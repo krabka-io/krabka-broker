@@ -11,6 +11,8 @@ struct FetchScenario {
 
 #[fixture]
 fn fetch() -> FetchScenario {
+    // Start this scenario with fresh inputs and observations.
+
     FetchScenario {
         watermarks: None,
         visibility: None,
@@ -37,13 +39,18 @@ fn fetch_watermarks(
     });
 }
 
-#[when("a follower {is_follower} committed {read_committed} fetches offset {fetch_offset}")]
-fn fetch_offset(
-    fetch: &mut FetchScenario,
-    is_follower: bool,
-    read_committed: bool,
-    fetch_offset: i64,
-) {
+#[when("a {reader} using {isolation} fetches offset {fetch_offset}")]
+fn fetch_offset(fetch: &mut FetchScenario, reader: String, isolation: String, fetch_offset: i64) {
+    let is_follower = match reader.as_str() {
+        "consumer" => false,
+        "follower" => true,
+        _ => panic!("unknown fetch reader: {reader}"),
+    };
+    let read_committed = match isolation.as_str() {
+        "read-committed" => true,
+        "read-uncommitted" => false,
+        _ => panic!("unknown fetch isolation: {isolation}"),
+    };
     fetch.visibility = Some(fetch_visibility(
         is_follower,
         read_committed,
@@ -52,23 +59,42 @@ fn fetch_offset(
     ));
 }
 
-#[then(
-    "fetch bounds are out of range {out_of_range} empty {empty} limit {limit_offset} stable {effective_lso} aborts {read_committed_aborts}"
-)]
-fn fetch_bounds(
-    fetch: &FetchScenario,
-    out_of_range: bool,
-    empty: bool,
-    limit_offset: i64,
-    effective_lso: i64,
-    read_committed_aborts: bool,
-) {
+#[then("the fetch offset is {range} and the computed window is {availability}")]
+fn fetch_range(fetch: &FetchScenario, range: String, availability: String) {
+    let out_of_range = match range.as_str() {
+        "in-range" => false,
+        "out-of-range" => true,
+        _ => panic!("unknown fetch range: {range}"),
+    };
+    let empty = match availability.as_str() {
+        "empty" => true,
+        "nonempty" => false,
+        _ => panic!("unknown fetch availability: {availability}"),
+    };
     let actual = fetch.visibility.expect("a fetch was evaluated");
     assert2::assert!(
         actual
             == FetchVisibility {
                 out_of_range,
                 empty,
+                ..actual
+            }
+    );
+}
+
+#[then(
+    "its visible prefix ends at {limit_offset} with stable offset {effective_lso} and abort metadata {aborts}"
+)]
+fn fetch_bounds(fetch: &FetchScenario, limit_offset: i64, effective_lso: i64, aborts: String) {
+    let read_committed_aborts = match aborts.as_str() {
+        "included" => true,
+        "omitted" => false,
+        _ => panic!("unknown abort metadata policy: {aborts}"),
+    };
+    let actual = fetch.visibility.expect("a fetch was evaluated");
+    assert2::assert!(
+        actual
+            == FetchVisibility {
                 limit_offset,
                 effective_lso,
                 read_committed_aborts,

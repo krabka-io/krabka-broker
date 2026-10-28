@@ -14,17 +14,20 @@ use {
     },
     assert2::assert,
     krabka_broker::{Broker, BrokerConfig},
-    krabka_protocol::owned::metadata_request::MetadataRequest,
+    krabka_protocol::owned::{
+        metadata_request::MetadataRequest, metadata_response::MetadataResponse,
+    },
     krabka_security::{ListenerProtocol, TlsConfig},
     rustls::crypto::aws_lc_rs,
     std::{
-        fs,
+        fs, io,
         path::{Path, PathBuf},
         sync::Arc,
     },
     tokio::net::TcpStream,
     tokio_rustls::{
         TlsConnector,
+        client::TlsStream,
         rustls::{
             ClientConfig,
             pki_types::{CertificateDer, ServerName, pem::PemObject as _},
@@ -46,175 +49,200 @@ fn write_dev_pem(dir: &Path) -> PemPaths {
     PemPaths { cert: cp, key: kp }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("auth handlers tls: tls listener accepts tls handshake only")]
-async fn bdd_verify_tls_listener_accepts_tls_handshake_only() {
-    let TlsFixture {
-        log_dir,
-        pem_dir: _pem_dir,
-        cert_path,
-        key_path,
-    } = tls_fixture();
+struct TlsListener {
+    files: TlsFixture,
+    config: Option<BrokerConfig>,
+    broker: Option<krabka_broker::BrokerHandle>,
+    connector: Option<TlsConnector>,
+    handshake: Option<io::Result<TlsStream<TcpStream>>>,
+    metadata: Option<MetadataResponse>,
+}
 
-    let cfg = ssl_config(
-        log_dir.path().to_path_buf(),
-        dev_tls_config(cert_path.clone(), key_path),
-    );
+#[rstest::fixture]
+fn tls_listener() -> TlsListener {
+    // Start this scenario with fresh inputs and observations.
 
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
+    TlsListener {
+        files: tls_fixture(),
+        config: None,
+        broker: None,
+        connector: None,
+        handshake: None,
+        metadata: None,
+    }
+}
 
-    // Build a client config trusting our dev cert. The fixture cert is
-    // self-issued with `CA:TRUE`, which rustls's default webpki verifier
-    // refuses to accept as an end-entity (`CaUsedAsEndEntity`). Since
-    // this test only proves the TLS handshake bytes complete and produces
-    // no real authentication, plug in a verifier that pins to the dev
-    // cert's DER bytes and accepts anything that matches. Subsequent
-    // task tests (T22 JVM TLS) regenerate proper cert chains.
-    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(&cert_path)
+#[rstest_bdd_macros::given("an SSL listener and a client pinning its development certificate")]
+fn pinned_ssl_listener(tls_listener: &mut TlsListener) {
+    let files = &tls_listener.files;
+    tls_listener.config = Some(ssl_config(
+        files.log_dir.path().to_path_buf(),
+        dev_tls_config(files.cert_path.clone(), files.key_path.clone()),
+    ));
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(&files.cert_path)
         .expect("open dev cert")
         .collect::<Result<_, _>>()
         .expect("parse dev cert");
-    let expected_cert = certs.into_iter().next().expect("at least one cert").clone();
     let client_cfg = ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(PinnedCertVerifier {
-            pinned: expected_cert,
+            pinned: certs.into_iter().next().expect("at least one cert"),
             schemes: fixture_signature_schemes(),
             mismatch: "presented cert does not match pinned dev cert",
         }))
         .with_no_client_auth();
-    let connector = TlsConnector::from(Arc::new(client_cfg));
-    let tcp = TcpStream::connect(addr).await.unwrap();
-    let server_name = ServerName::try_from("krabka-dev").unwrap();
-    let _tls = connector
-        .connect(server_name, tcp)
-        .await
-        .expect("TLS handshake must succeed");
-
-    handle.shutdown().await;
+    tls_listener.connector = Some(TlsConnector::from(Arc::new(client_cfg)));
 }
 
-#[cfg(test)]
+#[rstest_bdd_macros::given("a broker configured with PLAINTEXT and SSL listeners")]
+fn dual_tls_listeners(tls_listener: &mut TlsListener) {
+    let files = &tls_listener.files;
+    let mut cfg = BrokerConfig::for_tests(files.log_dir.path().to_path_buf());
+    cfg.listeners = vec![
+        listeners::listener(
+            "PLAINTEXT",
+            "127.0.0.1:0".parse().unwrap(),
+            ListenerProtocol::Plaintext,
+        ),
+        listeners::listener("SSL", "0.0.0.0:0".parse().unwrap(), ListenerProtocol::Ssl),
+    ];
+    cfg.inter_broker_listener_name = "PLAINTEXT".to_owned();
+    cfg.tls_config = Some(dev_tls_config(
+        files.cert_path.clone(),
+        files.key_path.clone(),
+    ));
+    tls_listener.config = Some(cfg);
+}
+
+#[rstest_bdd_macros::when("the configured TLS broker starts")]
+async fn start_tls_listener(tls_listener: &mut TlsListener) {
+    tls_listener.broker = Some(
+        Broker::start(tls_listener.config.take().expect("listener configuration"))
+            .await
+            .expect("broker must start"),
+    );
+}
+
+#[rstest_bdd_macros::when("the pinned client negotiates TLS with the SSL listener")]
+async fn negotiate_pinned_tls(tls_listener: &mut TlsListener) {
+    let addr = tls_listener
+        .broker
+        .as_ref()
+        .expect("broker started")
+        .listen_addr();
+    let tcp = TcpStream::connect(addr).await.unwrap();
+    tls_listener.handshake = Some(
+        tls_listener
+            .connector
+            .as_ref()
+            .expect("pinned connector")
+            .connect(ServerName::try_from("krabka-dev").unwrap(), tcp)
+            .await,
+    );
+}
+
+#[rstest_bdd_macros::then("the pinned client has an established TLS stream")]
+fn tls_stream_established(tls_listener: &TlsListener) {
+    assert!(
+        tls_listener
+            .handshake
+            .as_ref()
+            .expect("TLS negotiation attempted")
+            .is_ok()
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "self registration contains exactly PLAINTEXT and SSL with their protocols"
+)]
+async fn registered_tls_endpoints(tls_listener: &TlsListener) {
+    let handle = tls_listener.broker.as_ref().expect("broker started");
+    let node_id = handle.node_id();
+    handle
+        .wait_for_image(|img| {
+            img.broker(krabka_broker::NodeId(node_id))
+                .is_some_and(|broker| broker.endpoints.len() >= 2)
+        })
+        .await;
+    let endpoints = handle.self_registration_endpoints();
+    assert!(endpoints.len() == 2);
+    let mut names: Vec<&str> = endpoints
+        .iter()
+        .map(|endpoint| endpoint.name.as_str())
+        .collect();
+    names.sort_unstable();
+    assert!(names == vec!["PLAINTEXT", "SSL"]);
+    assert!(
+        endpoints
+            .iter()
+            .find(|endpoint| endpoint.name == "PLAINTEXT")
+            .unwrap()
+            .protocol
+            == ListenerProtocol::Plaintext
+    );
+    assert!(
+        endpoints
+            .iter()
+            .find(|endpoint| endpoint.name == "SSL")
+            .unwrap()
+            .protocol
+            == ListenerProtocol::Ssl
+    );
+}
+
+#[rstest_bdd_macros::when("a client requests Metadata through the PLAINTEXT listener")]
+async fn plaintext_listener_metadata(tls_listener: &mut TlsListener) {
+    let addr = tls_listener
+        .broker
+        .as_ref()
+        .expect("broker started")
+        .listen_addr();
+    let client = connect_owned(&addr.to_string(), "krabka-auth-test", "client build").await;
+    tls_listener.metadata = Some(
+        client
+            .send(MetadataRequest::default())
+            .await
+            .expect("Metadata round-trip"),
+    );
+}
+
+#[rstest_bdd_macros::then("Metadata includes this broker with node id 1")]
+fn tls_metadata_node(tls_listener: &TlsListener) {
+    let response = tls_listener.metadata.as_ref().expect("Metadata requested");
+    assert!(!response.brokers.is_empty());
+    assert!(response.brokers.iter().any(|broker| broker.node_id == 1));
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/auth_handlers/tls.feature",
     name = "tls listener accepts tls handshake only"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tls_listener_accepts_tls_handshake_only() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("auth handlers tls: metadata response carries listener endpoints")]
-async fn bdd_verify_metadata_response_carries_listener_endpoints() {
-    let TlsFixture {
-        log_dir,
-        pem_dir: _pem_dir,
-        cert_path,
-        key_path,
-    } = tls_fixture();
-
-    // Distinct wildcard and loopback binds satisfy listener validation while
-    // leaving port allocation atomic with Broker startup.
-    let plaintext_bind = "127.0.0.1:0".parse().unwrap();
-    let ssl_bind = "0.0.0.0:0".parse().unwrap();
-
-    // Two listeners on independent ephemeral ports. PLAINTEXT is the
-    // inter-broker listener (so self-registration's `host`/`port` falls
-    // out from it); SSL exercises the multi-listener code path.
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![
-        listeners::listener("PLAINTEXT", plaintext_bind, ListenerProtocol::Plaintext),
-        listeners::listener("SSL", ssl_bind, ListenerProtocol::Ssl),
-    ];
-    cfg.inter_broker_listener_name = "PLAINTEXT".to_owned();
-    cfg.tls_config = Some(dev_tls_config(cert_path, key_path));
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let plaintext_addr = handle.listen_addr();
-
-    // ── Assertion 1: in-memory registration carries both endpoints.
-    //
-    // Self-registration is best-effort + asynchronous (the leader watcher
-    // races with the `submit_change` round-trip); wait until the broker's
-    // own registration record in the committed image carries both endpoints.
-    let node_id = handle.node_id();
-    handle
-        .wait_for_image(|img| {
-            img.broker(krabka_broker::NodeId(node_id))
-                .is_some_and(|b| b.endpoints.len() >= 2)
-        })
+async fn tls_listener_accepts_tls_handshake_only(tls_listener: TlsListener) {
+    tls_listener
+        .broker
+        .expect("broker started")
+        .shutdown()
         .await;
-    let endpoints = handle.self_registration_endpoints();
-    assert!(
-        endpoints.len() == 2,
-        "self-registration must carry one endpoint per configured listener (got {endpoints:?})"
-    );
-    let mut names: Vec<&str> = endpoints.iter().map(|e| e.name.as_str()).collect();
-    names.sort_unstable();
-    assert!(names == vec!["PLAINTEXT", "SSL"]);
-    let plaintext_ep = endpoints
-        .iter()
-        .find(|e| e.name == "PLAINTEXT")
-        .expect("PLAINTEXT endpoint");
-    assert!(plaintext_ep.protocol == ListenerProtocol::Plaintext);
-    let ssl_ep = endpoints
-        .iter()
-        .find(|e| e.name == "SSL")
-        .expect("SSL endpoint");
-    assert!(ssl_ep.protocol == ListenerProtocol::Ssl);
-
-    // ── Assertion 2: a Metadata round-trip over the PLAINTEXT listener
-    // returns a broker entry. The Kafka v9+ wire format has no
-    // `endpoints[]` array on `MetadataResponseBroker`, so we only assert
-    // that *some* broker entry comes back and matches our id — the
-    // per-listener data is verified above via the in-memory image.
-    let bootstrap = plaintext_addr.to_string();
-    let client = connect_owned(&bootstrap, "krabka-auth-test", "client build").await;
-    let resp = client
-        .send(MetadataRequest::default())
-        .await
-        .expect("Metadata round-trip");
-    assert!(
-        !resp.brokers.is_empty(),
-        "MetadataResponse must include at least one broker"
-    );
-    assert!(
-        resp.brokers.iter().any(|b| b.node_id == 1),
-        "MetadataResponse must include this broker (node_id=1): {:?}",
-        resp.brokers,
-    );
-
-    handle.shutdown().await;
 }
 
-/// Every configured listener should appear as a `BrokerEndpoint` on this
-/// broker's self-registration record, and the projection should survive a
-/// Metadata round-trip end-to-end. The Kafka v9+ Metadata wire response
-/// carries a single `host:port` per broker, because the codec has no
-/// `endpoints[]` array on `MetadataResponseBroker`. So this test asserts:
-///
-/// 1. The on-disk registration record stored in [`krabka_metadata::MetadataImage`]
-///    carries one [`krabka_metadata::BrokerEndpoint`] per [`krabka_broker::config::ListenerSpec`].
-/// 2. A `MetadataRequest::v12` round-trip over the PLAINTEXT listener
-///    returns at least one broker entry whose `host:port` matches one of
-///    the configured advertised endpoints.
-///
-/// The two-listener config uses PLAINTEXT and SSL. The SSL listener uses the
-/// dev cert, so `BrokerConfig::validate` accepts it. We dial only the
-/// PLAINTEXT listener, because the goal here is the metadata projection and
-/// not TLS termination. `tls_listener_accepts_*` covers TLS termination.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/auth_handlers/tls.feature",
     name = "metadata response carries listener endpoints"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn metadata_response_carries_listener_endpoints() {}
+async fn metadata_response_carries_listener_endpoints(tls_listener: TlsListener) {
+    tls_listener
+        .broker
+        .expect("broker started")
+        .shutdown()
+        .await;
+}
 
 /// A log directory, the directory holding the dev PEM files, and their paths.
 struct TlsFixture {
     log_dir: tempfile::TempDir,
-    pem_dir: tempfile::TempDir,
+    _pem_dir: tempfile::TempDir,
     cert_path: PathBuf,
     key_path: PathBuf,
 }
@@ -240,7 +268,7 @@ fn tls_fixture() -> TlsFixture {
     } = write_dev_pem(pem_dir.path());
     TlsFixture {
         log_dir,
-        pem_dir,
+        _pem_dir: pem_dir,
         cert_path,
         key_path,
     }

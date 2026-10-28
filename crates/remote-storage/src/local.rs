@@ -352,25 +352,54 @@ mod tests {
         check_sample_indexes(&rsm, &md);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "local tests: copied files use kafka local tiered storage layout for {example}"
-    )]
-    fn bdd_verify_copied_files_use_kafka_local_tiered_storage_layout(example: String) {
-        type Example<'a> = (&'a str,);
-        let (suffix,): Example<'_> = match example.as_str() {
-            "log" => (".log",),
-            "offset index" => (".index",),
-            "time index" => (".timeindex",),
-            "snapshot" => (".snapshot",),
-            "leader epoch checkpoint" => (".leader_epoch_checkpoint",),
-            "transaction index" => (".txnindex",),
-            _ => panic!("unknown BDD example: {example}"),
-        };
+    struct LocalCopyScenario {
+        fixture: Option<LocalFixture>,
+        data: Option<LogSegmentData>,
+    }
+    #[rstest::fixture]
+    fn local_copy() -> LocalCopyScenario {
+        let fixture = None;
+        LocalCopyScenario {
+            fixture,
+            data: None,
+        }
+    }
 
-        let LocalFixture { remote, .. } = copied_store(TransactionIndex::Present);
+    #[rstest_bdd_macros::given("a local orders segment with every Kafka index artifact")]
+    fn local_segment_source(local_copy: &mut LocalCopyScenario) {
+        let fixture = local_store();
+        local_copy.data = Some(sample_data(
+            fixture.source.path(),
+            TransactionIndex::Present,
+        ));
+        local_copy.fixture = Some(fixture);
+    }
 
-        let partition = remote.path().join("orders-0-AAAAAAAAAAAAAAAAAAAAAQ");
+    #[rstest_bdd_macros::when("the segment is copied into local tiered storage")]
+    fn copy_local_segment(local_copy: &mut LocalCopyScenario) {
+        let fixture = local_copy
+            .fixture
+            .as_ref()
+            .expect("a source segment was given");
+        fixture
+            .store
+            .copy_log_segment_data(
+                &fixture.metadata,
+                local_copy.data.as_ref().expect("index files were given"),
+            )
+            .expect("copy segment artifacts");
+    }
+
+    #[rstest_bdd_macros::then("the Kafka tiered partition contains segment artifact {suffix}")]
+    fn copied_local_artifact(local_copy: &LocalCopyScenario, suffix: String) {
+        let fixture = local_copy
+            .fixture
+            .as_ref()
+            .expect("a source segment was given");
+        let partition = fixture
+            .remote
+            .path()
+            .join("orders-0-AAAAAAAAAAAAAAAAAAAAAQ");
         check!(
             partition
                 .join(format!(
@@ -381,12 +410,7 @@ mod tests {
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/local.feature",
-        name = "tests: copied files use kafka local tiered storage layout"
-    )]
-    fn copied_files_use_kafka_local_tiered_storage_layout(example: String) { let _ = example; }
+    rstest_bdd_macros::scenarios!("tests/features/local_segment_copy", fixtures = [local_copy: LocalCopyScenario]);
 
     #[test]
     fn missing_optional_txn_index_is_not_found() {

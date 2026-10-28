@@ -6,225 +6,265 @@
 
 use {
     crate::{
-        harness::{
-            ConsumptionFixture, broker_config, broker_test_permit, consumption_fixture,
-            initialize_consumption, join, produce_n,
-        },
-        share_rpc::{
-            AcquiredRecordCount, acquired_count, fetch_count, fetch_empty, fetch_until_acquired,
-            share_fetch,
-        },
+        harness::{ConsumptionFixture, consumption_fixture, join, produce_n},
+        share_rpc::{acquired_count, fetch_until_acquired, share_fetch},
         support::share::{
-            ConsumptionSetup, MemberSession, RetryEpochs, ShareAck, ShareSessionEpoch,
-            ShareSessionSetup, acknowledge_success, refetch_while_empty, rejoin_group, start_topic,
+            RetryEpochs, ShareAck, ShareSessionEpoch, ShareSessionSetup, acknowledge_success,
+            refetch_while_empty, rejoin_group,
         },
     },
     assert2::{assert, check},
+    krabka_broker::BrokerHandle,
+    krabka_client_core::Client,
     krabka_protocol::owned::share_fetch_response::PartitionData,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::sync::Arc,
+    tempfile::TempDir,
+    tokio::sync::OwnedSemaphorePermit,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("share consume acknowledgements: consume accept restart")]
-async fn bdd_verify_consume_accept_restart() {
-    let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let log_dir = dir.path().to_path_buf();
+struct AcknowledgementFixture {
+    permit: OwnedSemaphorePermit,
+    directory: TempDir,
+    broker: Option<BrokerHandle>,
+    client: Arc<Client>,
+    topic: uuid::Uuid,
+    member: String,
+}
 
-    let tid;
-    {
-        let (broker, client, topic) = start_topic()
-            .cfg(broker_config(log_dir.clone()))
-            .call()
-            .await;
-        tid = topic;
-        let MemberSession { member, .. } =
-            initialize_consumption(&broker, &client, ConsumptionSetup {
-                topic_id: tid,
+#[derive(Default)]
+struct ShareAcknowledgement {
+    fixture: Option<AcknowledgementFixture>,
+    row: Option<PartitionData>,
+}
+
+#[fixture]
+fn share_acknowledgement() -> ShareAcknowledgement {
+    // Acquired records and their acknowledgement outcomes are actual wire observations.
+    ShareAcknowledgement::default()
+}
+
+#[given("an acknowledgement-test member has {records} available records on t")]
+async fn acknowledgement_records(share_acknowledgement: &mut ShareAcknowledgement, records: i64) {
+    let ConsumptionFixture {
+        _permit: permit,
+        broker,
+        client,
+        _dir: directory,
+        tid: topic,
+        member,
+    } = consumption_fixture().count(records).call().await;
+    share_acknowledgement.fixture = Some(AcknowledgementFixture {
+        permit,
+        broker: Some(broker),
+        client,
+        directory,
+        topic,
+        member,
+    });
+}
+
+#[when("the acknowledgement-test member opens its session and acquires records")]
+async fn acquire_acknowledgement_records(share_acknowledgement: &mut ShareAcknowledgement) {
+    share_acknowledgement.row = Some(
+        fetch_until_acquired(
+            &share_acknowledgement.fixture().client,
+            ShareSessionSetup::opening(
+                &share_acknowledgement.fixture().member,
+                share_acknowledgement.fixture().topic,
+            ),
+        )
+        .await,
+    );
+}
+
+#[then("the acknowledgement fetch contains {records} records at delivery count {delivery_count}")]
+fn acknowledgement_delivery_count(
+    share_acknowledgement: &ShareAcknowledgement,
+    records: i64,
+    delivery_count: i16,
+) {
+    let response = share_acknowledgement.row.as_ref().expect("records fetched");
+    check!(
+        acquired_count(response) == records,
+        "{:?}",
+        response.acquired_records
+    );
+    check!(
+        response
+            .acquired_records
+            .iter()
+            .all(|range| range.delivery_count == delivery_count)
+    );
+    check!(response.records.is_some(), "acquired records carry bytes");
+}
+
+#[when("the member acknowledges through offset {last} with {kind}")]
+async fn acknowledge_share_records(
+    share_acknowledgement: &ShareAcknowledgement,
+    last: i64,
+    kind: String,
+) {
+    let acknowledgement = ShareAck::prefix_for(
+        &share_acknowledgement.fixture().member,
+        share_acknowledgement.fixture().topic,
+        krabka_ids::Offset(last),
+    );
+    let acknowledgement = match kind.as_str() {
+        "accept" => acknowledgement,
+        "release" => acknowledgement.release(),
+        "reject" => acknowledgement.reject(),
+        _ => panic!("unknown acknowledgement {kind}"),
+    };
+    acknowledge_success(&share_acknowledgement.fixture().client, acknowledgement).await;
+}
+
+#[when("the acknowledgement-test member fetches at epoch {epoch}")]
+async fn fetch_acknowledgement_records(
+    share_acknowledgement: &mut ShareAcknowledgement,
+    epoch: i32,
+) {
+    share_acknowledgement.row = Some(
+        share_fetch(
+            &share_acknowledgement.fixture().client,
+            ShareSessionSetup::joined(
+                &share_acknowledgement.fixture().member,
+                share_acknowledgement.fixture().topic,
+            )
+            .fetch_at(ShareSessionEpoch(epoch)),
+        )
+        .await,
+    );
+}
+
+#[then("the acknowledgement fetch acquires no records")]
+fn acknowledged_records_absent(share_acknowledgement: &ShareAcknowledgement) {
+    assert!(acquired_count(share_acknowledgement.row.as_ref().expect("records fetched")) == 0);
+}
+
+#[when("the accepted start offset 3 is persisted and the broker restarts")]
+async fn restart_accepted_records(share_acknowledgement: &mut ShareAcknowledgement) {
+    let fixture = share_acknowledgement
+        .fixture
+        .as_mut()
+        .expect("acknowledgement fixture");
+    fixture
+        .broker
+        .as_ref()
+        .expect("first broker")
+        .wait_until_share_spso("g1", fixture.topic, 0, 3)
+        .await;
+    fixture
+        .broker
+        .take()
+        .expect("first broker")
+        .shutdown()
+        .await;
+    let (broker, client) = rejoin_group(fixture.directory.path().to_path_buf(), "g1").await;
+    fixture.member = join(&client, "g1", "t").await.member;
+    broker
+        .wait_for_share_state_summary("g1", fixture.topic, 0)
+        .await;
+    fixture.broker = Some(broker);
+    fixture.client = client;
+}
+
+#[when("one new record is appended after the rejected pair and fetched from epoch three")]
+async fn fetch_after_rejected_pair(share_acknowledgement: &mut ShareAcknowledgement) {
+    produce_n()
+        .client(&share_acknowledgement.fixture().client)
+        .topic_id(share_acknowledgement.fixture().topic)
+        .call()
+        .await;
+    let response = share_fetch(
+        &share_acknowledgement.fixture().client,
+        ShareSessionSetup::joined(
+            &share_acknowledgement.fixture().member,
+            share_acknowledgement.fixture().topic,
+        )
+        .fetch_at(ShareSessionEpoch(3)),
+    )
+    .await;
+    share_acknowledgement.row = Some(
+        refetch_while_empty()
+            .client(&share_acknowledgement.fixture().client)
+            .row(response)
+            .session(ShareSessionSetup {
+                member: &share_acknowledgement.fixture().member,
+                topic_id: share_acknowledgement.fixture().topic,
                 ..Default::default()
             })
-            .await;
-        let session = ShareSessionSetup::joined(&member, tid);
+            .epochs(RetryEpochs {
+                start: ShareSessionEpoch(4),
+                ..Default::default()
+            })
+            .call()
+            .await,
+    );
+}
 
-        // First fetch (epoch 0 opens the session): acquire offsets 0..2.
-        let row = fetch_until_acquired(&client, session.with_epoch(ShareSessionEpoch(0))).await;
-        check!(
-            acquired_count(&row) == 3,
-            "must acquire all 3 offsets, got {:?}",
-            row.acquired_records
-        );
-        check!(
-            row.acquired_records.iter().all(|r| r.delivery_count == 1),
-            "first delivery_count must be 1, got {:?}",
-            row.acquired_records
-        );
-        check!(
-            row.records.is_some(),
-            "acquired records must carry record bytes"
-        );
+#[then("only the new offset two is acquired after the rejected records")]
+fn rejected_offsets_skipped(share_acknowledgement: &ShareAcknowledgement) {
+    let response = share_acknowledgement
+        .row
+        .as_ref()
+        .expect("new record fetched");
+    assert!(acquired_count(response) == 1);
+    assert!(
+        response.acquired_records[0].first_offset == 2
+            && response.acquired_records[0].last_offset == 2
+    );
+}
 
-        // Accept offsets 0..2 (session epoch is now 1 after the open).
-        acknowledge_success(
-            &client,
-            ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)),
-        )
-        .await;
-
-        // Next fetch (epoch 2): the SPSO advanced past 2 — nothing left.
-        fetch_empty(&client, session.fetch_at(ShareSessionEpoch(2))).await;
-
-        // Wait until the persister has landed the advanced SPSO (>= 3, past
-        // offset 2) in __share_group_state before shutting down, so the
-        // restart below sees the durable SPSO.
-        broker.wait_until_share_spso("g1", tid, 0, 3).await;
-        broker.shutdown().await;
-    }
-
-    {
-        let (broker, client) = rejoin_group(log_dir, "g1").await;
-
-        // A fresh member rejoins the recovered group; a fresh-session fetch
-        // must observe the recovered SPSO (past offset 2) — zero acquired.
-        // Wait until the share state is recovered on the new broker, then
-        // assert in a single fetch (no timing guess needed).
-        let MemberSession { member, .. } = join(&client, "g1", "t").await;
-        let session = ShareSessionSetup::joined(&member, tid);
-        broker.wait_for_share_state_summary("g1", tid, 0).await;
-        let row = share_fetch(&client, session.fetch_at(ShareSessionEpoch(0))).await;
-        let acquired = acquired_count(&row);
-        assert!(
-            acquired == 0,
-            "recovered SPSO must skip the accepted records; re-acquired {acquired}"
-        );
+impl ShareAcknowledgement {
+    async fn shutdown(&mut self) {
+        let AcknowledgementFixture {
+            broker,
+            client,
+            directory,
+            permit,
+            ..
+        } = self.fixture.take().expect("acknowledgement fixture");
+        broker.expect("share broker").shutdown().await;
+        drop(client);
+        drop(directory);
+        drop(permit);
     }
 }
 
-/// Acquire 3 records, Accept them all, and observe the SPSO advance. The test
-/// then restarts the broker on the same data dir to prove the broker persisted
-/// the advance.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/share_consume/acknowledgements.feature",
     name = "consume accept restart"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn consume_accept_restart() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share consume acknowledgements: release redelivers")]
-async fn bdd_verify_release_redelivers() {
-    let AcquiredPair { fixture, row } = acquired_pair().await;
-    let session = fixture.session();
-
-    assert!(row.acquired_records.iter().all(|r| r.delivery_count == 1));
-
-    // Release offsets 0..1 (epoch 1).
-    acknowledge_success(
-        &fixture.client,
-        ShareAck::prefix_for(&fixture.member, fixture.tid, krabka_ids::Offset(1)).release(),
-    )
-    .await;
-
-    // Next fetch (epoch 2): the same offsets are re-acquired at delivery_count 2.
-    let row2 = fetch_count(
-        &fixture.client,
-        session.fetch_at(ShareSessionEpoch(2)),
-        AcquiredRecordCount(2),
-    )
-    .await;
-    assert!(
-        row2.acquired_records.iter().all(|r| r.delivery_count == 2),
-        "redelivery must bump delivery_count to 2, got {:?}",
-        row2.acquired_records
-    );
+async fn consume_accept_restart(share_acknowledgement: ShareAcknowledgement) {
+    share_acknowledgement.shutdown().await;
+    drop(share_acknowledgement);
 }
 
-/// Release re-delivers the same offsets with an incremented `delivery_count`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/share_consume/acknowledgements.feature",
     name = "release redelivers"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn release_redelivers() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share consume acknowledgements: reject archives")]
-async fn bdd_verify_reject_archives() {
-    let AcquiredPair { fixture, row: _row } = acquired_pair().await;
-    let session = fixture.session();
-
-    // Reject offsets 0..1 (epoch 1) → archived.
-    acknowledge_success(
-        &fixture.client,
-        ShareAck::prefix_for(&fixture.member, fixture.tid, krabka_ids::Offset(1)).reject(),
-    )
-    .await;
-
-    // Next fetch (epoch 2): nothing re-acquired.
-    fetch_empty(&fixture.client, session.fetch_at(ShareSessionEpoch(2))).await;
-
-    // Produce one more (offset 2). The SPSO advanced past the rejected pair, so
-    // only the new offset is acquired — proving the rejected ones were skipped.
-    produce_n()
-        .client(&fixture.client)
-        .topic_id(fixture.tid)
-        .call()
-        .await;
-    let row3 = share_fetch(&fixture.client, session.fetch_at(ShareSessionEpoch(3))).await;
-    let row3 = refetch_while_empty()
-        .client(&fixture.client)
-        .row(row3)
-        .session(ShareSessionSetup {
-            member: &fixture.member,
-            topic_id: fixture.tid,
-            ..Default::default()
-        })
-        .epochs(RetryEpochs {
-            start: ShareSessionEpoch(4),
-            ..Default::default()
-        })
-        .call()
-        .await;
-    assert!(
-        acquired_count(&row3) == 1,
-        "only the new offset must be acquired, got {:?}",
-        row3.acquired_records
-    );
-    assert!(
-        row3.acquired_records[0].first_offset == 2 && row3.acquired_records[0].last_offset == 2,
-        "acquired offset must be 2 (past the rejected 0..1), got {:?}",
-        row3.acquired_records
-    );
+async fn release_redelivers(share_acknowledgement: ShareAcknowledgement) {
+    share_acknowledgement.shutdown().await;
+    drop(share_acknowledgement);
 }
 
-/// Reject archives the records: the broker never re-delivers them AND the SPSO
-/// advances past them. A freshly produced offset is the only thing the test
-/// acquires.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/share_consume/acknowledgements.feature",
     name = "reject archives"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reject_archives() {}
-
-struct AcquiredPair {
-    fixture: ConsumptionFixture,
-    row: PartitionData,
+async fn reject_archives(share_acknowledgement: ShareAcknowledgement) {
+    share_acknowledgement.shutdown().await;
+    drop(share_acknowledgement);
 }
 
-async fn acquired_pair() -> AcquiredPair {
-    let fixture = consumption_fixture().count(2).call().await;
-    let row = acquire_both(&fixture.client, &fixture.member, fixture.tid).await;
-    AcquiredPair { fixture, row }
-}
-
-async fn acquire_both(
-    client: &krabka_client_core::Client,
-    member: &str,
-    tid: uuid::Uuid,
-) -> PartitionData {
-    let row = fetch_until_acquired(client, ShareSessionSetup::opening(member, tid)).await;
-    assert!(acquired_count(&row) == 2, "acquire both offsets");
-    row
+impl ShareAcknowledgement {
+    fn fixture(&self) -> &AcknowledgementFixture {
+        self.fixture.as_ref().expect("live scenario fixture")
+    }
 }

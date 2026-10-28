@@ -9,7 +9,7 @@ use {
         incremental_alter_configs_request::{AlterConfigsResource, AlterableConfig},
         incremental_alter_configs_response::AlterConfigsResourceResponse,
     },
-    krabka_telemetry::{LogLevel, LogLevelController},
+    krabka_telemetry::{LogLevel, LogLevelController, LogLevelFilter},
 };
 
 /// This node's id in every case below.
@@ -30,16 +30,6 @@ fn config(name: &str, operation: i8, value: Option<&str>) -> AlterableConfig {
 struct Applied {
     response: AlterConfigsResourceResponse,
     levels: LogLevelController,
-}
-
-/// One refused alter: what it does, its resource name and operations, and the
-/// code and message of the refusal.
-struct Refusal<'a> {
-    what: &'a str,
-    resource_name: &'a str,
-    configs: Vec<AlterableConfig>,
-    code: i16,
-    message: &'a str,
 }
 
 /// Apply `configs` to a fresh controller seeded with `spec` and return the
@@ -149,98 +139,86 @@ fn one_bad_config_leaves_the_whole_resource_unapplied() {
     assert!(levels.level("krabka_broker") == Some(LogLevel::Info));
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers incremental alter configs broker logger scope tests: refusals carry kafkas own message"
-)]
-fn bdd_verify_refusals_carry_kafkas_own_message() {
-    let cases: Vec<Refusal<'_>> = vec![
-        Refusal {
-            what: "a name that is not a node id",
-            resource_name: "not-a-number",
-            configs: vec![config("krabka_broker", 0, Some("DEBUG"))],
-            code: codes::INVALID_REQUEST,
-            message: "Node id must be an integer, but it is: not-a-number",
-        },
-        Refusal {
-            what: "another node's id",
-            resource_name: "4",
-            configs: vec![config("krabka_broker", 0, Some("DEBUG"))],
-            code: codes::INVALID_REQUEST,
-            message: "Unexpected node id. Expected 3, but received 4",
-        },
-        Refusal {
-            what: "a logger this node does not have",
-            resource_name: "3",
-            configs: vec![config("no_such_target", 0, Some("DEBUG"))],
-            code: codes::INVALID_CONFIG,
-            message: "Logger no_such_target does not exist!",
-        },
-        Refusal {
-            what: "a level that is not a level",
-            resource_name: "3",
-            configs: vec![config("krabka_broker", 0, Some("VERBOSE"))],
-            code: codes::INVALID_CONFIG,
-            message: "Cannot set the log level of krabka_broker to VERBOSE as it is not a supported log level. Valid log levels are DEBUG, ERROR, FATAL, INFO, TRACE, WARN",
-        },
-        Refusal {
-            what: "a set with no value at all",
-            resource_name: "3",
-            configs: vec![config("krabka_broker", 0, None)],
-            code: codes::INVALID_CONFIG,
-            message: "Cannot set the log level of krabka_broker to null as it is not a supported log level. Valid log levels are DEBUG, ERROR, FATAL, INFO, TRACE, WARN",
-        },
-        Refusal {
-            what: "a delete of the root logger",
-            resource_name: "3",
-            configs: vec![config("root", 1, None)],
-            code: codes::INVALID_REQUEST,
-            message: "Removing the log level of the root logger is not allowed",
-        },
-        Refusal {
-            what: "an append",
-            resource_name: "3",
-            configs: vec![config("krabka_broker", 2, Some("DEBUG"))],
-            code: codes::INVALID_REQUEST,
-            message: "APPEND operation is not allowed for the BROKER_LOGGER resource",
-        },
-        Refusal {
-            what: "a subtract",
-            resource_name: "3",
-            configs: vec![config("krabka_broker", 3, Some("DEBUG"))],
-            code: codes::INVALID_REQUEST,
-            message: "SUBTRACT operation is not allowed for the BROKER_LOGGER resource",
-        },
-        Refusal {
-            what: "an operation byte no version defines",
-            resource_name: "3",
-            configs: vec![config("krabka_broker", 9, Some("DEBUG"))],
-            code: codes::INVALID_REQUEST,
-            message: "Unknown operation type 9 is not allowed for the BROKER_LOGGER resource",
-        },
-    ];
-
-    for Refusal {
-        what,
-        resource_name,
-        configs,
-        code,
-        message,
-    } in cases
-    {
-        let Applied { response: out, .. } =
-            apply("info,krabka_broker=info", resource_name, configs, false);
-        check!(out.error_code == code, "{what}");
-        check!(out.error_message.as_deref() == Some(message), "{what}");
+#[derive(Default)]
+struct LoggerAlterationScenario {
+    levels: Option<(LogLevelController, LogLevelFilter)>,
+    resource: Option<AlterConfigsResource>,
+    response: Option<AlterConfigsResourceResponse>,
+}
+#[rstest::fixture]
+fn logger_alteration() -> LoggerAlterationScenario {
+    let levels = None;
+    LoggerAlterationScenario {
+        levels,
+        ..Default::default()
     }
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/incremental_alter_configs/broker_logger_scope/tests.feature",
-    name = "refusals carry kafkas own message"
+#[rstest_bdd_macros::given("node 3 has root and krabka_broker loggers at INFO")]
+fn configured_broker_loggers(logger_alteration: &mut LoggerAlterationScenario) {
+    logger_alteration.levels = Some(LogLevelController::new("info,krabka_broker=info"));
+}
+#[rstest_bdd_macros::given(
+    "the logger alteration names node {node} logger {logger} operation {operation} value {value}"
 )]
-fn refusals_carry_kafkas_own_message() {}
+fn requested_logger_alteration(
+    logger_alteration: &mut LoggerAlterationScenario,
+    node: String,
+    logger: String,
+    operation: i8,
+    value: String,
+) {
+    logger_alteration.resource = Some(AlterConfigsResource {
+        resource_type: 8,
+        resource_name: node,
+        configs: vec![config(
+            &logger,
+            operation,
+            if value == "null" { None } else { Some(&value) },
+        )],
+        ..Default::default()
+    });
+}
+#[rstest_bdd_macros::when("the live logger controller applies the alteration")]
+fn apply_refused_logger_alteration(logger_alteration: &mut LoggerAlterationScenario) {
+    let resource = logger_alteration.resource.as_ref().unwrap();
+    let mut response = AlterConfigsResourceResponse {
+        resource_type: resource.resource_type,
+        resource_name: resource.resource_name.clone(),
+        error_code: codes::NONE,
+        error_message: None,
+        ..Default::default()
+    };
+    handle_broker_logger_scoped(
+        resource,
+        NODE_ID,
+        &logger_alteration.levels.as_ref().unwrap().0,
+        false,
+        &mut response,
+    );
+    logger_alteration.response = Some(response);
+}
+#[rstest_bdd_macros::then(
+    "the logger alteration returns code {code} message {message} and retains INFO"
+)]
+fn check_refused_logger_alteration(
+    logger_alteration: &LoggerAlterationScenario,
+    code: i16,
+    message: String,
+) {
+    let response = logger_alteration.response.as_ref().unwrap();
+    check!(response.error_code == code);
+    check!(response.error_message.as_deref() == Some(message.as_str()));
+    check!(
+        logger_alteration
+            .levels
+            .as_ref()
+            .unwrap()
+            .0
+            .level("krabka_broker")
+            == Some(LogLevel::Info)
+    );
+}
+rstest_bdd_macros::scenarios!("tests/features/handler_broker_logger_refusals",fixtures=[logger_alteration:LoggerAlterationScenario]);
 
 #[test]
 fn the_default_filter_names_the_loggers_an_operator_reaches_for() {

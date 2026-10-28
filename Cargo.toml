@@ -329,6 +329,9 @@ krabka-units = "0.7.0"
 # through the open upstream PR bytecodealliance/rustix#1718, from this fork
 # at its head. Drop the patch when a rustix release carries it.
 rustix = { git = "https://github.com/robot-head/rustix", rev = "8b5b932aba81d9d2869517fe63a1b9167daf5289" }
+# Release fixture guards after BDD steps and emit stable outline table metadata.
+# Source and upstream unit-test evidence live on deps/rstest-bdd-0.6-fixture-guards.
+rstest-bdd-macros = { git = "https://github.com/krabka-io/krabka-broker", rev = "94f772b1b4da7fb46a1fbd1dcd09452d3dde9cfe" }
 # Upstream replaces the archived basic-toml parser (RUSTSEC-2026-0374).
 i18n-config = { git = "https://github.com/kellpossible/cargo-i18n", rev = "2ce7b1dfe9a8cc224288bf50cbc2a67a6de863c4" }
 krabka-admin-ui = { git = "https://github.com/krabka-io/krabka-cli", rev = "b39dc88d0da3792db02ad62469b45f4fe312ea75" }

@@ -25,109 +25,145 @@ use {
         },
     },
     assert2::assert,
+    krabka_protocol::owned::{fetch_response::FetchResponse, produce_response::ProduceResponse},
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("acl handlers produce fetch: produce denied without topic acl")]
-async fn bdd_verify_produce_denied_without_topic_acl() {
-    let (handle, _dir, addr) = start_denied_foo().await;
+struct TopicDataAccess {
+    broker: Option<krabka_broker::BrokerHandle>,
+    directory: Option<tempfile::TempDir>,
+    produced: Option<ProduceResponse>,
+    fetched: Option<FetchResponse>,
+}
+#[rstest::fixture]
+fn data_access() -> TopicDataAccess {
+    // Start this scenario with fresh inputs and observations.
 
-    // alice has NO Write-on-foo binding → Produce must return 29.
-    let resp = drive_produce_as_plain(
-        addr,
-        single_record_produce_request("foo", 0, b"hello"),
-        &plain_authentication_setup().client_id(CLIENT_ID).call(),
-    )
-    .await
-    .expect("Produce must round-trip");
-    handle.shutdown().await;
-
-    let p = single_partition_response(&resp);
-    assert!(
-        p.error_code == ERR_TOPIC_AUTHORIZATION_FAILED,
-        "alice has no Write ACL on foo, expected TOPIC_AUTHORIZATION_FAILED (29), got {p:?}"
+    TopicDataAccess {
+        broker: None,
+        directory: None,
+        produced: None,
+        fetched: None,
+    }
+}
+#[rstest_bdd_macros::given("foo exists but alice has no topic grants")]
+async fn no_topic_grant(data_access: &mut TopicDataAccess) {
+    let (broker, directory, _) = start_denied_foo().await;
+    data_access.broker = Some(broker);
+    data_access.directory = Some(directory);
+}
+#[rstest_bdd_macros::given("alice has an Allow Write grant on literal topic foo")]
+async fn topic_write_grant(data_access: &mut TopicDataAccess) {
+    let (broker, directory, _) =
+        start_alice_topic_grant(krabka_metadata::AclOperation::Write).await;
+    data_access.broker = Some(broker);
+    data_access.directory = Some(directory);
+}
+#[rstest_bdd_macros::when("alice produces hello to foo partition 0 without a grant")]
+async fn unauthorized_topic_produce(data_access: &mut TopicDataAccess) {
+    let addr = data_access
+        .broker
+        .as_ref()
+        .expect("broker started")
+        .listen_addr();
+    data_access.produced = Some(
+        drive_produce_as_plain(
+            addr,
+            single_record_produce_request("foo", 0, b"hello"),
+            &plain_authentication_setup().client_id(CLIENT_ID).call(),
+        )
+        .await
+        .expect("Produce must round-trip"),
     );
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/acl_handlers/produce_fetch.feature",
-    name = "produce denied without topic acl"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn produce_denied_without_topic_acl() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("acl handlers produce fetch: produce allowed with topic write acl")]
-async fn bdd_verify_produce_allowed_with_topic_write_acl() {
-    // Commit the literal Allow Write grant through the controller.
-    let (handle, _dir, addr) = start_alice_topic_grant(krabka_metadata::AclOperation::Write).await;
-
-    // The ACL submit above is committed via the controller's raft path
-    // then applied into the in-memory `MetadataImage` asynchronously, so
-    // Produce reads from that image. Retry on Deny for up to 10 s — on
-    // CI the commit-then-apply gap is usually a few ms but can spike.
-    let resp = retry_produce_until_allowed(addr, "alice", b"wonderland", "foo")
-        .await
-        .expect("Produce must round-trip");
-
-    let p = single_partition_response(&resp);
-    assert!(
-        p.error_code == 0,
-        "alice has Write ACL on foo, expected error_code=0, got {p:?}"
+#[rstest_bdd_macros::when("alice produces to foo after the Write grant applies")]
+async fn authorized_topic_produce(data_access: &mut TopicDataAccess) {
+    let addr = data_access
+        .broker
+        .as_ref()
+        .expect("broker started")
+        .listen_addr();
+    data_access.produced = Some(
+        retry_produce_until_allowed(addr, "alice", b"wonderland", "foo")
+            .await
+            .expect("Produce must round-trip"),
     );
-
-    // Verify the record actually landed in the local log.
-    let leo = handle
+}
+#[rstest_bdd_macros::then("the produced partition reports error code {error}")]
+fn topic_produce_result(data_access: &TopicDataAccess, error: i16) {
+    let response = data_access.produced.as_ref().expect("Produce attempted");
+    let partition = single_partition_response(response);
+    assert!(partition.error_code == error, "{partition:?}");
+}
+#[rstest_bdd_macros::then("foo partition 0 has at least one locally stored record")]
+fn produced_record_stored(data_access: &TopicDataAccess) {
+    let leo = data_access
+        .broker
+        .as_ref()
+        .expect("broker started")
         .local_log_end_offset("foo", 0)
         .expect("foo-0 must be hosted on this broker");
-    handle.shutdown().await;
     assert!(
         leo >= 1,
         "log_end_offset must advance after a successful Produce, got {leo}"
     );
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/acl_handlers/produce_fetch.feature",
-    name = "produce allowed with topic write acl"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn produce_allowed_with_topic_write_acl() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("acl handlers produce fetch: fetch denied without topic read acl")]
-async fn bdd_verify_fetch_denied_without_topic_read_acl() {
-    let (handle, _dir, addr) = start_denied_foo().await;
-
-    // alice has NO Read-on-foo binding → Fetch must return 29 on the
-    // partition row.
+#[rstest_bdd_macros::when("alice fetches foo without a Read grant")]
+async fn unauthorized_topic_fetch(data_access: &mut TopicDataAccess) {
+    let addr = data_access
+        .broker
+        .as_ref()
+        .expect("broker started")
+        .listen_addr();
     let req = named_topic_fetch("foo", FetchLimits::one_mebibyte(RequestWaitMillis(0)));
-    let resp = drive_fetch_as_plain(addr, req, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        ..Default::default()
-    })
-    .await
-    .expect("Fetch must round-trip");
-    handle.shutdown().await;
-
+    data_access.fetched = Some(
+        drive_fetch_as_plain(addr, req, &PlainAuthenticationSetup {
+            client_id: CLIENT_ID,
+            ..Default::default()
+        })
+        .await
+        .expect("Fetch must round-trip"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "Fetch returns one topic and partition with topic authorization error 29"
+)]
+fn topic_fetch_denied(data_access: &TopicDataAccess) {
+    let resp = data_access.fetched.as_ref().expect("Fetch attempted");
     assert!(resp.responses.len() == 1, "one topic in response");
     assert!(
         resp.responses[0].partitions.len() == 1,
         "one partition row in response"
     );
-    let p = &resp.responses[0].partitions[0];
+    let partition = &resp.responses[0].partitions[0];
     assert!(
-        p.error_code == ERR_TOPIC_AUTHORIZATION_FAILED,
-        "alice has no Read ACL on foo, expected TOPIC_AUTHORIZATION_FAILED (29), got {p:?}"
+        partition.error_code == ERR_TOPIC_AUTHORIZATION_FAILED,
+        "{partition:?}"
     );
 }
 
-#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/produce_fetch.feature",
+    name = "produce denied without topic acl"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn produce_denied_without_topic_acl(data_access: TopicDataAccess) {
+    data_access.broker.expect("broker started").shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/produce_fetch.feature",
+    name = "produce allowed with topic write acl"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn produce_allowed_with_topic_write_acl(data_access: TopicDataAccess) {
+    data_access.broker.expect("broker started").shutdown().await;
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/acl_handlers/produce_fetch.feature",
     name = "fetch denied without topic read acl"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_denied_without_topic_read_acl() {}
+async fn fetch_denied_without_topic_read_acl(data_access: TopicDataAccess) {
+    data_access.broker.expect("broker started").shutdown().await;
+}

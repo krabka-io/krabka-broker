@@ -169,91 +169,62 @@ mod tests {
         assert2::assert!(names[0] != names[1]);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "role tests: a fetch updates the caught up time by kafkas two branch rule"
-    )]
-    fn bdd_verify_a_fetch_updates_the_caught_up_time_by_kafkas_two_branch_rule() {
-        /// A run of fetches and the progress the last of them leaves.
-        struct Case {
-            label: &'static str,
-            fetches: Vec<Fetch>,
-            expected: ReplicaProgress,
-        }
+    use {
+        rstest::fixture,
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    };
 
-        /// One fetch of the run.
-        struct Fetch {
-            now: u64,
-            offset: i64,
-            log_end: i64,
-        }
-        let fetch = |now, offset, log_end| Fetch {
-            now,
-            offset,
-            log_end,
-        };
-        let progress =
-            |fetch_offset, last_fetch, last_caught_up, last_fetch_leader_log_end| ReplicaProgress {
-                fetch_offset,
-                last_fetch: SimInstant(last_fetch),
-                last_caught_up: SimInstant(last_caught_up),
-                last_fetch_leader_log_end,
-            };
-        let cases = [
-            Case {
-                label: "a first fetch short of the end",
-                fetches: vec![fetch(100, 5, 10)],
-                expected: progress(5, 100, 0, 10),
-            },
-            Case {
-                label: "a first fetch at the end",
-                fetches: vec![fetch(100, 10, 10)],
-                expected: progress(10, 100, 100, 10),
-            },
-            Case {
-                label: "keeping pace under appends is caught up as of the previous fetch",
-                fetches: vec![fetch(100, 5, 10), fetch(200, 10, 20)],
-                expected: progress(10, 200, 100, 20),
-            },
-            Case {
-                label: "still short of the previous end stays not caught up",
-                fetches: vec![fetch(100, 5, 10), fetch(200, 9, 20)],
-                expected: progress(9, 200, 0, 20),
-            },
-            Case {
-                label: "catching up to the current end is caught up now",
-                fetches: vec![fetch(100, 5, 10), fetch(200, 10, 20), fetch(300, 20, 20)],
-                expected: progress(20, 300, 300, 20),
-            },
-        ];
-        for Case {
-            label,
-            fetches,
-            expected,
-        } in cases
-        {
-            let mut actual = ReplicaProgress::default();
-            for Fetch {
-                now,
-                offset,
-                log_end,
-            } in fetches
-            {
-                actual.record_fetch(SimInstant(now), offset, log_end);
-            }
-            assert2::assert!(actual == expected, "{label}");
+    #[derive(DataTableRow)]
+    struct FollowerFetch {
+        at_ms: u64,
+        fetch_offset: i64,
+        leader_end: i64,
+    }
+
+    struct FollowerProgress {
+        progress: Option<ReplicaProgress>,
+    }
+
+    #[fixture]
+    fn follower() -> FollowerProgress {
+        let progress = None;
+        FollowerProgress { progress }
+    }
+
+    #[given("a follower that has never fetched")]
+    fn fresh_follower(follower: &mut FollowerProgress) {
+        follower.progress = Some(ReplicaProgress::default());
+    }
+
+    #[when("the follower fetches in this order:")]
+    fn follower_fetches(follower: &mut FollowerProgress, #[datatable] rows: Rows<FollowerFetch>) {
+        let progress = follower.progress.as_mut().expect("a follower was given");
+        for row in rows {
+            progress.record_fetch(SimInstant(row.at_ms), row.fetch_offset, row.leader_end);
         }
     }
 
-    /// `ReplicaState.updateFollowerState`: a fetch at or past the leader's log
-    /// end is caught up now, and one short of it is caught up as of the
-    /// previous fetch when it reaches the log end that fetch saw.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/role.feature",
-        name = "tests: a fetch updates the caught up time by kafkas two branch rule"
+    #[then(
+        "its fetch offset is {fetch_offset}, last fetch is {last_fetch} ms, caught-up time is {last_caught_up} ms, and last observed leader end is {last_end}"
     )]
-    fn a_fetch_updates_the_caught_up_time_by_kafkas_two_branch_rule() {}
+    fn recorded_progress(
+        follower: &FollowerProgress,
+        fetch_offset: i64,
+        last_fetch: u64,
+        last_caught_up: u64,
+        last_end: i64,
+    ) {
+        let expected = ReplicaProgress {
+            fetch_offset,
+            last_fetch: SimInstant(last_fetch),
+            last_caught_up: SimInstant(last_caught_up),
+            last_fetch_leader_log_end: last_end,
+        };
+        assert!(follower.progress.as_ref() == Some(&expected));
+    }
+
+    scenarios!("tests/features/migrated/src/role.feature", fixtures = [follower: FollowerProgress]);
 
     /// `LeaderState.isReplicaCaughtUp`: caught up at some point, and fetched
     /// within the last hour.

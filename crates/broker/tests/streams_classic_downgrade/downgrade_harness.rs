@@ -69,3 +69,128 @@ pub fn rejoin_config(log_dir: PathBuf) -> BrokerConfig {
     cfg.bootstrap_mode = BootstrapMode::Rejoin;
     cfg
 }
+
+use {
+    crate::{
+        CONVERGE_TRIES,
+        downgrade_streams_join::{streams_join_and_converge, topology},
+    },
+    krabka_broker::{Broker, BrokerHandle, coordinator::unified::GroupType},
+    krabka_protocol::owned::streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
+    rstest::fixture,
+    rstest_bdd_macros::{given, then, when},
+    std::sync::Arc,
+    tempfile::TempDir,
+};
+
+/// Independent protocol clients and original streams identity for a downgrade.
+#[derive(Default)]
+pub struct DowngradeScenario {
+    pub broker: Option<BrokerHandle>,
+    pub directory: Option<TempDir>,
+    pub classic: Option<Arc<Client>>,
+    pub streams: Option<Arc<Client>>,
+    pub topic: String,
+    pub group: String,
+    pub topic_id: Option<WireUuid>,
+    pub member: String,
+    pub epoch: i32,
+    pub heartbeat: Option<StreamsGroupHeartbeatResponse>,
+}
+
+#[fixture]
+pub fn downgrade_case() -> DowngradeScenario {
+    // Keep the live streams identity until the classic protocol replaces its group.
+    DowngradeScenario::default()
+}
+
+impl DowngradeScenario {
+    pub fn broker(&self) -> &BrokerHandle { self.broker.as_ref().expect("downgrade broker") }
+
+    pub fn classic(&self) -> &Client { self.classic.as_ref().expect("classic client") }
+
+    pub fn streams(&self) -> &Client { self.streams.as_ref().expect("streams client") }
+
+    pub async fn shutdown(&mut self) {
+        self.broker
+            .take()
+            .expect("downgrade broker")
+            .shutdown()
+            .await;
+        self.classic.take();
+        self.streams.take();
+        self.directory.take();
+    }
+}
+
+#[given("a downgrade broker holds one-partition topic {topic} for group {group}")]
+async fn downgrade_broker(downgrade_case: &mut DowngradeScenario, topic: String, group: String) {
+    let (broker, bootstrap, directory) = boot().await;
+    let streams = connect(&bootstrap).await;
+    let classic = connect(&bootstrap).await;
+    create_topic(&streams, &topic, 1).await;
+    finalize_streams_version(&streams).await;
+    downgrade_case.topic_id = Some(topic_id_for(&streams, &topic).await);
+    downgrade_case.broker = Some(broker);
+    downgrade_case.directory = Some(directory);
+    downgrade_case.streams = Some(streams);
+    downgrade_case.classic = Some(classic);
+    downgrade_case.topic = topic;
+    downgrade_case.group = group;
+}
+
+#[given("a durable downgrade broker holds topic in4 for group g4")]
+async fn durable_downgrade_broker(downgrade_case: &mut DowngradeScenario) {
+    let directory = TempDir::new().unwrap();
+    let broker = Broker::start(heartbeat_config(directory.path().to_path_buf()))
+        .await
+        .unwrap();
+    broker.wait_until_broker_alive(broker.node_id()).await;
+    broker.wait_until_group_coordinator_ready().await;
+    let bootstrap = broker.listen_addr().to_string();
+    let streams = connect(&bootstrap).await;
+    let classic = connect(&bootstrap).await;
+    finalize_streams_version(&streams).await;
+    create_topic(&streams, "in4", 1).await;
+    downgrade_case.topic_id = Some(topic_id_for(&streams, "in4").await);
+    downgrade_case.broker = Some(broker);
+    downgrade_case.directory = Some(directory);
+    downgrade_case.streams = Some(streams);
+    downgrade_case.classic = Some(classic);
+    downgrade_case.topic = "in4".into();
+    downgrade_case.group = "g4".into();
+}
+
+#[when("a streams member joins the downgrade group and converges on its single task")]
+async fn live_downgrade_streams_member(downgrade_case: &mut DowngradeScenario) {
+    let (member, response) = streams_join_and_converge(
+        downgrade_case.streams(),
+        &downgrade_case.group,
+        topology(&downgrade_case.topic),
+        1,
+        CONVERGE_TRIES,
+    )
+    .await;
+    downgrade_case.member = member;
+    downgrade_case.epoch = response.member_epoch;
+    downgrade_case.heartbeat = Some(response);
+}
+
+#[then("the downgrade group has a healthy live Streams member")]
+async fn healthy_downgrade_streams_member(downgrade_case: &DowngradeScenario) {
+    let response = downgrade_case
+        .heartbeat
+        .as_ref()
+        .expect("streams join answered");
+    assert!(response.error_code == ERR_NONE, "{response:?}");
+    downgrade_case
+        .broker()
+        .wait_until_group_type(&downgrade_case.group, GroupType::Streams)
+        .await;
+    assert!(
+        downgrade_case
+            .broker()
+            .group_type_for_test(&downgrade_case.group)
+            == Some(GroupType::Streams)
+    );
+}

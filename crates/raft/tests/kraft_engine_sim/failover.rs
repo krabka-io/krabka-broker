@@ -6,8 +6,8 @@
 use {
     crate::{
         harness::{
-            self as fixture, await_single_leader, await_until, reopen_controller, start_cluster,
-            start_engines, three_voter_network, topic_record,
+            self as fixture, await_single_leader, await_until, reopen_controller, start_engines,
+            three_voter_network, topic_record,
         },
         sim_net::SimNet,
     },
@@ -30,6 +30,7 @@ struct ElectedCluster {
 /// The nodes left after a leader is killed, and the leader and epoch they
 /// elect.
 struct SurvivingLeader {
+    former_epoch: u32,
     survivors: Vec<fixture::NodeId>,
     leader: fixture::NodeId,
     epoch: u32,
@@ -91,8 +92,8 @@ async fn await_surviving_leader(
         .collect::<Vec<_>>();
     let (leader, epoch) =
         await_single_leader(net, &survivors, fixture::Duration::from_secs(15)).await;
-    assert2::assert!((leader != former, epoch > former_epoch) == (true, true));
     SurvivingLeader {
+        former_epoch,
         survivors,
         leader,
         epoch,
@@ -121,261 +122,280 @@ async fn await_quorum_state<F>(
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("kraft engine sim failover: leader failure reelects")]
-async fn bdd_verify_leader_failure_reelects() {
+use rstest_bdd_macros::{given, then, when};
+struct FailoverCluster {
+    net: SimNet,
+    ids: [fixture::NodeId; 3],
+    cluster: uuid::Uuid,
+    elected: Option<ElectedCluster>,
+    replacement: Option<SurvivingLeader>,
+    elapsed: Option<fixture::Duration>,
+    convergence: Vec<(fixture::NodeId, u32)>,
+    isolated_state: Option<QuorumStateSnapshot>,
+}
+#[rstest::fixture]
+fn failover() -> FailoverCluster {
     let (net, ids) = three_voter_network();
-    let cid = uuid::Uuid::from_u128(300);
-
-    let ElectedCluster {
-        dirs: _dirs,
-        leader,
-        epoch: epoch1,
-    } = elect_three_voter_cluster(&net, &ids, cid).await;
-
-    // Kill the leader: shut it down and remove it from the registry so peers see
-    // it as unreachable.
-    net.get(leader).unwrap().shutdown().await;
-    net.remove(leader);
-
-    // The two survivors must elect a NEW single leader at a higher epoch.
-    let SurvivingLeader {
-        survivors,
-        leader: new_leader,
-        epoch: _epoch2,
-    } = await_surviving_leader(&net, &ids, leader, epoch1).await;
-
-    // A submit to the new leader commits across the two survivors.
+    FailoverCluster {
+        net,
+        ids,
+        cluster: uuid::Uuid::nil(),
+        elected: None,
+        replacement: None,
+        elapsed: None,
+        convergence: vec![],
+        isolated_state: None,
+    }
+}
+#[given("a three voter cluster {cluster} has elected its initial leader")]
+async fn initial_failover_leader(failover: &mut FailoverCluster, cluster: u128) {
+    failover.cluster = uuid::Uuid::from_u128(cluster);
+    failover.elected =
+        Some(elect_three_voter_cluster(&failover.net, &failover.ids, failover.cluster).await);
+}
+#[given(
+    "cluster {cluster} has uniform 150 millisecond elections and 1500 millisecond Fetch rounds"
+)]
+async fn lockstep_failover_leader(failover: &mut FailoverCluster, cluster: u128) {
+    failover.cluster = uuid::Uuid::from_u128(cluster);
+    failover.elected = Some(
+        elected_cluster()
+            .net(&failover.net)
+            .ids(&failover.ids)
+            .cluster_id(failover.cluster)
+            .timeouts(&[prelude::millis(150); 3])
+            .fetch_timeout(prelude::millis(1500))
+            .call()
+            .await,
+    );
+    time::sleep(fixture::Duration::from_secs(1)).await;
+}
+#[when("the current leader crashes and the surviving majority elects a replacement")]
+async fn crash_leader(failover: &mut FailoverCluster) {
+    let initial = failover.elected.as_ref().expect("initial leader elected");
+    let killed_at = Instant::now();
+    failover
+        .net
+        .get(initial.leader)
+        .expect("leader running")
+        .shutdown()
+        .await;
+    failover.net.remove(initial.leader);
+    failover.replacement = Some(
+        await_surviving_leader(&failover.net, &failover.ids, initial.leader, initial.epoch).await,
+    );
+    failover.elapsed = Some(killed_at.elapsed());
+}
+#[then("a different surviving voter leads at a higher epoch")]
+fn new_failover_epoch(failover: &FailoverCluster) {
+    let initial = failover.elected.as_ref().expect("initial leader");
+    let replacement = failover.replacement.as_ref().expect("replacement elected");
+    assert2::assert!(replacement.leader != initial.leader);
+    assert2::assert!(replacement.former_epoch == initial.epoch);
+    assert2::assert!(replacement.epoch > replacement.former_epoch);
+}
+#[then("the replacement election completes in less than 2600 milliseconds")]
+fn lockstep_failover_bound(failover: &FailoverCluster) {
+    assert2::assert!(failover.elapsed.expect("crash timed") < fixture::Duration::from_millis(2600));
+}
+#[when("the replacement leader commits the post-failover topic to both survivors")]
+async fn submit_after_failover(failover: &mut FailoverCluster) {
+    let replacement = failover.replacement.as_ref().expect("replacement elected");
     time::timeout(
         fixture::Duration::from_secs(10),
-        net.get(new_leader)
-            .unwrap()
+        failover
+            .net
+            .get(replacement.leader)
+            .expect("leader running")
             .submit_change(vec![topic_record("post-failover", 7)]),
     )
     .await
-    .expect("post-failover submit did not hang")
-    .expect("post-failover submit ok");
-
-    for &id in &survivors {
-        let ctrl = net.get(id).unwrap();
+    .expect("submit did not hang")
+    .expect("submit committed");
+    for &id in &replacement.survivors {
+        let controller = failover.net.get(id).expect("survivor");
         await_until(fixture::Duration::from_secs(10), || {
-            ctrl.current_image().topic("post-failover").map(|_| ())
+            controller
+                .current_image()
+                .topic("post-failover")
+                .map(|_| ())
         })
         .await;
     }
-
-    for &id in &survivors {
-        net.get(id).unwrap().shutdown().await;
+}
+#[then("both surviving metadata images contain the post-failover topic")]
+fn failover_committed_topic(failover: &FailoverCluster) {
+    for &id in &failover
+        .replacement
+        .as_ref()
+        .expect("replacement")
+        .survivors
+    {
+        assert2::assert!(
+            failover
+                .net
+                .get(id)
+                .expect("survivor")
+                .current_image()
+                .topic("post-failover")
+                .is_some()
+        );
     }
 }
-
-/// 3. After a kill of the leader, the remaining two re-elect a single new
-///    leader, and a `submit_change` to the new leader commits.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
-    name = "leader failure reelects"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn leader_failure_reelects() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("kraft engine sim failover: repeated leader restart reelects")]
-async fn bdd_verify_repeated_leader_restart_reelects() {
-    let (net, ids) = three_voter_network();
-    let cid = uuid::Uuid::from_u128(301);
-    let dirs = start_cluster(&net, &ids, cid);
-
+#[when("the elected leader is crashed and reopened from its directory five times")]
+async fn repeated_failover(failover: &mut FailoverCluster) {
     for _ in 0..5 {
-        let (leader, _) = await_single_leader(&net, &ids, fixture::Duration::from_secs(10)).await;
-        net.get(leader).unwrap().shutdown().await;
-        net.remove(leader);
+        let (leader, epoch) = await_single_leader(
+            &failover.net,
+            &failover.ids,
+            fixture::Duration::from_secs(10),
+        )
+        .await;
+        failover.convergence.push((leader, epoch));
+        failover.net.get(leader).expect("leader").shutdown().await;
+        failover.net.remove(leader);
         time::sleep(fixture::Duration::from_millis(50)).await;
-        let reopened =
-            reopen_controller(&net, dirs[&leader].path().to_path_buf(), leader, cid, &ids);
-        net.register(leader, reopened);
+        let index = failover
+            .ids
+            .iter()
+            .position(|id| *id == leader)
+            .expect("leader voter index");
+        let directory = failover.elected.as_ref().expect("cluster directories").dirs[index]
+            .path()
+            .to_path_buf();
+        let reopened = reopen_controller(
+            &failover.net,
+            directory,
+            leader,
+            failover.cluster,
+            &failover.ids,
+        );
+        failover.net.register(leader, reopened);
     }
-
-    let _ = await_single_leader(&net, &ids, fixture::Duration::from_secs(10)).await;
-    for &id in &ids {
-        net.get(id).unwrap().shutdown().await;
+    failover.convergence.push(
+        await_single_leader(
+            &failover.net,
+            &failover.ids,
+            fixture::Duration::from_secs(10),
+        )
+        .await,
+    );
+}
+#[then("all six observed quorums agree on a live leader at an established epoch")]
+fn repeated_failover_convergence(failover: &FailoverCluster) {
+    assert2::assert!(failover.convergence.len() == 6);
+    for &(leader, epoch) in &failover.convergence {
+        assert2::assert!(failover.ids.contains(&leader));
+        assert2::assert!(epoch >= 1);
     }
 }
-
-/// 3b. The same leader is killed and reopened over its own data dir five times
-///     in a row, and the quorum must converge on one leader after every round.
-///
-///     This is the acceptance for an ex-leader that comes back. Leadership is
-///     volatile, so the reopened node loads `leader_id == None` while its two
-///     followers still believe it leads. It must not answer their Fetches as if
-///     it did. When it did, each answer scored as a live fetch, their watchdogs
-///     never expired, they held their stale leader belief, and a KIP-996
-///     pre-vote only grants when the voter follows no leader. Nothing could
-///     ever win a pre-vote and the cluster stayed leaderless.
-///
-///     Wall-clock, not `start_paused`: the engines are real spawned tasks and
-///     `await_single_leader` polls them with `yield_now`, so the runtime is
-///     never idle and virtual time would never auto-advance.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
-    name = "repeated leader restart reelects"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn repeated_leader_restart_reelects() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kraft engine sim failover: isolated leader resigns and rejoins after heal"
-)]
-async fn bdd_verify_isolated_leader_resigns_and_rejoins_after_heal() {
-    let (net, ids) = three_voter_network();
-    let cid = uuid::Uuid::from_u128(302);
-    let ElectedCluster {
-        dirs: _dirs,
-        leader,
-        epoch: epoch1,
-    } = elect_three_voter_cluster(&net, &ids, cid).await;
-    let isolated = net.get(leader).expect("leader is registered");
-    net.partition(leader);
-
-    // Check-quorum is 1.5x the fetch timeout, and the longest configured
-    // timeout here is 450ms, so a resignation is due well inside this budget.
-    // Until it resigns the node still names itself leader of `epoch1`.
-    await_quorum_state(&isolated, fixture::Duration::from_secs(10), |qs| {
-        qs.leader_id.is_none()
+#[when("the network isolates the leader until it resigns and the majority elects a replacement")]
+async fn isolate_failover_leader(failover: &mut FailoverCluster) {
+    let initial = failover.elected.as_ref().expect("initial leader");
+    let isolated = failover.net.get(initial.leader).expect("leader running");
+    failover.net.partition(initial.leader);
+    await_quorum_state(&isolated, fixture::Duration::from_secs(10), |state| {
+        state.leader_id.is_none()
     })
     .await;
-
-    // The majority side elects its own leader at a higher epoch and commits.
-    let SurvivingLeader {
-        survivors: _survivors,
-        leader: new_leader,
-        epoch: epoch2,
-    } = await_surviving_leader(&net, &ids, leader, epoch1).await;
+    failover.isolated_state = Some(
+        isolated
+            .quorum_state()
+            .await
+            .expect("isolated quorum state"),
+    );
+    failover.replacement = Some(
+        await_surviving_leader(&failover.net, &failover.ids, initial.leader, initial.epoch).await,
+    );
+}
+#[then("the isolated controller no longer names itself leader")]
+fn isolated_resignation(failover: &FailoverCluster) {
+    assert2::assert!(
+        failover
+            .isolated_state
+            .as_ref()
+            .expect("isolation observed")
+            .leader_id
+            .is_none()
+    );
+}
+#[when("the majority commits post-partition and the network heals the former leader")]
+async fn heal_failover_leader(failover: &mut FailoverCluster) {
+    let initial = failover.elected.as_ref().expect("initial leader");
+    let replacement = failover.replacement.as_ref().expect("replacement");
     time::timeout(
         fixture::Duration::from_secs(10),
-        net.get(new_leader)
-            .expect("new leader is registered")
+        failover
+            .net
+            .get(replacement.leader)
+            .expect("new leader")
             .submit_change(vec![topic_record("post-partition", 8)]),
     )
     .await
-    .expect("post-partition submit did not hang")
-    .expect("post-partition submit ok");
-
-    // Heal: the rejoining node attaches to the new leader's epoch as a
-    // follower, and replicates what it missed.
-    net.heal(leader);
-    await_quorum_state(&isolated, fixture::Duration::from_secs(15), |qs| {
-        qs.leader_id == Some(new_leader) && qs.leader_epoch >= epoch2
+    .expect("submit did not hang")
+    .expect("submit committed");
+    failover.net.heal(initial.leader);
+    let isolated = failover.net.get(initial.leader).expect("former leader");
+    await_quorum_state(&isolated, fixture::Duration::from_secs(15), |state| {
+        state.leader_id == Some(replacement.leader) && state.leader_epoch >= replacement.epoch
     })
     .await;
     await_until(fixture::Duration::from_secs(15), || {
         isolated.current_image().topic("post-partition").map(|_| ())
     })
     .await;
-
-    for &id in &ids {
-        net.get(id).expect("still registered").shutdown().await;
-    }
+    failover.isolated_state = Some(isolated.quorum_state().await.expect("healed quorum state"));
 }
-
-/// 3c. A leader that the network isolates must resign instead of holding an
-///     epoch it can no longer serve, and must rejoin as a follower once the
-///     partition heals.
-///
-///     Nothing else can tell it. The majority side elects at a higher epoch, but
-///     the isolated node receives none of that traffic, and under KIP-996 the
-///     new round's pre-votes never reach it either -- so with no check-quorum it
-///     keeps answering `DescribeQuorum`, Metadata and `BrokerHeartbeat` as the
-///     leader of the old epoch for as long as the partition lasts. The
-///     `election_safety` model property cannot see this: the two leaders hold
-///     different epochs.
-///
-///     The isolated node keeps running, which is what separates this from the
-///     kill above: its whole state machine ticks on, and the only thing that
-///     changes is that no voter's Fetch arrives.
-#[cfg(test)]
+#[then("the former leader follows the replacement epoch and contains post-partition")]
+fn healed_failover_image(failover: &FailoverCluster) {
+    let initial = failover.elected.as_ref().expect("initial leader");
+    let replacement = failover.replacement.as_ref().expect("replacement");
+    let state = failover.isolated_state.as_ref().expect("healed state");
+    assert2::assert!(state.leader_id == Some(replacement.leader));
+    assert2::assert!(state.leader_epoch >= replacement.epoch);
+    assert2::assert!(
+        failover
+            .net
+            .get(initial.leader)
+            .expect("former leader")
+            .current_image()
+            .topic("post-partition")
+            .is_some()
+    );
+}
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
-    name = "isolated leader resigns and rejoins after heal"
+    name = "A leader crash preserves majority commits"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn isolated_leader_resigns_and_rejoins_after_heal() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kraft engine sim failover: lockstep survivors elect within a fetch timeout and a few election timeouts for {example}"
-)]
-async fn bdd_verify_lockstep_survivors_elect_within_a_fetch_timeout_and_a_few_election_timeouts(
-    example: String,
-) {
-    type Example = (u128,);
-    let (cluster,): Example = match example.as_str() {
-        "first" => (940,),
-        "second" => (941,),
-        "third" => (942,),
-        "fourth" => (943,),
-        "fifth" => (944,),
-        "sixth" => (945,),
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    let fetch_timeout = prelude::millis(1_500);
-    let election_timeout = prelude::millis(150);
-    let (net, ids) = three_voter_network();
-    let ElectedCluster {
-        dirs: _dirs,
-        leader,
-        epoch,
-    } = elected_cluster()
-        .net(&net)
-        .ids(&ids)
-        .cluster_id(uuid::Uuid::from_u128(cluster))
-        .timeouts(&[election_timeout; 3])
-        .fetch_timeout(fetch_timeout)
-        .call()
-        .await;
-    // Let both followers settle into the same long-poll Fetch rounds.
-    time::sleep(fixture::Duration::from_secs(1)).await;
-
-    let killed_at = Instant::now();
-    net.get(leader).unwrap().shutdown().await;
-    net.remove(leader);
-    let SurvivingLeader { survivors, .. } = await_surviving_leader(&net, &ids, leader, epoch).await;
-    let elapsed = killed_at.elapsed();
-
-    // One fetch timeout to notice, a split round, and one retry drawn from at
-    // most two election timeouts, with room for a loaded runner. A retry on the
-    // fetch timeout lands at least two fetch timeouts in, past this bound.
-    // 1500 ms, plus four 150 ms election timeouts, plus 500 ms of slack.
-    let bound = fixture::Duration::from_millis(2_600);
-    assert2::assert!(elapsed < bound);
-    for id in survivors {
-        net.get(id).unwrap().shutdown().await;
-    }
+async fn leader_failure_reelects(failover: FailoverCluster) {
+    fixture::shutdown_nodes(&failover.net, &failover.ids).await;
 }
-
-/// 3e. Two survivors whose fetch timers run in lockstep elect a new leader
-///     within one fetch timeout and a few election timeouts of a leader kill
-///     (#1477).
-///
-///     Both followers last heard from the leader in the same Fetch round, so
-///     their fetch timers expire together. Each wins the other's pre-vote, both
-///     stand, and the binding vote splits. Kafka retries a split vote one
-///     randomized election timeout later, `controller.quorum.election.timeout.ms`
-///     plus up to as much again, which is far shorter than the fetch timeout.
-///     When the election timer ran on the fetch timeout, the retry came one to
-///     two fetch timeouts after the split, so a crashed controller's
-///     leadership took up to three fetch timeouts to move.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
-    name = "lockstep survivors elect within a fetch timeout and a few election timeouts"
+    name = "Five leader restarts preserve election convergence"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repeated_leader_restart_reelects(failover: FailoverCluster) {
+    fixture::shutdown_nodes(&failover.net, &failover.ids).await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
+    name = "An isolated leader resigns and rejoins after healing"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn isolated_leader_resigns_and_rejoins_after_heal(failover: FailoverCluster) {
+    fixture::shutdown_nodes(&failover.net, &failover.ids).await;
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
+    name = "Lockstep survivors retry split votes on the election timer"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn lockstep_survivors_elect_within_a_fetch_timeout_and_a_few_election_timeouts(
-    example: String,
+    failover: FailoverCluster,
+    cluster: u128,
 ) {
-    let _ = example;
+    let _ = cluster;
+    fixture::shutdown_nodes(&failover.net, &failover.ids).await;
 }

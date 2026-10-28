@@ -71,95 +71,75 @@ pub fn quota_entities(stdout: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::check,
+        rstest::fixture,
+        rstest_bdd::Slot,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance cli config output tests: the resource path yields its keys without the provenance"
-    )]
-    fn bdd_verify_the_resource_path_yields_its_keys_without_the_provenance() {
-        let stdout = "Dynamic configs for group 'krabka-grp' are:\n  \
-             consumer.session.timeout.ms=50000 sensitive=false \
-             synonyms={DYNAMIC_GROUP_CONFIG:consumer.session.timeout.ms=50000}\n";
-        check!(
-            parse_describe(stdout)
-                == Configs::from([("consumer.session.timeout.ms".to_owned(), "50000".to_owned())])
-        );
+    struct ConfigOutput {
+        stdout: String,
+        configs: Slot<Configs>,
+        entities: Vec<String>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_cli/config_output.feature",
-        name = "tests: the resource path yields its keys without the provenance"
-    )]
-    fn the_resource_path_yields_its_keys_without_the_provenance() {}
+    #[fixture]
+    fn output() -> ConfigOutput {
+        // Start this scenario with fresh inputs and observations.
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance cli config output tests: the quota path yields the same shape as the resource path"
-    )]
-    fn bdd_verify_the_quota_path_yields_the_same_shape_as_the_resource_path() {
-        let stdout = "Quota configs for client-id 'krabka-client' are \
-             consumer_byte_rate=1024.0, producer_byte_rate=2048.0\n";
-        check!(
-            parse_describe(stdout)
-                == Configs::from([
-                    ("consumer_byte_rate".to_owned(), "1024.0".to_owned()),
-                    ("producer_byte_rate".to_owned(), "2048.0".to_owned()),
-                ])
-        );
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_cli/config_output.feature",
-        name = "tests: the quota path yields the same shape as the resource path"
-    )]
-    fn the_quota_path_yields_the_same_shape_as_the_resource_path() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance cli config output tests: a tuple entity is reported with both of its components"
-    )]
-    fn bdd_verify_a_tuple_entity_is_reported_with_both_of_its_components() {
-        let stdout = "Quota configs for user-principal 'u', client-id 'c' are \
-             request_percentage=42.0\n";
-        check!(quota_entities(stdout) == vec!["user-principal 'u', client-id 'c'".to_owned()]);
-        check!(
-            parse_describe(stdout)
-                == Configs::from([("request_percentage".to_owned(), "42.0".to_owned())])
-        );
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_cli/config_output.feature",
-        name = "tests: a tuple entity is reported with both of its components"
-    )]
-    fn a_tuple_entity_is_reported_with_both_of_its_components() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance cli config output tests: a header line contributes nothing"
-    )]
-    fn bdd_verify_a_header_line_contributes_nothing() {
-        for stdout in [
-            "Dynamic configs for topic 't' are:\n",
-            "All configs for client-metrics 'm' are:\n",
-            "",
-        ] {
-            check!(
-                parse_describe(stdout).is_empty(),
-                "parsed keys out of {stdout:?}"
-            );
-            check!(quota_entities(stdout).is_empty());
+        ConfigOutput {
+            stdout: String::new(),
+            configs: Slot::new(),
+            entities: Vec::new(),
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_cli/config_output.feature",
-        name = "tests: a header line contributes nothing"
-    )]
-    fn a_header_line_contributes_nothing() {}
+    #[given("the configuration tool printed")]
+    fn tool_stdout(output: &mut ConfigOutput, docstring: String) { output.stdout = docstring; }
+
+    #[when("the described configuration and quota entities are read")]
+    fn read_output(output: &mut ConfigOutput) {
+        output.configs.set(parse_describe(&output.stdout));
+        output.entities = quota_entities(&output.stdout);
+    }
+
+    #[then("the described configuration contains exactly")]
+    fn described_values(output: &ConfigOutput, datatable: Vec<Vec<String>>) {
+        let expected = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let columns: [String; 2] = row.try_into().expect("a key and a value");
+                columns.into()
+            })
+            .collect::<Configs>();
+        check!(
+            output.configs.get() == Some(expected),
+            "stdout: {:?}",
+            output.stdout
+        );
+    }
+
+    #[then("the quota entity retains both user u and client c")]
+    fn tuple_entity(output: &ConfigOutput) {
+        check!(output.entities == vec!["user-principal 'u', client-id 'c'".to_owned()]);
+    }
+
+    #[then("no configuration values or quota entities are invented")]
+    fn no_values(output: &ConfigOutput) {
+        check!(
+            output
+                .configs
+                .get()
+                .expect("configuration output was read")
+                .is_empty(),
+            "parsed keys out of {:?}",
+            output.stdout
+        );
+        check!(output.entities.is_empty());
+    }
+
+    scenarios!("tests/features/migrated/tests/jvm_acceptance_cli/config_output.feature", fixtures = [output: ConfigOutput]);
 }

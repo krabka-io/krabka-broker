@@ -9,14 +9,7 @@
 //! fails with `InvalidReplicaAssignmentException` (39).
 
 use {
-    crate::{
-        harness::start_two_dir_broker,
-        two_dir_topic::start,
-        wire::{
-            CLIENT_ID, ConfigAlterOutcome, alter_replica_log_dirs, describe_log_dirs_at,
-            set_broker_config,
-        },
-    },
+    crate::wire::{ConfigAlterOutcome, describe_log_dirs_at, set_broker_config},
     assert2::{assert, check},
     krabka_protocol::{
         UnknownTaggedFields,
@@ -104,98 +97,103 @@ fn move_result(topic: &str, error_code: i16) -> AlterReplicaLogDirsResponse {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "alter replica log dirs cordoned: a cordoned dir is flagged and refuses replica moves"
-)]
-async fn bdd_verify_a_cordoned_dir_is_flagged_and_refuses_replica_moves() {
-    let (handle, primary, extra, addr) = start().client_id(CLIENT_ID).call().await;
-    let (first, second) = (canonical(primary.path()), canonical(extra.path()));
-    let extra_str = fs::canonicalize(extra.path())
-        .unwrap()
-        .display()
-        .to_string();
-    // The broker names its directories by their configured path, which is
-    // what a `cordoned.log.dirs` entry must match.
-    let configured = extra.path().display().to_string();
-
-    wait_for_flags(addr, &[
-        DirFlag::new(first.clone(), false),
-        DirFlag::new(second.clone(), false),
+use crate::{ReplicaDirectoryScenario, replica_directory};
+#[rstest_bdd_macros::given("both configured log directories initially report uncordoned")]
+async fn initially_uncordoned_directories(replica_directory: &ReplicaDirectoryScenario) {
+    wait_for_flags(replica_directory.address(), &[
+        DirFlag::new(canonical(replica_directory.primary()), false),
+        DirFlag::new(canonical(replica_directory.extra()), false),
     ])
     .await;
-    assert!(
-        set_broker_config(addr, 1, "cordoned.log.dirs", &configured).await
-            == ConfigAlterOutcome::accepted()
-    );
-    wait_for_flags(addr, &[
-        DirFlag::new(first.clone(), false),
-        DirFlag::new(second.clone(), true),
-    ])
-    .await;
-
-    let v4 = cordoned_flags(addr, 4).await;
-    let mut uncordoned = vec![
-        DirFlag::new(first.clone(), false),
-        DirFlag::new(second.clone(), false),
-    ];
-    uncordoned.sort();
-    check!(v4 == uncordoned);
-
-    let refused = alter_replica_log_dirs(addr, Path::new(&extra_str), "t", vec![0]).await;
-    check!(refused == move_result("t", 39));
-
-    assert!(
-        set_broker_config(addr, 1, "cordoned.log.dirs", "").await == ConfigAlterOutcome::accepted()
-    );
-    wait_for_flags(addr, &[
-        DirFlag::new(first, false),
-        DirFlag::new(second, false),
-    ])
-    .await;
-    let accepted = alter_replica_log_dirs(addr, Path::new(&extra_str), "t", vec![0]).await;
-    check!(accepted == move_result("t", 0));
-
-    handle.shutdown().await;
 }
-
-/// The issue's table: cordon the second directory, then `DescribeLogDirs` v5
-/// flags it and v4 has no field to carry the flag; a move into it is 39, and
-/// the same move succeeds once it is uncordoned.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/alter_replica_log_dirs/cordoned.feature",
-    name = "a cordoned dir is flagged and refuses replica moves"
+#[rstest_bdd_macros::when(
+    "broker 1 sets cordoned.log.dirs to \"{value}\" through IncrementalAlterConfigs"
 )]
-#[tokio::test]
-async fn a_cordoned_dir_is_flagged_and_refuses_replica_moves() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("alter replica log dirs cordoned: an unknown cordoned dir is refused")]
-async fn bdd_verify_an_unknown_cordoned_dir_is_refused() {
-    let (handle, _primary, _extra, addr) = start_two_dir_broker().await;
-    let refused = set_broker_config(addr, 1, "cordoned.log.dirs", "/nope").await;
+async fn alter_cordoned_replica_directories(
+    replica_directory: &mut ReplicaDirectoryScenario,
+    value: String,
+) {
+    let value = if value == "extra configured path" {
+        replica_directory.extra().display().to_string()
+    } else if value == "<empty>" {
+        String::new()
+    } else {
+        value
+    };
+    replica_directory.config_result =
+        Some(set_broker_config(replica_directory.address(), 1, "cordoned.log.dirs", &value).await);
+}
+#[rstest_bdd_macros::then(
+    "the alter succeeds and DescribeLogDirs v5 reports primary uncordoned and extra cordoned {cordoned}"
+)]
+async fn described_cordoned_replica_directory(
+    replica_directory: &ReplicaDirectoryScenario,
+    cordoned: bool,
+) {
+    assert!(
+        replica_directory
+            .config_result
+            .as_ref()
+            .expect("config alter response")
+            == &ConfigAlterOutcome::accepted()
+    );
+    wait_for_flags(replica_directory.address(), &[
+        DirFlag::new(canonical(replica_directory.primary()), false),
+        DirFlag::new(canonical(replica_directory.extra()), cordoned),
+    ])
+    .await;
+}
+#[rstest_bdd_macros::then(
+    "DescribeLogDirs v4 omits cordoning and reports both directories uncordoned"
+)]
+async fn legacy_directory_cordon_flags(replica_directory: &ReplicaDirectoryScenario) {
+    let actual = cordoned_flags(replica_directory.address(), 4).await;
+    let mut expected = vec![
+        DirFlag::new(canonical(replica_directory.primary()), false),
+        DirFlag::new(canonical(replica_directory.extra()), false),
+    ];
+    expected.sort();
+    check!(actual == expected);
+}
+#[rstest_bdd_macros::then("the complete replica move response has partition 0 error code {code}")]
+async fn cordoned_destination_move_response(
+    replica_directory: &mut ReplicaDirectoryScenario,
+    code: i16,
+) {
+    check!(replica_directory.response.as_ref().expect("move response") == &move_result("t", code));
+    if code == 0 {
+        replica_directory.shutdown().await;
+    }
+}
+#[rstest_bdd_macros::then("cordoning refuses with code 42 and message \"{message}\"")]
+async fn unknown_cordoned_directory_response(
+    replica_directory: &mut ReplicaDirectoryScenario,
+    message: String,
+) {
     check!(
-        refused
-            == ConfigAlterOutcome {
+        replica_directory
+            .config_result
+            .as_ref()
+            .expect("config refusal")
+            == &ConfigAlterOutcome {
                 error_code: 42,
-                error_message: Some(
-                    "requirement failed: All entries in cordoned.log.dirs must be present in \
-                     log.dirs or log.dir. Missing entries : /nope"
-                        .to_owned()
-                ),
+                error_message: Some(message)
             }
     );
-    handle.shutdown().await;
+    replica_directory.shutdown().await;
 }
-
-/// `kafka-configs --alter --add-config cordoned.log.dirs=/nope` on
-/// `apache/kafka:4.3.1` fails with `InvalidRequestException` and Kafka's
-/// `requirement failed` message, and nothing is cordoned.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/alter_replica_log_dirs/cordoned.feature",
-    name = "an unknown cordoned dir is refused"
+    path = "tests/features/storage/replica_directory_cordoning.feature",
+    name = "Cordoning is versioned in descriptions and blocks moves until removed"
 )]
 #[tokio::test]
-async fn an_unknown_cordoned_dir_is_refused() {}
+async fn a_cordoned_dir_is_flagged_and_refuses_replica_moves(
+    replica_directory: ReplicaDirectoryScenario,
+) {
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/storage/replica_directory_cordoning.feature",
+    name = "Cordoning cannot name an unconfigured directory"
+)]
+#[tokio::test]
+async fn an_unknown_cordoned_dir_is_refused(replica_directory: ReplicaDirectoryScenario) {}

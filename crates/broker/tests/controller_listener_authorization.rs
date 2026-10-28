@@ -29,7 +29,7 @@ use {
         broker_heartbeat_request::{self, BrokerHeartbeatRequest},
         broker_heartbeat_response::BrokerHeartbeatResponse,
         create_topics_request::{self},
-        create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
+        create_topics_response::CreateTopicsResponse,
         describe_cluster_request::{self, DescribeClusterRequest},
         describe_cluster_response::DescribeClusterResponse,
         describe_quorum_request::{self},
@@ -169,25 +169,6 @@ fn decode<T: Decode<'static>>(bytes: &Bytes, version: i16) -> T {
     decoded
 }
 
-async fn check_quorum_denied<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S, version: i16) {
-    let refused = exchange(
-        stream,
-        describe_quorum_request::API_KEY,
-        version,
-        true,
-        &describe_quorum(),
-    )
-    .await;
-    check!(
-        decode::<DescribeQuorumResponse>(&refused, version)
-            == DescribeQuorumResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                error_message: Some(MESSAGE.to_owned()),
-                ..Default::default()
-            }
-    );
-}
-
 async fn sasl_plain(stream: &mut TcpStream, user: &str, password: &str) {
     let handshake = exchange(
         stream,
@@ -258,61 +239,67 @@ fn describe_quorum() -> Bytes {
     )
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "controller listener authorization: a plaintext controller listener authorizes every request for anonymous"
+#[derive(Default)]
+struct PlainControllerAuthorization {
+    node: Option<RunningBroker>,
+    stream: Option<TcpStream>,
+    vote: Option<VoteResponse>,
+    refused: Option<KrabkaSubmitChangeResponse>,
+    heartbeat: Option<BrokerHeartbeatResponse>,
+    applied: Option<KrabkaSubmitChangeResponse>,
+}
+#[rstest::fixture]
+fn plain_controller_auth() -> PlainControllerAuthorization {
+    let node = None;
+    PlainControllerAuthorization {
+        node,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "an open plaintext controller connection has principal ANONYMOUS and no ClusterAction grant"
 )]
-async fn bdd_verify_a_plaintext_controller_listener_authorizes_every_request_for_anonymous() {
-    let RunningBroker { broker, dir: _dir } = start(ListenerProtocol::Plaintext, &[]).await;
-    let mut stream = TcpStream::connect(broker.controller_addr())
-        .await
-        .expect("connect controller listener");
-
-    let vote_version = vote_request::MAX_VERSION;
-    let vote = exchange(
-        &mut stream,
+async fn anonymous_controller_connection(plain_controller_auth: &mut PlainControllerAuthorization) {
+    let node = start(ListenerProtocol::Plaintext, &[]).await;
+    plain_controller_auth.stream = Some(
+        TcpStream::connect(node.broker.controller_addr())
+            .await
+            .expect("controller connection"),
+    );
+    plain_controller_auth.node = Some(node);
+}
+#[rstest_bdd_macros::when(
+    "ANONYMOUS sends Vote, SubmitChange for anonymous-denied and BrokerHeartbeat for broker 1 at epoch -1 on that connection"
+)]
+async fn anonymous_controller_requests(plain_controller_auth: &mut PlainControllerAuthorization) {
+    let stream = plain_controller_auth
+        .stream
+        .as_mut()
+        .expect("controller connection");
+    let version = vote_request::MAX_VERSION;
+    let bytes = exchange(
+        stream,
         vote_request::API_KEY,
-        vote_version,
+        version,
         true,
-        &encode(&VoteRequest::default(), vote_version),
+        &encode(&VoteRequest::default(), version),
     )
     .await;
-    check!(
-        decode::<VoteResponse>(&vote, vote_version)
-            == VoteResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                ..Default::default()
-            }
-    );
-
-    let refused = exchange(
-        &mut stream,
+    plain_controller_auth.vote = Some(decode(&bytes, version));
+    let bytes = exchange(
+        stream,
         API_KEY_SUBMIT_CHANGE,
         0,
         true,
         &submit_change("anonymous-denied"),
     )
     .await;
-    check!(
-        submit_change_response(&refused)
-            == KrabkaSubmitChangeResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                leader_hint: -1,
-                result: Bytes::new(),
-            }
-    );
-    check!(
-        broker
-            .controller_image_for_test()
-            .topic("anonymous-denied")
-            .is_none()
-    );
-
-    let heartbeat_version = broker_heartbeat_request::MAX_VERSION;
-    let heartbeat = exchange(
-        &mut stream,
+    plain_controller_auth.refused = Some(submit_change_response(&bytes));
+    let version = broker_heartbeat_request::MAX_VERSION;
+    let bytes = exchange(
+        stream,
         broker_heartbeat_request::API_KEY,
-        heartbeat_version,
+        version,
         true,
         &encode(
             &BrokerHeartbeatRequest {
@@ -320,85 +307,182 @@ async fn bdd_verify_a_plaintext_controller_listener_authorizes_every_request_for
                 broker_epoch: -1,
                 ..Default::default()
             },
-            heartbeat_version,
+            version,
         ),
     )
     .await;
+    plain_controller_auth.heartbeat = Some(decode(&bytes, version));
+}
+#[rstest_bdd_macros::then(
+    "Vote and SubmitChange return their complete authorization failure shapes, the heartbeat returns code 31 and anonymous-denied is absent"
+)]
+fn anonymous_controller_refusals(plain_controller_auth: &PlainControllerAuthorization) {
     check!(
-        decode::<BrokerHeartbeatResponse>(&heartbeat, heartbeat_version).error_code
+        plain_controller_auth.vote.as_ref().expect("Vote response")
+            == &VoteResponse {
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                ..Default::default()
+            }
+    );
+    check!(
+        plain_controller_auth
+            .refused
+            .as_ref()
+            .expect("SubmitChange response")
+            == &KrabkaSubmitChangeResponse {
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                leader_hint: -1,
+                result: Bytes::new()
+            }
+    );
+    check!(
+        plain_controller_auth
+            .heartbeat
+            .as_ref()
+            .expect("heartbeat response")
+            .error_code
             == CLUSTER_AUTHORIZATION_FAILED
     );
-
-    allow(&broker, "User:ANONYMOUS", AclOperation::ClusterAction).await;
-    let applied = exchange(
-        &mut stream,
+    check!(
+        plain_controller_auth
+            .node
+            .as_ref()
+            .expect("controller broker")
+            .broker
+            .controller_image_for_test()
+            .topic("anonymous-denied")
+            .is_none()
+    );
+}
+#[rstest_bdd_macros::when(
+    "User:ANONYMOUS receives ClusterAction and submits anonymous-allowed on the same controller connection"
+)]
+async fn grant_anonymous_controller_action(
+    plain_controller_auth: &mut PlainControllerAuthorization,
+) {
+    allow(
+        &plain_controller_auth
+            .node
+            .as_ref()
+            .expect("controller broker")
+            .broker,
+        "User:ANONYMOUS",
+        AclOperation::ClusterAction,
+    )
+    .await;
+    let bytes = exchange(
+        plain_controller_auth
+            .stream
+            .as_mut()
+            .expect("same controller connection"),
         API_KEY_SUBMIT_CHANGE,
         0,
         true,
         &submit_change("anonymous-allowed"),
     )
     .await;
-    check!(submit_change_response(&applied).error_code == 0);
+    plain_controller_auth.applied = Some(submit_change_response(&bytes));
+}
+#[rstest_bdd_macros::then(
+    "SubmitChange succeeds and anonymous-allowed is committed without reconnecting"
+)]
+async fn authorized_anonymous_controller_action(
+    plain_controller_auth: &mut PlainControllerAuthorization,
+) {
     check!(
-        broker
+        plain_controller_auth
+            .applied
+            .as_ref()
+            .expect("authorized submission")
+            .error_code
+            == 0
+    );
+    let node = plain_controller_auth
+        .node
+        .take()
+        .expect("controller broker");
+    check!(
+        node.broker
             .controller_image_for_test()
             .topic("anonymous-allowed")
             .is_some()
     );
-
-    broker.shutdown().await;
+    node.broker.shutdown().await;
 }
 
-/// A `PLAINTEXT` controller listener authorizes every request for
-/// `ANONYMOUS`.
-///
-/// Without a grant, `Vote`, the private `SubmitChange` and `BrokerHeartbeat`
-/// get `CLUSTER_AUTHORIZATION_FAILED`, and no record is committed. The
-/// connection stays open. After an ACL grants `ClusterAction` to
-/// `User:ANONYMOUS`, the next `SubmitChange` on the same connection commits.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_listener_authorization.feature",
-    name = "a plaintext controller listener authorizes every request for anonymous"
+#[derive(Default)]
+struct SaslControllerAuthorization {
+    node: Option<RunningBroker>,
+    creator: Option<TcpStream>,
+    replicator: Option<TcpStream>,
+    reader: Option<TcpStream>,
+    created: Option<CreateTopicsResponse>,
+    fetched: Option<KrabkaMetadataFetchResponse>,
+    replicator_quorum: Option<DescribeQuorumResponse>,
+    reader_quorum: Option<DescribeQuorumResponse>,
+    reader_cluster: Option<DescribeClusterResponse>,
+}
+#[rstest::fixture]
+fn sasl_controller_auth() -> SaslControllerAuthorization {
+    let node = None;
+    SaslControllerAuthorization {
+        node,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "SASL PLAIN controller users creator, replicator and reader hold only cluster Create, ClusterAction and Describe respectively"
 )]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_plaintext_controller_listener_authorizes_every_request_for_anonymous() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "controller listener authorization: a sasl controller listener authorizes each request for its principal"
-)]
-async fn bdd_verify_a_sasl_controller_listener_authorizes_each_request_for_its_principal() {
-    const CREATOR: Credential = Credential {
-        user: "creator",
-        password: "creator-secret",
-    };
-    const REPLICATOR: Credential = Credential {
-        user: "replicator",
-        password: "replicator-secret",
-    };
-    const READER: Credential = Credential {
-        user: "reader",
-        password: "reader-secret",
-    };
-
-    let RunningBroker { broker, dir: _dir } = start(ListenerProtocol::SaslPlaintext, &[
-        CREATOR, REPLICATOR, READER,
-    ])
-    .await;
-    allow(&broker, "User:creator", AclOperation::Create).await;
-    allow(&broker, "User:replicator", AclOperation::ClusterAction).await;
-    allow(&broker, "User:reader", AclOperation::Describe).await;
-
-    let mut creator = TcpStream::connect(broker.controller_addr())
-        .await
-        .expect("connect");
-    sasl_plain(&mut creator, CREATOR.user, CREATOR.password).await;
-    let create_version = create_topics_request::MAX_VERSION;
-    let created = exchange(
-        &mut creator,
+async fn named_controller_connections(sasl_controller_auth: &mut SaslControllerAuthorization) {
+    let credentials = [
+        Credential {
+            user: "creator",
+            password: "creator-secret",
+        },
+        Credential {
+            user: "replicator",
+            password: "replicator-secret",
+        },
+        Credential {
+            user: "reader",
+            password: "reader-secret",
+        },
+    ];
+    let node = start(ListenerProtocol::SaslPlaintext, &credentials).await;
+    for (credential, operation) in credentials.iter().zip([
+        AclOperation::Create,
+        AclOperation::ClusterAction,
+        AclOperation::Describe,
+    ]) {
+        allow(
+            &node.broker,
+            &format!("User:{}", credential.user),
+            operation,
+        )
+        .await;
+        let mut stream = TcpStream::connect(node.broker.controller_addr())
+            .await
+            .expect("controller connection");
+        sasl_plain(&mut stream, credential.user, credential.password).await;
+        match credential.user {
+            "creator" => sasl_controller_auth.creator = Some(stream),
+            "replicator" => sasl_controller_auth.replicator = Some(stream),
+            "reader" => sasl_controller_auth.reader = Some(stream),
+            _ => unreachable!("fixed controller users"),
+        }
+    }
+    sasl_controller_auth.node = Some(node);
+}
+#[rstest_bdd_macros::when("creator creates topic created-by-creator on the controller connection")]
+async fn creator_controller_topic(sasl_controller_auth: &mut SaslControllerAuthorization) {
+    let version = create_topics_request::MAX_VERSION;
+    let bytes = exchange(
+        sasl_controller_auth
+            .creator
+            .as_mut()
+            .expect("creator connection"),
         create_topics_request::API_KEY,
-        create_version,
+        version,
         true,
         &encode(
             &create_topic_request(
@@ -406,24 +490,37 @@ async fn bdd_verify_a_sasl_controller_listener_authorizes_each_request_for_its_p
                     .name("created-by-creator".to_owned())
                     .call(),
             ),
-            create_version,
+            version,
         ),
     )
     .await;
-    let created = decode::<CreateTopicsResponse>(&created, create_version);
+    sasl_controller_auth.created = Some(decode(&bytes, version));
+}
+#[rstest_bdd_macros::then(
+    "the creation response contains exactly created-by-creator with success code 0"
+)]
+fn creator_controller_topic_response(sasl_controller_auth: &SaslControllerAuthorization) {
+    let response = sasl_controller_auth
+        .created
+        .as_ref()
+        .expect("creation response");
     check!(
-        created
+        response
             .topics
             .iter()
-            .map(|topic: &CreatableTopicResult| (topic.name.as_str(), topic.error_code))
+            .map(|topic| (topic.name.as_str(), topic.error_code))
             .collect::<Vec<_>>()
-            == vec![("created-by-creator", 0)]
+            == [("created-by-creator", 0)]
     );
-
-    let mut replicator = TcpStream::connect(broker.controller_addr())
-        .await
-        .expect("connect");
-    sasl_plain(&mut replicator, REPLICATOR.user, REPLICATOR.password).await;
+}
+#[rstest_bdd_macros::when(
+    "replicator fetches metadata from offset 0 with max bytes 1024 and then describes the metadata quorum"
+)]
+async fn replicator_controller_requests(sasl_controller_auth: &mut SaslControllerAuthorization) {
+    let stream = sasl_controller_auth
+        .replicator
+        .as_mut()
+        .expect("replicator connection");
     let mut fetch = Vec::new();
     KrabkaMetadataFetchRequest {
         fetch_offset: 0,
@@ -432,84 +529,130 @@ async fn bdd_verify_a_sasl_controller_listener_authorizes_each_request_for_its_p
         replica_directory_id: uuid::Uuid::nil(),
     }
     .encode_v0(&mut fetch);
-    let fetched = exchange(&mut replicator, API_KEY_METADATA_FETCH, 0, true, &fetch).await;
-    let mut cursor: &[u8] = &fetched;
-    check!(
-        KrabkaMetadataFetchResponse::decode_v0(&mut cursor)
-            .expect("decode MetadataFetch")
-            .error_code
-            == 0
+    let bytes = exchange(stream, API_KEY_METADATA_FETCH, 0, true, &fetch).await;
+    sasl_controller_auth.fetched = Some(
+        KrabkaMetadataFetchResponse::decode_v0(&mut &bytes[..]).expect("MetadataFetch response"),
     );
-    let quorum_version = describe_quorum_request::MAX_VERSION;
-    check_quorum_denied(&mut replicator, quorum_version).await;
-
-    let mut reader = TcpStream::connect(broker.controller_addr())
-        .await
-        .expect("connect");
-    sasl_plain(&mut reader, READER.user, READER.password).await;
-    let served = exchange(
-        &mut reader,
+    let version = describe_quorum_request::MAX_VERSION;
+    let bytes = exchange(
+        stream,
         describe_quorum_request::API_KEY,
-        quorum_version,
+        version,
         true,
         &describe_quorum(),
     )
     .await;
-    check!(decode::<DescribeQuorumResponse>(&served, quorum_version).error_code == 0);
-    let cluster_version = describe_cluster_request::MAX_VERSION;
-    let refused = exchange(
-        &mut reader,
+    sasl_controller_auth.replicator_quorum = Some(decode(&bytes, version));
+}
+#[rstest_bdd_macros::then(
+    "MetadataFetch succeeds but replicator's complete DescribeQuorum response is an authorization failure"
+)]
+fn replicator_controller_responses(sasl_controller_auth: &SaslControllerAuthorization) {
+    check!(
+        sasl_controller_auth
+            .fetched
+            .as_ref()
+            .expect("metadata fetch response")
+            .error_code
+            == 0
+    );
+    check!(
+        sasl_controller_auth
+            .replicator_quorum
+            .as_ref()
+            .expect("quorum response")
+            == &DescribeQuorumResponse {
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                error_message: Some(MESSAGE.to_owned()),
+                ..Default::default()
+            }
+    );
+}
+#[rstest_bdd_macros::when(
+    "reader describes the metadata quorum and describes cluster endpoint type 2 on the same controller connection"
+)]
+async fn reader_controller_requests(sasl_controller_auth: &mut SaslControllerAuthorization) {
+    let stream = sasl_controller_auth
+        .reader
+        .as_mut()
+        .expect("reader connection");
+    let version = describe_quorum_request::MAX_VERSION;
+    let bytes = exchange(
+        stream,
+        describe_quorum_request::API_KEY,
+        version,
+        true,
+        &describe_quorum(),
+    )
+    .await;
+    sasl_controller_auth.reader_quorum = Some(decode(&bytes, version));
+    let version = describe_cluster_request::MAX_VERSION;
+    let bytes = exchange(
+        stream,
         describe_cluster_request::API_KEY,
-        cluster_version,
+        version,
         true,
         &encode(
             &DescribeClusterRequest {
                 endpoint_type: 2,
                 ..Default::default()
             },
-            cluster_version,
+            version,
         ),
     )
     .await;
+    sasl_controller_auth.reader_cluster = Some(decode(&bytes, version));
+}
+#[rstest_bdd_macros::then(
+    "reader's DescribeQuorum succeeds but its complete DescribeCluster response is an authorization failure"
+)]
+async fn reader_controller_responses(sasl_controller_auth: &mut SaslControllerAuthorization) {
     check!(
-        decode::<DescribeClusterResponse>(&refused, cluster_version)
-            == DescribeClusterResponse {
+        sasl_controller_auth
+            .reader_quorum
+            .as_ref()
+            .expect("quorum response")
+            .error_code
+            == 0
+    );
+    check!(
+        sasl_controller_auth
+            .reader_cluster
+            .as_ref()
+            .expect("cluster response")
+            == &DescribeClusterResponse {
                 error_code: CLUSTER_AUTHORIZATION_FAILED,
                 error_message: Some(MESSAGE.to_owned()),
                 ..Default::default()
             }
     );
-
-    broker.shutdown().await;
+    sasl_controller_auth
+        .node
+        .take()
+        .expect("controller broker")
+        .broker
+        .shutdown()
+        .await;
 }
-
-/// A `SASL_PLAINTEXT` controller listener keeps a connection whose principal
-/// lacks `ClusterAction`, and it authorizes each request for that principal.
-///
-/// - `creator` holds `Create` on the cluster: `CreateTopics` creates the
-///   topic. Before #684 the handshake dropped the connection.
-/// - `replicator` holds `ClusterAction`: `MetadataFetch` is served, and
-///   `DescribeQuorum`, which needs `Describe`, is refused.
-/// - `reader` holds `Describe`: `DescribeQuorum` is served, and
-///   `DescribeCluster`, which needs `Alter` on a controller, is refused.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_listener_authorization.feature",
-    name = "a sasl controller listener authorizes each request for its principal"
+#[derive(Default)]
+struct TlsControllerAuthorization {
+    node: Option<RunningBroker>,
+    pem_directory: Option<tempfile::TempDir>,
+    stream: Option<TlsStream<TcpStream>>,
+    responses: Vec<DescribeQuorumResponse>,
+}
+#[rstest::fixture]
+fn tls_controller_auth() -> TlsControllerAuthorization {
+    let node = None;
+    TlsControllerAuthorization {
+        node,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "a mutually authenticated TLS controller connection uses the fixture client certificate principal without a Describe grant"
 )]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_sasl_controller_listener_authorizes_each_request_for_its_principal() {}
-
-use crate::support::tls::{
-    CLIENT_PRINCIPAL, DEV_CERT, DEV_CLIENT_CA, DEV_CLIENT_CERT, DEV_CLIENT_KEY, DEV_KEY,
-};
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "controller listener authorization: an ssl controller listener authorizes each request for the certificate principal"
-)]
-async fn bdd_verify_an_ssl_controller_listener_authorizes_each_request_for_the_certificate_principal()
- {
+async fn certificate_controller_connection(tls_controller_auth: &mut TlsControllerAuthorization) {
     let _ = aws_lc_rs::default_provider().install_default();
     let pem_dir = tempfile::TempDir::new().expect("tempdir");
     let write = |name: &str, contents: &str| {
@@ -524,7 +667,7 @@ async fn bdd_verify_an_ssl_controller_listener_authorizes_each_request_for_the_c
         client_ca_path: Some(write("client_ca.pem", DEV_CLIENT_CA)),
         client_auth: krabka_security::ClientAuthMode::Required,
     };
-    let RunningBroker { broker, dir: _dir } = start_with(ListenerProtocol::Ssl, &[], |config| {
+    let RunningBroker { broker, dir } = start_with(ListenerProtocol::Ssl, &[], |config| {
         config.tls_config = Some(tls);
     })
     .await;
@@ -551,7 +694,7 @@ async fn bdd_verify_an_ssl_controller_listener_authorizes_each_request_for_the_c
     let tcp = TcpStream::connect(broker.controller_addr())
         .await
         .expect("connect controller listener");
-    let mut stream = tokio_rustls::TlsConnector::from(Arc::new(client))
+    let stream = tokio_rustls::TlsConnector::from(Arc::new(client))
         .connect(
             ServerName::try_from("krabka-dev").expect("server name"),
             tcp,
@@ -559,39 +702,116 @@ async fn bdd_verify_an_ssl_controller_listener_authorizes_each_request_for_the_c
         .await
         .expect("mTLS handshake");
 
-    let quorum_version = describe_quorum_request::MAX_VERSION;
-    check_quorum_denied(&mut stream, quorum_version).await;
-
-    allow(
-        &broker,
-        &format!("User:{CLIENT_PRINCIPAL}"),
-        AclOperation::Describe,
-    )
-    .await;
-    let served = exchange(
-        &mut stream,
+    tls_controller_auth.node = Some(RunningBroker { broker, dir });
+    tls_controller_auth.pem_directory = Some(pem_dir);
+    tls_controller_auth.stream = Some(stream);
+}
+#[rstest_bdd_macros::when(
+    "the certificate principal sends DescribeQuorum without a Describe grant"
+)]
+async fn refused_certificate_quorum(tls_controller_auth: &mut TlsControllerAuthorization) {
+    let version = describe_quorum_request::MAX_VERSION;
+    let bytes = exchange(
+        tls_controller_auth
+            .stream
+            .as_mut()
+            .expect("TLS controller connection"),
         describe_quorum_request::API_KEY,
-        quorum_version,
+        version,
         true,
         &describe_quorum(),
     )
     .await;
-    check!(decode::<DescribeQuorumResponse>(&served, quorum_version).error_code == 0);
-
-    broker.shutdown().await;
+    tls_controller_auth.responses.push(decode(&bytes, version));
 }
-
-/// An `SSL` controller listener authorizes each request for the principal of
-/// the client certificate.
-///
-/// Before #684 the controller listener took no principal from a certificate
-/// and checked nothing on `SSL`. Now `DescribeQuorum` from the certificate
-/// principal is refused until an ACL grants `Describe` to that principal, and
-/// then it is served on the same connection.
-#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "the complete certificate-authenticated DescribeQuorum response has authorization error 31 and Cluster authorization failed message"
+)]
+fn certificate_quorum_denial(tls_controller_auth: &TlsControllerAuthorization) {
+    check!(
+        tls_controller_auth.responses.as_slice()
+            == [DescribeQuorumResponse {
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                error_message: Some(MESSAGE.to_owned()),
+                ..Default::default()
+            }]
+    );
+}
+#[rstest_bdd_macros::when(
+    "the certificate principal receives Describe and sends DescribeQuorum again on the same TLS connection"
+)]
+async fn granted_certificate_quorum(tls_controller_auth: &mut TlsControllerAuthorization) {
+    allow(
+        &tls_controller_auth
+            .node
+            .as_ref()
+            .expect("TLS controller broker")
+            .broker,
+        &format!("User:{CLIENT_PRINCIPAL}"),
+        AclOperation::Describe,
+    )
+    .await;
+    let version = describe_quorum_request::MAX_VERSION;
+    let bytes = exchange(
+        tls_controller_auth
+            .stream
+            .as_mut()
+            .expect("same TLS connection"),
+        describe_quorum_request::API_KEY,
+        version,
+        true,
+        &describe_quorum(),
+    )
+    .await;
+    tls_controller_auth.responses.push(decode(&bytes, version));
+}
+#[rstest_bdd_macros::then(
+    "the next certificate-authenticated DescribeQuorum response succeeds without reconnecting"
+)]
+async fn certificate_quorum_success(tls_controller_auth: &mut TlsControllerAuthorization) {
+    let [_, response] = tls_controller_auth.responses.as_slice() else {
+        panic!("denied and allowed responses required")
+    };
+    check!(response.error_code == 0);
+    tls_controller_auth
+        .node
+        .take()
+        .expect("TLS controller broker")
+        .broker
+        .shutdown()
+        .await;
+}
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_listener_authorization.feature",
-    name = "an ssl controller listener authorizes each request for the certificate principal"
+    path = "tests/features/controller/listener_authorization.feature",
+    name = "Plaintext authorization is checked for each request on an open connection"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_principal() {}
+async fn a_plaintext_controller_listener_authorizes_every_request_for_anonymous(
+    plain_controller_auth: PlainControllerAuthorization,
+) {
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/listener_authorization.feature",
+    name = "SASL principals receive only the controller operations they hold"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sasl_controller_listener_authorizes_each_request_for_its_principal(
+    sasl_controller_auth: SaslControllerAuthorization,
+) {
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/listener_authorization.feature",
+    name = "TLS certificate identity authorizes each request on the same connection"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_principal(
+    tls_controller_auth: TlsControllerAuthorization,
+) {
+}
+
+use {
+    crate::support::tls::{
+        CLIENT_PRINCIPAL, DEV_CERT, DEV_CLIENT_CA, DEV_CLIENT_CERT, DEV_CLIENT_KEY, DEV_KEY,
+    },
+    tokio_rustls::client::TlsStream,
+};

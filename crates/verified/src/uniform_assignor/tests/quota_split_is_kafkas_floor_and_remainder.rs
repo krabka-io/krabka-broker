@@ -36,6 +36,8 @@ struct AssignmentScenario {
 
 #[fixture]
 fn assignment() -> AssignmentScenario {
+    // Start this scenario with fresh inputs and observations.
+
     AssignmentScenario {
         partition_total: 0,
         members: 0,

@@ -1,4 +1,8 @@
-Feature: src replicator fetch loop
+Feature: Replication fetch requests separate response and per-partition budgets
+  Kafka's default response budget leaves room for several partitions so a full
+  batch from one partition does not consume the entire leader response.
 
-  Scenario: tests: the default envelope asks for kafka s response and partition maximums
-    Then replicator fetch loop tests: the default envelope asks for kafka s response and partition maximums
+  Scenario: Build the initial follower fetch with Kafka's default byte limits
+    Given a follower replicates a partition with default replication fetch limits
+    When the follower builds its initial partition fetch request
+    Then the fetch response budget is 10485760 bytes and its partition budget is 1048576 bytes

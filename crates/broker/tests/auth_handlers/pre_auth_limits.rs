@@ -43,6 +43,8 @@ use {
         primitives::uuid::Uuid,
     },
     krabka_security::SaslMechanism,
+    rstest::fixture,
+    rstest_bdd_macros::{given, then, when},
     std::{
         io,
         net::SocketAddr,
@@ -214,33 +216,6 @@ async fn plain_login(stream: &mut TcpStream, password: &str) -> Result<(), io::E
 
 async fn scrape_metrics(addr: SocketAddr) -> String { http_get(addr, "/metrics", false).await }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auth handlers pre auth limits: a frame over the sasl receive limit fails the authentication"
-)]
-async fn bdd_verify_a_frame_over_the_sasl_receive_limit_fails_the_authentication() {
-    let handle = start_broker(|cfg| {
-        cfg.sasl_server_max_receive = krabka_units::kibibytes(1);
-        cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
-    })
-    .await;
-    let metrics_addr = handle.metrics_addr().expect("metrics server bound");
-
-    // A SaslAuthenticate that declares 2 KiB, over the 1 KiB limit. The
-    // stream carries the size prefix and 8 body bytes, so a broker that
-    // tried to read the frame first would wait on it instead.
-    let mut stream = TcpStream::connect(handle.listen_addr()).await.unwrap();
-    let mut frame = 2048_u32.to_be_bytes().to_vec();
-    frame.extend_from_slice(&[0; 8]);
-    stream.write_all(&frame).await.unwrap();
-    assert_closed_without_a_frame(&mut stream, "an oversize pre-auth frame").await;
-
-    let body = scrape_metrics(metrics_addr).await;
-    handle.shutdown().await;
-    let needle = "krabka_broker_failed_authentication_total{mechanism=\"Unknown\"} 1";
-    assert!(body.contains(needle), "missing {needle} in:\n{body}");
-}
-
 /// A size prefix over `sasl.server.max.receive.size` fails the authentication
 /// before the frame is read. The peer gets no answer, since Kafka builds none
 /// for it, and the broker counts a failed authentication.
@@ -250,89 +225,12 @@ async fn bdd_verify_a_frame_over_the_sasl_receive_limit_fails_the_authentication
     name = "a frame over the sasl receive limit fails the authentication"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_frame_over_the_sasl_receive_limit_fails_the_authentication() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auth handlers pre auth limits: the larger request limit returns once the peer authenticated"
-)]
-async fn bdd_verify_the_larger_request_limit_returns_once_the_peer_authenticated() {
-    let handle = start_broker(|cfg| {
-        cfg.sasl_server_max_receive = krabka_units::kibibytes(1);
-    })
-    .await;
-    let addr = handle.listen_addr();
-
-    // A 2 KiB Metadata request, as a list of topic names.
-    let topics = (0..64)
-        .map(|index| {
-            metadata_topic(
-                Some(format!("a-topic-name-of-thirty-two-bytes-{index:02}")),
-                Uuid::default(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let metadata = encode(
-        &metadata_request::MetadataRequest {
-            allow_auto_topic_creation: false,
-            ..topic_metadata_request(Some(topics))
-        },
-        12,
-    );
-    assert!(
-        metadata.len() > 2048,
-        "the request is {} bytes",
-        metadata.len()
-    );
-
-    // Mid-exchange the frame is over the limit: a handshake has chosen a
-    // mechanism, and the next frame is read under the 1 KiB limit.
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let handshake = encode(
-        &sasl_handshake_request::SaslHandshakeRequest {
-            mechanism: "PLAIN".to_owned(),
-            ..Default::default()
-        },
-        1,
-    );
-    round_trip(
-        &mut stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(17),
-            version: WireApiVersion(1),
-            ..Default::default()
-        },
-        &handshake,
-    )
-    .await
-    .expect("handshake");
-    stream
-        .write_all(&request_frame().api_key(36).body(&vec![0u8; 2048]).call())
-        .await
-        .unwrap();
-    assert_closed_without_a_frame(&mut stream, "an oversize frame mid-exchange").await;
-
-    // Once authenticated, the same size is an ordinary request.
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    plain_login(&mut stream, &admin_plain_password())
-        .await
-        .expect("login");
-    let body = round_trip(
-        &mut stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(3),
-            version: WireApiVersion(12),
-            correlation: WireCorrelationId(4),
-            header: RequestHeaderEncoding::Flexible,
-        },
-        &metadata,
-    )
-    .await
-    .expect("Metadata after authentication");
-    let response =
-        metadata_response::MetadataResponse::decode(&mut &body[..], 12).expect("decode Metadata");
-    check!(response.topics.len() == 64);
-    handle.shutdown().await;
+async fn a_frame_over_the_sasl_receive_limit_fails_the_authentication(limits: PreAuthentication) {
+    limits
+        .broker
+        .expect("a pre-authentication broker")
+        .shutdown()
+        .await;
 }
 
 /// The frame limit is `sasl.server.max.receive.size` for the whole exchange
@@ -344,39 +242,12 @@ async fn bdd_verify_the_larger_request_limit_returns_once_the_peer_authenticated
     name = "the larger request limit returns once the peer authenticated"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_larger_request_limit_returns_once_the_peer_authenticated() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auth handlers pre auth limits: a failed authentication holds its answer for the configured delay"
-)]
-async fn bdd_verify_a_failed_authentication_holds_its_answer_for_the_configured_delay() {
-    let delay = Duration::from_millis(600);
-    let handle = start_broker(|cfg| {
-        cfg.connection_failed_authentication_delay = krabka_units::millis(600);
-    })
-    .await;
-
-    let mut stream = TcpStream::connect(handle.listen_addr()).await.unwrap();
-    let started = Instant::now();
-    let outcome = plain_login(&mut stream, &wrong_scram_password()).await;
-    let elapsed = started.elapsed();
-    check!(outcome.is_err(), "{outcome:?}");
-    check!(
-        elapsed >= delay,
-        "the failure came after {elapsed:?}, before the {delay:?} delay"
-    );
-    assert_closed_without_a_frame(&mut stream, "after the failed authentication").await;
-    handle.shutdown().await;
-
-    let handle = start_broker(|cfg| {
-        cfg.connection_failed_authentication_delay = krabka_units::millis(0);
-    })
-    .await;
-    let mut stream = TcpStream::connect(handle.listen_addr()).await.unwrap();
-    let outcome = plain_login(&mut stream, &wrong_scram_password()).await;
-    check!(outcome.is_err(), "{outcome:?}");
-    handle.shutdown().await;
+async fn the_larger_request_limit_returns_once_the_peer_authenticated(limits: PreAuthentication) {
+    limits
+        .broker
+        .expect("a pre-authentication broker")
+        .shutdown()
+        .await;
 }
 
 /// A failed authentication answers no sooner than
@@ -388,58 +259,16 @@ async fn bdd_verify_a_failed_authentication_holds_its_answer_for_the_configured_
     name = "a failed authentication holds its answer for the configured delay"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_failed_authentication_holds_its_answer_for_the_configured_delay() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auth handlers pre auth limits: a second api versions before the handshake closes the connection"
-)]
-async fn bdd_verify_a_second_api_versions_before_the_handshake_closes_the_connection() {
-    let handle = start_broker(|_| {}).await;
-    let addr = handle.listen_addr();
-
-    // A refused ApiVersions leaves the state alone, whichever way it is
-    // refused, and the retries, a valid one, and a handshake all follow.
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let unsupported = round_trip(
-        &mut stream,
-        SocketExchangeSetup {
-            version: WireApiVersion(i16::MAX),
-            header: RequestHeaderEncoding::Flexible,
-            ..Default::default()
-        },
-        &[0xff],
-    )
-    .await
-    .expect("UNSUPPORTED_VERSION answer");
-    check!(
-        api_versions_response::ApiVersionsResponse::decode(&mut &unsupported[..], 0)
-            .expect("decode")
-            .error_code
-            == 35
-    );
-    let invalid = api_versions(&mut stream, 3, &named_client("not valid!")).await;
-    check!(invalid.error_code == 42);
-    let valid = api_versions(&mut stream, 3, &named_client("krabka-test")).await;
-    check!(valid.error_code == 0);
-    plain_login(&mut stream, &admin_plain_password())
-        .await
-        .expect("the handshake follows one valid ApiVersions");
-
-    // A second valid one is what Kafka refuses.
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let first = api_versions(&mut stream, 3, &named_client("krabka-test")).await;
-    check!(first.error_code == 0);
-    stream
-        .write_all(
-            &request_frame()
-                .body(&encode(&named_client("krabka-test"), 3))
-                .call(),
-        )
-        .await
-        .unwrap();
-    assert_closed_without_a_frame(&mut stream, "a second ApiVersions").await;
-    handle.shutdown().await;
+async fn a_failed_authentication_holds_its_answer_for_the_configured_delay(
+    limits: PreAuthentication,
+    delay: u32,
+) {
+    let _ = delay;
+    limits
+        .broker
+        .expect("a pre-authentication broker")
+        .shutdown()
+        .await;
 }
 
 /// After one valid `ApiVersions` only a `SaslHandshake` is taken. A second
@@ -452,44 +281,14 @@ async fn bdd_verify_a_second_api_versions_before_the_handshake_closes_the_connec
     name = "a second api versions before the handshake closes the connection"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_second_api_versions_before_the_handshake_closes_the_connection() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auth handlers pre auth limits: a pre auth api versions carries no rebootstrap check"
-)]
-async fn bdd_verify_a_pre_auth_api_versions_carries_no_rebootstrap_check() {
-    let handle = start_broker(|cfg| {
-        cfg.features.unstable_api_versions = UnstableApiVersions::Enabled;
-    })
-    .await;
-    let stale = api_versions_request::ApiVersionsRequest {
-        cluster_id: Some("some-other-cluster".into()),
-        node_id: 41,
-        ..api_versions_request_for("krabka-test", "1.0")
-    };
-
-    let mut stream = TcpStream::connect(handle.listen_addr()).await.unwrap();
-    let before = api_versions(&mut stream, 5, &stale).await;
-    check!(before.error_code == 0, "before authentication: {before:?}");
-    check!(!before.api_keys.is_empty());
-
-    // A cluster id without a node id is invalid whichever code answers.
-    let mut lone_cluster = stale.clone();
-    lone_cluster.node_id = -1;
-    let mut fresh = TcpStream::connect(handle.listen_addr()).await.unwrap();
-    let invalid = api_versions(&mut fresh, 5, &lone_cluster).await;
-    check!(invalid.error_code == 42, "{invalid:?}");
-
-    plain_login(&mut stream, &admin_plain_password())
-        .await
-        .expect("login after the ApiVersions");
-    let after = api_versions(&mut stream, 5, &stale).await;
-    check!(
-        after.error_code == REBOOTSTRAP_REQUIRED,
-        "after authentication: {after:?}"
-    );
-    handle.shutdown().await;
+async fn a_second_api_versions_before_the_handshake_closes_the_connection(
+    limits: PreAuthentication,
+) {
+    limits
+        .broker
+        .expect("a pre-authentication broker")
+        .shutdown()
+        .await;
 }
 
 /// `SaslServerAuthenticator` answers the first `ApiVersions` from its own
@@ -502,4 +301,404 @@ async fn bdd_verify_a_pre_auth_api_versions_carries_no_rebootstrap_check() {
     name = "a pre auth api versions carries no rebootstrap check"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_pre_auth_api_versions_carries_no_rebootstrap_check() {}
+async fn a_pre_auth_api_versions_carries_no_rebootstrap_check(limits: PreAuthentication) {
+    limits
+        .broker
+        .expect("a pre-authentication broker")
+        .shutdown()
+        .await;
+}
+
+struct PreAuthentication {
+    broker: Option<BrokerHandle>,
+    stream: Option<TcpStream>,
+    versions: Option<api_versions_response::ApiVersionsResponse>,
+    metadata_request: Vec<u8>,
+    metadata: Option<metadata_response::MetadataResponse>,
+    login: Option<io::Result<()>>,
+    minimum_delay: Duration,
+    elapsed: Option<Duration>,
+    metrics: Option<String>,
+    stale_identity: Option<api_versions_request::ApiVersionsRequest>,
+}
+
+#[fixture]
+fn limits() -> PreAuthentication {
+    // Start this scenario with fresh inputs and observations.
+
+    PreAuthentication {
+        broker: None,
+        stream: None,
+        versions: None,
+        metadata_request: Vec::new(),
+        metadata: None,
+        login: None,
+        minimum_delay: Duration::ZERO,
+        elapsed: None,
+        metrics: None,
+        stale_identity: None,
+    }
+}
+
+#[given("a PLAIN broker with a 1 KiB SASL receive limit and authentication metrics")]
+async fn limited_metrics_broker(limits: &mut PreAuthentication) {
+    limits.broker = Some(
+        start_broker(|config| {
+            config.sasl_server_max_receive = krabka_units::kibibytes(1);
+            config.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
+        })
+        .await,
+    );
+}
+
+#[given("a PLAIN broker with a 1 KiB SASL receive limit")]
+async fn limited_broker(limits: &mut PreAuthentication) {
+    limits.broker = Some(
+        start_broker(|config| config.sasl_server_max_receive = krabka_units::kibibytes(1)).await,
+    );
+}
+
+#[given("a PLAIN broker with failed-authentication delay {delay} milliseconds")]
+async fn delayed_broker(limits: &mut PreAuthentication, delay: u32) {
+    limits.broker = Some(
+        start_broker(|config| {
+            config.connection_failed_authentication_delay = krabka_units::millis(delay);
+        })
+        .await,
+    );
+    limits.minimum_delay = Duration::from_millis(u64::from(delay));
+}
+
+#[given("a PLAIN broker before any ApiVersions negotiation")]
+async fn default_preauth_broker(limits: &mut PreAuthentication) {
+    limits.broker = Some(start_broker(|_| {}).await);
+}
+
+#[given("a PLAIN broker with unstable API versions enabled")]
+async fn unstable_preauth_broker(limits: &mut PreAuthentication) {
+    limits.broker = Some(
+        start_broker(|config| config.features.unstable_api_versions = UnstableApiVersions::Enabled)
+            .await,
+    );
+}
+
+#[given("a fresh unauthenticated socket to that PLAIN broker")]
+async fn fresh_preauth_socket(limits: &mut PreAuthentication) {
+    let addr = limits
+        .broker
+        .as_ref()
+        .expect("a PLAIN broker")
+        .listen_addr();
+    limits.stream = Some(TcpStream::connect(addr).await.unwrap());
+}
+
+#[given("a Metadata request for 64 topics exceeds 2048 encoded bytes")]
+fn large_metadata_request(limits: &mut PreAuthentication) {
+    let topics = (0..64)
+        .map(|index| {
+            metadata_topic(
+                Some(format!("a-topic-name-of-thirty-two-bytes-{index:02}")),
+                Uuid::default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    limits.metadata_request = encode(
+        &metadata_request::MetadataRequest {
+            allow_auto_topic_creation: false,
+            ..topic_metadata_request(Some(topics))
+        },
+        12,
+    );
+    assert!(
+        limits.metadata_request.len() > 2048,
+        "the request is {} bytes",
+        limits.metadata_request.len()
+    );
+}
+
+#[given("PLAIN has been selected but authentication is incomplete")]
+async fn incomplete_plain_exchange(limits: &mut PreAuthentication) {
+    fresh_preauth_socket(limits).await;
+    let handshake = encode(
+        &sasl_handshake_request::SaslHandshakeRequest {
+            mechanism: "PLAIN".to_owned(),
+            ..Default::default()
+        },
+        1,
+    );
+    round_trip(
+        limits.stream.as_mut().expect("a PLAIN socket"),
+        SocketExchangeSetup {
+            api_key: WireApiKey(17),
+            version: WireApiVersion(1),
+            ..Default::default()
+        },
+        &handshake,
+    )
+    .await
+    .expect("handshake");
+}
+
+#[given("the requested cluster id is stale and node id is 41")]
+fn stale_cluster_identity(limits: &mut PreAuthentication) {
+    limits.stale_identity = Some(api_versions_request::ApiVersionsRequest {
+        cluster_id: Some("some-other-cluster".into()),
+        node_id: 41,
+        ..api_versions_request_for("krabka-test", "1.0")
+    });
+}
+
+#[when("the client declares a 2048 byte frame but sends only 8 body bytes")]
+async fn oversize_prefix(limits: &mut PreAuthentication) {
+    fresh_preauth_socket(limits).await;
+    let mut frame = 2048_u32.to_be_bytes().to_vec();
+    frame.extend_from_slice(&[0; 8]);
+    limits
+        .stream
+        .as_mut()
+        .expect("a pre-authentication socket")
+        .write_all(&frame)
+        .await
+        .unwrap();
+}
+
+#[when("a 2048 byte SaslAuthenticate body is sent mid-exchange")]
+async fn oversize_mid_exchange(limits: &mut PreAuthentication) {
+    limits
+        .stream
+        .as_mut()
+        .expect("an incomplete PLAIN exchange")
+        .write_all(&request_frame().api_key(36).body(&vec![0u8; 2048]).call())
+        .await
+        .unwrap();
+}
+
+#[then("the unauthenticated socket closes without a response frame")]
+async fn limited_connection_closed(limits: &mut PreAuthentication) {
+    assert_closed_without_a_frame(
+        limits.stream.as_mut().expect("a pre-authentication socket"),
+        "the pre-authentication request",
+    )
+    .await;
+}
+
+#[when("the pre-authentication metrics are scraped")]
+async fn preauth_metric_samples(limits: &mut PreAuthentication) {
+    let addr = limits
+        .broker
+        .as_ref()
+        .expect("a metrics-enabled PLAIN broker")
+        .metrics_addr()
+        .expect("metrics server bound");
+    limits.metrics = Some(scrape_metrics(addr).await);
+}
+
+#[then("the Unknown-mechanism failed-authentication counter equals 1")]
+fn oversized_authentication_counted(limits: &PreAuthentication) {
+    let body = limits
+        .metrics
+        .as_ref()
+        .expect("pre-authentication metrics were scraped");
+    let needle = "krabka_broker_failed_authentication_total{mechanism=\"Unknown\"} 1";
+    assert!(body.contains(needle), "missing {needle} in:\n{body}");
+}
+
+#[given("admin authenticates on a fresh PLAIN socket")]
+async fn authenticated_admin_socket(limits: &mut PreAuthentication) {
+    fresh_preauth_socket(limits).await;
+    plain_login(
+        limits.stream.as_mut().expect("a fresh PLAIN socket"),
+        &admin_plain_password(),
+    )
+    .await
+    .expect("login");
+}
+
+#[when("the authenticated socket sends that large Metadata request")]
+async fn authenticated_large_request(limits: &mut PreAuthentication) {
+    let body = round_trip(
+        limits
+            .stream
+            .as_mut()
+            .expect("an authenticated PLAIN socket"),
+        SocketExchangeSetup {
+            api_key: WireApiKey(3),
+            version: WireApiVersion(12),
+            correlation: WireCorrelationId(4),
+            header: RequestHeaderEncoding::Flexible,
+        },
+        &limits.metadata_request,
+    )
+    .await
+    .expect("Metadata after authentication");
+    limits.metadata = Some(
+        metadata_response::MetadataResponse::decode(&mut &body[..], 12).expect("decode Metadata"),
+    );
+}
+
+#[then("the authenticated Metadata response contains all 64 requested topics")]
+fn large_authenticated_response(limits: &PreAuthentication) {
+    check!(
+        limits
+            .metadata
+            .as_ref()
+            .expect("a large Metadata request was answered")
+            .topics
+            .len()
+            == 64
+    );
+}
+
+#[when("admin attempts PLAIN authentication with a wrong password")]
+async fn delayed_wrong_password(limits: &mut PreAuthentication) {
+    fresh_preauth_socket(limits).await;
+    let started = Instant::now();
+    limits.login = Some(
+        plain_login(
+            limits.stream.as_mut().expect("a fresh PLAIN socket"),
+            &wrong_scram_password(),
+        )
+        .await,
+    );
+    limits.elapsed = Some(started.elapsed());
+}
+
+#[then("the failed authentication honors the configured minimum delay")]
+fn delayed_failed_authentication(limits: &PreAuthentication) {
+    let outcome = limits
+        .login
+        .as_ref()
+        .expect("wrong-password authentication was attempted");
+    check!(outcome.is_err(), "{outcome:?}");
+    let elapsed = limits
+        .elapsed
+        .expect("the authentication response time was measured");
+    let delay = limits.minimum_delay;
+    check!(
+        elapsed >= delay,
+        "the failure came after {elapsed:?}, before the {delay:?} delay"
+    );
+}
+
+#[when("the client sends an unsupported ApiVersions request")]
+async fn unsupported_api_version(limits: &mut PreAuthentication) {
+    let body = round_trip(
+        limits.stream.as_mut().expect("a pre-authentication socket"),
+        SocketExchangeSetup {
+            version: WireApiVersion(i16::MAX),
+            header: RequestHeaderEncoding::Flexible,
+            ..Default::default()
+        },
+        &[0xff],
+    )
+    .await
+    .expect("UNSUPPORTED_VERSION answer");
+    limits.versions = Some(
+        api_versions_response::ApiVersionsResponse::decode(&mut &body[..], 0).expect("decode"),
+    );
+}
+
+#[when("ApiVersions v3 client name {name} is negotiated")]
+async fn named_api_versions(limits: &mut PreAuthentication, name: String) {
+    limits.versions = Some(
+        api_versions(
+            limits.stream.as_mut().expect("a pre-authentication socket"),
+            3,
+            &named_client(&name),
+        )
+        .await,
+    );
+}
+
+#[then("the ApiVersions request returns error {code}")]
+fn negotiated_error(limits: &PreAuthentication, code: i16) {
+    let response = limits.versions.as_ref().expect("ApiVersions was requested");
+    check!(response.error_code == code, "{response:?}");
+}
+
+#[when("admin authenticates on the current PLAIN socket")]
+async fn login_after_negotiation(limits: &mut PreAuthentication) {
+    limits.login = Some(
+        plain_login(
+            limits.stream.as_mut().expect("the negotiated PLAIN socket"),
+            &admin_plain_password(),
+        )
+        .await,
+    );
+}
+
+#[then("PLAIN authentication succeeds after the negotiation")]
+fn login_after_api_versions(limits: &PreAuthentication) {
+    limits
+        .login
+        .as_ref()
+        .expect("admin attempted PLAIN authentication")
+        .as_ref()
+        .expect("the handshake follows one valid ApiVersions");
+}
+
+#[when("a second valid ApiVersions frame is sent before a handshake")]
+async fn duplicate_api_versions(limits: &mut PreAuthentication) {
+    limits
+        .stream
+        .as_mut()
+        .expect("a socket that already negotiated ApiVersions")
+        .write_all(
+            &request_frame()
+                .body(&encode(&named_client("krabka-test"), 3))
+                .call(),
+        )
+        .await
+        .unwrap();
+}
+
+#[when("ApiVersions v5 is requested with that stale cluster identity")]
+async fn stale_api_versions(limits: &mut PreAuthentication) {
+    let request = limits
+        .stale_identity
+        .as_ref()
+        .expect("a stale cluster identity");
+    limits.versions =
+        Some(api_versions(limits.stream.as_mut().expect("a PLAIN socket"), 5, request).await);
+}
+
+#[when("a fresh client sends that cluster id without a node id")]
+async fn missing_node_identity(limits: &mut PreAuthentication) {
+    let addr = limits
+        .broker
+        .as_ref()
+        .expect("an unstable-version PLAIN broker")
+        .listen_addr();
+    let mut request = limits
+        .stale_identity
+        .as_ref()
+        .expect("a stale cluster identity")
+        .clone();
+    request.node_id = -1;
+    let mut fresh = TcpStream::connect(addr).await.unwrap();
+    limits.versions = Some(api_versions(&mut fresh, 5, &request).await);
+}
+
+#[then("the pre-authentication ApiVersions response advertises supported APIs")]
+fn preauth_apis_nonempty(limits: &PreAuthentication) {
+    check!(
+        !limits
+            .versions
+            .as_ref()
+            .expect("ApiVersions was requested before authentication")
+            .api_keys
+            .is_empty()
+    );
+}
+
+#[then("the authenticated stale identity requires rebootstrap")]
+fn stale_routing_rejected(limits: &PreAuthentication) {
+    let response = limits
+        .versions
+        .as_ref()
+        .expect("the authenticated stale identity was requested");
+    check!(
+        response.error_code == REBOOTSTRAP_REQUIRED,
+        "after authentication: {response:?}"
+    );
+}

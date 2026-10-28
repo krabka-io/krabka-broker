@@ -38,14 +38,6 @@ pub(super) fn op(key: &'static str, value: f64) -> QuotaOp {
     }
 }
 
-pub(super) fn op_remove(key: &'static str, value: f64) -> QuotaOp {
-    QuotaOp {
-        key,
-        value,
-        remove: true,
-    }
-}
-
 pub(super) fn entry(entity: Vec<EntityPart<'_>>, ops: Vec<QuotaOp>) -> EntryData {
     EntryData {
         entity: entity

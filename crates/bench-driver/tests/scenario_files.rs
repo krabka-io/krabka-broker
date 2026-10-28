@@ -15,13 +15,17 @@ use {
 struct BenchmarkScenario {
     paths: Vec<PathBuf>,
     loaded: Vec<Scenario>,
+    reparsed: Vec<Scenario>,
 }
 
 #[fixture]
 fn benchmark() -> BenchmarkScenario {
+    // Start this scenario with fresh inputs and observations.
+
     BenchmarkScenario {
         paths: Vec::new(),
         loaded: Vec::new(),
+        reparsed: Vec::new(),
     }
 }
 
@@ -70,14 +74,19 @@ fn runnable(benchmark: &BenchmarkScenario) {
     }
 }
 
-#[then("every benchmark round trips through YAML")]
-fn round_trip(benchmark: &BenchmarkScenario) -> Result<(), Box<dyn Error>> {
-    assert!(!benchmark.loaded.is_empty());
+#[when("every loaded benchmark is serialized and reparsed")]
+fn serialize_benchmarks(benchmark: &mut BenchmarkScenario) -> Result<(), Box<dyn Error>> {
     for scenario in &benchmark.loaded {
         let yaml = serde_saphyr::to_string(scenario)?;
-        let reparsed: Scenario = serde_saphyr::from_str(&yaml)?;
-        assert!(reparsed == *scenario);
+        benchmark.reparsed.push(serde_saphyr::from_str(&yaml)?);
     }
     Ok(())
 }
+
+#[then("every benchmark round trips through YAML")]
+fn round_trip(benchmark: &BenchmarkScenario) {
+    assert!(!benchmark.loaded.is_empty());
+    assert!(benchmark.reparsed == benchmark.loaded);
+}
+
 scenarios!("tests/features/scenario_files", fixtures = [benchmark: BenchmarkScenario]);

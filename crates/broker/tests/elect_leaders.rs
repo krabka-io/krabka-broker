@@ -45,3 +45,56 @@ mod unclean;
 mod wait;
 #[path = "elect_leaders/wire.rs"]
 mod wire;
+
+#[derive(Default)]
+struct OperatorElectionScenario {
+    lock: Option<MutexGuard<'static, ()>>,
+    cluster: Vec<(
+        krabka_broker::BrokerHandle,
+        krabka_broker::BrokerConfig,
+        tempfile::TempDir,
+    )>,
+    address: Option<SocketAddr>,
+    revived: Option<krabka_broker::BrokerHandle>,
+    retired_directory: Option<tempfile::TempDir>,
+    result: Option<Vec<(i32, i16)>>,
+    all_result: Option<Vec<(String, i32, i16)>>,
+}
+#[rstest::fixture]
+fn operator_election() -> OperatorElectionScenario {
+    let lock = None;
+    OperatorElectionScenario {
+        lock,
+        ..Default::default()
+    }
+}
+impl OperatorElectionScenario {
+    fn address(&self) -> SocketAddr { self.address.expect("election endpoint") }
+
+    async fn shutdown(&mut self) {
+        if let Some(revived) = self.revived.take() {
+            revived.shutdown().await;
+        }
+        support::shutdown_cluster(mem::take(&mut self.cluster)).await;
+    }
+}
+#[rstest_bdd_macros::given("three plaintext brokers are registered for operator leader elections")]
+async fn registered_operator_election_cluster(operator_election: &mut OperatorElectionScenario) {
+    operator_election.lock = Some(cluster_lock().lock().await);
+    operator_election.cluster = support::registered_cluster(3).await;
+}
+#[rstest_bdd_macros::then("ElectLeaders returns partition 0 with success code 0")]
+fn successful_operator_election(operator_election: &OperatorElectionScenario) {
+    assert2::assert!(
+        operator_election
+            .result
+            .as_ref()
+            .expect("election response")
+            == &[(0, 0)]
+    );
+}
+
+use {
+    std::{mem, net::SocketAddr},
+    tokio::sync::MutexGuard,
+};

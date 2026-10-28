@@ -42,8 +42,7 @@ pub(super) fn client_metrics_config_record(
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
-        crate::{codes, handlers::alter_configs::test_support::client_metrics_resource},
+        super::*, crate::handlers::alter_configs::test_support::client_metrics_resource,
         assert2::assert,
     };
 
@@ -65,61 +64,65 @@ mod tests {
         assert!(record == expected);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers alter configs client metrics configs tests: client metrics replacement refusals match kafka"
-    )]
-    fn bdd_verify_client_metrics_replacement_refusals_match_kafka() {
-        for (name, subscription, configs, expected) in [
-            (
-                "interval below the minimum",
-                "sub-a",
-                &[("interval.ms", "5")][..],
-                (
-                    codes::INVALID_REQUEST,
-                    "Invalid value 5 for interval.ms, interval must be between 100 and 3600000 \
-                     (1 hour)",
-                ),
-            ),
-            (
-                "unknown key",
-                "sub-a",
-                &[("bogus.key", "x")][..],
-                (
-                    codes::INVALID_REQUEST,
-                    "Unknown client metrics configuration: bogus.key",
-                ),
-            ),
-            (
-                "interval not an int",
-                "sub-a",
-                &[("interval.ms", "abc")][..],
-                (
-                    codes::INVALID_CONFIG,
-                    "Invalid value abc for configuration interval.ms: Not a number of type INT",
-                ),
-            ),
-            (
-                "empty subscription name",
-                "",
-                &[][..],
-                (codes::INVALID_REQUEST, "Subscription name can't be empty"),
-            ),
-        ] {
-            let error =
-                client_metrics_config_record(&client_metrics_resource(subscription, configs))
-                    .expect_err(name);
-            assert2::check!(error == (expected.0, expected.1.to_owned()), "case {name}");
+    #[derive(Default)]
+    struct ClientMetricsReplacementScenario {
+        subscription: String,
+        key: String,
+        value: String,
+        result: Option<Result<MetadataRecord, (i16, String)>>,
+    }
+    #[rstest::fixture]
+    fn client_metrics_replacement() -> ClientMetricsReplacementScenario {
+        let subscription = String::new();
+        ClientMetricsReplacementScenario {
+            subscription,
+            ..Default::default()
         }
     }
-
-    /// `ClientMetricsConfigs.validate`: an unknown key, an out-of-range
-    /// interval and an empty subscription name are `InvalidRequestException`
-    /// (42), a value `ConfigDef` cannot parse is `ConfigException` (40).
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/alter_configs/client_metrics_configs.feature",
-        name = "tests: client metrics replacement refusals match kafka"
+    #[rstest_bdd_macros::given(
+        "client metrics subscription {subscription} is replaced with key {key} value {value}"
     )]
-    fn client_metrics_replacement_refusals_match_kafka() {}
+    fn client_metrics_replacement_input(
+        client_metrics_replacement: &mut ClientMetricsReplacementScenario,
+        subscription: String,
+        key: String,
+        value: String,
+    ) {
+        client_metrics_replacement.subscription = if subscription == "empty" {
+            String::new()
+        } else {
+            subscription
+        };
+        client_metrics_replacement.key = key;
+        client_metrics_replacement.value = value;
+    }
+    #[rstest_bdd_macros::when("the authoritative client metrics replacement record is built")]
+    fn build_client_metrics_replacement(
+        client_metrics_replacement: &mut ClientMetricsReplacementScenario,
+    ) {
+        let configs = if client_metrics_replacement.key == "none" {
+            Vec::new()
+        } else {
+            vec![(
+                client_metrics_replacement.key.as_str(),
+                client_metrics_replacement.value.as_str(),
+            )]
+        };
+        client_metrics_replacement.result = Some(client_metrics_config_record(
+            &client_metrics_resource(&client_metrics_replacement.subscription, &configs),
+        ));
+    }
+    #[rstest_bdd_macros::then(
+        "the client metrics replacement fails with code {code} and message {message}"
+    )]
+    fn check_client_metrics_replacement(
+        client_metrics_replacement: &ClientMetricsReplacementScenario,
+        code: i16,
+        message: String,
+    ) {
+        assert2::check!(
+            client_metrics_replacement.result.as_ref().unwrap() == &Err((code, message))
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_client_metrics_replacement",fixtures=[client_metrics_replacement:ClientMetricsReplacementScenario]);
 }

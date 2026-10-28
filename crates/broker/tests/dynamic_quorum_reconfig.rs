@@ -214,11 +214,30 @@ fn voter_change(result: Result<(), AdminError>, applied: i16) -> Result<(), Stri
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "dynamic quorum reconfig: brokers and controllers find a standalone quorum through bootstrap servers"
+#[derive(Default)]
+struct BootstrapQuorumScenario {
+    first: Option<StartedNode>,
+    second: Option<StartedNode>,
+    brokers: Vec<StartedNode>,
+    pending_second: Option<Node>,
+    broker_nodes: Vec<Node>,
+    pending_controller: Option<TcpSocket>,
+    bootstrap: Vec<SocketAddr>,
+    through: Option<SocketAddr>,
+    second_directory: Option<uuid::Uuid>,
+}
+#[rstest::fixture]
+fn bootstrap_quorum() -> BootstrapQuorumScenario {
+    let first = None;
+    BootstrapQuorumScenario {
+        first,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "standalone controller 3001 leads alone, controller 3002's bootstrap port refuses connections and broker nodes 1 and 2 have only both bootstrap controller endpoints"
 )]
-async fn bdd_verify_brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_servers() {
+async fn standalone_bootstrap_quorum(bootstrap_quorum: &mut BootstrapQuorumScenario) {
     support::init_tracing();
     let (client_addrs, controller_addrs, clients, controllers) =
         support::bind_and_hold_ports(4).await;
@@ -264,109 +283,214 @@ async fn bdd_verify_brokers_and_controllers_find_a_standalone_quorum_through_boo
         &listener,
     ])
     .await;
-    let StartedNode {
-        handle: first,
-        dir: first_dir,
-    } = start(first, vec![NodeRole::Controller], &log_dir, &bootstrap).await;
-    first.wait_until_controller_leader().await.unwrap();
-    let first_directory = first
-        .voter_directory_id_for_test(NodeId(3001))
-        .expect("the standalone voter");
+    let first = start(first, vec![NodeRole::Controller], &log_dir, &bootstrap).await;
+    first
+        .handle
+        .wait_until_controller_leader()
+        .await
+        .expect("standalone leader");
 
-    // The brokers know only the bootstrap server. Each finishes starting,
-    // which waits for a leader, and registers; the controller unfences them
-    // only once their heartbeats reach its controller listener.
-    let mut brokers = Vec::new();
-    for broker in [broker_one, broker_two] {
+    bootstrap_quorum.first = Some(first);
+    bootstrap_quorum.pending_second = Some(second);
+    bootstrap_quorum.broker_nodes = vec![broker_one, broker_two];
+    bootstrap_quorum.pending_controller = Some(pending_controller);
+    bootstrap_quorum.bootstrap = bootstrap.to_vec();
+}
+#[rstest_bdd_macros::when(
+    "brokers 1 and 2 start using controller bootstrap discovery without a local voter set"
+)]
+async fn discover_standalone_quorum(bootstrap_quorum: &mut BootstrapQuorumScenario) {
+    for broker in mem::take(&mut bootstrap_quorum.broker_nodes) {
         let log_dir = format(&broker, &[]).await;
-        brokers.push(start(broker, vec![NodeRole::Broker], &log_dir, &bootstrap).await);
+        bootstrap_quorum.brokers.push(
+            start(
+                broker,
+                vec![NodeRole::Broker],
+                &log_dir,
+                &bootstrap_quorum.bootstrap,
+            )
+            .await,
+        );
     }
-    first.wait_until_brokers_registered(2).await;
-    let through = brokers[0].handle.listen_addr();
-    wait_for_quorum(through, 3001, &[3001], &[1, 2]).await;
-
-    // A controller formatted to join no initial quorum observes it.
-    let log_dir = format(&second, &["--no-initial-controllers"]).await;
-    second.controller = Some(
-        pending_controller
+    bootstrap_quorum
+        .first
+        .as_ref()
+        .expect("standalone controller")
+        .handle
+        .wait_until_brokers_registered(2)
+        .await;
+    bootstrap_quorum.through = Some(bootstrap_quorum.brokers[0].handle.listen_addr());
+}
+#[rstest_bdd_macros::then(
+    "DescribeQuorum through broker 1 names leader {leader}, voters {voters} and observers {observers}"
+)]
+async fn described_bootstrap_quorum(
+    bootstrap_quorum: &BootstrapQuorumScenario,
+    leader: i32,
+    voters: String,
+    observers: String,
+) {
+    let ids = |value: &str| {
+        value
+            .split(',')
+            .map(|id| id.parse::<i32>().expect("quorum node ID"))
+            .collect::<Vec<_>>()
+    };
+    wait_for_quorum(
+        bootstrap_quorum.through.expect("broker discovery endpoint"),
+        leader,
+        &ids(&voters),
+        &ids(&observers),
+    )
+    .await;
+}
+#[rstest_bdd_macros::when(
+    "controller 3002 starts with no initial controllers and discovers the standalone quorum as an observer"
+)]
+async fn start_observing_controller(bootstrap_quorum: &mut BootstrapQuorumScenario) {
+    let mut node = bootstrap_quorum
+        .pending_second
+        .take()
+        .expect("reserved observer node");
+    let log_dir = format(&node, &["--no-initial-controllers"]).await;
+    node.controller = Some(
+        bootstrap_quorum
+            .pending_controller
+            .take()
+            .expect("reserved controller socket")
             .listen(1024)
             .expect("controller listener"),
     );
-    let StartedNode {
-        handle: second,
-        dir: second_dir,
-    } = start(second, vec![NodeRole::Controller], &log_dir, &bootstrap).await;
-    wait_for_quorum(through, 3001, &[3001], &[1, 2, 3002]).await;
-
-    // `kafka-metadata-quorum add-controller` sends `AddRaftVoter` for the new
-    // controller through the bootstrap controller.
-    let second_directory =
-        bootstrap::read_directory_id(&log_dir).expect("the joining controller's meta.properties");
-    let endpoint = RaftVoterEndpoint::new(
-        "CONTROLLER",
-        second_controller.ip().to_string(),
-        second_controller.port(),
-    )
-    .expect("endpoint");
+    bootstrap_quorum.second = Some(
+        start(
+            node,
+            vec![NodeRole::Controller],
+            &log_dir,
+            &bootstrap_quorum.bootstrap,
+        )
+        .await,
+    );
+    bootstrap_quorum.second_directory =
+        Some(bootstrap::read_directory_id(&log_dir).expect("joining directory ID"));
+}
+#[rstest_bdd_macros::when(
+    "the admin adds controller 3002 as a voter through bootstrap controller 3001"
+)]
+async fn add_bootstrap_controller_voter(bootstrap_quorum: &mut BootstrapQuorumScenario) {
+    let first = bootstrap_quorum.bootstrap[0];
+    let second = bootstrap_quorum.bootstrap[1];
+    let directory = bootstrap_quorum
+        .second_directory
+        .expect("joining voter directory");
+    let endpoint = RaftVoterEndpoint::new("CONTROLLER", second.ip().to_string(), second.port())
+        .expect("controller endpoint");
     until_ok("AddRaftVoter(3002)", || async {
-        let mut admin = AdminClient::connect_controller(&[first_controller.to_string()])
+        let mut admin = AdminClient::connect_controller(&[first.to_string()])
             .await
             .map_err(|error| error.to_string())?;
-        let added = admin
-            .add_raft_voter(None, 3002, second_directory, slice::from_ref(&endpoint))
-            .await;
-        voter_change(added, codes::DUPLICATE_VOTER)
+        voter_change(
+            admin
+                .add_raft_voter(None, 3002, directory, slice::from_ref(&endpoint))
+                .await,
+            codes::DUPLICATE_VOTER,
+        )
     })
     .await;
-    wait_for_quorum(through, 3001, &[3001, 3002], &[1, 2]).await;
-
-    // `remove-controller` takes the leader out: 3002 leads, and 3001 observes.
+}
+#[rstest_bdd_macros::when(
+    "the admin removes current leader 3001 using both controller bootstrap endpoints"
+)]
+async fn remove_bootstrap_controller_leader(bootstrap_quorum: &mut BootstrapQuorumScenario) {
+    let directory = bootstrap_quorum
+        .first
+        .as_ref()
+        .expect("initial controller")
+        .handle
+        .voter_directory_id_for_test(NodeId(3001))
+        .expect("initial voter directory");
     until_ok("RemoveRaftVoter(3001)", || async {
-        let mut admin = AdminClient::connect_controller(&[
-            first_controller.to_string(),
-            second_controller.to_string(),
-        ])
+        let mut admin = AdminClient::connect_controller(
+            &bootstrap_quorum
+                .bootstrap
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        )
         .await
         .map_err(|error| error.to_string())?;
-        let removed = admin.remove_raft_voter(None, 3001, first_directory).await;
-        voter_change(removed, codes::VOTER_NOT_FOUND)
+        voter_change(
+            admin.remove_raft_voter(None, 3001, directory).await,
+            codes::VOTER_NOT_FOUND,
+        )
     })
     .await;
-    wait_for_quorum(through, 3002, &[3002], &[1, 2, 3001]).await;
-
-    // The brokers stay in service under the new leader: their heartbeats
-    // reach it on the endpoint the voter set names. A new leader starts every
-    // registered broker alive, so the check waits out a heartbeat session
-    // first, after which a broker whose heartbeats go elsewhere is fenced.
-    time::sleep(FENCING_WINDOW).await;
-    let fenced = second.fenced_broker_ids_for_test();
-    assert!(fenced.is_empty(), "fenced under the new leader: {fenced:?}");
-
-    for StartedNode {
-        handle: broker,
-        dir: _dir,
-    } in brokers
-    {
-        broker.shutdown().await;
-    }
-    second.shutdown().await;
-    first.shutdown().await;
-    drop((first_dir, second_dir));
 }
-
-#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "neither broker is fenced after a full heartbeat session under controller 3002"
+)]
+async fn live_brokers_after_controller_reconfiguration(
+    bootstrap_quorum: &mut BootstrapQuorumScenario,
+) {
+    time::sleep(FENCING_WINDOW).await;
+    let fenced = bootstrap_quorum
+        .second
+        .as_ref()
+        .expect("replacement controller")
+        .handle
+        .fenced_broker_ids_for_test();
+    assert!(
+        fenced.is_empty(),
+        "fenced under replacement controller: {fenced:?}"
+    );
+    for StartedNode { handle, dir: _dir } in mem::take(&mut bootstrap_quorum.brokers) {
+        handle.shutdown().await;
+    }
+    bootstrap_quorum
+        .second
+        .take()
+        .expect("replacement controller")
+        .handle
+        .shutdown()
+        .await;
+    bootstrap_quorum
+        .first
+        .take()
+        .expect("former controller")
+        .handle
+        .shutdown()
+        .await;
+}
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/dynamic_quorum_reconfig.feature",
-    name = "brokers and controllers find a standalone quorum through bootstrap servers"
+    path = "tests/features/controller/bootstrap_quorum_reconfiguration.feature",
+    name = "Bootstrap discovery survives adding an observer and removing the original leader"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_servers() {}
+async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_servers(
+    bootstrap_quorum: BootstrapQuorumScenario,
+) {
+}
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "dynamic quorum reconfig: a wildcard controller advertises the host name in the voter set"
+#[derive(Default)]
+struct WildcardControllerAdvertisement {
+    node: Option<Node>,
+    log_dir: Option<PathBuf>,
+    controller: Option<StartedNode>,
+    reachable: Option<SocketAddr>,
+}
+#[rstest::fixture]
+fn wildcard_advertisement() -> WildcardControllerAdvertisement {
+    let node = None;
+    WildcardControllerAdvertisement {
+        node,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "standalone controller 3001 is formatted with a loopback voter endpoint but binds its controller listener to 0.0.0.0"
 )]
-async fn bdd_verify_a_wildcard_controller_advertises_the_host_name_in_the_voter_set() {
+async fn wildcard_controller_endpoint(
+    wildcard_advertisement: &mut WildcardControllerAdvertisement,
+) {
     support::init_tracing();
     let controller = TcpListener::bind("0.0.0.0:0").await.expect("bind");
     let controller_addr = controller.local_addr().expect("bound address");
@@ -382,12 +506,45 @@ async fn bdd_verify_a_wildcard_controller_advertises_the_host_name_in_the_voter_
     let reachable: SocketAddr = ([127, 0, 0, 1], controller_addr.port()).into();
     let listener = reachable.to_string();
     let log_dir = format(&node, &["--standalone", "--controller-listener", &listener]).await;
-    let StartedNode {
-        handle: controller,
-        dir: _dir,
-    } = start(node, vec![NodeRole::Controller], &log_dir, &[reachable]).await;
-    controller.wait_until_controller_leader().await.unwrap();
-
+    wildcard_advertisement.node = Some(node);
+    wildcard_advertisement.log_dir = Some(log_dir);
+    wildcard_advertisement.reachable = Some(reachable);
+}
+#[rstest_bdd_macros::when("the wildcard-bound controller starts and elects itself")]
+async fn start_wildcard_controller(wildcard_advertisement: &mut WildcardControllerAdvertisement) {
+    let node = wildcard_advertisement
+        .node
+        .take()
+        .expect("formatted wildcard node");
+    let started = start(
+        node,
+        vec![NodeRole::Controller],
+        wildcard_advertisement
+            .log_dir
+            .as_ref()
+            .expect("formatted log directory"),
+        &[wildcard_advertisement
+            .reachable
+            .expect("reachable controller")],
+    )
+    .await;
+    started
+        .handle
+        .wait_until_controller_leader()
+        .await
+        .expect("standalone leader");
+    wildcard_advertisement.controller = Some(started);
+}
+#[rstest_bdd_macros::then(
+    "the voter set advertises this machine's hostname on the bound controller port with listener name CONTROLLER"
+)]
+async fn advertised_wildcard_hostname(
+    wildcard_advertisement: &mut WildcardControllerAdvertisement,
+) {
+    let reachable = wildcard_advertisement
+        .reachable
+        .expect("reachable controller");
+    let controller_addr = reachable;
     let host_name = hostname::get()
         .expect("this machine's host name")
         .into_string()
@@ -421,22 +578,22 @@ async fn bdd_verify_a_wildcard_controller_advertises_the_host_name_in_the_voter_
         );
         time::sleep(Duration::from_millis(100)).await;
     }
-    controller.shutdown().await;
+    wildcard_advertisement
+        .controller
+        .take()
+        .expect("wildcard controller")
+        .handle
+        .shutdown()
+        .await;
 }
-
-/// A controller bound to a wildcard address, as the system test starts every
-/// controller with `--controller-listen-addr 0.0.0.0:9592`, advertises this
-/// machine's host name in the voter set, as Kafka advertises the canonical
-/// host name of a wildcard controller listener.
-///
-/// It once advertised `127.0.0.1` there. The leader's `UpdateRaftVoter`
-/// committed that address over the one `--controller-listener` gave the
-/// format, and a broker on another machine then sent every heartbeat to its
-/// own loopback address: it stayed fenced and never finished starting.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/dynamic_quorum_reconfig.feature",
-    name = "a wildcard controller advertises the host name in the voter set"
+    path = "tests/features/controller/bootstrap_quorum_reconfiguration.feature",
+    name = "Wildcard controller bindings advertise a reachable hostname"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_wildcard_controller_advertises_the_host_name_in_the_voter_set() {}
+async fn a_wildcard_controller_advertises_the_host_name_in_the_voter_set(
+    wildcard_advertisement: WildcardControllerAdvertisement,
+) {
+}
+
+use std::mem;

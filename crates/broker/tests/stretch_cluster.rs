@@ -73,7 +73,7 @@
 
 use {
     std::{future::Future, time::Duration},
-    support::{SITE_A, SITE_B, SITE_C, SITES, cluster_lock},
+    support::{SITE_A, SITE_C, SITES, cluster_lock},
 };
 
 mod support;

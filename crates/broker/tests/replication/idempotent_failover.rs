@@ -38,31 +38,26 @@ use {
     tempfile::TempDir,
 };
 
-/// The idempotent producer of every batch in this module.
-const PRODUCER_ID: i64 = 7_331;
-
-/// The `max_timestamp` of every batch. The topic is a `CreateTime` topic, so a
-/// duplicate answers with this value in `log_append_time_ms`: Kafka's
-/// `UnifiedLog.append` copies `BatchMetadata.timestamp` there.
-const BATCH_MAX_TIMESTAMP: i64 = 1_700_000_000_000;
-
-/// The number of records in every batch.
-const RECORDS_PER_BATCH: i32 = 3;
-
 type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
 
-/// The batch at producer sequence `base_sequence`, with
-/// [`RECORDS_PER_BATCH`] records. A retry sends the same batch again.
-fn idempotent_batch(base_sequence: i32) -> RecordBatch {
+struct ProducerBatchSpec {
+    id: i64,
+    epoch: i16,
+    records: i32,
+    timestamp: i64,
+}
+
+/// Construct the exact producer batch specified by the scenario.
+fn idempotent_batch(spec: &ProducerBatchSpec, base_sequence: i32) -> RecordBatch {
     RecordBatch {
-        last_offset_delta: RECORDS_PER_BATCH - 1,
-        base_timestamp: BATCH_MAX_TIMESTAMP,
-        max_timestamp: BATCH_MAX_TIMESTAMP,
-        producer_id: PRODUCER_ID,
-        producer_epoch: 0,
+        last_offset_delta: spec.records - 1,
+        base_timestamp: spec.timestamp,
+        max_timestamp: spec.timestamp,
+        producer_id: spec.id,
+        producer_epoch: spec.epoch,
         base_sequence,
         ..batch_from_records(
-            (0..RECORDS_PER_BATCH)
+            (0..spec.records)
                 .map(|offset_delta| {
                     value_record(
                         offset_delta,
@@ -86,15 +81,6 @@ fn appended(base_offset: i64) -> PartitionProduceResponse {
         error_message: None,
         current_leader: LeaderIdAndEpoch::default(),
         unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    }
-}
-
-/// The row of a retry that the leader recognized as a duplicate of the batch
-/// at `base_offset`.
-fn duplicate_of(base_offset: i64) -> PartitionProduceResponse {
-    PartitionProduceResponse {
-        log_append_time_ms: BATCH_MAX_TIMESTAMP,
-        ..appended(base_offset)
     }
 }
 
@@ -179,143 +165,266 @@ async fn batch_base_offsets(
     logs
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "replication idempotent failover: a leader elected by a controlled shutdown answers a replicated retry as a duplicate"
-)]
-async fn bdd_verify_a_leader_elected_by_a_controlled_shutdown_answers_a_replicated_retry_as_a_duplicate()
- {
-    let _g = cluster_lock().lock().await;
-    let mut cluster = registered_cluster(3).await;
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::mem::take,
+    tokio::sync::MutexGuard,
+};
 
-    // Do not stop the controller leader: it holds the only replica of an
-    // internal partition, which a controlled shutdown cannot move.
-    let controller = cluster[0].0.wait_until_controller_leader().await.unwrap();
-    let controller_idx = cluster
+#[derive(Default)]
+struct IdempotentReplication {
+    cluster: Cluster,
+    guard: Option<MutexGuard<'static, ()>>,
+    retired_directory: Option<TempDir>,
+    topic: String,
+    topic_id: Option<WireUuid>,
+    leader: u64,
+    batch: Option<ProducerBatchSpec>,
+    response: Option<PartitionProduceResponse>,
+    logs: Option<Vec<Option<Vec<i64>>>>,
+}
+
+#[fixture]
+fn idempotent_replication() -> IdempotentReplication {
+    // Retain the producer batch definition through the real leadership changes.
+    IdempotentReplication::default()
+}
+
+#[given("three registered brokers replicate an idempotent producer's log")]
+async fn idempotent_replica_cluster(idempotent_replication: &mut IdempotentReplication) {
+    idempotent_replication.guard = Some(cluster_lock().lock().await);
+    idempotent_replication.cluster = registered_cluster(3).await;
+}
+
+#[given(
+    "producer {id} uses epoch {epoch} with {records} records per batch at timestamp {timestamp}"
+)]
+fn idempotent_batch_spec(
+    idempotent_replication: &mut IdempotentReplication,
+    id: i64,
+    epoch: i16,
+    records: i32,
+    timestamp: i64,
+) {
+    idempotent_replication.batch = Some(ProducerBatchSpec {
+        id,
+        epoch,
+        records,
+        timestamp,
+    });
+}
+
+impl IdempotentReplication {
+    async fn install_topic(&mut self, topic: String, replicas: Vec<i32>) {
+        self.leader = u64::try_from(replicas[0]).expect("leader node ID");
+        self.topic_id = Some(create_topic(&self.cluster, &topic, &replicas).await);
+        broker(&self.cluster, self.leader)
+            .wait_until_local_partition_leader(&topic, 0, krabka_raft::NodeId(self.leader))
+            .await;
+        self.topic = topic;
+    }
+
+    async fn shutdown(&mut self) {
+        shutdown_cluster(take(&mut self.cluster)).await;
+        self.retired_directory.take();
+        self.guard.take();
+    }
+}
+
+#[given("topic {topic} pins broker one as leader with replicas one, two, and three")]
+async fn initially_led_idempotent_topic(
+    idempotent_replication: &mut IdempotentReplication,
+    topic: String,
+) {
+    idempotent_replication
+        .install_topic(topic, vec![1, 2, 3])
+        .await;
+}
+
+#[given("topic {topic} chooses a data leader other than the active controller")]
+async fn independently_led_idempotent_topic(
+    idempotent_replication: &mut IdempotentReplication,
+    topic: String,
+) {
+    let controller = idempotent_replication.cluster[0]
+        .0
+        .wait_until_controller_leader()
+        .await
+        .unwrap();
+    let controller_index = idempotent_replication
+        .cluster
         .iter()
         .position(|(_, config, _)| config.node_id == controller)
-        .expect("controller leader in cluster");
-    let leader_idx = (controller_idx + 1) % cluster.len();
-    let leader = i32::try_from(cluster[leader_idx].1.node_id.0).expect("node id");
+        .expect("controller member");
+    let leader_index = (controller_index + 1) % idempotent_replication.cluster.len();
+    let leader =
+        i32::try_from(idempotent_replication.cluster[leader_index].1.node_id.0).expect("node ID");
     let mut replicas = vec![leader];
     replicas.extend(
-        cluster
+        idempotent_replication
+            .cluster
             .iter()
-            .map(|(_, config, _)| i32::try_from(config.node_id.0).expect("node id"))
+            .map(|(_, config, _)| i32::try_from(config.node_id.0).expect("node ID"))
             .filter(|node| *node != leader),
     );
-    let topic = "idempotent-bounce";
-    let topic_id = create_topic(&cluster, topic, &replicas).await;
-    cluster[leader_idx]
-        .0
-        .wait_until_local_partition_leader(topic, 0, cluster[leader_idx].1.node_id)
-        .await;
+    idempotent_replication.install_topic(topic, replicas).await;
+}
 
-    let first = produce(&cluster[leader_idx].0, topic, topic_id, idempotent_batch(0)).await;
-    let unanswered = produce(&cluster[leader_idx].0, topic, topic_id, idempotent_batch(3)).await;
-    assert!((first, unanswered) == (appended(0), appended(3)));
-    batch_base_offsets(&cluster, topic, 6).await;
+#[when("the current leader receives the idempotent batch beginning at sequence {sequence}")]
+async fn produce_idempotent_replica_batch(
+    idempotent_replication: &mut IdempotentReplication,
+    sequence: i32,
+) {
+    idempotent_replication.response = Some(
+        produce(
+            broker(
+                &idempotent_replication.cluster,
+                idempotent_replication.leader,
+            ),
+            &idempotent_replication.topic,
+            idempotent_replication.topic_id.expect("topic identity"),
+            idempotent_batch(
+                idempotent_replication
+                    .batch
+                    .as_ref()
+                    .expect("producer batch specification"),
+                sequence,
+            ),
+        )
+        .await,
+    );
+}
 
-    let (stopped, _, _stopped_dir) = cluster.remove(leader_idx);
+#[then(
+    "the complete idempotent Produce response has base offset {base} and append timestamp {timestamp}"
+)]
+fn idempotent_replica_response(
+    idempotent_replication: &IdempotentReplication,
+    base: i64,
+    timestamp: i64,
+) {
+    let expected = PartitionProduceResponse {
+        log_append_time_ms: timestamp,
+        ..appended(base)
+    };
+    assert!(
+        idempotent_replication
+            .response
+            .as_ref()
+            .expect("Produce answered")
+            == &expected
+    );
+}
+
+#[then("all idempotent replicas reach log end {offset}")]
+async fn idempotent_replicas_caught_up(
+    idempotent_replication: &IdempotentReplication,
+    offset: i64,
+) {
+    batch_base_offsets(
+        &idempotent_replication.cluster,
+        &idempotent_replication.topic,
+        offset,
+    )
+    .await;
+}
+
+#[when("the idempotent data leader completes controlled shutdown within thirty seconds")]
+async fn stop_idempotent_replica_leader(idempotent_replication: &mut IdempotentReplication) {
+    let index = idempotent_replication
+        .cluster
+        .iter()
+        .position(|(_, config, _)| config.node_id.0 == idempotent_replication.leader)
+        .expect("leader member");
+    let (stopped, _, directory) = idempotent_replication.cluster.remove(index);
+    idempotent_replication.retired_directory = Some(directory);
     stopped
         .controlled_shutdown(Duration::from_secs(30))
         .await
-        .expect("controlled shutdown drains the leader");
-    let stopped_id = krabka_metadata::NodeId(u64::try_from(leader).expect("node id"));
-    cluster[0]
+        .expect("controlled shutdown drains leader");
+    let stopped_id = krabka_metadata::NodeId(idempotent_replication.leader);
+    idempotent_replication.cluster[0]
         .0
         .wait_for_image(|image| {
             image
-                .partition(topic, 0)
+                .partition(&idempotent_replication.topic, 0)
                 .is_some_and(|record| record.leader != stopped_id)
         })
         .await;
-    let new_leader = cluster[0]
+    idempotent_replication.leader = idempotent_replication.cluster[0]
         .0
-        .partition_leader_for_test(topic, 0)
+        .partition_leader_for_test(&idempotent_replication.topic, 0)
         .expect("new leader");
-    let new_leader = broker(&cluster, new_leader);
-    new_leader
-        .wait_until_local_partition_leader(topic, 0, krabka_raft::NodeId(new_leader.node_id()))
-        .await;
-
-    let retry = produce(new_leader, topic, topic_id, idempotent_batch(3)).await;
-    let older_retry = produce(new_leader, topic, topic_id, idempotent_batch(0)).await;
-    let next = produce(new_leader, topic, topic_id, idempotent_batch(6)).await;
-    let logs = batch_base_offsets(&cluster, topic, 9).await;
-
-    assert!(
-        (retry, older_retry, next, logs)
-            == (duplicate_of(3), duplicate_of(0), appended(6), vec![
-                Some(
-                    vec![0, 3, 6]
-                );
-                2
-            ])
-    );
-
-    shutdown_cluster(cluster).await;
+    broker(
+        &idempotent_replication.cluster,
+        idempotent_replication.leader,
+    )
+    .wait_until_local_partition_leader(
+        &idempotent_replication.topic,
+        0,
+        krabka_raft::NodeId(idempotent_replication.leader),
+    )
+    .await;
 }
 
-/// The `clean_bounce` case of the system test. The leader appends a batch,
-/// every follower replicates it, and then the leader stops with a controlled
-/// shutdown before the producer reads the answer. The producer sends the batch
-/// again to the new leader. The new leader must answer with the offset of the
-/// first append and must not append the batch a second time.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[when("broker {leader} is elected as idempotent partition leader at the next epoch")]
+async fn elect_idempotent_replica_leader(
+    idempotent_replication: &mut IdempotentReplication,
+    leader: u64,
+) {
+    elect(
+        &idempotent_replication.cluster,
+        &idempotent_replication.topic,
+        leader,
+    )
+    .await;
+    idempotent_replication.leader = leader;
+}
+
+#[when("the local idempotent batch bases are read after log end nine")]
+async fn read_idempotent_replica_logs(idempotent_replication: &mut IdempotentReplication) {
+    idempotent_replication.logs = Some(
+        batch_base_offsets(
+            &idempotent_replication.cluster,
+            &idempotent_replication.topic,
+            9,
+        )
+        .await,
+    );
+}
+
+#[then("exactly {replicas} local logs contain batch bases zero, three, and six")]
+fn idempotent_replica_logs(idempotent_replication: &IdempotentReplication, replicas: usize) {
+    assert!(
+        idempotent_replication
+            .logs
+            .as_ref()
+            .expect("replica logs read")
+            == &vec![Some(vec![0, 3, 6]); replicas]
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/replication/idempotent_failover.feature",
     name = "a leader elected by a controlled shutdown answers a replicated retry as a duplicate"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_leader_elected_by_a_controlled_shutdown_answers_a_replicated_retry_as_a_duplicate() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "replication idempotent failover: a leader elected again continues from the batches it replicated"
-)]
-async fn bdd_verify_a_leader_elected_again_continues_from_the_batches_it_replicated() {
-    let _g = cluster_lock().lock().await;
-    let cluster = registered_cluster(3).await;
-    let topic = "idempotent-reelection";
-    let topic_id = create_topic(&cluster, topic, &[1, 2, 3]).await;
-    cluster[0]
-        .0
-        .wait_until_local_partition_leader(topic, 0, krabka_raft::NodeId(1))
-        .await;
-
-    let first_term = produce(broker(&cluster, 1), topic, topic_id, idempotent_batch(0)).await;
-    elect(&cluster, topic, 2).await;
-    let other_term = produce(broker(&cluster, 2), topic, topic_id, idempotent_batch(3)).await;
-    batch_base_offsets(&cluster, topic, 6).await;
-    elect(&cluster, topic, 1).await;
-
-    let next = produce(broker(&cluster, 1), topic, topic_id, idempotent_batch(6)).await;
-    let retry = produce(broker(&cluster, 1), topic, topic_id, idempotent_batch(3)).await;
-    let logs = batch_base_offsets(&cluster, topic, 9).await;
-
-    assert!(
-        (first_term, other_term, next, retry, logs)
-            == (
-                appended(0),
-                appended(3),
-                appended(6),
-                duplicate_of(3),
-                vec![Some(vec![0, 3, 6]); 3]
-            )
-    );
-
-    shutdown_cluster(cluster).await;
+async fn a_leader_elected_by_a_controlled_shutdown_answers_a_replicated_retry_as_a_duplicate(
+    idempotent_replication: IdempotentReplication,
+) {
+    idempotent_replication.shutdown().await;
+    drop(idempotent_replication);
 }
 
-/// A broker that leads, follows, and leads again. While it follows, it
-/// replicates a batch that another leader appended. When it leads again, a
-/// retry of that batch is a duplicate, and the next batch follows it in
-/// sequence: it is not out of order against the sequence of the first term.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/replication/idempotent_failover.feature",
     name = "a leader elected again continues from the batches it replicated"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_leader_elected_again_continues_from_the_batches_it_replicated() {}
+async fn a_leader_elected_again_continues_from_the_batches_it_replicated(
+    idempotent_replication: IdempotentReplication,
+) {
+    idempotent_replication.shutdown().await;
+    drop(idempotent_replication);
+}

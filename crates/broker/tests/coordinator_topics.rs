@@ -106,22 +106,93 @@ async fn start_three(configure: impl Fn(&mut BrokerConfig)) -> Cluster {
     cluster
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "coordinator topics: a cold cluster replicates the offsets topic on every broker"
+struct CoordinatorTopics {
+    cluster: Cluster,
+    first: Option<FindCoordinatorResponse>,
+    coordinator: Option<i32>,
+    successor: Option<i32>,
+    transaction_lookups: Vec<FindCoordinatorResponse>,
+    victim: Option<usize>,
+    stopped_id: Option<NodeId>,
+    stopped_directory: Option<TempDir>,
+}
+impl CoordinatorTopics {
+    async fn shutdown(self) { shutdown_cluster(self.cluster).await; }
+}
+#[rstest::fixture]
+fn coordinators() -> CoordinatorTopics {
+    // Start this scenario with fresh inputs and observations.
+
+    CoordinatorTopics {
+        cluster: Vec::new(),
+        first: None,
+        coordinator: None,
+        successor: None,
+        transaction_lookups: Vec::new(),
+        victim: None,
+        stopped_id: None,
+        stopped_directory: None,
+    }
+}
+#[rstest_bdd_macros::given(
+    "a cold three broker cluster uses replication factor 3 for coordinator topics"
 )]
-async fn bdd_verify_a_cold_cluster_replicates_the_offsets_topic_on_every_broker() {
-    let mut cluster = start_three(|_| {}).await;
-    let image = cluster[0].0.controller_image_for_test();
-    assert!(image.topic(OFFSETS_TOPIC).is_none());
-
-    let admin = client(&cluster[0].0).await;
-    let first = find(&admin, KEY_TYPE_GROUP, "g").await;
-    check!(first.coordinators[0].error_code == COORDINATOR_NOT_AVAILABLE);
-    let coordinator = coordinator_of(&admin, KEY_TYPE_GROUP, "g", None).await;
+async fn cold_coordinator_cluster(coordinators: &mut CoordinatorTopics) {
+    coordinators.cluster = start_three(|_| {}).await;
+}
+#[rstest_bdd_macros::given(
+    "a cold three broker cluster requires transaction state replication factor 4"
+)]
+async fn unsatisfiable_transaction_cluster(coordinators: &mut CoordinatorTopics) {
+    coordinators.cluster = start_three(|config| {
+        config.transaction_state_replication_factor = 4;
+    })
+    .await;
+}
+#[rstest_bdd_macros::given("a cold three broker cluster uses three share-state partitions")]
+async fn cold_share_coordinator_cluster(coordinators: &mut CoordinatorTopics) {
+    coordinators.cluster = start_three(|config| {
+        config.share_coordinator.state_topic_num_partitions = 3;
+    })
+    .await;
+}
+#[rstest_bdd_macros::then("the offsets topic is absent before any group coordinator lookup")]
+fn offsets_not_created_at_boot(coordinators: &CoordinatorTopics) {
+    assert!(
+        coordinators.cluster[0]
+            .0
+            .controller_image_for_test()
+            .topic(OFFSETS_TOPIC)
+            .is_none()
+    );
+}
+#[rstest_bdd_macros::when("a client first looks up the coordinator for group g")]
+async fn first_group_coordinator_lookup(coordinators: &mut CoordinatorTopics) {
+    let admin = client(&coordinators.cluster[0].0).await;
+    coordinators.first = Some(find(&admin, KEY_TYPE_GROUP, "g").await);
     admin.close();
-
-    let image = cluster[0].0.controller_image_for_test();
+}
+#[rstest_bdd_macros::then("the initial lookup reports coordinator not available error 15")]
+fn cold_coordinator_lookup_pending(coordinators: &CoordinatorTopics) {
+    check!(
+        coordinators
+            .first
+            .as_ref()
+            .expect("initial lookup sent")
+            .coordinators[0]
+            .error_code
+            == COORDINATOR_NOT_AVAILABLE
+    );
+}
+#[rstest_bdd_macros::when("the client retries group g until its coordinator is available")]
+async fn group_coordinator_ready(coordinators: &mut CoordinatorTopics) {
+    let admin = client(&coordinators.cluster[0].0).await;
+    coordinators.coordinator = Some(coordinator_of(&admin, KEY_TYPE_GROUP, "g", None).await);
+    admin.close();
+}
+#[rstest_bdd_macros::then("all three offsets partitions have replicas on brokers 1 2 and 3")]
+fn offsets_replicated_to_every_broker(coordinators: &CoordinatorTopics) {
+    let image = coordinators.cluster[0].0.controller_image_for_test();
     let replicas: Vec<Vec<NodeId>> = (0..3)
         .map(|partition| {
             let mut replicas = image
@@ -135,80 +206,85 @@ async fn bdd_verify_a_cold_cluster_replicates_the_offsets_topic_on_every_broker(
         .collect();
     let every_broker = vec![NodeId(1), NodeId(2), NodeId(3)];
     assert!(replicas == vec![every_broker; 3]);
-
-    // Stop the coordinator of the group. A survivor leads its partition next.
-    let position = cluster
+}
+#[rstest_bdd_macros::when("the broker coordinating group g shuts down")]
+async fn stop_group_coordinator(coordinators: &mut CoordinatorTopics) {
+    let coordinator = coordinators
+        .coordinator
+        .expect("group coordinator available");
+    let position = coordinators
+        .cluster
         .iter()
         .position(|(handle, _, _)| handle.node_id() == u64::try_from(coordinator).unwrap())
-        .expect("the coordinator is a cluster member");
-    let (stopped, _, stopped_dir) = cluster.remove(position);
+        .expect("coordinator is a cluster member");
+    let (stopped, _, directory) = coordinators.cluster.remove(position);
     stopped.shutdown().await;
-    let survivor = client(&cluster[0].0).await;
-    let next = coordinator_of(&survivor, KEY_TYPE_GROUP, "g", Some(coordinator)).await;
-    check!(next != coordinator);
-    survivor.close();
-
-    shutdown_cluster(cluster).await;
-    drop(stopped_dir);
+    coordinators.stopped_directory = Some(directory);
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/coordinator_topics.feature",
-    name = "a cold cluster replicates the offsets topic on every broker"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_cold_cluster_replicates_the_offsets_topic_on_every_broker() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "coordinator topics: a replication factor above the broker count leaves the coordinator unavailable"
-)]
-async fn bdd_verify_a_replication_factor_above_the_broker_count_leaves_the_coordinator_unavailable()
-{
-    let cluster = start_three(|config| config.transaction_state_replication_factor = 4).await;
-    let admin = client(&cluster[0].0).await;
-
-    // The group coordinator's topic fits the cluster, so the cluster serves
-    // groups while its transaction coordinator stays unavailable.
-    coordinator_of(&admin, KEY_TYPE_GROUP, "g", None).await;
+#[rstest_bdd_macros::when("a survivor looks up group g until a different coordinator is available")]
+async fn replacement_group_coordinator(coordinators: &mut CoordinatorTopics) {
+    let survivor = client(&coordinators.cluster[0].0).await;
+    coordinators.successor =
+        Some(coordinator_of(&survivor, KEY_TYPE_GROUP, "g", coordinators.coordinator).await);
+    survivor.close();
+}
+#[rstest_bdd_macros::then("the surviving coordinator differs from the stopped broker")]
+fn coordinator_failover_visible(coordinators: &CoordinatorTopics) {
+    check!(
+        coordinators
+            .successor
+            .expect("replacement lookup completed")
+            != coordinators
+                .coordinator
+                .expect("original coordinator known")
+    );
+}
+#[rstest_bdd_macros::then("the group coordinator belongs to the running cluster")]
+fn group_coordinator_served(coordinators: &CoordinatorTopics) {
+    let coordinator = coordinators
+        .coordinator
+        .expect("group coordinator lookup completed");
+    assert!(
+        coordinators
+            .cluster
+            .iter()
+            .any(|(broker, _, _)| i32::try_from(broker.node_id()).unwrap() == coordinator)
+    );
+}
+#[rstest_bdd_macros::when("the client performs ten transaction coordinator lookups for t")]
+async fn unavailable_transaction_coordinator(coordinators: &mut CoordinatorTopics) {
+    let admin = client(&coordinators.cluster[0].0).await;
     for _ in 0..10 {
-        let found = find(&admin, KEY_TYPE_TRANSACTION, "t").await;
-        check!(found.coordinators[0].error_code == COORDINATOR_NOT_AVAILABLE);
-        // intentional: each lookup asks for the topic again, and each
-        // creation must be refused.
+        coordinators
+            .transaction_lookups
+            .push(find(&admin, KEY_TYPE_TRANSACTION, "t").await);
         time::sleep(Duration::from_millis(100)).await;
     }
-    for (handle, _, _) in &cluster {
+    admin.close();
+}
+#[rstest_bdd_macros::then(
+    "all ten lookups report error 15 and no broker image contains a transaction state topic"
+)]
+fn transaction_replication_not_lowered(coordinators: &CoordinatorTopics) {
+    assert!(coordinators.transaction_lookups.len() == 10);
+    for found in &coordinators.transaction_lookups {
+        check!(found.coordinators[0].error_code == COORDINATOR_NOT_AVAILABLE);
+    }
+    for (broker, _, _) in &coordinators.cluster {
         check!(
-            handle
+            broker
                 .controller_image_for_test()
                 .topic(TRANSACTION_TOPIC)
                 .is_none()
         );
     }
-    admin.close();
-
-    shutdown_cluster(cluster).await;
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/coordinator_topics.feature",
-    name = "a replication factor above the broker count leaves the coordinator unavailable"
+#[rstest_bdd_macros::given(
+    "a non-quorum-leader broker is selected after led is created with three partitions and replication factor 3"
 )]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_replication_factor_above_the_broker_count_leaves_the_coordinator_unavailable() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "coordinator topics: a cleanly stopped broker still counts toward the replication factor"
-)]
-async fn bdd_verify_a_cleanly_stopped_broker_still_counts_toward_the_replication_factor() {
+async fn controlled_shutdown_coordinator_setup(coordinators: &mut CoordinatorTopics) {
     const LED_TOPIC: &str = "led";
-    let mut cluster =
-        start_three(|config| config.share_coordinator.state_topic_num_partitions = 3).await;
-
+    let cluster = &coordinators.cluster;
     // Stop a broker that does not lead the raft quorum. The topic gives every
     // broker one partition to lead, so the stop goes through controlled
     // shutdown rather than straight to a fence.
@@ -230,7 +306,7 @@ async fn bdd_verify_a_cleanly_stopped_broker_still_counts_toward_the_replication
         .expect("CreateTopics");
     assert!(created.topics[0].error_code == 0, "{created:?}");
     admin.close();
-    for (handle, _, _) in &cluster {
+    for (handle, _, _) in cluster {
         for partition in 0..3 {
             handle
                 .wait_until_partition_present(LED_TOPIC, partition)
@@ -238,30 +314,50 @@ async fn bdd_verify_a_cleanly_stopped_broker_still_counts_toward_the_replication
         }
     }
 
-    let (stopped, _, stopped_dir) = cluster.remove(position);
-    let stopped_id = NodeId(stopped.node_id());
+    coordinators.victim = Some(position);
+}
+#[rstest_bdd_macros::when("the selected broker completes a controlled shutdown within 30 seconds")]
+async fn controlled_shutdown_before_coordinator_creation(coordinators: &mut CoordinatorTopics) {
+    let (stopped, _, directory) = coordinators
+        .cluster
+        .remove(coordinators.victim.expect("nonleader selected"));
+    coordinators.stopped_id = Some(NodeId(stopped.node_id()));
     stopped
         .controlled_shutdown(Duration::from_secs(30))
         .await
         .expect("the controlled shutdown drains");
-    for (handle, _, _) in &cluster {
+    coordinators.stopped_directory = Some(directory);
+}
+#[rstest_bdd_macros::then(
+    "the stopped broker stays registered fenced and in controlled shutdown on every survivor"
+)]
+async fn controlled_coordinator_registration_retained(coordinators: &CoordinatorTopics) {
+    let stopped_id = coordinators.stopped_id.expect("controlled broker stopped");
+    for (handle, _, _) in &coordinators.cluster {
         handle
             .wait_for_image(|image| image.broker(stopped_id).is_some_and(|broker| broker.fenced))
             .await;
     }
-    let registration = cluster[0]
+    let registration = coordinators.cluster[0]
         .0
         .controller_image_for_test()
         .broker(stopped_id)
         .cloned()
-        .expect("the stopped broker stays registered");
+        .expect("stopped broker stays registered");
     assert!((registration.fenced, registration.in_controlled_shutdown) == (true, true));
-
-    let survivor = client(&cluster[0].0).await;
+}
+#[rstest_bdd_macros::when("a survivor looks up share partition 0 with topic UUID bytes all 7")]
+async fn create_coordinator_after_controlled_shutdown(coordinators: &mut CoordinatorTopics) {
+    let survivor = client(&coordinators.cluster[0].0).await;
     let key = format!("share-group:{}:0", URL_SAFE_NO_PAD.encode([7u8; 16]));
     coordinator_of(&survivor, KEY_TYPE_SHARE, &key, None).await;
     survivor.close();
-
+}
+#[rstest_bdd_macros::then(
+    "all three share-state partitions retain replicas 1 2 3 with only the survivors in ISR"
+)]
+fn controlled_shutdown_coordinator_placement(coordinators: &CoordinatorTopics) {
+    let cluster = &coordinators.cluster;
     let image = cluster[0].0.controller_image_for_test();
     let mut survivors = cluster
         .iter()
@@ -295,27 +391,37 @@ async fn bdd_verify_a_cleanly_stopped_broker_still_counts_toward_the_replication
                 3
             ]
     );
-
-    shutdown_cluster(cluster).await;
-    drop(stopped_dir);
 }
 
-/// A broker that stops through a controlled shutdown stays registered,
-/// fenced, and Kafka's `StripedReplicaPlacer` takes a fenced broker as a last
-/// resort. A coordinator topic that is first asked for after the stop
-/// therefore still gets its configured replication factor, with the stopped
-/// broker as a replica outside the ISR.
-///
-/// This is the start of `ShareConsumerTest.test_broker_failure`: the share
-/// group asks for `__share_group_state` only after one of three brokers has
-/// stopped cleanly. The registration of that broker keeps
-/// `InControlledShutdown`, and krabka once read that flag as "still shutting
-/// down", left the broker out of the placement, and refused the topic for as
-/// long as the broker stayed down.
-#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/coordinator_topics.feature",
+    name = "a cold cluster replicates the offsets topic on every broker"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cold_cluster_replicates_the_offsets_topic_on_every_broker(
+    coordinators: CoordinatorTopics,
+) {
+    coordinators.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/coordinator_topics.feature",
+    name = "a replication factor above the broker count leaves the coordinator unavailable"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replication_factor_above_the_broker_count_leaves_the_coordinator_unavailable(
+    coordinators: CoordinatorTopics,
+) {
+    coordinators.shutdown().await;
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/coordinator_topics.feature",
     name = "a cleanly stopped broker still counts toward the replication factor"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_cleanly_stopped_broker_still_counts_toward_the_replication_factor() {}
+async fn a_cleanly_stopped_broker_still_counts_toward_the_replication_factor(
+    coordinators: CoordinatorTopics,
+) {
+    coordinators.shutdown().await;
+}

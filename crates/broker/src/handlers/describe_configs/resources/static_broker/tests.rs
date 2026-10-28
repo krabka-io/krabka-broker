@@ -78,16 +78,42 @@ fn supplied(expiration_ms: i32, cleanup_interval_ms: i32) -> StaticBrokerConfigs
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers describe configs resources static broker tests: kafka defaults report at default config source"
+#[derive(Default)]
+struct StaticBrokerDefaultsScenario {
+    settings: Option<StaticBrokerConfigs<'static>>,
+    entries: Option<Vec<DescribeConfigsResourceResult>>,
+}
+#[rstest::fixture]
+fn static_broker_defaults() -> StaticBrokerDefaultsScenario {
+    let settings = None;
+    StaticBrokerDefaultsScenario {
+        settings,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "the broker has Kafka defaults for transactional ID expiry and expired transaction cleanup"
 )]
-fn bdd_verify_kafka_defaults_report_at_default_config_source() {
-    let entries = static_broker_entries(kafka_default_static_broker(), &both_expiry_keys, BOTH);
-
+fn default_transaction_expiry_settings(static_broker_defaults: &mut StaticBrokerDefaultsScenario) {
+    static_broker_defaults.settings = Some(kafka_default_static_broker());
+}
+#[rstest_bdd_macros::when(
+    "DescribeConfigs requests both transaction expiry keys with synonyms and documentation"
+)]
+fn describe_default_transaction_expiry(static_broker_defaults: &mut StaticBrokerDefaultsScenario) {
+    static_broker_defaults.entries = Some(static_broker_entries(
+        static_broker_defaults.settings.take().unwrap(),
+        &both_expiry_keys,
+        BOTH,
+    ));
+}
+#[rstest_bdd_macros::then(
+    "both expiry entries report their exact Kafka default values types documentation and default source synonyms"
+)]
+fn check_default_transaction_expiry(static_broker_defaults: &StaticBrokerDefaultsScenario) {
     assert!(
-        entries
-            == vec![
+        static_broker_defaults.entries.as_ref().unwrap()
+            == &vec![
                 expected_entry()
                     .synonyms(vec![expected_synonym(
                         config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
@@ -95,19 +121,11 @@ fn bdd_verify_kafka_defaults_report_at_default_config_source() {
                         CONFIG_SOURCE_DEFAULT
                     )])
                     .call(),
-                expected_default_cleanup_interval(),
+                expected_default_cleanup_interval()
             ]
     );
 }
-
-/// A node still on Kafka's built-in defaults reports both keys at
-/// `DEFAULT_CONFIG`, with the default as their one synonym.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/describe_configs/resources/static_broker/tests.feature",
-    name = "kafka defaults report at default config source"
-)]
-fn kafka_defaults_report_at_default_config_source() {}
+rstest_bdd_macros::scenarios!("tests/features/handler_static_broker_defaults",fixtures=[static_broker_defaults:StaticBrokerDefaultsScenario]);
 
 /// The second `apache/kafka:4.3.1` output quoted on the module: the operator's
 /// value heads the chain at `STATIC_BROKER_CONFIG`, and Kafka's default stays

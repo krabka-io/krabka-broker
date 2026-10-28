@@ -13,37 +13,64 @@ use {
         },
         support,
     },
+    assert2::assert,
+    krabka_broker::{BrokerHandle, NodeId},
+    krabka_units::secs,
     std::{
         fs,
         process::Command,
         time::{Duration, Instant},
     },
+    tempfile::TempDir,
     tokio::time,
     uuid::Uuid,
 };
 
 const CONTESTED_CONTAINER: &str = "krabka-kip996-contested";
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm static quorum spike contested election: contested election krabka counts jvm prevote"
+struct ContestedElection {
+    controllers: Option<[BrokerHandle; 2]>,
+    survivor: Option<BrokerHandle>,
+    dirs: Option<[TempDir; 2]>,
+    properties: Option<TempDir>,
+    old_leader: u64,
+    old_term: u64,
+    survivor_id: u64,
+    logs: String,
+}
+#[rstest::fixture]
+fn contested() -> ContestedElection {
+    // Start this scenario with fresh inputs and observations.
+
+    ContestedElection {
+        controllers: None,
+        survivor: None,
+        dirs: None,
+        properties: None,
+        old_leader: 0,
+        old_term: 0,
+        survivor_id: 0,
+        logs: String::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "a caught-up static quorum of Krabka voters 1 and 2 and JVM voter 3 with cluster id {id}"
 )]
-async fn bdd_verify_contested_election_krabka_counts_jvm_prevote() {
+async fn caught_up_quorum(contested: &mut ContestedElection, id: String) {
     support::init_tracing();
     docker_rm(CONTESTED_CONTAINER);
 
-    let cluster_id = Uuid::from_u128(0x4b69_7039_3936_4350_7245_566f_7445_7374);
+    let cluster_id = Uuid::parse_str(&id).expect("cluster UUID");
     let cid_str = kafka_cluster_id_string(cluster_id);
 
-    let ([p1, p2, p3], [c1, c2], [_dir1, _dir2]) =
-        MixedQuorum::start(cluster_id, Some(krabka_units::secs(2))).await;
+    let ([p1, p2, p3], [c1, c2], dirs) = MixedQuorum::start(cluster_id, Some(secs(2))).await;
 
     // JVM voter id 3: release the dead leader fast, self-nominate slowly.
     let props = jvm_controller_properties(
         [p1, p2, p3],
         "controller.quorum.fetch.timeout.ms=300\ncontroller.quorum.election.timeout.ms=10000\n",
     );
-    let _propdir = start_jvm_controller(CONTESTED_CONTAINER, p3, &cid_str, &props);
+    let propdir = start_jvm_controller(CONTESTED_CONTAINER, p3, &cid_str, &props);
 
     // ── Phase 1: a Krabka node leads and the JVM joins as a follower. ───────
     let deadline = Instant::now() + Duration::from_secs(50);
@@ -51,7 +78,7 @@ async fn bdd_verify_contested_election_krabka_counts_jvm_prevote() {
     while Instant::now() < deadline {
         let l1 = c1.controller_leader_id();
         let l2 = c2.controller_leader_id();
-        if l1.is_some() && l1 == l2 && matches!(l1, Some(krabka_broker::NodeId(1 | 2))) {
+        if l1.is_some() && l1 == l2 && matches!(l1, Some(NodeId(1 | 2))) {
             leader0 = l1.map(|n| n.0);
             break;
         }
@@ -139,66 +166,66 @@ async fn bdd_verify_contested_election_krabka_counts_jvm_prevote() {
     time::sleep(Duration::from_secs(6)).await;
     eprintln!("phase 1c: JVM has had 6s of steady fetching — killing the leader now");
 
-    // ── Phase 2: kill the Krabka leader; the survivor needs the JVM's grants. ─
-    let (killed, survivor, survivor_id) = if leader0 == 1 {
-        (c1, c2, 2u64)
+    contested.controllers = Some([c1, c2]);
+    contested.dirs = Some(dirs);
+    contested.properties = Some(propdir);
+    contested.old_leader = leader0;
+    contested.old_term = epoch0;
+}
+#[rstest_bdd_macros::when(
+    "the Krabka leader shuts down and the remaining voters have one minute to elect"
+)]
+async fn lose_leader(contested: &mut ContestedElection) {
+    let [c1, c2] = contested.controllers.take().expect("two controllers");
+    let (killed, survivor, survivor_id) = if contested.old_leader == 1 {
+        (c1, c2, 2)
     } else {
-        (c2, c1, 1u64)
+        (c2, c1, 1)
     };
     killed.shutdown().await;
-    eprintln!("phase 2: killed Krabka leader {leader0}; survivor is {survivor_id}");
-
-    // ── Phase 3: the surviving Krabka voter must win a new election. ─────────
-    // Trace the survivor's quorum state every ~2s so a stuck recovery is legible:
-    // does `current_term` climb past epoch0 (the survivor IS promoting in some
-    // rounds) or is it truly pinned at the old epoch (no majority reachable)?
-    let recover_deadline = Instant::now() + Duration::from_mins(1);
-    let mut recovered = false;
+    contested.survivor_id = survivor_id;
+    let deadline = Instant::now() + Duration::from_mins(1);
     let mut tick = 0u32;
-    while Instant::now() < recover_deadline {
-        let qs = survivor.controller_quorum_state_for_test();
+    while Instant::now() < deadline {
+        let state = survivor.controller_quorum_state_for_test();
         if tick.is_multiple_of(4) {
             eprintln!(
-                "[recovery t={}s] survivor {survivor_id} view: leader={:?} term={} (was {epoch0})",
-                tick / 2,
-                qs.current_leader,
-                qs.current_term,
+                "survivor {survivor_id}: leader={:?} term={} previous={}",
+                state.current_leader, state.current_term, contested.old_term
             );
         }
-        if qs.current_leader == Some(krabka_broker::NodeId(survivor_id)) && qs.current_term > epoch0
+        if state.current_leader == Some(NodeId(survivor_id))
+            && state.current_term > contested.old_term
         {
-            recovered = true;
             break;
         }
         tick += 1;
-        // intentional: waits for the survivor to win at a HIGHER raft term
-        // (current_term > epoch0); the controller quorum term is not in the
-        // metadata image and has no awaiter/metric — wait_until_controller_leader
-        // only observes a non-zero leader, not term advance or leader identity.
         time::sleep(Duration::from_millis(500)).await;
     }
-    let final_qs = survivor.controller_quorum_state_for_test();
-    eprintln!(
-        "phase 3: survivor view leader={:?} epoch={} (was {epoch0})",
-        final_qs.current_leader, final_qs.current_term
+    contested.survivor = Some(survivor);
+    contested.logs = support::save_jvm_logs(CONTESTED_CONTAINER, "/tmp/jvm_contested.log");
+    support::print_log_tail(&contested.logs, 40);
+}
+#[rstest_bdd_macros::then(
+    "the surviving Krabka voter is leader at a higher term and the JVM reports no fatal fault"
+)]
+fn recovered_leader(contested: &ContestedElection) {
+    let state = contested
+        .survivor
+        .as_ref()
+        .expect("surviving controller")
+        .controller_quorum_state_for_test();
+    assert!(
+        state.current_leader == Some(NodeId(contested.survivor_id))
+            && state.current_term > contested.old_term,
+        "survivor leader={:?} term={} previous={}",
+        state.current_leader,
+        state.current_term,
+        contested.old_term
     );
-
-    let jvm_fatal_fault = capture_contested_jvm_logs();
-
-    docker_rm(CONTESTED_CONTAINER);
-    survivor.shutdown().await;
-
-    assert2::assert!(
-        recovered,
-        "surviving Krabka voter {survivor_id} did not win a new election at a \
-         higher epoch after the leader died — the JVM's pre-vote grant was not \
-         counted (KIP-996 interop regression). survivor view: leader={:?} epoch={} (was {epoch0})",
-        final_qs.current_leader,
-        final_qs.current_term
-    );
-    assert2::assert!(
-        !jvm_fatal_fault,
-        "JVM controller fatal-faulted during the contested election; see /tmp/jvm_contested.log"
+    assert!(
+        !contested.logs.contains("Encountered fatal fault"),
+        "JVM controller fatal fault; see /tmp/jvm_contested.log"
     );
 }
 
@@ -229,18 +256,13 @@ async fn bdd_verify_contested_election_krabka_counts_jvm_prevote() {
     name = "contested election krabka counts jvm prevote"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn contested_election_krabka_counts_jvm_prevote() {}
-
-fn capture_contested_jvm_logs() -> bool {
-    // Capture JVM logs for diagnosis regardless of outcome.
-    let log_text = support::save_jvm_logs(CONTESTED_CONTAINER, "/tmp/jvm_contested.log");
-    let jvm_fatal_fault = log_text.contains("Encountered fatal fault");
-
-    // Dump the JVM log tail to stderr (pass or fail) — it shows whether the JVM
-    // granted/rejected the survivor's preVote/Vote, and whether it tried to
-    // become candidate/leader itself.
-    eprintln!("==== JVM controller logs (tail) — contested election ====");
-    support::print_log_tail(&log_text, 40);
-
-    jvm_fatal_fault
+async fn contested_election_krabka_counts_jvm_prevote(contested: ContestedElection) {
+    docker_rm(CONTESTED_CONTAINER);
+    contested
+        .survivor
+        .take()
+        .expect("survivor")
+        .shutdown()
+        .await;
+    drop(contested);
 }

@@ -72,3 +72,11 @@ async fn assign_follower(handle: &BrokerHandle, topic: &str, follower: u64, in_i
 pub async fn add_follower_in_isr(handle: &BrokerHandle, topic: &str, follower: u64) {
     assign_follower(handle, topic, follower, true).await;
 }
+
+/// Match the committed leader-side replication rate read by the fetch path.
+pub fn leader_rate_matches(image: &krabka_metadata::MetadataImage, node: u64, rate: u32) -> bool {
+    image.broker_throttle_rate(
+        krabka_metadata::NodeId(node),
+        krabka_metadata::ThrottleKind::Leader,
+    ) == Some(krabka_units::bytes_per_sec(rate))
+}

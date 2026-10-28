@@ -375,46 +375,92 @@ async fn denied_share_request_answers_cluster_authorization_failed_on_every_key(
     broker_handle.shutdown().await;
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers find coordinator tests: denied group key answers kafka row shape per version"
-)]
-async fn bdd_verify_denied_group_key_answers_kafka_row_shape_per_version() {
-    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker); boot [start_broker_no_audit_with(|config| config.authorizer = Arc::new(DenyAll))]; };
-    let rows = vec![
-        VersionedResponse {
-            version: krabka_ids::ApiVersion(4),
-            response: FindCoordinatorResponse {
-                coordinators: vec![row("g", codes::GROUP_AUTHORIZATION_FAILED, None)],
-                ..Default::default()
-            },
-        },
-        VersionedResponse {
-            version: krabka_ids::ApiVersion(3),
-            response: legacy_coordinator_error(
-                KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED),
-                Some("Group authorization failed.".into()),
-            ),
-        },
-    ];
-    check_lookup_versions()
-        .broker(&broker)
-        .rows(rows)
-        .call()
-        .await;
-    broker_handle.shutdown().await;
+#[derive(Default)]
+struct DeniedCoordinatorScenario {
+    started: Option<HandlerStartedBroker>,
+    version: i16,
+    request: Option<FindCoordinatorRequest>,
+    response: Option<FindCoordinatorResponse>,
 }
-
-/// A denied group id keeps its own row. At v4+ Kafka's row has no message; at
-/// v0-v3 the answer goes through `getErrorResponse`, which carries the default
-/// message of the code and `Node.noNode()`.
-#[cfg(test)]
+#[rstest::fixture]
+fn denied_coordinator() -> DeniedCoordinatorScenario {
+    let started = None;
+    DeniedCoordinatorScenario {
+        started,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given("the group coordinator lookup for g is denied at API version {version}")]
+async fn denied_group_lookup(denied_coordinator: &mut DeniedCoordinatorScenario, version: i16) {
+    denied_coordinator.started =
+        Some(start_broker_no_audit_with(|config| config.authorizer = Arc::new(DenyAll)).await);
+    denied_coordinator.version = version;
+    denied_coordinator.request = Some(FindCoordinatorRequest {
+        key: "g".into(),
+        key_type: 0,
+        coordinator_keys: if version >= 4 {
+            vec!["g".into()]
+        } else {
+            Vec::new()
+        },
+        ..Default::default()
+    });
+}
+#[rstest_bdd_macros::when("alice requests the group coordinator")]
+async fn request_denied_group_coordinator(denied_coordinator: &mut DeniedCoordinatorScenario) {
+    let broker = denied_coordinator
+        .started
+        .as_ref()
+        .unwrap()
+        .broker
+        .broker_arc_for_test();
+    denied_coordinator.response = Some(
+        find(
+            &broker,
+            denied_coordinator.request.as_ref().unwrap(),
+            denied_coordinator.version,
+            "alice",
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then("the coordinator refusal uses the {shape} Kafka response shape")]
+async fn check_denied_group_coordinator(
+    denied_coordinator: &mut DeniedCoordinatorScenario,
+    shape: String,
+) {
+    let expected = match shape.as_str() {
+        "per-key without message" => FindCoordinatorResponse {
+            coordinators: vec![row("g", codes::GROUP_AUTHORIZATION_FAILED, None)],
+            ..Default::default()
+        },
+        "legacy with default message and no node" => legacy_coordinator_error(
+            KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED),
+            Some("Group authorization failed.".into()),
+        ),
+        _ => panic!("unknown coordinator shape: {shape}"),
+    };
+    assert!(denied_coordinator.response.as_ref().unwrap() == &expected);
+    denied_coordinator
+        .started
+        .take()
+        .unwrap()
+        .broker
+        .shutdown()
+        .await;
+}
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/find_coordinator/tests.feature",
-    name = "denied group key answers kafka row shape per version"
+    path = "tests/features/handler_denied_group_coordinator/coordinator.feature",
+    name = "Denied group lookups preserve the version-specific coordinator response"
 )]
 #[tokio::test]
-async fn denied_group_key_answers_kafka_row_shape_per_version() {}
+async fn denied_group_key_answers_kafka_row_shape_per_version(
+    denied_coordinator: DeniedCoordinatorScenario,
+    version: i16,
+    shape: String,
+) {
+    let _ = (denied_coordinator, version, shape);
+}
 
 /// With `ClusterAction` granted, a malformed share key gets its own
 /// `INVALID_REQUEST` row with no message and a valid key resolves.

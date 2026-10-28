@@ -215,122 +215,6 @@ async fn a_known_member_that_rejoins_a_full_group_is_refused_by_4_3_1_only() {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "coordinator unified streams actor tests: member epoch rule matches kafka"
-)]
-async fn bdd_verify_member_epoch_rule_matches_kafka() {
-    use krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds;
-
-    // A request that reports owned tasks reports all three lists, as the
-    // Streams client does; the standby and warmup lists are empty.
-    let request = |member_id: &str, member_epoch, active_tasks: Option<Vec<TaskIds>>| {
-        StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: member_id.into(),
-            member_epoch,
-            standby_tasks: active_tasks.as_ref().map(|_| vec![]),
-            warmup_tasks: active_tasks.as_ref().map(|_| vec![]),
-            active_tasks,
-            ..Default::default()
-        }
-    };
-    let unassigned = Some(vec![TaskIds {
-        subtopology_id: "s".into(),
-        partitions: vec![0],
-        ..Default::default()
-    }]);
-    // (request epoch, owned active tasks, expected error code)
-    let rows = [
-        (0, None, codes::NONE),
-        (3, Some(vec![]), codes::NONE),
-        (3, unassigned, codes::FENCED_MEMBER_EPOCH),
-        (3, None, codes::FENCED_MEMBER_EPOCH),
-        (2, Some(vec![]), codes::FENCED_MEMBER_EPOCH),
-        (4, None, codes::NONE),
-        (5, Some(vec![]), codes::FENCED_MEMBER_EPOCH),
-    ];
-
-    for (index, (member_epoch, active_tasks, error_code)) in rows.into_iter().enumerate() {
-        let (coord, _log) = make_coordinator();
-        let handle = coord.get_or_create_streams("g");
-        check!(
-            heartbeat(&handle, request("m1", 0, None))
-                .await
-                .member_epoch
-                == 2
-        );
-        check!(
-            heartbeat(&handle, request("m2", 0, None))
-                .await
-                .member_epoch
-                == 3
-        );
-        check!(
-            heartbeat(&handle, request("m1", 2, None))
-                .await
-                .member_epoch
-                == 3
-        );
-        check!(
-            heartbeat(&handle, request("m3", 0, None))
-                .await
-                .member_epoch
-                == 4
-        );
-        check!(
-            heartbeat(&handle, request("m1", 3, None))
-                .await
-                .member_epoch
-                == 4
-        );
-
-        let resp = heartbeat(&handle, request("m1", member_epoch, active_tasks)).await;
-
-        let expected = if error_code == codes::NONE {
-            // A rejoin at epoch 0 gets the task lists; a heartbeat with an
-            // unchanged assignment does not.
-            let rejoin = (member_epoch == 0).then(Vec::new);
-            StreamsGroupHeartbeatResponse {
-                active_tasks: rejoin.clone(),
-                standby_tasks: rejoin.clone(),
-                warmup_tasks: rejoin,
-                ..heartbeat(&handle, request("m1", 4, None)).await
-            }
-        } else {
-            let relation = if member_epoch > 4 {
-                "greater"
-            } else {
-                "smaller"
-            };
-            super::response::error_resp(
-                error_code,
-                Some(format!(
-                    "The streams group member has a {relation} member epoch ({member_epoch}) than \
-                     the one known by the group coordinator (4). The member must abandon all its \
-                     partitions and rejoin."
-                )),
-            )
-        };
-        check!(resp == expected, "row {index}");
-    }
-}
-
-/// The member epoch rule of Kafka's `throwIfStreamsGroupMemberEpochIsInvalid`.
-/// Member `m1` is at epoch 4 with previous epoch 3: it joins at epoch 2, the
-/// first bump past the initial group epoch 1, `m2` joins (group epoch 3), `m1`
-/// heartbeats at 2, `m3` joins (group epoch 4), and `m1` heartbeats at 3.
-/// With no metadata source every assignment is
-/// empty. Each row sends one heartbeat on a fresh group. An accepted row must
-/// answer exactly what a heartbeat at the member epoch answers.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
-    name = "member epoch rule matches kafka"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn member_epoch_rule_matches_kafka() {}
-
 /// Kafka's `streamsGroupLeave` answers `UNKNOWN_MEMBER_ID` to a member that
 /// the group does not have, and writes no record.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -525,8 +409,8 @@ async fn heartbeat_applies_member_metadata() {
 /// A topic of a test metadata image: its name, the byte that fills its topic
 /// id, and its partition count.
 #[derive(Clone, Copy)]
-struct ImageTopic {
-    name: &'static str,
+struct ImageTopic<'a> {
+    name: &'a str,
     id: u8,
     partitions: i32,
 }
@@ -549,7 +433,10 @@ struct StatusEntry {
 
 /// Builds the metadata image of one broker, `broker_rack` its rack, that
 /// holds each of `topics`.
-fn image_of(broker_rack: Option<&str>, topics: &[ImageTopic]) -> krabka_metadata::MetadataImage {
+fn image_of(
+    broker_rack: Option<&str>,
+    topics: &[ImageTopic<'_>],
+) -> krabka_metadata::MetadataImage {
     use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord, TopicRecord};
 
     let broker = krabka_audit::NodeId(1);
@@ -1029,539 +916,6 @@ async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() 
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "coordinator unified streams actor tests: a join sizes the internal topics as kafka does"
-)]
-async fn bdd_verify_a_join_sizes_the_internal_topics_as_kafka_does() {
-    use {
-        crate::coordinator::unified::streams::topology::{InternalTopicSpec, status},
-        krabka_protocol::owned::{
-            common::{
-                streams_group_heartbeat_request::topic_info::TopicInfo,
-                streams_group_heartbeat_response::status::Status,
-            },
-            streams_group_heartbeat_request::{CopartitionGroup, Subtopology, Topology},
-        },
-    };
-
-    struct PartitionCounts {
-        orders: i32,
-        customers: i32,
-    }
-    struct Row {
-        name: &'static str,
-        /// The partition counts of `orders` and `customers`.
-        partitions: PartitionCounts,
-        copartitioned: bool,
-        /// The expected partition counts of `rp` and `store-changelog`.
-        rp: i32,
-        changelog: i32,
-    }
-    let rows = [
-        Row {
-            name: "copartition coerces rp to the customers topic",
-            partitions: PartitionCounts {
-                orders: 6,
-                customers: 3,
-            },
-            copartitioned: true,
-            rp: 3,
-            changelog: 3,
-        },
-        Row {
-            name: "rp takes the partition count of its writer",
-            partitions: PartitionCounts {
-                orders: 4,
-                customers: 8,
-            },
-            copartitioned: false,
-            rp: 4,
-            changelog: 8,
-        },
-    ];
-
-    for row in rows {
-        let source = Arc::new(
-            FakeMetadataSource::builder()
-                .image(image_of(None, &[
-                    ImageTopic {
-                        name: "orders",
-                        id: 1,
-                        partitions: row.partitions.orders,
-                    },
-                    ImageTopic {
-                        name: "customers",
-                        id: 2,
-                        partitions: row.partitions.customers,
-                    },
-                ]))
-                .build(),
-        );
-        let (coord, _log) = make_coordinator();
-        coord.set_metadata_source(source);
-        let handle = coord.get_or_create_streams("g");
-        let topology = Topology {
-            epoch: 1,
-            subtopologies: vec![source_to_repartition(), Subtopology {
-                subtopology_id: "1".into(),
-                source_topics: vec!["customers".into()],
-                repartition_source_topics: vec![TopicInfo {
-                    name: "rp".into(),
-                    ..Default::default()
-                }],
-                state_changelog_topics: vec![TopicInfo {
-                    name: "store-changelog".into(),
-                    ..Default::default()
-                }],
-                copartition_groups: if row.copartitioned {
-                    vec![CopartitionGroup {
-                        source_topics: vec![0],
-                        repartition_source_topics: vec![0],
-                        ..Default::default()
-                    }]
-                } else {
-                    vec![]
-                },
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let result = heartbeat_result(&handle, StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: 0,
-            rebalance_timeout_ms: 1_000,
-            topology: Some(topology),
-            ..Default::default()
-        })
-        .await;
-
-        let spec = |name: &str, partitions| InternalTopicSpec {
-            name: name.into(),
-            partitions,
-            replication_factor: 0,
-            configs: BTreeMap::new(),
-        };
-        check!(
-            result.creatable_topics
-                == vec![spec("rp", row.rp), spec("store-changelog", row.changelog)],
-            "{}",
-            row.name
-        );
-        let expected = StreamsGroupHeartbeatResponse {
-            member_id: "m1".into(),
-            status: Some(vec![Status {
-                status_code: status::MISSING_INTERNAL_TOPICS,
-                status_detail: "Internal topics are missing: rp, store-changelog".into(),
-                ..Default::default()
-            }]),
-            active_tasks: Some(vec![]),
-            standby_tasks: Some(vec![]),
-            warmup_tasks: Some(vec![]),
-            ..super::response::base_resp(codes::NONE, 2, &undelayed())
-        };
-        check!(result.response == expected, "{}", row.name);
-    }
-}
-
-/// Kafka sizes the internal topics with `InternalTopicManager`: a repartition
-/// topic takes the partition count of its writer, and a copartition group
-/// coerces it to the partition count of the external topics. Each row joins
-/// one member with a two-subtopology topology and compares the internal topics
-/// that the heartbeat asks `CreateTopics` for, and the whole response.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
-    name = "a join sizes the internal topics as kafka does"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_join_sizes_the_internal_topics_as_kafka_does() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "coordinator unified streams actor tests: the heartbeat status list follows kafka"
-)]
-async fn bdd_verify_the_heartbeat_status_list_follows_kafka() {
-    use {
-        crate::coordinator::unified::streams::topology::status,
-        krabka_protocol::owned::{
-            common::streams_group_heartbeat_response::status::Status,
-            streams_group_heartbeat_request::{Subtopology, Topology},
-        },
-        std::collections::HashMap,
-    };
-
-    #[derive(Clone, Copy)]
-    enum Beat {
-        /// A join with this topology epoch.
-        Join(&'static str, i32),
-        /// A heartbeat at the member epoch, with `shutdown_application`.
-        Heartbeat(&'static str, bool),
-        /// A leave, with `shutdown_application`.
-        Leave(&'static str, bool),
-    }
-    struct ExpectedStatus {
-        code: i8,
-        detail: &'static str,
-    }
-    struct Row {
-        name: &'static str,
-        sources: &'static [&'static str],
-        beats: Vec<Beat>,
-        member: &'static str,
-        epoch: i32,
-        /// The active tasks, when the response sends the task lists.
-        active: Option<Vec<i32>>,
-        status: Vec<ExpectedStatus>,
-    }
-    let rows = [
-        Row {
-            name: "a ready group sends an empty list",
-            sources: &["in"],
-            beats: vec![Beat::Join("m1", 1)],
-            member: "m1",
-            epoch: 2,
-            active: Some(vec![0]),
-            status: vec![],
-        },
-        Row {
-            name: "two missing source topics give one entry",
-            sources: &["b", "a"],
-            beats: vec![Beat::Join("m1", 1)],
-            member: "m1",
-            epoch: 2,
-            active: Some(vec![]),
-            status: vec![ExpectedStatus {
-                code: status::MISSING_SOURCE_TOPICS,
-                detail: "Source topics a, b are missing.",
-            }],
-        },
-        Row {
-            name: "a heartbeat requests the shutdown",
-            sources: &["in"],
-            beats: vec![Beat::Join("m1", 1), Beat::Heartbeat("m1", true)],
-            member: "m1",
-            epoch: 2,
-            active: None,
-            status: vec![ExpectedStatus {
-                code: status::SHUTDOWN_APPLICATION,
-                detail: "Streams group member m1 encountered a fatal error and requested a shutdown for \
-                 the entire application.",
-            }],
-        },
-        Row {
-            name: "a leave requests the shutdown",
-            sources: &["in"],
-            beats: vec![
-                Beat::Join("m1", 1),
-                Beat::Join("m2", 1),
-                Beat::Leave("m2", true),
-                Beat::Heartbeat("m1", false),
-            ],
-            member: "m1",
-            epoch: 4,
-            active: None,
-            status: vec![ExpectedStatus {
-                code: status::SHUTDOWN_APPLICATION,
-                detail: "Streams group member m2 encountered a fatal error and requested a shutdown for \
-                 the entire application.",
-            }],
-        },
-        Row {
-            name: "the shutdown request ends when the group becomes empty",
-            sources: &["in"],
-            beats: vec![
-                Beat::Join("m1", 1),
-                Beat::Heartbeat("m1", true),
-                Beat::Leave("m1", false),
-                Beat::Join("m2", 1),
-            ],
-            member: "m2",
-            epoch: 4,
-            active: Some(vec![0]),
-            status: vec![],
-        },
-        Row {
-            name: "a member behind the group topology gets STALE_TOPOLOGY",
-            sources: &["in"],
-            beats: vec![Beat::Join("m1", 2), Beat::Join("m2", 1)],
-            member: "m2",
-            epoch: 3,
-            active: Some(vec![]),
-            status: vec![ExpectedStatus {
-                code: status::STALE_TOPOLOGY,
-                detail: "The member's topology epoch 1 is behind the group's topology epoch 2.",
-            }],
-        },
-        Row {
-            name: "a member at the group topology does not get STALE_TOPOLOGY",
-            sources: &["in"],
-            beats: vec![
-                Beat::Join("m1", 2),
-                Beat::Join("m2", 1),
-                Beat::Heartbeat("m1", false),
-            ],
-            member: "m1",
-            epoch: 3,
-            active: None,
-            status: vec![],
-        },
-    ];
-
-    for row in rows {
-        let source = input_topic_source(1);
-        let coord = coordinator_with_source(source, None);
-        let handle = coord.get_or_create_streams("g");
-        let mut epochs: HashMap<&str, i32> = HashMap::new();
-        let mut last = None;
-        for beat in &row.beats {
-            let (member, member_epoch, shutdown, topology_epoch) = match *beat {
-                Beat::Join(member, topology_epoch) => (member, 0, false, Some(topology_epoch)),
-                Beat::Heartbeat(member, shutdown) => (member, epochs[member], shutdown, None),
-                Beat::Leave(member, shutdown) => (member, -1, shutdown, None),
-            };
-            let resp = heartbeat(&handle, StreamsGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: member.into(),
-                member_epoch,
-                rebalance_timeout_ms: 1_000,
-                shutdown_application: shutdown,
-                topology: topology_epoch.map(|epoch| Topology {
-                    epoch,
-                    subtopologies: vec![Subtopology {
-                        subtopology_id: "0".into(),
-                        source_topics: row.sources.iter().map(|s| (*s).to_owned()).collect(),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })
-            .await;
-            check!(resp.error_code == codes::NONE, "{}", row.name);
-            epochs.insert(member, resp.member_epoch);
-            last = Some(resp);
-        }
-
-        let expected = super::test_support::expected_active_response()
-            .member_id(row.member)
-            .epoch(row.epoch)
-            .maybe_status(Some(
-                row.status
-                    .iter()
-                    .map(|status| Status {
-                        status_code: status.code,
-                        status_detail: status.detail.into(),
-                        ..Default::default()
-                    })
-                    .collect(),
-            ))
-            .maybe_active(partition_indices(row.active))
-            .call();
-        check!(last == Some(expected), "{}", row.name);
-    }
-}
-
-/// Kafka builds the `StreamsGroupHeartbeat` status list on every heartbeat:
-/// `STALE_TOPOLOGY` for a member behind the group topology, the topology
-/// configuration status, and `SHUTDOWN_APPLICATION` while a shutdown request
-/// stands. The list is empty, not null, when nothing holds, and the shutdown
-/// request ends when the group becomes empty. Each row runs its heartbeats on
-/// a fresh group with a one-partition source topic and compares the whole
-/// response of the last one.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
-    name = "the heartbeat status list follows kafka"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_heartbeat_status_list_follows_kafka() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "coordinator unified streams actor tests: the heartbeat response carries what kafka sends"
-)]
-async fn bdd_verify_the_heartbeat_response_carries_what_kafka_sends() {
-    use {
-        krabka_protocol::owned::{
-            common::{
-                streams_group_heartbeat_request::endpoint::Endpoint as RequestEndpoint,
-                streams_group_heartbeat_response::{
-                    endpoint::Endpoint, topic_partition::TopicPartition,
-                },
-            },
-            streams_group_heartbeat_response::EndpointToPartitions,
-        },
-        std::collections::HashMap,
-    };
-
-    #[derive(Clone, Copy)]
-    enum Beat {
-        /// A join with this user endpoint port.
-        Join(&'static str, Option<u16>),
-        /// A heartbeat at the member epoch, or at this epoch.
-        Heartbeat(&'static str, Option<i32>),
-        Leave(&'static str),
-    }
-    let endpoint = |port: u16, active: &[i32]| EndpointToPartitions {
-        user_endpoint: Endpoint {
-            host: "localhost".into(),
-            port,
-            ..Default::default()
-        },
-        active_partitions: if active.is_empty() {
-            vec![]
-        } else {
-            vec![TopicPartition {
-                topic: "in".into(),
-                partitions: active.to_vec(),
-                ..Default::default()
-            }]
-        },
-        standby_partitions: vec![],
-        ..Default::default()
-    };
-    let accepted = accepted_tasks;
-    let rows = [
-        (
-            "the joining member of a new group gets its endpoint information",
-            1,
-            1,
-            vec![Beat::Join("m1", Some(1))],
-            StreamsGroupHeartbeatResponse {
-                partitions_by_user_endpoint: Some(vec![endpoint(1, &[0])]),
-                ..accepted("m1", 2, Some(&[0]))
-            },
-        ),
-        (
-            "two members with endpoints",
-            10,
-            1,
-            vec![Beat::Join("m1", Some(1)), Beat::Join("m2", Some(2))],
-            StreamsGroupHeartbeatResponse {
-                endpoint_information_epoch: 1,
-                partitions_by_user_endpoint: Some(vec![endpoint(1, &[0]), endpoint(2, &[])]),
-                ..accepted("m2", 3, Some(&[]))
-            },
-        ),
-        (
-            "a member that must revoke a task gets its tasks at its epoch",
-            10,
-            2,
-            vec![
-                Beat::Join("m1", None),
-                Beat::Join("m2", None),
-                Beat::Heartbeat("m1", None),
-            ],
-            accepted("m1", 2, Some(&[0])),
-        ),
-        (
-            "a member with an endpoint that must revoke a task",
-            10,
-            2,
-            vec![
-                Beat::Join("m1", Some(1)),
-                Beat::Join("m2", None),
-                Beat::Heartbeat("m1", None),
-            ],
-            StreamsGroupHeartbeatResponse {
-                endpoint_information_epoch: 1,
-                partitions_by_user_endpoint: Some(vec![endpoint(1, &[0])]),
-                ..accepted("m1", 2, Some(&[0]))
-            },
-        ),
-        (
-            "a heartbeat with an unchanged assignment",
-            10,
-            1,
-            vec![Beat::Join("m1", None), Beat::Heartbeat("m1", None)],
-            accepted("m1", 2, None),
-        ),
-        (
-            "a leave",
-            10,
-            1,
-            vec![Beat::Join("m1", None), Beat::Leave("m1")],
-            StreamsGroupHeartbeatResponse {
-                member_id: "m1".into(),
-                member_epoch: -1,
-                status: Some(vec![]),
-                ..Default::default()
-            },
-        ),
-        (
-            "a full group",
-            1,
-            1,
-            vec![Beat::Join("m1", None), Beat::Join("m2", None)],
-            super::response::error_resp(
-                codes::GROUP_MAX_SIZE_REACHED,
-                Some("The streams group has reached its maximum capacity of 1 members.".into()),
-            ),
-        ),
-        (
-            "an unknown member",
-            10,
-            1,
-            vec![Beat::Join("m1", None), Beat::Heartbeat("m9", Some(3))],
-            super::response::error_resp(
-                codes::UNKNOWN_MEMBER_ID,
-                Some("Member m9 is not a member of group g.".into()),
-            ),
-        ),
-    ];
-
-    for (name, max_size, partitions, beats, expected) in rows {
-        let source = input_topic_source(partitions);
-        let coord = coordinator_with_source(source, Some(max_size));
-        let handle = coord.get_or_create_streams("g");
-        let mut epochs: HashMap<&str, i32> = HashMap::new();
-        let mut last = None;
-        for beat in beats {
-            let (member, member_epoch, port) = match beat {
-                Beat::Join(member, port) => (member, 0, port),
-                Beat::Heartbeat(member, epoch) => {
-                    (member, epoch.unwrap_or_else(|| epochs[member]), None)
-                }
-                Beat::Leave(member) => (member, -1, None),
-            };
-            let resp = heartbeat(&handle, StreamsGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: member.into(),
-                member_epoch,
-                rebalance_timeout_ms: 1_000,
-                user_endpoint: port.map(|port| RequestEndpoint {
-                    host: "localhost".into(),
-                    port,
-                    ..Default::default()
-                }),
-                topology: (member_epoch == 0).then(|| one_subtopology().call()),
-                ..Default::default()
-            })
-            .await;
-            epochs.insert(member, resp.member_epoch);
-            last = Some(resp);
-        }
-        check!(last == Some(expected), "{name}");
-    }
-}
-
-/// The parts of Kafka's `StreamsGroupHeartbeat` response beyond the member
-/// epoch and the status: the task lists only on a join or a change, the
-/// endpoint information for Interactive Queries, the leave response and the
-/// error response. Each row runs its heartbeats on a fresh group with a
-/// source topic of the given partition count and compares the whole response
-/// of the last one.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
-    name = "the heartbeat response carries what kafka sends"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_heartbeat_response_carries_what_kafka_sends() {}
-
 /// KIP-1071 reconciliation through the actor, as Kafka's
 /// `CurrentAssignmentBuilder` and `scheduleStreamsGroupRebalanceTimeout` run
 /// it. `m1` owns both tasks of a two-partition topic and `m2` joins, so the
@@ -1754,344 +1108,6 @@ async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "coordinator unified streams actor tests: a static member follows kafka static membership"
-)]
-async fn bdd_verify_a_static_member_follows_kafka_static_membership() {
-    let config = StreamsGroupConfig {
-        max_size: 2,
-        unstable_api_versions: UnstableApiVersions::Enabled,
-        ..undelayed()
-    };
-    let join = |member_id: &str, instance_id: &str| StreamsGroupHeartbeatRequest {
-        group_id: "g".into(),
-        member_id: member_id.into(),
-        member_epoch: 0,
-        instance_id: Some(instance_id.into()),
-        rebalance_timeout_ms: 1_000,
-        active_tasks: Some(vec![]),
-        standby_tasks: Some(vec![]),
-        warmup_tasks: Some(vec![]),
-        topology: Some(one_subtopology().call()),
-        ..Default::default()
-    };
-    let beat = |member_id: &str, member_epoch, instance_id: &str| StreamsGroupHeartbeatRequest {
-        group_id: "g".into(),
-        member_id: member_id.into(),
-        member_epoch,
-        instance_id: Some(instance_id.into()),
-        ..Default::default()
-    };
-    let assigned = |member_id: &str, member_epoch| StreamsGroupHeartbeatResponse {
-        member_id: member_id.into(),
-        status: Some(vec![]),
-        active_tasks: Some(vec![ResponseTaskIds {
-            subtopology_id: "0".into(),
-            partitions: vec![0],
-            ..Default::default()
-        }]),
-        standby_tasks: Some(vec![]),
-        warmup_tasks: Some(vec![]),
-        ..super::response::base_resp(codes::NONE, member_epoch, &config)
-    };
-    let rows = [
-        (
-            "a static member leaves for a while and keeps its tasks",
-            vec![beat("m1", -2, "i1")],
-            StreamsGroupHeartbeatResponse {
-                member_id: "m1".into(),
-                member_epoch: -2,
-                status: Some(vec![]),
-                ..Default::default()
-            },
-            vec![DescribedMember {
-                member_id: "m1".to_owned(),
-                member_epoch: -2,
-                active: vec![0],
-            }],
-        ),
-        (
-            "a new member replaces the released static member",
-            vec![beat("m1", -2, "i1"), join("m2", "i1")],
-            assigned("m2", 2),
-            vec![DescribedMember {
-                member_id: "m2".to_owned(),
-                member_epoch: 2,
-                active: vec![0],
-            }],
-        ),
-        (
-            "a join with an instance id that a member still holds",
-            vec![join("m2", "i1")],
-            super::response::error_resp(
-                codes::UNRELEASED_INSTANCE_ID,
-                Some(
-                    "Static member m2 with instance id i1 cannot join the group because the \
-                     instance id is owned by m1 member."
-                        .into(),
-                ),
-            ),
-            vec![DescribedMember {
-                member_id: "m1".to_owned(),
-                member_epoch: 2,
-                active: vec![0],
-            }],
-        ),
-        (
-            "a heartbeat with the instance id of another member",
-            vec![beat("m2", 5, "i1")],
-            super::response::error_resp(
-                codes::FENCED_INSTANCE_ID,
-                Some("Static member m2 with instance id i1 was fenced by member m1.".into()),
-            ),
-            vec![DescribedMember {
-                member_id: "m1".to_owned(),
-                member_epoch: 2,
-                active: vec![0],
-            }],
-        ),
-        (
-            "a heartbeat with an unknown instance id",
-            vec![beat("m1", 2, "i9")],
-            super::response::error_resp(
-                codes::UNKNOWN_MEMBER_ID,
-                Some("Instance id i9 is unknown.".into()),
-            ),
-            vec![DescribedMember {
-                member_id: "m1".to_owned(),
-                member_epoch: 2,
-                active: vec![0],
-            }],
-        ),
-        (
-            "a released static member does not count against a full group",
-            vec![join("m3", "i3"), beat("m1", -2, "i1"), join("m2", "i1")],
-            assigned("m2", 3),
-            vec![
-                DescribedMember {
-                    member_id: "m2".to_owned(),
-                    member_epoch: 3,
-                    active: vec![0],
-                },
-                DescribedMember {
-                    member_id: "m3".to_owned(),
-                    member_epoch: 3,
-                    active: vec![],
-                },
-            ],
-        ),
-        (
-            "a replacement takes over a member id that another member holds",
-            vec![join("m2", "i2"), beat("m1", -2, "i1"), join("m2", "i1")],
-            assigned("m2", 4),
-            vec![DescribedMember {
-                member_id: "m2".to_owned(),
-                member_epoch: 4,
-                active: vec![0],
-            }],
-        ),
-        (
-            "a static member leaves for good",
-            vec![beat("m1", -1, "i1")],
-            StreamsGroupHeartbeatResponse {
-                member_id: "m1".into(),
-                member_epoch: -1,
-                status: Some(vec![]),
-                ..Default::default()
-            },
-            vec![],
-        ),
-    ];
-
-    for (name, beats, expected, members) in rows {
-        let source = input_topic_source(1);
-        let coord = coordinator_with_log(config.clone(), Arc::new(InMemoryOffsetsLog::default()));
-        coord.set_metadata_source(source);
-        let handle = coord.get_or_create_streams("g");
-        check!(
-            heartbeat(&handle, join("m1", "i1")).await == assigned("m1", 2),
-            "{name}"
-        );
-
-        let mut last = None;
-        for request in beats {
-            last = Some(heartbeat(&handle, request).await);
-        }
-
-        check!(last == Some(expected), "{name}");
-        let mut described: Vec<DescribedMember> = describe(&handle)
-            .await
-            .members
-            .into_iter()
-            .map(|member| {
-                let active = member.active.get("0").cloned().unwrap_or_default();
-                DescribedMember {
-                    member_id: member.member_id,
-                    member_epoch: member.member_epoch,
-                    active,
-                }
-            })
-            .collect();
-        described.sort();
-        check!(described == members, "{name}");
-    }
-}
-
-/// KIP-1071 static membership, as Kafka's
-/// `getOrMaybeCreateStaticStreamsGroupMember` and
-/// `streamsGroupStaticMemberGroupLeave` run it. Member `m1` holds instance id
-/// `i1` in a group with a one-partition topic. Each row sends its heartbeats
-/// and compares the whole last response and the members afterwards, as
-/// `(member id, member epoch, active tasks)`. Static membership is Kafka
-/// trunk's: 4.3.1 refuses an instance id before the group sees the request.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
-    name = "a static member follows kafka static membership"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_static_member_follows_kafka_static_membership() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "coordinator unified streams actor tests: validate offset commit follows kafka streams group"
-)]
-fn bdd_verify_validate_offset_commit_follows_kafka_streams_group() {
-    let offset = |api_version| CommitFence::Offset { api_version };
-    let txn = CommitFence::Transactional;
-    let mut group = StreamsGroupState::new("g");
-    let member = epoch_five_member();
-    group.members.insert("m1".into(), member);
-    let empty = StreamsGroupState::new("g");
-
-    // (row, group, member id, group instance id, member epoch, fence, expected)
-    let rows = [
-        (
-            "admin commit on an empty group",
-            &empty,
-            "",
-            None,
-            -1,
-            offset(9),
-            Ok(()),
-        ),
-        (
-            "admin commit on a live group",
-            &group,
-            "",
-            None,
-            -1,
-            offset(9),
-            Err(codes::UNKNOWN_MEMBER_ID),
-        ),
-        (
-            "empty member id at a real epoch",
-            &group,
-            "",
-            None,
-            5,
-            offset(9),
-            Err(codes::UNKNOWN_MEMBER_ID),
-        ),
-        (
-            "transactional commit with no member",
-            &group,
-            "",
-            None,
-            -1,
-            txn,
-            Ok(()),
-        ),
-        (
-            "transactional commit naming only a group instance id",
-            &group,
-            "",
-            Some("instance"),
-            -1,
-            txn,
-            Err(codes::UNKNOWN_MEMBER_ID),
-        ),
-        (
-            "transactional commit naming a group instance id on an empty group",
-            &empty,
-            "",
-            Some("instance"),
-            -1,
-            txn,
-            Ok(()),
-        ),
-        (
-            "unknown member",
-            &group,
-            "m2",
-            None,
-            5,
-            offset(9),
-            Err(codes::UNKNOWN_MEMBER_ID),
-        ),
-        (
-            "OffsetCommit before v9",
-            &group,
-            "m1",
-            None,
-            5,
-            offset(8),
-            Err(codes::UNSUPPORTED_VERSION),
-        ),
-        (
-            "TxnOffsetCommit has no version floor",
-            &group,
-            "m1",
-            None,
-            5,
-            txn,
-            Ok(()),
-        ),
-        ("current epoch", &group, "m1", None, 5, offset(9), Ok(())),
-        (
-            "newer epoch",
-            &group,
-            "m1",
-            None,
-            6,
-            offset(9),
-            Err(codes::STALE_MEMBER_EPOCH),
-        ),
-        (
-            "older epoch on a group without a topology",
-            &group,
-            "m1",
-            None,
-            4,
-            offset(9),
-            Err(codes::STALE_MEMBER_EPOCH),
-        ),
-    ];
-    let partitions = [("in".to_owned(), 0)];
-    for (row, state, member_id, group_instance_id, member_epoch, fence, expected) in rows {
-        let identity = CommitIdentity {
-            member_id,
-            group_instance_id,
-            member_epoch,
-            fence,
-        };
-        check!(
-            validate_offset_commit(state, None, identity, &partitions) == expected,
-            "{row}"
-        );
-    }
-}
-
-/// Kafka's `StreamsGroup.validateOffsetCommit`. Each row is a group (with
-/// member `m1` at epoch 5, or empty), a commit and the expected answer.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
-    name = "validate offset commit follows kafka streams group"
-)]
-fn validate_offset_commit_follows_kafka_streams_group() {}
-
 /// A stored subtopology `id` that reads the source topic `source` and the
 /// repartition topics `repartition`.
 fn stored_subtopology(id: &str, source: &str, repartition: &[&str]) -> StoredSubtopology {
@@ -2113,111 +1129,6 @@ fn stored_subtopology(id: &str, source: &str, repartition: &[&str]) -> StoredSub
         copartition_groups: vec![],
     }
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "coordinator unified streams actor tests: subscribed topics follow kafka streams group"
-)]
-fn bdd_verify_subscribed_topics_follow_kafka_streams_group() {
-    let topology = StreamsGroupTopologyValue {
-        epoch: 1,
-        subtopologies: vec![
-            StoredSubtopology {
-                repartition_sink_topics: vec!["rep".into()],
-                ..stored_subtopology("0", "in", &[])
-            },
-            stored_subtopology("1", "other", &["rep"]),
-        ],
-    };
-    let mut live = StreamsGroupState::new("g");
-    live.members.insert("m1".into(), epoch_five_member());
-    live.phase = StreamsGroupStatePhase::Stable;
-    let empty = StreamsGroupState::new("g");
-    let named = |topics: &[&str]| {
-        SubscribedTopics::Named(topics.iter().map(|topic| (*topic).to_owned()).collect())
-    };
-
-    // (row, group, topology, expected)
-    let rows = [
-        ("an empty group", &empty, Some(&topology), named(&[])),
-        ("a live group with no topology", &live, None, named(&[])),
-        (
-            "a live group with a topology",
-            &live,
-            Some(&topology),
-            named(&["in", "other", "rep"]),
-        ),
-    ];
-    for (row, state, topology, expected) in rows {
-        check!(subscribed_topics(state, topology) == expected, "{row}");
-    }
-}
-
-/// Kafka's `StreamsGroup.isSubscribedToTopic`, which `OffsetDelete` asks:
-/// an empty group and a group with no topology subscribe to nothing;
-/// otherwise the group subscribes to the source and repartition source
-/// topics of its topology, and not to its other topics.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
-    name = "subscribed topics follow kafka streams group"
-)]
-fn subscribed_topics_follow_kafka_streams_group() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "coordinator unified streams actor tests: validate offset fetch follows kafka streams group"
-)]
-fn bdd_verify_validate_offset_fetch_follows_kafka_streams_group() {
-    let mut group = StreamsGroupState::new("g");
-    group.members.insert("m1".into(), epoch_five_member());
-
-    // (row, member id, member epoch, expected)
-    let rows = [
-        ("no member id and epoch -1 (admin client)", None, -1, Ok(())),
-        ("the member at its epoch", Some("m1"), 5, Ok(())),
-        (
-            "the member at an older epoch",
-            Some("m1"),
-            4,
-            Err(codes::STALE_MEMBER_EPOCH),
-        ),
-        (
-            "the member at a newer epoch",
-            Some("m1"),
-            6,
-            Err(codes::STALE_MEMBER_EPOCH),
-        ),
-        (
-            "an unknown member",
-            Some("ghost"),
-            5,
-            Err(codes::UNKNOWN_MEMBER_ID),
-        ),
-        (
-            "no member id with an epoch",
-            None,
-            5,
-            Err(codes::UNKNOWN_MEMBER_ID),
-        ),
-    ];
-    for (row, member_id, member_epoch, expected) in rows {
-        check!(
-            validate_offset_fetch(&group, member_id, member_epoch) == expected,
-            "{row}"
-        );
-    }
-}
-
-/// Kafka's `StreamsGroup.validateOffsetFetch`. Each row is the v9+ member
-/// fields of an `OffsetFetch` against a group whose member `m1` is at epoch 5,
-/// and the expected answer.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests.feature",
-    name = "validate offset fetch follows kafka streams group"
-)]
-fn validate_offset_fetch_follows_kafka_streams_group() {}
 
 /// KIP-1251: Kafka 4.3.1's `StreamsGroup.createAssignmentEpochValidator`.
 /// Member `m1` is at epoch 5. It holds active tasks 0 and 1 of subtopology
@@ -3149,4 +2060,617 @@ async fn a_bump_records_the_validated_topology_epoch() {
             "{case}"
         );
     }
+}
+
+#[derive(serde::Deserialize)]
+struct StreamsFenceInput {
+    live: bool,
+    member_id: Option<String>,
+    instance_id: Option<String>,
+    epoch: i32,
+    offset_commit_version: Option<i16>,
+}
+#[derive(Default)]
+struct StreamsOffsetFence {
+    state: Option<StreamsGroupState>,
+    input: Option<StreamsFenceInput>,
+    result: Option<Result<(), i16>>,
+}
+#[rstest::fixture]
+fn streams_offset_fence() -> StreamsOffsetFence {
+    // Every membership decision starts with fresh group state.
+    StreamsOffsetFence::default()
+}
+#[rstest_bdd_macros::given("streams offset identity {input} with live member m1 at epoch 5")]
+fn streams_fence_identity(streams_offset_fence: &mut StreamsOffsetFence, input: String) {
+    let input: StreamsFenceInput = serde_json::from_str(&input).expect("offset identity");
+    let mut state = StreamsGroupState::new("g");
+    if input.live {
+        state.members.insert("m1".into(), epoch_five_member());
+    }
+    streams_offset_fence.state = Some(state);
+    streams_offset_fence.input = Some(input);
+}
+#[rstest_bdd_macros::when("the streams group validates committing in partition 0")]
+fn streams_commit_fence(streams_offset_fence: &mut StreamsOffsetFence) {
+    let input = streams_offset_fence
+        .input
+        .as_ref()
+        .expect("commit identity");
+    let fence = input
+        .offset_commit_version
+        .map_or(CommitFence::Transactional, |api_version| {
+            CommitFence::Offset { api_version }
+        });
+    streams_offset_fence.result = Some(validate_offset_commit(
+        streams_offset_fence.state.as_ref().expect("streams group"),
+        None,
+        CommitIdentity {
+            member_id: input.member_id.as_deref().unwrap_or(""),
+            group_instance_id: input.instance_id.as_deref(),
+            member_epoch: input.epoch,
+            fence,
+        },
+        &[("in".to_owned(), 0)],
+    ));
+}
+#[rstest_bdd_macros::when("the streams group validates fetching offsets")]
+fn streams_fetch_fence(streams_offset_fence: &mut StreamsOffsetFence) {
+    let input = streams_offset_fence.input.as_ref().expect("fetch identity");
+    streams_offset_fence.result = Some(validate_offset_fetch(
+        streams_offset_fence.state.as_ref().expect("streams group"),
+        input.member_id.as_deref(),
+        input.epoch,
+    ));
+}
+#[rstest_bdd_macros::then("the streams offset validation returns Kafka code {code}")]
+fn streams_offset_validation(streams_offset_fence: &StreamsOffsetFence, code: i16) {
+    let expected = if code == 0 { Ok(()) } else { Err(code) };
+    check!(
+        streams_offset_fence
+            .result
+            .as_ref()
+            .expect("validation executed")
+            == &expected
+    );
+}
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/coordinator/unified/streams/actor/tests/offset_validation.feature",
+    fixtures = [streams_offset_fence: StreamsOffsetFence],
+);
+type SubtopologyInput = (String, String, Vec<String>, Vec<String>);
+
+#[derive(serde::Deserialize)]
+struct StreamsTopologyInput {
+    live: bool,
+    topology: Option<Vec<SubtopologyInput>>,
+}
+#[derive(Default)]
+struct StreamsSubscriptions {
+    state: Option<StreamsGroupState>,
+    topology: Option<StreamsGroupTopologyValue>,
+    result: Option<SubscribedTopics>,
+}
+#[rstest::fixture]
+fn streams_subscriptions() -> StreamsSubscriptions {
+    // Each subscription projection owns its complete topology.
+    StreamsSubscriptions::default()
+}
+#[rstest_bdd_macros::given("streams group membership and source/repartition topology {input}")]
+fn streams_subscription_topology(streams_subscriptions: &mut StreamsSubscriptions, input: String) {
+    let input: StreamsTopologyInput = serde_json::from_str(&input).expect("subscription topology");
+    let mut state = StreamsGroupState::new("g");
+    if input.live {
+        state.members.insert("m1".into(), epoch_five_member());
+        state.phase = StreamsGroupStatePhase::Stable;
+    }
+    streams_subscriptions.state = Some(state);
+    streams_subscriptions.topology = input.topology.map(|rows| StreamsGroupTopologyValue {
+        epoch: 1,
+        subtopologies: rows
+            .into_iter()
+            .map(|(id, source, repartition, sinks)| {
+                let refs = repartition.iter().map(String::as_str).collect::<Vec<_>>();
+                StoredSubtopology {
+                    repartition_sink_topics: sinks,
+                    ..stored_subtopology(&id, &source, &refs)
+                }
+            })
+            .collect(),
+    });
+}
+#[rstest_bdd_macros::when("OffsetDelete asks which topics the streams group subscribes to")]
+fn streams_subscribed_topics(streams_subscriptions: &mut StreamsSubscriptions) {
+    streams_subscriptions.result = Some(subscribed_topics(
+        streams_subscriptions.state.as_ref().expect("streams group"),
+        streams_subscriptions.topology.as_ref(),
+    ));
+}
+#[rstest_bdd_macros::then("the complete subscribed topic set is {topics}")]
+fn streams_subscription_set(streams_subscriptions: &StreamsSubscriptions, topics: String) {
+    let topics: Vec<String> = serde_json::from_str(&topics).expect("subscribed topics");
+    check!(
+        streams_subscriptions
+            .result
+            .as_ref()
+            .expect("subscriptions observed")
+            == &SubscribedTopics::Named(topics.into_iter().collect())
+    );
+}
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/coordinator/unified/streams/actor/tests/subscriptions.feature",
+    fixtures = [streams_subscriptions: StreamsSubscriptions],
+);
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests/epochs.feature",
+    name = "member epoch rule matches kafka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn member_epoch_rule_matches_kafka(
+    streams_actor_behavior: StreamsActorBehavior,
+    environment: String,
+    requests: String,
+    expected: String,
+    codes: String,
+) {
+    let _ = (
+        streams_actor_behavior,
+        environment,
+        requests,
+        expected,
+        codes,
+    );
+}
+
+#[rstest_bdd_macros::then("the acknowledged streams setup member epochs are {epochs}")]
+fn streams_setup_epochs(streams_actor_behavior: &StreamsActorBehavior, epochs: String) {
+    let epochs: Vec<i32> = serde_json::from_str(&epochs).expect("setup epochs");
+    check!(
+        streams_actor_behavior
+            .responses
+            .iter()
+            .take(epochs.len())
+            .map(|r| r.member_epoch)
+            .collect::<Vec<_>>()
+            == epochs
+    );
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests/internal_topics.feature",
+    name = "a join sizes the internal topics as kafka does"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_join_sizes_the_internal_topics_as_kafka_does(
+    streams_actor_behavior: StreamsActorBehavior,
+    environment: String,
+    copartitioned: String,
+    topics: String,
+    expected: String,
+) {
+    let _ = (
+        streams_actor_behavior,
+        environment,
+        copartitioned,
+        topics,
+        expected,
+    );
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests/statuses.feature",
+    name = "the heartbeat status list follows kafka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_heartbeat_status_list_follows_kafka(
+    streams_actor_behavior: StreamsActorBehavior,
+    environment: String,
+    requests: String,
+    expected: String,
+    codes: String,
+) {
+    let _ = (
+        streams_actor_behavior,
+        environment,
+        requests,
+        expected,
+        codes,
+    );
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests/responses.feature",
+    name = "the heartbeat response carries what kafka sends"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_heartbeat_response_carries_what_kafka_sends(
+    streams_actor_behavior: StreamsActorBehavior,
+    environment: String,
+    requests: String,
+    expected: String,
+) {
+    let _ = (streams_actor_behavior, environment, requests, expected);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/coordinator/unified/streams/actor/tests/static_members.feature",
+    name = "a static member follows kafka static membership"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_static_member_follows_kafka_static_membership(
+    streams_actor_behavior: StreamsActorBehavior,
+    requests: String,
+    expected: String,
+    members: String,
+) {
+    let _ = (streams_actor_behavior, requests, expected, members);
+}
+
+use {
+    crate::coordinator::unified::streams::topology::InternalTopicSpec,
+    krabka_protocol::owned::{
+        common::{
+            streams_group_heartbeat_request::{
+                endpoint::Endpoint as HeartbeatRequestEndpoint, topic_info::TopicInfo,
+            },
+            streams_group_heartbeat_response::{
+                endpoint::Endpoint as HeartbeatEndpoint,
+                topic_partition::TopicPartition as HeartbeatTopicPartition,
+            },
+        },
+        streams_group_heartbeat_request::{CopartitionGroup, Subtopology},
+        streams_group_heartbeat_response::EndpointToPartitions,
+    },
+};
+
+#[derive(serde::Deserialize)]
+struct ActorEnvironment {
+    topics: Option<Vec<(String, u8, i32)>>,
+    max_size: usize,
+    unstable: bool,
+}
+type HeartbeatTasks = Vec<(String, Vec<i32>)>;
+type InteractiveQueryEndpoints = Vec<(u16, Vec<i32>)>;
+
+#[derive(serde::Deserialize)]
+struct ActorHeartbeat {
+    timeout_ms: i32,
+    member: String,
+    epoch: Option<i32>,
+    topology: Option<(i32, Vec<String>)>,
+    instance: Option<String>,
+    port: Option<u16>,
+    shutdown: bool,
+    owned: Option<HeartbeatTasks>,
+}
+#[derive(Default)]
+struct StreamsActorBehavior {
+    coordinator: Option<Arc<GroupCoordinator>>,
+    handle: Option<Arc<StreamsGroupActorHandle>>,
+    responses: Vec<StreamsGroupHeartbeatResponse>,
+    creatable_topics: Vec<InternalTopicSpec>,
+    members: Vec<DescribedMember>,
+}
+#[rstest::fixture]
+fn streams_actor_behavior() -> StreamsActorBehavior {
+    // A new native coordinator and actor own each scenario's membership and log.
+    StreamsActorBehavior::default()
+}
+#[rstest_bdd_macros::given("a fresh streams actor with environment {environment}")]
+fn fresh_streams_actor(streams_actor_behavior: &mut StreamsActorBehavior, environment: String) {
+    let environment: ActorEnvironment =
+        serde_json::from_str(&environment).expect("actor environment");
+    let config = StreamsGroupConfig {
+        max_size: environment.max_size,
+        unstable_api_versions: if environment.unstable {
+            UnstableApiVersions::Enabled
+        } else {
+            UnstableApiVersions::Disabled
+        },
+        ..undelayed()
+    };
+    let coordinator = coordinator_with_log(config, Arc::new(InMemoryOffsetsLog::default()));
+    if let Some(topics) = environment.topics {
+        let image_topics = topics
+            .iter()
+            .map(|(name, id, partitions)| ImageTopic {
+                name,
+                id: *id,
+                partitions: *partitions,
+            })
+            .collect::<Vec<_>>();
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_of(None, &image_topics))
+                .build(),
+        );
+        coordinator.set_metadata_source(source);
+    }
+    streams_actor_behavior.handle = Some(coordinator.get_or_create_streams("g"));
+    streams_actor_behavior.coordinator = Some(coordinator);
+}
+
+#[rstest_bdd_macros::when("the actor receives these heartbeat requests {requests}")]
+async fn streams_actor_heartbeats(
+    streams_actor_behavior: &mut StreamsActorBehavior,
+    requests: String,
+) {
+    let requests: Vec<ActorHeartbeat> =
+        serde_json::from_str(&requests).expect("heartbeat requests");
+    let handle = streams_actor_behavior
+        .handle
+        .as_ref()
+        .expect("streams actor");
+    for request in requests {
+        let epoch = request.epoch.unwrap_or_else(|| {
+            streams_actor_behavior
+                .responses
+                .iter()
+                .rev()
+                .find(|response| response.member_id == request.member)
+                .expect("member's last acknowledged epoch")
+                .member_epoch
+        });
+        let owned = request.owned.map(|tasks| {
+            tasks
+                .into_iter()
+                .map(|(subtopology_id, partitions)| RequestTaskIds {
+                    subtopology_id,
+                    partitions,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>()
+        });
+        let response = heartbeat(handle, StreamsGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: request.member,
+            member_epoch: epoch,
+            instance_id: request.instance,
+            shutdown_application: request.shutdown,
+            user_endpoint: request.port.map(|port| HeartbeatRequestEndpoint {
+                host: "localhost".into(),
+                port,
+                ..Default::default()
+            }),
+            rebalance_timeout_ms: request.timeout_ms,
+            topology: request.topology.map(|(epoch, source_topics)| Topology {
+                epoch,
+                subtopologies: vec![Subtopology {
+                    subtopology_id: "0".into(),
+                    source_topics,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            standby_tasks: owned.as_ref().map(|_| vec![]),
+            warmup_tasks: owned.as_ref().map(|_| vec![]),
+            active_tasks: owned,
+            ..Default::default()
+        })
+        .await;
+        streams_actor_behavior.responses.push(response);
+    }
+    streams_actor_behavior.members = describe(handle)
+        .await
+        .members
+        .into_iter()
+        .map(|member| DescribedMember {
+            active: member.active.get("0").cloned().unwrap_or_default(),
+            member_id: member.member_id,
+            member_epoch: member.member_epoch,
+        })
+        .collect();
+    streams_actor_behavior.members.sort();
+}
+
+#[derive(serde::Deserialize)]
+struct ExpectedActorResponse {
+    code: i16,
+    message: Option<String>,
+    member: String,
+    epoch: i32,
+    heartbeat_ms: i32,
+    task_ms: i32,
+    lag: i64,
+    active: Option<HeartbeatTasks>,
+    standby: Option<HeartbeatTasks>,
+    warmup: Option<HeartbeatTasks>,
+    status: Vec<(i8, String)>,
+    endpoint_epoch: i32,
+    endpoints: Option<InteractiveQueryEndpoints>,
+}
+impl ExpectedActorResponse {
+    fn native(self) -> StreamsGroupHeartbeatResponse {
+        let tasks = |rows: Option<HeartbeatTasks>| {
+            rows.map(|rows| {
+                rows.into_iter()
+                    .map(|(subtopology_id, partitions)| ResponseTaskIds {
+                        subtopology_id,
+                        partitions,
+                        ..Default::default()
+                    })
+                    .collect()
+            })
+        };
+        StreamsGroupHeartbeatResponse {
+            error_code: self.code,
+            error_message: self.message,
+            member_id: self.member,
+            member_epoch: self.epoch,
+            heartbeat_interval_ms: self.heartbeat_ms,
+            task_offset_interval_ms: self.task_ms,
+            acceptable_recovery_lag: self.lag,
+            active_tasks: tasks(self.active),
+            standby_tasks: tasks(self.standby),
+            warmup_tasks: tasks(self.warmup),
+            status: Some(
+                self.status
+                    .into_iter()
+                    .map(|(status_code, status_detail)| Status {
+                        status_code,
+                        status_detail,
+                        ..Default::default()
+                    })
+                    .collect(),
+            ),
+            endpoint_information_epoch: self.endpoint_epoch,
+            partitions_by_user_endpoint: self.endpoints.map(|rows| {
+                rows.into_iter()
+                    .map(|(port, active)| EndpointToPartitions {
+                        user_endpoint: HeartbeatEndpoint {
+                            host: "localhost".into(),
+                            port,
+                            ..Default::default()
+                        },
+                        active_partitions: if active.is_empty() {
+                            vec![]
+                        } else {
+                            vec![HeartbeatTopicPartition {
+                                topic: "in".into(),
+                                partitions: active,
+                                ..Default::default()
+                            }]
+                        },
+                        standby_partitions: vec![],
+                        ..Default::default()
+                    })
+                    .collect()
+            }),
+            ..Default::default()
+        }
+    }
+}
+#[rstest_bdd_macros::then("the complete last streams heartbeat response is {expected}")]
+fn streams_last_response(streams_actor_behavior: &StreamsActorBehavior, expected: String) {
+    let expected: ExpectedActorResponse =
+        serde_json::from_str(&expected).expect("complete expected response");
+    check!(
+        streams_actor_behavior
+            .responses
+            .last()
+            .expect("heartbeat executed")
+            == &expected.native()
+    );
+}
+#[rstest_bdd_macros::then("every streams heartbeat returns these Kafka codes {codes}")]
+fn streams_response_codes(streams_actor_behavior: &StreamsActorBehavior, codes: String) {
+    let codes: Vec<i16> = serde_json::from_str(&codes).expect("expected heartbeat codes");
+    check!(
+        streams_actor_behavior
+            .responses
+            .iter()
+            .map(|response| response.error_code)
+            .collect::<Vec<_>>()
+            == codes
+    );
+}
+#[rstest_bdd_macros::then("the acknowledged streams member epochs are {epochs}")]
+fn streams_response_epochs(streams_actor_behavior: &StreamsActorBehavior, epochs: String) {
+    let epochs: Vec<i32> = serde_json::from_str(&epochs).expect("expected acknowledged epochs");
+    check!(
+        streams_actor_behavior
+            .responses
+            .iter()
+            .map(|response| response.member_epoch)
+            .collect::<Vec<_>>()
+            == epochs
+    );
+}
+#[rstest_bdd_macros::then("the complete initial streams heartbeat response is {expected}")]
+fn streams_initial_response(streams_actor_behavior: &StreamsActorBehavior, expected: String) {
+    let expected: ExpectedActorResponse =
+        serde_json::from_str(&expected).expect("initial expected response");
+    check!(
+        streams_actor_behavior
+            .responses
+            .first()
+            .expect("initial heartbeat executed")
+            == &expected.native()
+    );
+}
+#[rstest_bdd_macros::then(
+    "the described member identities, epochs and active partitions are {members}"
+)]
+fn streams_described_members(streams_actor_behavior: &StreamsActorBehavior, members: String) {
+    let members: Vec<(String, i32, Vec<i32>)> =
+        serde_json::from_str(&members).expect("complete member projection");
+    let expected = members
+        .into_iter()
+        .map(|(member_id, member_epoch, active)| DescribedMember {
+            member_id,
+            member_epoch,
+            active,
+        })
+        .collect::<Vec<_>>();
+    check!(streams_actor_behavior.members == expected);
+}
+
+#[rstest_bdd_macros::when(
+    "a member joins a two-subtopology orders to rp to customers topology with copartition {copartitioned}"
+)]
+async fn join_internal_topology(
+    streams_actor_behavior: &mut StreamsActorBehavior,
+    copartitioned: bool,
+) {
+    let topology = Topology {
+        epoch: 1,
+        subtopologies: vec![source_to_repartition(), Subtopology {
+            subtopology_id: "1".into(),
+            source_topics: vec!["customers".into()],
+            repartition_source_topics: vec![TopicInfo {
+                name: "rp".into(),
+                ..Default::default()
+            }],
+            state_changelog_topics: vec![TopicInfo {
+                name: "store-changelog".into(),
+                ..Default::default()
+            }],
+            copartition_groups: if copartitioned {
+                vec![CopartitionGroup {
+                    source_topics: vec![0],
+                    repartition_source_topics: vec![0],
+                    ..Default::default()
+                }]
+            } else {
+                vec![]
+            },
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let result = heartbeat_result(
+        streams_actor_behavior
+            .handle
+            .as_ref()
+            .expect("streams actor"),
+        StreamsGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: "m1".into(),
+            member_epoch: 0,
+            rebalance_timeout_ms: 1_000,
+            topology: Some(topology),
+            ..Default::default()
+        },
+    )
+    .await;
+    streams_actor_behavior.responses.push(result.response);
+    streams_actor_behavior.creatable_topics = result.creatable_topics;
+}
+#[rstest_bdd_macros::then(
+    "the requested internal topics have names and partition counts {topics} with replication zero and no configs"
+)]
+fn streams_internal_topic_specs(streams_actor_behavior: &StreamsActorBehavior, topics: String) {
+    let topics: Vec<(String, i32)> =
+        serde_json::from_str(&topics).expect("expected internal topics");
+    let expected = topics
+        .into_iter()
+        .map(|(name, partitions)| InternalTopicSpec {
+            name,
+            partitions,
+            replication_factor: 0,
+            configs: BTreeMap::new(),
+        })
+        .collect::<Vec<_>>();
+    check!(streams_actor_behavior.creatable_topics == expected);
 }

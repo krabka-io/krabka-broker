@@ -32,14 +32,6 @@ const fn deltas(offset_delta: i32, timestamp_delta: i64) -> RestoreRecordDeltas 
     }
 }
 
-const NON_IDEMPOTENT: RestoreProducer = RestoreProducer {
-    control: false,
-    transactional: false,
-    producer_id: -1,
-    producer_epoch: -1,
-    base_sequence: -1,
-};
-
 const fn layout(base_offset: i64, last_offset_delta: i32, records_count: i32) -> RestoreLayout {
     RestoreLayout {
         base_offset,

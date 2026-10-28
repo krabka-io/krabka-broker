@@ -66,3 +66,6 @@ mod topics;
 mod transitions;
 #[path = "break_glass/two_person_rule.rs"]
 mod two_person_rule;
+
+#[path = "break_glass/behavior.rs"]
+mod behavior;

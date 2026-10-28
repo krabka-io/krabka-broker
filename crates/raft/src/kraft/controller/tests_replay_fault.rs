@@ -203,7 +203,6 @@ fn elected_replay_engine() -> ElectedReplayEngine {
 /// the decoder's error. It skips a record that decodes but that the image
 /// cannot take. Each row first commits a topic, so a row can name a topic
 /// the image holds.
-
 #[test]
 fn a_controller_stops_on_a_committed_record_it_cannot_decode() {
     struct Scenario {

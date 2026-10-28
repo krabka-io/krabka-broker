@@ -100,7 +100,6 @@ mod tests {
                 RESOURCE_TYPE_GROUP,
                 test_support::{Handled, make_scoped_resource, make_set_cfg},
             },
-            test_support::string_pairs,
         },
         assert2::assert,
         krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
@@ -123,59 +122,148 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers incremental alter configs group scope tests: group config stores every key kafka 4 3 1 accepts"
+    struct GroupConfigScenario {
+        group: String,
+        configs: Vec<AlterableConfig>,
+        unstable: UnstableApiVersions,
+        handled: Option<Handled>,
+        record: Option<Result<MetadataRecord, (i16, String)>>,
+    }
+    #[rstest::fixture]
+    fn group_config() -> GroupConfigScenario {
+        let group = "g".to_owned();
+        GroupConfigScenario {
+            group,
+            configs: Vec::new(),
+            unstable: UnstableApiVersions::Enabled,
+            handled: None,
+            record: None,
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "the stable group configuration request sets these Kafka-supported keys"
     )]
-    fn bdd_verify_group_config_stores_every_key_kafka_4_3_1_accepts() {
-        let keys = [
-            ("consumer.session.timeout.ms", "50000"),
-            ("consumer.heartbeat.interval.ms", "6000"),
-            ("consumer.assignment.interval.ms", "500"),
-            ("share.session.timeout.ms", "50000"),
-            ("share.heartbeat.interval.ms", "6000"),
-            ("share.record.lock.duration.ms", "45000"),
-            ("share.delivery.count.limit", "7"),
-            ("share.partition.max.record.locks", "1000"),
-            ("share.isolation.level", "read_committed"),
-            ("share.renew.acknowledge.enable", "false"),
-            ("share.assignment.interval.ms", "500"),
-            ("streams.initial.rebalance.delay.ms", "0"),
-            ("streams.assignment.interval.ms", "500"),
-            (KEY_NUM_STANDBY_REPLICAS, "1"),
-        ];
+    fn stable_group_configs(group_config: &mut GroupConfigScenario, datatable: Vec<Vec<String>>) {
+        group_config.unstable = UnstableApiVersions::Disabled;
+        group_config.configs = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [key, value] = row.as_slice() else {
+                    panic!("configuration name and value required")
+                };
+                make_set_cfg(key, value)
+            })
+            .collect();
+    }
+    #[rstest_bdd_macros::given("share group share-workers sets offset reset strategy {strategy}")]
+    fn share_offset_strategy(group_config: &mut GroupConfigScenario, strategy: String) {
+        group_config.group = "share-workers".into();
+        group_config.configs = vec![make_set_cfg(KEY_SHARE_AUTO_OFFSET_RESET, &strategy)];
+    }
+    #[rstest_bdd_macros::given(
+        "group {group} requests operation {operation} on key {key} with value 1"
+    )]
+    fn group_operation(
+        group_config: &mut GroupConfigScenario,
+        group: String,
+        operation: i8,
+        key: String,
+    ) {
+        group_config.group = if group == "empty" {
+            String::new()
+        } else {
+            group
+        };
+        group_config.configs = vec![AlterableConfig {
+            name: key,
+            config_operation: operation,
+            value: Some("1".into()),
+            ..Default::default()
+        }];
+    }
+    #[rstest_bdd_macros::when("the group configuration handler stages the request")]
+    fn stage_group_configs(group_config: &mut GroupConfigScenario) {
         let resource = make_scoped_resource(
             RESOURCE_TYPE_GROUP,
-            "g",
-            keys.iter()
-                .map(|(name, value)| make_set_cfg(name, value))
-                .collect(),
+            &group_config.group,
+            group_config.configs.clone(),
         );
-        let Handled {
-            response: out,
-            records,
-        } = drive(&resource, UnstableApiVersions::Disabled);
-        assert!(out.error_code == codes::NONE, "{out:?}");
+        group_config.handled = Some(drive(&resource, group_config.unstable));
+    }
+    #[rstest_bdd_macros::when("the controller merges operations and validates the group resource")]
+    fn validate_group_record(group_config: &mut GroupConfigScenario) {
+        let resource = make_scoped_resource(
+            RESOURCE_TYPE_GROUP,
+            &group_config.group,
+            group_config.configs.clone(),
+        );
+        group_config.record = Some(group_record(
+            &resource,
+            &MetadataImage::new(uuid::Uuid::nil()),
+            &GroupBounds::default(),
+            api_catalog::UnstableApiVersions::Enabled,
+        ));
+    }
+    #[rstest_bdd_macros::then(
+        "one authoritative group configuration record preserves every requested key and value"
+    )]
+    fn check_complete_group_record(group_config: &GroupConfigScenario) {
+        let handled = group_config.handled.as_ref().unwrap();
         assert!(
-            records
+            handled.response.error_code == codes::NONE,
+            "{:?}",
+            handled.response
+        );
+        let expected = group_config
+            .configs
+            .iter()
+            .map(|cfg| (cfg.name.clone(), cfg.value.clone().unwrap()))
+            .collect();
+        assert!(
+            handled.records
                 == vec![MetadataRecord::V1GroupConfig(GroupConfigRecord {
-                    group_id: "g".into(),
-                    configs: string_pairs(&keys),
+                    group_id: group_config.group.clone(),
+                    configs: expected
                 })]
         );
     }
-
-    /// Kafka's `ControllerConfigurationValidator` accepts every key of
-    /// `GroupConfig.CONFIG_DEF`, whatever the group coordinators apply, and the
-    /// controller stores the whole map: the documented
-    /// `kafka-configs.sh --alter --entity-type groups --add-config
-    /// consumer.session.timeout.ms=...` flow of KIP-848 and KIP-932.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/incremental_alter_configs/group_scope.feature",
-        name = "tests: group config stores every key kafka 4 3 1 accepts"
+    #[rstest_bdd_macros::then(
+        "offset reset validation returns error {code} and stages a record only on success"
     )]
-    fn group_config_stores_every_key_kafka_4_3_1_accepts() {}
+    fn check_share_strategy(group_config: &GroupConfigScenario, code: i16) {
+        let handled = group_config.handled.as_ref().unwrap();
+        assert!(handled.response.error_code == code);
+        if code == codes::NONE {
+            let value = group_config.configs[0].value.as_deref().unwrap();
+            assert!(
+                matches!(handled.records.as_slice(),[MetadataRecord::V1GroupConfig(record)]if record.configs.get(KEY_SHARE_AUTO_OFFSET_RESET).map(String::as_str)==Some(value))
+            );
+        } else {
+            assert!(handled.records.is_empty());
+        }
+    }
+    #[rstest_bdd_macros::then(
+        "the group resource is refused with code {code} and message {message}"
+    )]
+    fn check_group_resource_refusal(
+        group_config: &GroupConfigScenario,
+        code: i16,
+        message: String,
+    ) {
+        assert!(group_config.record.as_ref().unwrap() == &Err((code, message)));
+    }
+    #[rstest_bdd_macros::then("the resulting record sets one standby replica for group g")]
+    fn check_group_standby_record(group_config: &GroupConfigScenario) {
+        assert!(
+            group_config.record.as_ref().unwrap()
+                == &Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
+                    group_id: "g".into(),
+                    configs: maplit::btreemap! {KEY_NUM_STANDBY_REPLICAS.to_owned()=>"1".to_owned()}
+                }))
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_group_config",fixtures=[group_config:GroupConfigScenario]);
 
     #[test]
     fn group_config_set_validates_and_stages_authoritative_map() {
@@ -198,63 +286,6 @@ mod tests {
         ));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers incremental alter configs group scope tests: group config takes every share offset reset strategy kafka accepts for {example}"
-    )]
-    fn bdd_verify_group_config_takes_every_share_offset_reset_strategy_kafka_accepts(
-        example: String,
-    ) {
-        type Example<'a> = (&'a str, i16);
-        let (value, want_code): Example<'_> = match example.as_str() {
-            "latest" => ("latest", codes::NONE),
-            "earliest" => ("earliest", codes::NONE),
-            "by duration" => ("by_duration:PT1H", codes::NONE),
-            "negative duration" => ("by_duration:-PT1H", codes::INVALID_CONFIG),
-            "missing duration" => ("by_duration:", codes::INVALID_CONFIG),
-            "unknown strategy" => ("none", codes::INVALID_CONFIG),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        // `ShareGroupAutoOffsetResetStrategy` accepts `latest`, `earliest`,
-        // and `by_duration:<ISO-8601 duration>`, and refuses anything else.
-        let resource =
-            make_scoped_resource(RESOURCE_TYPE_GROUP, "share-workers", vec![make_set_cfg(
-                KEY_SHARE_AUTO_OFFSET_RESET,
-                value,
-            )]);
-        let Handled {
-            response: out,
-            records,
-        } = drive(&resource, UnstableApiVersions::Enabled);
-        assert2::assert!(
-            out.error_code == want_code,
-            "{KEY_SHARE_AUTO_OFFSET_RESET}={value}"
-        );
-        if want_code == codes::NONE {
-            assert2::assert!(
-                matches!(
-                    records.as_slice(),
-                    [MetadataRecord::V1GroupConfig(record)]
-                        if record.configs.get(KEY_SHARE_AUTO_OFFSET_RESET).map(String::as_str)
-                            == Some(value)
-                ),
-                "{KEY_SHARE_AUTO_OFFSET_RESET}={value}"
-            );
-        } else {
-            assert2::assert!(records.is_empty(), "{KEY_SHARE_AUTO_OFFSET_RESET}={value}");
-        }
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/incremental_alter_configs/group_scope.feature",
-        name = "tests: group config takes every share offset reset strategy kafka accepts"
-    )]
-    fn group_config_takes_every_share_offset_reset_strategy_kafka_accepts(example: String) {
-        let _ = example;
-    }
-
     #[test]
     fn group_config_rejects_values_outside_broker_bounds() {
         let resource =
@@ -269,77 +300,4 @@ mod tests {
         assert!(out.error_code == codes::INVALID_CONFIG);
         assert!(records.is_empty());
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers incremental alter configs group scope tests: group resources follow kafkas merge and validation order"
-    )]
-    fn bdd_verify_group_resources_follow_kafkas_merge_and_validation_order() {
-        let set = |key: &str, value: &str| make_set_cfg(key, value);
-        let append = |key: &str| AlterableConfig {
-            name: key.into(),
-            config_operation: 2,
-            value: Some("1".into()),
-            ..Default::default()
-        };
-        let cases = [
-            (
-                "g",
-                vec![set("not.a.group.key", "1")],
-                Err((
-                    codes::INVALID_CONFIG,
-                    "Unknown group config name: not.a.group.key".to_owned(),
-                )),
-            ),
-            (
-                "g",
-                vec![append(KEY_SESSION_TIMEOUT_MS)],
-                Err((
-                    codes::INVALID_CONFIG,
-                    "Can't APPEND to key streams.session.timeout.ms because its type is not LIST."
-                        .to_owned(),
-                )),
-            ),
-            (
-                "",
-                vec![set(KEY_NUM_STANDBY_REPLICAS, "1")],
-                Err((
-                    codes::INVALID_REQUEST,
-                    "Default group resources are not allowed.".to_owned(),
-                )),
-            ),
-            (
-                "g",
-                vec![set(KEY_NUM_STANDBY_REPLICAS, "1")],
-                Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
-                    group_id: "g".into(),
-                    configs: maplit::btreemap! {
-                        KEY_NUM_STANDBY_REPLICAS.to_owned() => "1".to_owned(),
-                    },
-                })),
-            ),
-        ];
-        for (name, configs, want) in cases {
-            let resource = make_scoped_resource(RESOURCE_TYPE_GROUP, name, configs.clone());
-            assert!(
-                group_record(
-                    &resource,
-                    &MetadataImage::new(uuid::Uuid::nil()),
-                    &GroupBounds::default(),
-                    api_catalog::UnstableApiVersions::Enabled,
-                ) == want,
-                "{name:?} {configs:?}"
-            );
-        }
-    }
-
-    /// Kafka's controller order for a `GROUP` resource: the operations merge,
-    /// then the group name, then `GroupConfig.validate`. Each row is the whole
-    /// outcome.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/incremental_alter_configs/group_scope.feature",
-        name = "tests: group resources follow kafkas merge and validation order"
-    )]
-    fn group_resources_follow_kafkas_merge_and_validation_order() {}
 }

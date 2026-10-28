@@ -11,10 +11,8 @@ mod support;
 
 use {
     crate::support::{
-        client::{connect_client, standalone_topic},
+        client::standalone_topic,
         producer::{default_producer, producer_record},
-        standalone_broker,
-        topics::{creatable_topic, create_topic_request},
     },
     krabka_client_consumer::{AutoOffsetReset, Consumer},
     std::time::{Duration, Instant},
@@ -39,92 +37,121 @@ async fn produce_n(bootstrap: &str, topic: &str, n: u32) {
     drop(producer);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "client consumer seek: seek before first poll resumes from sought offset"
-)]
-async fn bdd_verify_seek_before_first_poll_resumes_from_sought_offset() {
-    let (_dir, _broker, bootstrap, _admin) = standalone_topic("s").await;
+struct ConsumerSeeking {
+    directory: Option<tempfile::TempDir>,
+    broker: Option<krabka_broker::BrokerHandle>,
+    consumer: Option<Consumer>,
+    topic: String,
+    seek: Option<Result<(), String>>,
+    offsets: Option<Vec<i64>>,
+}
+#[rstest::fixture]
+fn seeking() -> ConsumerSeeking {
+    // Start this scenario with fresh inputs and observations.
 
-    // Offsets 0..=4 on partition 0.
-    produce_n(&bootstrap, "s", 5).await;
-
-    // Fresh group with Earliest: without a seek this would read from offset 0.
-    let mut consumer = Consumer::builder()
-        .bootstrap(&bootstrap)
-        .group_id("seek-group")
-        .subscribe(vec!["s".to_owned()])
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .build()
-        .await
-        .unwrap();
-
-    // Seek to offset 2 *before* the first poll — i.e. before the partition is
-    // even guaranteed assigned. The consumer must hold this pending and apply
-    // it after assignment, before any fetch.
-    consumer.seek("s", 0, 2).await.unwrap();
-
-    // Collect until we have the 3 expected records (offsets 2,3,4).
-    let mut got = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while got.len() < 3 && Instant::now() < deadline {
-        let recs = consumer.poll(krabka_units::millis(500)).await.unwrap();
-        got.extend(recs);
+    ConsumerSeeking {
+        directory: None,
+        broker: None,
+        consumer: None,
+        topic: String::new(),
+        seek: None,
+        offsets: None,
     }
-
-    let offsets: Vec<i64> = got.iter().map(|r| r.offset).collect();
-    // No pre-seek record (offset 0 or 1) is ever delivered, and nothing above
-    // the seek is skipped: exactly 2, 3, 4.
-    assert2::assert!(offsets == vec![2, 3, 4]);
-
-    consumer.close().await.unwrap();
+}
+#[rstest_bdd_macros::given(
+    "topic {topic} has {records} records and an unpolled Earliest consumer in group {group}"
+)]
+async fn unpolled_consumer(
+    seeking: &mut ConsumerSeeking,
+    topic: String,
+    records: u32,
+    group: String,
+) {
+    let (directory, broker, bootstrap, _) = standalone_topic(&topic).await;
+    produce_n(&bootstrap, &topic, records).await;
+    seeking.consumer = Some(
+        Consumer::builder()
+            .bootstrap(&bootstrap)
+            .group_id(&group)
+            .subscribe(vec![topic.clone()])
+            .auto_offset_reset(AutoOffsetReset::Earliest)
+            .build()
+            .await
+            .unwrap(),
+    );
+    seeking.directory = Some(directory);
+    seeking.broker = Some(broker);
+    seeking.topic = topic;
+}
+#[rstest_bdd_macros::when("the consumer seeks partition 0 to offset {offset}")]
+async fn seek_consumer_offset(seeking: &mut ConsumerSeeking, offset: i64) {
+    seeking.seek = Some(
+        seeking
+            .consumer
+            .as_ref()
+            .expect("consumer configured")
+            .seek(&seeking.topic, 0, offset)
+            .await
+            .map_err(|error| error.to_string()),
+    );
+}
+#[rstest_bdd_macros::then("the seek is accepted")]
+fn consumer_seek_accepted(seeking: &ConsumerSeeking) {
+    assert2::assert!(seeking.seek.as_ref().expect("seek attempted").is_ok());
+}
+#[rstest_bdd_macros::then("the seek is rejected")]
+fn consumer_seek_rejected(seeking: &ConsumerSeeking) {
+    assert2::assert!(seeking.seek.as_ref().expect("seek attempted").is_err());
+}
+#[rstest_bdd_macros::when("the consumer polls until three records arrive or 15 seconds elapse")]
+async fn poll_sought_records(seeking: &mut ConsumerSeeking) {
+    let consumer = seeking.consumer.as_mut().expect("consumer configured");
+    let mut offsets = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while offsets.len() < 3 && Instant::now() < deadline {
+        let records = consumer.poll(krabka_units::millis(500)).await.unwrap();
+        offsets.extend(records.iter().map(|record| record.offset));
+    }
+    seeking.offsets = Some(offsets);
+}
+#[rstest_bdd_macros::then("exactly offsets 2 3 and 4 are delivered without pre-seek records")]
+fn sought_offsets_delivered(seeking: &ConsumerSeeking) {
+    assert2::assert!(
+        seeking
+            .offsets
+            .as_ref()
+            .expect("consumer polled")
+            .as_slice()
+            == [2, 3, 4]
+    );
 }
 
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/client_consumer_seek.feature",
     name = "seek before first poll resumes from sought offset"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn seek_before_first_poll_resumes_from_sought_offset() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("client consumer seek: seek rejects negative offset")]
-async fn bdd_verify_seek_rejects_negative_offset() {
-    let (_dir, broker) = standalone_broker().await;
-    let bootstrap = broker.listen_addr().to_string();
-
-    let admin = connect_client(&bootstrap, None).await;
-    admin
-        .send(create_topic_request(
-            creatable_topic().name(("n").into()).call(),
-        ))
+async fn seek_before_first_poll_resumes_from_sought_offset(seeking: ConsumerSeeking) {
+    seeking
+        .consumer
+        .expect("consumer configured")
+        .close()
         .await
         .unwrap();
-
-    let consumer = Consumer::builder()
-        .bootstrap(&bootstrap)
-        .group_id("neg-group")
-        .subscribe(vec!["n".to_owned()])
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .build()
-        .await
-        .unwrap();
-
-    let err = consumer.seek("n", 0, -1).await;
-    assert2::assert!(err.is_err());
-
-    // Offset 0 is a valid seek target (re-read from the beginning): the reject
-    // boundary is strictly `offset < 0`, so 0 must be accepted.
-    assert2::assert!(consumer.seek("n", 0, 0).await.is_ok());
-
-    consumer.close().await.unwrap();
+    seeking.broker.expect("broker started").shutdown().await;
 }
 
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/client_consumer_seek.feature",
     name = "seek rejects negative offset"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn seek_rejects_negative_offset() {}
+async fn seek_rejects_negative_offset(seeking: ConsumerSeeking) {
+    seeking
+        .consumer
+        .expect("consumer configured")
+        .close()
+        .await
+        .unwrap();
+    seeking.broker.expect("broker started").shutdown().await;
+}

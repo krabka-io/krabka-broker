@@ -7,40 +7,26 @@
 
 use {
     crate::{
+        TopicRlmmScenario,
         rlmm_cluster::{await_activation, build_client_secured, start_sasl_broker_with_topic_rlmm},
-        rlmm_round_trip::copy_then_fetch_round_trip,
-        run_broker_test,
+        topic_rlmm,
     },
     krabka_client_core::security::{ClientSecurity, SaslCredentials},
     krabka_security::ListenerProtocol,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "tiered storage topic rlmm rlmm sasl: topic rlmm sasl loopback copy then fetch round trip"
+#[rstest_bdd_macros::given(
+    "the topic metadata manager and its client authenticate over SASL_PLAINTEXT as rlmm with password rlmm-secret"
 )]
-fn bdd_verify_topic_rlmm_sasl_loopback_copy_then_fetch_round_trip() {
-    run_broker_test(topic_rlmm_sasl_loopback_copy_then_fetch_round_trip_case());
-}
-
-/// The full copy→metadata→read round-trip, but the broker's only listener
-/// is `SASL_PLAINTEXT/PLAIN`. The RLMM's internal metadata client must
-/// authenticate as the inter-broker PLAIN principal to bootstrap the
-/// topic, publish/consume `CopySegment` events, and serve the read-back. This
-/// proves the secured metadata client works end-to-end. The test's own
-/// client authenticates with the same credentials.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/tiered_storage_topic_rlmm/rlmm_sasl.feature",
-    name = "topic rlmm sasl loopback copy then fetch round trip"
-)]
-fn topic_rlmm_sasl_loopback_copy_then_fetch_round_trip() {}
-
-async fn topic_rlmm_sasl_loopback_copy_then_fetch_round_trip_case() {
-    const TOPIC: &str = "tiered-topic-rlmm-sasl-itest";
-    let (broker, _log_dir, remote_dir) = start_sasl_broker_with_topic_rlmm().await;
-    await_activation(&broker).await;
-
+fn authenticated_topic_manager(topic_rlmm: &mut TopicRlmmScenario) {
+    topic_rlmm.cluster = Some(
+        topic_rlmm
+            .runtime
+            .block_on(start_sasl_broker_with_topic_rlmm()),
+    );
+    topic_rlmm
+        .runtime
+        .block_on(await_activation(topic_rlmm.broker()));
     let security = ClientSecurity {
         protocol: ListenerProtocol::SaslPlaintext,
         tls: None,
@@ -50,10 +36,17 @@ async fn topic_rlmm_sasl_loopback_copy_then_fetch_round_trip_case() {
         }),
         sasl_host: None,
     };
-    let client = build_client_secured(&broker, Some(security)).await;
-    copy_then_fetch_round_trip(&broker, &client, remote_dir.path(), TOPIC).await;
-    // Close the test client before broker shutdown for the same reason as
-    // `topic_rlmm_copy_then_fetch_round_trip`.
-    drop(client);
-    broker.shutdown().await;
+    topic_rlmm.client = Some(
+        topic_rlmm
+            .runtime
+            .block_on(build_client_secured(topic_rlmm.broker(), Some(security))),
+    );
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_storage_topic_rlmm/rlmm_sasl.feature",
+    name = "topic rlmm sasl loopback copy then fetch round trip"
+)]
+fn topic_rlmm_sasl_loopback_copy_then_fetch_round_trip(topic_rlmm: TopicRlmmScenario) {
+    topic_rlmm.shutdown();
 }

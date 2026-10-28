@@ -892,147 +892,132 @@ mod tests {
         batch
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "metadata observer fetch tests: a malformed batch is refused trimmed or counted as kafka does"
-    )]
-    fn bdd_verify_a_malformed_batch_is_refused_trimmed_or_counted_as_kafka_does() {
-        let a = topic_batch_bytes(0, "a", 1);
-        let b = topic_batch_bytes(1, "b", 2);
-        let c = topic_batch_bytes(2, "c", 3);
-        let corrupt_crc = {
-            let mut bytes = b.clone();
-            *bytes.last_mut().expect("a batch has bytes") ^= 0xff;
-            bytes
-        };
-        let unsupported_magic = {
-            let mut bytes = b.clone();
-            bytes[16] = 1;
-            bytes
-        };
-        let negative_length = {
-            let mut bytes = b.clone();
-            bytes[8..12].copy_from_slice(&(-1_i32).to_be_bytes());
-            bytes
-        };
-        let truncated_body = b[..b.len() - 3].to_vec();
-        let truncated_header = b[..20].to_vec();
-        let unparseable_records = with_records_count(b, 5);
+    #[derive(Default)]
+    struct ObserverFetchRecords {
+        image: Option<watch::Sender<Arc<MetadataImage>>>,
+        records: Vec<u8>,
+        applied: Option<Applied>,
+        header: Vec<u8>,
+        header_dump: Option<String>,
+    }
 
-        let refused = Applied {
-            next_offset: 0,
-            load_errors: 0,
-            fatal: None,
-            last_applied_record_timestamp_ms: None,
-        };
-        let cases = [
-            (
-                "corrupt CRC",
-                corrupt_crc,
-                c.clone(),
-                refused.clone(),
-                [false; 3],
-            ),
-            (
-                "unsupported magic",
-                unsupported_magic,
-                c.clone(),
-                refused.clone(),
-                [false; 3],
-            ),
-            (
-                "negative batch length",
-                negative_length,
-                c.clone(),
-                refused,
-                [false; 3],
-            ),
-            (
-                "truncated body",
-                truncated_body,
-                Vec::new(),
-                Applied {
-                    next_offset: 1,
-                    load_errors: 0,
-                    fatal: None,
-                    last_applied_record_timestamp_ms: Some(0),
-                },
-                [true, false, false],
-            ),
-            (
-                "truncated header",
-                truncated_header,
-                Vec::new(),
-                Applied {
-                    next_offset: 1,
-                    load_errors: 0,
-                    fatal: None,
-                    last_applied_record_timestamp_ms: Some(0),
-                },
-                [true, false, false],
-            ),
-            (
-                "records that do not parse in a sound batch",
-                unparseable_records,
-                c,
-                Applied {
-                    next_offset: 3,
-                    load_errors: 1,
-                    fatal: None,
-                    last_applied_record_timestamp_ms: Some(0),
-                },
-                [true, false, false],
-            ),
-        ];
+    #[rstest::fixture]
+    fn observer_fetch_records() -> ObserverFetchRecords {
+        // Each controller response applies to a fresh observer image.
+        ObserverFetchRecords::default()
+    }
 
-        for (case, malformed, tail, want, topics) in cases {
-            let image_tx = image_channel(Uuid::nil());
-            let response = [a.clone(), malformed, tail].concat();
-
-            let applied = apply_fetch_records(0, &response, &image_tx);
-
-            let image = image_tx.borrow().clone();
-            assert!(
-                (applied, [
-                    image.topic("a").is_some(),
-                    image.topic("b").is_some(),
-                    image.topic("c").is_some(),
-                ],) == (want, topics),
-                "{case}"
-            );
+    #[rstest_bdd_macros::given("a fetched topic sequence a, b, c has {fault} in the middle batch")]
+    fn malformed_observer_response(
+        observer_fetch_records: &mut ObserverFetchRecords,
+        fault: String,
+    ) {
+        let first = topic_batch_bytes(0, "a", 1);
+        let mut middle = topic_batch_bytes(1, "b", 2);
+        let mut tail = topic_batch_bytes(2, "c", 3);
+        match fault.as_str() {
+            "a corrupt CRC" => *middle.last_mut().expect("batch payload") ^= 0xff,
+            "an unsupported magic byte" => middle[16] = 1,
+            "a negative batch length" => middle[8..12].copy_from_slice(&(-1_i32).to_be_bytes()),
+            "a truncated body" => {
+                middle.truncate(middle.len() - 3);
+                tail.clear();
+            }
+            "a truncated header" => {
+                middle.truncate(20);
+                tail.clear();
+            }
+            "unparseable records in sound framing" => middle = with_records_count(middle, 5),
+            _ => panic!("unknown actual fetched-batch corruption {fault}"),
         }
+        observer_fetch_records.records = [first, middle, tail].concat();
+        observer_fetch_records.image = Some(image_channel(Uuid::nil()));
     }
 
-    /// One row per way a fetched batch can be malformed, each in a response
-    /// that carries batches `a` at 0, `b` at 1 and `c` at 2, with `b` the
-    /// malformed one.
-    ///
-    /// Kafka's raft layer refuses a response with a corrupt batch whole: the
-    /// append takes none of it, and the fetch offset stays. A batch the
-    /// response holds only part of is dropped with what follows it, and the
-    /// whole batches before it apply. A batch whose framing and CRC are sound
-    /// but whose records do not parse is the `MetadataLoader`'s load error:
-    /// counted, with the rest of the response skipped and the offset moved
-    /// past it.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/metadata_observer/fetch.feature",
-        name = "tests: a malformed batch is refused trimmed or counted as kafka does"
-    )]
-    fn a_malformed_batch_is_refused_trimmed_or_counted_as_kafka_does() {}
+    #[rstest_bdd_macros::when("the observer applies the fetched records from offset 0")]
+    fn apply_supplied_observer_records(observer_fetch_records: &mut ObserverFetchRecords) {
+        observer_fetch_records.applied = Some(apply_fetch_records(
+            0,
+            &observer_fetch_records.records,
+            observer_fetch_records
+                .image
+                .as_ref()
+                .expect("observer image was given"),
+        ));
+    }
 
-    #[cfg(test)]
     #[rstest_bdd_macros::then(
-        "metadata observer fetch tests: hex matches kafkas lowercase header dump"
+        "the observer resumes at {offset}, counts {errors} load errors, has timestamp {timestamp}, and reports no fatal fault"
     )]
-    fn bdd_verify_hex_matches_kafkas_lowercase_header_dump() {
-        assert!(hex(&[0x00, 0x0a, 0xff]) == "000aff");
+    fn expected_observer_apply_result(
+        observer_fetch_records: &ObserverFetchRecords,
+        offset: u64,
+        errors: u64,
+        timestamp: String,
+    ) {
+        let timestamp = if timestamp == "unset" {
+            None
+        } else {
+            Some(
+                timestamp
+                    .parse::<i64>()
+                    .expect("expected applied timestamp"),
+            )
+        };
+        assert!(
+            observer_fetch_records.applied.as_ref()
+                == Some(&Applied {
+                    next_offset: offset,
+                    load_errors: errors,
+                    fatal: None,
+                    last_applied_record_timestamp_ms: timestamp
+                })
+        );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/metadata_observer/fetch.feature",
-        name = "tests: hex matches kafkas lowercase header dump"
-    )]
-    fn hex_matches_kafkas_lowercase_header_dump() {}
+    #[rstest_bdd_macros::then("the published topics from that sequence are JSON {topics}")]
+    fn expected_observer_published_topics(
+        observer_fetch_records: &ObserverFetchRecords,
+        topics: String,
+    ) {
+        let image = observer_fetch_records
+            .image
+            .as_ref()
+            .expect("observer image was given")
+            .borrow()
+            .clone();
+        let actual: Vec<&str> = ["a", "b", "c"]
+            .into_iter()
+            .filter(|topic| image.topic(topic).is_some())
+            .collect();
+        let expected: Vec<String> =
+            serde_json::from_str(&topics).expect("independent published topic names");
+        assert!(actual == expected);
+    }
+
+    #[rstest_bdd_macros::given("a metadata fetch diagnostic header has bytes {bytes}")]
+    fn supplied_observer_diagnostic_header(
+        observer_fetch_records: &mut ObserverFetchRecords,
+        bytes: String,
+    ) {
+        observer_fetch_records.header = hex::decode(bytes).expect("explicit header bytes");
+    }
+
+    #[rstest_bdd_macros::when("the observer renders the header for a Kafka diagnostic dump")]
+    fn render_observer_diagnostic_header(observer_fetch_records: &mut ObserverFetchRecords) {
+        observer_fetch_records.header_dump = Some(hex(&observer_fetch_records.header));
+    }
+
+    #[rstest_bdd_macros::then("the diagnostic dump is {expected}")]
+    fn expected_observer_diagnostic_header(
+        observer_fetch_records: &ObserverFetchRecords,
+        expected: String,
+    ) {
+        assert!(observer_fetch_records.header_dump.as_ref() == Some(&expected));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/metadata_observer/fetch",
+        fixtures = [observer_fetch_records: ObserverFetchRecords]
+    );
 }

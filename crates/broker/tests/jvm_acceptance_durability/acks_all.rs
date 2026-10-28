@@ -12,35 +12,31 @@ use {
         support::{jvm_acks_all_burst, jvm_output_lines},
     },
     assert2::assert,
-    std::time::Duration,
+    krabka_broker::BrokerHandle,
+    std::{process::Output, time::Duration},
+    tempfile::TempDir,
     tokio::time,
 };
+const TOPIC: &str = "krabka-acks-all-itest";
+struct ReplicatedAcknowledgement {
+    cluster: Vec<(BrokerHandle, TempDir)>,
+    produced: Option<Output>,
+    consumed: Option<Output>,
+}
+#[rstest::fixture]
+fn acknowledgements() -> ReplicatedAcknowledgement {
+    // Start this scenario with fresh inputs and observations.
 
-// `acks=all` durability gate: 3-broker Krabka cluster, JVM
-// `kafka-console-producer --request-required-acks -1` writes 100
-// records, then `kafka-console-consumer --isolation-level
-// read_committed` reads them all back. Confirms HW+acks=all works
-// against an unmodified JVM client.
-//
-// Fixed ports above 10000 — the other multi-broker tests use 9092-9992;
-// this test steps into 10000+ to dodge TIME_WAIT + raft-quorum collisions
-// when JVM tests run sequentially via the nextest broker-jvm-acceptance test group.
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm acceptance durability acks all: acks all durability")]
-async fn bdd_verify_acks_all_durability() {
-    const TOPIC: &str = "krabka-acks-all-itest";
-
-    // Ports 10092/10192/10292 + 10093/10193/10293 — the next free hundred
-    // above the transactional test (9792-9992). The other multi-broker
-    // tests use the 9092-9992 range; we step into 10000+ to avoid TIME_WAIT
-    // collisions.
-    let client_ports = [10092u16, 10192, 10292];
-    let controller_ports = [10093u16, 10193, 10293];
-
-    let cluster = durability_cluster(client_ports, controller_ports, |_| {}).await;
-
-    let bootstrap_1 = format!("host.docker.internal:{}", client_ports[0]);
-
+    ReplicatedAcknowledgement {
+        cluster: Vec::new(),
+        produced: None,
+        consumed: None,
+    }
+}
+#[rstest_bdd_macros::given("three brokers host a topic replicated on all three nodes")]
+async fn replicated_topic(acknowledgements: &mut ReplicatedAcknowledgement) {
+    acknowledgements.cluster =
+        durability_cluster([10092, 10192, 10292], [10093, 10193, 10293], |_| {}).await;
     docker_run_kafka_tool(&[
         "kafka-topics",
         "--create",
@@ -52,51 +48,71 @@ async fn bdd_verify_acks_all_durability() {
         "--replication-factor",
         "3",
         "--bootstrap-server",
-        &bootstrap_1,
+        "host.docker.internal:10092",
     ]);
-
-    // Produce 100 records with --request-required-acks=-1.
-    let producer_out = jvm_acks_all_burst(KAFKA_IMAGE, &bootstrap_1, TOPIC, "msg", 10_000)
-        .output()
-        .expect("spawn kafka-console-producer");
-    eprintln!(
-        "KRABKA[test] producer status={} stdout={} stderr={}",
-        producer_out.status,
-        String::from_utf8_lossy(&producer_out.stdout),
-        String::from_utf8_lossy(&producer_out.stderr),
-    );
-    assert!(
-        producer_out.status.success(),
-        "kafka-console-producer failed: stdout={}, stderr={}",
-        String::from_utf8_lossy(&producer_out.stdout),
-        String::from_utf8_lossy(&producer_out.stderr),
-    );
-
-    // intentional: wait for the produced records (acks=-1) to replicate to
-    // node 3 and its high-watermark to advance before the read_committed
-    // consume below. Follower high-watermark/LSO is not in the metadata image
-    // and has no krabka awaiter/metric.
-    time::sleep(Duration::from_secs(2)).await;
-
-    let bootstrap_3 = format!("host.docker.internal:{}", client_ports[2]);
-    let consume_out = consume_committed_at(&bootstrap_3, TOPIC, 100);
-    let stdout = String::from_utf8_lossy(&consume_out.stdout);
-    let line_count = jvm_output_lines(&consume_out).len();
-    assert!(
-        line_count >= 100,
-        "expected at least 100 records; got {line_count}: stdout={stdout}"
-    );
-
-    for (h, _) in cluster {
-        h.shutdown().await;
-    }
 }
-
+#[rstest_bdd_macros::when(
+    "the stock producer writes a hundred records with acknowledgements from all replicas"
+)]
+fn write(acknowledgements: &mut ReplicatedAcknowledgement) {
+    acknowledgements.produced = Some(
+        jvm_acks_all_burst(
+            KAFKA_IMAGE,
+            "host.docker.internal:10092",
+            TOPIC,
+            "msg",
+            10_000,
+        )
+        .output()
+        .expect("spawn kafka-console-producer"),
+    );
+}
+#[rstest_bdd_macros::then("the replicated producer command succeeds")]
+fn acknowledged(acknowledgements: &ReplicatedAcknowledgement) {
+    let output = acknowledgements
+        .produced
+        .as_ref()
+        .expect("producer completed");
+    assert!(
+        output.status.success(),
+        "kafka-console-producer failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+#[rstest_bdd_macros::when(
+    "a read committed stock consumer reads from the third broker after replication settles"
+)]
+async fn read(acknowledgements: &mut ReplicatedAcknowledgement) {
+    // The follower HW/LSO has no awaiter in this original network harness.
+    time::sleep(Duration::from_secs(2)).await;
+    acknowledgements.consumed = Some(consume_committed_at(
+        "host.docker.internal:10292",
+        TOPIC,
+        100,
+    ));
+}
+#[rstest_bdd_macros::then("the committed consumer receives at least a hundred records")]
+fn committed_records(acknowledgements: &ReplicatedAcknowledgement) {
+    let output = acknowledgements
+        .consumed
+        .as_ref()
+        .expect("consumer completed");
+    let count = jvm_output_lines(output).len();
+    assert!(
+        count >= 100,
+        "expected at least100 records; got {count}: stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
 #[ignore = "requires Docker"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_durability/acks_all.feature",
-    name = "acks all durability"
+    name = "All replica acknowledgements make records visible to a committed consumer on another broker"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acks_all_durability() {}
+async fn acks_all_durability(acknowledgements: ReplicatedAcknowledgement) {
+    for (handle, _directory) in acknowledgements.cluster {
+        handle.shutdown().await;
+    }
+}

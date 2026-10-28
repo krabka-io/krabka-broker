@@ -173,75 +173,53 @@ fn verification_code(code: i16, version: i16) -> i16 {
 mod tests {
     use {super::*, assert2::assert};
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "txn handlers txn offset commit verification tests: a coordinator answer becomes the code kafka puts on the response"
-    )]
-    fn bdd_verify_a_coordinator_answer_becomes_the_code_kafka_puts_on_the_response() {
-        // (coordinator answer, TxnOffsetCommit version, code on the response)
-        let cases = [
-            (codes::NONE, 3, codes::NONE),
-            (codes::NONE, 5, codes::NONE),
-            // The fenced answer is INVALID_PRODUCER_EPOCH at every version.
-            (codes::PRODUCER_FENCED, 3, codes::INVALID_PRODUCER_EPOCH),
-            (codes::PRODUCER_FENCED, 5, codes::INVALID_PRODUCER_EPOCH),
-            (
-                codes::INVALID_PRODUCER_ID_MAPPING,
-                3,
-                codes::INVALID_PRODUCER_ID_MAPPING,
-            ),
-            (
-                codes::CONCURRENT_TRANSACTIONS,
-                5,
-                codes::CONCURRENT_TRANSACTIONS,
-            ),
-            (
-                codes::CLUSTER_AUTHORIZATION_FAILED,
-                5,
-                codes::INVALID_TXN_STATE,
-            ),
-            // A client below v4 does not know TRANSACTION_ABORTABLE.
-            (codes::TRANSACTION_ABORTABLE, 3, codes::INVALID_TXN_STATE),
-            (
-                codes::TRANSACTION_ABORTABLE,
-                4,
-                codes::TRANSACTION_ABORTABLE,
-            ),
-            (
-                codes::TRANSACTION_ABORTABLE,
-                5,
-                codes::TRANSACTION_ABORTABLE,
-            ),
-            // What Kafka's group coordinator does to a failed operation.
-            (
-                codes::NETWORK_EXCEPTION,
-                5,
-                codes::COORDINATOR_LOAD_IN_PROGRESS,
-            ),
-            (
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-                5,
-                codes::COORDINATOR_NOT_AVAILABLE,
-            ),
-            (
-                codes::COORDINATOR_NOT_AVAILABLE,
-                5,
-                codes::COORDINATOR_NOT_AVAILABLE,
-            ),
-            (codes::NOT_LEADER_OR_FOLLOWER, 5, codes::NOT_COORDINATOR),
-        ];
-        let expected: Vec<_> = cases.iter().map(|(_, _, want)| *want).collect();
-        let actual: Vec<_> = cases
-            .iter()
-            .map(|(code, version, _)| verification_code(*code, *version))
-            .collect();
-        assert!(actual == expected);
+    #[derive(Default)]
+    struct OffsetCommitVerification {
+        code: Option<i16>,
+        version: Option<i16>,
+        response: Option<i16>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/txn/handlers/txn_offset_commit/verification.feature",
-        name = "tests: a coordinator answer becomes the code kafka puts on the response"
+    #[rstest::fixture]
+    fn offset_commit_verification() -> OffsetCommitVerification {
+        // Each TxnOffsetCommit response applies its own request-version compatibility.
+        OffsetCommitVerification::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "TxnOffsetCommit version {version} received transaction coordinator code {code}"
     )]
-    fn a_coordinator_answer_becomes_the_code_kafka_puts_on_the_response() {}
+    fn supplied_offset_commit_verification(
+        offset_commit_verification: &mut OffsetCommitVerification,
+        version: i16,
+        code: i16,
+    ) {
+        offset_commit_verification.version = Some(version);
+        offset_commit_verification.code = Some(code);
+    }
+
+    #[rstest_bdd_macros::when("the broker maps verification for the TxnOffsetCommit response")]
+    fn map_offset_commit_verification(offset_commit_verification: &mut OffsetCommitVerification) {
+        offset_commit_verification.response = Some(verification_code(
+            offset_commit_verification
+                .code
+                .expect("coordinator answer was given"),
+            offset_commit_verification
+                .version
+                .expect("request version was given"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the TxnOffsetCommit response verification code is {code}")]
+    fn expected_offset_commit_verification(
+        offset_commit_verification: &OffsetCommitVerification,
+        code: i16,
+    ) {
+        assert!(offset_commit_verification.response == Some(code));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/txn/handlers/txn_offset_commit/verification.feature",
+        fixtures = [offset_commit_verification: OffsetCommitVerification]
+    );
 }

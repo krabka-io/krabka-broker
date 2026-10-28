@@ -62,94 +62,69 @@ fn replay(records: Vec<LogRecord>) -> Outcome {
     })
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "coordinator bootstrap partition metadata replay tests: partition metadata replays as kafka 4 3 1 does"
-)]
-fn bdd_verify_partition_metadata_replays_as_kafka_4_3_1_does() {
-    struct Case {
-        name: &'static str,
-        records: Vec<LogRecord>,
-        expected: Outcome,
-    }
-
-    let epoch = |epoch: i32| {
-        GroupMetadataValue {
-            epoch,
-            metadata_hash: 0,
-        }
-        .encode()
-    };
-    // A group that the replay creates is Kafka's new `ConsumerGroup`, at
-    // group and assignment epoch 1.
-    let marked = |group_epoch: i32| GroupSeed {
-        group_epoch,
-        has_subscription_metadata_record: true,
-        ..GroupSeed::new_group()
-    };
-    let mut version_1 = value().to_vec();
-    version_1[1] = 1;
-    let truncated = value().slice(..5);
-
-    let cases = vec![
-        Case {
-            name: "a value creates an empty consumer group that holds the record",
-            records: vec![LogRecord::put(key(partition_metadata), value())],
-            expected: Outcome::Group(Box::new(marked(1))),
-        },
-        Case {
-            name: "a value marks an existing group",
-            records: vec![
-                LogRecord::put(key(group_metadata), epoch(4)),
-                LogRecord::put(key(partition_metadata), value()),
-            ],
-            expected: Outcome::Group(Box::new(marked(4))),
-        },
-        Case {
-            name: "a tombstone clears the mark",
-            records: vec![
-                LogRecord::put(key(group_metadata), epoch(4)),
-                LogRecord::put(key(partition_metadata), value()),
-                LogRecord::tombstone(key(partition_metadata)),
-            ],
-            expected: Outcome::Group(Box::new(GroupSeed {
-                group_epoch: 4,
-                ..GroupSeed::new_group()
-            })),
-        },
-        Case {
-            name: "a tombstone of a group the log does not hold is ignored",
-            records: vec![LogRecord::tombstone(key(partition_metadata))],
-            expected: Outcome::NoGroup,
-        },
-        Case {
-            name: "a value version Kafka does not know fails the load",
-            records: vec![LogRecord::put(
-                key(partition_metadata),
-                Bytes::from(version_1),
-            )],
-            expected: Outcome::Failed,
-        },
-        Case {
-            name: "a value that does not decode fails the load",
-            records: vec![LogRecord::put(key(partition_metadata), truncated)],
-            expected: Outcome::Failed,
-        },
-    ];
-
-    for Case {
-        name,
-        records,
-        expected,
-    } in cases
-    {
-        check!(replay(records) == expected, "{name}");
-    }
+use {
+    rstest_bdd_macros::{given, scenarios, then, when},
+    std::mem,
+};
+#[derive(Default)]
+struct PartitionMetadataLoad {
+    records: Vec<LogRecord>,
+    outcome: Option<Outcome>,
 }
+#[rstest::fixture]
+fn metadata_load() -> PartitionMetadataLoad {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/coordinator/bootstrap/partition_metadata_replay_tests.feature",
-    name = "partition metadata replays as kafka 4 3 1 does"
+    PartitionMetadataLoad::default()
+}
+#[given("the persisted consumer partition metadata log contains {records}")]
+fn persisted_partition_metadata(metadata_load: &mut PartitionMetadataLoad, records: String) {
+    metadata_load.records = records
+        .split(',')
+        .map(|record| match record {
+            "group-epoch-4" => LogRecord::put(
+                key(group_metadata),
+                GroupMetadataValue {
+                    epoch: 4,
+                    metadata_hash: 0,
+                }
+                .encode(),
+            ),
+            "metadata" => LogRecord::put(key(partition_metadata), value()),
+            "metadata-tombstone" => LogRecord::tombstone(key(partition_metadata)),
+            "unknown-version" => {
+                let mut bytes = value().to_vec();
+                bytes[1] = 1;
+                LogRecord::put(key(partition_metadata), Bytes::from(bytes))
+            }
+            "truncated" => LogRecord::put(key(partition_metadata), value().slice(..5)),
+            _ => panic!("unknown subscription metadata log record"),
+        })
+        .collect();
+}
+#[when("bootstrap loads the deprecated consumer partition metadata records")]
+fn load_partition_metadata(metadata_load: &mut PartitionMetadataLoad) {
+    metadata_load.outcome = Some(replay(mem::take(&mut metadata_load.records)));
+}
+#[then(
+    "the consumer metadata load is {outcome} at group epoch {epoch} with persisted subscription marker {marked}"
 )]
-fn partition_metadata_replays_as_kafka_4_3_1_does() {}
+fn loaded_partition_metadata(
+    metadata_load: &PartitionMetadataLoad,
+    outcome: String,
+    epoch: i32,
+    marked: bool,
+) {
+    let expected = match outcome.as_str() {
+        "group" => Outcome::Group(Box::new(GroupSeed {
+            group_epoch: epoch,
+            has_subscription_metadata_record: marked,
+            ..GroupSeed::new_group()
+        })),
+        "absent" => Outcome::NoGroup,
+        "failed" => Outcome::Failed,
+        _ => panic!("unknown metadata load outcome"),
+    };
+    check!(metadata_load.outcome.as_ref() == Some(&expected));
+}
+scenarios!("tests/features/migrated/src/coordinator/bootstrap/partition_metadata_replay_tests.feature",fixtures=[metadata_load:PartitionMetadataLoad]);

@@ -3,6 +3,7 @@ use {
     assert2::{assert, check},
     krabka_security::ListenerProtocol,
     rcgen::{CertificateParams, DnType, KeyPair},
+    rstest_bdd::datatable::Rows,
     rustls::crypto::aws_lc_rs,
     std::{fs, fs::File, time::Duration},
 };
@@ -140,118 +141,6 @@ fn refused(cause: &str) -> Checked {
 fn invalid_configuration(message: &str) -> String {
     format!("org.apache.kafka.common.errors.InvalidConfigurationException: {message}")
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "listener tls tests: a store is checked as kafkas default ssl engine factory checks it"
-)]
-fn bdd_verify_a_store_is_checked_as_kafkas_default_ssl_engine_factory_checks_it() {
-    let fixture = Fixture::new();
-    let renewed = identity("localhost", &["localhost"]);
-    let keystore = fixture.keystore_file("renewed.pem", &renewed);
-    let cases: Vec<(Vec<(&str, &str)>, Checked)> = vec![
-        (vec![("ssl.keystore.location", keystore.as_str())], Ok(())),
-        (
-            vec![
-                ("ssl.keystore.type", "PEM"),
-                ("ssl.keystore.location", keystore.as_str()),
-            ],
-            Ok(()),
-        ),
-        (
-            vec![
-                ("ssl.keystore.key", renewed.key.as_str()),
-                ("ssl.keystore.certificate.chain", renewed.cert.as_str()),
-            ],
-            Ok(()),
-        ),
-        (
-            vec![
-                ("ssl.keystore.type", "JKS"),
-                ("ssl.keystore.location", keystore.as_str()),
-            ],
-            refused(&invalid_configuration(
-                "krabka loads PEM key stores only, but the key store type is JKS.",
-            )),
-        ),
-        (
-            vec![
-                ("ssl.keystore.location", keystore.as_str()),
-                ("ssl.keystore.password", "secret"),
-            ],
-            refused(&invalid_configuration(
-                "SSL key store password cannot be specified with PEM format, only key password \
-                 may be specified",
-            )),
-        ),
-        (
-            vec![("ssl.keystore.key", renewed.key.as_str())],
-            refused(&invalid_configuration(
-                "SSL private key is specified, but certificate chain is not specified.",
-            )),
-        ),
-        (
-            vec![("ssl.keystore.certificate.chain", renewed.cert.as_str())],
-            refused(&invalid_configuration(
-                "SSL certificate chain is specified, but private key is not specified",
-            )),
-        ),
-        (
-            vec![
-                ("ssl.keystore.location", keystore.as_str()),
-                ("ssl.key.password", "secret"),
-            ],
-            refused(&invalid_configuration(
-                "krabka cannot decrypt an encrypted PEM private key; give the key unencrypted and \
-                 leave ssl.key.password unset.",
-            )),
-        ),
-        (
-            vec![("ssl.truststore.certificates", renewed.cert.as_str())],
-            Ok(()),
-        ),
-        (
-            vec![
-                ("ssl.truststore.certificates", renewed.cert.as_str()),
-                ("ssl.truststore.password", "secret"),
-            ],
-            refused(&invalid_configuration(
-                "SSL trust store password cannot be specified for PEM format.",
-            )),
-        ),
-        (
-            vec![
-                ("ssl.truststore.type", "PKCS12"),
-                ("ssl.truststore.location", keystore.as_str()),
-            ],
-            refused(&invalid_configuration(
-                "krabka loads PEM trust stores only, but the trust store type is PKCS12.",
-            )),
-        ),
-    ];
-    for (keys, want) in cases {
-        let proposed: BTreeMap<String, String> = keys
-            .iter()
-            .map(|(key, value)| (format!("listener.name.ssl.{key}"), (*value).to_owned()))
-            .collect();
-        check!(
-            fixture
-                .inputs()
-                .check_reconfiguration(&BTreeMap::new(), &proposed)
-                == want,
-            "{keys:?}"
-        );
-    }
-}
-
-/// Kafka's `createKeystore` and `createTruststore` refusals, and krabka's
-/// two of its own: a store that is not PEM, and an encrypted key.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/listener_tls/tests.feature",
-    name = "a store is checked as kafkas default ssl engine factory checks it"
-)]
-fn a_store_is_checked_as_kafkas_default_ssl_engine_factory_checks_it() {}
 
 /// `CertificateEntries.ensureCompatible`: a new keystore keeps the DN and
 /// every SAN, and adding a SAN is allowed.
@@ -402,3 +291,93 @@ fn the_cache_serves_the_dynamic_keystore_and_reloads_a_changed_file() {
             .is_none()
     );
 }
+
+#[derive(Default)]
+struct ListenerStoreChange {
+    listener: Option<Fixture>,
+    renewed: Option<Identity>,
+    renewed_keystore: Option<String>,
+    proposed: BTreeMap<String, String>,
+    checked: Option<Checked>,
+}
+
+#[derive(rstest_bdd_macros::DataTableRow)]
+struct ChangedSslProperty {
+    key: String,
+    value: String,
+}
+
+#[rstest::fixture]
+fn listener_store_change() -> ListenerStoreChange {
+    // Every reconfiguration owns its listener, real certificate, private key and PEM file.
+    ListenerStoreChange::default()
+}
+
+#[rstest_bdd_macros::given("a current SSL listener and a renewed localhost PEM identity")]
+fn supplied_listener_store_identity(listener_store_change: &mut ListenerStoreChange) {
+    let listener = Fixture::new();
+    let renewed = identity("localhost", &["localhost"]);
+    listener_store_change.renewed_keystore = Some(listener.keystore_file("renewed.pem", &renewed));
+    listener_store_change.renewed = Some(renewed);
+    listener_store_change.listener = Some(listener);
+}
+
+#[rstest_bdd_macros::given("the SSL listener reconfiguration supplies these properties:")]
+fn supplied_listener_store_properties(
+    listener_store_change: &mut ListenerStoreChange,
+    #[datatable] rows: Rows<ChangedSslProperty>,
+) {
+    let identity = listener_store_change
+        .renewed
+        .as_ref()
+        .expect("renewed key material was given");
+    listener_store_change.proposed = rows
+        .into_iter()
+        .map(|row| {
+            let value = match row.value.as_str() {
+                "renewed-keystore" => listener_store_change
+                    .renewed_keystore
+                    .as_ref()
+                    .expect("PEM keystore file was prepared")
+                    .clone(),
+                "renewed-private-key" => identity.key.clone(),
+                "renewed-certificate" => identity.cert.clone(),
+                _ => row.value,
+            };
+            (format!("listener.name.ssl.{}", row.key), value)
+        })
+        .collect();
+}
+
+#[rstest_bdd_macros::when("the listener validates the SSL store reconfiguration")]
+fn validate_listener_store_change(listener_store_change: &mut ListenerStoreChange) {
+    listener_store_change.checked = Some(
+        listener_store_change
+            .listener
+            .as_ref()
+            .expect("SSL listener was prepared")
+            .inputs()
+            .check_reconfiguration(&BTreeMap::new(), &listener_store_change.proposed),
+    );
+}
+
+#[rstest_bdd_macros::then("the SSL store reconfiguration is accepted")]
+fn accepted_listener_store_change(listener_store_change: &ListenerStoreChange) {
+    check!(listener_store_change.checked == Some(Ok(())));
+}
+
+#[rstest_bdd_macros::then(
+    "the SSL store update is refused with code {code} and exact message {message}"
+)]
+fn refused_listener_store_change(
+    listener_store_change: &ListenerStoreChange,
+    code: i16,
+    message: String,
+) {
+    check!(listener_store_change.checked == Some(Err((code, message))));
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/listener_tls/tests.feature",
+    fixtures = [listener_store_change: ListenerStoreChange]
+);

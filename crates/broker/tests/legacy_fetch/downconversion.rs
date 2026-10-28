@@ -23,6 +23,9 @@ use {
         records::{Record, RecordBatch, RecordsPayload},
     },
     krabka_records_legacy::{ParsedRecord, decode_message_set},
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    support::InProcess,
 };
 
 fn decode_legacy_records(legacy_bytes: &[u8]) -> Vec<ParsedRecord> {
@@ -30,17 +33,31 @@ fn decode_legacy_records(legacy_bytes: &[u8]) -> Vec<ParsedRecord> {
     decode_message_set(&mut cursor, legacy_bytes.len()).expect("decode_message_set")
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "legacy fetch downconversion: fetch v3 downconverts v2 batch to v0 messageset"
-)]
-async fn bdd_verify_fetch_v3_downconverts_v2_batch_to_v0_messageset() {
-    let p = support::start_legacy().await;
+const PARTITIONS: [i32; 3] = [0, 1, 2];
 
-    // 1. Create topic.
-    create_topic(&p.client, "legacy_fetch_basic").await;
+struct Downconversion {
+    process: Option<InProcess>,
+    topic: String,
+    response: Option<LegacyFetchResponse>,
+    conversions_before: Option<u64>,
+}
 
-    // 2. Produce 2 records via modern path (ProduceRequest v9).
+#[fixture]
+fn legacy() -> Downconversion {
+    // Start this scenario with fresh inputs and observations.
+
+    Downconversion {
+        process: None,
+        topic: String::new(),
+        response: None,
+        conversions_before: None,
+    }
+}
+
+#[given("a modern batch contains keyed records key0=val0 and key1=val1")]
+async fn keyed_batch(legacy: &mut Downconversion) {
+    let process = support::start_legacy().await;
+    create_topic(&process.client, "legacy_fetch_basic").await;
     let batch = RecordBatch {
         records: vec![
             Record {
@@ -59,70 +76,15 @@ async fn bdd_verify_fetch_v3_downconverts_v2_batch_to_v0_messageset() {
         last_offset_delta: 1,
         ..Default::default()
     };
-    let addr = p.broker.listen_addr();
-    produce_batch(addr, "legacy_fetch_basic", batch).await;
-
-    // 3. Fetch v3 via raw TCP.
-    let resp_body = fetch_legacy_raw(addr, "legacy_fetch_basic", 3).await;
-
-    // 4. Decode as LegacyFetchResponse (Fetch v3 is non-flexible).
-    let fetch_resp = LegacyFetchResponse::decode(&mut resp_body.as_slice(), 3)
-        .expect("decode LegacyFetchResponse v3");
-
-    assert!(
-        fetch_resp.responses.len() == 1,
-        "expected 1 topic in fetch response"
-    );
-    let part = &fetch_resp.responses[0].partitions[0];
-    let legacy_bytes = legacy_bytes(
-        part.error_code,
-        part.records.as_ref(),
-        "expected Legacy MessageSet in Fetch v3 response, got non-Legacy payload",
-    );
-
-    // 6. Decode the MessageSet and verify key/value pairs.
-    let recs = decode_legacy_records(&legacy_bytes);
-
-    assert!(
-        recs.len() == 2,
-        "expected 2 records in MessageSet; got {}",
-        recs.len()
-    );
-    for (i, key, value) in [
-        (0usize, b"key0" as &[u8], b"val0" as &[u8]),
-        (1, b"key1", b"val1"),
-    ] {
-        check!(
-            recs[i].key.as_deref() == Some(key),
-            "record {i} key mismatch"
-        );
-        check!(
-            recs[i].value.as_deref() == Some(value),
-            "record {i} value mismatch"
-        );
-    }
-
-    p.broker.shutdown().await;
+    produce_batch(process.broker.listen_addr(), "legacy_fetch_basic", batch).await;
+    legacy.process = Some(process);
+    legacy.topic = "legacy_fetch_basic".into();
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/legacy_fetch/downconversion.feature",
-    name = "fetch v3 downconverts v2 batch to v0 messageset"
-)]
-#[tokio::test]
-async fn fetch_v3_downconverts_v2_batch_to_v0_messageset() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "legacy fetch downconversion: fetch v0 downconverts to magic v0 without timestamps"
-)]
-async fn bdd_verify_fetch_v0_downconverts_to_magic_v0_without_timestamps() {
-    let p = support::start_legacy().await;
-    create_topic(&p.client, "legacy_fetch_v0").await;
-
-    // base_timestamp + per-record delta give a non-zero create-time that
-    // a v1 MessageSet would carry but v0 must drop.
+#[given("a modern record has key k value v and a nonzero create timestamp")]
+async fn timestamped_batch(legacy: &mut Downconversion) {
+    let process = support::start_legacy().await;
+    create_topic(&process.client, "legacy_fetch_v0").await;
     let batch = RecordBatch {
         base_timestamp: 1_700_000_000,
         last_offset_delta: 0,
@@ -135,75 +97,20 @@ async fn bdd_verify_fetch_v0_downconverts_to_magic_v0_without_timestamps() {
         }],
         ..Default::default()
     };
-    let addr = p.broker.listen_addr();
-    produce_batch(addr, "legacy_fetch_v0", batch).await;
-
-    let resp_body = fetch_legacy_raw(addr, "legacy_fetch_v0", 0).await;
-    let mut cur: &[u8] = &resp_body;
-    let fetch_resp =
-        LegacyFetchResponse::decode(&mut cur, 0).expect("decode LegacyFetchResponse v0");
-
-    let part = &fetch_resp.responses[0].partitions[0];
-    assert!(
-        part.error_code == 0,
-        "fetch partition error: {}",
-        part.error_code
-    );
-
-    let legacy_bytes = match part.records.as_ref().expect("records field should be Some") {
-        RecordsPayload::Legacy(b) => b.clone(),
-        _ => {
-            panic!("expected Legacy MessageSet in Fetch v0 response")
-        }
-    };
-
-    // MessageSet layout: offset(8) + message_size(4) + crc(4) + magic(1).
-    // The magic byte sits at index 16 and must be 0 for a v0 MessageSet.
-    assert!(legacy_bytes.len() > 16, "legacy bytes too short");
-    assert!(legacy_bytes[16] == 0, "expected v0 MessageSet magic byte 0");
-
-    let recs = decode_legacy_records(&legacy_bytes);
-    assert!(recs.len() == 1, "expected 1 record");
-    check!(recs[0].key.as_deref() == Some(b"k".as_ref()));
-    check!(recs[0].value.as_deref() == Some(b"v".as_ref()));
-    check!(
-        recs[0].timestamp == None,
-        "v0 MessageSet must carry no timestamp"
-    );
-
-    p.broker.shutdown().await;
+    produce_batch(process.broker.listen_addr(), "legacy_fetch_v0", batch).await;
+    legacy.process = Some(process);
+    legacy.topic = "legacy_fetch_v0".into();
 }
 
-/// Fetch v0 maps to `Magic::V0`, which has no per-message timestamp.
-///
-/// The test produces a batch with timestamps through the modern path, then
-/// fetches at v0 and confirms that the down-converted `MessageSet` strips
-/// them. This drives the `request_version < 2` branch of
-/// `down_convert_for_fetch` through the full Fetch handler, not through the
-/// unit helper.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/legacy_fetch/downconversion.feature",
-    name = "fetch v0 downconverts to magic v0 without timestamps"
-)]
-#[tokio::test]
-async fn fetch_v0_downconverts_to_magic_v0_without_timestamps() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "legacy fetch downconversion: fetch v3 meters every converted partition of a topic"
-)]
-async fn bdd_verify_fetch_v3_meters_every_converted_partition_of_a_topic() {
-    const TOPIC: &str = "legacy_fetch_multi";
-    const PARTITIONS: [i32; 3] = [0, 1, 2];
-
-    let p = support::start_legacy().await;
-    create_topic_with_partitions(&p.client, TOPIC, 3).await;
-    let addr = p.broker.listen_addr();
-
+#[given("three topic partitions each hold their own acknowledged record")]
+async fn partitioned_records(legacy: &mut Downconversion) {
+    let process = support::start_legacy().await;
+    let topic = "legacy_fetch_multi";
+    create_topic_with_partitions(&process.client, topic, 3).await;
     for partition in PARTITIONS {
-        p.broker
-            .wait_until_partition_present(TOPIC, partition)
+        process
+            .broker
+            .wait_until_partition_present(topic, partition)
             .await;
         let batch = RecordBatch {
             records: vec![Record {
@@ -214,39 +121,133 @@ async fn bdd_verify_fetch_v3_meters_every_converted_partition_of_a_topic() {
             }],
             ..Default::default()
         };
-        produce_batch_to(addr, TOPIC, partition, batch).await;
-        p.broker
-            .wait_until_high_watermark(TOPIC, partition, 1)
+        produce_batch_to(process.broker.listen_addr(), topic, partition, batch).await;
+        process
+            .broker
+            .wait_until_high_watermark(topic, partition, 1)
             .await;
     }
-
-    let before = p
-        .broker
-        .metrics()
-        .fetch_message_conversions
-        .get_or_create(&TopicLabel {
-            topic: TOPIC.into(),
-        })
-        .get();
-
-    let resp_body = fetch_legacy_raw_partitions(addr, TOPIC, 3, &PARTITIONS, 0).await;
-    let mut cur: &[u8] = &resp_body;
-    let fetch_resp =
-        LegacyFetchResponse::decode(&mut cur, 3).expect("decode LegacyFetchResponse v3");
-
-    assert!(
-        fetch_resp.responses.len() == 1,
-        "the three partitions belong to one topic entry"
+    legacy.conversions_before = Some(
+        process
+            .broker
+            .metrics()
+            .fetch_message_conversions
+            .get_or_create(&TopicLabel {
+                topic: topic.into(),
+            })
+            .get(),
     );
-    let rows = &fetch_resp.responses[0].partitions;
+    legacy.process = Some(process);
+    legacy.topic = topic.into();
+}
+
+#[when("Fetch version {version} requests the modern record batch")]
+async fn fetch_one(legacy: &mut Downconversion, version: i16) {
+    let process = legacy
+        .process
+        .as_ref()
+        .expect("modern records were produced");
+    let response = fetch_legacy_raw(process.broker.listen_addr(), &legacy.topic, version).await;
+    legacy.response = Some(
+        LegacyFetchResponse::decode(&mut response.as_slice(), version)
+            .expect("decode legacy Fetch response"),
+    );
+}
+
+#[when("Fetch v3 requests all three partitions together")]
+async fn fetch_partitions(legacy: &mut Downconversion) {
+    let process = legacy
+        .process
+        .as_ref()
+        .expect("modern records were produced");
+    let response = fetch_legacy_raw_partitions(
+        process.broker.listen_addr(),
+        &legacy.topic,
+        3,
+        &PARTITIONS,
+        0,
+    )
+    .await;
+    legacy.response = Some(
+        LegacyFetchResponse::decode(&mut response.as_slice(), 3)
+            .expect("decode legacy Fetch response"),
+    );
+}
+
+#[then("the legacy message set preserves both record keys and values")]
+fn preserved_records(legacy: &Downconversion) {
+    let response = legacy.response.as_ref().expect("Fetch completed");
+    assert!(
+        response.responses.len() == 1,
+        "expected one topic in Fetch response"
+    );
+    let partition = &response.responses[0].partitions[0];
+    let bytes = legacy_bytes(
+        partition.error_code,
+        partition.records.as_ref(),
+        "Fetch v3 must return a Legacy MessageSet",
+    );
+    let records = decode_legacy_records(&bytes);
+    assert!(records.len() == 2, "expected two records in MessageSet");
+    for (index, key, value) in [
+        (0_usize, b"key0" as &[u8], b"val0" as &[u8]),
+        (1, b"key1", b"val1"),
+    ] {
+        check!(
+            records[index].key.as_deref() == Some(key),
+            "record {index} key mismatch"
+        );
+        check!(
+            records[index].value.as_deref() == Some(value),
+            "record {index} value mismatch"
+        );
+    }
+}
+
+#[then("the v0 message set retains k and v but contains no record timestamp")]
+fn no_timestamp(legacy: &Downconversion) {
+    let response = legacy.response.as_ref().expect("Fetch completed");
+    let partition = &response.responses[0].partitions[0];
+    let bytes = legacy_bytes(
+        partition.error_code,
+        partition.records.as_ref(),
+        "Fetch v0 must return a Legacy MessageSet",
+    );
+    assert!(bytes.len() > 16, "legacy bytes too short");
+    assert!(bytes[16] == 0, "expected v0 MessageSet magic byte zero");
+    let records = decode_legacy_records(&bytes);
+    assert!(records.len() == 1, "expected one record");
+    check!(records[0].key.as_deref() == Some(b"k".as_ref()));
+    check!(records[0].value.as_deref() == Some(b"v".as_ref()));
+    check!(
+        records[0].timestamp == None,
+        "v0 MessageSet must carry no timestamp"
+    );
+}
+
+#[then(
+    "every returned partition contains its own legacy record and increments conversion metering"
+)]
+fn every_partition_is_metered(legacy: &Downconversion) {
+    let response = legacy.response.as_ref().expect("Fetch completed");
+    assert!(
+        response.responses.len() == 1,
+        "all partitions belong to one topic entry"
+    );
+    let rows = &response.responses[0].partitions;
     assert!(
         rows.len() == PARTITIONS.len(),
-        "expected one row per requested partition; got {}",
-        rows.len()
+        "one row per requested partition"
     );
-
-    // Every row came back down-converted and carrying its own record, so
-    // every row is one the conversion counter must have seen.
+    let mut returned = rows
+        .iter()
+        .map(|row| row.partition_index)
+        .collect::<Vec<_>>();
+    returned.sort_unstable();
+    assert!(
+        returned.as_slice() == &PARTITIONS,
+        "one distinct response for every requested partition"
+    );
     for row in rows {
         check!(
             row.error_code == 0,
@@ -254,54 +255,75 @@ async fn bdd_verify_fetch_v3_meters_every_converted_partition_of_a_topic() {
             row.partition_index,
             row.error_code
         );
-        let legacy_bytes = match row.records.as_ref().expect("records field should be Some") {
-            RecordsPayload::Legacy(b) => b.clone(),
+        let bytes = match row.records.as_ref().expect("records field should be Some") {
+            RecordsPayload::Legacy(bytes) => bytes.clone(),
             _ => panic!(
                 "expected Legacy MessageSet for partition {}",
                 row.partition_index
             ),
         };
-        let mut ms_cur: &[u8] = &legacy_bytes;
-        let recs = decode_message_set(&mut ms_cur, legacy_bytes.len()).expect("decode_message_set");
-        check!(recs.len() == 1, "partition {}", row.partition_index);
+        let records = decode_legacy_records(&bytes);
+        check!(records.len() == 1, "partition {}", row.partition_index);
         check!(
-            recs[0].value.as_deref() == Some(format!("val{}", row.partition_index).as_bytes()),
+            records[0].value.as_deref() == Some(format!("val{}", row.partition_index).as_bytes()),
             "partition {} carries another partition's record",
             row.partition_index
         );
     }
-
-    let after = p
+    let process = legacy
+        .process
+        .as_ref()
+        .expect("modern records were produced");
+    let after = process
         .broker
         .metrics()
         .fetch_message_conversions
         .get_or_create(&TopicLabel {
-            topic: TOPIC.into(),
+            topic: legacy.topic.clone().into(),
         })
         .get();
+    let before = legacy
+        .conversions_before
+        .expect("the initial conversion counter was recorded");
     assert!(
         after - before == PARTITIONS.len() as u64,
-        "one conversion per converted partition under the one topic label; \
-         counter moved by {}",
+        "one conversion per converted partition; counter moved by {}",
         after - before
     );
-
-    p.broker.shutdown().await;
 }
 
-/// A legacy Fetch that reads several partitions of one topic converts, and
-/// meters, every one of them.
-///
-/// `downconvert_legacy_responses` resolves the topic name once per topic entry
-/// and then walks that entry's partitions, recording one
-/// `fetch_message_conversions` observation per converted partition under a
-/// single `topic` label. Every other case in this suite fetches one partition,
-/// so none of them can tell a per-topic resolution from a per-partition one,
-/// nor catch a loop that meters only the first row.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+async fn stop_downconversion(legacy: Downconversion) {
+    legacy
+        .process
+        .expect("a broker was started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/legacy_fetch/downconversion.feature",
-    name = "fetch v3 meters every converted partition of a topic"
+    name = "Fetch v3 preserves modern record keys and values in legacy framing"
 )]
 #[tokio::test]
-async fn fetch_v3_meters_every_converted_partition_of_a_topic() {}
+async fn fetch_v3_downconverts_v2_batch_to_v0_messageset(legacy: Downconversion) {
+    stop_downconversion(legacy).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/legacy_fetch/downconversion.feature",
+    name = "Fetch v0 removes timestamps that its framing cannot represent"
+)]
+#[tokio::test]
+async fn fetch_v0_downconverts_to_magic_v0_without_timestamps(legacy: Downconversion) {
+    stop_downconversion(legacy).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/legacy_fetch/downconversion.feature",
+    name = "Legacy conversion meters every converted partition under one topic"
+)]
+#[tokio::test]
+async fn fetch_v3_meters_every_converted_partition_of_a_topic(legacy: Downconversion) {
+    stop_downconversion(legacy).await;
+}

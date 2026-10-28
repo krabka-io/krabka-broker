@@ -24,7 +24,7 @@ use {
     bytes::Bytes,
     krabka_broker::codes::NOT_CONTROLLER,
     krabka_client_core::Client,
-    krabka_client_producer::{Producer, ProducerRecord},
+    krabka_client_producer::{Producer, ProducerError, ProducerRecord, RecordMetadata},
     krabka_protocol::{
         owned::{
             assign_replicas_to_dirs_request::{
@@ -90,22 +90,47 @@ fn metric_value(body: &str, name: &str) -> Option<f64> {
     })
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("jbod enospc: prometheus value parser ignores help and other metrics")]
-fn bdd_verify_prometheus_value_parser_ignores_help_and_other_metrics() {
-    let body = "# HELP krabka_broker_offline_log_dirs count\n\
-                another_metric 9\n\
-                krabka_broker_offline_log_dirs 1\n";
-    assert!(metric_value(body, "krabka_broker_offline_log_dirs") == Some(1.0));
-    assert!(metric_value(body, "missing") == None);
+#[derive(Default)]
+struct MetricSample {
+    body: String,
+    value: rstest_bdd::Slot<Option<f64>>,
 }
 
-#[cfg(test)]
+#[rstest::fixture]
+fn metric_sample() -> MetricSample {
+    // The exposition text and each observed lookup are isolated.
+    MetricSample::default()
+}
+
+#[rstest_bdd_macros::given("Prometheus returns this exposition text")]
+fn metric_exposition(metric_sample: &mut MetricSample, docstring: String) {
+    metric_sample.body = docstring;
+}
+
+#[rstest_bdd_macros::when("the parser looks up metric {name}")]
+fn lookup_exposed_metric(metric_sample: &MetricSample, name: String) {
+    metric_sample
+        .value
+        .set(metric_value(&metric_sample.body, &name));
+}
+
+#[rstest_bdd_macros::then("the metric value is {value}")]
+fn exposed_metric_value(metric_sample: &MetricSample, value: f64) {
+    assert!(metric_sample.value.get().expect("metric lookup") == Some(value));
+}
+
+#[rstest_bdd_macros::then("no metric value is returned")]
+fn absent_exposed_metric(metric_sample: &MetricSample) {
+    assert!(metric_sample.value.get().expect("metric lookup").is_none());
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/jbod_enospc.feature",
     name = "prometheus value parser ignores help and other metrics"
 )]
-fn prometheus_value_parser_ignores_help_and_other_metrics() {}
+fn prometheus_value_parser_ignores_help_and_other_metrics(metric_sample: MetricSample) {
+    let _ = metric_sample;
+}
 
 struct TinyFs {
     volume: String,
@@ -727,19 +752,53 @@ async fn wait_keys(cluster: &Cluster, partitions: &[i32], expected: &BTreeSet<St
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jbod enospc: real enospc moves leadership and preserves acked records across restart"
+#[derive(Default)]
+struct JbodExhaustion {
+    fill: Option<Producer>,
+    primary_fill: Option<Producer>,
+    cluster: Option<Cluster>,
+    doomed: Option<i32>,
+    healthy: Option<i32>,
+    acked: BTreeSet<String>,
+    healthy_receipt: Option<Result<RecordMetadata, ProducerError>>,
+}
+
+#[rstest::fixture]
+fn jbod_exhaustion() -> JbodExhaustion {
+    // Actual acknowledged keys survive both real tmpfs failures and the restart.
+    JbodExhaustion::default()
+}
+
+impl JbodExhaustion {
+    fn cluster(&self) -> &Cluster { self.cluster.as_ref().expect("packaged JBOD cluster") }
+
+    fn doomed(&self) -> i32 { self.doomed.expect("tiny-directory partition") }
+
+    fn healthy(&self) -> i32 { self.healthy.expect("primary-directory partition") }
+
+    fn shutdown(self) {
+        let Self {
+            fill,
+            primary_fill,
+            cluster,
+            ..
+        } = self;
+        drop((fill, primary_fill));
+        drop(cluster);
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "three packaged brokers host twelve RF3 partitions and node 1 has a 32-MiB primary and 16-MiB extra tmpfs, each containing a node-1-led partition with ISR 3"
 )]
-async fn bdd_verify_real_enospc_moves_leadership_and_preserves_acked_records_across_restart() {
-    let cluster = Cluster::start();
-    let bootstrap = cluster.bootstrap();
+async fn real_jbod_topology(jbod_exhaustion: &mut JbodExhaustion) {
+    jbod_exhaustion.cluster = Some(Cluster::start());
+    let bootstrap = jbod_exhaustion.cluster().bootstrap();
     create_topic(&bootstrap).await;
 
-    let node1 = &cluster.brokers[0];
     let deadline = Instant::now() + READY;
     let (tiny_partitions, primary_partitions) = loop {
-        let described = describe(&node1.bootstrap()).await;
+        let described = describe(&jbod_exhaustion.cluster().brokers[0].bootstrap()).await;
         let tiny = partitions_in(&described, EXTRA);
         let primary = partitions_in(&described, PRIMARY);
         if !tiny.is_empty() && !primary.is_empty() {
@@ -751,7 +810,7 @@ async fn bdd_verify_real_enospc_moves_leadership_and_preserves_acked_records_acr
         );
         time::sleep(Duration::from_millis(250)).await;
     };
-    let before = leaders(&node1.bootstrap()).await;
+    let before = leaders(&jbod_exhaustion.cluster().brokers[0].bootstrap()).await;
     let doomed = *tiny_partitions
         .iter()
         .find(|partition| before[usize::try_from(**partition).unwrap()] == 1)
@@ -760,16 +819,45 @@ async fn bdd_verify_real_enospc_moves_leadership_and_preserves_acked_records_acr
         .iter()
         .find(|partition| before[usize::try_from(**partition).unwrap()] == 1)
         .expect("a node-1-led partition must live on the primary dir");
-    assign_node1_dirs(&cluster, &primary_partitions, &tiny_partitions).await;
+    assign_node1_dirs(
+        jbod_exhaustion.cluster(),
+        &primary_partitions,
+        &tiny_partitions,
+    )
+    .await;
     wait_isr(&bootstrap, doomed, 3).await;
     wait_isr(&bootstrap, healthy, 3).await;
 
-    let fill = producer(&bootstrap).await;
-    let mut acked = BTreeSet::new();
-    fill_partition(&fill, doomed, "fill", 128, &mut acked).await;
-    wait_metric(&node1.metrics_url(), 1.0, node1).await;
+    jbod_exhaustion.doomed = Some(doomed);
+    jbod_exhaustion.healthy = Some(healthy);
+}
 
-    let failed = describe(&node1.bootstrap()).await;
+#[rstest_bdd_macros::when(
+    "up to 128 fill records of 256 KiB fill the extra-directory partition, recording only acknowledged keys"
+)]
+async fn exhaust_extra_jbod_directory(jbod_exhaustion: &mut JbodExhaustion) {
+    jbod_exhaustion.fill = Some(producer(&jbod_exhaustion.cluster().bootstrap()).await);
+    fill_partition(
+        jbod_exhaustion.fill.as_ref().expect("extra fill producer"),
+        jbod_exhaustion.doomed(),
+        "fill",
+        128,
+        &mut jbod_exhaustion.acked,
+    )
+    .await;
+}
+
+#[rstest_bdd_macros::then(
+    "node 1 reports one offline log directory, its extra directory returns KAFKA_STORAGE_ERROR 56 and its primary remains online with code 0"
+)]
+async fn partially_exhausted_jbod_directory(jbod_exhaustion: &JbodExhaustion) {
+    wait_metric(
+        &jbod_exhaustion.cluster().brokers[0].metrics_url(),
+        1.0,
+        &jbod_exhaustion.cluster().brokers[0],
+    )
+    .await;
+    let failed = describe(&jbod_exhaustion.cluster().brokers[0].bootstrap()).await;
     let extra = failed
         .results
         .iter()
@@ -788,29 +876,80 @@ async fn bdd_verify_real_enospc_moves_leadership_and_preserves_acked_records_acr
         primary.error_code == 0,
         "primary directory stays online: {primary:?}"
     );
+}
 
-    let healthy_key = "healthy-primary".to_owned();
-    let healthy_producer = producer(&bootstrap).await;
-    assert!(
+#[rstest_bdd_macros::when(
+    "the primary-directory partition receives a sixteen-byte healthy-primary record"
+)]
+async fn write_healthy_jbod_directory(jbod_exhaustion: &mut JbodExhaustion) {
+    let healthy_producer = producer(&jbod_exhaustion.cluster().bootstrap()).await;
+    jbod_exhaustion.healthy_receipt = Some(
         healthy_producer
-            .send(record(healthy, healthy_key.clone(), 16))
-            .await
-            .is_ok(),
-        "a partition on node 1's healthy directory must remain writable"
+            .send(record(
+                jbod_exhaustion.healthy(),
+                "healthy-primary".into(),
+                16,
+            ))
+            .await,
     );
     drop(healthy_producer);
-    acked.insert(healthy_key);
+    if jbod_exhaustion
+        .healthy_receipt
+        .as_ref()
+        .expect("healthy write attempted")
+        .is_ok()
+    {
+        jbod_exhaustion.acked.insert("healthy-primary".into());
+    }
+}
 
-    let primary_fill = producer(&bootstrap).await;
-    fill_partition(&primary_fill, healthy, "primary-fill", 256, &mut acked).await;
-    wait_exited(node1).await;
+#[rstest_bdd_macros::then(
+    "the healthy-primary record is acknowledged while only the extra directory is offline"
+)]
+fn writable_healthy_jbod_directory(jbod_exhaustion: &JbodExhaustion) {
+    assert!(
+        jbod_exhaustion
+            .healthy_receipt
+            .as_ref()
+            .expect("healthy write attempted")
+            .is_ok(),
+        "a partition on node1's healthy directory must remain writable"
+    );
+}
+
+#[rstest_bdd_macros::when(
+    "up to 256 primary-fill records of 256 KiB exhaust the primary directory, recording only acknowledged keys"
+)]
+async fn exhaust_primary_jbod_directory(jbod_exhaustion: &mut JbodExhaustion) {
+    jbod_exhaustion.primary_fill = Some(producer(&jbod_exhaustion.cluster().bootstrap()).await);
+    fill_partition(
+        jbod_exhaustion
+            .primary_fill
+            .as_ref()
+            .expect("primary fill producer"),
+        jbod_exhaustion.healthy(),
+        "primary-fill",
+        256,
+        &mut jbod_exhaustion.acked,
+    )
+    .await;
+}
+
+#[rstest_bdd_macros::then(
+    "node 1 exits with all directories offline and both exhausted partitions elect a leader other than 1"
+)]
+async fn failed_jbod_broker(jbod_exhaustion: &JbodExhaustion) {
+    wait_exited(&jbod_exhaustion.cluster().brokers[0]).await;
     let deadline = Instant::now() + READY;
     loop {
-        let now = leaders(&cluster.brokers[1].bootstrap()).await;
-        if [doomed, healthy].into_iter().all(|partition| {
-            let leader = now[usize::try_from(partition).unwrap()];
-            leader > 0 && leader != 1
-        }) {
+        let now = leaders(&jbod_exhaustion.cluster().brokers[1].bootstrap()).await;
+        if [jbod_exhaustion.doomed(), jbod_exhaustion.healthy()]
+            .into_iter()
+            .all(|partition| {
+                let leader = now[usize::try_from(partition).unwrap()];
+                leader > 0 && leader != 1
+            })
+        {
             break;
         }
         assert!(
@@ -819,18 +958,42 @@ async fn bdd_verify_real_enospc_moves_leadership_and_preserves_acked_records_acr
         );
         time::sleep(Duration::from_millis(250)).await;
     }
+}
 
-    wait_keys(&cluster, &[doomed, healthy], &acked).await;
+#[rstest_bdd_macros::then("every acknowledged key from both affected partitions remains readable")]
+async fn durable_jbod_keys(jbod_exhaustion: &JbodExhaustion) {
+    wait_keys(
+        jbod_exhaustion.cluster(),
+        &[jbod_exhaustion.doomed(), jbod_exhaustion.healthy()],
+        &jbod_exhaustion.acked,
+    )
+    .await;
+}
 
-    cluster.primary.free_topic_data();
-    cluster.extra.free_topic_data();
-    cluster.primary.grow("64m");
-    cluster.extra.grow("64m");
-    node1.start_existing();
-    wait_metric(&node1.metrics_url(), 0.0, node1).await;
+#[rstest_bdd_macros::when(
+    "both node 1 filesystems are freed and grown to 64 MiB and its broker restarts on existing state"
+)]
+fn recover_jbod_filesystems(jbod_exhaustion: &JbodExhaustion) {
+    jbod_exhaustion.cluster().primary.free_topic_data();
+    jbod_exhaustion.cluster().extra.free_topic_data();
+    jbod_exhaustion.cluster().primary.grow("64m");
+    jbod_exhaustion.cluster().extra.grow("64m");
+    jbod_exhaustion.cluster().brokers[0].start_existing();
+}
+
+#[rstest_bdd_macros::then(
+    "node 1 reports zero offline directories, both directories host healthy replicas and both affected ISRs return to 3"
+)]
+async fn recovered_jbod_replicas(jbod_exhaustion: &JbodExhaustion) {
+    wait_metric(
+        &jbod_exhaustion.cluster().brokers[0].metrics_url(),
+        0.0,
+        &jbod_exhaustion.cluster().brokers[0],
+    )
+    .await;
     let deadline = Instant::now() + READY;
     loop {
-        let recovered = describe(&node1.bootstrap()).await;
+        let recovered = describe(&jbod_exhaustion.cluster().brokers[0].bootstrap()).await;
         let primary = recovered
             .results
             .iter()
@@ -852,19 +1015,31 @@ async fn bdd_verify_real_enospc_moves_leadership_and_preserves_acked_records_acr
         );
         time::sleep(Duration::from_millis(250)).await;
     }
-    wait_isr(&bootstrap, doomed, 3).await;
-    wait_isr(&bootstrap, healthy, 3).await;
-    wait_keys(&cluster, &[doomed, healthy], &acked).await;
+    wait_isr(
+        &jbod_exhaustion.cluster().bootstrap(),
+        jbod_exhaustion.doomed(),
+        3,
+    )
+    .await;
+    wait_isr(
+        &jbod_exhaustion.cluster().bootstrap(),
+        jbod_exhaustion.healthy(),
+        3,
+    )
+    .await;
 }
 
 #[ignore = "requires Docker and //packaging:image"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/jbod_enospc.feature",
     name = "real enospc moves leadership and preserves acked records across restart"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart() {}
+async fn real_enospc_moves_leadership_and_preserves_acked_records_across_restart(
+    jbod_exhaustion: JbodExhaustion,
+) {
+    jbod_exhaustion.shutdown();
+}
 
 async fn fill_partition(
     producer: &Producer,

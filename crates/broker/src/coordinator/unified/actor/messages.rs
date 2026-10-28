@@ -305,7 +305,6 @@ pub struct JoinResult {
 
 /// The defaults of Kafka's `JoinGroupResponseData`, generation `-1` included,
 /// so an error reply carries the same fields Kafka's does.
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JoinResultMember {
     pub member_id: String,

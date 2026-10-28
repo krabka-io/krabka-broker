@@ -1,13 +1,13 @@
-Feature: src coordinator unified classic state protocol
-
-  Scenario Outline: tests: supports protocols matches kafka
-    Then coordinator unified classic state protocol tests: supports protocols matches kafka for <example>
-
+Feature: Classic group protocol negotiation
+  Scenario Outline: Joining members must share an existing protocol and protocol type
+    Given the classic group is <state> with existing consumer protocol support
+    When a joining member offers protocol type <kind> with preference list <names>
+    Then the offered protocols are compatible <compatible>
     Examples:
-      | example                 |
-      | empty empty type        |
-      | empty no protocols      |
-      | empty other type        |
-      | stable other type       |
-      | stable missing protocol |
-      | stable shared protocol  |
+      | state | kind | names | compatible |
+      | empty | empty | range | false |
+      | empty | consumer | none | false |
+      | empty | connect | x | true |
+      | stable | connect | sticky | false |
+      | stable | consumer | range | false |
+      | stable | consumer | x,sticky | true |

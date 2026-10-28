@@ -92,6 +92,7 @@ mod tests {
     use {
         super::*,
         crate::coordinator::unified::{
+            codec_observations::EncodedRecord,
             share::persistence::{
                 KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT, KEY_SHARE_TARGET_ASSIGNMENT_MEMBER,
                 ShareGroupKey,
@@ -99,33 +100,8 @@ mod tests {
             test_support::wire_bytes,
         },
         assert2::assert,
+        rstest_bdd_macros::{given, scenarios, then, when},
     };
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified share persistence assignment tests: target assignment member bytes match kafka schema"
-    )]
-    fn bdd_verify_target_assignment_member_bytes_match_kafka_schema() {
-        let v = ShareGroupTargetAssignmentMemberValue {
-            topic_partitions: vec![(Uuid([1; 16]), vec![3])],
-        };
-        let want = wire_bytes(&[
-            "000002",
-            "01010101010101010101010101010101",
-            "02",
-            "00000003",
-            "00", // TopicPartition tagged fields
-            "00", // message tagged fields
-        ]);
-        assert!(&v.encode()[..] == &want[..]);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/share/persistence/assignment.feature",
-        name = "tests: target assignment member bytes match kafka schema"
-    )]
-    fn target_assignment_member_bytes_match_kafka_schema() {}
 
     #[test]
     fn target_assignment_member_round_trip() {
@@ -143,33 +119,6 @@ mod tests {
         };
         assert!(ShareGroupTargetAssignmentMemberValue::decode(&v.encode()).unwrap() == v);
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified share persistence assignment tests: current member assignment bytes match kafka schema"
-    )]
-    fn bdd_verify_current_member_assignment_bytes_match_kafka_schema() {
-        let v = ShareGroupCurrentMemberAssignmentValue {
-            member_epoch: 5,
-            previous_member_epoch: 4,
-            assigned_partitions: vec![],
-        };
-        let want = wire_bytes(&[
-            "0000", "00000005", // MemberEpoch
-            "00000004", // PreviousMemberEpoch
-            "00",       // MemberState.STABLE
-            "01",       // empty AssignedPartitions
-            "00",       // message tagged fields
-        ]);
-        assert!(&v.encode()[..] == &want[..]);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/share/persistence/assignment.feature",
-        name = "tests: current member assignment bytes match kafka schema"
-    )]
-    fn current_member_assignment_bytes_match_kafka_schema() {}
 
     #[test]
     fn current_member_assignment_round_trip() {
@@ -196,5 +145,96 @@ mod tests {
         assert!(ShareGroupTargetAssignmentMemberValue::decode(&t[..t.len() - 1]).is_err());
         let c = ShareGroupCurrentMemberAssignmentValue::default().encode();
         assert!(ShareGroupCurrentMemberAssignmentValue::decode(&c[..c.len() - 1]).is_err());
+    }
+    mod bdd_target_assignment_member {
+        use {super::*, assert2::assert};
+        type EncodedValue = EncodedRecord<ShareGroupTargetAssignmentMemberValue>;
+        #[rstest::fixture]
+        fn stored_value() -> EncodedValue {
+            // Start this scenario with fresh inputs and observations.
+            EncodedValue::default()
+        }
+        #[given("a Share target assignment assigns partition 3 of the all-one topic UUID")]
+        fn prepared_value(stored_value: &mut EncodedValue) {
+            let v = ShareGroupTargetAssignmentMemberValue {
+                topic_partitions: vec![(Uuid([1; 16]), vec![3])],
+            };
+
+            stored_value.value = Some(v);
+        }
+        #[when(
+            "the coordinator persists the Share target member assignment in the compacted group log"
+        )]
+        fn encode_group_record(stored_value: &mut EncodedValue) {
+            stored_value.encoded = Some(
+                stored_value
+                    .value
+                    .as_ref()
+                    .expect("group record prepared")
+                    .encode(),
+            );
+        }
+        #[then(
+            "the persisted Share target member assignment matches Kafka schema bytes including compact lengths and tagged trailers"
+        )]
+        fn kafka_record_layout(stored_value: &EncodedValue) {
+            let want = wire_bytes(&[
+                "000002",
+                "01010101010101010101010101010101",
+                "02",
+                "00000003",
+                "00", // TopicPartition tagged fields
+                "00", // message tagged fields
+            ]);
+
+            assert!(&stored_value.encoded.as_ref().expect("record encoded")[..] == &want[..]);
+        }
+        scenarios!("tests/features/migrated/src/coordinator/unified/share/persistence/assignment.feature",tags="@target_assignment_member",fixtures=[stored_value: EncodedValue]);
+    }
+    mod bdd_current_member_assignment {
+        use {super::*, assert2::assert};
+        type EncodedValue = EncodedRecord<ShareGroupCurrentMemberAssignmentValue>;
+        #[rstest::fixture]
+        fn stored_value() -> EncodedValue {
+            // Start this scenario with fresh inputs and observations.
+            EncodedValue::default()
+        }
+        #[given("a Share current assignment at epochs 5 and 4 has no assigned partitions")]
+        fn prepared_value(stored_value: &mut EncodedValue) {
+            let v = ShareGroupCurrentMemberAssignmentValue {
+                member_epoch: 5,
+                previous_member_epoch: 4,
+                assigned_partitions: vec![],
+            };
+
+            stored_value.value = Some(v);
+        }
+        #[when(
+            "the coordinator encodes this ShareGroupCurrentMemberAssignmentValue record for the compacted group log"
+        )]
+        fn encode_group_record(stored_value: &mut EncodedValue) {
+            stored_value.encoded = Some(
+                stored_value
+                    .value
+                    .as_ref()
+                    .expect("group record prepared")
+                    .encode(),
+            );
+        }
+        #[then(
+            "the ShareGroupCurrentMemberAssignmentValue record matches Kafka schema bytes including compact lengths and tagged trailers"
+        )]
+        fn kafka_record_layout(stored_value: &EncodedValue) {
+            let want = wire_bytes(&[
+                "0000", "00000005", // MemberEpoch
+                "00000004", // PreviousMemberEpoch
+                "00",       // MemberState.STABLE
+                "01",       // empty AssignedPartitions
+                "00",       // message tagged fields
+            ]);
+
+            assert!(&stored_value.encoded.as_ref().expect("record encoded")[..] == &want[..]);
+        }
+        scenarios!("tests/features/migrated/src/coordinator/unified/share/persistence/assignment.feature",tags="@current_member_assignment",fixtures=[stored_value: EncodedValue]);
     }
 }

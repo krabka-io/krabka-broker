@@ -714,33 +714,6 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "network dispatch sasl tests: kafka api name is the api keys constant"
-    )]
-    fn bdd_verify_kafka_api_name_is_the_api_keys_constant() {
-        let cases = [
-            (ApiKey::Produce, "PRODUCE"),
-            (ApiKey::ListOffsets, "LIST_OFFSETS"),
-            (ApiKey::OffsetForLeaderEpoch, "OFFSET_FOR_LEADER_EPOCH"),
-            (
-                ApiKey::DescribeUserScramCredentials,
-                "DESCRIBE_USER_SCRAM_CREDENTIALS",
-            ),
-        ];
-        for (api, name) in cases {
-            assert!(kafka_api_name(api) == name);
-        }
-    }
-
-    /// The exception message names the api as Kafka's `ApiKeys` enum does.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/network/dispatch/sasl.feature",
-        name = "tests: kafka api name is the api keys constant"
-    )]
-    fn kafka_api_name_is_the_api_keys_constant() {}
-
     /// A failed exchange resolved no principal, so the audit row can only name
     /// what the peer claimed. PLAIN is the one mechanism that says it in the
     /// clear, and the field the row must name is the *authcid* — the field
@@ -804,36 +777,6 @@ mod tests {
             );
         }
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "network dispatch sasl tests: a resolved principal is audited in the kafka user form"
-    )]
-    fn bdd_verify_a_resolved_principal_is_audited_in_the_kafka_user_form() {
-        let principal = krabka_security::Principal {
-            name: "alice".to_owned(),
-            auth_method: krabka_security::AuthMethod::SaslScramSha512,
-            groups: vec![],
-        };
-        assert!(
-            audit_principal(&principal)
-                == krabka_audit::AuditPrincipal {
-                    name: "User:alice".to_owned(),
-                    auth_method: "SaslScramSha512".to_owned(),
-                }
-        );
-    }
-
-    /// An auditor joins an authentication row to the privileged-action rows
-    /// the same session went on to write, by the principal string. That join
-    /// only holds while this renders the `User:<name>` Kafka form that
-    /// `break_glass::handlers::principal_name` puts on the other side.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/network/dispatch/sasl.feature",
-        name = "tests: a resolved principal is audited in the kafka user form"
-    )]
-    fn a_resolved_principal_is_audited_in_the_kafka_user_form() {}
 
     /// The refusal an operator has to be able to see after the fact: one
     /// `Authentication` row, `Failure`, naming the mechanism, the user the
@@ -1166,4 +1109,77 @@ mod tests {
 
         handle.shutdown().await;
     }
+
+    #[derive(Default)]
+    struct SaslAuditVocabulary {
+        api: Option<ApiKey>,
+        api_name: Option<String>,
+        principal: Option<Principal>,
+        audited: Option<krabka_audit::AuditPrincipal>,
+    }
+
+    #[rstest::fixture]
+    fn sasl_audit_vocabulary() -> SaslAuditVocabulary {
+        // An exception or audit row receives its own Kafka vocabulary inputs.
+        SaslAuditVocabulary::default()
+    }
+
+    #[rstest_bdd_macros::given("a SASL dispatch exception concerns Kafka API key {key}")]
+    fn supplied_sasl_api(sasl_audit_vocabulary: &mut SaslAuditVocabulary, key: i16) {
+        sasl_audit_vocabulary.api = Some(ApiKey::from_i16(key).expect("known Kafka API key"));
+    }
+
+    #[rstest_bdd_macros::when("the Kafka API name is rendered for the SASL exception")]
+    fn render_sasl_api_name(sasl_audit_vocabulary: &mut SaslAuditVocabulary) {
+        sasl_audit_vocabulary.api_name = Some(kafka_api_name(
+            sasl_audit_vocabulary.api.expect("API key was given"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the exception API name is {name}")]
+    fn expected_sasl_api_name(sasl_audit_vocabulary: &SaslAuditVocabulary, name: String) {
+        assert!(sasl_audit_vocabulary.api_name.as_ref() == Some(&name));
+    }
+
+    #[rstest_bdd_macros::given("user {user} authenticated through SCRAM-SHA-512")]
+    fn supplied_sasl_audit_principal(
+        sasl_audit_vocabulary: &mut SaslAuditVocabulary,
+        user: String,
+    ) {
+        sasl_audit_vocabulary.principal = Some(Principal {
+            name: user,
+            auth_method: AuthMethod::SaslScramSha512,
+            groups: vec![],
+        });
+    }
+
+    #[rstest_bdd_macros::when("the resolved principal is rendered for authentication audit")]
+    fn render_sasl_audit_principal(sasl_audit_vocabulary: &mut SaslAuditVocabulary) {
+        sasl_audit_vocabulary.audited = Some(audit_principal(
+            sasl_audit_vocabulary
+                .principal
+                .as_ref()
+                .expect("resolved principal was given"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the audit principal is {name} with authentication method {method}")]
+    fn expected_sasl_audit_principal(
+        sasl_audit_vocabulary: &SaslAuditVocabulary,
+        name: String,
+        method: String,
+    ) {
+        assert!(
+            sasl_audit_vocabulary.audited.as_ref()
+                == Some(&krabka_audit::AuditPrincipal {
+                    name,
+                    auth_method: method
+                })
+        );
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/network/dispatch/sasl.feature",
+        fixtures = [sasl_audit_vocabulary: SaslAuditVocabulary]
+    );
 }

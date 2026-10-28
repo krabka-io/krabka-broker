@@ -76,32 +76,47 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check, krabka_units::prelude::millis};
+    use {
+        super::*,
+        assert2::check,
+        krabka_units::prelude::millis,
+        rstest::fixture,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kraft controller graceful shutdown tests: the window is kafkas five seconds or two and a half fetch timeouts for {example}"
-    )]
-    fn bdd_verify_the_window_is_kafkas_five_seconds_or_two_and_a_half_fetch_timeouts(
-        example: String,
-    ) {
-        type Example = (Time, Duration);
-        let (fetch_timeout, window): Example = match example.as_str() {
-            "short test timeout" => (millis(500), Duration::from_millis(1_250)),
-            "kafka default" => (millis(2_000), Duration::from_secs(5)),
-            "longer than kafka" => (millis(20_000), Duration::from_secs(5)),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(graceful_shutdown_window(fetch_timeout) == window);
+    struct ShutdownWindow {
+        fetch_timeout: Option<Time>,
+        window: Option<Duration>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kraft/controller/graceful_shutdown.feature",
-        name = "tests: the window is kafkas five seconds or two and a half fetch timeouts"
-    )]
-    fn the_window_is_kafkas_five_seconds_or_two_and_a_half_fetch_timeouts(example: String) {
-        let _ = example;
+    #[fixture]
+    fn shutdown() -> ShutdownWindow {
+        // Start this scenario with fresh inputs and observations.
+
+        ShutdownWindow {
+            fetch_timeout: None,
+            window: None,
+        }
     }
+
+    #[given("a KRaft fetch timeout of {timeout_ms} ms")]
+    fn configured_timeout(shutdown: &mut ShutdownWindow, timeout_ms: u32) {
+        shutdown.fetch_timeout = Some(millis(timeout_ms));
+    }
+
+    #[when("the controller chooses its graceful shutdown window")]
+    fn choose_shutdown_window(shutdown: &mut ShutdownWindow) {
+        shutdown.window = Some(graceful_shutdown_window(
+            shutdown
+                .fetch_timeout
+                .expect("a fetch timeout was configured"),
+        ));
+    }
+
+    #[then("the graceful shutdown window is {window_ms} ms")]
+    fn bounded_shutdown_window(shutdown: &ShutdownWindow, window_ms: u64) {
+        check!(shutdown.window == Some(Duration::from_millis(window_ms)));
+    }
+
+    scenarios!("tests/features/migrated/src/kraft/controller/graceful_shutdown.feature", fixtures = [shutdown: ShutdownWindow]);
 }

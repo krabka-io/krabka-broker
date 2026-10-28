@@ -70,59 +70,15 @@ mod tests {
             share::persistence::{
                 KEY_SHARE_GROUP_METADATA, KEY_SHARE_TARGET_ASSIGNMENT_METADATA, ShareGroupKey,
             },
-            test_support::assignment_metadata_golden_cases,
+            test_support::wire_bytes,
         },
-        assert2::{assert, check},
+        assert2::assert,
+        rstest_bdd_macros::{given, scenarios, then, when},
     };
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified share persistence epochs tests: group metadata bytes match kafka schema"
-    )]
-    fn bdd_verify_group_metadata_bytes_match_kafka_schema() {
-        struct Row {
-            case: &'static str,
-            value: ShareGroupMetadataValue,
-            /// Kafka's bytes.
-            bytes: &'static [u8],
-        }
-        let rows: [Row; 2] = [
-            Row {
-                case: "no subscribed topic",
-                value: ShareGroupMetadataValue {
-                    epoch: 7,
-                    metadata_hash: 0,
-                },
-                bytes: b"\x00\x00\x00\x00\x00\x07\x00\x00\x00\x00\x00\x00\x00\x00\x00",
-            },
-            Row {
-                case: "Kafka's group hash of the golden topics foo and bar",
-                value: ShareGroupMetadataValue {
-                    epoch: 2,
-                    metadata_hash: -556_879_919_459_959_918,
-                },
-                bytes: b"\x00\x00\x00\x00\x00\x02\xf8\x45\x90\xa9\xea\x0a\x7b\x92\x00",
-            },
-        ];
-        for Row { case, value, bytes } in rows {
-            check!(&value.encode()[..] == bytes, "{case}");
-            check!(
-                ShareGroupMetadataValue::decode(bytes).unwrap() == value,
-                "{case}"
-            );
-        }
-    }
 
     /// i16 version | i32 `Epoch` | i64 `MetadataHash` | uvarint tagged count, as
     /// Kafka 4.3.1's generated writer lays `ShareGroupMetadataValue` out. The
     /// hash is a plain field, so 0 is on the wire too.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/share/persistence/epochs.feature",
-        name = "tests: group metadata bytes match kafka schema"
-    )]
-    fn group_metadata_bytes_match_kafka_schema() {}
-
     #[test]
     fn group_metadata_round_trip() {
         let key = ShareGroupKey::GroupMetadata {
@@ -140,37 +96,9 @@ mod tests {
         assert!(ShareGroupMetadataValue::decode(&v.encode()).unwrap() == v);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified share persistence epochs tests: target assignment metadata bytes match kafka schema"
-    )]
-    fn bdd_verify_target_assignment_metadata_bytes_match_kafka_schema() {
-        let rows = assignment_metadata_golden_cases().call();
-        for row in rows {
-            let case = row.description;
-            let bytes = row.bytes;
-            let value = ShareGroupTargetAssignmentMetadataValue {
-                assignment_epoch: row.epoch.0,
-                assignment_timestamp_ms: row.timestamp.0,
-            };
-            check!(&value.encode()[..] == bytes, "{case}");
-            check!(
-                ShareGroupTargetAssignmentMetadataValue::decode(bytes).unwrap() == value,
-                "{case}"
-            );
-        }
-    }
-
     /// i16 version | i32 `AssignmentEpoch` | tagged-field trailer, which holds
     /// `AssignmentTimestamp` as tag 0 with an eight-byte payload unless it is
     /// the default 0.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/share/persistence/epochs.feature",
-        name = "tests: target assignment metadata bytes match kafka schema"
-    )]
-    fn target_assignment_metadata_bytes_match_kafka_schema() {}
-
     #[test]
     fn target_assignment_metadata_round_trip() {
         let key = ShareGroupKey::TargetAssignmentMetadata {
@@ -203,4 +131,60 @@ mod tests {
         .encode();
         assert!(ShareGroupTargetAssignmentMetadataValue::decode(&t[..t.len() - 1]).is_err());
     }
+    #[derive(Debug, PartialEq)]
+    enum ShareEpochRecord {
+        Group(ShareGroupMetadataValue),
+        Target(ShareGroupTargetAssignmentMetadataValue),
+    }
+    use crate::coordinator::unified::codec_observations::KafkaRecordRoundTrip;
+    type ShareEpochCompatibility = KafkaRecordRoundTrip<ShareEpochRecord>;
+    #[rstest::fixture]
+    fn epochs() -> ShareEpochCompatibility {
+        // Start this scenario with fresh inputs and observations.
+        ShareEpochCompatibility::default()
+    }
+    #[given("the Share group epoch is {epoch} with metadata hash {hash}")]
+    fn group_epoch_input(epochs: &mut ShareEpochCompatibility, epoch: i32, hash: i64) {
+        epochs.input = Some(ShareEpochRecord::Group(ShareGroupMetadataValue {
+            epoch,
+            metadata_hash: hash,
+        }));
+    }
+    #[given("the Share assignment epoch is {epoch} with completion timestamp {timestamp}")]
+    fn target_epoch_input(epochs: &mut ShareEpochCompatibility, epoch: i32, timestamp: i64) {
+        epochs.input = Some(ShareEpochRecord::Target(
+            ShareGroupTargetAssignmentMetadataValue {
+                assignment_epoch: epoch,
+                assignment_timestamp_ms: timestamp,
+            },
+        ));
+    }
+    #[given("Kafka encodes that Share epoch record as {hex}")]
+    fn kafka_epoch_bytes(epochs: &mut ShareEpochCompatibility, hex: String) {
+        epochs.golden = wire_bytes(&[&hex]);
+    }
+    #[when("the coordinator writes the Share epoch record and reads Kafka bytes")]
+    fn epoch_codec(epochs: &mut ShareEpochCompatibility) {
+        let (encoded, decoded) = match epochs.input.as_ref().expect("epoch record prepared") {
+            ShareEpochRecord::Group(value) => (
+                value.encode(),
+                ShareEpochRecord::Group(
+                    ShareGroupMetadataValue::decode(&epochs.golden)
+                        .expect("read Kafka group epoch"),
+                ),
+            ),
+            ShareEpochRecord::Target(value) => (
+                value.encode(),
+                ShareEpochRecord::Target(
+                    ShareGroupTargetAssignmentMetadataValue::decode(&epochs.golden)
+                        .expect("read Kafka assignment epoch"),
+                ),
+            ),
+        };
+        epochs.encoded = Some(encoded);
+        epochs.decoded = Some(decoded);
+    }
+    #[then("the Share epoch bytes match Kafka exactly and all epoch fields are recovered")]
+    fn epoch_golden(epochs: &ShareEpochCompatibility) { epochs.assert_compatible(); }
+    scenarios!("tests/features/migrated/src/coordinator/unified/share/persistence/epochs.feature",fixtures=[epochs:ShareEpochCompatibility]);
 }

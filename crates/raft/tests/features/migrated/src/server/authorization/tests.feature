@@ -1,33 +1,61 @@
-Feature: src server authorization tests
+Feature: Kafka controller authorization and refusal layouts
+  The controller listener checks its own cluster operations. Broker-handled APIs
+  keep their handler authorization. Refusals use each API's complete response shape,
+  including Fetch session/partition fields and private metadata response sentinels.
 
-  Scenario Outline: each controller api needs the kafka operation
-    Then server authorization tests: each controller api needs the kafka operation for <example>
+  Scenario Outline: Each controller API requires its Kafka cluster operation
+    Given controller listener API <api>
+    When the controller listener resolves the API's required cluster operation
+    Then the controller API requires <operation>
 
     Examples:
-      | example                   |
-      | fetch                     |
-      | vote                      |
-      | begin quorum epoch        |
-      | end quorum epoch          |
-      | fetch snapshot            |
-      | controller registration   |
-      | update raft voter         |
-      | assign replicas to dirs   |
-      | submit change             |
-      | metadata fetch            |
-      | delegation token mutation |
-      | add raft voter            |
-      | remove raft voter         |
-      | describe cluster          |
-      | describe quorum           |
-      | api versions              |
-      | create topics             |
-      | envelope                  |
-      | broker registration       |
-      | broker heartbeat          |
+      | api | operation |
+      | Fetch | ClusterAction |
+      | Vote | ClusterAction |
+      | BeginQuorumEpoch | ClusterAction |
+      | EndQuorumEpoch | ClusterAction |
+      | FetchSnapshot | ClusterAction |
+      | ControllerRegistration | ClusterAction |
+      | UpdateRaftVoter | ClusterAction |
+      | AssignReplicasToDirs | ClusterAction |
+      | SubmitChange | ClusterAction |
+      | MetadataFetch | ClusterAction |
+      | DelegationTokenMutation | ClusterAction |
+      | AddRaftVoter | Alter |
+      | RemoveRaftVoter | Alter |
+      | DescribeCluster | Alter |
+      | DescribeQuorum | Describe |
+      | ApiVersions | broker-handler-authorization |
+      | CreateTopics | broker-handler-authorization |
+      | Envelope | broker-handler-authorization |
+      | BrokerRegistration | broker-handler-authorization |
+      | BrokerHeartbeat | broker-handler-authorization |
 
-  Scenario: fetch and quorum refusals are kafka error responses
-    Then server authorization tests: fetch and quorum refusals are kafka error responses
+  Scenario: Fetch and quorum refusals retain exact Kafka schema layouts
+    Given the controller receives these authorization-refusal request shapes:
+      | api | version |
+      | Fetch | 12 |
+      | Fetch | 13 |
+      | Fetch | 17 |
+      | Vote | 2 |
+      | BeginQuorumEpoch | 1 |
+      | EndQuorumEpoch | 1 |
+      | FetchSnapshot | 1 |
+    When the controller encodes ClusterAuthorizationFailed for every requested API
+    Then every refusal matches the complete Kafka response layout and consumes every encoded byte
 
-  Scenario: admin and private refusals are kafka error responses
-    Then server authorization tests: admin and private refusals are kafka error responses
+  Scenario: Admin and private metadata refusals retain exact API error layouts
+    Given the controller receives these authorization-refusal request shapes:
+      | api | version |
+      | AssignReplicasToDirs | 0 |
+      | ControllerRegistration | 0 |
+      | UpdateRaftVoter | 0 |
+      | AddRaftVoter | 0 |
+      | RemoveRaftVoter | 0 |
+      | DescribeCluster | 1 |
+      | DescribeQuorum | 2 |
+      | SubmitChange | 0 |
+      | DelegationTokenMutation | 0 |
+      | MetadataFetch | 0 |
+    When the controller encodes ClusterAuthorizationFailed for every requested API
+    Then every refusal matches the complete Kafka response layout and consumes every encoded byte

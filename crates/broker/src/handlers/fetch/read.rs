@@ -763,10 +763,7 @@ mod tests {
         super::{RawServed, ServedRecords, read_task_panicked},
         crate::{
             blocking::inline_blocking_on_this_thread,
-            codes::{
-                CORRUPT_MESSAGE, KAFKA_STORAGE_ERROR, NONE, OFFSET_OUT_OF_RANGE,
-                UNKNOWN_SERVER_ERROR,
-            },
+            codes::{NONE, OFFSET_OUT_OF_RANGE},
             delivery::test_support::batch_at,
             error::BrokerError,
             handlers::test_support::default_records_batch,
@@ -1499,87 +1496,94 @@ mod tests {
         LogInDir { log, dir }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers fetch read tests: a failed read answers the row kafka gives its error"
-    )]
-    async fn bdd_verify_a_failed_read_answers_the_row_kafka_gives_its_error() {
-        struct Case {
-            name: &'static str,
-            error: BrokerError,
-            error_code: i16,
-            dir_offline: bool,
-        }
-        let cases = [
-            Case {
-                name: "an I/O failure",
-                error: BrokerError::Log(LogError::Io(io::Error::other("EIO"))),
-                error_code: KAFKA_STORAGE_ERROR,
-                dir_offline: true,
-            },
-            Case {
-                name: "retention moved the log start past the fetch offset",
-                error: BrokerError::Log(LogError::OffsetTooLow {
-                    requested: Offset(0),
-                    log_start: Offset(5),
-                }),
-                error_code: OFFSET_OUT_OF_RANGE,
-                dir_offline: false,
-            },
-            Case {
-                name: "tiering moved the local log start past the fetch offset",
-                error: BrokerError::Log(LogError::OffsetBelowLocalStart {
-                    requested: Offset(0),
-                    local_log_start: Offset(5),
-                }),
-                error_code: OFFSET_OUT_OF_RANGE,
-                dir_offline: false,
-            },
-            Case {
-                name: "a corrupt batch",
-                error: BrokerError::Log(LogError::Corrupt("record batch header".into())),
-                error_code: CORRUPT_MESSAGE,
-                dir_offline: false,
-            },
-            Case {
-                name: "a panic in the read task",
-                error: read_task_panicked(&"boom"),
-                error_code: UNKNOWN_SERVER_ERROR,
-                dir_offline: false,
-            },
-        ];
-        for case in cases {
-            let (partition, dir) = test_partition(Arc::new(Notify::new()));
-            let log_dirs = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
-
-            let row = super::settle_failed_read(&partition, 4, &case.error, &log_dirs);
-
-            assert!(
-                row == super::refused_read(4, case.error_code),
-                "{}",
-                case.name
-            );
-            assert!(
-                log_dirs.is_offline(dir.path()) == case.dir_offline,
-                "{}",
-                case.name
-            );
+    #[derive(Default)]
+    struct FailedFetchRead {
+        partition: Option<Partition>,
+        dir: Option<tempfile::TempDir>,
+        registry: Option<LogDirRegistry>,
+        error: Option<BrokerError>,
+        response: Option<PartitionData>,
+    }
+    #[rstest::fixture]
+    fn failed_fetch_read() -> FailedFetchRead {
+        let partition = None;
+        FailedFetchRead {
+            partition,
+            ..Default::default()
         }
     }
-
-    /// A read that throws answers its own partition's row, the one Kafka's
-    /// `ReplicaManager.readFromLog.read` gives that exception, and an I/O
-    /// failure takes the partition's log dir offline so the next fetch is
-    /// refused at the gate instead of failing the same read again. Only the
-    /// `IOException` flips the dir: retention racing a read and a panic in
-    /// the read task are not a disk fault.
-    #[cfg(test)]
+    #[rstest_bdd_macros::given("an online partition log whose read fails with {failure}")]
+    fn failing_partition_read(failed_fetch_read: &mut FailedFetchRead, failure: String) {
+        let (partition, dir) = test_partition(Arc::new(Notify::new()));
+        failed_fetch_read.registry = Some(LogDirRegistry::probe(&[dir.path().to_path_buf()]));
+        failed_fetch_read.partition = Some(partition);
+        failed_fetch_read.dir = Some(dir);
+        failed_fetch_read.error = Some(match failure.as_str() {
+            "IO-EIO" => BrokerError::Log(LogError::Io(io::Error::other("EIO"))),
+            "requested-0-before-log-start-5" => BrokerError::Log(LogError::OffsetTooLow {
+                requested: Offset(0),
+                log_start: Offset(5),
+            }),
+            "requested-0-before-local-start-5" => {
+                BrokerError::Log(LogError::OffsetBelowLocalStart {
+                    requested: Offset(0),
+                    local_log_start: Offset(5),
+                })
+            }
+            "corrupt-record-batch-header" => {
+                BrokerError::Log(LogError::Corrupt("record batch header".into()))
+            }
+            "task-panic-boom" => read_task_panicked(&"boom"),
+            other => panic!("unknown read failure {other}"),
+        });
+    }
+    #[rstest_bdd_macros::when("Fetch settles the failed read for response partition 4")]
+    fn settle_failed_partition_read(failed_fetch_read: &mut FailedFetchRead) {
+        failed_fetch_read.response = Some(super::settle_failed_read(
+            failed_fetch_read.partition.as_ref().expect("partition"),
+            4,
+            failed_fetch_read.error.as_ref().expect("read failure"),
+            failed_fetch_read
+                .registry
+                .as_ref()
+                .expect("directory registry"),
+        ));
+    }
+    #[rstest_bdd_macros::then(
+        "the full Fetch refusal has code {code} and the directory offline state is {offline}"
+    )]
+    fn failed_fetch_response(failed_fetch_read: &FailedFetchRead, code: i16, offline: bool) {
+        assert!(
+            failed_fetch_read.response.as_ref().expect("settled read")
+                == &super::refused_read(4, code)
+        );
+        assert!(
+            failed_fetch_read
+                .registry
+                .as_ref()
+                .expect("directory registry")
+                .is_offline(
+                    failed_fetch_read
+                        .dir
+                        .as_ref()
+                        .expect("partition directory")
+                        .path()
+                )
+                == offline
+        );
+    }
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/fetch/read.feature",
-        name = "tests: a failed read answers the row kafka gives its error"
+        path = "tests/features/handler_fetch_read_failures.feature",
+        name = "Read exceptions produce partition errors and only disk failures fence directories"
     )]
     #[tokio::test]
-    async fn a_failed_read_answers_the_row_kafka_gives_its_error() {}
+    async fn a_failed_read_answers_the_row_kafka_gives_its_error(
+        failed_fetch_read: FailedFetchRead,
+        failure: String,
+        code: i16,
+        offline: bool,
+    ) {
+    }
 
     /// Retention or `DeleteRecords` can move the log start between `plan_read`
     /// and the second log lock. The read then fails with `OffsetTooLow`, and

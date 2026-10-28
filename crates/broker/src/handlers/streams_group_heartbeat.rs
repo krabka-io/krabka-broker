@@ -514,88 +514,112 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers streams group heartbeat tests: handle finds or creates the streams group as kafka does"
-    )]
-    async fn bdd_verify_handle_finds_or_creates_the_streams_group_as_kafka_does() {
-        use crate::coordinator::unified::{
-            actor::GroupKindTag, streams::actor::response::error_resp,
-        };
-
-        let version = streams_group_heartbeat_response::MAX_VERSION;
-        ready_alice_broker!(broker_handle, _dir, broker, principal, peer, ctx);
-        broker.group_coordinator.mark_share("share");
-        let _consumer = broker
-            .group_coordinator
-            .get_or_create_group("consumer", GroupKindTag::Consumer);
-        let heartbeat = |group_id: &str, member_epoch| StreamsGroupHeartbeatRequest {
-            group_id: group_id.into(),
-            member_id: "m1".into(),
-            member_epoch,
-            ..Default::default()
-        };
-        let not_found =
-            |message: String| Some(error_resp(codes::GROUP_ID_NOT_FOUND, Some(message)));
-        // (group id, request, expected error response or None for success,
-        // a streams group exists afterwards)
-        let rows = [
-            (
-                "absent-heartbeat",
-                heartbeat("absent-heartbeat", 3),
-                not_found("Streams group absent-heartbeat not found.".into()),
-                false,
-            ),
-            (
-                "absent-leave",
-                heartbeat("absent-leave", -1),
-                not_found("Group absent-leave not found.".into()),
-                false,
-            ),
-            (
-                "share",
-                request("share"),
-                not_found("Group share is not a streams group.".into()),
-                false,
-            ),
-            (
-                "consumer",
-                request("consumer"),
-                not_found("Group consumer is not a streams group.".into()),
-                false,
-            ),
-            ("absent-join", request("absent-join"), None, true),
-        ];
-
-        for (group_id, req, expected, exists) in rows {
-            let resp = handle(&broker, req.clone(), version, &ctx)
-                .await
-                .expect("handle");
-            match expected {
-                Some(expected) => assert!(resp == expected, "{group_id}"),
-                None => assert!(resp.error_code == codes::NONE, "{group_id}: {resp:?}"),
-            }
-            assert!(
-                broker.group_coordinator.find_streams(group_id).is_some() == exists,
-                "{group_id}"
-            );
-        }
-        broker_handle.shutdown().await;
+    #[derive(Default)]
+    struct StreamsGroupCreation {
+        started: Option<HandlerStartedBroker>,
+        group: String,
+        response: Option<StreamsGroupHeartbeatResponse>,
     }
-
-    /// Kafka creates a streams group only on a join, and answers
-    /// `GROUP_ID_NOT_FOUND` to a heartbeat or a leave for a group that does not
-    /// exist and to any heartbeat for a group of another type
-    /// (`getOrCreateStreamsGroup`, `getStreamsGroupOrThrow`, `streamsGroup`).
-    /// Each row sends one request for its own group id, compares the whole
-    /// response, and checks whether a streams group exists afterwards.
-    #[cfg(test)]
+    #[rstest::fixture]
+    fn streams_creation() -> StreamsGroupCreation {
+        let started = None;
+        StreamsGroupCreation {
+            started,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "a join-ready streams broker with share group share and consumer group consumer"
+    )]
+    async fn streams_group_kinds(streams_creation: &mut StreamsGroupCreation) {
+        let started = join_ready_broker().await;
+        let broker = started.broker.broker_arc_for_test();
+        broker.group_coordinator.mark_share("share");
+        let _consumer = broker.group_coordinator.get_or_create_group(
+            "consumer",
+            crate::coordinator::unified::actor::GroupKindTag::Consumer,
+        );
+        streams_creation.started = Some(started);
+    }
+    #[rstest_bdd_macros::when("member m1 sends streams heartbeat epoch {epoch} to group {group}")]
+    async fn heartbeat_streams_group(
+        streams_creation: &mut StreamsGroupCreation,
+        epoch: i32,
+        group: String,
+    ) {
+        let req = if epoch == 0 {
+            request(&group)
+        } else {
+            StreamsGroupHeartbeatRequest {
+                group_id: group.clone(),
+                member_id: "m1".into(),
+                member_epoch: epoch,
+                ..Default::default()
+            }
+        };
+        let broker = streams_creation
+            .started
+            .as_ref()
+            .expect("join-ready broker")
+            .broker
+            .broker_arc_for_test();
+        krabka_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; };
+        streams_creation.response = Some(
+            handle(
+                &broker,
+                req,
+                streams_group_heartbeat_response::MAX_VERSION,
+                &ctx,
+            )
+            .await
+            .expect("handle"),
+        );
+        streams_creation.group = group;
+    }
+    #[rstest_bdd_macros::then(
+        "the streams heartbeat returns code {code}, message \"{message}\" and streams group existence {exists}"
+    )]
+    async fn streams_group_creation_result(
+        streams_creation: &mut StreamsGroupCreation,
+        code: i16,
+        message: String,
+        exists: bool,
+    ) {
+        let response = streams_creation
+            .response
+            .as_ref()
+            .expect("heartbeat response");
+        if code == codes::NONE {
+            assert!(response.error_code == codes::NONE);
+        } else {
+            assert!(response == &error_resp(code, Some(message)));
+        }
+        let started = streams_creation.started.take().expect("join-ready broker");
+        assert!(
+            started
+                .broker
+                .broker_arc_for_test()
+                .group_coordinator
+                .find_streams(&streams_creation.group)
+                .is_some()
+                == exists
+        );
+        started.broker.shutdown().await;
+    }
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/streams_group_heartbeat.feature",
-        name = "tests: handle finds or creates the streams group as kafka does"
+        path = "tests/features/handler_streams_group_creation.feature",
+        name = "Only a join to a free group identity creates a streams group"
     )]
     #[tokio::test]
-    async fn handle_finds_or_creates_the_streams_group_as_kafka_does() {}
+    async fn handle_finds_or_creates_the_streams_group_as_kafka_does(
+        streams_creation: StreamsGroupCreation,
+        group: String,
+        epoch: i32,
+        code: i16,
+        message: String,
+        exists: bool,
+    ) {
+    }
 
     /// Kafka's `GroupCoordinatorService` refuses an invalid request before the
     /// coordinator runs it, so the response carries only the error and the

@@ -101,15 +101,6 @@ const CONTAINER_ROOT: &str = "/var/lib/krabka";
 /// The formatted log directory inside that mount.
 const CONTAINER_LOG_DIR: &str = "/var/lib/krabka/data";
 
-/// Kill/restart cycles. Odd-numbered ones tear the tail as well, so this many
-/// gives three bare kills and three torn tails in one run.
-const CYCLES: usize = 6;
-
-/// Records produced and individually acked before the kill is fired. These are
-/// the floor on "the client saw an ack": whatever the in-flight burst manages
-/// on top is a bonus.
-const SETTLED_RECORDS: usize = 20;
-
 /// Upper bound on the produce attempts made while the kill is in flight. The
 /// burst stops at the first failure; this only keeps a broker that somehow
 /// survives from looping forever.
@@ -499,76 +490,6 @@ async fn read_all(bootstrap: &str, topic: &str, group: &str, want: usize) -> BTr
     keys
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("process kill durability: flush on append stays off by default")]
-fn bdd_verify_flush_on_append_stays_off_by_default() {
-    check!(!krabka_log::LogConfig::default().flush_on_append);
-}
-
-/// The premise every claim in this file rests on.
-///
-/// `flush_on_append` is off, so nothing below is a statement about a machine
-/// that lost power: it is a statement about a process that was killed while the
-/// kernel kept its page cache. A change that turned this on would strengthen
-/// the guarantee, and a change that made the broker set it per partition would
-/// mean this suite is describing a configuration nobody runs -- either way, the
-/// text above needs rewriting, so it fails here first.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/process_kill_durability.feature",
-    name = "flush on append stays off by default"
-)]
-fn flush_on_append_stays_off_by_default() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("process kill durability: torn tail is a partial trailing batch")]
-fn bdd_verify_torn_tail_is_a_partial_trailing_batch() {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let segment = dir.path().join("00000000000000000000.log");
-    let whole = batch_bytes(0, 3);
-    fs::write(&segment, &whole).expect("write a whole segment");
-
-    let SegmentWalk {
-        batches: before,
-        tail,
-    } = walk_batches(&whole);
-    check!(tail == Tail::Boundary);
-    check!(before.len() == 1);
-    check!(
-        before[0]
-            == Batch {
-                start: 0,
-                end: whole.len(),
-                base_offset: 0,
-                last_offset: 3,
-            }
-    );
-
-    let torn_len = tear_tail(&segment);
-    let torn = fs::read(&segment).expect("read the torn segment");
-    check!(torn.len() == torn_len);
-    check!(
-        walk_batches(&torn)
-            == SegmentWalk {
-                batches: before,
-                tail: Tail::Partial(whole.len() / 2),
-            }
-    );
-}
-
-/// A torn tail is a partial trailing batch, and the walk says so.
-///
-/// [`tear_tail`] is what makes the container cycles deterministic, so what it
-/// produces is worth checking without a daemon in the way: a whole file walks
-/// to a boundary, and the same file with half a batch appended walks to the
-/// same batches and reports exactly those extra bytes as partial.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/process_kill_durability.feature",
-    name = "torn tail is a partial trailing batch"
-)]
-fn torn_tail_is_a_partial_trailing_batch() {}
-
 /// One well-formed empty v2 batch, for [`torn_tail_is_a_partial_trailing_batch`].
 ///
 /// Empty of records but complete as a batch: the walk reads headers and CRCs,
@@ -654,121 +575,315 @@ async fn produce_through_a_kill(
 ///
 /// The readiness probe runs before this, so a tail recovery that had left the
 /// partial batch in place shows up as a chain that stops short of the end.
-fn check_recovered_segment(segment: &Path, cycle: usize) {
-    let bytes = fs::read(segment).expect("read the recovered segment");
-    let SegmentWalk { batches, tail } = walk_batches(&bytes);
-    let shown = segment.display();
+fn check_recovered_segment(bytes: &[u8], cycle: usize) {
+    let SegmentWalk { batches, tail } = walk_batches(bytes);
     check!(
         tail == Tail::Boundary,
-        "cycle {cycle}: {shown} does not end on a batch boundary"
+        "cycle {cycle}: recovered segment does not end on a batch boundary"
     );
-    check!(!batches.is_empty(), "cycle {cycle}: {shown} is empty");
+    check!(
+        !batches.is_empty(),
+        "cycle {cycle}: recovered segment is empty"
+    );
     for pair in batches.windows(2) {
         check!(
             pair[1].base_offset == pair[0].last_offset + 1,
-            "cycle {cycle}: an offset gap between batches at byte {}",
+            "cycle {cycle}: offset gap at byte {}",
             pair[1].start
         );
     }
 }
 
 /// One kill/restart cycle. Returns the keys the client saw acked in it.
-async fn kill_cycle(broker: &BrokerProcess, topic: &str, cycle: usize, tear: bool) -> Vec<String> {
+struct KillEvidence {
+    cycle: usize,
+    acked: Vec<String>,
+    settled: usize,
+    exit: String,
+    injected_tail: Option<usize>,
+    segment: Vec<u8>,
+}
+async fn kill_cycle(
+    broker: &BrokerProcess,
+    topic: &str,
+    cycle: usize,
+    settled_count: usize,
+    tear: bool,
+) -> KillEvidence {
     let bootstrap = broker.bootstrap();
     let mut acked = Vec::new();
-
     let ready_key = format!("c{cycle}-ready");
     wait_ready(&bootstrap, topic, &ready_key).await;
     acked.push(ready_key);
-
     let producer = producer_for(&bootstrap).await;
-
-    // A floor of acks that are unambiguously the client's: each was awaited to
-    // completion before the next was sent.
-    let settled: Vec<String> = (0..SETTLED_RECORDS)
-        .map(|i| format!("c{cycle}-s{i}"))
+    let settled_keys: Vec<String> = (0..settled_count)
+        .map(|index| format!("c{cycle}-s{index}"))
         .collect();
-    let got = produce_settled(&producer, topic, &settled).await;
-    assert!(
-        got.len() == SETTLED_RECORDS,
-        "cycle {cycle}: the broker acked {} of {SETTLED_RECORDS} settled records",
-        got.len()
-    );
+    let got = produce_settled(&producer, topic, &settled_keys).await;
+    let settled = got.len();
     acked.extend(got);
     acked.extend(produce_through_a_kill(&producer, topic, cycle, broker.name.clone()).await);
-
-    // 137 is 128 + SIGKILL: the daemon's record that the process did not get to
-    // run a line of shutdown code.
-    let status = broker.wait_exit();
-    check!(status == "137", "cycle {cycle}: broker exited {status}");
-
-    if tear {
-        ensure_torn(&active_segment(&broker.host_log_dir(), topic));
-    }
-
+    let exit = broker.wait_exit();
+    let segment_path = active_segment(&broker.host_log_dir(), topic);
+    let injected_tail = if tear {
+        ensure_torn(&segment_path);
+        match walk_batches(&fs::read(&segment_path).expect("read injected torn segment")).tail {
+            Tail::Partial(bytes) => Some(bytes),
+            Tail::Boundary => panic!("the requested torn-tail fault must contain a partial batch"),
+        }
+    } else {
+        None
+    };
     broker.restart();
     let recovered_key = format!("c{cycle}-recovered");
     wait_ready(&bootstrap, topic, &recovered_key).await;
     acked.push(recovered_key);
-
-    check_recovered_segment(&active_segment(&broker.host_log_dir(), topic), cycle);
-    // Dropped where it always was, at the end of the cycle, after the restart.
+    let segment =
+        fs::read(active_segment(&broker.host_log_dir(), topic)).expect("read recovered segment");
     drop(producer);
-    acked
+    KillEvidence {
+        cycle,
+        acked,
+        settled,
+        exit,
+        injected_tail,
+        segment,
+    }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "process kill durability: acks all survives a sigkill of the broker process"
-)]
-async fn bdd_verify_acks_all_survives_a_sigkill_of_the_broker_process() {
-    const TOPIC: &str = "kill-durability";
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+struct DefaultPolicy {
+    config: Option<krabka_log::LogConfig>,
+    flush_on_append: Option<bool>,
+}
+#[fixture]
+fn policy() -> DefaultPolicy {
+    // Start this scenario with fresh inputs and observations.
 
-    let broker = BrokerProcess::start();
-    let bootstrap = broker.bootstrap();
-    create_topic(&bootstrap, TOPIC).await;
-
-    // Every key the client was ever told was durable, across every cycle.
-    let mut acked: BTreeSet<String> = BTreeSet::new();
-    let mut torn_cycles = 0usize;
-
-    for cycle in 0..CYCLES {
-        // Half the cycles are a bare kill and half tear the tail as well, so
-        // both recovery paths run several times in one execution.
-        let tear = cycle % 2 == 1;
-        acked.extend(kill_cycle(&broker, TOPIC, cycle, tear).await);
-        if tear {
-            torn_cycles += 1;
-        }
-
-        let readable = read_all(&bootstrap, TOPIC, &format!("verify-{cycle}"), acked.len()).await;
-        let lost: Vec<&String> = acked.difference(&readable).collect();
-        assert!(
-            lost.is_empty(),
-            "cycle {cycle}: {} acked records are gone after the kill: {lost:?}",
-            lost.len()
-        );
+    DefaultPolicy {
+        config: None,
+        flush_on_append: None,
     }
+}
+#[given("a broker log uses its default configuration")]
+fn default_policy(policy: &mut DefaultPolicy) {
+    policy.config = Some(krabka_log::LogConfig::default());
+}
+#[when("the per append flush policy is inspected")]
+fn inspect_policy(policy: &mut DefaultPolicy) {
+    policy.flush_on_append = Some(
+        policy
+            .config
+            .as_ref()
+            .expect("default log config constructed")
+            .flush_on_append,
+    );
+}
+#[then("per append fsync is disabled by default")]
+fn no_flush(policy: &DefaultPolicy) {
+    check!(policy.flush_on_append == Some(false));
+}
 
-    // "Deterministically, not by luck": were the tear ever to stop producing a
-    // partial batch, the cycles above would prove nothing about tail recovery
-    // and would still pass.
-    assert!(
-        torn_cycles == CYCLES / 2,
-        "expected {} torn-tail cycles, reached {torn_cycles}",
-        CYCLES / 2
+struct TornSegment {
+    directory: tempfile::TempDir,
+    path: PathBuf,
+    whole: Vec<u8>,
+    walk: Option<SegmentWalk>,
+    torn_length: Option<usize>,
+    torn_bytes: Option<Vec<u8>>,
+}
+#[fixture]
+fn segment() -> TornSegment {
+    let directory = tempfile::tempdir().expect("segment directory");
+    let path = directory.path().join("00000000000000000000.log");
+    TornSegment {
+        directory,
+        path,
+        whole: Vec::new(),
+        walk: None,
+        torn_length: None,
+        torn_bytes: None,
+    }
+}
+#[given("a segment contains one complete batch at offset {base} with last offset delta {delta}")]
+fn complete(segment: &mut TornSegment, base: i64, delta: i32) {
+    segment.whole = batch_bytes(base, delta);
+    fs::write(&segment.path, &segment.whole).expect("write complete segment");
+}
+#[when("the complete segment is walked batch by batch")]
+fn walk_whole(segment: &mut TornSegment) { segment.walk = Some(walk_batches(&segment.whole)); }
+#[then(
+    "the walk reaches a boundary with one batch spanning bytes zero to {end} and offsets zero through {last}"
+)]
+fn whole_boundary(segment: &TornSegment, end: usize, last: i64) {
+    let walk = segment.walk.as_ref().expect("complete segment walked");
+    check!(walk.tail == Tail::Boundary);
+    check!(walk.batches.len() == 1);
+    check!(
+        walk.batches[0]
+            == Batch {
+                start: 0,
+                end,
+                base_offset: 0,
+                last_offset: last
+            }
+    );
+}
+#[when("the first half of the last complete batch is appended as a torn tail")]
+fn tear(segment: &mut TornSegment) {
+    segment.torn_length = Some(tear_tail(&segment.path));
+    segment.torn_bytes = Some(fs::read(&segment.path).expect("read torn segment"));
+}
+#[then(
+    "the resulting segment preserves its complete batch and reports {partial} partial trailing bytes"
+)]
+fn partial_boundary(segment: &TornSegment, partial: usize) {
+    let bytes = segment.torn_bytes.as_ref().expect("segment tail torn");
+    check!(Some(bytes.len()) == segment.torn_length);
+    check!(
+        walk_batches(bytes)
+            == SegmentWalk {
+                batches: segment
+                    .walk
+                    .as_ref()
+                    .expect("baseline batch observed")
+                    .batches
+                    .clone(),
+                tail: Tail::Partial(partial)
+            }
     );
 }
 
-/// `SIGKILL` the broker mid-produce, over and over, and prove every ack held.
-///
-/// See the module documentation for the guarantee, the fsync policy it is
-/// stated under, and why the torn tail is made rather than waited for.
-#[ignore = "requires Docker and //packaging:image"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+struct CrashDurability {
+    broker: Option<BrokerProcess>,
+    topic: String,
+    acked: BTreeSet<String>,
+    readable: Option<BTreeSet<String>>,
+    cycles: Vec<KillEvidence>,
+}
+#[fixture]
+fn durability() -> CrashDurability {
+    // Start this scenario with fresh inputs and observations.
+
+    CrashDurability {
+        broker: None,
+        topic: String::new(),
+        acked: BTreeSet::new(),
+        readable: None,
+        cycles: Vec::new(),
+    }
+}
+#[given(
+    "the packaged single broker process hosts topic {topic} with all acknowledgements and one in sync replica"
+)]
+async fn process(durability: &mut CrashDurability, topic: String) {
+    let broker = BrokerProcess::start();
+    create_topic(&broker.bootstrap(), &topic).await;
+    durability.broker = Some(broker);
+    durability.topic = topic;
+}
+#[when(
+    "cycle {cycle} acknowledges {settled} settled records then SIGKILL interrupts a producer burst with tail mode {mode}"
+)]
+async fn crash_cycle(durability: &mut CrashDurability, cycle: usize, settled: usize, mode: String) {
+    let tear = match mode.as_str() {
+        "intact" => false,
+        "torn" => true,
+        _ => panic!("unknown tail fault mode {mode}"),
+    };
+    let evidence = kill_cycle(
+        durability.broker.as_ref().expect("packaged broker started"),
+        &durability.topic,
+        cycle,
+        settled,
+        tear,
+    )
+    .await;
+    durability.acked.extend(evidence.acked.iter().cloned());
+    durability.cycles.push(evidence);
+}
+#[then(
+    "the last cycle exits with SIGKILL status 137 acknowledges {settled} settled records and recovers a continuous valid batch chain"
+)]
+fn recovered(durability: &CrashDurability, settled: usize) {
+    let cycle = durability
+        .cycles
+        .last()
+        .expect("kill restart cycle completed");
+    assert!(
+        cycle.settled == settled,
+        "cycle {}: expected{settled} settled acknowledgements, got{}",
+        cycle.cycle,
+        cycle.settled
+    );
+    check!(
+        cycle.exit == "137",
+        "cycle {}: broker exited{}",
+        cycle.cycle,
+        cycle.exit
+    );
+    check_recovered_segment(&cycle.segment, cycle.cycle);
+}
+#[when("all acknowledged records are read after cycle {cycle}")]
+async fn read(durability: &mut CrashDurability, cycle: usize) {
+    let broker = durability
+        .broker
+        .as_ref()
+        .expect("packaged broker restarted");
+    durability.readable = Some(
+        read_all(
+            &broker.bootstrap(),
+            &durability.topic,
+            &format!("verify-{cycle}"),
+            durability.acked.len(),
+        )
+        .await,
+    );
+}
+#[then("every key acknowledged across all completed cycles remains readable")]
+fn no_loss(durability: &CrashDurability) {
+    let readable = durability
+        .readable
+        .as_ref()
+        .expect("acknowledged keys read back");
+    let lost: Vec<&String> = durability.acked.difference(readable).collect();
+    assert!(
+        lost.is_empty(),
+        "{} acknowledged records are gone after process loss: {lost:?}",
+        lost.len()
+    );
+}
+#[then("{cycles} kill restart cycles include {torn} observed partial tail faults")]
+fn fault_coverage(durability: &CrashDurability, cycles: usize, torn: usize) {
+    assert!(durability.cycles.len() == cycles);
+    assert!(
+        durability
+            .cycles
+            .iter()
+            .filter(|cycle| cycle.injected_tail.is_some())
+            .count()
+            == torn
+    );
+}
+#[scenario(
     path = "tests/features/migrated/tests/process_kill_durability.feature",
-    name = "acks all survives a sigkill of the broker process"
+    name = "The default durability premise uses page cache without per append fsync"
+)]
+fn flush_on_append_stays_off_by_default(policy: DefaultPolicy) { let _ = policy; }
+#[scenario(
+    path = "tests/features/migrated/tests/process_kill_durability.feature",
+    name = "A synthetic torn tail preserves the complete prefix and exposes a partial batch"
+)]
+fn torn_tail_is_a_partial_trailing_batch(segment: TornSegment) { drop(segment.directory); }
+#[ignore = "requires Docker and //packaging:image"]
+#[scenario(
+    path = "tests/features/migrated/tests/process_kill_durability.feature",
+    name = "Acknowledged records survive repeated SIGKILL and deterministic torn tail recovery"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acks_all_survives_a_sigkill_of_the_broker_process() {}
+async fn acks_all_survives_a_sigkill_of_the_broker_process(durability: CrashDurability) {
+    drop(durability);
+}

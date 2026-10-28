@@ -1003,54 +1003,59 @@ mod tests {
         ThreeSegments { dir, log, config }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "log state tests: a reopened log reports the start kafka reports for {example}"
-    )]
-    fn bdd_verify_a_reopened_log_reports_the_start_kafka_reports(example: String) {
-        type Example = (bool, Option<i64>, i64, i64);
-        let (remote_storage_enable, moved_to, log_start, reported): Example = match example.as_str()
-        {
-            "tiered nobody moved it" => (true, None, 6, 0),
-            "tiered moved" => (true, Some(4), 4, 4),
-            "local only" => (false, None, 6, 6),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
+    #[derive(Default)]
+    struct ReopenedStartScenario {
+        segments: Option<ThreeSegments>,
+        removed: Option<usize>,
+        starts: Option<(Offset, Offset)>,
+    }
+    #[rstest::fixture]
+    fn reopened_start() -> ReopenedStartScenario {
+        let segments = None;
+        ReopenedStartScenario {
+            segments,
+            ..ReopenedStartScenario::default()
+        }
+    }
+    #[rstest_bdd_macros::given("three log segments with remote storage {enabled}")]
+    fn three_retained_segments(reopened_start: &mut ReopenedStartScenario, enabled: bool) {
+        reopened_start.segments = Some(three_segments(enabled));
+    }
+    #[rstest_bdd_macros::given("the logical log start checkpoint is {checkpoint}")]
+    fn checkpointed_log_start(reopened_start: &mut ReopenedStartScenario, checkpoint: String) {
+        if checkpoint != "untouched" {
+            reopened_start
+                .segments
+                .as_mut()
+                .expect("segments given")
+                .log
+                .set_log_start_offset(Offset(checkpoint.parse().expect("logical start offset")))
+                .expect("set log start checkpoint");
+        }
+    }
+    #[rstest_bdd_macros::when("local retention deletes through offset 6 and the log is reopened")]
+    fn retain_and_reopen_log(reopened_start: &mut ReopenedStartScenario) {
         let ThreeSegments {
             dir,
             mut log,
             config,
-        } = three_segments(remote_storage_enable);
-        if let Some(start) = moved_to {
-            log.set_log_start_offset(Offset(start)).unwrap();
-        }
-        check!(log.delete_local_segments_through(Offset(6)).unwrap() == 2);
-        drop(log);
-
-        let log = Log::open(dir.path(), config).unwrap();
-        check!(
-            (log.log_start_offset(), log.reported_log_start())
-                == (Offset(log_start), Offset(reported))
+        } = reopened_start.segments.take().expect("segments given");
+        reopened_start.removed = Some(
+            log.delete_local_segments_through(Offset(6))
+                .expect("delete sealed local segments"),
         );
+        drop(log);
+        let reopened = Log::open(dir.path(), config).expect("reopen retained log");
+        reopened_start.starts = Some((reopened.log_start_offset(), reopened.reported_log_start()));
     }
-
-    /// A leader reports Kafka's `logStartOffset` to its followers, and they
-    /// raise their own start to it. A remote-storage-enabled log reopened over
-    /// the segments local retention left infers a start above the whole
-    /// archive, and Kafka's `LogLoader.load` never takes that one: it reports
-    /// the checkpointed start, 0 when nobody moved it. A start somebody moved
-    /// is reported as it is, and a log with no remote tier reports the start
-    /// its segments witness.
-    ///
-    /// Each case fills three segments (offsets 0, 3 and 6), optionally moves
-    /// the start, drops the two sealed segments from disk, and reopens.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/log/state.feature",
-        name = "tests: a reopened log reports the start kafka reports"
+    #[rstest_bdd_macros::then(
+        "two local segments are removed and start {local} is reported as {reported}"
     )]
-    fn a_reopened_log_reports_the_start_kafka_reports(example: String) { let _ = example; }
+    fn reopened_log_starts(reopened_start: &ReopenedStartScenario, local: i64, reported: i64) {
+        check!(reopened_start.removed == Some(2));
+        check!(reopened_start.starts == Some((Offset(local), Offset(reported))));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/reopened_log_start", fixtures = [reopened_start: ReopenedStartScenario]);
 
     /// How a follower's log came by its start before the leader reports one.
     #[derive(Clone, Copy, Debug)]

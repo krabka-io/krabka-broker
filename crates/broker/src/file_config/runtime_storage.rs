@@ -285,63 +285,55 @@ mod tests {
         assert!(cfg.log_config.read_ahead_max == krabka_log::DEFAULT_READ_AHEAD_MAX);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "file config runtime storage tests: message max bytes takes kafkas int at least zero for {example}"
-    )]
-    fn bdd_verify_message_max_bytes_takes_kafkas_int_at_least_zero(example: String) {
-        type Example<'a> = (&'a str, Option<u64>);
-        let (value, expected): Example<'_> = match example.as_str() {
-            "zero" => ("0B", Some(0)),
-            "kibibytes" => ("2KiB", Some(2048)),
-            "max i32" => ("2147483647B", Some(2_147_483_647)),
-            "negative" => ("-1B", None),
-            "above i32" => ("2147483648B", None),
-            "gibibytes" => ("2GiB", None),
-            "fractional byte" => ("1.5B", None),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let applied = optional_configured_feature(
-            &format!("[runtime]\nmessage_max_bytes = \"{value}\"\n"),
-            |config| config.log_config.max_message_size.bytes_u64(),
-        );
-        assert2::assert!(applied == expected, "message_max_bytes={value}");
+    #[derive(Default)]
+    struct MessageSizeFile {
+        source: String,
+        applied: rstest_bdd::Slot<Option<u64>>,
     }
 
-    /// The TOML surface takes exactly the values Kafka's `INT` with
-    /// `atLeast(0)` takes.
-    ///
-    /// `apache/kafka:4.3.1` starts on `message.max.bytes=0`, refuses `-1` with
-    /// "Value must be at least 0", and refuses `2147483648` with "Not a number
-    /// of type INT". The zero and the 2 GiB cases are the ones that separate
-    /// this domain from a plain positive-whole-bytes one: a broker that took
-    /// 2 GiB here would hand a topic an effective cap `kafka-configs` could
-    /// not represent, and one that refused 0 would refuse a value Kafka boots
-    /// on.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/file_config/runtime_storage.feature",
-        name = "tests: message max bytes takes kafkas int at least zero"
-    )]
-    fn message_max_bytes_takes_kafkas_int_at_least_zero(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "file config runtime storage tests: omitted message max bytes keeps kafkas 1048588"
-    )]
-    fn bdd_verify_omitted_message_max_bytes_keeps_kafkas_1048588() {
-        let cfg = configured("[runtime]\n", "parse runtime config").expect("apply runtime config");
-
-        assert!(cfg.log_config.max_message_size.bytes_u64() == 1_048_588);
+    #[rstest::fixture]
+    fn message_size_file() -> MessageSizeFile {
+        // File parsing and runtime application each operate on a fresh broker.
+        MessageSizeFile::default()
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/file_config/runtime_storage.feature",
-        name = "tests: omitted message max bytes keeps kafkas 1048588"
-    )]
-    fn omitted_message_max_bytes_keeps_kafkas_1048588() {}
+    #[rstest_bdd_macros::given("the runtime file sets message_max_bytes to {value}")]
+    fn configured_message_size_file(message_size_file: &mut MessageSizeFile, value: String) {
+        message_size_file.source = format!("[runtime]\nmessage_max_bytes = \"{value}\"\n");
+    }
+
+    #[rstest_bdd_macros::given("the runtime file omits message_max_bytes")]
+    fn omitted_message_size_file(message_size_file: &mut MessageSizeFile) {
+        message_size_file.source = "[runtime]\n".to_owned();
+    }
+
+    #[rstest_bdd_macros::when("the runtime file is parsed and applied to a default broker")]
+    fn apply_message_size_file(message_size_file: &mut MessageSizeFile) {
+        let applied = toml::from_str::<FileConfig>(&message_size_file.source)
+            .ok()
+            .and_then(|file| {
+                let mut config = BrokerConfig::default();
+                file.apply_to(&mut config)
+                    .ok()
+                    .map(|()| config.log_config.max_message_size.bytes_u64())
+            });
+        message_size_file.applied.set(applied);
+    }
+
+    #[rstest_bdd_macros::then("the partition maximum message size is {bytes} bytes")]
+    fn configured_message_size_bytes(message_size_file: &MessageSizeFile, bytes: u64) {
+        assert!(message_size_file.applied.get() == Some(Some(bytes)));
+    }
+
+    #[rstest_bdd_macros::then("the runtime file cannot be applied as a valid message size")]
+    fn refused_message_size_file(message_size_file: &MessageSizeFile) {
+        assert!(message_size_file.applied.get() == Some(None));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/file_config/runtime_storage.feature",
+        fixtures = [message_size_file: MessageSizeFile]
+    );
 
     #[test]
     fn omitted_log_delivery_clock_uncertainty_keeps_the_quarter_second_default() {

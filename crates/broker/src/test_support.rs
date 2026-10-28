@@ -88,11 +88,7 @@ use {
         },
         bootstrap::encode_bootstrap_records,
         broker::{Broker, BrokerHandle, spawn_partition},
-        codes::{
-            COORDINATOR_NOT_AVAILABLE, KAFKA_STORAGE_ERROR, MESSAGE_TOO_LARGE, NONE,
-            NOT_COORDINATOR, NOT_ENOUGH_REPLICAS, NOT_LEADER_OR_FOLLOWER, RECORD_LIST_TOO_LARGE,
-            REQUEST_TIMED_OUT, UNKNOWN_SERVER_ERROR,
-        },
+        codes::NONE,
         config::BrokerConfig,
         config_keys::{BROKER_WITNESS, MIN_INSYNC_REPLICAS, WITNESS_TRUE},
         controller_endpoint::ControllerDialer,
@@ -3106,17 +3102,6 @@ pub fn scripted_response_body(body: &impl Encode, version: i16, flexible: bool) 
         .expect("encode the scripted answer");
     out.to_vec()
 }
-
-/// Kafka's common offset/transaction append-error translations, independent of either mapper.
-pub const COORDINATOR_WRITE_ERROR_CASES: [(i16, i16); 7] = [
-    (NOT_ENOUGH_REPLICAS, COORDINATOR_NOT_AVAILABLE),
-    (REQUEST_TIMED_OUT, COORDINATOR_NOT_AVAILABLE),
-    (NOT_LEADER_OR_FOLLOWER, NOT_COORDINATOR),
-    (KAFKA_STORAGE_ERROR, NOT_COORDINATOR),
-    (MESSAGE_TOO_LARGE, UNKNOWN_SERVER_ERROR),
-    (RECORD_LIST_TOO_LARGE, UNKNOWN_SERVER_ERROR),
-    (UNKNOWN_SERVER_ERROR, UNKNOWN_SERVER_ERROR),
-];
 
 /// One heartbeat expiring after the fixed ten-millisecond test window.
 pub async fn expired_broker_fixture(

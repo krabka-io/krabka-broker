@@ -212,250 +212,235 @@ async fn prepare_share_topic(broker: &BrokerHandle, topic: &str, group: &str) ->
     ShareTopic { client, tid }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm share groups: jvm share consumer reads krabka")]
-async fn bdd_verify_jvm_share_consumer_reads_krabka() {
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+struct ShareWorkflow {
+    broker: Option<StartedBroker>,
+    client: Option<Client>,
+    topic: String,
+    group: String,
+    consumed: Option<Output>,
+    administration: Option<Output>,
+}
+#[fixture]
+fn share() -> ShareWorkflow {
+    // Start this scenario with fresh inputs and observations.
+
+    ShareWorkflow {
+        broker: None,
+        client: None,
+        topic: String::new(),
+        group: String::new(),
+        consumed: None,
+        administration: None,
+    }
+}
+#[given("share topic {topic} for group {group} contains values {values}")]
+async fn populated(share: &mut ShareWorkflow, topic: String, group: String, values: String) {
+    let started = start_host_broker().await;
+    let ShareTopic { client, tid } = prepare_share_topic(&started.broker, &topic, &group).await;
+    let values: Vec<&str> = values.split(',').collect();
+    produce(&client, &topic, tid, &values).await;
+    share.broker = Some(started);
+    share.client = Some(client);
+    share.topic = topic;
+    share.group = group;
+}
+#[given(
+    "share group {group} has registered on topic {topic} after a stock consumer reads values {values}"
+)]
+async fn registered(share: &mut ShareWorkflow, group: String, topic: String, values: String) {
+    let started = start_host_broker().await;
+    let values: Vec<&str> = values.split(',').collect();
+    register_jvm_share_group(&started.broker, &topic, &group, &values).await;
+    share.broker = Some(started);
+    share.topic = topic;
+    share.group = group;
+}
+#[given("share topic {topic} for group {group} contains timestamped batches")]
+async fn timestamped(
+    share: &mut ShareWorkflow,
+    topic: String,
+    group: String,
+    datatable: Vec<Vec<String>>,
+) {
+    let started = start_host_broker().await;
+    let ShareTopic { client, tid } = prepare_share_topic(&started.broker, &topic, &group).await;
+    let rows: Vec<(i64, String)> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [age, value]: [String; 2] = row.try_into().expect("age and value");
+            (age.parse().expect("millisecond age"), value)
+        })
+        .collect();
+    let mut ages = Vec::new();
+    for (age, _) in &rows {
+        if !ages.contains(age) {
+            ages.push(*age);
+        }
+    }
+    let now = now_ms();
+    for age in ages {
+        let values: Vec<&str> = rows
+            .iter()
+            .filter_map(|(candidate, value)| (*candidate == age).then_some(value.as_str()))
+            .collect();
+        produce_at(&client, &topic, tid, &values, now - age).await;
+    }
+    share.broker = Some(started);
+    share.client = Some(client);
+    share.topic = topic;
+    share.group = group;
+}
+#[when(
+    "the operator sets share reset strategy {strategy} and a stock share consumer reads {count} records"
+)]
+fn consume_reset(share: &mut ShareWorkflow, strategy: String, count: usize) {
+    set_share_auto_offset_reset(bootstrap_addr(), &share.group, &strategy);
+    share.consumed = Some(run_share_consumer(
+        bootstrap_addr(),
+        &share.topic,
+        &share.group,
+        count,
+    ));
+}
+#[when(
+    "a stock share consumer joins with the unchanged default reset strategy and exits after its idle timeout"
+)]
+fn consume_default(share: &mut ShareWorkflow) {
     let bootstrap = bootstrap_addr();
-    let StartedBroker { broker, dir: _dir } = start_host_broker().await;
-    let topic = "kip932-jvm";
-    let group = "jvm-share-g";
-    let values = ["share-alpha", "share-bravo", "share-charlie", "share-delta"];
-
-    let ShareTopic { client, tid } = prepare_share_topic(&broker, topic, group).await;
-    produce(&client, topic, tid, &values).await;
-
-    // Drive the real JVM KafkaShareConsumer. The group config sets the
-    // share-partition start to the log start offset, so it must read all
-    // produced records. `--timeout-ms` makes it exit after the idle window
-    // once it has drained the partition.
-    set_share_auto_offset_reset(bootstrap, group, "earliest");
-    let consumed = run_share_consumer(bootstrap, topic, group, values.len());
-    let stdout = String::from_utf8_lossy(&consumed.stdout);
-    eprintln!("KRABKA[test] share-consumer stdout:\n{stdout}");
-
-    for v in values {
+    let topic = &share.topic;
+    let group = &share.group;
+    share.consumed = Some(docker_run(&[
+        "bash",
+        "-c",
+        &format!(
+            "{SHARE_CONSUMER} --bootstrap-server {bootstrap} --topic {topic} --group {group} --timeout-ms 15000"
+        ),
+    ]));
+}
+#[then("the share consumer delivers these values")]
+fn delivered(share: &ShareWorkflow, datatable: Vec<Vec<String>>) {
+    let output = share
+        .consumed
+        .as_ref()
+        .expect("stock share consumer completed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for row in datatable.into_iter().skip(1) {
+        let value = row.into_iter().next().expect("expected delivered value");
         assert!(
-            stdout.contains(v),
-            "JVM share consumer must read produced value {v:?}; got stdout:\n{stdout}\nstderr:\n{}",
-            String::from_utf8_lossy(&consumed.stderr),
+            stdout.contains(&value),
+            "share consumer missing {value}: stdout={stdout} stderr={}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }
-
-/// The main differential test. A real JVM `KafkaShareConsumer` joins a fresh
-/// Krabka share group, reads every produced record, and acknowledges
-/// implicitly on poll. The test asserts that each produced value appears in
-/// its stdout.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_share_groups.feature",
-    name = "jvm share consumer reads krabka"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_share_consumer_reads_krabka() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm share groups: jvm share groups describe state")]
-async fn bdd_verify_jvm_share_groups_describe_state() {
+#[then("the share consumer withholds these values")]
+fn withheld(share: &ShareWorkflow, datatable: Vec<Vec<String>>) {
+    let stdout = String::from_utf8_lossy(
+        &share
+            .consumed
+            .as_ref()
+            .expect("stock share consumer completed")
+            .stdout,
+    );
+    for row in datatable.into_iter().skip(1) {
+        let value = row.into_iter().next().expect("expected withheld value");
+        assert!(
+            !stdout.contains(&value),
+            "share consumer unexpectedly delivered {value}: {stdout}"
+        );
+    }
+}
+#[when("the stock share group tool describes the group's coordinator and state")]
+fn describe(share: &mut ShareWorkflow) {
     let bootstrap = bootstrap_addr();
-    let StartedBroker { broker, dir: _dir } = start_host_broker().await;
-    let topic = "kip932-jvm-d";
-    let group = "jvm-share-gd";
-    let values = ["d-one", "d-two"];
-
-    register_jvm_share_group(&broker, topic, group, &values).await;
-
-    // `--describe --state` drives ShareGroupDescribe (api_key 77). Renders e.g.
-    //   GROUP         COORDINATOR (ID)              STATE   #MEMBERS
-    //   jvm-share-gd  host.docker.internal:9092 (1) Empty   0
-    let state = docker_run(&[
+    let group = &share.group;
+    share.administration = Some(docker_run(&[
         "bash",
         "-c",
         &format!(
             "{SHARE_GROUPS} --bootstrap-server {bootstrap} --describe --state --group {group}"
         ),
-    ]);
-    let state_out = String::from_utf8_lossy(&state.stdout);
-    eprintln!("KRABKA[test] share-groups --describe --state stdout:\n{state_out}");
-    assert!(
-        state_out.contains(group),
-        "share group {group} must appear in --describe --state output; got:\n{state_out}\nstderr:\n{}",
-        String::from_utf8_lossy(&state.stderr),
-    );
+    ]));
 }
-
-/// `kafka-share-groups.sh --describe --state` reports the share group after
-/// the JVM consumer joined. That proves Krabka serves the share-group admin
-/// path (`ShareGroupDescribe`, `api_key` 77) to the real JVM tooling. The tool
-/// resolves the share coordinator, sends `ShareGroupDescribe`, and prints the
-/// group's coordinator and state.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_share_groups.feature",
-    name = "jvm share groups describe state"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_share_groups_describe_state() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm share groups: jvm share groups list")]
-async fn bdd_verify_jvm_share_groups_list() {
+#[when("the stock share group tool lists all share groups")]
+fn list(share: &mut ShareWorkflow) {
     let bootstrap = bootstrap_addr();
-    let StartedBroker { broker, dir: _dir } = start_host_broker().await;
-    let topic = "kip932-jvm-l";
-    let group = "jvm-share-gl";
-    let values = ["l-one", "l-two"];
-
-    register_jvm_share_group(&broker, topic, group, &values).await;
-
-    // `--list` drives ListGroups(16) with types_filter=["share"]. The share
-    // group id must appear in stdout.
-    let listed = docker_run(&[
+    share.administration = Some(docker_run(&[
         "bash",
         "-c",
         &format!("{SHARE_GROUPS} --bootstrap-server {bootstrap} --list"),
-    ]);
-    let list_out = String::from_utf8_lossy(&listed.stdout);
-    eprintln!("KRABKA[test] share-groups --list stdout:\n{list_out}");
+    ]));
+}
+#[then("the administrative report contains the registered share group identity")]
+fn visible(share: &ShareWorkflow) {
+    let output = share
+        .administration
+        .as_ref()
+        .expect("share group administration completed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        list_out.contains(group),
-        "share group {group} must appear in --list output; got:\n{list_out}\nstderr:\n{}",
-        String::from_utf8_lossy(&listed.stderr),
+        stdout.contains(&share.group),
+        "share group {} missing from report: {stdout} stderr={}",
+        share.group,
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
-/// `kafka-share-groups.sh --list` drives `ListGroups` (`api_key` 16) with
-/// `types_filter = ["share"]`. After a real JVM `KafkaShareConsumer` joins a
-/// share group on the Krabka broker, the share group id must appear in the
-/// tool's `--list` stdout.
-///
-/// Before the `ListGroups` share pass, the JVM tool's `types_filter=["share"]`
-/// matched nothing and `--list` was EMPTY. This test asserts that the
-/// regression is closed against the real Apache Kafka 4.1.0 tool.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_share_groups.feature",
-    name = "jvm share groups list"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_share_groups_list() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm share groups: jvm share consumer by duration skips records outside the window"
-)]
-async fn bdd_verify_jvm_share_consumer_by_duration_skips_records_outside_the_window() {
-    let bootstrap = bootstrap_addr();
-    let StartedBroker { broker, dir: _dir } = start_host_broker().await;
-    let topic = "kip932-jvm-dur";
-    let group = "jvm-share-gdur";
-    let stale = ["dur-stale-one", "dur-stale-two"];
-    let recent = ["dur-recent-one", "dur-recent-two"];
-
-    let ShareTopic { client, tid } = prepare_share_topic(&broker, topic, group).await;
-    let now = now_ms();
-    produce_at(&client, topic, tid, &stale, now - 2 * 60 * 60 * 1_000).await;
-    produce_at(&client, topic, tid, &recent, now).await;
-
-    set_share_auto_offset_reset(bootstrap, group, "by_duration:PT1H");
-    let consumed = run_share_consumer(bootstrap, topic, group, recent.len());
-    let stdout = String::from_utf8_lossy(&consumed.stdout);
-    eprintln!("KRABKA[test] by_duration share-consumer stdout:\n{stdout}");
-
-    for v in recent {
-        assert!(
-            stdout.contains(v),
-            "record inside the by_duration window must be delivered: {v:?}; got:\n{stdout}",
-        );
-    }
-    for v in stale {
-        assert!(
-            !stdout.contains(v),
-            "record older than the by_duration window must not be delivered: {v:?}; got:\n{stdout}",
-        );
+impl ShareWorkflow {
+    async fn shutdown(mut self) {
+        let StartedBroker { broker, dir } = self.broker.take().expect("share broker started");
+        broker.shutdown().await;
+        drop(dir);
+        drop(self);
     }
 }
 
-/// `share.auto.offset.reset=by_duration:PT1H` starts the share partition at
-/// the first record inside the window. The test produces one batch stamped two
-/// hours ago and one stamped now, then asserts that the real JVM
-/// `KafkaShareConsumer` reads only the recent batch.
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/jvm_share_groups.feature",
-    name = "jvm share consumer by duration skips records outside the window"
+    name = "An earliest share group reads every preexisting record"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_share_consumer_by_duration_skips_records_outside_the_window() {}
+async fn jvm_share_consumer_reads_krabka(share: ShareWorkflow) { share.shutdown().await; }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm share groups: jvm share consumer defaults to latest")]
-async fn bdd_verify_jvm_share_consumer_defaults_to_latest() {
-    let bootstrap = bootstrap_addr();
-    let StartedBroker { broker, dir: _dir } = start_host_broker().await;
-    let topic = "kip932-jvm-latest";
-    let group = "jvm-share-glatest";
-    let values = ["latest-alpha", "latest-bravo"];
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_share_groups.feature",
+    name = "Stock share administration describes a registered group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_share_groups_describe_state(share: ShareWorkflow) { share.shutdown().await; }
 
-    let ShareTopic { client, tid } = prepare_share_topic(&broker, topic, group).await;
-    produce(&client, topic, tid, &values).await;
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_share_groups.feature",
+    name = "Stock share administration lists a registered group"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_share_groups_list(share: ShareWorkflow) { share.shutdown().await; }
 
-    let consumed = docker_run(&[
-        "bash",
-        "-c",
-        &format!(
-            "{SHARE_CONSUMER} \
-                --bootstrap-server {bootstrap} \
-                --topic {topic} \
-                --group {group} \
-                --timeout-ms 15000"
-        ),
-    ]);
-    let stdout = String::from_utf8_lossy(&consumed.stdout);
-    eprintln!("KRABKA[test] default-latest share-consumer stdout:\n{stdout}");
-    for v in values {
-        assert!(
-            !stdout.contains(v),
-            "a `latest` share group must not read a record produced before it joined: {v:?}; \
-             got:\n{stdout}",
-        );
-    }
-
-    let state = docker_run(&[
-        "bash",
-        "-c",
-        &format!(
-            "{SHARE_GROUPS} --bootstrap-server {bootstrap} --describe --state --group {group}"
-        ),
-    ]);
-    let state_out = String::from_utf8_lossy(&state.stdout);
-    assert!(
-        state_out.contains(group),
-        "the share group must be registered, or the empty stdout above proves nothing; got:\n\
-         {state_out}\nstderr:\n{}",
-        String::from_utf8_lossy(&state.stderr),
-    );
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_share_groups.feature",
+    name = "A one hour share reset window skips older batches"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_share_consumer_by_duration_skips_records_outside_the_window(share: ShareWorkflow) {
+    share.shutdown().await;
 }
 
-/// The default strategy is `latest`: a fresh share group never sees the
-/// records produced before its first fetch.
-///
-/// The group config is left untouched, so the broker's own default decides.
-/// After the consumer's idle-timeout exit, `kafka-share-groups.sh --describe
-/// --state` must still report the group, which is what proves the consumer
-/// joined and fetched rather than failing to connect.
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/jvm_share_groups.feature",
-    name = "jvm share consumer defaults to latest"
+    name = "A default latest share group joins without reading old records"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_share_consumer_defaults_to_latest() {}
+async fn jvm_share_consumer_defaults_to_latest(share: ShareWorkflow) { share.shutdown().await; }
 
 async fn register_jvm_share_group(
     broker: &BrokerHandle,

@@ -245,82 +245,334 @@ mod tests {
         retry_backoff: Duration::from_millis(200),
     };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log range tests: range steps follow batch progress to the end for {example}"
+    #[derive(Default)]
+    struct RangeProgressScenario {
+        current: i64,
+        end: i64,
+        next: Option<i64>,
+        step: Option<RangeStep>,
+        error: Option<ClientError>,
+        retriable: Option<bool>,
+        page: Vec<FetchedRecord>,
+        records: Option<Vec<MetadataEventRecord>>,
+    }
+    #[rstest::fixture]
+    fn range_progress() -> RangeProgressScenario {
+        let page = Vec::new();
+        RangeProgressScenario {
+            page,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "a range at offset {current} ending before {end} receives next batch offset {next}"
     )]
-    fn bdd_verify_range_steps_follow_batch_progress_to_the_end(example: String) {
-        type Example = (i64, i64, Option<i64>, RangeStep);
-        let (current, end, next, expected): Example = match example.as_str() {
-            "advances one" => (4, 10, Some(5), RangeStep::Continue(5)),
-            "skips compacted offsets" => (4, 10, Some(8), RangeStep::Continue(8)),
-            "reaches end" => (4, 10, Some(10), RangeStep::Done),
-            "passes end" => (4, 10, Some(12), RangeStep::Done),
-            "no batch" => (4, 10, None, RangeStep::Stalled),
-            "no progress" => (4, 10, Some(4), RangeStep::Stalled),
-            "regresses" => (4, 10, Some(3), RangeStep::Stalled),
-            _ => panic!("unknown BDD example: {example}"),
+    fn batch_progress(
+        range_progress: &mut RangeProgressScenario,
+        current: i64,
+        end: i64,
+        next: String,
+    ) {
+        range_progress.current = current;
+        range_progress.end = end;
+        range_progress.next = if next == "none" {
+            None
+        } else {
+            Some(next.parse().unwrap())
         };
-
-        check!(
-            next_range_step(current, end, next) == expected,
-            "current {current}, end {end}, next {next:?}"
+    }
+    #[rstest_bdd_macros::when("the range read chooses its next offset")]
+    fn choose_next_offset(range_progress: &mut RangeProgressScenario) {
+        range_progress.step = Some(next_range_step(
+            range_progress.current,
+            range_progress.end,
+            range_progress.next,
+        ));
+    }
+    #[rstest_bdd_macros::then("range progress is {expected}")]
+    fn check_range_progress(range_progress: &RangeProgressScenario, expected: String) {
+        let expected = match expected.as_str() {
+            "done" => RangeStep::Done,
+            "stalled" => RangeStep::Stalled,
+            _ => RangeStep::Continue(
+                expected
+                    .strip_prefix("continue at ")
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            ),
+        };
+        check!(range_progress.step.unwrap() == expected);
+    }
+    #[rstest_bdd_macros::given("the range fetch failed with server error {code}")]
+    fn range_server_error(range_progress: &mut RangeProgressScenario, code: i16) {
+        range_progress.error = Some(ClientError::Server { error_code: code });
+    }
+    #[rstest_bdd_macros::given("the range fetch failed with {failure}")]
+    fn range_connection_error(range_progress: &mut RangeProgressScenario, failure: String) {
+        range_progress.error = Some(match failure.as_str() {
+            "disconnected" => ClientError::Disconnected,
+            "timeout" => ClientError::Timeout(secs(30)),
+            "connection reset" => ClientError::Io(ErrorKind::ConnectionReset.into()),
+            "connection refused" => ClientError::Connect {
+                addr: "127.0.0.1:9092".parse().unwrap(),
+                source: ErrorKind::ConnectionRefused.into(),
+            },
+            "invalid config" => ClientError::InvalidConfig("bad".into()),
+            _ => panic!("unknown transport failure: {failure}"),
+        });
+    }
+    #[rstest_bdd_macros::when("the range reader decides whether to retry")]
+    fn classify_fetch_error(range_progress: &mut RangeProgressScenario) {
+        range_progress.retriable = Some(range_fetch_retriable(
+            range_progress.error.as_ref().unwrap(),
+        ));
+    }
+    #[rstest_bdd_macros::then("retrying the range fetch is {expected}")]
+    fn check_fetch_retry(range_progress: &RangeProgressScenario, expected: bool) {
+        check!(range_progress.retriable.unwrap() == expected);
+    }
+    #[rstest_bdd_macros::given(
+        "a fetched page has records before inside and after offsets 4 through 6 including a tombstone at 6"
+    )]
+    fn page_overlapping_range(range_progress: &mut RangeProgressScenario) {
+        range_progress.page = vec![
+            fetched(3, Some(b"before")),
+            fetched(4, Some(b"first")),
+            fetched(6, None),
+            fetched(7, Some(b"past")),
+        ];
+    }
+    #[rstest_bdd_macros::when("the page is filtered to partition 1 offsets 4 through 6")]
+    fn filter_page(range_progress: &mut RangeProgressScenario) {
+        range_progress.records =
+            Some(page_records(1, 4, 7, mem::take(&mut range_progress.page)).collect());
+    }
+    #[rstest_bdd_macros::then(
+        "only offset 4 and the tombstone at 6 are delivered with their original keys"
+    )]
+    fn check_page_records(range_progress: &RangeProgressScenario) {
+        assert!(
+            range_progress.records.as_ref().unwrap()
+                == &vec![record(4, Some(b"first")), record(6, None)]
         );
     }
+    rstest_bdd_macros::scenarios!("tests/features/range_progress", fixtures=[range_progress: RangeProgressScenario]);
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/range.feature",
-        name = "tests: range steps follow batch progress to the end"
-    )]
-    fn range_steps_follow_batch_progress_to_the_end(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log range tests: retriable fetch failures are leader moves and broken connections for {example}"
-    )]
-    fn bdd_verify_retriable_fetch_failures_are_leader_moves_and_broken_connections(
-        example: String,
-    ) {
-        type Example = (ClientError, bool);
-        let (error, expected): Example = match example.as_str() {
-            "not leader" => (ClientError::Server { error_code: 6 }, true),
-            "fenced epoch" => (ClientError::Server { error_code: 74 }, true),
-            "unknown leader epoch" => (ClientError::Server { error_code: 75 }, true),
-            "leader unavailable" => (ClientError::Server { error_code: 5 }, true),
-            "replica unavailable" => (ClientError::Server { error_code: 9 }, true),
-            "storage error" => (ClientError::Server { error_code: 56 }, true),
-            "offset unavailable" => (ClientError::Server { error_code: 78 }, true),
-            "unknown topic" => (ClientError::Server { error_code: 100 }, true),
-            "unknown server" => (ClientError::Server { error_code: -1 }, true),
-            "disconnected" => (ClientError::Disconnected, true),
-            "timeout" => (ClientError::Timeout(secs(30)), true),
-            "connection reset" => (ClientError::Io(ErrorKind::ConnectionReset.into()), true),
-            "connection refused" => (
-                ClientError::Connect {
-                    addr: "127.0.0.1:9092".parse().unwrap(),
-                    source: ErrorKind::ConnectionRefused.into(),
-                },
-                true,
-            ),
-            "offset out of range" => (ClientError::Server { error_code: 1 }, false),
-            "corrupt message" => (ClientError::Server { error_code: 2 }, false),
-            "topic authorization" => (ClientError::Server { error_code: 29 }, false),
-            "unsupported version" => (ClientError::Server { error_code: 35 }, false),
-            "invalid config" => (ClientError::InvalidConfig("bad".into()), false),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(range_fetch_retriable(&error) == expected, "{error:?}");
+    struct RangeReadScenario {
+        fetcher: Option<ScriptedFetcher>,
+        partition: i32,
+        start: i64,
+        end: i64,
+        results: Vec<Result<Vec<MetadataEventRecord>, MetadataLogError>>,
+        visited: Vec<i64>,
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/range.feature",
-        name = "tests: retriable fetch failures are leader moves and broken connections"
+    #[rstest::fixture]
+    fn range_read() -> RangeReadScenario {
+        let results = Vec::new();
+        RangeReadScenario {
+            fetcher: None,
+            partition: 1,
+            start: 0,
+            end: 4,
+            results,
+            visited: Vec::new(),
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "leader 1 serves offsets 0 and 1 then moves to leader 2 serving offsets 2 and 3"
     )]
-    fn retriable_fetch_failures_are_leader_moves_and_broken_connections(example: String) {
-        let _ = example;
+    fn moving_leader(range_read: &mut RangeReadScenario) {
+        range_read.fetcher = Some(ScriptedFetcher::new([Ok(1), Ok(2)], [
+            Ok(page(0..2)),
+            Err(ClientError::Server { error_code: 6 }),
+            Ok(page(2..4)),
+        ]));
+    }
+    #[rstest_bdd_macros::given(
+        "the partition initially has no leader then broker 3 serves offsets 0 and 1"
+    )]
+    fn initially_missing_leader(range_read: &mut RangeReadScenario) {
+        range_read.end = 2;
+        range_read.fetcher = Some(ScriptedFetcher::new(
+            [
+                Err(RangeReadFailure::retriable("no leader yet".into())),
+                Ok(3),
+            ],
+            [Ok(page(0..2))],
+        ));
+    }
+    #[rstest_bdd_macros::given(
+        "the first range fetch fails with corrupt message and the next leader lookup is unauthorized"
+    )]
+    fn fatal_range_failures(range_read: &mut RangeReadScenario) {
+        range_read.fetcher = Some(ScriptedFetcher::new(
+            [
+                Ok(1),
+                Err(RangeReadFailure::client(
+                    "Metadata failed",
+                    &ClientError::Server { error_code: 29 },
+                )),
+            ],
+            [Ok(page(0..2)), Err(ClientError::Server { error_code: 2 })],
+        ));
+    }
+    #[rstest_bdd_macros::given("a range from 4 to 10 receives an empty page with no next offset")]
+    fn stalled_range(range_read: &mut RangeReadScenario) {
+        range_read.start = 4;
+        range_read.end = 10;
+        range_read.fetcher = Some(ScriptedFetcher::new([Ok(1)], [Ok(FetchPartitionResult {
+            records: Vec::new(),
+            next_offset: None,
+        })]));
+    }
+    #[rstest_bdd_macros::given("a range from 0 to 6 has a page containing offsets 0 through 2")]
+    fn visitor_page(range_read: &mut RangeReadScenario) {
+        range_read.end = 6;
+        range_read.fetcher = Some(ScriptedFetcher::new([Ok(1)], [Ok(page(0..3))]));
+    }
+    #[rstest_bdd_macros::given("an empty range from 5 to 5")]
+    fn empty_range(range_read: &mut RangeReadScenario) {
+        range_read.start = 5;
+        range_read.end = 5;
+        range_read.fetcher = Some(ScriptedFetcher::new([], []));
+    }
+    #[rstest_bdd_macros::given(
+        "a range from 0 to 1 targets partition {partition} of a two-partition topic"
+    )]
+    fn outside_partition(range_read: &mut RangeReadScenario, partition: i32) {
+        range_read.partition = partition;
+        range_read.end = 1;
+        range_read.fetcher = Some(ScriptedFetcher::new([], []));
+    }
+    #[rstest_bdd_macros::when("the requested range is read")]
+    async fn read_requested_range(range_read: &mut RangeReadScenario) {
+        range_read.results.push(
+            read(
+                range_read.fetcher.as_ref().unwrap(),
+                range_read.partition,
+                range_read.start,
+                range_read.end,
+            )
+            .await,
+        );
+    }
+    #[rstest_bdd_macros::when("the requested range is read twice")]
+    async fn read_twice(range_read: &mut RangeReadScenario) {
+        read_requested_range(range_read).await;
+        read_requested_range(range_read).await;
+    }
+    #[rstest_bdd_macros::when("the range visitor closes on its first record")]
+    async fn visitor_closes(range_read: &mut RangeReadScenario) {
+        let seen = &mut range_read.visited;
+        let result = visit_range_pages(
+            range_read.fetcher.as_ref().unwrap(),
+            &TOPIC,
+            1,
+            0,
+            6,
+            &mut |record| {
+                seen.push(record.offset);
+                Err(MetadataLogError::Closed)
+            },
+        )
+        .await;
+        range_read.results.push(result.map(|()| Vec::new()));
+    }
+    #[rstest_bdd_macros::then(
+        "offsets 0 through 3 are delivered once and fetching resumes from 2 on leader 2"
+    )]
+    fn check_leader_resume(range_read: &RangeReadScenario) {
+        assert!(
+            range_read.results[0].as_ref().unwrap()
+                == &(0..4)
+                    .map(|offset| record(offset, Some(b"v")))
+                    .collect::<Vec<_>>()
+        );
+        assert!(
+            range_read.fetcher.as_ref().unwrap().calls()
+                == vec![
+                    Call::Leader,
+                    Call::Fetch {
+                        leader: 1,
+                        offset: 0
+                    },
+                    Call::Fetch {
+                        leader: 1,
+                        offset: 2
+                    },
+                    Call::Leader,
+                    Call::Fetch {
+                        leader: 2,
+                        offset: 2
+                    }
+                ]
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "offsets 0 and 1 are delivered after two leader lookups and one fetch from broker 3"
+    )]
+    fn check_leader_discovery(range_read: &RangeReadScenario) {
+        assert!(
+            range_read.results[0].as_ref().unwrap()
+                == &vec![record(0, Some(b"v")), record(1, Some(b"v"))]
+        );
+        assert!(
+            range_read.fetcher.as_ref().unwrap().calls()
+                == vec![Call::Leader, Call::Leader, Call::Fetch {
+                    leader: 3,
+                    offset: 0
+                }]
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "both reads stop with their precise fetch and metadata authorization errors"
+    )]
+    fn check_fatal_read_errors(range_read: &RangeReadScenario) {
+        check!(
+            range_read.results[0].as_ref().unwrap_err().to_string()
+                == "metadata log error: __diskless_wal_index partition 1 Fetch at 2 failed: protocol error from server: 2"
+        );
+        check!(
+            range_read.results[1].as_ref().unwrap_err().to_string()
+                == "metadata log error: Metadata failed: protocol error from server: 29"
+        );
+    }
+    #[rstest_bdd_macros::then("the read reports that no batch was returned at 4 before 10")]
+    fn check_stalled_read(range_read: &RangeReadScenario) {
+        assert!(
+            range_read.results[0].as_ref().unwrap_err().to_string()
+                == "metadata log error: __diskless_wal_index partition 1 Fetch at 4 returned no batch before 10"
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "only offset 0 reaches the visitor and the closed error stops further fetches"
+    )]
+    fn check_closed_visitor(range_read: &RangeReadScenario) {
+        check!(matches!(
+            range_read.results[0],
+            Err(MetadataLogError::Closed)
+        ));
+        check!(range_read.visited == vec![0]);
+        check!(
+            range_read.fetcher.as_ref().unwrap().calls()
+                == vec![Call::Leader, Call::Fetch {
+                    leader: 1,
+                    offset: 0
+                }]
+        );
+    }
+    #[rstest_bdd_macros::then("no records are delivered and no network requests are made")]
+    fn check_empty_range(range_read: &RangeReadScenario) {
+        check!(range_read.results[0].as_ref().unwrap().is_empty());
+        check!(range_read.fetcher.as_ref().unwrap().calls().is_empty());
+    }
+    #[rstest_bdd_macros::then("the partition is rejected with count 2 without network requests")]
+    fn check_outside_partition(range_read: &RangeReadScenario) {
+        check!(
+            matches!(&range_read.results[0],Err(MetadataLogError::PartitionOutOfRange{partition,count:2}) if *partition==range_read.partition)
+        );
+        check!(range_read.fetcher.as_ref().unwrap().calls().is_empty());
     }
 
     fn fetched(offset: i64, value: Option<&'static [u8]>) -> FetchedRecord {
@@ -342,30 +594,6 @@ mod tests {
             tombstone: value.is_none(),
         }
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log range tests: page records keep the fetch offset up to the range end"
-    )]
-    fn bdd_verify_page_records_keep_the_fetch_offset_up_to_the_range_end() {
-        let page = vec![
-            fetched(3, Some(b"before")),
-            fetched(4, Some(b"first")),
-            fetched(6, None),
-            fetched(7, Some(b"past")),
-        ];
-
-        let records: Vec<_> = page_records(1, 4, 7, page).collect();
-
-        assert!(records == vec![record(4, Some(b"first")), record(6, None)]);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/range.feature",
-        name = "tests: page records keep the fetch offset up to the range end"
-    )]
-    fn page_records_keep_the_fetch_offset_up_to_the_range_end() {}
 
     /// One call a range read made through [`ScriptedFetcher`].
     #[derive(Debug, PartialEq, Eq)]
@@ -442,230 +670,66 @@ mod tests {
         Ok(records)
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log range tests: a retriable fetch failure looks the leader up again and resumes"
-    )]
-    async fn bdd_verify_a_retriable_fetch_failure_looks_the_leader_up_again_and_resumes() {
-        let fetcher = ScriptedFetcher::new([Ok(1), Ok(2)], [
-            Ok(page(0..2)),
-            Err(ClientError::Server { error_code: 6 }),
-            Ok(page(2..4)),
-        ]);
-
-        let records = read(&fetcher, 1, 0, 4).await.unwrap();
-
-        assert!(
-            records
-                == (0..4)
-                    .map(|offset| record(offset, Some(b"v")))
-                    .collect::<Vec<_>>()
-        );
-        assert!(
-            fetcher.calls()
-                == vec![
-                    Call::Leader,
-                    Call::Fetch {
-                        leader: 1,
-                        offset: 0
-                    },
-                    Call::Fetch {
-                        leader: 1,
-                        offset: 2
-                    },
-                    Call::Leader,
-                    Call::Fetch {
-                        leader: 2,
-                        offset: 2
-                    },
-                ]
-        );
-    }
-
-    #[cfg(test)]
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/range.feature",
-        name = "tests: a retriable fetch failure looks the leader up again and resumes"
+        path = "tests/features/range_reads/reads.feature",
+        name = "A moved leader resumes at the first undelivered offset"
     )]
     #[tokio::test(start_paused = true)]
-    async fn a_retriable_fetch_failure_looks_the_leader_up_again_and_resumes() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log range tests: a partition without a leader is looked up again"
-    )]
-    async fn bdd_verify_a_partition_without_a_leader_is_looked_up_again() {
-        let fetcher = ScriptedFetcher::new(
-            [
-                Err(RangeReadFailure::retriable("no leader yet".into())),
-                Ok(3),
-            ],
-            [Ok(page(0..2))],
-        );
-
-        let records = read(&fetcher, 1, 0, 2).await.unwrap();
-
-        assert!(records == vec![record(0, Some(b"v")), record(1, Some(b"v"))]);
-        assert!(
-            fetcher.calls()
-                == vec![Call::Leader, Call::Leader, Call::Fetch {
-                    leader: 3,
-                    offset: 0
-                },]
-        );
+    async fn a_retriable_fetch_failure_looks_the_leader_up_again_and_resumes(
+        range_read: RangeReadScenario,
+    ) {
+        let _ = range_read;
     }
 
-    #[cfg(test)]
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/range.feature",
-        name = "tests: a partition without a leader is looked up again"
+        path = "tests/features/range_reads/reads.feature",
+        name = "Leader discovery retries until a leader exists"
     )]
     #[tokio::test(start_paused = true)]
-    async fn a_partition_without_a_leader_is_looked_up_again() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log range tests: a fatal failure stops the read with its cause"
-    )]
-    async fn bdd_verify_a_fatal_failure_stops_the_read_with_its_cause() {
-        let fetcher = ScriptedFetcher::new(
-            [
-                Ok(1),
-                Err(RangeReadFailure::client(
-                    "Metadata failed",
-                    &ClientError::Server { error_code: 29 },
-                )),
-            ],
-            [Ok(page(0..2)), Err(ClientError::Server { error_code: 2 })],
-        );
-
-        let fetch_error = read(&fetcher, 1, 0, 4).await.unwrap_err();
-        let lookup_error = read(&fetcher, 1, 0, 4).await.unwrap_err();
-
-        check!(
-            fetch_error.to_string()
-                == "metadata log error: __diskless_wal_index partition 1 Fetch at 2 failed: \
-                    protocol error from server: 2"
-        );
-        check!(
-            lookup_error.to_string()
-                == "metadata log error: Metadata failed: protocol error from server: 29"
-        );
+    async fn a_partition_without_a_leader_is_looked_up_again(range_read: RangeReadScenario) {
+        let _ = range_read;
     }
 
-    #[cfg(test)]
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/range.feature",
-        name = "tests: a fatal failure stops the read with its cause"
+        path = "tests/features/range_reads/reads.feature",
+        name = "Fatal fetch and lookup errors retain their causes"
     )]
     #[tokio::test]
-    async fn a_fatal_failure_stops_the_read_with_its_cause() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log range tests: a fetch that makes no progress stalls the read"
-    )]
-    async fn bdd_verify_a_fetch_that_makes_no_progress_stalls_the_read() {
-        let fetcher = ScriptedFetcher::new([Ok(1)], [Ok(FetchPartitionResult {
-            records: Vec::new(),
-            next_offset: None,
-        })]);
-
-        let error = read(&fetcher, 1, 4, 10).await.unwrap_err();
-
-        assert!(
-            error.to_string()
-                == "metadata log error: __diskless_wal_index partition 1 Fetch at 4 returned no \
-                    batch before 10"
-        );
+    async fn a_fatal_failure_stops_the_read_with_its_cause(range_read: RangeReadScenario) {
+        let _ = range_read;
     }
 
-    #[cfg(test)]
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/range.feature",
-        name = "tests: a fetch that makes no progress stalls the read"
+        path = "tests/features/range_reads/reads.feature",
+        name = "A page without batch progress fails the range"
     )]
     #[tokio::test]
-    async fn a_fetch_that_makes_no_progress_stalls_the_read() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log range tests: a visitor error stops the read before the next record"
-    )]
-    async fn bdd_verify_a_visitor_error_stops_the_read_before_the_next_record() {
-        let fetcher = ScriptedFetcher::new([Ok(1)], [Ok(page(0..3))]);
-        let mut seen = Vec::new();
-
-        let error = visit_range_pages(&fetcher, &TOPIC, 1, 0, 6, &mut |record| {
-            seen.push(record.offset);
-            Err(MetadataLogError::Closed)
-        })
-        .await
-        .unwrap_err();
-
-        check!(matches!(error, MetadataLogError::Closed));
-        check!(seen == vec![0]);
-        check!(
-            fetcher.calls()
-                == vec![Call::Leader, Call::Fetch {
-                    leader: 1,
-                    offset: 0
-                }]
-        );
+    async fn a_fetch_that_makes_no_progress_stalls_the_read(range_read: RangeReadScenario) {
+        let _ = range_read;
     }
 
-    #[cfg(test)]
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/range.feature",
-        name = "tests: a visitor error stops the read before the next record"
+        path = "tests/features/range_reads/reads.feature",
+        name = "Visitor closure stops delivery immediately"
     )]
     #[tokio::test]
-    async fn a_visitor_error_stops_the_read_before_the_next_record() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("kafka log range tests: an empty read sends nothing")]
-    async fn bdd_verify_an_empty_read_sends_nothing() {
-        let fetcher = ScriptedFetcher::new([], []);
-
-        check!(read(&fetcher, 1, 5, 5).await.unwrap().is_empty());
-        check!(fetcher.calls().is_empty());
+    async fn a_visitor_error_stops_the_read_before_the_next_record(range_read: RangeReadScenario) {
+        let _ = range_read;
     }
 
-    #[cfg(test)]
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/range.feature",
-        name = "tests: an empty read sends nothing"
+        path = "tests/features/range_reads/reads.feature",
+        name = "An empty range performs no I O"
     )]
     #[tokio::test]
-    async fn an_empty_read_sends_nothing() {}
+    async fn an_empty_read_sends_nothing(range_read: RangeReadScenario) { let _ = range_read; }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log range tests: out of range read sends nothing for {example}"
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/range_reads/reads.feature",
+        name = "An invalid partition performs no I O"
     )]
-    async fn bdd_verify_out_of_range_read_sends_nothing(example: String) {
-        type Example = (i32,);
-        let (partition,): Example = match example.as_str() {
-            "negative" => (-1,),
-            "upper bound" => (2,),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let fetcher = ScriptedFetcher::new([], []);
-
-        check!(matches!(
-            read(&fetcher, partition, 0, 1).await,
-            Err(MetadataLogError::PartitionOutOfRange { partition: got, count: 2 })
-                if got == partition
-        ));
-        check!(fetcher.calls().is_empty());
+    #[tokio::test]
+    async fn out_of_range_read_sends_nothing(range_read: RangeReadScenario, partition: i32) {
+        let _ = (range_read, partition);
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/range.feature",
-        name = "tests: out of range read sends nothing"
-    )]
-    #[tokio::test]
-    async fn out_of_range_read_sends_nothing(example: String) { let _ = example; }
 }

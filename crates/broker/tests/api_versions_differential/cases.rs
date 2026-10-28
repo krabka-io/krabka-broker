@@ -41,86 +41,100 @@ fn regenerating() -> bool {
 /// `api_catalog::INTER_BROKER_ONLY_APIS`.
 fn catalog_sorted_by_key() -> Vec<ApiVersion> { supported_client_apis() }
 
-/// The stock broker's decoded table, with the container that serves it.
-struct OracleTable {
-    oracle: OracleBroker,
-    table: Vec<ApiVersion>,
-}
-
-/// Decode the stock broker's table, retaining its container until the case ends.
-fn kafka_advertised_table() -> OracleTable {
-    let oracle = OracleBroker::start();
-    let output = oracle.api_versions();
-    eprintln!("KRABKA[test] {ORACLE_IMAGE} api-versions:\n{output}");
-    let kafka =
-        advertised(&parse_single_broker(&output).unwrap_or_else(|e| panic!("{e}\n{output}")));
-    OracleTable {
-        oracle,
-        table: kafka,
-    }
-}
-
 /// The API keys one advertised table names.
 fn key_set(apis: &[ApiVersion]) -> BTreeSet<i16> { apis.iter().map(|api| api.api_key).collect() }
 
-/// Read krabka's advertised table the way a client does: through the JVM tool.
-async fn krabka_advertised_table() -> Vec<ApiVersion> {
+struct ClientCatalog {
+    listeners: Option<JvmListeners>,
+    broker: Option<KrabkaBroker>,
+    oracle: Option<OracleBroker>,
+    krabka: Option<Vec<ApiVersion>>,
+    kafka: Option<Vec<ApiVersion>>,
+    observed: Option<DivergenceReport>,
+    expected: Option<DivergenceReport>,
+}
+impl ClientCatalog {
+    async fn shutdown(self) {
+        let KrabkaBroker {
+            handle,
+            dir: _directory,
+        } = self.broker.expect("Krabka started");
+        handle.shutdown().await;
+    }
+}
+#[rstest::fixture]
+fn catalog() -> ClientCatalog {
+    // Start this scenario with fresh inputs and observations.
+
+    ClientCatalog {
+        listeners: None,
+        broker: None,
+        oracle: None,
+        krabka: None,
+        kafka: None,
+        observed: None,
+        expected: None,
+    }
+}
+#[rstest_bdd_macros::given("a PLAINTEXT Krabka client listener without a metrics receiver")]
+async fn krabka_catalog_source(catalog: &mut ClientCatalog) {
     let listeners = JvmListeners::allocate();
-    let KrabkaBroker {
-        handle: broker,
-        dir: _dir,
-    } = start_krabka(&listeners).await;
-    let output = krabka_api_versions(&listeners);
-    broker.shutdown().await;
+    catalog.broker = Some(start_krabka(&listeners).await);
+    catalog.listeners = Some(listeners);
+}
+#[rstest_bdd_macros::given("a stock Kafka broker from the pinned oracle image")]
+fn kafka_catalog_source(catalog: &mut ClientCatalog) {
+    catalog.oracle = Some(OracleBroker::start());
+}
+#[rstest_bdd_macros::when("the JVM API versions tool reads the Krabka client listener")]
+fn read_krabka_catalog(catalog: &mut ClientCatalog) {
+    let output = krabka_api_versions(catalog.listeners.as_ref().expect("Krabka listener"));
     eprintln!("KRABKA[test] krabka api-versions:\n{output}");
-    let rows = parse_single_broker(&output).unwrap_or_else(|e| panic!("{e}\n{output}"));
-    advertised(&rows)
+    catalog.krabka = Some(advertised(
+        &parse_single_broker(&output).unwrap_or_else(|error| panic!("{error}\n{output}")),
+    ));
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "api versions differential cases: krabka advertises exactly the api catalog"
-)]
-async fn bdd_verify_krabka_advertises_exactly_the_api_catalog() {
-    let table = krabka_advertised_table().await;
-    assert!(table == catalog_sorted_by_key());
+#[rstest_bdd_macros::when("the same JVM API versions tool reads the stock Kafka broker")]
+fn read_kafka_catalog(catalog: &mut ClientCatalog) {
+    let output = catalog
+        .oracle
+        .as_ref()
+        .expect("Kafka oracle")
+        .api_versions();
+    eprintln!("KRABKA[test] {ORACLE_IMAGE} api-versions:\n{output}");
+    catalog.kafka = Some(advertised(
+        &parse_single_broker(&output).unwrap_or_else(|error| panic!("{error}\n{output}")),
+    ));
 }
-
-/// The JVM tool's view of krabka's `ApiVersions` response is exactly the
-/// catalog the broker builds that response from.
-///
-/// This is the claim the suite exists for. `api_catalog` carries a per-KIP
-/// comment for nearly every row and the handler copies the list onto the wire,
-/// but until something read the table back through a real client nothing tied
-/// those comments to what a client sees. The whole parsed table is compared
-/// against the whole catalog, so an added, dropped, or re-ranged key fails here
-/// rather than only in the unit test that asserts the handler copied the list.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/api_versions_differential/cases.feature",
-    name = "krabka advertises exactly the api catalog"
+#[rstest_bdd_macros::then("the complete advertised Krabka table equals the client API catalog")]
+fn client_catalog_matches(catalog: &ClientCatalog) {
+    assert!(catalog.krabka.as_ref().expect("Krabka queried") == &catalog_sorted_by_key());
+}
+#[rstest_bdd_macros::when(
+    "the advertised tables are compared with the reviewed divergence expectation"
 )]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn krabka_advertises_exactly_the_api_catalog() {}
-
-#[cfg(test)]
+fn compare_advertised_catalogs(catalog: &mut ClientCatalog) {
+    let observed = DivergenceReport::build(
+        ORACLE_IMAGE,
+        catalog.krabka.as_ref().expect("Krabka queried"),
+        catalog.kafka.as_ref().expect("Kafka queried"),
+    );
+    let path = expectation_path();
+    if regenerating() {
+        observed.store(&path);
+    }
+    catalog.expected = Some(DivergenceReport::load(&path));
+    catalog.observed = Some(observed);
+}
 #[rstest_bdd_macros::then(
-    "api versions differential cases: divergence from real kafka matches the expectation"
+    "every advertised API has a canonical name and the full divergence equals the reviewed report"
 )]
-async fn bdd_verify_divergence_from_real_kafka_matches_the_expectation() {
-    let krabka = krabka_advertised_table().await;
-
-    let OracleTable {
-        oracle: _oracle,
-        table: kafka,
-    } = kafka_advertised_table();
-
-    let observed = DivergenceReport::build(ORACLE_IMAGE, &krabka, &kafka);
-    // Every key on either side has a canonical name in krabka-protocol's
-    // generated registry. One that does not is a key this repository cannot
-    // reason about, so it fails here rather than landing as `Unknown` in the
-    // checked-in file and the matrix built from it.
+fn reviewed_catalog_divergence(catalog: &ClientCatalog) {
+    let observed = catalog.observed.as_ref().expect("tables compared");
+    let expected = catalog
+        .expected
+        .as_ref()
+        .expect("reviewed expectation loaded");
     let unnamed: Vec<i16> = observed
         .apis
         .iter()
@@ -131,79 +145,25 @@ async fn bdd_verify_divergence_from_real_kafka_matches_the_expectation() {
         unnamed.is_empty(),
         "api keys with no protocol name: {unnamed:?}"
     );
-
     let path = expectation_path();
-    if regenerating() {
-        observed.store(&path);
-    }
-    let expected = DivergenceReport::load(&path);
     assert!(
         observed == expected,
-        "the advertised-version divergence moved for {}; rerun with \
-         KRABKA_UPDATE_API_VERSIONS_EXPECTATION=1 and review {}",
-        moved_rows(&observed, &expected),
-        path.display(),
+        "the advertised-version divergence moved for {}; rerun with KRABKA_UPDATE_API_VERSIONS_EXPECTATION=1 and review {}",
+        moved_rows(observed, expected),
+        path.display()
     );
 }
-
-/// krabka's table beside a real Kafka broker's, compared against the
-/// checked-in expectation.
-///
-/// Every difference is legitimate until someone reviews it, so the suite does
-/// not judge them: it records the outer join and fails when the join moves.
-/// Regenerate with `KRABKA_UPDATE_API_VERSIONS_EXPECTATION=1` and the diff is
-/// the change under review.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/api_versions_differential/cases.feature",
-    name = "divergence from real kafka matches the expectation"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn divergence_from_real_kafka_matches_the_expectation() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "api versions differential cases: the client listener prints the same api key set as kafka"
-)]
-async fn bdd_verify_the_client_listener_prints_the_same_api_key_set_as_kafka() {
-    let krabka = krabka_advertised_table().await;
-
-    let OracleTable {
-        oracle: _oracle,
-        table: kafka,
-    } = kafka_advertised_table();
-
-    let ours = key_set(&krabka);
-    let theirs = key_set(&kafka);
+#[rstest_bdd_macros::then("both client listeners advertise exactly the same API key set")]
+fn client_key_sets_match(catalog: &ClientCatalog) {
+    let ours = key_set(catalog.krabka.as_ref().expect("Krabka queried"));
+    let theirs = key_set(catalog.kafka.as_ref().expect("Kafka queried"));
     let krabka_only: Vec<i16> = ours.difference(&theirs).copied().collect();
     let kafka_only: Vec<i16> = theirs.difference(&ours).copied().collect();
     assert!(
         ours == theirs,
-        "krabka advertises {krabka_only:?} that {ORACLE_IMAGE} does not, and misses \
-         {kafka_only:?} that it does"
+        "krabka advertises {krabka_only:?} that {ORACLE_IMAGE} does not, and misses {kafka_only:?} that it does"
     );
 }
-
-/// The set of API keys the tool prints for krabka's client listener is the set
-/// it prints for a stock Kafka broker.
-///
-/// The divergence case above records the whole join, ranges included, so it
-/// moves whenever a range moves. This one asks the narrower question the issue
-/// behind the split is about: `kafka-broker-api-versions.sh` against krabka
-/// names neither more nor fewer APIs than the same command against Kafka, so a
-/// tool or an audit that reads the advertised set to infer a node's role reads
-/// krabka as the broker it is. Both tables are read with the tool from the same
-/// pinned image, so nothing about the reader differs between the two halves.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/api_versions_differential/cases.feature",
-    name = "the client listener prints the same api key set as kafka"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_client_listener_prints_the_same_api_key_set_as_kafka() {}
-
 /// The API keys whose recorded row changed, for the failure message. The
 /// assertion above compares the reports whole, and whole is 75 rows: naming the
 /// handful that moved is what a reader needs before reading that dump.
@@ -224,4 +184,34 @@ fn moved_rows(observed: &DivergenceReport, expected: &DivergenceReport) -> Strin
     }));
     moved.sort_unstable();
     format!("api keys {moved:?}")
+}
+
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/api_versions_differential/cases.feature",
+    name = "krabka advertises exactly the api catalog"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn krabka_advertises_exactly_the_api_catalog(catalog: ClientCatalog) {
+    catalog.shutdown().await;
+}
+
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/api_versions_differential/cases.feature",
+    name = "divergence from real kafka matches the expectation"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn divergence_from_real_kafka_matches_the_expectation(catalog: ClientCatalog) {
+    catalog.shutdown().await;
+}
+
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/api_versions_differential/cases.feature",
+    name = "the client listener prints the same api key set as kafka"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_client_listener_prints_the_same_api_key_set_as_kafka(catalog: ClientCatalog) {
+    catalog.shutdown().await;
 }

@@ -212,55 +212,44 @@ mod tests {
         stable
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified classic state protocol tests: supports protocols matches kafka for {example}"
-    )]
-    fn bdd_verify_supports_protocols_matches_kafka(example: String) {
-        type Example<'a> = (&'a str, bool, &'a str, &'a [&'a str], bool);
-        let (name, stable, protocol_type, names, want): Example<'_> = match example.as_str() {
-            "empty empty type" => ("empty, empty type", false, "", &["range"][..], false),
-            "empty no protocols" => ("empty, no protocols", false, "consumer", &[][..], false),
-            "empty other type" => ("empty, anything else", false, "connect", &["x"][..], true),
-            "stable other type" => (
-                "stable, other type",
-                true,
-                "connect",
-                &["sticky"][..],
-                false,
-            ),
-            "stable missing protocol" => (
-                "stable, protocol one member lacks",
-                true,
-                "consumer",
-                &["range"][..],
-                false,
-            ),
-            "stable shared protocol" => (
-                "stable, shared protocol",
-                true,
-                "consumer",
-                &["x", "sticky"][..],
-                true,
-            ),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let group = if stable {
-            stable_protocol_group()
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct ProtocolNegotiation {
+        group: Option<ClassicGroup>,
+        supported: Option<bool>,
+    }
+    #[rstest::fixture]
+    fn negotiation() -> ProtocolNegotiation {
+        // Start this scenario with fresh inputs and observations.
+        ProtocolNegotiation::default()
+    }
+    #[given("the classic group is {state} with existing consumer protocol support")]
+    fn classic_protocol_group(negotiation: &mut ProtocolNegotiation, state: String) {
+        negotiation.group = Some(match state.as_str() {
+            "empty" => empty_protocol_group(),
+            "stable" => stable_protocol_group(),
+            _ => panic!("unknown classic group state"),
+        });
+    }
+    #[when("a joining member offers protocol type {kind} with preference list {names}")]
+    fn negotiate_protocol(negotiation: &mut ProtocolNegotiation, kind: String, names: String) {
+        let kind = if kind == "empty" { "" } else { &kind };
+        let names = if names == "none" {
+            vec![]
         } else {
-            empty_protocol_group()
+            names.split(',').collect::<Vec<_>>()
         };
-        assert2::assert!(
-            group.supports_protocols(protocol_type, names.iter().copied()) == want,
-            "{name}"
+        negotiation.supported = Some(
+            negotiation
+                .group
+                .as_ref()
+                .expect("group prepared")
+                .supports_protocols(kind, names.into_iter()),
         );
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/classic_state/protocol.feature",
-        name = "tests: supports protocols matches kafka"
-    )]
-    fn supports_protocols_matches_kafka(example: String) { let _ = example; }
+    #[then("the offered protocols are compatible {compatible}")]
+    fn compatible_protocols(negotiation: &ProtocolNegotiation, compatible: bool) {
+        assert2::assert!(negotiation.supported == Some(compatible));
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/classic_state/protocol.feature",fixtures=[negotiation:ProtocolNegotiation]);
 }

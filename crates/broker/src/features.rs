@@ -218,51 +218,43 @@ mod tests {
         assert2::assert!(cidr_hosts_supported(&image) == want, "{finalized:?}");
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "features tests: metadata changed between walks like kafka for {example}"
-    )]
-    fn bdd_verify_metadata_changed_between_walks_like_kafka(example: String) {
-        type Example = (i16, i16, bool);
-        let (source, target, want): Example = match example.as_str() {
-            "same version" => (25, 25, false),
-            "adjacent downgrade 25 to 24" => (25, 24, false),
-            "adjacent upgrade 24 to 25" => (24, 25, false),
-            "multi version downgrade without change 29 to 24" => (29, 24, false),
-            "crossing change 25 to 22" => (25, 22, true),
-            "lower change excluded 25 to 23" => (25, 23, false),
-            "crossing change 23 to 22" => (23, 22, true),
-            "crossing change 17 to 15" => (17, 15, true),
-            "lower change excluded 16 to 15" => (16, 15, false),
-            "crossing change 13 to 12" => (13, 12, true),
-            "lower change excluded 12 to 11" => (12, 11, false),
-            "crossing change 30 to 29" => (30, 29, true),
-            "crossing change 32 to 31" => (32, 31, true),
-            "lower change excluded 31 to 30" => (31, 30, false),
-            "crossing change 8 to 7" => (8, 7, true),
-            "crossing change 7 to 6" => (7, 6, true),
-            "crossing change 33 to 32" => (33, 32, true),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        use krabka_metadata::metadata_version::metadata_changed_between;
-        assert2::assert!(
-            metadata_changed_between(source, target) == want,
-            "{source} -> {target}"
-        );
+    #[derive(Default)]
+    struct MetadataTransition {
+        source: i16,
+        target: i16,
+        changed: Option<bool>,
     }
 
-    /// Kafka's `checkIfMetadataChanged` walks from the higher level down
-    /// and stops at the first level whose `didMetadataChange` is set, so the
-    /// higher level's own flag counts and the lower level's does not. The
-    /// broker's `UpdateFeatures` path reads it from `krabka_metadata`, and
-    /// these are the cases the broker-local table it replaced was held to.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/features.feature",
-        name = "tests: metadata changed between walks like kafka"
-    )]
-    fn metadata_changed_between_walks_like_kafka(example: String) { let _ = example; }
+    #[rstest::fixture]
+    fn transition() -> MetadataTransition {
+        // Keep transition inputs and observations fresh for each scenario.
+        MetadataTransition::default()
+    }
+
+    #[rstest_bdd_macros::given("metadata changes from version {source} to version {target}")]
+    fn metadata_versions(transition: &mut MetadataTransition, source: i16, target: i16) {
+        transition.source = source;
+        transition.target = target;
+    }
+
+    #[rstest_bdd_macros::when("Kafka's metadata-change boundaries are traversed")]
+    fn traverse_metadata_versions(transition: &mut MetadataTransition) {
+        use krabka_metadata::metadata_version::metadata_changed_between;
+        transition.changed = Some(metadata_changed_between(
+            transition.source,
+            transition.target,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("a metadata format change is crossed {changed}")]
+    fn metadata_change_result(transition: &MetadataTransition, changed: bool) {
+        assert!(
+            transition.changed == Some(changed),
+            "{} -> {}",
+            transition.source,
+            transition.target
+        );
+    }
 
     #[test]
     fn self_bootstrap_and_format_default_to_the_same_metadata_version() {
@@ -386,4 +378,6 @@ mod tests {
             "level {required_level}"
         );
     }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/features.feature", fixtures = [transition: MetadataTransition]);
 }

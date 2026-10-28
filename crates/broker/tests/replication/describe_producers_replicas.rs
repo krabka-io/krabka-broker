@@ -43,9 +43,12 @@ use {
         primitives::uuid::Uuid as WireUuid,
         records::RecordBatch,
     },
-    std::{net::SocketAddr, time::Duration},
+    rstest::fixture,
+    rstest_bdd::datatable::Rows,
+    rstest_bdd_macros::{DataTableRow, given, scenario, then, when},
+    std::{mem::take, net::SocketAddr, time::Duration},
     tempfile::TempDir,
-    tokio::time,
+    tokio::{sync::MutexGuard, time},
 };
 
 type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
@@ -55,12 +58,6 @@ const TOPIC: &str = "describe-producers-replicas";
 /// The `transactional_id` of every transactional `Produce`.
 const TRANSACTIONAL_ID: &str = "describe-producers-replicas";
 
-/// The `max_timestamp` of the first batch. Each later batch adds one.
-const BASE_TIMESTAMP: i64 = 1_700_000_000_000;
-
-/// The coordinator epoch that every transaction marker carries.
-const COORDINATOR_EPOCH: i32 = 17;
-
 /// The last `Produce` version before transaction version 2. With
 /// `transaction.partition.verification.enable=false`, Kafka's leader appends
 /// a transactional batch at this version without a call to the transaction
@@ -69,17 +66,6 @@ const PRODUCE_V11: i16 = 11;
 
 /// Kafka's `api_key` of `Produce`.
 const PRODUCE_API_KEY: i16 = 0;
-
-/// The idempotent producer.
-const IDEMPOTENT: ProducerIdentity = producer(9_001, 0);
-/// The transactional producer that commits at its epoch (transaction version
-/// 1).
-const COMMITTED: ProducerIdentity = producer(9_002, 2);
-/// The transactional producer that aborts at the next epoch (transaction
-/// version 2).
-const ABORTED: ProducerIdentity = producer(9_003, 4);
-/// The transactional producer whose transaction stays open.
-const OPEN: ProducerIdentity = producer(9_004, 0);
 
 /// The producer with `id` at `epoch`.
 const fn producer(id: i64, epoch: i16) -> ProducerIdentity {
@@ -103,12 +89,6 @@ struct TransactionFields {
     coordinator_epoch: i32,
     current_txn_start_offset: i64,
 }
-
-/// A row for a producer that has no open transaction and no marker.
-const NO_TRANSACTION: TransactionFields = TransactionFields {
-    coordinator_epoch: -1,
-    current_txn_start_offset: -1,
-};
 
 use crate::support::records::now_ms;
 
@@ -200,6 +180,7 @@ async fn end_transaction(
     producer: ProducerIdentity,
     commit: TransactionOutcome,
     transaction_version: i8,
+    coordinator_epoch: i32,
 ) -> i16 {
     let response = leader
         .send(WriteTxnMarkersRequest {
@@ -207,7 +188,7 @@ async fn end_transaction(
                 transactions::transaction_marker()
                     .producer(producer)
                     .outcome(commit)
-                    .coordinator_epoch(COORDINATOR_EPOCH)
+                    .coordinator_epoch(coordinator_epoch)
                     .transaction_version(transaction_version)
                     .topics(vec![transactions::marker_topic(TOPIC.into(), vec![0])])
                     .call(),
@@ -265,125 +246,174 @@ fn reported_timestamp(answer: &DescribeProducersResponse, producer_id: i64) -> i
         .map_or(-1, |row| row.last_timestamp)
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "replication describe producers replicas: every replica describes the producers of its log"
-)]
-async fn bdd_verify_every_replica_describes_the_producers_of_its_log() {
-    let _g = cluster_lock().lock().await;
-    let cluster = start_cluster().await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+#[derive(Default)]
+struct ProducerReplicaScenario {
+    cluster: Cluster,
+    guard: Option<MutexGuard<'static, ()>>,
+    leader: Option<Connection>,
+    topic: Option<WireUuid>,
+    codes: Vec<i16>,
+    marker_before: Option<i64>,
+    marker_after: Option<i64>,
+    answers: Vec<DescribeProducersResponse>,
+}
 
-    let admin =
-        connect_with_context(cluster[0].1.listen_addr.to_string(), None, "admin client").await;
-    let topic_id = support::client::create_topic_spec(
-        &admin,
-        support::topic_on(TOPIC, &[&[1, 2, 3]]),
-        CreateTopicRequestSetup::default(),
+#[fixture]
+fn producer_replicas() -> ProducerReplicaScenario {
+    // Compare the actual log-derived producer rows on leader and both followers.
+    ProducerReplicaScenario::default()
+}
+
+impl ProducerReplicaScenario {
+    fn leader(&self) -> &Connection { self.leader.as_ref().expect("leader connection") }
+}
+
+#[derive(DataTableRow)]
+struct ProducerAppend {
+    id: i64,
+    epoch: i16,
+    sequence: i32,
+    records: i32,
+    timestamp: i64,
+    transaction: String,
+    marker: String,
+    marker_epoch_delta: i16,
+    transaction_version: i8,
+    coordinator_epoch: i32,
+}
+
+#[derive(DataTableRow)]
+struct ProducerExpectation {
+    id: i64,
+    epoch: i16,
+    sequence: i32,
+    timestamp: String,
+    coordinator_epoch: i32,
+    transaction_start: i64,
+}
+
+#[given("three replicas accept transactional Produce v11 without partition verification")]
+async fn producer_state_replicas(producer_replicas: &mut ProducerReplicaScenario) {
+    producer_replicas.guard = Some(cluster_lock().lock().await);
+    producer_replicas.cluster = start_cluster().await;
+    support::wait_for_all_brokers_registered(&producer_replicas.cluster, 3).await;
+    let admin = connect_with_context(
+        producer_replicas.cluster[0].1.listen_addr.to_string(),
+        None,
+        "admin client",
     )
     .await;
+    producer_replicas.topic = Some(
+        support::client::create_topic_spec(
+            &admin,
+            support::topic_on(TOPIC, &[&[1, 2, 3]]),
+            CreateTopicRequestSetup::default(),
+        )
+        .await,
+    );
     support::partitions::wait_for_partition_on_all(
-        cluster.iter().map(|(handle, _, _)| handle),
+        producer_replicas
+            .cluster
+            .iter()
+            .map(|(broker, _, _)| broker),
         TOPIC,
         0,
     )
     .await;
-    cluster[0]
+    producer_replicas.cluster[0]
         .0
-        .wait_until_local_partition_leader(TOPIC, 0, cluster[0].1.node_id)
+        .wait_until_local_partition_leader(TOPIC, 0, producer_replicas.cluster[0].1.node_id)
         .await;
-    let leader = connect(cluster[0].0.listen_addr()).await;
+    producer_replicas.leader = Some(connect(producer_replicas.cluster[0].0.listen_addr()).await);
+}
 
-    // Offsets 0 to 4: the idempotent producer, two batches.
-    let idempotent = [
-        produce(
-            &leader,
-            topic_id,
-            batch()
-                .producer(batch_producer(IDEMPOTENT))
-                .records(3)
-                .max_timestamp(BASE_TIMESTAMP)
-                .call(),
-        )
-        .await,
-        produce(
-            &leader,
-            topic_id,
-            batch()
-                .producer(batch_producer(IDEMPOTENT))
-                .base_sequence(3)
-                .records(2)
-                .max_timestamp(BASE_TIMESTAMP + 1)
-                .call(),
-        )
-        .await,
-    ];
-    // Offsets 5 and 6, 8, and 10 and 11: the transactional batches. Offsets 7
-    // and 9 are the markers below.
-    let committed = produce_transactional(
-        &leader,
-        batch()
-            .producer(batch_producer(COMMITTED))
-            .records(2)
-            .max_timestamp(BASE_TIMESTAMP + 2)
-            .transaction(BatchTransactionMode::Transactional)
-            .call(),
-    )
-    .await;
-    let before_markers = now_ms();
-    let commit = end_transaction(&leader, COMMITTED, TransactionOutcome::Commit, 1).await;
-    let aborted = produce_transactional(
-        &leader,
-        batch()
-            .producer(batch_producer(ABORTED))
-            .max_timestamp(BASE_TIMESTAMP + 3)
-            .transaction(BatchTransactionMode::Transactional)
-            .call(),
-    )
-    .await;
-    let aborted_next_epoch = producer(ABORTED.id.0, ABORTED.epoch.0 + 1);
-    let abort = end_transaction(&leader, aborted_next_epoch, TransactionOutcome::Abort, 2).await;
-    let after_markers = now_ms();
-    let open = produce_transactional(
-        &leader,
-        batch()
-            .producer(batch_producer(OPEN))
-            .records(2)
-            .max_timestamp(BASE_TIMESTAMP + 4)
-            .transaction(BatchTransactionMode::Transactional)
-            .call(),
-    )
-    .await;
-    assert!(
-        (idempotent, committed, commit, aborted, abort, open)
-            == (
-                [codes::NONE; 2],
-                codes::NONE,
-                codes::NONE,
-                codes::NONE,
-                codes::NONE,
-                codes::NONE
+#[when("the leader appends these producer batches and transaction markers in order")]
+async fn append_replica_producers(
+    producer_replicas: &mut ProducerReplicaScenario,
+    #[datatable] rows: Rows<ProducerAppend>,
+) {
+    for row in rows {
+        let batch = batch()
+            .producer(batch_producer(producer(row.id, row.epoch)))
+            .base_sequence(row.sequence)
+            .records(row.records)
+            .max_timestamp(row.timestamp)
+            .transaction(if row.transaction == "transactional" {
+                BatchTransactionMode::Transactional
+            } else {
+                BatchTransactionMode::Ordinary
+            })
+            .call();
+        let code = if row.transaction == "transactional" {
+            produce_transactional(producer_replicas.leader(), batch).await
+        } else {
+            produce(
+                producer_replicas.leader(),
+                producer_replicas.topic.expect("topic identity"),
+                batch,
             )
-    );
-    for (handle, _, _) in &cluster {
-        handle.wait_until_local_log_end_offset(TOPIC, 0, 12).await;
+            .await
+        };
+        producer_replicas.codes.push(code);
+        if row.marker != "none" {
+            if producer_replicas.marker_before.is_none() {
+                producer_replicas.marker_before = Some(now_ms());
+            }
+            let outcome = match row.marker.as_str() {
+                "commit" => TransactionOutcome::Commit,
+                "abort" => TransactionOutcome::Abort,
+                _ => panic!("unknown marker {}", row.marker),
+            };
+            let code = end_transaction(
+                producer_replicas.leader(),
+                producer(row.id, row.epoch + row.marker_epoch_delta),
+                outcome,
+                row.transaction_version,
+                row.coordinator_epoch,
+            )
+            .await;
+            producer_replicas.codes.push(code);
+            producer_replicas.marker_after = Some(now_ms());
+        }
     }
+}
 
-    let mut answers = Vec::new();
-    for (handle, _, _) in &cluster {
-        answers.push(describe_producers(handle).await);
+#[then("all seven producer append and marker operations succeed")]
+fn producer_appends_replicated(producer_replicas: &ProducerReplicaScenario) {
+    assert!(producer_replicas.codes == vec![codes::NONE; 7]);
+}
+
+#[when("every replica reaches log end twelve and answers DescribeProducers")]
+async fn describe_replica_producers(producer_replicas: &mut ProducerReplicaScenario) {
+    for (broker, _, _) in &producer_replicas.cluster {
+        broker.wait_until_local_log_end_offset(TOPIC, 0, 12).await;
     }
+    for (broker, _, _) in &producer_replicas.cluster {
+        producer_replicas
+            .answers
+            .push(describe_producers(broker).await);
+    }
+}
 
-    // Kafka's `ProducerAppendInfo.appendEndTxnMarker` puts the timestamp of
-    // the marker in `lastTimestamp`. The leader wrote both markers inside
-    // this window, so its answer gives those values.
-    let window = before_markers..=after_markers;
-    let committed_marker = TransactionFields {
-        coordinator_epoch: COORDINATOR_EPOCH,
-        current_txn_start_offset: -1,
-    };
-    let committed_at = reported_timestamp(&answers[0], COMMITTED.id.0);
-    let aborted_at = reported_timestamp(&answers[0], aborted_next_epoch.id.0);
+#[then("all three complete DescribeProducers responses contain these ordered rows")]
+fn equivalent_replica_producers(
+    producer_replicas: &ProducerReplicaScenario,
+    #[datatable] rows: Rows<ProducerExpectation>,
+) {
+    assert!(producer_replicas.answers.len() == 3);
+    let rows: Vec<_> = rows.into_iter().collect();
+    let committed = rows
+        .iter()
+        .find(|row| row.timestamp == "commit_marker_time")
+        .expect("committed producer expectation")
+        .id;
+    let aborted = rows
+        .iter()
+        .find(|row| row.timestamp == "abort_marker_time")
+        .expect("aborted producer expectation")
+        .id;
+    let committed_at = reported_timestamp(&producer_replicas.answers[0], committed);
+    let aborted_at = reported_timestamp(&producer_replicas.answers[0], aborted);
     let expected = DescribeProducersResponse {
         throttle_time_ms: 0,
         topics: vec![TopicResponse {
@@ -392,42 +422,52 @@ async fn bdd_verify_every_replica_describes_the_producers_of_its_log() {
                 partition_index: 0,
                 error_code: codes::NONE,
                 error_message: None,
-                active_producers: vec![
-                    producer_row(IDEMPOTENT, 4, BASE_TIMESTAMP + 1, NO_TRANSACTION),
-                    producer_row(COMMITTED, 1, committed_at, committed_marker),
-                    producer_row(aborted_next_epoch, -1, aborted_at, committed_marker),
-                    producer_row(OPEN, 1, BASE_TIMESTAMP + 4, TransactionFields {
-                        coordinator_epoch: -1,
-                        current_txn_start_offset: 10,
-                    }),
-                ],
+                active_producers: rows
+                    .into_iter()
+                    .map(|row| {
+                        let timestamp = match row.timestamp.as_str() {
+                            "commit_marker_time" => committed_at,
+                            "abort_marker_time" => aborted_at,
+                            value => value.parse().expect("producer timestamp"),
+                        };
+                        producer_row(
+                            producer(row.id, row.epoch),
+                            row.sequence,
+                            timestamp,
+                            TransactionFields {
+                                coordinator_epoch: row.coordinator_epoch,
+                                current_txn_start_offset: row.transaction_start,
+                            },
+                        )
+                    })
+                    .collect(),
                 ..Default::default()
             }],
             ..Default::default()
         }],
         ..Default::default()
     };
+    let window = producer_replicas
+        .marker_before
+        .expect("first marker instant")
+        ..=producer_replicas.marker_after.expect("last marker instant");
     assert!(
         (
-            answers,
+            &producer_replicas.answers,
             window.contains(&committed_at),
             window.contains(&aborted_at)
-        ) == (vec![expected; 3], true, true)
+        ) == (&vec![expected; 3], true, true)
     );
-
-    shutdown_cluster(cluster).await;
 }
 
-/// The leader appends batches of an idempotent producer and of three
-/// transactional producers: one commits at its epoch, one aborts at the next
-/// epoch, and one keeps its transaction open. Once every follower has the
-/// whole log, each broker gives the same `DescribeProducers` answer: one row
-/// for each producer, in producer id order, with the sequence, the timestamp
-/// and the transaction fields of the producer state of its log.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/replication/describe_producers_replicas.feature",
     name = "every replica describes the producers of its log"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn every_replica_describes_the_producers_of_its_log() {}
+async fn every_replica_describes_the_producers_of_its_log(
+    producer_replicas: ProducerReplicaScenario,
+) {
+    shutdown_cluster(take(&mut producer_replicas.cluster)).await;
+    drop(producer_replicas);
+}

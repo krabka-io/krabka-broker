@@ -5,16 +5,13 @@
 use {
     crate::{
         harness::{
-            alice_password, alice_plain_config, common_imports::*, metadata_probe, round_trip,
-            start_alice_plain, start_reauth_broker, wrong_scram_password,
+            alice_password, alice_plain_config, common_imports::*, metadata_probe, read_after_auth,
+            round_trip, start_alice_plain, start_reauth_broker, wrong_scram_password,
         },
         kafka_wire::{
             PlainAuthenticationSetup, sasl_plain_authenticate_on, sasl_plain_reauthenticate_on,
         },
-        reauth_cases::{
-            capped_session_closes, different_principal_closes, repeated_expired_reauth,
-            same_principal_reopens,
-        },
+        reauth_cases::{Reauthentication, reauthentication},
         support::{
             client::scrape_metrics as scrape_metrics_client,
             sasl::plain_authentication_body,
@@ -22,17 +19,12 @@ use {
         },
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, then, when},
     std::{io, net::SocketAddr},
+    tempfile::TempDir,
 };
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("auth handlers plain: sasl plain happy path")]
-async fn bdd_verify_sasl_plain_happy_path() {
-    let (_log_dir, handle, addr) = start_alice_plain(alice_password()).await;
-    let result = drive_sasl_plain_session(addr, "alice", alice_password().as_bytes()).await;
-    handle.shutdown().await;
-    result.expect("SASL/PLAIN session must succeed end-to-end");
-}
 
 /// Happy-path drive of a SASL/PLAIN session: `ApiVersions` → `SaslHandshake`
 /// → `SaslAuthenticate` → Metadata.
@@ -47,44 +39,12 @@ async fn bdd_verify_sasl_plain_happy_path() {
     name = "sasl plain happy path"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_plain_happy_path() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auth handlers plain: sasl plain authentication metrics tick for success and failure"
-)]
-async fn bdd_verify_sasl_plain_authentication_metrics_tick_for_success_and_failure() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = alice_plain_config(log_dir.path().to_path_buf(), alice_password());
-    cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
-    let metrics_addr = handle
-        .metrics_addr()
-        .expect("metrics server should be bound");
-
-    // 1. Happy path — must tick `successful_authentication_total`.
-    drive_sasl_plain_session(addr, "alice", alice_password().as_bytes())
-        .await
-        .expect("happy-path PLAIN session");
-    // 2. Wrong password — must tick `failed_authentication_total`.
-    let bad = drive_sasl_plain_session(addr, "alice", wrong_scram_password().as_bytes()).await;
-    assert!(bad.is_err(), "wrong password must fail: {bad:?}");
-
-    let body = scrape_metrics(metrics_addr).await;
-    handle.shutdown().await;
-
-    let success_needle = "krabka_broker_successful_authentication_total{mechanism=\"PLAIN\"} 1";
-    let failed_needle = "krabka_broker_failed_authentication_total{mechanism=\"PLAIN\"} 1";
-    assert!(
-        body.contains(success_needle),
-        "missing or wrong-value {success_needle} in:\n{body}"
-    );
-    assert!(
-        body.contains(failed_needle),
-        "missing or wrong-value {failed_needle} in:\n{body}"
-    );
+async fn sasl_plain_happy_path(authentication: PlainAuthentication) {
+    authentication
+        .broker
+        .expect("a PLAIN listener")
+        .shutdown()
+        .await;
 }
 
 /// SASL PLAIN metrics: one happy-path session and one wrong-password session
@@ -100,30 +60,26 @@ async fn bdd_verify_sasl_plain_authentication_metrics_tick_for_success_and_failu
     name = "sasl plain authentication metrics tick for success and failure"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_plain_authentication_metrics_tick_for_success_and_failure() {}
+async fn sasl_plain_authentication_metrics_tick_for_success_and_failure(
+    authentication: PlainAuthentication,
+) {
+    authentication
+        .broker
+        .expect("a PLAIN listener")
+        .shutdown()
+        .await;
+}
 
 /// Send an HTTP GET `/metrics` to `addr` and return the response body.
 ///
 /// The returned body holds no HTTP head.
 async fn scrape_metrics(addr: SocketAddr) -> String { scrape_metrics_client(addr).await }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("auth handlers plain: sasl plain wrong password closes connection")]
-async fn bdd_verify_sasl_plain_wrong_password_closes_connection() {
-    let (_log_dir, handle, addr) = start_alice_plain(alice_password()).await;
-    let result = drive_sasl_plain_session(addr, "alice", wrong_scram_password().as_bytes()).await;
-    handle.shutdown().await;
-    assert!(
-        result.is_err(),
-        "wrong password must fail the SASL session: {result:?}"
-    );
-}
-
 /// Negative path: with a wrong password, `SaslAuthenticate` responds with
 /// `error_code = SASL_AUTHENTICATION_FAILED` (58) and the broker closes the
 /// connection.
 ///
-/// `drive_sasl_plain_session` reports the failure as an `Err` in two cases.
+/// `drive_sasl_plain_session_on` reports the failure as an `Err` in two cases.
 /// The first case is a non-zero `error_code` on the auth response. The second
 /// case is an EOF on the Metadata read that follows, when the peer closed the
 /// connection.
@@ -133,7 +89,13 @@ async fn bdd_verify_sasl_plain_wrong_password_closes_connection() {
     name = "sasl plain wrong password closes connection"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sasl_plain_wrong_password_closes_connection() {}
+async fn sasl_plain_wrong_password_closes_connection(authentication: PlainAuthentication) {
+    authentication
+        .broker
+        .expect("a PLAIN listener")
+        .shutdown()
+        .await;
+}
 
 /// Drive a complete SASL/PLAIN session against a `SASL_PLAINTEXT` listener.
 ///
@@ -153,19 +115,18 @@ async fn sasl_plain_wrong_password_closes_connection() {}
 ///   non-flexible.
 /// - Length framing: a 4-byte big-endian length prefix on every frame in both
 ///   directions, the same as `krabka_broker::network::codec`.
-async fn drive_sasl_plain_session(
-    addr: SocketAddr,
+async fn drive_sasl_plain_session_on(
+    stream: &mut TcpStream,
     user: &str,
     password: &[u8],
 ) -> Result<(), io::Error> {
-    let mut stream = TcpStream::connect(addr).await?;
-    sasl_plain_authenticate_on(&mut stream, &PlainAuthenticationSetup {
+    sasl_plain_authenticate_on(stream, &PlainAuthenticationSetup {
         client_id: "krabka-sasl-test",
         user,
         password: (password).to_vec(),
     })
     .await?;
-    metadata_probe(&mut stream, 4).await
+    metadata_probe(stream, 4).await
 }
 
 /// Opens a PLAIN session on `stream` and returns the `SaslAuthenticate`
@@ -180,14 +141,6 @@ pub async fn plain_authenticate(
     sasl_plain_reauthenticate_on(stream, corr, setup).await
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auth handlers plain: plain session capped by connections max reauth then closes"
-)]
-async fn bdd_verify_plain_session_capped_by_connections_max_reauth_then_closes() {
-    capped_session_closes(SaslMechanism::Plain).await;
-}
-
 /// KIP-368: with `connections.max.reauth.ms` set, a PLAIN session reports the
 /// window as `session_lifetime_ms`, and a data-plane request that arrives after
 /// it elapses without an in-band re-authentication closes the connection.
@@ -197,14 +150,10 @@ async fn bdd_verify_plain_session_capped_by_connections_max_reauth_then_closes()
     name = "plain session capped by connections max reauth then closes"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plain_session_capped_by_connections_max_reauth_then_closes() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auth handlers plain: plain in band reauth same principal reopens data plane"
-)]
-async fn bdd_verify_plain_in_band_reauth_same_principal_reopens_data_plane() {
-    same_principal_reopens(SaslMechanism::Plain).await;
+async fn plain_session_capped_by_connections_max_reauth_then_closes(
+    reauthentication: Reauthentication,
+) {
+    reauthentication.shutdown().await;
 }
 
 /// KIP-368: an in-band re-authentication with the same principal succeeds and
@@ -215,14 +164,10 @@ async fn bdd_verify_plain_in_band_reauth_same_principal_reopens_data_plane() {
     name = "plain in band reauth same principal reopens data plane"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plain_in_band_reauth_same_principal_reopens_data_plane() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auth handlers plain: plain in band reauth with different principal closes"
-)]
-async fn bdd_verify_plain_in_band_reauth_with_different_principal_closes() {
-    different_principal_closes(SaslMechanism::Plain).await;
+async fn plain_in_band_reauth_same_principal_reopens_data_plane(
+    reauthentication: Reauthentication,
+) {
+    reauthentication.shutdown().await;
 }
 
 /// KIP-368 forbids a principal switch mid-connection: a PLAIN re-auth that
@@ -234,37 +179,8 @@ async fn bdd_verify_plain_in_band_reauth_with_different_principal_closes() {
     name = "plain in band reauth with different principal closes"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plain_in_band_reauth_with_different_principal_closes() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auth handlers plain: plain authenticate without handshake closes the connection"
-)]
-async fn bdd_verify_plain_authenticate_without_handshake_closes_the_connection() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle =
-        start_reauth_broker(log_dir.path(), krabka_units::secs(30), SaslMechanism::Plain).await;
-    let addr = handle.listen_addr();
-
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let auth_body = plain_authentication_body("alice", alice_password().as_bytes());
-    check!(
-        round_trip(
-            &mut stream,
-            SocketExchangeSetup {
-                api_key: WireApiKey(36),
-                version: WireApiVersion(2),
-                header: RequestHeaderEncoding::Flexible,
-                ..Default::default()
-            },
-            &auth_body
-        )
-        .await
-        .is_err(),
-        "a SaslAuthenticate before a handshake must close with no response"
-    );
-
-    handle.shutdown().await;
+async fn plain_in_band_reauth_with_different_principal_closes(reauthentication: Reauthentication) {
+    reauthentication.shutdown().await;
 }
 
 /// A `SaslAuthenticate` before any handshake closes the connection with no
@@ -276,14 +192,14 @@ async fn bdd_verify_plain_authenticate_without_handshake_closes_the_connection()
     name = "plain authenticate without handshake closes the connection"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plain_authenticate_without_handshake_closes_the_connection() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auth handlers plain: plain reauth after the window elapsed keeps serving round after round"
-)]
-async fn bdd_verify_plain_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
-    repeated_expired_reauth(SaslMechanism::Plain, krabka_units::millis(300), 200..=300).await;
+async fn plain_authenticate_without_handshake_closes_the_connection(
+    authentication: PlainAuthentication,
+) {
+    authentication
+        .broker
+        .expect("a PLAIN listener")
+        .shutdown()
+        .await;
 }
 
 /// KIP-368: a PLAIN connection re-authenticates round after round, and each
@@ -299,4 +215,206 @@ async fn bdd_verify_plain_reauth_after_the_window_elapsed_keeps_serving_round_af
     name = "plain reauth after the window elapsed keeps serving round after round"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plain_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {}
+async fn plain_reauth_after_the_window_elapsed_keeps_serving_round_after_round(
+    reauthentication: Reauthentication,
+) {
+    reauthentication.shutdown().await;
+}
+
+struct PlainAuthentication {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    password: Vec<u8>,
+    stream: Option<TcpStream>,
+    result: Option<io::Result<()>>,
+    raw_result: Option<io::Result<Vec<u8>>>,
+    metrics: Option<String>,
+    bytes_read: Option<usize>,
+}
+
+#[fixture]
+fn authentication() -> PlainAuthentication {
+    // Start this scenario with fresh inputs and observations.
+
+    PlainAuthentication {
+        broker: None,
+        directory: None,
+        password: Vec::new(),
+        stream: None,
+        result: None,
+        raw_result: None,
+        metrics: None,
+        bytes_read: None,
+    }
+}
+
+#[given("a PLAIN listener provisioned with alice's configured password")]
+async fn plain_listener(authentication: &mut PlainAuthentication) {
+    let (directory, broker, _addr) = start_alice_plain(alice_password()).await;
+    authentication.directory = Some(directory);
+    authentication.broker = Some(broker);
+}
+
+#[given("the PLAIN listener exports authentication metrics")]
+async fn plain_metrics_listener(authentication: &mut PlainAuthentication) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = alice_plain_config(directory.path().to_path_buf(), alice_password());
+    config.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
+    authentication.broker = Some(Broker::start(config).await.expect("broker must start"));
+    authentication.directory = Some(directory);
+}
+
+#[given("a PLAIN listener with a 30 second reauthentication cap")]
+async fn plain_reauth_listener(authentication: &mut PlainAuthentication) {
+    let directory = tempfile::tempdir().unwrap();
+    authentication.broker = Some(
+        start_reauth_broker(
+            directory.path(),
+            krabka_units::secs(30),
+            SaslMechanism::Plain,
+        )
+        .await,
+    );
+    authentication.directory = Some(directory);
+}
+
+#[given("alice supplies the configured PLAIN password")]
+fn correct_plain_password(authentication: &mut PlainAuthentication) {
+    authentication.password = alice_password().into_bytes();
+}
+
+#[given("alice supplies a wrong PLAIN password")]
+fn wrong_plain_password(authentication: &mut PlainAuthentication) {
+    authentication.password = wrong_scram_password().into_bytes();
+}
+
+#[when("alice opens a fresh connection and attempts PLAIN authentication followed by Metadata")]
+async fn plain_session(authentication: &mut PlainAuthentication) {
+    let addr = authentication
+        .broker
+        .as_ref()
+        .expect("a PLAIN listener")
+        .listen_addr();
+    let mut stream = TcpStream::connect(addr)
+        .await
+        .expect("connect to the PLAIN listener");
+    authentication.result =
+        Some(drive_sasl_plain_session_on(&mut stream, "alice", &authentication.password).await);
+    authentication.stream = Some(stream);
+}
+
+#[then("PLAIN authentication and Metadata complete successfully")]
+fn plain_authenticated(authentication: &PlainAuthentication) {
+    authentication
+        .result
+        .as_ref()
+        .expect("a PLAIN session was attempted")
+        .as_ref()
+        .expect("SASL/PLAIN session must succeed end-to-end");
+}
+
+#[then("PLAIN credentials are rejected with SASL_AUTHENTICATION_FAILED")]
+fn plain_authentication_failed(authentication: &PlainAuthentication) {
+    let result = authentication
+        .result
+        .as_ref()
+        .expect("a PLAIN session was attempted");
+    assert!(
+        result.is_err(),
+        "wrong password must fail the SASL session: {result:?}"
+    );
+    let error = result
+        .as_ref()
+        .expect_err("wrong credentials must be rejected");
+    assert!(
+        error.to_string().contains("error_code=58"),
+        "the broker must reject credentials, not fail unrelated I/O: {error}"
+    );
+}
+
+#[when("the refused PLAIN client reads the connection")]
+async fn read_refused_plain_session(authentication: &mut PlainAuthentication) {
+    authentication.bytes_read = Some(
+        read_after_auth(
+            authentication
+                .stream
+                .as_mut()
+                .expect("an attempted PLAIN session"),
+        )
+        .await,
+    );
+}
+
+#[then("the refused PLAIN connection is closed at EOF")]
+fn plain_connection_closed(authentication: &PlainAuthentication) {
+    assert!(
+        authentication.bytes_read == Some(0),
+        "the broker must close after failed PLAIN authentication"
+    );
+}
+
+#[when("the PLAIN authentication metrics are scraped")]
+async fn plain_metric_samples(authentication: &mut PlainAuthentication) {
+    let addr = authentication
+        .broker
+        .as_ref()
+        .expect("a PLAIN listener")
+        .metrics_addr()
+        .expect("metrics server should be bound");
+    authentication.metrics = Some(scrape_metrics(addr).await);
+}
+
+#[then("PLAIN successful and failed authentication counters both equal 1")]
+fn plain_metric_counts(authentication: &PlainAuthentication) {
+    let body = authentication
+        .metrics
+        .as_ref()
+        .expect("authentication metrics were scraped");
+    let success = "krabka_broker_successful_authentication_total{mechanism=\"PLAIN\"} 1";
+    let failed = "krabka_broker_failed_authentication_total{mechanism=\"PLAIN\"} 1";
+    assert!(
+        body.contains(success),
+        "missing or wrong-value {success} in:\n{body}"
+    );
+    assert!(
+        body.contains(failed),
+        "missing or wrong-value {failed} in:\n{body}"
+    );
+}
+
+#[when("alice sends SaslAuthenticate without any SaslHandshake")]
+async fn authenticate_without_handshake(authentication: &mut PlainAuthentication) {
+    let addr = authentication
+        .broker
+        .as_ref()
+        .expect("a PLAIN listener")
+        .listen_addr();
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let auth_body = plain_authentication_body("alice", alice_password().as_bytes());
+    authentication.raw_result = Some(
+        round_trip(
+            &mut stream,
+            SocketExchangeSetup {
+                api_key: WireApiKey(36),
+                version: WireApiVersion(2),
+                header: RequestHeaderEncoding::Flexible,
+                ..Default::default()
+            },
+            &auth_body,
+        )
+        .await,
+    );
+    authentication.stream = Some(stream);
+}
+
+#[then("the pre-handshake SaslAuthenticate receives no response")]
+fn authenticate_requires_handshake(authentication: &PlainAuthentication) {
+    let result = authentication
+        .raw_result
+        .as_ref()
+        .expect("a bare authentication was attempted");
+    check!(
+        result.is_err(),
+        "a SaslAuthenticate before a handshake must close with no response"
+    );
+}

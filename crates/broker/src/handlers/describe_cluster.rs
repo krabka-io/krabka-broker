@@ -307,122 +307,140 @@ mod tests {
         broker_handle.broker.shutdown().await;
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("handlers describe cluster tests: endpoint type errors match kafka")]
-    async fn bdd_verify_endpoint_type_errors_match_kafka() {
-        struct Case {
-            name: &'static str,
-            version: i16,
-            endpoint_type: i8,
-            error_code: i16,
-            error_message: &'static str,
-        }
-        let cases = [
-            Case {
-                name: "controller endpoint type on a broker listener",
-                version: VERSION,
-                endpoint_type: 2,
-                error_code: codes::MISMATCHED_ENDPOINT_TYPE,
-                error_message: "The request was sent to an endpoint of type BROKER, but we \
-                                 wanted an endpoint of type CONTROLLER",
-            },
-            Case {
-                name: "unknown endpoint type 0 at v2",
-                version: VERSION,
-                endpoint_type: 0,
-                error_code: codes::UNSUPPORTED_ENDPOINT_TYPE,
-                error_message: "Unsupported endpoint type 0",
-            },
-            Case {
-                name: "unknown endpoint type 3 at v1",
-                version: 1,
-                endpoint_type: 3,
-                error_code: codes::UNSUPPORTED_ENDPOINT_TYPE,
-                error_message: "Unsupported endpoint type 3",
-            },
-        ];
-
-        for case in cases {
-            krabka_macros::broker_test_setup! {
-                bind(broker_handle, _dir, broker, ctx);
-                boot [start_broker] deny_all;
-                user ["alice"];
-            };
-            let req = DescribeClusterRequest {
-                endpoint_type: case.endpoint_type,
-                ..Default::default()
-            };
-
-            let got = handle(&broker, req, case.version, &ctx)
-                .await
-                .expect("handle");
-
-            let expected = krabka_macros::unthrottled_wire!(DescribeClusterResponse {
-                error_code: case.error_code,
-                error_message: Some(case.error_message.into()),
-                endpoint_type: 1,
-                cluster_id: String::new(),
-                controller_id: -1,
-                brokers: vec![],
-                cluster_authorized_operations: i32::MIN,
-            });
-            assert!(got == expected, "{}", case.name);
-            broker_handle.shutdown().await;
+    #[derive(Default)]
+    struct DescribeClusterScenario {
+        started: Option<HandlerStartedBroker>,
+        version: i16,
+        endpoint_type: i8,
+        principal: String,
+        response: Option<DescribeClusterResponse>,
+    }
+    #[rstest::fixture]
+    fn describe_cluster() -> DescribeClusterScenario {
+        let started = None;
+        DescribeClusterScenario {
+            started,
+            ..Default::default()
         }
     }
-
-    /// KIP-919 endpoint-type table, matching Kafka's
-    /// `AuthHelper.computeDescribeClusterResponse` byte for byte: a
-    /// `CONTROLLER` request against a broker listener gets
-    /// `MISMATCHED_ENDPOINT_TYPE` with Kafka's own message; any other
-    /// non-`BROKER` value gets `UNSUPPORTED_ENDPOINT_TYPE`. Neither error
-    /// response echoes the requested `endpoint_type`; it stays at the schema
-    /// default (`1`). This all happens before the authorizer is consulted, so
-    /// `DenyAll` proves the endpoint-type check is not an authorization path.
-    ///
-    /// `endpoint_type` is a v1+ field (KIP-919 predates v0), so a v0 request
-    /// always decodes it at the schema default of `1` (BROKER) regardless of
-    /// what bytes follow -- there is no wire-reachable way to drive a v0
-    /// request into either error arm, and this table does not try to.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/describe_cluster.feature",
-        name = "tests: endpoint type errors match kafka"
-    )]
-    #[tokio::test]
-    async fn endpoint_type_errors_match_kafka() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers describe cluster tests: reports cluster id in kafka base64 form"
-    )]
-    async fn bdd_verify_reports_cluster_id_in_kafka_base64_form() {
+    #[rstest_bdd_macros::given("a broker listener denies all authorization")]
+    async fn denied_describe_cluster(describe_cluster: &mut DescribeClusterScenario) {
+        describe_cluster.started = Some(start_broker(Arc::new(DenyAll)).await);
+        describe_cluster.principal = "alice".into();
+    }
+    #[rstest_bdd_macros::given("the broker cluster UUID has bytes 1 through 16")]
+    async fn fixed_describe_cluster_id(describe_cluster: &mut DescribeClusterScenario) {
         let known_cluster_id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [broker_fixture_support::start_broker_with(|config| config.cluster_id = Some(known_cluster_id))];
-            user ["describer"];
-        };
-
-        let resp = handle(&broker, request(false), VERSION, &ctx)
-            .await
-            .expect("handle");
-
-        assert!(resp.cluster_id.as_str() == "AQIDBAUGBwgJCgsMDQ4PEA");
-        broker_handle.shutdown().await;
+        describe_cluster.started = Some(
+            broker_fixture_support::start_broker_with(|config| {
+                config.cluster_id = Some(known_cluster_id);
+            })
+            .await,
+        );
+        describe_cluster.principal = "describer".into();
+        describe_cluster.version = VERSION;
+        describe_cluster.endpoint_type = 1;
     }
-
-    /// `DescribeClusterResponse.ClusterId` reports Kafka's base64 `Uuid` form,
-    /// not `java.util.UUID`'s hyphenated form (#1042). The expected string is
-    /// what `org.apache.kafka.common.Uuid(0x0102030405060708L,
-    /// 0x090a0b0c0d0e0f10L).toString()` produces for the same 16 bytes.
-    #[cfg(test)]
+    #[rstest_bdd_macros::given(
+        "a DescribeCluster version {version} request asks for endpoint type {endpoint}"
+    )]
+    fn describe_cluster_endpoint_request(
+        describe_cluster: &mut DescribeClusterScenario,
+        version: i16,
+        endpoint: i8,
+    ) {
+        describe_cluster.version = version;
+        describe_cluster.endpoint_type = endpoint;
+    }
+    #[rstest_bdd_macros::when("the broker listener handles DescribeCluster")]
+    async fn handle_describe_cluster(describe_cluster: &mut DescribeClusterScenario) {
+        let broker = describe_cluster
+            .started
+            .as_ref()
+            .unwrap()
+            .broker
+            .broker_arc_for_test();
+        let principal = describe_cluster.principal.as_str();
+        krabka_macros::request_test_identity! {bind(ctx);user [principal];}
+        let req = DescribeClusterRequest {
+            endpoint_type: describe_cluster.endpoint_type,
+            ..Default::default()
+        };
+        describe_cluster.response = Some(
+            handle(&broker, req, describe_cluster.version, &ctx)
+                .await
+                .expect("handle"),
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "the endpoint refusal is code {code} message {message} with the default broker endpoint and no cluster data"
+    )]
+    async fn check_describe_cluster_endpoint(
+        describe_cluster: &mut DescribeClusterScenario,
+        code: i16,
+        message: String,
+    ) {
+        assert!(
+            describe_cluster.response.as_ref().unwrap()
+                == &krabka_macros::unthrottled_wire!(DescribeClusterResponse {
+                    error_code: code,
+                    error_message: Some(message),
+                    endpoint_type: 1,
+                    cluster_id: String::new(),
+                    controller_id: -1,
+                    brokers: vec![],
+                    cluster_authorized_operations: i32::MIN
+                })
+        );
+        describe_cluster
+            .started
+            .take()
+            .unwrap()
+            .broker
+            .shutdown()
+            .await;
+    }
+    #[rstest_bdd_macros::then("the reported cluster ID is AQIDBAUGBwgJCgsMDQ4PEA")]
+    async fn check_describe_cluster_base64(describe_cluster: &mut DescribeClusterScenario) {
+        assert!(
+            describe_cluster
+                .response
+                .as_ref()
+                .unwrap()
+                .cluster_id
+                .as_str()
+                == "AQIDBAUGBwgJCgsMDQ4PEA"
+        );
+        describe_cluster
+            .started
+            .take()
+            .unwrap()
+            .broker
+            .shutdown()
+            .await;
+    }
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/describe_cluster.feature",
-        name = "tests: reports cluster id in kafka base64 form"
+        path = "tests/features/handler_describe_cluster/cluster.feature",
+        name = "Endpoint type errors precede authorization and retain Kafka response defaults"
     )]
     #[tokio::test]
-    async fn reports_cluster_id_in_kafka_base64_form() {}
+    async fn endpoint_type_errors_match_kafka(
+        describe_cluster: DescribeClusterScenario,
+        version: i16,
+        endpoint: i8,
+        code: i16,
+        message: String,
+    ) {
+        let _ = (describe_cluster, version, endpoint, code, message);
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_describe_cluster/cluster.feature",
+        name = "The cluster identifier uses Kafka unpadded base64"
+    )]
+    #[tokio::test]
+    async fn reports_cluster_id_in_kafka_base64_form(describe_cluster: DescribeClusterScenario) {
+        let _ = describe_cluster;
+    }
 
     /// KIP-430: the bitfield is filled only when the request opts in. Without
     /// the flag the field keeps the `i32::MIN` "not present" sentinel, which

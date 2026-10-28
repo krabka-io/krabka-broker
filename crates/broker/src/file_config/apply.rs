@@ -377,72 +377,68 @@ protocol = "Plaintext"
         file.apply_to(&mut existing_cfg).unwrap();
         assert!(existing_cfg.log_dir == PathBuf::from("/var/lib/krabka/cli"));
     }
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "file config apply tests: metadata log dir resolves like kafkas metadata log dir"
-    )]
-    fn bdd_verify_metadata_log_dir_resolves_like_kafkas_metadata_log_dir() {
-        use {crate::config::BrokerConfig, std::path::PathBuf};
-
-        // (what, file, flag, metadata dir, data dirs)
-        let cases = [
-            (
-                "unset",
-                "log_dir = \"/data/a\"\nextra_log_dirs = [\"/data/b\"]",
-                None,
-                "/data/a",
-                vec!["/data/a", "/data/b"],
-            ),
-            (
-                "a separate directory",
-                "log_dir = \"/data/a\"\nmetadata_log_dir = \"/meta\"",
-                None,
-                "/meta",
-                vec!["/data/a"],
-            ),
-            (
-                "one of the data directories",
-                "log_dir = \"/data/a\"\nextra_log_dirs = [\"/data/b\"]\nmetadata_log_dir = \"/data/b\"",
-                None,
-                "/data/b",
-                vec!["/data/a", "/data/b"],
-            ),
-            (
-                "the flag wins over the file",
-                "log_dir = \"/data/a\"\nmetadata_log_dir = \"/meta\"",
-                Some("/flag"),
-                "/flag",
-                vec!["/data/a"],
-            ),
-        ];
-        for (what, toml, flag, metadata, data) in cases {
-            let file: FileConfig = toml::from_str(toml).unwrap();
-            let mut cfg = BrokerConfig {
-                metadata_log_dir: flag.map(PathBuf::from),
-                ..BrokerConfig::default()
-            };
-            file.apply_to(&mut cfg).unwrap();
-            assert!(
-                (cfg.metadata_dir().to_path_buf(), cfg.all_log_dirs())
-                    == (
-                        PathBuf::from(metadata),
-                        data.into_iter().map(PathBuf::from).collect::<Vec<_>>()
-                    ),
-                "{what}"
-            );
-        }
+    #[derive(Default)]
+    struct MetadataDirectoryFile {
+        source: String,
+        broker: BrokerConfig,
+        resolved: Option<(PathBuf, Vec<PathBuf>)>,
     }
 
-    /// `metadata_log_dir` is Kafka's `metadata.log.dir`: the file sets it
-    /// unless `--metadata-log-dir` already did, and unset it leaves the
-    /// metadata log in `log_dir`, the first entry of `log.dirs`. A separate
-    /// metadata directory is not a data directory.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/file_config/apply.feature",
-        name = "tests: metadata log dir resolves like kafkas metadata log dir"
+    #[rstest::fixture]
+    fn metadata_directory_file() -> MetadataDirectoryFile {
+        // File and command-line directory choices belong to one fresh broker.
+        MetadataDirectoryFile::default()
+    }
+
+    #[rstest_bdd_macros::given("a log directory configuration file contains:")]
+    fn supplied_metadata_directory_file(
+        metadata_directory_file: &mut MetadataDirectoryFile,
+        docstring: String,
+    ) {
+        metadata_directory_file.source = docstring;
+    }
+
+    #[rstest_bdd_macros::given("the metadata-log-dir command-line flag selects {path}")]
+    fn supplied_metadata_directory_flag(
+        metadata_directory_file: &mut MetadataDirectoryFile,
+        path: String,
+    ) {
+        metadata_directory_file.broker.metadata_log_dir = Some(path.into());
+    }
+
+    #[rstest_bdd_macros::when(
+        "the file is applied and the metadata and data log paths are resolved"
     )]
-    fn metadata_log_dir_resolves_like_kafkas_metadata_log_dir() {}
+    fn resolve_metadata_directory_file(metadata_directory_file: &mut MetadataDirectoryFile) {
+        let file: FileConfig =
+            toml::from_str(&metadata_directory_file.source).expect("parse log directory config");
+        file.apply_to(&mut metadata_directory_file.broker)
+            .expect("apply directory configuration");
+        metadata_directory_file.resolved = Some((
+            metadata_directory_file.broker.metadata_dir().to_path_buf(),
+            metadata_directory_file.broker.all_log_dirs(),
+        ));
+    }
+
+    #[rstest_bdd_macros::then(
+        "the metadata log directory is {metadata} and data log directories are JSON {data}"
+    )]
+    fn expected_metadata_directory_file(
+        metadata_directory_file: &MetadataDirectoryFile,
+        metadata: String,
+        data: String,
+    ) {
+        let expected = (
+            metadata.into(),
+            serde_json::from_str(&data).expect("explicit ordered data directory paths"),
+        );
+        assert!(metadata_directory_file.resolved.as_ref() == Some(&expected));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/file_config/apply.feature",
+        fixtures = [metadata_directory_file: MetadataDirectoryFile]
+    );
 
     #[test]
     fn apply_to_extra_log_dirs_fills_empty_but_preserves_existing() {

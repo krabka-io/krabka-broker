@@ -1,229 +1,203 @@
-//! KIP-546 client-quota administration through `kafka-configs`: the alter,
-//! describe, and delete round-trip for a user-scoped `producer_byte_rate`, an
-//! `ip`-scoped `connection_creation_rate`, and a user-scoped
-//! `controller_mutation_rate`.
-//!
-//! Each test ends by waiting for the deletion to reach the committed metadata
-//! image, which is what proves the JVM tool's write went through raft rather
-//! than only through the broker that served it.
-
+//! Stock Kafka quota administration and visibility through committed metadata.
 use {
-    crate::jvm_acceptance::{
-        ADMIN, ADMIN_PASS, KAFKA_IMAGE_TXN, broker0_advertised, describe_console_entity,
-        docker_run_kafka_tool_with_image_and_mount, start_three_broker_sasl_plaintext_jvm_cluster,
-        write_plain_props,
+    crate::{
+        jvm_acceptance::{
+            ADMIN, ADMIN_PASS, ClientPropsFile, KAFKA_IMAGE_TXN, SaslCluster, broker0_advertised,
+            start_three_broker_sasl_plaintext_jvm_cluster, write_plain_props,
+        },
+        support::jvm_docker_command,
     },
     assert2::assert,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::process::Output,
 };
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance quotas client quotas: jvm kafka configs alter client quota end to end"
-)]
-async fn bdd_verify_jvm_kafka_configs_alter_client_quota_end_to_end() {
-    Box::pin(user_quota_round_trip(
-        "producer_byte_rate",
-        "1024",
-        "producer_byte_rate=1024",
-    ))
-    .await;
+struct QuotaAdministration {
+    cluster: Option<SaslCluster>,
+    admin: Option<ClientPropsFile>,
+    entity: String,
+    name: String,
+    metadata_entity: String,
+    quota: String,
+    altered: Option<Output>,
+    described: Option<Output>,
+    deleted: Option<Output>,
 }
+#[fixture]
+fn quota() -> QuotaAdministration {
+    // Start this scenario with fresh inputs and observations.
 
-/// JVM acceptance: `kafka-configs --entity-type users` client quota round-trip.
-///
-/// Three-broker SASL/PLAINTEXT cluster. The JVM admin CLI runs alter,
-/// describe, and delete on a user-scoped `producer_byte_rate`.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_quotas/client_quotas.feature",
-    name = "jvm kafka configs alter client quota end to end"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_kafka_configs_alter_client_quota_end_to_end() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance quotas client quotas: jvm kafka configs alter ip quota end to end"
-)]
-async fn bdd_verify_jvm_kafka_configs_alter_ip_quota_end_to_end() {
-    Box::pin(quota_round_trip(QuotaCase {
-        entity: "ips",
-        name: "127.0.0.1",
-        metadata_entity: "ip",
-        quota: "connection_creation_rate",
-        value: "2.0",
-        expected: "connection_creation_rate=2",
-        label: "ip quota",
-        users: &[],
-    }))
-    .await;
+    QuotaAdministration {
+        cluster: None,
+        admin: None,
+        entity: String::new(),
+        name: String::new(),
+        metadata_entity: String::new(),
+        quota: String::new(),
+        altered: None,
+        described: None,
+        deleted: None,
+    }
 }
-
-/// JVM acceptance: `kafka-configs --entity-type ips` KIP-612 round-trip.
-///
-/// Three-broker SASL/PLAINTEXT cluster. The JVM admin CLI runs alter,
-/// describe (stdout substring), and delete-config on the
-/// `connection_creation_rate` of `ip=127.0.0.1`. This test does not exercise
-/// wall-time enforcement, because a single connection does not trigger the
-/// rate limit. The Rust integration test in `tests/ip_quotas.rs` covers that.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_quotas/client_quotas.feature",
-    name = "jvm kafka configs alter ip quota end to end"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_kafka_configs_alter_ip_quota_end_to_end() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance quotas client quotas: jvm kafka configs alter controller mutation rate end to end"
-)]
-async fn bdd_verify_jvm_kafka_configs_alter_controller_mutation_rate_end_to_end() {
-    Box::pin(user_quota_round_trip(
-        "controller_mutation_rate",
-        "2.0",
-        "controller_mutation_rate=2",
-    ))
-    .await;
+#[given("three registered SASL brokers accept the administrator and these extra PLAIN users")]
+async fn cluster(quota: &mut QuotaAdministration, datatable: Vec<Vec<String>>) {
+    let users: Vec<(String, String)> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let credentials: [String; 2] = row.try_into().expect("username password");
+            credentials.into()
+        })
+        .collect();
+    let users: Vec<(&str, &str)> = users
+        .iter()
+        .map(|(name, password)| (name.as_str(), password.as_str()))
+        .collect();
+    quota.cluster = Some(
+        Box::pin(
+            start_three_broker_sasl_plaintext_jvm_cluster()
+                .extra_users(&users)
+                .wait_until_registered(true)
+                .call(),
+        )
+        .await,
+    );
+    quota.admin = Some(write_plain_props(ADMIN, ADMIN_PASS));
 }
-
-/// JVM acceptance: `kafka-configs --entity-type users controller_mutation_rate` round-trip.
-///
-/// Three-broker SASL/PLAINTEXT cluster. The JVM admin CLI runs alter,
-/// describe (stdout substring), and delete-config on the
-/// `controller_mutation_rate` of `user=alice`. This test does not check
-/// wall-time enforcement: a single `kafka-topics --create` is one request,
-/// with a maximum throttle of 1 s. The Rust integration test in
-/// `tests/controller_mutation_quota.rs` covers enforcement.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_quotas/client_quotas.feature",
-    name = "jvm kafka configs alter controller mutation rate end to end"
+#[given(
+    "the operator addresses {entity} entity {name} recorded as metadata entity type {metadata_entity}"
 )]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_kafka_configs_alter_controller_mutation_rate_end_to_end() {}
-
-struct QuotaCase<'a> {
-    entity: &'a str,
-    name: &'a str,
-    metadata_entity: &'a str,
-    quota: &'a str,
-    value: &'a str,
-    expected: &'a str,
-    label: &'a str,
-    users: &'a [(&'a str, &'a str)],
+fn entity(quota: &mut QuotaAdministration, entity: String, name: String, metadata_entity: String) {
+    quota.entity = entity;
+    quota.name = name;
+    quota.metadata_entity = metadata_entity;
 }
-
-async fn user_quota_round_trip(quota: &str, value: &str, expected: &str) {
-    Box::pin(quota_round_trip(QuotaCase {
-        entity: "users",
-        name: "alice",
-        metadata_entity: "user",
-        quota,
-        value,
-        expected,
-        label: "quota",
-        users: &[("alice", "alice-secret")],
-    }))
-    .await;
-}
-
-async fn quota_round_trip(case: QuotaCase<'_>) {
-    let QuotaCase {
-        entity,
-        name,
-        metadata_entity,
-        quota,
-        value,
-        expected,
-        label,
-        users,
-    } = case;
-
-    let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) = Box::pin(
-        start_three_broker_sasl_plaintext_jvm_cluster()
-            .extra_users(users)
-            .wait_until_registered(true)
-            .call(),
-    )
-    .await;
-
-    let admin_props = write_plain_props(ADMIN, ADMIN_PASS);
-    let admin_mount = admin_props.mount_str();
-
-    // Set the user quota through the JVM admin client.
-    let out = docker_run_kafka_tool_with_image_and_mount(KAFKA_IMAGE_TXN, &admin_mount, &[
+fn run_config(quota: &QuotaAdministration, args: &[&str]) -> Output {
+    let mount = quota
+        .admin
+        .as_ref()
+        .expect("SASL administrator configured")
+        .mount_str();
+    let mut full = vec![
         "kafka-configs",
-        "--alter",
         "--entity-type",
-        entity,
+        quota.entity.as_str(),
         "--entity-name",
-        name,
+        quota.name.as_str(),
+        "--bootstrap-server",
+        broker0_advertised(),
+        "--command-config",
+        "/client.properties",
+    ];
+    full.extend_from_slice(args);
+    jvm_docker_command()
+        .image(KAFKA_IMAGE_TXN)
+        .mounts(&[&mount])
+        .args(&full)
+        .call()
+        .output()
+        .expect("run quota configuration tool")
+}
+#[when("the administrator sets quota {key} to {value}")]
+fn alter(quota: &mut QuotaAdministration, key: String, value: String) {
+    quota.altered = Some(run_config(quota, &[
+        "--alter",
         "--add-config",
-        &format!("{quota}={value}"),
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--command-config",
-        "/client.properties",
-    ]);
-    eprintln!(
-        "KRABKA[test] alter status={} stdout={} stderr={}",
-        out.status,
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
+        &format!("{key}={value}"),
+    ]));
+    quota.quota = key;
+}
+#[then("the quota alteration command succeeds")]
+fn altered(quota: &QuotaAdministration) {
+    let output = quota.altered.as_ref().expect("quota alteration completed");
     assert!(
-        out.status.success(),
-        "alter failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+        output.status.success(),
+        "quota alter failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-
-    // Describe — confirm visibility.
-    // api_key 50 (DescribeUserScramCredentials) is implemented,
-    // so the JVM tool exits 0 cleanly. Use the helper which asserts success.
-    let desc = describe_console_entity(&admin_mount, entity, name);
-    let stdout = String::from_utf8_lossy(&desc.stdout);
+}
+#[when("the administrator describes the addressed quota entity")]
+fn describe(quota: &mut QuotaAdministration) {
+    quota.described = Some(run_config(quota, &["--describe"]));
+}
+#[then("the successful quota report includes {setting}")]
+fn visible(quota: &QuotaAdministration, setting: String) {
+    let output = quota.described.as_ref().expect("quota describe completed");
     assert!(
-        stdout.contains(expected),
-        "expected {label} in describe output: {stdout}"
+        output.status.success(),
+        "quota describe failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-
-    // Delete the config.
-    let del_out = docker_run_kafka_tool_with_image_and_mount(KAFKA_IMAGE_TXN, &admin_mount, &[
-        "kafka-configs",
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&setting),
+        "quota report missing {setting}: {stdout}"
+    );
+}
+#[when("the administrator deletes the configured quota key")]
+fn delete(quota: &mut QuotaAdministration) {
+    quota.deleted = Some(run_config(quota, &[
         "--alter",
-        "--entity-type",
-        entity,
-        "--entity-name",
-        name,
         "--delete-config",
-        quota,
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--command-config",
-        "/client.properties",
-    ]);
+        quota.quota.as_str(),
+    ]));
+}
+#[then("the deletion succeeds and the committed metadata image no longer contains that quota")]
+async fn removed(quota: &QuotaAdministration) {
+    let output = quota.deleted.as_ref().expect("quota deletion completed");
     assert!(
-        del_out.status.success(),
+        output.status.success(),
         "delete-config failed: {}",
-        String::from_utf8_lossy(&del_out.stderr)
+        String::from_utf8_lossy(&output.stderr)
     );
-
-    // Confirm the quota was cleared from the committed metadata image.
-    h1.wait_for_image(|img| {
-        let key: krabka_metadata::EntityKey =
-            vec![(metadata_entity.to_owned(), Some(name.to_owned()))];
-        img.client_quotas()
-            .get(&key)
-            .and_then(|m| m.get(quota))
-            .is_none()
-    })
-    .await;
-
+    let cluster = quota.cluster.as_ref().expect("SASL quota cluster started");
+    cluster
+        .0
+        .wait_for_image(|image| {
+            let key: krabka_metadata::EntityKey =
+                vec![(quota.metadata_entity.clone(), Some(quota.name.clone()))];
+            image
+                .client_quotas()
+                .get(&key)
+                .and_then(|settings| settings.get(&quota.quota))
+                .is_none()
+        })
+        .await;
+}
+async fn shutdown(quota: QuotaAdministration) {
+    let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
+        quota.cluster.expect("SASL quota cluster started");
     h1.shutdown().await;
     h2.shutdown().await;
     h3.shutdown().await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_quotas/client_quotas.feature",
+    name = "A user producer byte quota is visible and can be removed from committed metadata"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_configs_alter_client_quota_end_to_end(quota: QuotaAdministration) {
+    Box::pin(shutdown(quota)).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_quotas/client_quotas.feature",
+    name = "An IP connection creation quota is visible and can be removed from committed metadata"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_configs_alter_ip_quota_end_to_end(quota: QuotaAdministration) {
+    Box::pin(shutdown(quota)).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_quotas/client_quotas.feature",
+    name = "A user controller mutation quota is visible and can be removed from committed metadata"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_configs_alter_controller_mutation_rate_end_to_end(quota: QuotaAdministration) {
+    Box::pin(shutdown(quota)).await;
 }

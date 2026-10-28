@@ -355,37 +355,64 @@ mod tests {
         assert2::assert!((got.max_connections, got.listener_max_connections) == (want, want));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "connection limiter settings tests: overrides parse as kafka parses them for {example}"
-    )]
-    fn bdd_verify_overrides_parse_as_kafka_parses_them(example: String) {
-        type Example<'a> = (&'a str, Option<BTreeMap<String, usize>>);
-        let (value, want): Example<'_> = match example.as_str() {
-            "empty" => ("", Some(overrides(&[]))),
-            "one" => ("127.0.0.1:2", Some(overrides(&[("127.0.0.1", 2)]))),
-            "spaced" => (
-                " a.example : 3 , b:4 ",
-                Some(overrides(&[("a.example", 3), ("b", 4)])),
-            ),
-            "ipv6 splits on last colon" => ("::1:5", Some(overrides(&[("::1", 5)]))),
-            "trailing comma" => ("a:1,", Some(overrides(&[("a", 1)]))),
-            "last duplicate wins" => ("a:1,a:2", Some(overrides(&[("a", 2)]))),
-            "negative refuses all" => ("a:-1", Some(overrides(&[("a", 0)]))),
-            "leading comma" => (",a:1", None),
-            "no colon" => ("a", None),
-            "not a number" => ("a:x", None),
-            "bad host" => ("a/b:1", None),
-            _ => panic!("unknown BDD example: {example}"),
-        };
+    use {
+        rstest::fixture,
+        rstest_bdd::{Slot, datatable::Rows},
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    };
 
-        assert2::assert!(parse_overrides(value) == want);
+    struct ConnectionOverrides {
+        value: Option<String>,
+        parsed: Slot<Option<BTreeMap<String, usize>>>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/connection_limiter/settings.feature",
-        name = "tests: overrides parse as kafka parses them"
-    )]
-    fn overrides_parse_as_kafka_parses_them(example: String) { let _ = example; }
+    #[fixture]
+    fn quota() -> ConnectionOverrides {
+        // Start this scenario with fresh inputs and observations.
+
+        ConnectionOverrides {
+            value: None,
+            parsed: Slot::default(),
+        }
+    }
+
+    #[given("the per-IP connection override text is {quoted}")]
+    fn override_text(quota: &mut ConnectionOverrides, quoted: String) {
+        quota.value = Some(
+            quoted
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .expect("the feature preserves exact whitespace inside double quotes")
+                .to_owned(),
+        );
+    }
+
+    #[when("Kafka per-IP override parsing is applied")]
+    fn parse_override_text(quota: &mut ConnectionOverrides) {
+        quota.parsed.set(parse_overrides(
+            quota.value.as_deref().expect("override text was given"),
+        ));
+    }
+
+    #[derive(DataTableRow)]
+    struct OverrideRow {
+        host: String,
+        maximum_connections: usize,
+    }
+
+    #[then("the parsed per-IP overrides are:")]
+    fn parsed_overrides(quota: &ConnectionOverrides, #[datatable] rows: Rows<OverrideRow>) {
+        let expected: BTreeMap<_, _> = rows
+            .into_iter()
+            .map(|row| (row.host, row.maximum_connections))
+            .collect();
+        assert2::assert!(quota.parsed.get().as_ref() == Some(&Some(expected)));
+    }
+
+    #[then("the entire per-IP override value is rejected")]
+    fn rejected_overrides(quota: &ConnectionOverrides) {
+        assert2::assert!(quota.parsed.get() == Some(None));
+    }
+
+    scenarios!("tests/features/migrated/src/connection_limiter/settings.feature", fixtures = [quota: ConnectionOverrides]);
 }

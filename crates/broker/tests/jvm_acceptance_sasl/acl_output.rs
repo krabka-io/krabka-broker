@@ -94,142 +94,85 @@ fn field(line: &str, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::check,
+        rstest::fixture,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
 
-    /// What `--list` prints after `--producer --topic orders`: the two topic
-    /// operations the shorthand expands to, and the cluster `IDEMPOTENT_WRITE`
-    /// it adds unless `--idempotent` is spelled out.
-    const PRODUCER_LISTING: &str = concat!(
-        "Current ACLs for resource `ResourcePattern(resourceType=TOPIC, name=orders, ",
-        "patternType=LITERAL)`: \n",
-        "\t(principal=User:alice, host=*, operation=WRITE, permissionType=ALLOW)\n",
-        "\t(principal=User:alice, host=*, operation=DESCRIBE, permissionType=ALLOW)\n",
-        "\n",
-        "Current ACLs for resource `ResourcePattern(resourceType=CLUSTER, name=kafka-cluster, ",
-        "patternType=LITERAL)`: \n",
-        "\t(principal=User:alice, host=*, operation=IDEMPOTENT_WRITE, permissionType=ALLOW)\n",
-    );
+    struct AclListing {
+        stdout: String,
+        parsed: Vec<BTreeSet<AclBinding>>,
+    }
 
-    fn binding(
-        resource_type: &str,
-        resource_name: &str,
-        operation: &str,
-        permission: &str,
-    ) -> AclBinding {
-        AclBinding {
-            resource_type: resource_type.to_owned(),
-            resource_name: resource_name.to_owned(),
-            pattern_type: "LITERAL".to_owned(),
-            principal: "User:alice".to_owned(),
-            host: "*".to_owned(),
-            operation: operation.to_owned(),
-            permission: permission.to_owned(),
+    #[fixture]
+    fn listing() -> AclListing {
+        // Start this scenario with fresh inputs and observations.
+
+        AclListing {
+            stdout: String::new(),
+            parsed: Vec::new(),
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance sasl acl output tests: every entry is flattened onto the resource it was printed under"
-    )]
-    fn bdd_verify_every_entry_is_flattened_onto_the_resource_it_was_printed_under() {
-        check!(
-            parse_acls(PRODUCER_LISTING)
-                == BTreeSet::from([
-                    binding("TOPIC", "orders", "WRITE", "ALLOW"),
-                    binding("TOPIC", "orders", "DESCRIBE", "ALLOW"),
-                    binding("CLUSTER", "kafka-cluster", "IDEMPOTENT_WRITE", "ALLOW"),
-                ])
-        );
+    #[given("the ACL tool printed")]
+    fn tool_listing(listing: &mut AclListing, docstring: String) { listing.stdout = docstring; }
+
+    #[when("the ACL listing is read")]
+    fn read_listing(listing: &mut AclListing) {
+        listing.parsed = vec![parse_acls(&listing.stdout)];
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_output.feature",
-        name = "tests: every entry is flattened onto the resource it was printed under"
-    )]
-    fn every_entry_is_flattened_onto_the_resource_it_was_printed_under() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance sasl acl output tests: the resources may be printed in any order"
-    )]
-    fn bdd_verify_the_resources_may_be_printed_in_any_order() {
-        let reordered: String = {
-            let mut blocks: Vec<&str> = PRODUCER_LISTING.split("\n\n").collect();
-            blocks.reverse();
-            blocks.join("\n\n")
-        };
-        check!(parse_acls(&reordered) == parse_acls(PRODUCER_LISTING));
+    #[when("the ACL listing is read in its original and reversed resource order")]
+    fn read_both_orders(listing: &mut AclListing) {
+        let mut resources = listing.stdout.split("\n\n").collect::<Vec<_>>();
+        resources.reverse();
+        listing.parsed = vec![
+            parse_acls(&listing.stdout),
+            parse_acls(&resources.join("\n\n")),
+        ];
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_output.feature",
-        name = "tests: the resources may be printed in any order"
-    )]
-    fn the_resources_may_be_printed_in_any_order() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance sasl acl output tests: a denied host is read off the entry that carries it"
-    )]
-    fn bdd_verify_a_denied_host_is_read_off_the_entry_that_carries_it() {
-        let listing = concat!(
-            "Current ACLs for resource `ResourcePattern(resourceType=TOPIC, name=orders, ",
-            "patternType=PREFIXED)`: \n",
-            "\t(principal=User:mallory, host=10.0.0.1, operation=READ, permissionType=DENY)\n",
-        );
-        check!(
-            parse_acls(listing)
-                == BTreeSet::from([AclBinding {
-                    resource_type: "TOPIC".to_owned(),
-                    resource_name: "orders".to_owned(),
-                    pattern_type: "PREFIXED".to_owned(),
-                    principal: "User:mallory".to_owned(),
-                    host: "10.0.0.1".to_owned(),
-                    operation: "READ".to_owned(),
-                    permission: "DENY".to_owned(),
-                }])
-        );
+    #[then("every listing contains exactly these bindings")]
+    fn expected_bindings(listing: &AclListing, datatable: Vec<Vec<String>>) {
+        let expected = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [
+                    resource_type,
+                    resource_name,
+                    pattern_type,
+                    principal,
+                    host,
+                    operation,
+                    permission,
+                ]: [String; 7] = row.try_into().expect("seven ACL binding fields");
+                AclBinding {
+                    resource_type,
+                    resource_name,
+                    pattern_type,
+                    principal,
+                    host,
+                    operation,
+                    permission,
+                }
+            })
+            .collect::<BTreeSet<_>>();
+        check!(!listing.parsed.is_empty());
+        for actual in &listing.parsed {
+            check!(*actual == expected);
+        }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_output.feature",
-        name = "tests: a denied host is read off the entry that carries it"
-    )]
-    fn a_denied_host_is_read_off_the_entry_that_carries_it() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance sasl acl output tests: entries printed before any resource header are dropped"
-    )]
-    fn bdd_verify_entries_printed_before_any_resource_header_are_dropped() {
-        check!(
-            parse_acls("\t(principal=User:alice, host=*, operation=READ, permissionType=ALLOW)\n")
-                .is_empty()
-        );
+    #[then("the listing contains no ACL bindings")]
+    fn empty_listing(listing: &AclListing) {
+        check!(!listing.parsed.is_empty());
+        for bindings in &listing.parsed {
+            check!(bindings.is_empty());
+        }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_output.feature",
-        name = "tests: entries printed before any resource header are dropped"
-    )]
-    fn entries_printed_before_any_resource_header_are_dropped() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance sasl acl output tests: an empty listing is an empty set"
-    )]
-    fn bdd_verify_an_empty_listing_is_an_empty_set() {
-        check!(parse_acls("").is_empty());
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_output.feature",
-        name = "tests: an empty listing is an empty set"
-    )]
-    fn an_empty_listing_is_an_empty_set() {}
+    scenarios!("tests/features/migrated/tests/jvm_acceptance_sasl/acl_output.feature", fixtures = [listing: AclListing]);
 }

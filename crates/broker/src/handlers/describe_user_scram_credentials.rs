@@ -379,12 +379,25 @@ mod tests {
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers describe user scram credentials tests: credential infos are ordered by kafka scram mechanism type"
+    #[derive(Default)]
+    struct DescribeScramScenario {
+        seeded: Vec<SeededUser<'static>>,
+        request: Option<DescribeUserScramCredentialsRequest>,
+        response: Option<DescribeUserScramCredentialsResponse>,
+    }
+    #[rstest::fixture]
+    fn describe_scram() -> DescribeScramScenario {
+        let seeded = Vec::new();
+        DescribeScramScenario {
+            seeded,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "alice has SHA-512 with 8192 iterations before SHA-256 with 4096 iterations"
     )]
-    fn bdd_verify_credential_infos_are_ordered_by_kafka_scram_mechanism_type() {
-        let resp = run_handle_filter(Some(vec!["alice".into()]), &[
+    fn out_of_order_scram_credentials(describe_scram: &mut DescribeScramScenario) {
+        describe_scram.seeded = vec![
             SeededUser {
                 user: "alice",
                 mechanism: SaslMechanism::ScramSha512,
@@ -395,9 +408,21 @@ mod tests {
                 mechanism: SaslMechanism::ScramSha256,
                 iterations: 4096,
             },
-        ]);
-
-        let alice = resp
+        ];
+    }
+    #[rstest_bdd_macros::when("alice's SCRAM credentials are described")]
+    fn describe_alice_scram(describe_scram: &mut DescribeScramScenario) {
+        describe_scram.response = Some(run_handle_filter(
+            Some(vec!["alice".into()]),
+            &describe_scram.seeded,
+        ));
+    }
+    #[rstest_bdd_macros::then("alice's credential mechanisms appear in Kafka order 1 then 2")]
+    fn check_scram_credential_order(describe_scram: &DescribeScramScenario) {
+        let alice = describe_scram
+            .response
+            .as_ref()
+            .unwrap()
             .results
             .iter()
             .find(|row| row.user == "alice")
@@ -407,16 +432,41 @@ mod tests {
             .iter()
             .map(|info| info.mechanism)
             .collect();
-
         assert!(mechanisms == vec![1, 2]);
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/describe_user_scram_credentials.feature",
-        name = "tests: credential infos are ordered by kafka scram mechanism type"
+    #[rstest_bdd_macros::given("a denied SCRAM description request has user filter {users}")]
+    fn denied_scram_filter(describe_scram: &mut DescribeScramScenario, users: String) {
+        let users = match users.as_str() {
+            "null" => None,
+            "empty" => Some(Vec::new()),
+            _ => Some(users.split(',').map(str::to_owned).collect()),
+        };
+        describe_scram.request = Some(scram_users_request(users));
+    }
+    #[rstest_bdd_macros::when("the denied SCRAM description response is constructed")]
+    fn render_denied_scram(describe_scram: &mut DescribeScramScenario) {
+        describe_scram.response = Some(denied_response(describe_scram.request.as_ref().unwrap()));
+    }
+    #[rstest_bdd_macros::then(
+        "the denied response has {rows} anonymous credential-free error rows under cluster authorization failure"
     )]
-    fn credential_infos_are_ordered_by_kafka_scram_mechanism_type() {}
+    fn check_denied_scram(describe_scram: &DescribeScramScenario, rows: usize) {
+        let denied_row = krabka_macros::tagged_wire!(DescribeUserScramCredentialsResult {
+            user: String::new(),
+            error_code: CLUSTER_AUTHORIZATION_FAILED,
+            error_message: None,
+            credential_infos: Vec::new()
+        });
+        assert2::assert!(
+            describe_scram.response.as_ref().unwrap()
+                == &krabka_macros::unthrottled_wire!(DescribeUserScramCredentialsResponse {
+                    error_code: CLUSTER_AUTHORIZATION_FAILED,
+                    error_message: None,
+                    results: vec![denied_row; rows]
+                })
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_describe_scram",fixtures=[describe_scram:DescribeScramScenario]);
 
     #[yare::parameterized(
         scram_sha256 = { SaslMechanism::ScramSha256, 1 },
@@ -479,52 +529,4 @@ mod tests {
         );
         broker_handle.shutdown().await;
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers describe user scram credentials tests: denied response matches kafka get error response for {example}"
-    )]
-    fn bdd_verify_denied_response_matches_kafka_get_error_response(example: String) {
-        type Example<'a> = (Option<Vec<&'a str>>, usize);
-        let (users, expected_rows): Example<'_> = match example.as_str() {
-            "absent users" => (None, 0),
-            "empty users" => (Some(vec![]), 0),
-            "repeated users" => (Some(vec!["alice", "bob", "alice"]), 3),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        use krabka_protocol::owned::describe_user_scram_credentials_request::UserName;
-
-        let denied_row = krabka_macros::tagged_wire!(DescribeUserScramCredentialsResult {
-            user: String::new(),
-            error_code: CLUSTER_AUTHORIZATION_FAILED,
-            error_message: None,
-            credential_infos: Vec::new(),
-        });
-        let req = DescribeUserScramCredentialsRequest {
-            users: users.as_ref().map(|names| {
-                names
-                    .iter()
-                    .map(|name| UserName {
-                        name: name.to_string(),
-                        ..Default::default()
-                    })
-                    .collect()
-            }),
-            ..Default::default()
-        };
-        let want = krabka_macros::unthrottled_wire!(DescribeUserScramCredentialsResponse {
-            error_code: CLUSTER_AUTHORIZATION_FAILED,
-            error_message: None,
-            results: vec![denied_row; expected_rows],
-        });
-        assert2::assert!(denied_response(&req) == want, "users = {users:?}");
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/describe_user_scram_credentials.feature",
-        name = "tests: denied response matches kafka get error response"
-    )]
-    fn denied_response_matches_kafka_get_error_response(example: String) { let _ = example; }
 }

@@ -156,7 +156,9 @@ mod tests {
             test_support::sasl_principal,
         },
         assert2::{assert, check},
+        bytes::Bytes,
         krabka_security::AuthMethod,
+        rstest_bdd::datatable::Rows,
         std::mem,
     };
 
@@ -260,100 +262,103 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "network auth plain tests: every plain refusal answers kafkas message"
-    )]
-    fn bdd_verify_every_plain_refusal_answers_kafkas_message() {
-        const INVALID: &str = "Authentication failed: Invalid username or password";
-        /// One refused PLAIN payload and the message it must be answered with.
-        struct Refusal<'a> {
-            case: &'a str,
-            bytes: Vec<u8>,
-            message: &'a str,
-        }
-        let cases: [Refusal<'_>; 10] = [
-            Refusal {
-                case: "empty payload",
-                bytes: Vec::new(),
-                message: "Invalid SASL/PLAIN response: expected 3 tokens, got 1",
-            },
-            Refusal {
-                case: "two fields",
-                bytes: b"\0alice".to_vec(),
-                message: "Invalid SASL/PLAIN response: expected 3 tokens, got 2",
-            },
-            Refusal {
-                case: "four fields",
-                bytes: b"\0alice\0wonderland\0extra".to_vec(),
-                message: "Invalid SASL/PLAIN response: expected 3 tokens, got 4",
-            },
-            Refusal {
-                case: "five fields report four",
-                bytes: b"\0alice\0wonderland\0a\0b".to_vec(),
-                message: "Invalid SASL/PLAIN response: expected 3 tokens, got 4",
-            },
-            Refusal {
-                case: "empty username",
-                bytes: b"\0\0wonderland".to_vec(),
-                message: "Authentication failed: username not specified",
-            },
-            Refusal {
-                case: "empty password",
-                bytes: b"\0alice\0".to_vec(),
-                message: "Authentication failed: password not specified",
-            },
-            Refusal {
-                // Kafka decodes `FF FE` to two U+FFFD, a user nobody configured.
-                case: "malformed utf-8 username",
-                bytes: vec![0, 0xff, 0xfe, 0, b'w', b'o'],
-                message: INVALID,
-            },
-            Refusal {
-                case: "unknown user",
-                bytes: b"\0carol\0wonderland".to_vec(),
-                message: INVALID,
-            },
-            Refusal {
-                case: "wrong password",
-                bytes: b"\0alice\0hunter2".to_vec(),
-                message: INVALID,
-            },
-            Refusal {
-                case: "authzid names another user",
-                bytes: b"bob\0alice\0wonderland".to_vec(),
-                message: "Authentication failed: Client requested an authorization id that is different \
-                 from username",
-            },
-        ];
-        for Refusal {
-            case,
-            bytes,
-            message,
-        } in cases
-        {
-            let req = SaslAuthenticateRequest {
-                auth_bytes: bytes::Bytes::from(bytes),
-                ..Default::default()
-            };
-            let mut auth = negotiating();
-            let resp = handle_authenticate_plain(&req, &mut auth, &credentials(), None);
-            assert_failed_authenticate_response(&resp, Some(message));
-            check!(!auth.is_authenticated(), "{case}");
-        }
+    #[derive(Default)]
+    struct PlainAuthenticationScenario {
+        input: Vec<u8>,
+        credentials: HashMap<String, String>,
+        auth: Option<ConnectionAuth>,
+        response: Option<SaslAuthenticateResponse>,
     }
 
-    /// Every way a PLAIN credential can be refused answers with
-    /// `PlainSaslServer`'s message. An unknown user and a wrong password share
-    /// one message, so a peer cannot tell them apart, and none of the refusals
-    /// authenticates the connection -- including an authorization id that
-    /// asks to act as another user.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/network/auth/plain.feature",
-        name = "tests: every plain refusal answers kafkas message"
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct PlainCredential {
+        user: String,
+        password: String,
+    }
+
+    #[rstest::fixture]
+    fn plain_login() -> PlainAuthenticationScenario {
+        // Credential tables, connection state, and replies are fresh per login.
+        PlainAuthenticationScenario::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "a PLAIN exchange is negotiating without a prior authenticated session"
     )]
-    fn every_plain_refusal_answers_kafkas_message() {}
+    fn negotiating_plain_login(plain_login: &mut PlainAuthenticationScenario) {
+        plain_login.auth = Some(negotiating());
+    }
+
+    #[rstest_bdd_macros::given("the PLAIN credential table is:")]
+    fn plain_login_credentials(
+        plain_login: &mut PlainAuthenticationScenario,
+        #[datatable] rows: Rows<PlainCredential>,
+    ) {
+        plain_login.credentials = rows
+            .into_iter()
+            .map(|row| (row.user, row.password))
+            .collect();
+    }
+
+    #[rstest_bdd_macros::given("the received PLAIN payload has these hexadecimal bytes:")]
+    fn plain_login_payload(plain_login: &mut PlainAuthenticationScenario, docstring: String) {
+        plain_login.input = docstring
+            .split_whitespace()
+            .map(|byte| u8::from_str_radix(byte, 16).expect("payload bytes are hexadecimal"))
+            .collect();
+    }
+
+    #[rstest_bdd_macros::when(
+        "the broker handles PLAIN authentication without a reauthentication lifetime cap"
+    )]
+    fn authenticate_plain_login(plain_login: &mut PlainAuthenticationScenario) {
+        let request = SaslAuthenticateRequest {
+            auth_bytes: Bytes::from(plain_login.input.clone()),
+            ..Default::default()
+        };
+        let auth = plain_login
+            .auth
+            .as_mut()
+            .expect("a negotiating exchange was given");
+        plain_login.response = Some(handle_authenticate_plain(
+            &request,
+            auth,
+            &plain_login.credentials,
+            None,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("PLAIN authentication fails with Kafka message {message}")]
+    fn plain_login_refusal(plain_login: &PlainAuthenticationScenario, message: String) {
+        let response = plain_login
+            .response
+            .as_ref()
+            .expect("authentication was attempted");
+        assert_failed_authenticate_response(response, Some(&message));
+        check!(
+            !plain_login
+                .auth
+                .as_ref()
+                .expect("the connection exists")
+                .is_authenticated()
+        );
+    }
+
+    #[rstest_bdd_macros::then("PLAIN authentication succeeds as decoded principal {user}")]
+    fn plain_login_success(plain_login: &PlainAuthenticationScenario, user: String) {
+        let response = plain_login
+            .response
+            .as_ref()
+            .expect("authentication was attempted");
+        assert_success_authenticate_response(response, b"", 0);
+        let auth = plain_login.auth.as_ref().expect("the connection exists");
+        assert!(auth.principal().map(|principal| principal.name.as_str()) == Some(user.as_str()));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/network/auth/plain",
+        fixtures = [plain_login: PlainAuthenticationScenario]
+    );
 
     /// The decoder replaces malformed input exactly as JDK 21's
     /// `new String(bytes, StandardCharsets.UTF_8)` does. Each expected value
@@ -388,41 +393,6 @@ mod tests {
         assert2::assert!(java_utf8_lossy(bytes) == expected);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "network auth plain tests: malformed bytes match what kafka decodes them to for {example}"
-    )]
-    fn bdd_verify_malformed_bytes_match_what_kafka_decodes_them_to(example: String) {
-        type Example<'a> = (&'static [u8], &'a str, &'a str);
-        let (bytes, user, password): Example<'_> = match example.as_str() {
-            "username" => (b"\0\xFFeve\0secret", "\u{FFFD}eve", "secret"),
-            "password" => (b"\0eve\0se\xED\xA0\x80cret", "eve", "se\u{FFFD}cret"),
-            "authzid" => (b"\xC0eve\0\xFFeve\0secret", "\u{FFFD}eve", "secret"),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let credentials = HashMap::from([(user.to_owned(), password.to_owned())]);
-        let req = SaslAuthenticateRequest {
-            auth_bytes: bytes::Bytes::from_static(bytes),
-            ..Default::default()
-        };
-        let mut auth = negotiating();
-        let resp = handle_authenticate_plain(&req, &mut auth, &credentials, None);
-        assert_success_authenticate_response(&resp, b"", 0);
-        assert2::assert!(auth.principal().map(|p| p.name.as_str()) == Some(user));
-    }
-
-    /// Kafka compares the decoded username, password and authorization id,
-    /// so malformed bytes match a configured name or password that holds the
-    /// U+FFFD they decode to.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/network/auth/plain.feature",
-        name = "tests: malformed bytes match what kafka decodes them to"
-    )]
-    fn malformed_bytes_match_what_kafka_decodes_them_to(example: String) { let _ = example; }
-
-    /// An authorization id equal to the username is accepted.
     #[test]
     fn an_authzid_equal_to_the_username_authenticates() {
         let req = SaslAuthenticateRequest {

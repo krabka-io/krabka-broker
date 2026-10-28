@@ -11,12 +11,15 @@ use {
         heartbeat_config,
     },
     assert2::assert,
-    krabka_broker::{BootstrapMode, Broker, BrokerConfig, codes},
+    krabka_broker::{BootstrapMode, Broker, BrokerConfig},
     krabka_client_core::Client,
-    krabka_protocol::owned::{
-        consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
-        consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+    krabka_protocol::{
+        owned::{
+            consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+            consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
+            create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        },
+        primitives::uuid::Uuid as WireUuid,
     },
     std::{collections::HashSet, path::PathBuf, sync::Arc, time::Duration},
     tokio::time,
@@ -44,205 +47,11 @@ async fn create_topic(client: &Client, name: &str, partitions: i32) {
     );
 }
 
-async fn boot_topic(log_dir: PathBuf, topic: &str) -> BrokerWithClient {
-    let BrokerWithClient { broker, client } = boot(log_dir).await;
-    create_topic(&client, topic, 2).await;
-    BrokerWithClient { broker, client }
-}
-
 fn rejoin_config(log_dir: PathBuf) -> BrokerConfig {
     let mut cfg = heartbeat_config(log_dir);
     cfg.bootstrap_mode = BootstrapMode::Rejoin;
     cfg
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "consumer group next gen persistence: replay preserves group epoch and members"
-)]
-async fn bdd_verify_replay_preserves_group_epoch_and_members() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let log_dir = dir.path().to_path_buf();
-
-    let member_id;
-    let initial_epoch;
-    {
-        let BrokerWithClient { broker, client } = boot_topic(log_dir.clone(), "tp").await;
-        let req = ConsumerGroupHeartbeatRequest {
-            subscribed_topic_names: Some(vec!["tp".into()]),
-            ..joining_consumer("gp", uuid::Uuid::new_v4().to_string(), 60_000)
-        };
-        let resp = client.send(req).await.unwrap();
-        assert!(resp.error_code == 0);
-        member_id = resp.member_id.unwrap();
-        initial_epoch = resp.member_epoch;
-        // The heartbeat RPC awaits flush_pending→offsets_log.append synchronously,
-        // so durability is guaranteed before the RPC returns. Wait for the actor's
-        // in-memory state to reflect the member (epoch ≥ 1) as a clean shutdown gate.
-        broker.wait_until_group_member_count("gp", 1).await;
-        broker.shutdown().await;
-    }
-
-    let req = ConsumerGroupHeartbeatRequest {
-        subscribed_topic_names: Some(vec!["tp".into()]),
-        rebalance_timeout_ms: 60_000,
-        ..consumer_heartbeat("gp", member_id.clone(), initial_epoch)
-    };
-    let (_broker, resp) = restarted_heartbeat(log_dir, req).await;
-    assert!(resp.error_code == 0, "post-restart heartbeat must succeed");
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/consumer_group_next_gen_persistence.feature",
-    name = "replay preserves group epoch and members"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn replay_preserves_group_epoch_and_members() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "consumer group next gen persistence: next gen state cleared after leave then restart"
-)]
-async fn bdd_verify_next_gen_state_cleared_after_leave_then_restart() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let log_dir = dir.path().to_path_buf();
-
-    let member_id;
-    {
-        let BrokerWithClient { broker, client } = boot(log_dir.clone()).await;
-        create_topic(&client, "tp2", 1).await;
-        let join = ConsumerGroupHeartbeatRequest {
-            subscribed_topic_names: Some(vec!["tp2".into()]),
-            ..joining_consumer("gpx", uuid::Uuid::new_v4().to_string(), 60_000)
-        };
-        let resp = client.send(join).await.unwrap();
-        assert!(resp.error_code == 0);
-        member_id = resp.member_id.unwrap();
-        broker.wait_until_group_member_count("gpx", 1).await;
-        assert!(
-            time::timeout(
-                Duration::from_millis(75),
-                broker.wait_until_group_empty("gpx"),
-            )
-            .await
-            .is_err(),
-            "group-empty waiter must not complete while a member is live"
-        );
-        let leave = consumer_heartbeat("gpx", member_id.clone(), -1);
-        let _ = client.send(leave).await.unwrap();
-        // The leave RPC awaits flush_pending→offsets_log.append synchronously,
-        // so tombstones are durable before the RPC returns. Wait for actor's
-        // in-memory view to confirm zero members before shutdown.
-        broker.wait_until_group_empty("gpx").await;
-        broker.shutdown().await;
-    }
-
-    // After leave + restart, the member should be unknown.
-    let req = ConsumerGroupHeartbeatRequest {
-        subscribed_topic_names: Some(vec!["tp2".into()]),
-        ..consumer_heartbeat("gpx", member_id.clone(), 5)
-    };
-    let (_broker, resp) = restarted_heartbeat(log_dir, req).await;
-    assert!(resp.error_code == codes::UNKNOWN_MEMBER_ID);
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/consumer_group_next_gen_persistence.feature",
-    name = "next gen state cleared after leave then restart"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn next_gen_state_cleared_after_leave_then_restart() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "consumer group next gen persistence: replay keeps the topics a regex resolved to and finds new ones"
-)]
-async fn bdd_verify_replay_keeps_the_topics_a_regex_resolved_to_and_finds_new_ones() {
-    let test_dir = tempfile::tempdir().expect("test tempdir");
-    let log_dir = test_dir.path().to_path_buf();
-
-    let (member_id, initial_epoch);
-    {
-        let BrokerWithClient { broker, client } = boot_topic(log_dir.clone(), "orders-eu").await;
-        let resp = client
-            .send(ConsumerGroupHeartbeatRequest {
-                subscribed_topic_regex: Some("orders-.*".into()),
-                ..joining_consumer("gre", uuid::Uuid::new_v4().to_string(), 60_000)
-            })
-            .await
-            .unwrap();
-        assert!(resp.error_code == 0, "{resp:?}");
-        member_id = resp.member_id.unwrap();
-        // Kafka writes the pattern's resolution after the join's batch, so the
-        // member gets the topic at its next heartbeat.
-        let resp = client
-            .send(ConsumerGroupHeartbeatRequest {
-                group_id: "gre".into(),
-                member_id: member_id.clone(),
-                member_epoch: resp.member_epoch,
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert!(resp.error_code == 0, "{resp:?}");
-        assert!(
-            resp.assignment
-                .as_ref()
-                .is_some_and(|assignment| assignment.topic_partitions.len() == 1)
-        );
-        initial_epoch = resp.member_epoch;
-        broker.wait_until_group_member_count("gre", 1).await;
-        broker.shutdown().await;
-    }
-
-    let BrokerWithClient { broker, client } = restart(log_dir, true).await;
-    create_topic(&client, "orders-us", 2).await;
-
-    // The member heartbeats without its pattern until it holds both topics.
-    let mut held = HashSet::new();
-    let mut member_epoch = initial_epoch;
-    for _ in 0..200 {
-        let resp = client
-            .send(consumer_heartbeat("gre", member_id.clone(), member_epoch))
-            .await
-            .unwrap();
-        assert!(resp.error_code == 0, "{resp:?}");
-        member_epoch = resp.member_epoch;
-        if let Some(assignment) = resp.assignment {
-            held = assignment
-                .topic_partitions
-                .into_iter()
-                .map(|topic| topic.topic_id)
-                .collect();
-        }
-        if held.len() == 2 {
-            break;
-        }
-        time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(
-        held.len() == 2,
-        "the member holds {} topics after the restart",
-        held.len()
-    );
-    broker.shutdown().await;
-}
-
-/// Kafka persists the topics that a `SubscribedTopicRegex` resolved to
-/// (`ConsumerGroupRegularExpression`) and replays them, so a coordinator
-/// restart keeps the member's topics. The Java client sends its pattern only
-/// when it changes, so the heartbeats after the restart carry none, and the
-/// group resolves the pattern again by itself: a topic created after the
-/// restart reaches the member too.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/consumer_group_next_gen_persistence.feature",
-    name = "replay keeps the topics a regex resolved to and finds new ones"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn replay_keeps_the_topics_a_regex_resolved_to_and_finds_new_ones() {}
 
 /// A running broker and a client connected to it.
 struct BrokerWithClient {
@@ -268,10 +77,295 @@ async fn restart(log_dir: PathBuf, wait_for_group: bool) -> BrokerWithClient {
     BrokerWithClient { broker, client }
 }
 
-async fn restarted_heartbeat(
-    log_dir: PathBuf,
-    request: ConsumerGroupHeartbeatRequest,
-) -> (krabka_broker::BrokerHandle, ConsumerGroupHeartbeatResponse) {
-    let BrokerWithClient { broker, client } = restart(log_dir, false).await;
-    (broker, client.send(request).await.unwrap())
+#[derive(Default)]
+struct PersistedConsumer {
+    running: Option<BrokerWithClient>,
+    group: String,
+    member: String,
+    epoch: i32,
+    response: Option<ConsumerGroupHeartbeatResponse>,
+    live_wait_timed_out: Option<bool>,
+    held_topics: HashSet<WireUuid>,
+    polled_codes: Vec<i16>,
+    directory_guard: Option<tempfile::TempDir>,
+}
+#[rstest::fixture]
+fn persisted_consumer() -> PersistedConsumer {
+    // The disk directory survives both native brokers in this scenario.
+    PersistedConsumer::default()
+}
+#[rstest_bdd_macros::given(
+    "a disk-backed consumer broker with topic {topic} and {partitions} partitions"
+)]
+async fn persisted_topic(
+    persisted_consumer: &mut PersistedConsumer,
+    topic: String,
+    partitions: i32,
+) {
+    let dir = tempfile::tempdir().expect("persistent broker directory");
+    let running = boot(dir.path().to_path_buf()).await;
+    create_topic(&running.client, &topic, partitions).await;
+    persisted_consumer.running = Some(running);
+    persisted_consumer.directory_guard = Some(dir);
+}
+#[rstest_bdd_macros::when(
+    "a member joins group {group} with named topics {topics} and regex {pattern}"
+)]
+async fn persisted_join(
+    persisted_consumer: &mut PersistedConsumer,
+    group: String,
+    topics: String,
+    pattern: String,
+) {
+    let topics: Option<Vec<String>> = serde_json::from_str(&topics).expect("named subscription");
+    let pattern: Option<String> = serde_json::from_str(&pattern).expect("regex subscription");
+    let request = ConsumerGroupHeartbeatRequest {
+        subscribed_topic_names: topics,
+        subscribed_topic_regex: pattern,
+        ..joining_consumer(&group, uuid::Uuid::new_v4().to_string(), 60_000)
+    };
+    let response = persisted_consumer
+        .running
+        .as_ref()
+        .expect("broker")
+        .client
+        .send(request)
+        .await
+        .expect("join");
+    persisted_consumer.group = group;
+    persisted_consumer.member = response.member_id.clone().expect("member identity");
+    persisted_consumer.epoch = response.member_epoch;
+    persisted_consumer.response = Some(response);
+}
+#[rstest_bdd_macros::then("the persisted consumer heartbeat returns Kafka code {code}")]
+fn persisted_response_code(persisted_consumer: &PersistedConsumer, code: i16) {
+    assert!(
+        persisted_consumer
+            .response
+            .as_ref()
+            .expect("heartbeat executed")
+            .error_code
+            == code
+    );
+}
+#[rstest_bdd_macros::when(
+    "the member heartbeats at its acknowledged epoch without repeating the regex"
+)]
+async fn persisted_pattern_resolution(persisted_consumer: &mut PersistedConsumer) {
+    let request = consumer_heartbeat(
+        &persisted_consumer.group,
+        persisted_consumer.member.clone(),
+        persisted_consumer.epoch,
+    );
+    let response = persisted_consumer
+        .running
+        .as_ref()
+        .expect("broker")
+        .client
+        .send(request)
+        .await
+        .expect("resolve regex");
+    persisted_consumer.epoch = response.member_epoch;
+    persisted_consumer.response = Some(response);
+}
+#[rstest_bdd_macros::then("the heartbeat assignment includes exactly {count} topics")]
+fn persisted_assigned_topics(persisted_consumer: &PersistedConsumer, count: usize) {
+    assert!(
+        persisted_consumer
+            .response
+            .as_ref()
+            .expect("heartbeat executed")
+            .assignment
+            .as_ref()
+            .is_some_and(|assignment| assignment.topic_partitions.len() == count)
+    );
+}
+#[rstest_bdd_macros::when(
+    "the broker waits {millis} milliseconds for the live group to become empty"
+)]
+async fn persisted_live_empty_wait(persisted_consumer: &mut PersistedConsumer, millis: u64) {
+    let broker = &persisted_consumer.running.as_ref().expect("broker").broker;
+    broker
+        .wait_until_group_member_count(&persisted_consumer.group, 1)
+        .await;
+    persisted_consumer.live_wait_timed_out = Some(
+        time::timeout(
+            Duration::from_millis(millis),
+            broker.wait_until_group_empty(&persisted_consumer.group),
+        )
+        .await
+        .is_err(),
+    );
+}
+#[rstest_bdd_macros::then("the group-empty waiter times out while the member is live")]
+fn persisted_wait_keeps_live_group(persisted_consumer: &PersistedConsumer) {
+    assert!(persisted_consumer.live_wait_timed_out == Some(true));
+}
+#[rstest_bdd_macros::when(
+    "the member leaves at epoch minus one and the broker shuts down after its group is empty"
+)]
+async fn persisted_member_leave(persisted_consumer: &mut PersistedConsumer) {
+    let running = persisted_consumer.running.take().expect("broker");
+    let request = consumer_heartbeat(
+        &persisted_consumer.group,
+        persisted_consumer.member.clone(),
+        -1,
+    );
+    let _ = running.client.send(request).await.expect("leave");
+    running
+        .broker
+        .wait_until_group_empty(&persisted_consumer.group)
+        .await;
+    running.broker.shutdown().await;
+}
+#[rstest_bdd_macros::when("the broker shuts down after its one member is visible")]
+async fn persisted_member_shutdown(persisted_consumer: &mut PersistedConsumer) {
+    let running = persisted_consumer.running.take().expect("broker");
+    running
+        .broker
+        .wait_until_group_member_count(&persisted_consumer.group, 1)
+        .await;
+    running.broker.shutdown().await;
+}
+#[rstest_bdd_macros::when(
+    "the restarted broker receives the saved member heartbeat at epoch {epoch} with rebalance timeout {timeout} and named topics {topics}"
+)]
+async fn replayed_member_heartbeat(
+    persisted_consumer: &mut PersistedConsumer,
+    epoch: String,
+    timeout: i32,
+    topics: String,
+) {
+    let epoch = if epoch == "acknowledged" {
+        persisted_consumer.epoch
+    } else {
+        epoch.parse().expect("request epoch")
+    };
+    let topics: Option<Vec<String>> = serde_json::from_str(&topics).expect("named subscription");
+    let running = restart(
+        persisted_consumer
+            .directory_guard
+            .as_ref()
+            .expect("disk directory")
+            .path()
+            .to_path_buf(),
+        false,
+    )
+    .await;
+    let request = ConsumerGroupHeartbeatRequest {
+        subscribed_topic_names: topics,
+        rebalance_timeout_ms: timeout,
+        ..consumer_heartbeat(
+            &persisted_consumer.group,
+            persisted_consumer.member.clone(),
+            epoch,
+        )
+    };
+    persisted_consumer.response = Some(
+        running
+            .client
+            .send(request)
+            .await
+            .expect("post-restart heartbeat"),
+    );
+    persisted_consumer.running = Some(running);
+}
+#[rstest_bdd_macros::when(
+    "the replayed coordinator creates topic {topic} with {partitions} partitions and polls the saved member up to {attempts} times every {millis} milliseconds"
+)]
+async fn replayed_regex_topic(
+    persisted_consumer: &mut PersistedConsumer,
+    topic: String,
+    partitions: i32,
+    attempts: usize,
+    millis: u64,
+) {
+    let running = restart(
+        persisted_consumer
+            .directory_guard
+            .as_ref()
+            .expect("disk directory")
+            .path()
+            .to_path_buf(),
+        true,
+    )
+    .await;
+    create_topic(&running.client, &topic, partitions).await;
+    for _ in 0..attempts {
+        let response = running
+            .client
+            .send(consumer_heartbeat(
+                &persisted_consumer.group,
+                persisted_consumer.member.clone(),
+                persisted_consumer.epoch,
+            ))
+            .await
+            .expect("regex refresh heartbeat");
+        persisted_consumer.polled_codes.push(response.error_code);
+        persisted_consumer.epoch = response.member_epoch;
+        if let Some(assignment) = response.assignment {
+            persisted_consumer.held_topics = assignment
+                .topic_partitions
+                .into_iter()
+                .map(|topic| topic.topic_id)
+                .collect();
+        }
+        if persisted_consumer.held_topics.len() == 2 {
+            break;
+        }
+        time::sleep(Duration::from_millis(millis)).await;
+    }
+    persisted_consumer.running = Some(running);
+}
+#[rstest_bdd_macros::then(
+    "all replayed pattern heartbeats return Kafka code {code} and the member holds {count} topics"
+)]
+fn replayed_regex_assignment(persisted_consumer: &PersistedConsumer, code: i16, count: usize) {
+    assert!(!persisted_consumer.polled_codes.is_empty());
+    assert!(
+        persisted_consumer
+            .polled_codes
+            .iter()
+            .all(|observed| *observed == code)
+    );
+    assert!(persisted_consumer.held_topics.len() == count);
+}
+#[rstest_bdd_macros::then("the restarted consumer broker is shut down")]
+async fn finish_persisted_consumer(persisted_consumer: &mut PersistedConsumer) {
+    persisted_consumer
+        .running
+        .take()
+        .expect("broker")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen_persistence.feature",
+    name = "replay preserves group epoch and members"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replay_preserves_group_epoch_and_members(persisted_consumer: PersistedConsumer) {
+    let _ = persisted_consumer;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen_persistence.feature",
+    name = "next gen state cleared after leave then restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn next_gen_state_cleared_after_leave_then_restart(persisted_consumer: PersistedConsumer) {
+    let _ = persisted_consumer;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/consumer_group_next_gen_persistence.feature",
+    name = "replay keeps the topics a regex resolved to and finds new ones"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replay_keeps_the_topics_a_regex_resolved_to_and_finds_new_ones(
+    persisted_consumer: PersistedConsumer,
+) {
+    let _ = persisted_consumer;
 }

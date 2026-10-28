@@ -19,17 +19,41 @@ use {
     krabka_broker::Broker,
     krabka_protocol::owned::{
         create_acls_request::CreateAclsRequest,
+        create_acls_response::CreateAclsResponse,
         delete_acls_request::{DeleteAclsFilter, DeleteAclsRequest},
+        delete_acls_response::DeleteAclsResponse,
+        describe_acls_response::DescribeAclsResponse,
     },
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "acl handlers provisioning: create acls super user can provision and describe"
-)]
-async fn bdd_verify_create_acls_super_user_can_provision_and_describe() {
-    let (_log_dir, handle, addr) = start_admin_with(&[("admin", "admin-secret")]).await;
+struct AclProvisioning {
+    directory: Option<tempfile::TempDir>,
+    broker: Option<krabka_broker::BrokerHandle>,
+    created: Option<CreateAclsResponse>,
+    described: Option<DescribeAclsResponse>,
+    deleted: Option<DeleteAclsResponse>,
+}
+#[rstest::fixture]
+fn acls() -> AclProvisioning {
+    // Start this scenario with fresh inputs and observations.
 
+    AclProvisioning {
+        directory: None,
+        broker: None,
+        created: None,
+        described: None,
+        deleted: None,
+    }
+}
+#[rstest_bdd_macros::given("a super user admin on the SASL listener")]
+async fn acl_admin_listener(acls: &mut AclProvisioning) {
+    let (directory, handle, _) = start_admin_with(&[("admin", "admin-secret")]).await;
+    acls.directory = Some(directory);
+    acls.broker = Some(handle);
+}
+#[rstest_bdd_macros::when("admin creates a Read grant on foo for alice")]
+async fn acl_create_read(acls: &mut AclProvisioning) {
+    let addr = acls.broker.as_ref().expect("broker started").listen_addr();
     // Provision: Allow Read on Topic LITERAL "foo" for User:alice from *.
     let create_req = CreateAclsRequest {
         creations: vec![topic_allow_creation("foo", "User:alice", OPERATION_READ)],
@@ -42,6 +66,11 @@ async fn bdd_verify_create_acls_super_user_can_provision_and_describe() {
     )
     .await
     .expect("CreateAcls as super-user must succeed");
+    acls.created = Some(create_resp);
+}
+#[rstest_bdd_macros::then("the Read grant creation returns one successful binding")]
+fn acl_read_created(acls: &AclProvisioning) {
+    let create_resp = acls.created.as_ref().expect("creation attempted");
     assert!(
         create_resp.results.len() == 1,
         "one result per creation: {create_resp:?}"
@@ -51,10 +80,10 @@ async fn bdd_verify_create_acls_super_user_can_provision_and_describe() {
         "super-user creation must return error_code=0, got {:?}",
         create_resp.results[0]
     );
-
-    // Describe with a permissive filter (resource_type=Topic, everything
-    // else any/null) — must return exactly one resource entry carrying
-    // one ACL description for User:alice / Read / Allow.
+}
+#[rstest_bdd_macros::when("admin describes all topic ACLs")]
+async fn acl_describe_topics(acls: &mut AclProvisioning) {
+    let addr = acls.broker.as_ref().expect("broker started").listen_addr();
     let describe_resp = drive_describe_acls_as_plain(
         addr,
         describe_all_topic_acls(),
@@ -62,8 +91,11 @@ async fn bdd_verify_create_acls_super_user_can_provision_and_describe() {
     )
     .await
     .expect("DescribeAcls as super-user must succeed");
-    handle.shutdown().await;
-
+    acls.described = Some(describe_resp);
+}
+#[rstest_bdd_macros::then("the only ACL is alice Read Allow on literal foo from any host")]
+fn acl_only_alice_read(acls: &AclProvisioning) {
+    let describe_resp = acls.described.as_ref().expect("ACLs described");
     assert!(
         describe_resp.error_code == 0,
         "DescribeAcls must succeed, got {describe_resp:?}"
@@ -88,18 +120,8 @@ async fn bdd_verify_create_acls_super_user_can_provision_and_describe() {
     check!(acl.operation == OPERATION_READ);
     check!(acl.permission_type == PERMISSION_ALLOW);
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/acl_handlers/provisioning.feature",
-    name = "create acls super user can provision and describe"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_acls_super_user_can_provision_and_describe() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("acl handlers provisioning: create acls non super user rejected")]
-async fn bdd_verify_create_acls_non_super_user_rejected() {
+#[rstest_bdd_macros::given("alice is credentialed but only admin is a super user")]
+async fn acl_unprivileged_listener(acls: &mut AclProvisioning) {
     let log_dir = tempfile::tempdir().unwrap();
     // alice is NOT the super-user. admin is configured as super-user so
     // the compat shim stays off and the cluster-Alter gate applies.
@@ -110,8 +132,12 @@ async fn bdd_verify_create_acls_non_super_user_rejected() {
     );
 
     let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
-
+    acls.directory = Some(log_dir);
+    acls.broker = Some(handle);
+}
+#[rstest_bdd_macros::when("alice creates Read on foo and Write on bar for other principals")]
+async fn acl_unprivileged_create(acls: &mut AclProvisioning) {
+    let addr = acls.broker.as_ref().expect("broker started").listen_addr();
     let req = CreateAclsRequest {
         creations: vec![
             topic_allow_creation("foo", "User:bob", OPERATION_READ),
@@ -125,8 +151,11 @@ async fn bdd_verify_create_acls_non_super_user_rejected() {
     })
     .await
     .expect("CreateAcls request must round-trip even when denied");
-    handle.shutdown().await;
-
+    acls.created = Some(resp);
+}
+#[rstest_bdd_macros::then("both requested bindings are denied with cluster authorization error 31")]
+fn acl_unprivileged_denied(acls: &AclProvisioning) {
+    let resp = acls.created.as_ref().expect("creation attempted");
     assert!(resp.results.len() == 2, "one result row per creation");
     for (i, r) in resp.results.iter().enumerate() {
         assert!(
@@ -135,28 +164,9 @@ async fn bdd_verify_create_acls_non_super_user_rejected() {
         );
     }
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/acl_handlers/provisioning.feature",
-    name = "create acls non super user rejected"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_acls_non_super_user_rejected() {}
-
-/// One ACL binding the broker still reports after a delete.
-#[derive(Debug, PartialEq)]
-struct SurvivingBinding {
-    resource_name: String,
-    operation: i8,
-    permission_type: i8,
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("acl handlers provisioning: delete acls removes matching")]
-async fn bdd_verify_delete_acls_removes_matching() {
-    let (_log_dir, handle, addr) = start_admin_with(&[("admin", "admin-secret")]).await;
-
+#[rstest_bdd_macros::given("admin has provisioned alice Read on foo and Write on bar")]
+async fn acl_two_existing(acls: &mut AclProvisioning) {
+    let addr = acls.broker.as_ref().expect("broker started").listen_addr();
     // Provision two ACLs (Read on "foo", Write on "bar").
     let create_req = CreateAclsRequest {
         creations: vec![
@@ -176,8 +186,10 @@ async fn bdd_verify_delete_acls_removes_matching() {
     for r in &create_resp.results {
         assert!(r.error_code == 0, "provisioning must succeed, got {r:?}");
     }
-
-    // Delete only the Read-on-foo binding via a precisely-targeted filter.
+}
+#[rstest_bdd_macros::when("admin deletes only alice Read Allow on literal foo from any host")]
+async fn acl_targeted_delete(acls: &mut AclProvisioning) {
+    let addr = acls.broker.as_ref().expect("broker started").listen_addr();
     let delete_req = DeleteAclsRequest {
         filters: vec![DeleteAclsFilter {
             resource_type_filter: RESOURCE_TYPE_TOPIC,
@@ -198,6 +210,11 @@ async fn bdd_verify_delete_acls_removes_matching() {
     )
     .await
     .expect("DeleteAcls must succeed");
+    acls.deleted = Some(delete_resp);
+}
+#[rstest_bdd_macros::then("the precise delete returns exactly the successful Read binding on foo")]
+fn acl_targeted_deleted(acls: &AclProvisioning) {
+    let delete_resp = acls.deleted.as_ref().expect("deletion attempted");
     assert!(
         delete_resp.filter_results.len() == 1,
         "one filter result row per filter"
@@ -215,17 +232,16 @@ async fn bdd_verify_delete_acls_removes_matching() {
     check!(matching[0].resource_name == "foo");
     check!(matching[0].operation == OPERATION_READ);
     check!(matching[0].error_code == 0);
-
-    // Describe — only the Write-on-bar binding should remain.
-    let describe_resp = drive_describe_acls_as_plain(
-        addr,
-        describe_all_topic_acls(),
-        &PlainAuthenticationSetup::admin(CLIENT_ID),
-    )
-    .await
-    .expect("DescribeAcls must succeed");
-    handle.shutdown().await;
-
+}
+#[derive(Debug, PartialEq)]
+struct SurvivingBinding {
+    resource_name: String,
+    operation: i8,
+    permission_type: i8,
+}
+#[rstest_bdd_macros::then("only alice Write Allow on bar survives the targeted deletion")]
+fn acl_write_survives(acls: &AclProvisioning) {
+    let describe_resp = acls.described.as_ref().expect("ACLs described");
     assert!(describe_resp.error_code == 0);
     // Flatten all (resource, acl) pairs so the assertion doesn't depend
     // on whether the broker groups by resource or emits one resource per
@@ -257,10 +273,29 @@ async fn bdd_verify_delete_acls_removes_matching() {
     );
 }
 
-#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/provisioning.feature",
+    name = "create acls super user can provision and describe"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_acls_super_user_can_provision_and_describe(acls: AclProvisioning) {
+    acls.broker.expect("broker started").shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/acl_handlers/provisioning.feature",
+    name = "create acls non super user rejected"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_acls_non_super_user_rejected(acls: AclProvisioning) {
+    acls.broker.expect("broker started").shutdown().await;
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/acl_handlers/provisioning.feature",
     name = "delete acls removes matching"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_acls_removes_matching() {}
+async fn delete_acls_removes_matching(acls: AclProvisioning) {
+    acls.broker.expect("broker started").shutdown().await;
+}

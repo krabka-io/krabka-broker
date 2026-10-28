@@ -179,6 +179,7 @@ mod tests {
         crate::{
             config::BrokerConfig,
             file_config::{FileConfig, test_support::configured},
+            share_coordinator::config::ShareCoordinatorConfig,
         },
         assert2::assert,
         krabka_units::{mebibytes, secs},
@@ -237,164 +238,115 @@ barrier_max_topics_per_group = 16
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "file config runtime transactions tests: share coordinator keys follow kafka defaults and bounds"
-    )]
-    fn bdd_verify_share_coordinator_keys_follow_kafka_defaults_and_bounds() {
-        struct Row {
-            label: &'static str,
-            /// The `[runtime]` body.
-            body: &'static str,
-            /// The expected share coordinator config.
-            expected: Option<ShareCoordinatorConfig>,
-        }
-
-        use {
-            crate::share_coordinator::config::ShareCoordinatorConfig,
-            krabka_compression::CompressionType, std::time::Duration,
-        };
-
-        let with = |f: fn(&mut ShareCoordinatorConfig)| {
-            let mut config = ShareCoordinatorConfig::default();
-            f(&mut config);
-            Some(config)
-        };
-        let rows: [Row; 20] = [
-            Row {
-                label: "defaults",
-                body: "",
-                expected: Some(ShareCoordinatorConfig::default()),
-            },
-            Row {
-                label: "snapshot cadence at its ceiling",
-                body: "share_snapshot_update_records_per_snapshot = 500",
-                expected: with(|c| c.snapshot_update_records_per_snapshot = 500),
-            },
-            Row {
-                label: "snapshot cadence of zero",
-                body: "share_snapshot_update_records_per_snapshot = 0",
-                expected: with(|c| c.snapshot_update_records_per_snapshot = 0),
-            },
-            Row {
-                label: "snapshot cadence above 500",
-                body: "share_snapshot_update_records_per_snapshot = 501",
-                expected: None,
-            },
-            Row {
-                label: "write timeout",
-                body: "share_coordinator_write_timeout = \"250ms\"",
-                expected: with(|c| c.write_timeout = Duration::from_millis(250)),
-            },
-            Row {
-                label: "zero write timeout",
-                body: "share_coordinator_write_timeout = \"0ms\"",
-                expected: None,
-            },
-            Row {
-                label: "prune interval",
-                body: "share_state_prune_interval = \"1s\"",
-                expected: with(|c| c.state_topic_prune_interval = Duration::from_secs(1)),
-            },
-            Row {
-                label: "cold snapshot interval above the INT ceiling",
-                body: "share_cold_partition_snapshot_interval = \"2147483648ms\"",
-                expected: None,
-            },
-            Row {
-                label: "load buffer size",
-                body: "share_coordinator_load_buffer_size = \"2MiB\"",
-                expected: Some(ShareCoordinatorConfig::default()),
-            },
-            Row {
-                label: "zstd state topic codec",
-                body: "share_state_compression_codec = 4",
-                expected: with(|c| c.state_topic_compression_codec = CompressionType::Zstd),
-            },
-            Row {
-                label: "unknown state topic codec",
-                body: "share_state_compression_codec = 5",
-                expected: None,
-            },
-            Row {
-                label: "negative state topic codec",
-                body: "share_state_compression_codec = -1",
-                expected: None,
-            },
-            Row {
-                label: "four coordinator threads",
-                body: "share_coordinator_threads = 4",
-                expected: with(|c| c.threads = 4),
-            },
-            Row {
-                label: "zero coordinator threads",
-                body: "share_coordinator_threads = 0",
-                expected: None,
-            },
-            Row {
-                label: "adaptive append linger",
-                body: "share_coordinator_append_linger_ms = -1",
-                expected: Some(ShareCoordinatorConfig::default()),
-            },
-            Row {
-                label: "zero append linger",
-                body: "share_coordinator_append_linger_ms = 0",
-                expected: with(|c| c.append_linger = Some(Duration::ZERO)),
-            },
-            Row {
-                label: "append linger below -1",
-                body: "share_coordinator_append_linger_ms = -2",
-                expected: None,
-            },
-            Row {
-                label: "cached buffer at its floor",
-                body: "share_coordinator_cached_buffer_max_bytes = \"512KiB\"",
-                expected: with(|c| c.cached_buffer_max_bytes = krabka_units::kibibytes(512)),
-            },
-            Row {
-                label: "cached buffer below 512KiB",
-                body: "share_coordinator_cached_buffer_max_bytes = \"524287B\"",
-                expected: None,
-            },
-            Row {
-                label: "cached buffer above the INT ceiling",
-                body: "share_coordinator_cached_buffer_max_bytes = \"2GiB\"",
-                expected: None,
-            },
-        ];
-        for Row {
-            label,
-            body,
-            expected,
-        } in rows
-        {
-            let file: FileConfig =
-                toml::from_str(&format!("[runtime]\n{body}\n")).expect("parse runtime config");
-            let mut cfg = BrokerConfig::default();
-            let applied = file
-                .apply_to(&mut cfg)
-                .ok()
-                .map(|()| *cfg.share_coordinator);
-            assert!(applied == expected, "{label}");
-        }
-        let file: FileConfig =
-            toml::from_str("[runtime]\nshare_coordinator_load_buffer_size = \"2MiB\"\n")
-                .expect("parse runtime config");
-        let mut cfg = BrokerConfig::default();
-        file.apply_to(&mut cfg).expect("apply");
-        assert!(cfg.share_coordinator_load_buffer_size == krabka_units::mebibytes(2));
-        assert!(
-            BrokerConfig::default().share_coordinator_load_buffer_size
-                == krabka_units::mebibytes(5)
+    #[derive(Default)]
+    struct ShareCoordinatorProperties {
+        body: String,
+        applied: Option<Result<BrokerConfig, String>>,
+    }
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct CoordinatorPolicyField {
+        field: String,
+        value: String,
+    }
+    #[rstest::fixture]
+    fn share_coordinator_properties() -> ShareCoordinatorProperties {
+        // Keep the submitted properties and their complete application outcome together.
+        ShareCoordinatorProperties::default()
+    }
+    #[rstest_bdd_macros::given("the Share coordinator runtime properties are")]
+    fn share_coordinator_source(
+        share_coordinator_properties: &mut ShareCoordinatorProperties,
+        docstring: String,
+    ) {
+        share_coordinator_properties.body = docstring;
+    }
+    #[rstest_bdd_macros::when("the broker parses and applies the Share coordinator properties")]
+    fn apply_share_coordinator_properties(
+        share_coordinator_properties: &mut ShareCoordinatorProperties,
+    ) {
+        let file: FileConfig = toml::from_str(&format!(
+            "[runtime]\n{}\n",
+            share_coordinator_properties.body
+        ))
+        .expect("runtime TOML syntax");
+        let mut config = BrokerConfig::default();
+        share_coordinator_properties.applied = Some(
+            file.apply_to(&mut config)
+                .map(|()| config)
+                .map_err(|error| error.to_string()),
         );
     }
-
-    /// Kafka's `ShareCoordinatorConfig` defaults and bounds for the share
-    /// coordinator keys: `Some` is the applied value, `None` a refusal.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/file_config/runtime_transactions.feature",
-        name = "tests: share coordinator keys follow kafka defaults and bounds"
-    )]
-    fn share_coordinator_keys_follow_kafka_defaults_and_bounds() {}
+    #[rstest_bdd_macros::then("the complete Share coordinator policy equals defaults except")]
+    fn share_coordinator_policy(
+        share_coordinator_properties: &ShareCoordinatorProperties,
+        #[datatable] datatable: rstest_bdd::datatable::Rows<CoordinatorPolicyField>,
+    ) {
+        let config = share_coordinator_properties
+            .applied
+            .as_ref()
+            .expect("properties applied")
+            .as_ref()
+            .expect("valid policy");
+        let mut expected = ShareCoordinatorConfig::default();
+        for row in datatable {
+            match row.field.as_str() {
+                "snapshot_update_records_per_snapshot" => {
+                    expected.snapshot_update_records_per_snapshot =
+                        row.value.parse().expect("integer setting")
+                }
+                "write_timeout" => {
+                    expected.write_timeout = std::time::Duration::from_millis(
+                        row.value.parse().expect("timer milliseconds"),
+                    )
+                }
+                "state_topic_prune_interval" => {
+                    expected.state_topic_prune_interval = std::time::Duration::from_millis(
+                        row.value.parse().expect("timer milliseconds"),
+                    )
+                }
+                "state_topic_compression_codec" => {
+                    expected.state_topic_compression_codec = match row.value.as_str() {
+                        "zstd" => krabka_compression::CompressionType::Zstd,
+                        other => panic!("unknown codec {other}"),
+                    }
+                }
+                "threads" => expected.threads = row.value.parse().expect("integer setting"),
+                "append_linger" => {
+                    expected.append_linger = Some(std::time::Duration::from_millis(
+                        row.value.parse().expect("linger milliseconds"),
+                    ))
+                }
+                "cached_buffer_max_bytes" => {
+                    expected.cached_buffer_max_bytes =
+                        krabka_units::bytes(row.value.parse().expect("cache bytes"))
+                }
+                unknown => panic!("unknown Share coordinator field {unknown}"),
+            }
+        }
+        assert!(config.share_coordinator.as_ref() == &expected);
+    }
+    #[rstest_bdd_macros::then("the Share coordinator policy is refused")]
+    fn share_coordinator_refusal(share_coordinator_properties: &ShareCoordinatorProperties) {
+        assert!(
+            share_coordinator_properties
+                .applied
+                .as_ref()
+                .expect("properties applied")
+                .is_err()
+        );
+    }
+    #[rstest_bdd_macros::then("the Share coordinator load buffer has {bytes} bytes")]
+    fn share_coordinator_load_buffer(
+        share_coordinator_properties: &ShareCoordinatorProperties,
+        bytes: u32,
+    ) {
+        let config = share_coordinator_properties
+            .applied
+            .as_ref()
+            .expect("properties applied")
+            .as_ref()
+            .expect("valid policy");
+        assert!(config.share_coordinator_load_buffer_size == krabka_units::bytes(bytes));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/file_config/runtime_transactions.feature", fixtures = [share_coordinator_properties: ShareCoordinatorProperties]);
 }

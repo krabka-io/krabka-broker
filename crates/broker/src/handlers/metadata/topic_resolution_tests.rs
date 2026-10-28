@@ -100,14 +100,6 @@ struct RequestedTopic {
     id: Id,
 }
 
-impl RequestedTopic {
-    const fn new(name: Name, id: Id) -> Self { Self { name, id } }
-}
-
-fn duplicate_topic(name: Name, id: Id) -> Vec<RequestedTopic> {
-    vec![RequestedTopic::new(name, id); 2]
-}
-
 /// One table row.
 #[derive(Debug, Clone)]
 struct Case {
@@ -344,150 +336,142 @@ async fn envelope(fixture: &Fixture) -> MetadataResponse {
     metadata(&fixture.broker, 12, &request).await
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers metadata topic resolution tests: topic ids follow kafka version rules"
-)]
-async fn bdd_verify_topic_ids_follow_kafka_version_rules() {
-    use Expect::{Failed, Rows};
-    let cases = vec![
-        // Versions 10 and 11 refuse a non-zero id or a null name.
-        Case {
-            version: 11,
-            rows: vec![RequestedTopic {
-                name: Name::A,
-                id: Id::Zero,
-            }],
-            expect: Rows(vec![Row::Described(Id::A)]),
-        },
-        Case {
-            version: 11,
-            rows: vec![RequestedTopic {
-                name: Name::A,
-                id: Id::A,
-            }],
-            expect: Failed(codes::INVALID_REQUEST),
-        },
-        Case {
-            version: 10,
-            rows: vec![RequestedTopic {
-                name: Name::Null,
-                id: Id::Zero,
-            }],
-            expect: Failed(codes::INVALID_REQUEST),
-        },
-        Case {
-            version: 11,
-            rows: vec![
-                RequestedTopic {
-                    name: Name::Null,
-                    id: Id::Unknown,
-                },
-                RequestedTopic {
-                    name: Name::A,
-                    id: Id::Zero,
-                },
-            ],
-            expect: Failed(codes::INVALID_REQUEST),
-        },
-        // From version 12 on, the ids win and the names are ignored.
-        Case {
-            version: 12,
-            rows: vec![RequestedTopic::new(Name::A, Id::B)],
-            expect: Rows(vec![Row::Described(Id::B)]),
-        },
-        Case {
-            version: 12,
-            rows: vec![
-                RequestedTopic::new(Name::A, Id::Zero),
-                RequestedTopic::new(Name::Null, Id::B),
-            ],
-            expect: Rows(vec![Row::Described(Id::B)]),
-        },
-        Case {
-            version: 12,
-            rows: vec![RequestedTopic {
-                name: Name::A,
-                id: Id::Unknown,
-            }],
-            expect: Rows(vec![Row::UnknownId]),
-        },
-        Case {
-            version: 13,
-            rows: vec![
-                RequestedTopic {
-                    name: Name::Null,
-                    id: Id::Unknown,
-                },
-                RequestedTopic {
-                    name: Name::Null,
-                    id: Id::A,
-                },
-                RequestedTopic {
-                    name: Name::Null,
-                    id: Id::Zero,
-                },
-            ],
-            expect: Rows(vec![Row::UnknownId, Row::Described(Id::A)]),
-        },
-        Case {
-            version: 13,
-            rows: duplicate_topic(Name::Null, Id::A),
-            expect: Rows(vec![Row::Described(Id::A)]),
-        },
-        // A repeated name is described once (#640).
-        Case {
-            version: 12,
-            rows: duplicate_topic(Name::A, Id::Zero),
-            expect: Rows(vec![Row::Described(Id::A)]),
-        },
-        // With only zero ids, the names are described, and a null name fails
-        // the whole request.
-        Case {
-            version: 12,
-            rows: vec![RequestedTopic {
-                name: Name::Unknown,
-                id: Id::Zero,
-            }],
-            expect: Rows(vec![Row::UnknownName]),
-        },
-        Case {
-            version: 12,
-            rows: vec![
-                RequestedTopic {
-                    name: Name::Null,
-                    id: Id::Zero,
-                },
-                RequestedTopic {
-                    name: Name::A,
-                    id: Id::Zero,
-                },
-            ],
-            expect: Failed(codes::UNKNOWN_SERVER_ERROR),
-        },
-        Case {
-            version: 13,
-            rows: vec![RequestedTopic {
-                name: Name::Null,
-                id: Id::Zero,
-            }],
-            expect: Failed(codes::UNKNOWN_SERVER_ERROR),
-        },
-    ];
-    let fixture = start(Arc::new(AllowAllAuthorizer)).await;
-    let baseline = baseline(&fixture).await;
-
-    fixture.run(&cases, &baseline).await;
-    fixture.broker.shutdown().await;
+#[derive(Default)]
+struct TopicResolutionScenario {
+    fixture: Option<Fixture>,
+    baseline: Option<MetadataResponse>,
+    version: i16,
+    rows: Vec<RequestedTopic>,
+    response: Option<MetadataResponse>,
 }
-
-#[cfg(test)]
+#[rstest::fixture]
+fn topic_resolution() -> TopicResolutionScenario {
+    let fixture = None;
+    TopicResolutionScenario {
+        fixture,
+        ..Default::default()
+    }
+}
+fn resolution_topic_id(text: &str) -> Id {
+    match text {
+        TOPIC_A => Id::A,
+        TOPIC_B => Id::B,
+        "unknown" => Id::Unknown,
+        "zero" => Id::Zero,
+        _ => panic!("unknown topic UUID reference: {text}"),
+    }
+}
+#[rstest_bdd_macros::given(
+    "topics resolution-a and resolution-b exist with their own UUIDs and a complete metadata baseline"
+)]
+async fn existing_resolution_topics(topic_resolution: &mut TopicResolutionScenario) {
+    let fixture = start(Arc::new(AllowAllAuthorizer)).await;
+    topic_resolution.baseline = Some(baseline(&fixture).await);
+    topic_resolution.fixture = Some(fixture);
+}
+#[rstest_bdd_macros::given("Metadata API version {version} carries topic references {rows}")]
+fn requested_topic_resolution(
+    topic_resolution: &mut TopicResolutionScenario,
+    version: i16,
+    rows: String,
+) {
+    topic_resolution.version = version;
+    topic_resolution.rows = rows
+        .split(';')
+        .map(|row| {
+            let (name, id) = row.split_once('/').unwrap();
+            RequestedTopic {
+                name: match name {
+                    TOPIC_A => Name::A,
+                    UNKNOWN_NAME => Name::Unknown,
+                    "null" => Name::Null,
+                    _ => panic!("unknown topic name input: {name}"),
+                },
+                id: resolution_topic_id(id),
+            }
+        })
+        .collect();
+}
+#[rstest_bdd_macros::when("the broker answers the versioned topic metadata request")]
+async fn resolve_versioned_topics(topic_resolution: &mut TopicResolutionScenario) {
+    let fixture = topic_resolution.fixture.as_ref().unwrap();
+    topic_resolution.response = Some(
+        metadata(
+            &fixture.broker,
+            topic_resolution.version,
+            &fixture.request(&topic_resolution.rows),
+        )
+        .await,
+    );
+}
+impl TopicResolutionScenario {
+    async fn check_resolution_response(&mut self, expect: Expect) {
+        let case = Case {
+            version: self.version,
+            rows: self.rows.clone(),
+            expect,
+        };
+        let fixture = self.fixture.as_ref().expect("metadata fixture");
+        assert!(
+            self.response.as_ref().expect("metadata response")
+                == &fixture.expected(&case, self.baseline.as_ref().expect("metadata baseline"))
+        );
+        self.fixture
+            .take()
+            .expect("metadata fixture")
+            .broker
+            .shutdown()
+            .await;
+    }
+}
+#[rstest_bdd_macros::then("the complete Metadata response contains ordered topic rows {rows}")]
+async fn check_resolved_topic_rows(topic_resolution: &mut TopicResolutionScenario, rows: String) {
+    let rows = rows
+        .split(';')
+        .map(|row| match row {
+            "described resolution-a" => Row::Described(Id::A),
+            "described resolution-b" => Row::Described(Id::B),
+            "unknown UUID" => Row::UnknownId,
+            "unknown name" => Row::UnknownName,
+            _ => panic!("unknown expected topic row: {row}"),
+        })
+        .collect();
+    topic_resolution
+        .check_resolution_response(Expect::Rows(rows))
+        .await;
+}
+#[rstest_bdd_macros::then("the complete Metadata request error response has code {code}")]
+async fn check_topic_resolution_failure(topic_resolution: &mut TopicResolutionScenario, code: i16) {
+    topic_resolution
+        .check_resolution_response(Expect::Failed(code))
+        .await;
+}
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/metadata/topic_resolution_tests.feature",
-    name = "topic ids follow kafka version rules"
+    path = "tests/features/handler_metadata_topic_resolution/resolution.feature",
+    name = "Names and UUIDs resolve according to the requested Kafka version"
 )]
 #[tokio::test]
-async fn topic_ids_follow_kafka_version_rules() {}
+async fn topic_ids_follow_kafka_version_rules(
+    topic_resolution: TopicResolutionScenario,
+    version: i16,
+    rows: String,
+    expected: String,
+) {
+    let _ = (topic_resolution, version, rows, expected);
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_metadata_topic_resolution/resolution.feature",
+    name = "Invalid UUID or null-name combinations fail the complete versioned request"
+)]
+#[tokio::test]
+async fn invalid_topic_id_requests(
+    topic_resolution: TopicResolutionScenario,
+    version: i16,
+    rows: String,
+    code: i16,
+) {
+    let _ = (topic_resolution, version, rows, code);
+}
 
 /// A denied id row carries a null name and the real id. A denied name row
 /// carries the name and the zero id. An unknown id needs no authorization, and

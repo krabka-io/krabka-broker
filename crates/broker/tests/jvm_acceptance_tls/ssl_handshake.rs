@@ -8,33 +8,66 @@
 use {
     crate::{
         jvm_acceptance::{
-            KAFKA_IMAGE, broker0_advertised, nc_check_connectivity, prepare_jks_truststore,
-            start_ssl_broker, write_client_props,
+            ClientPropsFile, KAFKA_IMAGE, broker0_advertised, nc_check_connectivity,
+            prepare_jks_truststore, start_ssl_broker, write_client_props,
         },
         support::jvm_docker_command,
     },
     assert2::assert,
-    std::process::Stdio,
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::{
+        path::PathBuf,
+        process::{Output, Stdio},
+    },
+    tempfile::TempDir,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm acceptance tls ssl handshake: jvm ssl handshake succeeds")]
-async fn bdd_verify_jvm_ssl_handshake_succeeds() {
-    let (broker, _dir) = start_ssl_broker().await;
+struct EncryptedDiscovery {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    truststore: Option<PathBuf>,
+    properties: Option<ClientPropsFile>,
+    output: Option<Output>,
+}
+#[fixture]
+fn discovery() -> EncryptedDiscovery {
+    // Start this scenario with fresh inputs and observations.
+
+    EncryptedDiscovery {
+        broker: None,
+        directory: None,
+        truststore: None,
+        properties: None,
+        output: None,
+    }
+}
+#[given("an SSL only broker and a JVM truststore containing its development certificate")]
+async fn trusted_listener(discovery: &mut EncryptedDiscovery) {
+    let (broker, directory) = start_ssl_broker().await;
     nc_check_connectivity();
-
-    let truststore_path = prepare_jks_truststore();
-
-    let props = "security.protocol=SSL\n\
-                 ssl.truststore.location=/truststore.jks\n\
-                 ssl.truststore.password=changeit\n\
-                 ssl.endpoint.identification.algorithm=\n";
-    let props_tmp = write_client_props(props);
-    let ts_mount = format!("{}:/truststore.jks:ro", truststore_path.display());
-
+    discovery.truststore = Some(prepare_jks_truststore());
+    discovery.properties = Some(write_client_props(
+        "security.protocol=SSL\nssl.truststore.location=/truststore.jks\nssl.truststore.password=changeit\nssl.endpoint.identification.algorithm=\n",
+    ));
+    discovery.broker = Some(broker);
+    discovery.directory = Some(directory);
+}
+#[when("the stock broker API versions tool connects through the encrypted listener")]
+fn api_versions(discovery: &mut EncryptedDiscovery) {
+    let props = discovery
+        .properties
+        .as_ref()
+        .expect("SSL properties configured");
+    let truststore = discovery
+        .truststore
+        .as_ref()
+        .expect("JVM truststore prepared");
+    let mount = format!("{}:/truststore.jks:ro", truststore.display());
     let out = jvm_docker_command()
         .image(KAFKA_IMAGE)
-        .mounts(&[&props_tmp.mount_str(), &ts_mount])
+        .mounts(&[&props.mount_str(), &mount])
         .args(&[
             "kafka-broker-api-versions",
             "--bootstrap-server",
@@ -47,41 +80,31 @@ async fn bdd_verify_jvm_ssl_handshake_succeeds() {
         .stdout(Stdio::piped())
         .output()
         .expect("spawn kafka-broker-api-versions");
-    eprintln!(
-        "KRABKA[test] ssl api-versions status={} stdout={} stderr={}",
-        out.status,
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-    assert!(
-        out.status.success(),
-        "ssl handshake failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-
-    broker.shutdown().await;
+    discovery.output = Some(out);
 }
-
-/// End-to-end TLS handshake check against an `SSL`-only listener. The test
-/// drives `kafka-broker-api-versions` from inside the cp-kafka container
-/// with a JKS truststore that holds the broker's dev cert. It verifies that
-/// the JVM client completes the TLS handshake and exchanges an
-/// `ApiVersions` request over the encrypted channel.
-///
-/// The test turns off hostname verification with
-/// `ssl.endpoint.identification.algorithm=`, because the CN of the dev cert
-/// is `krabka-dev`, not `host.docker.internal`. The dev cert is a
-/// self-signed ECDSA P-256 end-entity, regenerated from the original
-/// ED25519 + CA:TRUE fixture. cp-kafka:6.1.1 ships Java 11, whose
-/// `SunJSSE` does not advertise `ed25519` signature schemes during the TLS
-/// handshake, so the JVM client would reject ED25519 server certs with
-/// `NoSignatureSchemesInCommon`.
+#[then("TLS negotiation and API discovery complete successfully")]
+fn handshake(discovery: &EncryptedDiscovery) {
+    let output = discovery
+        .output
+        .as_ref()
+        .expect("API versions command completed");
+    assert!(
+        output.status.success(),
+        "ssl handshake failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_tls/ssl_handshake.feature",
-    name = "jvm ssl handshake succeeds"
+    name = "A JVM client discovers broker APIs over trusted TLS"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn jvm_ssl_handshake_succeeds() {}
+async fn jvm_ssl_handshake_succeeds(discovery: EncryptedDiscovery) {
+    discovery
+        .broker
+        .expect("SSL broker started")
+        .shutdown()
+        .await;
+}

@@ -181,7 +181,9 @@ mod tests {
     use {
         super::*,
         assert2::{assert, check},
-        krabka_units::{convert::ByteSizeExt, mebibytes, millis, minutes, secs},
+        krabka_remote_storage_topic::MetadataEventQueueCapacity,
+        krabka_units::{bytes, convert::ByteSizeExt, mebibytes, millis, minutes, secs},
+        rstest_bdd::datatable::Rows,
         std::path::PathBuf,
     };
 
@@ -196,84 +198,6 @@ mod tests {
         let c = BrokerConfig::for_tests(PathBuf::from("/tmp"));
         assert!(matches!(c.remote_log_metadata, RlmmKind::InMemory));
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "config tiered storage tests: kafka rlmm config default has sane topic settings"
-    )]
-    fn bdd_verify_kafka_rlmm_config_default_has_sane_topic_settings() {
-        let c = KafkaRlmmConfig::default();
-        check!(c.num_partitions == 50);
-        check!(c.replication == 3);
-        check!(c.min_isr == 2);
-        check!(c.bootstrap.is_empty());
-        check!(c.snapshot_dir == PathBuf::new());
-        check!(c.snapshot_interval == DEFAULT_RLMM_SNAPSHOT_INTERVAL);
-        check!(c.topic_create_timeout == secs(30));
-        check!(c.fetch_max_wait == millis(500));
-        check!(c.fetch_max_bytes == mebibytes(1));
-        check!(c.fetch_retry_backoff == millis(200));
-        check!(c.event_queue_capacity.capacity() == 1024);
-        check!(c.security.is_none());
-        c.validate().unwrap();
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/config/tiered_storage.feature",
-        name = "tests: kafka rlmm config default has sane topic settings"
-    )]
-    fn kafka_rlmm_config_default_has_sane_topic_settings() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "config tiered storage tests: kafka rlmm config validates transport and snapshot policy"
-    )]
-    fn bdd_verify_kafka_rlmm_config_validates_transport_and_snapshot_policy() {
-        let valid = KafkaRlmmConfig {
-            topic_create_timeout: secs(45),
-            fetch_max_wait: millis(750),
-            fetch_max_bytes: mebibytes(2),
-            fetch_retry_backoff: millis(300),
-            event_queue_capacity: krabka_remote_storage_topic::MetadataEventQueueCapacity::new(
-                2048,
-            )
-            .unwrap(),
-            snapshot_interval: secs(90),
-            min_isr: 1,
-            ..KafkaRlmmConfig::default()
-        };
-        valid.validate().unwrap();
-
-        for (field, config) in [
-            ("fetch_max_wait", KafkaRlmmConfig {
-                fetch_max_wait: Time::ZERO,
-                ..KafkaRlmmConfig::default()
-            }),
-            ("min_isr", KafkaRlmmConfig {
-                min_isr: 0,
-                ..KafkaRlmmConfig::default()
-            }),
-            ("snapshot_interval", KafkaRlmmConfig {
-                snapshot_interval: Time::ZERO,
-                ..KafkaRlmmConfig::default()
-            }),
-            ("snapshot_interval", KafkaRlmmConfig {
-                snapshot_interval: Time::from_secs_f64(f64::INFINITY),
-                ..KafkaRlmmConfig::default()
-            }),
-        ] {
-            let error = config.validate().expect_err("invalid policy must fail");
-            assert!(error.to_string().contains(field), "{error}");
-        }
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/config/tiered_storage.feature",
-        name = "tests: kafka rlmm config validates transport and snapshot policy"
-    )]
-    fn kafka_rlmm_config_validates_transport_and_snapshot_policy() {}
 
     #[test]
     fn broker_validation_rejects_invalid_topic_metadata_policy() {
@@ -290,50 +214,6 @@ mod tests {
             .expect_err("invalid embedded metadata policy must fail");
         assert!(error.to_string().contains("fetch_max_bytes"), "{error}");
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "config tiered storage tests: kafka rlmm config carries snapshot settings"
-    )]
-    fn bdd_verify_kafka_rlmm_config_carries_snapshot_settings() {
-        let c = KafkaRlmmConfig {
-            bootstrap: "127.0.0.1:9092".into(),
-            snapshot_interval: minutes(1),
-            snapshot_dir: PathBuf::from("/data/remote-log-metadata"),
-            ..KafkaRlmmConfig::default()
-        };
-        assert!(c.snapshot_interval == minutes(1));
-        assert!(c.snapshot_dir == PathBuf::from("/data/remote-log-metadata"));
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/config/tiered_storage.feature",
-        name = "tests: kafka rlmm config carries snapshot settings"
-    )]
-    fn kafka_rlmm_config_carries_snapshot_settings() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "config tiered storage tests: kafka rlmm config carries optional security"
-    )]
-    fn bdd_verify_kafka_rlmm_config_carries_optional_security() {
-        let c = KafkaRlmmConfig {
-            bootstrap: "127.0.0.1:9092".into(),
-            num_partitions: 1,
-            replication: 1,
-            snapshot_dir: PathBuf::from("/data/remote-log-metadata"),
-            ..KafkaRlmmConfig::default()
-        };
-        assert!(c.security.is_none());
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/config/tiered_storage.feature",
-        name = "tests: kafka rlmm config carries optional security"
-    )]
-    fn kafka_rlmm_config_carries_optional_security() {}
 
     #[test]
     fn worm_without_an_object_store_backend_is_rejected_by_validate() {
@@ -378,4 +258,141 @@ mod tests {
         c.validate()
             .expect("WORM over an S3 backend is the supported pairing");
     }
+
+    #[derive(Default)]
+    struct TopicMetadataPolicy {
+        config: KafkaRlmmConfig,
+        validation: Option<Result<(), String>>,
+    }
+
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct MetadataPolicyProperty {
+        field: String,
+        value: String,
+    }
+
+    #[rstest::fixture]
+    fn metadata_policy() -> TopicMetadataPolicy {
+        // Each topic metadata manager receives its own configured policy.
+        TopicMetadataPolicy::default()
+    }
+
+    #[rstest_bdd_macros::given("the topic metadata manager uses default settings")]
+    fn default_metadata_policy(metadata_policy: &mut TopicMetadataPolicy) {
+        metadata_policy.config = KafkaRlmmConfig::default();
+    }
+
+    #[rstest_bdd_macros::given("the topic metadata manager has these policy overrides:")]
+    fn supplied_metadata_policy(
+        metadata_policy: &mut TopicMetadataPolicy,
+        #[datatable] rows: Rows<MetadataPolicyProperty>,
+    ) {
+        for row in rows {
+            let value = row.value.as_str();
+            match row.field.as_str() {
+                "bootstrap" => metadata_policy.config.bootstrap = value.to_owned(),
+                "num_partitions" => {
+                    metadata_policy.config.num_partitions = value.parse().expect("partition count");
+                }
+                "replication" => {
+                    metadata_policy.config.replication = value.parse().expect("replication factor");
+                }
+                "min_isr" => metadata_policy.config.min_isr = value.parse().expect("minimum ISR"),
+                "snapshot_dir" => metadata_policy.config.snapshot_dir = PathBuf::from(value),
+                "snapshot_interval_ms" => {
+                    metadata_policy.config.snapshot_interval = if value == "infinity" {
+                        Time::from_secs_f64(f64::INFINITY)
+                    } else {
+                        millis(value.parse::<u32>().expect("snapshot milliseconds"))
+                    }
+                }
+                "topic_create_timeout_ms" => {
+                    metadata_policy.config.topic_create_timeout =
+                        millis(value.parse::<u32>().expect("creation timeout"));
+                }
+                "fetch_max_wait_ms" => {
+                    metadata_policy.config.fetch_max_wait =
+                        millis(value.parse::<u32>().expect("fetch wait"));
+                }
+                "fetch_max_bytes" => {
+                    metadata_policy.config.fetch_max_bytes =
+                        bytes(value.parse::<u32>().expect("fetch bytes"));
+                }
+                "fetch_retry_backoff_ms" => {
+                    metadata_policy.config.fetch_retry_backoff =
+                        millis(value.parse::<u32>().expect("fetch backoff"));
+                }
+                "event_queue_capacity" => {
+                    metadata_policy.config.event_queue_capacity =
+                        MetadataEventQueueCapacity::new(value.parse().expect("queue capacity"))
+                            .expect("valid queue capacity");
+                }
+                field => panic!("unknown metadata policy field {field}"),
+            }
+        }
+    }
+
+    #[rstest_bdd_macros::when("the topic metadata manager policy is validated")]
+    fn validate_metadata_policy(metadata_policy: &mut TopicMetadataPolicy) {
+        metadata_policy.validation = Some(
+            metadata_policy
+                .config
+                .validate()
+                .map_err(|error| error.to_string()),
+        );
+    }
+
+    #[rstest_bdd_macros::then("the topic metadata manager policy is accepted")]
+    fn accepted_metadata_policy(metadata_policy: &TopicMetadataPolicy) {
+        check!(metadata_policy.validation == Some(Ok(())));
+    }
+
+    #[rstest_bdd_macros::then("the policy refusal names {field}")]
+    fn refused_metadata_policy(metadata_policy: &TopicMetadataPolicy, field: String) {
+        let Err(error) = metadata_policy
+            .validation
+            .as_ref()
+            .expect("policy was validated")
+        else {
+            panic!("invalid metadata policy must fail");
+        };
+        assert!(error.contains(&field), "{error}");
+    }
+
+    #[rstest_bdd_macros::then(
+        "the topic metadata policy retains Kafka defaults for topology, snapshots, transport and security"
+    )]
+    fn default_metadata_policy_values(metadata_policy: &TopicMetadataPolicy) {
+        let c = &metadata_policy.config;
+        check!(c.num_partitions == 50);
+        check!(c.replication == 3);
+        check!(c.min_isr == 2);
+        check!(c.bootstrap.is_empty());
+        check!(c.snapshot_dir == PathBuf::new());
+        check!(c.snapshot_interval == DEFAULT_RLMM_SNAPSHOT_INTERVAL);
+        check!(c.topic_create_timeout == secs(30));
+        check!(c.fetch_max_wait == millis(500));
+        check!(c.fetch_max_bytes == mebibytes(1));
+        check!(c.fetch_retry_backoff == millis(200));
+        check!(c.event_queue_capacity.capacity() == 1024);
+        check!(c.security.is_none());
+    }
+
+    #[rstest_bdd_macros::then(
+        "metadata snapshots use a one minute interval and directory /data/remote-log-metadata"
+    )]
+    fn retained_metadata_snapshot_settings(metadata_policy: &TopicMetadataPolicy) {
+        assert!(metadata_policy.config.snapshot_interval == minutes(1));
+        assert!(metadata_policy.config.snapshot_dir == PathBuf::from("/data/remote-log-metadata"));
+    }
+
+    #[rstest_bdd_macros::then("the metadata connection requires no security configuration")]
+    fn optional_metadata_security(metadata_policy: &TopicMetadataPolicy) {
+        assert!(metadata_policy.config.security.is_none());
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/config/tiered_storage",
+        fixtures = [metadata_policy: TopicMetadataPolicy]
+    );
 }

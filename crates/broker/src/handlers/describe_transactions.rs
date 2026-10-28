@@ -185,7 +185,7 @@ mod tests {
         crate::{
             authorizer as fixture_authorizers,
             handlers::test_support::transaction_admin_tests::*,
-            test_support::{allow_acl, grant_topic_operation, peer, principal},
+            test_support::{StartedBroker, allow_acl, grant_topic_operation, peer, principal},
             txn::state::TopicPartition,
         },
         assert2::assert,
@@ -232,30 +232,38 @@ mod tests {
         test_context ["admin-client"];
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("handlers describe transactions tests: each row carries kafkas code")]
-    async fn bdd_verify_each_row_carries_kafkas_code() {
+    #[derive(Default)]
+    struct TransactionRowsScenario {
+        started: Option<StartedBroker>,
+        empty_id: String,
+        foreign_id: String,
+        response: Option<DescribeTransactionsResponse>,
+    }
+    #[rstest::fixture]
+    fn transaction_rows() -> TransactionRowsScenario {
+        let started = None;
+        TransactionRowsScenario {
+            started,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "this broker coordinates an ongoing transaction a dead transaction and an absent ID but not a foreign ID"
+    )]
+    async fn transaction_description_states(transaction_rows: &mut TransactionRowsScenario) {
         use krabka_log::ProducerId;
-
-        let version = describe_transactions_response::MAX_VERSION;
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker);
-            boot [start_broker] allow_all;
-        };
+        let started = start_broker(Arc::new(fixture_authorizers::AllowAllAuthorizer)).await;
+        let broker = started.broker.broker_arc_for_test();
         let coordinator = &broker.txn_coordinator;
-        krabka_macros::request_test_identity! {
-            bind(context);
-            user ["admin"];
-        };
-
-        // Two ids this broker coordinates, and one it does not.
-        let (ongoing_id, dead_id) = ("tx-ongoing", "tx-dead");
-        lead_transaction_state_partitions(&broker_handle, &[
-            coordinator.partition_for(ongoing_id).unwrap(),
-            coordinator.partition_for(dead_id).unwrap(),
+        lead_transaction_state_partitions(&started.broker, &[
+            coordinator.partition_for("tx-ongoing").unwrap(),
+            coordinator.partition_for("tx-dead").unwrap(),
         ])
         .await;
-        for (tid, state) in [(ongoing_id, TxnState::Ongoing), (dead_id, TxnState::Dead)] {
+        for (tid, state) in [
+            ("tx-ongoing", TxnState::Ongoing),
+            ("tx-dead", TxnState::Dead),
+        ] {
             let mut entry = TxnEntry::new_empty(
                 tid.to_owned(),
                 ProducerId(if state == TxnState::Dead { 200 } else { 100 }),
@@ -270,81 +278,107 @@ mod tests {
                 .await
                 .expect("seed the transaction");
         }
-        // An id this broker coordinates and holds nothing for.
-        let empty_id = (0..1_000)
+        transaction_rows.empty_id = (0..1_000)
             .map(|n| format!("tx-empty-{n}"))
-            .find(|tid| coordinator.partition_for(tid) == coordinator.partition_for(ongoing_id))
+            .find(|tid| coordinator.partition_for(tid) == coordinator.partition_for("tx-ongoing"))
             .expect("an id in a led partition");
-        // An id in a partition this broker does not lead.
-        let foreign_id = (0..1_000)
+        transaction_rows.foreign_id = (0..1_000)
             .map(|n| format!("tx-foreign-{n}"))
             .find(|tid| {
-                let p = coordinator.partition_for(tid);
-                p != coordinator.partition_for(ongoing_id)
-                    && p != coordinator.partition_for(dead_id)
+                let partition = coordinator.partition_for(tid);
+                partition != coordinator.partition_for("tx-ongoing")
+                    && partition != coordinator.partition_for("tx-dead")
             })
             .expect("an id in an unled partition");
-
+        transaction_rows.started = Some(started);
+    }
+    #[rstest_bdd_macros::when(
+        "an admin describes the empty absent foreign dead and ongoing transaction IDs in that order"
+    )]
+    async fn describe_all_transaction_states(transaction_rows: &mut TransactionRowsScenario) {
+        let broker = transaction_rows
+            .started
+            .as_ref()
+            .unwrap()
+            .broker
+            .broker_arc_for_test();
+        krabka_macros::request_test_identity! {bind(context);user ["admin"];};
         let request = DescribeTransactionsRequest {
             transactional_ids: vec![
                 String::new(),
-                empty_id.clone(),
-                foreign_id.clone(),
-                dead_id.to_owned(),
-                ongoing_id.to_owned(),
+                transaction_rows.empty_id.clone(),
+                transaction_rows.foreign_id.clone(),
+                "tx-dead".into(),
+                "tx-ongoing".into(),
             ],
             ..Default::default()
         };
-        let response = handle(&broker, request, version, &context)
+        transaction_rows.response = Some(
+            handle(
+                &broker,
+                request,
+                describe_transactions_response::MAX_VERSION,
+                &context,
+            )
             .await
-            .expect("describe");
-
+            .expect("describe"),
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "the transaction rows preserve invalid absent foreign dead and complete ongoing state semantics"
+    )]
+    async fn check_described_transaction_states(transaction_rows: &mut TransactionRowsScenario) {
         let not_found = |tid: &str| TransactionState {
             error_code: codes::TRANSACTIONAL_ID_NOT_FOUND,
             transactional_id: tid.to_owned(),
             ..Default::default()
         };
         assert!(
-            response.transaction_states
+            transaction_rows
+                .response
+                .as_ref()
+                .unwrap()
+                .transaction_states
                 == vec![
                     TransactionState {
                         error_code: codes::INVALID_REQUEST,
                         ..Default::default()
                     },
-                    not_found(&empty_id),
+                    not_found(&transaction_rows.empty_id),
                     TransactionState {
                         error_code: codes::NOT_COORDINATOR,
-                        transactional_id: foreign_id.clone(),
+                        transactional_id: transaction_rows.foreign_id.clone(),
                         ..Default::default()
                     },
-                    not_found(dead_id),
+                    not_found("tx-dead"),
                     TransactionState {
                         error_code: codes::NONE,
-                        transactional_id: ongoing_id.to_owned(),
-                        transaction_state: "Ongoing".to_owned(),
+                        transactional_id: "tx-ongoing".into(),
+                        transaction_state: "Ongoing".into(),
                         transaction_timeout_ms: 60_000,
                         transaction_start_time_ms: 7,
                         producer_id: 100,
                         producer_epoch: 3,
                         ..Default::default()
-                    },
+                    }
                 ]
         );
-        broker_handle.shutdown().await;
+        transaction_rows
+            .started
+            .take()
+            .unwrap()
+            .broker
+            .shutdown()
+            .await;
     }
-
-    /// Kafka `TransactionCoordinator.handleDescribeTransactions` per requested
-    /// id: `INVALID_REQUEST` for an empty id, the coordinator error of the id's
-    /// partition, `TRANSACTIONAL_ID_NOT_FOUND` for an id this broker
-    /// coordinates but holds nothing for, or holds a `Dead` entry for, and the
-    /// row otherwise.
-    #[cfg(test)]
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/describe_transactions.feature",
-        name = "tests: each row carries kafkas code"
+        path = "tests/features/handler_describe_transactions/transactions.feature",
+        name = "Each requested transaction receives its own Kafka state row"
     )]
     #[tokio::test]
-    async fn each_row_carries_kafkas_code() {}
+    async fn each_row_carries_kafkas_code(transaction_rows: TransactionRowsScenario) {
+        let _ = transaction_rows;
+    }
 
     /// A topic ACL: the topic it names and the operation it grants.
     struct TopicGrant {

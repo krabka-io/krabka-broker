@@ -141,24 +141,47 @@ mod tests {
         assert!(wire_node_id(krabka_metadata::NodeId(42)) == 42);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers find coordinator resolve tests: share key parser accepts kafka uuid and colons in group"
-    )]
-    fn bdd_verify_share_key_parser_accepts_kafka_uuid_and_colons_in_group() {
-        let key = format!("group:with:colon:{TOPIC_ID}:7");
-        let (group, topic_id, partition) = parse_share_key(&key).expect("valid share key");
-        assert!(group == "group:with:colon");
-        assert!(topic_id == uuid::Uuid::from_bytes([5; 16]));
-        assert!(partition == 7);
+    #[derive(Default)]
+    struct ShareCoordinatorKeyScenario {
+        key: String,
+        parsed: Vec<Option<(String, uuid::Uuid, i32)>>,
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/find_coordinator/resolve.feature",
-        name = "tests: share key parser accepts kafka uuid and colons in group"
+    #[rstest::fixture]
+    fn share_coordinator_key() -> ShareCoordinatorKeyScenario {
+        let key = String::new();
+        ShareCoordinatorKeyScenario {
+            key,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given("the share coordinator key is {key}")]
+    fn share_coordinator_key_text(
+        share_coordinator_key: &mut ShareCoordinatorKeyScenario,
+        key: String,
+    ) {
+        share_coordinator_key.key = key;
+    }
+    #[rstest_bdd_macros::when("the share coordinator key is parsed")]
+    fn parse_share_coordinator_key(share_coordinator_key: &mut ShareCoordinatorKeyScenario) {
+        share_coordinator_key.parsed.push(
+            parse_share_key(&share_coordinator_key.key)
+                .map(|(group, topic, partition)| (group.to_owned(), topic, partition)),
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "the coordinator group is group:with:colon topic bytes are all 5 and partition is 7"
     )]
-    fn share_key_parser_accepts_kafka_uuid_and_colons_in_group() {}
+    fn check_share_coordinator_key(share_coordinator_key: &ShareCoordinatorKeyScenario) {
+        assert!(
+            share_coordinator_key.parsed
+                == vec![Some((
+                    "group:with:colon".into(),
+                    uuid::Uuid::from_bytes([5; 16]),
+                    7
+                ))]
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_share_coordinator_key",fixtures=[share_coordinator_key:ShareCoordinatorKeyScenario]);
 
     #[yare::parameterized(
         empty_group = { format!(":{TOPIC_ID}:0") },

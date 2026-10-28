@@ -1,24 +1,28 @@
-Feature: src features
+Feature: Metadata version transition compatibility
+  A transition crosses a format change only when a changed version lies above
+  the lower endpoint and at or below the higher endpoint, in either direction.
 
-  Scenario Outline: tests: metadata changed between walks like kafka
-    Then features tests: metadata changed between walks like kafka for <example>
+  Scenario Outline: Metadata transition boundaries match Kafka's exclusive lower endpoint
+    Given metadata changes from version <source> to version <target>
+    When Kafka's metadata-change boundaries are traversed
+    Then a metadata format change is crossed <changed>
 
     Examples:
-      | example                                         |
-      | same version                                    |
-      | adjacent downgrade 25 to 24                     |
-      | adjacent upgrade 24 to 25                       |
-      | multi version downgrade without change 29 to 24 |
-      | crossing change 25 to 22                        |
-      | lower change excluded 25 to 23                  |
-      | crossing change 23 to 22                        |
-      | crossing change 17 to 15                        |
-      | lower change excluded 16 to 15                  |
-      | crossing change 13 to 12                        |
-      | lower change excluded 12 to 11                  |
-      | crossing change 30 to 29                        |
-      | crossing change 32 to 31                        |
-      | lower change excluded 31 to 30                  |
-      | crossing change 8 to 7                          |
-      | crossing change 7 to 6                          |
-      | crossing change 33 to 32                        |
+      | source | target | changed |
+      | 25     | 25     | false   |
+      | 25     | 24     | false   |
+      | 24     | 25     | false   |
+      | 29     | 24     | false   |
+      | 25     | 22     | true    |
+      | 25     | 23     | false   |
+      | 23     | 22     | true    |
+      | 17     | 15     | true    |
+      | 16     | 15     | false   |
+      | 13     | 12     | true    |
+      | 12     | 11     | false   |
+      | 30     | 29     | true    |
+      | 32     | 31     | true    |
+      | 31     | 30     | false   |
+      | 8      | 7      | true    |
+      | 7      | 6      | true    |
+      | 33     | 32     | true    |

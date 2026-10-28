@@ -3,8 +3,7 @@
 //!
 //! `fetch_all` exists because the generated `FetchResponse` codec decodes only
 //! the first batch of a partition, so collecting the whole log takes a loop of
-//! `Fetch` calls. Its result feeds `assert_latest_records_survive`, which is
-//! the actual claim of this suite, so the two live together.
+//! `Fetch` calls. Its result feeds the scenario’s independent compaction assertions.
 
 use {
     crate::{
@@ -22,15 +21,15 @@ use {
         owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
         primitives::uuid::Uuid,
     },
-    std::{collections::BTreeSet, net::SocketAddr},
+    std::net::SocketAddr,
     tokio::net::TcpStream,
 };
 
 /// A flattened record: key and value as plain byte vecs.
 #[derive(Debug)]
 pub struct FlatRecord {
-    key: Vec<u8>,
-    value: Vec<u8>,
+    pub(crate) key: Vec<u8>,
+    pub(crate) value: Vec<u8>,
 }
 
 /// Fetch all records from (topic, partition 0) and start at offset 0.
@@ -106,39 +105,4 @@ pub async fn fetch_all(addr: SocketAddr, topic: &str, topic_id: Uuid) -> Vec<Fla
         }
     }
     out
-}
-
-pub fn assert_latest_records_survive(records: &[FlatRecord]) {
-    let distinct_keys: BTreeSet<String> = records
-        .iter()
-        .map(|record| String::from_utf8(record.key.clone()).unwrap())
-        .filter(|key| key != "__pad__")
-        .collect();
-    assert!(
-        distinct_keys
-            == ["k1".to_owned(), "k2".to_owned(), "k3".to_owned()]
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
-        "k1, k2, k3 must all survive compaction; got: {distinct_keys:?}"
-    );
-
-    for key in ["k1", "k2", "k3"] {
-        let values_for_key: Vec<String> = records
-            .iter()
-            .filter(|record| record.key == key.as_bytes())
-            .map(|record| String::from_utf8(record.value.clone()).unwrap())
-            .collect();
-        let expected_latest = format!("v10-{key}");
-        assert!(
-            values_for_key.contains(&expected_latest),
-            "key {key} must have latest value {expected_latest}; got {values_for_key:?}"
-        );
-        for stale_round in 0..10u32 {
-            let stale = format!("v{stale_round}-{key}");
-            assert!(
-                !values_for_key.contains(&stale),
-                "key {key} must NOT retain stale value {stale}; got {values_for_key:?}"
-            );
-        }
-    }
 }

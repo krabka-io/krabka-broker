@@ -265,94 +265,115 @@ mod tests {
     /// value behind its two-byte length, and no headers.
     const LARGE: usize = 1_007;
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "index batch tests: first record at or after timestamp refuses only the records kafka reads for {example}"
+    struct TimestampLookupScenario {
+        bytes: Vec<u8>,
+        floor: i64,
+        timestamp: i64,
+        limit: Option<usize>,
+        found: Option<Result<Option<(i64, i64)>, RemoteStorageError>>,
+    }
+    #[rstest::fixture]
+    fn timestamp_lookup() -> TimestampLookupScenario {
+        // Start this scenario with fresh inputs and observations.
+
+        TimestampLookupScenario {
+            bytes: Vec::new(),
+            floor: 0,
+            timestamp: 0,
+            limit: None,
+            found: None,
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "a {codec} remote segment with a 1000-byte middle record between offsets 10 and 12"
     )]
-    fn bdd_verify_first_record_at_or_after_timestamp_refuses_only_the_records_kafka_reads(
-        example: String,
+    fn lookup_records(timestamp_lookup: &mut TimestampLookupScenario, codec: String) {
+        let codec = match codec.as_str() {
+            "gzip" => krabka_compression::CompressionType::Gzip,
+            "uncompressed" => krabka_compression::CompressionType::None,
+            _ => panic!("unknown compression {codec}"),
+        };
+        timestamp_lookup.bytes = encoded(&[
+            sized_batch_at(10, &[sized(1_000, 10)], codec),
+            sized_batch_at(11, &[sized(1_100, 1_000), sized(1_200, 10)], codec),
+        ])
+        .to_vec();
+    }
+    #[rstest_bdd_macros::given(
+        "a remote timestamp lookup starts at offset {floor} for timestamp {target} with limit {limit}"
+    )]
+    fn lookup_request(
+        timestamp_lookup: &mut TimestampLookupScenario,
+        floor: i64,
+        target: i64,
+        limit: String,
     ) {
-        type Example = (
-            krabka_compression::CompressionType,
-            i64,
-            i64,
-            Option<usize>,
-            Result<Option<(i64, i64)>, usize>,
-        );
-        let (codec, floor_offset, target, limit, want): Example = match example.as_str() {
-            "found before oversized batch" => (
-                krabka_compression::CompressionType::Gzip,
-                10,
-                1_000,
-                Some(100),
-                Ok(Some((10, 1_000))),
-            ),
-            "oversized record is match" => (
-                krabka_compression::CompressionType::Gzip,
-                10,
-                1_100,
-                Some(100),
-                Err(LARGE),
-            ),
-            "oversized record before match" => (
-                krabka_compression::CompressionType::Gzip,
-                10,
-                1_200,
-                Some(100),
-                Err(LARGE),
-            ),
-            "batch below offset floor" => (
-                krabka_compression::CompressionType::Gzip,
-                13,
-                1_100,
-                Some(100),
-                Ok(None),
-            ),
-            "no limit" => (
-                krabka_compression::CompressionType::Gzip,
-                10,
-                1_100,
-                None,
-                Ok(Some((11, 1_100))),
-            ),
-            "uncompressed batch" => (
-                krabka_compression::CompressionType::None,
-                10,
-                1_100,
-                Some(100),
-                Ok(Some((11, 1_100))),
-            ),
-            _ => panic!("unknown BDD example: {example}"),
+        timestamp_lookup.floor = floor;
+        timestamp_lookup.timestamp = target;
+        timestamp_lookup.limit = if limit == "unlimited" {
+            None
+        } else {
+            Some(limit.parse().expect("record byte limit"))
         };
-
-        let layout = |codec| {
-            encoded(&[
-                sized_batch_at(10, &[sized(1_000, 10)], codec),
-                sized_batch_at(11, &[sized(1_100, 1_000), sized(1_200, 10)], codec),
-            ])
-        };
-        let got =
-            match first_record_at_or_after_timestamp(&layout(codec), floor_offset, target, limit) {
-                Ok(found) => Ok(found),
-                Err(RemoteStorageError::RecordTooLarge { size, limit }) => {
-                    assert2::assert!(limit == 100);
-                    Err(size)
-                }
-                Err(other) => panic!("unexpected error: {other}"),
-            };
-        assert2::assert!(got == want);
     }
-
-    /// Kafka's `RemoteLogManager.lookupTimestamp` decompresses a batch only when
-    /// its max timestamp and its last offset reach the lookup's, and holds each
-    /// record it reads to the limit. A batch the producer did not compress is
-    /// never held to it.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/index/batch.feature",
-        name = "tests: first record at or after timestamp refuses only the records kafka reads"
+    #[rstest_bdd_macros::when("the first matching remote record is located")]
+    fn lookup_timestamp_record(timestamp_lookup: &mut TimestampLookupScenario) {
+        timestamp_lookup.found = Some(first_record_at_or_after_timestamp(
+            &timestamp_lookup.bytes,
+            timestamp_lookup.floor,
+            timestamp_lookup.timestamp,
+            timestamp_lookup.limit,
+        ));
+    }
+    #[rstest_bdd_macros::then(
+        "the remote record at offset {offset} and timestamp {timestamp} is returned"
     )]
-    fn first_record_at_or_after_timestamp_refuses_only_the_records_kafka_reads(example: String) {
-        let _ = example;
+    fn matching_timestamp_record(
+        timestamp_lookup: &TimestampLookupScenario,
+        offset: i64,
+        timestamp: i64,
+    ) {
+        let found = timestamp_lookup
+            .found
+            .as_ref()
+            .expect("timestamp lookup performed")
+            .as_ref()
+            .expect("matching record accepted");
+        assert2::assert!(*found == Some((offset, timestamp)));
     }
+    #[rstest_bdd_macros::then("a {size}-byte record exceeds the {limit}-byte decompression bound")]
+    fn oversized_timestamp_record(
+        timestamp_lookup: &TimestampLookupScenario,
+        size: usize,
+        limit: usize,
+    ) {
+        let error = timestamp_lookup
+            .found
+            .as_ref()
+            .expect("timestamp lookup performed")
+            .as_ref()
+            .expect_err("oversized record refused");
+        assert2::assert!(let RemoteStorageError::RecordTooLarge { .. } = error);
+        let RemoteStorageError::RecordTooLarge {
+            size: actual_size,
+            limit: actual_limit,
+        } = error
+        else {
+            unreachable!("record-size error asserted")
+        };
+        assert2::assert!(size == LARGE);
+        assert2::assert!(*actual_size == size);
+        assert2::assert!(*actual_limit == limit);
+    }
+    #[rstest_bdd_macros::then("the remote timestamp lookup has no match")]
+    fn no_timestamp_record(timestamp_lookup: &TimestampLookupScenario) {
+        let found = timestamp_lookup
+            .found
+            .as_ref()
+            .expect("timestamp lookup performed")
+            .as_ref()
+            .expect("skipped batches accepted");
+        assert2::assert!(*found == None);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/timestamp_lookup", fixtures = [timestamp_lookup: TimestampLookupScenario]);
 }

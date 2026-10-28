@@ -325,65 +325,53 @@ mod tests {
 
     fn dirs() -> Vec<PathBuf> { vec![PathBuf::from("/d1"), PathBuf::from("/d2")] }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "cordoned log dirs tests: values resolve as kafka validates them for {example}"
-    )]
-    fn bdd_verify_values_resolve_as_kafka_validates_them(example: String) {
-        type Example<'a> = (&'a str, Result<Vec<PathBuf>, String>);
-        let (value, want): Example<'_> = match example.as_str() {
-            "empty" => ("", Ok(vec![])),
-            "whitespace" => ("  ", Ok(vec![])),
-            "one directory" => ("/d1", Ok(vec![PathBuf::from("/d1")])),
-            "trimmed ordered directories" => (
-                "/d2 , /d1",
-                Ok(vec![PathBuf::from("/d1"), PathBuf::from("/d2")]),
-            ),
-            "duplicate directory" => ("/d1,/d1", Ok(vec![PathBuf::from("/d1")])),
-            "wildcard" => ("*", Ok(vec![PathBuf::from("/d1"), PathBuf::from("/d2")])),
-            "trailing empty entry" => (
-                "/d1,",
-                Err("Configuration 'cordoned.log.dirs' values must not be empty.".to_owned()),
-            ),
-            "wildcard with directory" => (
-                "*,/d1",
-                Err(
-                    "requirement failed: When cordoned.log.dirs is set to *, it must not \
-                         contain other values"
-                        .to_owned(),
-                ),
-            ),
-            "missing directory" => (
-                "/nope",
-                Err(
-                    "requirement failed: All entries in cordoned.log.dirs must be present in \
-                         log.dirs or log.dir. Missing entries : /nope"
-                        .to_owned(),
-                ),
-            ),
-            "multiple missing directories" => (
-                "/x,/d1,/y",
-                Err(
-                    "requirement failed: All entries in cordoned.log.dirs must be present in \
-                         log.dirs or log.dir. Missing entries : /x, /y"
-                        .to_owned(),
-                ),
-            ),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(resolve(value, &dirs()) == want, "{value:?}");
+    #[derive(Default)]
+    struct CordoningRequest {
+        directories: Vec<PathBuf>,
+        input: String,
+        resolved: Option<Result<Vec<PathBuf>, String>>,
     }
 
-    /// Each message is the one `kafka-configs --alter --entity-name 1
-    /// --add-config cordoned.log.dirs=...` printed against `apache/kafka:4.3.1`
-    /// with `log.dirs=/tmp/d1,/tmp/d2`.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/cordoned_log_dirs.feature",
-        name = "tests: values resolve as kafka validates them"
-    )]
-    fn values_resolve_as_kafka_validates_them(example: String) { let _ = example; }
+    #[rstest::fixture]
+    fn cordoning_request() -> CordoningRequest {
+        // Directory resolution receives fresh configured paths for each request.
+        CordoningRequest::default()
+    }
+
+    #[rstest_bdd_macros::given("the broker log directories are /d1 and /d2")]
+    fn configured_cordon_directories(cordoning_request: &mut CordoningRequest) {
+        cordoning_request.directories = dirs();
+    }
+
+    #[rstest_bdd_macros::given("cordoned.log.dirs is JSON {value}")]
+    fn supplied_cordoning_value(cordoning_request: &mut CordoningRequest, value: String) {
+        cordoning_request.input =
+            serde_json::from_str(&value).expect("JSON preserves directory whitespace");
+    }
+
+    #[rstest_bdd_macros::when("the cordoned log directories are resolved")]
+    fn resolve_cordoning_value(cordoning_request: &mut CordoningRequest) {
+        cordoning_request.resolved = Some(resolve(
+            &cordoning_request.input,
+            &cordoning_request.directories,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the ordered cordoned directories are JSON {paths}")]
+    fn expected_cordoned_directories(cordoning_request: &CordoningRequest, paths: String) {
+        let expected: Vec<PathBuf> = serde_json::from_str(&paths).expect("explicit directory list");
+        check!(cordoning_request.resolved == Some(Ok(expected)));
+    }
+
+    #[rstest_bdd_macros::then("the cordoning request fails with {message}")]
+    fn refused_cordoning_request(cordoning_request: &CordoningRequest, message: String) {
+        check!(cordoning_request.resolved == Some(Err(message)));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/cordoned_log_dirs.feature",
+        fixtures = [cordoning_request: CordoningRequest]
+    );
 
     fn registration(
         log_dirs: &[u128],

@@ -19,7 +19,10 @@ use {
         produce::{SinglePartitionProduceSetup, single_partition_produce},
     },
     assert2::assert,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
     std::time::Duration,
+    support::InProcess,
     tokio::{task, time::Instant},
 };
 mod support;
@@ -28,7 +31,9 @@ use {
     bytes::{Bytes, BytesMut},
     krabka_ids::Offset,
     krabka_protocol::{
-        owned::fetch_request::FetchRequest, primitives::uuid::Uuid, records::RecordsPayload,
+        owned::fetch_request::FetchRequest,
+        primitives::uuid::Uuid,
+        records::{RecordBatch, RecordsPayload},
     },
     krabka_records_legacy::{Magic, ParsedRecord, encode_flat_message_set},
 };
@@ -80,100 +85,173 @@ async fn produce_legacy(
     resp.responses[0].partition_responses[0].error_code
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "produce legacy upconvert: produce v1 message set is upconverted and round trips"
-)]
-async fn bdd_verify_produce_v1_message_set_is_upconverted_and_round_trips() {
-    let p = support::start().await;
-    create_topic(&p.client, "legacy", 1).await;
-    let topic_id = topic_id_for(&p, "legacy").await;
+struct LegacyConversion {
+    broker: Option<InProcess>,
+    topic: String,
+    topic_id: Uuid,
+    payload: Option<Bytes>,
+    produce_error: Option<i16>,
+    fetch_errors: Vec<i16>,
+    stored: Option<RecordBatch>,
+}
 
-    let legacy_bytes = build_v1_message_set(&[b"alpha", b"beta", b"gamma"]);
+#[fixture]
+fn conversion() -> LegacyConversion {
+    // Start this scenario with fresh inputs and observations.
 
-    let err = produce_legacy(&p, "legacy", topic_id, legacy_bytes).await;
-    assert!(err == 0, "Produce up-conversion must succeed: {err}");
+    LegacyConversion {
+        broker: None,
+        topic: String::new(),
+        topic_id: Uuid::ZERO,
+        payload: None,
+        produce_error: None,
+        fetch_errors: Vec::new(),
+        stored: None,
+    }
+}
 
-    // Fetch the stored records back and verify they survived the
-    // up-conversion. The wire response is v2, so the fetched batch
-    // carries the same values.
+async fn conversion_topic(conversion: &mut LegacyConversion, name: &str) {
+    let broker = support::start().await;
+    create_topic(&broker.client, name, 1).await;
+    conversion.topic_id = topic_id_for(&broker, name).await;
+    conversion.broker = Some(broker);
+    conversion.topic = name.into();
+}
+
+fn legacy_value_rows(datatable: Vec<Vec<String>>) -> Vec<Vec<u8>> {
+    datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [value]: [String; 1] = row.try_into().expect("one record value");
+            value.into_bytes()
+        })
+        .collect()
+}
+
+#[given("the legacy producer has these v1 message values")]
+async fn legacy_values(conversion: &mut LegacyConversion, datatable: Vec<Vec<String>>) {
+    conversion_topic(conversion, "legacy").await;
+    let values = legacy_value_rows(datatable);
+    let values = values.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    conversion.payload = Some(build_v1_message_set(&values));
+}
+
+#[given("the legacy producer has a framed v1 message set containing corrupt record bytes")]
+async fn corrupt_legacy(conversion: &mut LegacyConversion) {
+    conversion_topic(conversion, "bad").await;
+    let mut garbage = vec![0_u8; 100];
+    garbage[8..12].copy_from_slice(&88_i32.to_be_bytes());
+    conversion.payload = Some(Bytes::from(garbage));
+}
+
+#[when("the message set is produced through the legacy records payload path")]
+async fn submit_legacy(conversion: &mut LegacyConversion) {
+    let broker = conversion.broker.as_ref().expect("a topic was created");
+    let payload = conversion
+        .payload
+        .take()
+        .expect("a legacy message set was provided");
+    conversion.produce_error =
+        Some(produce_legacy(broker, &conversion.topic, conversion.topic_id, payload).await);
+}
+
+#[then("the legacy produce is accepted")]
+fn accepted_legacy(conversion: &LegacyConversion) {
+    assert!(
+        conversion.produce_error == Some(0),
+        "Produce up-conversion must succeed: {:?}",
+        conversion.produce_error
+    );
+}
+
+#[when("a modern consumer fetches the committed records")]
+async fn fetch_converted(conversion: &mut LegacyConversion) {
+    let broker = conversion.broker.as_ref().expect("a topic was created");
     let deadline = Instant::now() + Duration::from_secs(5);
-    let batch = loop {
-        let fr = p
+    conversion.stored = loop {
+        let response = broker
             .client
             .send(FetchRequest {
                 replica_id: -1,
                 ..single_partition_fetch()
-                    .topic("legacy".into())
-                    .topic_id(topic_id)
+                    .topic(conversion.topic.clone())
+                    .topic_id(conversion.topic_id)
                     .call()
             })
             .await
             .expect("Fetch");
-        let part = &fr.responses[0].partitions[0];
-        assert!(part.error_code == 0);
-        if let Some(batch) = part
+        let partition = &response.responses[0].partitions[0];
+        conversion.fetch_errors.push(partition.error_code);
+        if let Some(batch) = partition
             .records
             .as_ref()
-            .and_then(|p| p.as_v2())
+            .and_then(|records| records.as_v2())
             .and_then(<[_]>::first)
         {
-            break batch.clone();
+            break Some(batch.clone());
         }
-        assert!(
-            Instant::now() < deadline,
-            "Fetch did not return the committed v2 batch within 5s"
-        );
+        if Instant::now() >= deadline {
+            break None;
+        }
         task::yield_now().await;
     };
-    assert!(batch.records.len() == 3);
-    let values: Vec<&[u8]> = batch
+}
+
+#[then("the fetch succeeds and returns these values in one v2 batch")]
+fn converted_values(conversion: &LegacyConversion, datatable: Vec<Vec<String>>) {
+    assert!(!conversion.fetch_errors.is_empty());
+    assert!(
+        conversion.fetch_errors.iter().all(|&code| code == 0),
+        "fetch errors: {:?}",
+        conversion.fetch_errors
+    );
+    let batch = conversion
+        .stored
+        .as_ref()
+        .expect("Fetch returns the committed v2 batch within 5s");
+    let expected = legacy_value_rows(datatable);
+    assert!(batch.records.len() == expected.len());
+    let values = batch
         .records
         .iter()
-        .map(|r| r.value.as_deref().unwrap_or(&[]))
-        .collect();
-    assert!(values == vec![&b"alpha"[..], &b"beta"[..], &b"gamma"[..]]);
-
-    p.broker.shutdown().await;
+        .map(|record| record.value.as_deref().unwrap_or(&[]).to_vec())
+        .collect::<Vec<_>>();
+    assert!(values == expected);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/produce_legacy_upconvert.feature",
-    name = "produce v1 message set is upconverted and round trips"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn produce_v1_message_set_is_upconverted_and_round_trips() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "produce legacy upconvert: produce malformed legacy bytes returns invalid record"
-)]
-async fn bdd_verify_produce_malformed_legacy_bytes_returns_invalid_record() {
-    let p = support::start().await;
-    create_topic(&p.client, "bad", 1).await;
-    let topic_id = topic_id_for(&p, "bad").await;
-
-    // 100 bytes of garbage that look superficially like a legacy
-    // MessageSet (byte 16 != 2 → routed to Legacy arm) but fail CRC
-    // when parsed. The handler must surface INVALID_RECORD (87), not
-    // panic or wedge. The size field frames the whole set: a field below
-    // Kafka's 14-byte minimum is `CORRUPT_MESSAGE` before anything is parsed.
-    let mut garbage = vec![0u8; 100];
-    garbage[8..12].copy_from_slice(&88_i32.to_be_bytes());
-    let err = produce_legacy(&p, "bad", topic_id, Bytes::from(garbage)).await;
+#[then("the corrupt legacy produce is refused with INVALID_RECORD 87")]
+fn invalid_legacy(conversion: &LegacyConversion) {
     assert!(
-        err == 87,
-        "malformed legacy bytes must surface INVALID_RECORD (87): {err}"
+        conversion.produce_error == Some(87),
+        "malformed legacy bytes must surface INVALID_RECORD (87): {:?}",
+        conversion.produce_error
     );
-
-    p.broker.shutdown().await;
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+async fn stop_conversion(conversion: LegacyConversion) {
+    conversion
+        .broker
+        .expect("a broker was started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/produce_legacy_upconvert.feature",
-    name = "produce malformed legacy bytes returns invalid record"
+    name = "A v1 message set is stored and fetched as equivalent v2 records"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn produce_malformed_legacy_bytes_returns_invalid_record() {}
+async fn produce_v1_message_set_is_upconverted_and_round_trips(conversion: LegacyConversion) {
+    stop_conversion(conversion).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/produce_legacy_upconvert.feature",
+    name = "A corrupt but correctly framed legacy message set is rejected as invalid records"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn produce_malformed_legacy_bytes_returns_invalid_record(conversion: LegacyConversion) {
+    stop_conversion(conversion).await;
+}

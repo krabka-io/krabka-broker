@@ -109,29 +109,63 @@ async fn describe_with_description(client: &Client) -> DescribedGroup {
     group
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "streams groups streams topology description: one member is asked and its push is described"
-)]
-async fn bdd_verify_one_member_is_asked_and_its_push_is_described() {
-    let GroupCoordinatorBoot {
-        broker: _broker,
-        bootstrap,
-        directory: _dir,
-    } = Box::pin(boot_with_plugin()).await;
-    let client = connect(&bootstrap).await;
-    finalize_streams_version(&client).await;
-    let source_topic = SOURCE;
-    create_topic(&client, source_topic, 1).await;
+use {
+    krabka_protocol::owned::streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::sync::Arc,
+};
 
-    let first = client
-        .send(first_join(GROUP, topology(SOURCE, vec![])))
-        .await
-        .expect("first join");
-    let second = client
-        .send(first_join(GROUP, topology(SOURCE, vec![])))
-        .await
-        .expect("second join");
+#[derive(Default)]
+struct TopologyDescriptionScenario {
+    booted: Option<GroupCoordinatorBoot>,
+    client: Option<Arc<Client>>,
+    joins: Vec<StreamsGroupHeartbeatResponse>,
+    descriptions: Vec<DescribedGroup>,
+    pushed: Option<StreamsGroupTopologyDescriptionUpdateResponse>,
+    heartbeats: Vec<StreamsGroupHeartbeatResponse>,
+    left: Option<StreamsGroupHeartbeatResponse>,
+    deleted_codes: Option<Vec<i16>>,
+}
+
+#[fixture]
+fn topology_description_case() -> TopologyDescriptionScenario {
+    // Preserve full descriptions and independently observed member responses.
+    TopologyDescriptionScenario::default()
+}
+
+impl TopologyDescriptionScenario {
+    fn client(&self) -> &Client { self.client.as_ref().expect("topology plugin client") }
+}
+
+#[given(
+    "a trunk streams broker runs the in-memory topology description plugin with one source partition"
+)]
+async fn topology_plugin_broker(topology_description_case: &mut TopologyDescriptionScenario) {
+    let booted = Box::pin(boot_with_plugin()).await;
+    let client = connect(&booted.bootstrap).await;
+    finalize_streams_version(&client).await;
+    create_topic(&client, SOURCE, 1).await;
+    topology_description_case.client = Some(client);
+    topology_description_case.booted = Some(booted);
+}
+
+#[when("a new member joins the topology-description group")]
+async fn topology_description_join(topology_description_case: &mut TopologyDescriptionScenario) {
+    topology_description_case.joins.push(
+        topology_description_case
+            .client()
+            .send(first_join(GROUP, topology(SOURCE, vec![])))
+            .await
+            .expect("streams join"),
+    );
+}
+
+#[then("both topology-description joins succeed and only the first member is asked to push")]
+fn one_topology_description_reporter(topology_description_case: &TopologyDescriptionScenario) {
+    assert!(topology_description_case.joins.len() == 2);
+    let first = &topology_description_case.joins[0];
+    let second = &topology_description_case.joins[1];
     assert!(
         first.error_code == 0 && second.error_code == 0,
         "{first:?} {second:?}"
@@ -142,133 +176,205 @@ async fn bdd_verify_one_member_is_asked_and_its_push_is_described() {
             second.topology_description_required
         ) == (true, false)
     );
-    let before = describe_with_description(&client).await;
+}
+
+#[then("the latest join succeeds and requests a topology description")]
+fn topology_description_required(topology_description_case: &TopologyDescriptionScenario) {
+    let response = topology_description_case
+        .joins
+        .last()
+        .expect("join answered");
+    assert!(response.error_code == 0, "{response:?}");
+    assert!(response.topology_description_required);
+}
+
+#[when("the administrator describes the group including its topology description")]
+async fn inspect_topology_description(topology_description_case: &mut TopologyDescriptionScenario) {
+    topology_description_case
+        .descriptions
+        .push(describe_with_description(topology_description_case.client()).await);
+}
+
+#[then("the topology description has status one and no stored description")]
+fn no_stored_topology_description(topology_description_case: &TopologyDescriptionScenario) {
+    let response = topology_description_case
+        .descriptions
+        .last()
+        .expect("group described");
     assert!(
         (
-            before.topology_description_status,
-            before.topology_description
+            response.topology_description_status,
+            response.topology_description.as_ref()
         ) == (1, None)
     );
+}
 
-    let pushed = client
-        .send(StreamsGroupTopologyDescriptionUpdateRequest {
-            group_id: GROUP.into(),
-            member_id: first.member_id.clone(),
-            topology_epoch: 0,
-            topology_description: pushed_description(),
-            ..Default::default()
-        })
-        .await
-        .expect("StreamsGroupTopologyDescriptionUpdate");
+#[when("the selected first member pushes the source-node description at topology epoch zero")]
+async fn push_topology_description(topology_description_case: &mut TopologyDescriptionScenario) {
+    topology_description_case.pushed = Some(
+        topology_description_case
+            .client()
+            .send(StreamsGroupTopologyDescriptionUpdateRequest {
+                group_id: GROUP.into(),
+                member_id: topology_description_case.joins[0].member_id.clone(),
+                topology_epoch: 0,
+                topology_description: pushed_description(),
+                ..Default::default()
+            })
+            .await
+            .expect("StreamsGroupTopologyDescriptionUpdate"),
+    );
+}
 
-    assert!(pushed == StreamsGroupTopologyDescriptionUpdateResponse::default());
-    let after = describe_with_description(&client).await;
+#[then("the topology description push returns the complete successful default response")]
+fn successful_topology_description_push(topology_description_case: &TopologyDescriptionScenario) {
     assert!(
-        after
+        topology_description_case
+            .pushed
+            .as_ref()
+            .expect("push answered")
+            == &StreamsGroupTopologyDescriptionUpdateResponse::default()
+    );
+}
+
+#[then("the group description changes only to status three with the exact pushed source topology")]
+fn stored_topology_description(topology_description_case: &TopologyDescriptionScenario) {
+    assert!(topology_description_case.descriptions.len() == 2);
+    assert!(
+        topology_description_case.descriptions[1]
             == DescribedGroup {
                 topology_description_status: 3,
                 topology_description: Some(described_description()),
-                ..before
+                ..topology_description_case.descriptions[0].clone()
             }
     );
-    for member in [&first, &second] {
-        let again = client
-            .send(
-                follow_up()
-                    .group(GROUP)
-                    .member_id(&member.member_id)
-                    .epoch(member.member_epoch)
-                    .call(),
-            )
-            .await
-            .expect("heartbeat");
-        assert!(again.error_code == 0, "{again:?}");
-        assert!(!again.topology_description_required, "{}", member.member_id);
+}
+
+#[when("both joined members heartbeat after the topology description push")]
+async fn heartbeat_topology_description_members(
+    topology_description_case: &mut TopologyDescriptionScenario,
+) {
+    for member in &topology_description_case.joins {
+        topology_description_case.heartbeats.push(
+            topology_description_case
+                .client()
+                .send(
+                    follow_up()
+                        .group(GROUP)
+                        .member_id(&member.member_id)
+                        .epoch(member.member_epoch)
+                        .call(),
+                )
+                .await
+                .expect("heartbeat"),
+        );
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/streams_groups/streams_topology_description.feature",
-    name = "one member is asked and its push is described"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn one_member_is_asked_and_its_push_is_described() {}
+#[then("both later heartbeats succeed without requesting another topology push")]
+fn topology_description_not_requested(topology_description_case: &TopologyDescriptionScenario) {
+    assert!(topology_description_case.heartbeats.len() == 2);
+    for response in &topology_description_case.heartbeats {
+        assert!(response.error_code == 0, "{response:?}");
+        assert!(!response.topology_description_required);
+    }
+}
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "streams groups streams topology description: a deleted and recreated group is asked again"
-)]
-async fn bdd_verify_a_deleted_and_recreated_group_is_asked_again() {
-    let booted = Box::pin(boot_with_plugin()).await;
-    let client = connect(&booted.bootstrap).await;
-    finalize_streams_version(&client).await;
-    create_topic(&client, SOURCE, 1).await;
-    let member = client
-        .send(first_join(GROUP, topology(SOURCE, vec![])))
-        .await
-        .expect("join");
-    assert!(member.topology_description_required, "{member:?}");
-    let pushed = client
-        .send(StreamsGroupTopologyDescriptionUpdateRequest {
-            group_id: GROUP.into(),
-            member_id: member.member_id.clone(),
-            topology_epoch: 0,
-            topology_description: pushed_description(),
-            ..Default::default()
-        })
-        .await
-        .expect("StreamsGroupTopologyDescriptionUpdate");
-    assert!(pushed.error_code == 0, "{pushed:?}");
-    let left = client
-        .send(
-            follow_up()
-                .group(GROUP)
-                .member_id(&member.member_id)
-                .epoch(-1)
-                .call(),
-        )
-        .await
-        .expect("leave");
-    assert!(left.error_code == 0, "{left:?}");
-    let deleted = client
+#[when("the topology-description group's member leaves permanently")]
+async fn leave_topology_description_group(
+    topology_description_case: &mut TopologyDescriptionScenario,
+) {
+    topology_description_case.left = Some(
+        topology_description_case
+            .client()
+            .send(
+                follow_up()
+                    .group(GROUP)
+                    .member_id(&topology_description_case.joins[0].member_id)
+                    .epoch(-1)
+                    .call(),
+            )
+            .await
+            .expect("leave"),
+    );
+}
+
+#[then("the topology-description leave succeeds")]
+fn topology_description_left(topology_description_case: &TopologyDescriptionScenario) {
+    assert!(
+        topology_description_case
+            .left
+            .as_ref()
+            .expect("leave answered")
+            .error_code
+            == 0
+    );
+}
+
+#[when("the empty topology-description group is deleted")]
+async fn delete_topology_description_group(
+    topology_description_case: &mut TopologyDescriptionScenario,
+) {
+    let response = topology_description_case
+        .client()
         .send(DeleteGroupsRequest {
             groups_names: vec![GROUP.into()],
             ..Default::default()
         })
         .await
         .expect("DeleteGroups");
-    assert!(
-        deleted
+    topology_description_case.deleted_codes = Some(
+        response
             .results
             .iter()
             .map(|result| result.error_code)
-            .eq([0]),
-        "{deleted:?}"
-    );
-
-    let rejoined = client
-        .send(first_join(GROUP, topology(SOURCE, vec![])))
-        .await
-        .expect("join the new group");
-
-    assert!(rejoined.error_code == 0, "{rejoined:?}");
-    assert!(rejoined.topology_description_required);
-    let described = describe_with_description(&client).await;
-    assert!(
-        (
-            described.topology_description_status,
-            described.topology_description
-        ) == (1, None)
+            .collect(),
     );
 }
 
-/// `DeleteGroups` drops what the plugin held, so the group that the next
-/// join creates is asked again and describes nothing stored.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[then("exactly one topology-description group deletion succeeds")]
+fn topology_description_deleted(topology_description_case: &TopologyDescriptionScenario) {
+    assert!(
+        topology_description_case
+            .deleted_codes
+            .as_ref()
+            .expect("delete answered")
+            == &vec![0]
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/streams_groups/streams_topology_description.feature",
+    name = "one member is asked and its push is described"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_member_is_asked_and_its_push_is_described(
+    topology_description_case: TopologyDescriptionScenario,
+) {
+    topology_description_case
+        .booted
+        .take()
+        .expect("plugin broker")
+        .broker
+        .shutdown()
+        .await;
+    drop(topology_description_case);
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/streams_groups/streams_topology_description.feature",
     name = "a deleted and recreated group is asked again"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_deleted_and_recreated_group_is_asked_again() {}
+async fn a_deleted_and_recreated_group_is_asked_again(
+    topology_description_case: TopologyDescriptionScenario,
+) {
+    topology_description_case
+        .booted
+        .take()
+        .expect("plugin broker")
+        .broker
+        .shutdown()
+        .await;
+    drop(topology_description_case);
+}

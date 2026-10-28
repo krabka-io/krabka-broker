@@ -251,278 +251,6 @@ async fn read_state(
     resp.results[0].partitions[0].clone()
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("share state: find coordinator share creates topic and returns broker")]
-async fn bdd_verify_find_coordinator_share_creates_topic_and_returns_broker() {
-    let (broker, bootstrap, _d) = boot().await;
-    let client = connect(&bootstrap).await;
-
-    let tid = uuid::Uuid::from_bytes([3u8; 16]);
-    let key = share_coordinator_key("g1", tid, 0);
-    let first = find_share_once(&client, &key).await;
-    check!(
-        first
-            == Coordinator {
-                key: key.clone(),
-                node_id: -1,
-                host: String::new(),
-                port: -1,
-                error_code: COORDINATOR_NOT_AVAILABLE,
-                error_message: None,
-                ..Default::default()
-            }
-    );
-
-    let retried = support::find_coordinator(&client, support::KEY_TYPE_SHARE, &key).await;
-    let addr = broker.listen_addr();
-    check!(
-        retried
-            == Coordinator {
-                key,
-                node_id: i32::try_from(broker.node_id()).unwrap(),
-                host: addr.ip().to_string(),
-                port: i32::from(addr.port()),
-                error_code: 0,
-                error_message: None,
-                ..Default::default()
-            }
-    );
-}
-
-/// `FindCoordinator(SHARE)` bootstraps `__share_group_state` and routes the
-/// `(group, topic, partition)` key to a real broker (this single node).
-///
-/// The first lookup finds no topic. It asks for the topic and answers
-/// `COORDINATOR_NOT_AVAILABLE` with no node, as Kafka's
-/// `KafkaApis.getCoordinator` does. A retried lookup names this broker.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_state.feature",
-    name = "find coordinator share creates topic and returns broker"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn find_coordinator_share_creates_topic_and_returns_broker() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share state: persister round trip")]
-async fn bdd_verify_persister_round_trip() {
-    let (_b, bootstrap, _d) = boot().await;
-    let client = connect(&bootstrap).await;
-    let tid = create_topic(&client, "round-trip").await;
-
-    // Bootstrap __share_group_state, then initialize (retrying until led).
-    initialize_partition(&client, "g1", tid, 0, InitialState {
-        state_epoch: 0,
-        start_offset: 0,
-    })
-    .await;
-
-    // Write an in-flight batch above the new SPSO (5).
-    let w = write_state(&client, StateWrite {
-        group: "g1",
-        topic_id: tid,
-        partition: 0,
-        state_epoch: 0,
-        leader_epoch: 0,
-        start_offset: 5,
-        delivery_complete_count: 2,
-        batches: vec![StateBatch {
-            first_offset: 5,
-            last_offset: 9,
-            delivery_state: 2,
-            delivery_count: 1,
-            ..Default::default()
-        }],
-    })
-    .await;
-    assert!(w == 0, "write error: {w}");
-
-    // Read full state.
-    let r = read_state(&client, "g1", tid, 0).await;
-    check!(r.error_code == 0, "read error: {}", r.error_code);
-    check!(
-        r.start_offset == 5,
-        "SPSO must be 5, got {}",
-        r.start_offset
-    );
-    check!(
-        r.state_batches
-            .iter()
-            .any(|b| b.first_offset == 5 && b.last_offset == 9),
-        "written batch must be present: {:?}",
-        r.state_batches
-    );
-
-    // Summary matches.
-    let s = read_summary(&client, "g1", tid, 0).await;
-    check!(s.error_code == 0, "summary error: {}", s.error_code);
-    check!(
-        s.start_offset == 5,
-        "summary SPSO 5, got {}",
-        s.start_offset
-    );
-    check!(
-        s.state_epoch == 0,
-        "summary state_epoch 0, got {}",
-        s.state_epoch
-    );
-    check!(
-        s.delivery_complete_count == 2,
-        "summary DCC 2, got {}",
-        s.delivery_complete_count
-    );
-
-    // Delete, then a fresh read is refused: the key has no state.
-    let del_req = DeleteShareGroupStateRequest {
-        group_id: "g1".into(),
-        topics: vec![DeleteStateData {
-            topic_id: wire(tid),
-            partitions: vec![DeletePart {
-                partition: 0,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let del = client.send(del_req).await.expect("DeleteShareGroupState");
-    assert!(
-        del.results[0].partitions[0].error_code == 0,
-        "delete error: {}",
-        del.results[0].partitions[0].error_code
-    );
-
-    let after = read_state(&client, "g1", tid, 0).await;
-    assert!(
-        after
-            == read_share_group_state_response::PartitionResult {
-                partition: 0,
-                error_code: INVALID_REQUEST,
-                error_message: Some(
-                    "Read operation on uninitialized share partition not allowed.".to_owned()
-                ),
-                ..Default::default()
-            }
-    );
-}
-
-/// Initialize -> Write -> Read -> `ReadSummary` -> Delete round-trips over the wire.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_state.feature",
-    name = "persister round trip"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn persister_round_trip() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share state: write fences stale state epoch")]
-async fn bdd_verify_write_fences_stale_state_epoch() {
-    let (_b, bootstrap, _d) = boot().await;
-    let client = connect(&bootstrap).await;
-    let tid = create_topic(&client, "stale-state-epoch").await;
-
-    support::find_coordinator(
-        &client,
-        support::KEY_TYPE_SHARE,
-        &share_coordinator_key("g1", tid, 0),
-    )
-    .await;
-    let init = initialize_ready(&client, "g1", tid, 0, 5, 0).await; // state_epoch 5
-    assert!(init == 0, "initialize error: {init}");
-
-    // Write at state_epoch 0 (< durable 5) -> fenced.
-    let w = write_state(&client, StateWrite {
-        group: "g1",
-        topic_id: tid,
-        partition: 0,
-        state_epoch: 0,
-        leader_epoch: 0,
-        start_offset: 0,
-        delivery_complete_count: 0,
-        batches: vec![],
-    })
-    .await;
-    assert!(
-        w == FENCED_STATE_EPOCH,
-        "stale state_epoch must fence with 124, got {w}"
-    );
-}
-
-/// The broker fences a write that carries a `state_epoch` below the durable
-/// one (124).
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_state.feature",
-    name = "write fences stale state epoch"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn write_fences_stale_state_epoch() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share state: state survives restart")]
-async fn bdd_verify_state_survives_restart() {
-    let restart_dir = tempfile::tempdir().expect("restart tempdir");
-    let log_dir = restart_dir.path().to_path_buf();
-
-    let tid = {
-        let broker = Broker::start(BrokerConfig::for_tests(log_dir.clone()))
-            .await
-            .unwrap();
-        broker.wait_until_share_coordinator_ready().await;
-        let client = connect(&broker.listen_addr().to_string()).await;
-        let tid = create_topic(&client, "survives-restart").await;
-
-        initialize_partition(&client, "g1", tid, 0, InitialState {
-            state_epoch: 0,
-            start_offset: 0,
-        })
-        .await;
-        let state = StateWrite {
-            group: "g1",
-            topic_id: tid,
-            partition: 0,
-            state_epoch: 0,
-            leader_epoch: 0,
-            start_offset: 7,
-            delivery_complete_count: 3,
-            batches: Vec::new(),
-        };
-        let w = write_state(&client, state).await;
-        assert!(w == 0, "write error: {w}");
-
-        broker.wait_until_share_spso("g1", tid, 0, 7).await;
-        broker.shutdown().await;
-        tid
-    };
-
-    {
-        let mut cfg = BrokerConfig::for_tests(log_dir);
-        cfg.bootstrap_mode = BootstrapMode::Rejoin;
-        let broker = Broker::start(cfg).await.unwrap();
-        let client = connect(&broker.listen_addr().to_string()).await;
-
-        // Recovered coordinator may still be materializing the led partition;
-        // await until the persisted SPSO is visible, then assert the wire value.
-        broker.wait_until_share_spso("g1", tid, 0, 7).await;
-        let summary = read_summary_ready(&client, "g1", tid, 0).await;
-        assert!(
-            (summary.error_code, summary.start_offset) == (0, 7),
-            "recovered SPSO must be 7, got {summary:?}"
-        );
-    }
-}
-
-/// Persisted share state survives a broker restart. Recovery replays
-/// `__share_group_state`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_state.feature",
-    name = "state survives restart"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn state_survives_restart() {}
-
 /// The state epoch and start offset a share partition is initialized with.
 #[derive(Clone, Copy)]
 struct InitialState {
@@ -549,4 +277,358 @@ async fn initialize_partition(
     .await;
     let init = initialize_ready(client, group, tid, partition, state_epoch, start_offset).await;
     assert!(init == 0, "initialize error: {init}");
+}
+
+use {
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+};
+
+#[derive(Default)]
+struct SharePersister {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    client: Option<Arc<Client>>,
+    topic: Option<uuid::Uuid>,
+    key: String,
+    coordinator: Option<Coordinator>,
+    write_code: Option<i16>,
+    delete_code: Option<i16>,
+    read: Option<read_share_group_state_response::PartitionResult>,
+    summary: Option<read_share_group_state_summary_response::PartitionResult>,
+}
+
+#[fixture]
+fn share_persister() -> SharePersister {
+    // Each wire operation records a separate state or coordinator observation.
+    SharePersister::default()
+}
+
+impl SharePersister {
+    fn client(&self) -> &Client { self.client.as_ref().expect("persister client") }
+
+    fn broker(&self) -> &BrokerHandle { self.broker.as_ref().expect("persister broker") }
+
+    fn topic(&self) -> uuid::Uuid { self.topic.expect("data topic identity") }
+}
+
+#[given("a fresh broker with no share coordinator lookup yet")]
+async fn new_share_persister(share_persister: &mut SharePersister) {
+    let (broker, bootstrap, directory) = boot().await;
+    share_persister.client = Some(connect(&bootstrap).await);
+    share_persister.broker = Some(broker);
+    share_persister.directory = Some(directory);
+}
+
+#[given("a durable broker ready to serve share-state recovery")]
+async fn durable_share_persister(share_persister: &mut SharePersister) {
+    let directory = TempDir::new().expect("restart tempdir");
+    let broker = Broker::start(BrokerConfig::for_tests(directory.path().to_path_buf()))
+        .await
+        .unwrap();
+    broker.wait_until_share_coordinator_ready().await;
+    share_persister.client = Some(connect(&broker.listen_addr().to_string()).await);
+    share_persister.broker = Some(broker);
+    share_persister.directory = Some(directory);
+}
+
+#[given("g1's topic {topic} partition zero is initialized at state epoch {epoch} and start zero")]
+async fn initialized_persister_partition(
+    share_persister: &mut SharePersister,
+    topic: String,
+    epoch: i32,
+) {
+    let identity = create_topic(share_persister.client(), &topic).await;
+    initialize_partition(share_persister.client(), "g1", identity, 0, InitialState {
+        state_epoch: epoch,
+        start_offset: 0,
+    })
+    .await;
+    share_persister.topic = Some(identity);
+}
+
+#[when(
+    "g1 first looks up a share coordinator for topic UUID 03030303030303030303030303030303 partition zero"
+)]
+async fn initial_share_coordinator(share_persister: &mut SharePersister) {
+    share_persister.key = share_coordinator_key("g1", uuid::Uuid::from_bytes([3u8; 16]), 0);
+    share_persister.coordinator =
+        Some(find_share_once(share_persister.client(), &share_persister.key).await);
+}
+
+#[then("the first share coordinator answer contains no node and COORDINATOR_NOT_AVAILABLE")]
+fn unavailable_share_coordinator(share_persister: &SharePersister) {
+    check!(
+        share_persister
+            .coordinator
+            .as_ref()
+            .expect("lookup answered")
+            == &Coordinator {
+                key: share_persister.key.clone(),
+                node_id: -1,
+                host: String::new(),
+                port: -1,
+                error_code: COORDINATOR_NOT_AVAILABLE,
+                error_message: None,
+                ..Default::default()
+            }
+    );
+}
+
+#[when("g1 retries the same share coordinator lookup until it is available")]
+async fn retry_share_coordinator(share_persister: &mut SharePersister) {
+    share_persister.coordinator = Some(
+        support::find_coordinator(
+            share_persister.client(),
+            support::KEY_TYPE_SHARE,
+            &share_persister.key,
+        )
+        .await,
+    );
+}
+
+#[then("the share coordinator answer names the running broker's exact listener")]
+fn available_share_coordinator(share_persister: &SharePersister) {
+    let broker = share_persister.broker();
+    let address = broker.listen_addr();
+    check!(
+        share_persister
+            .coordinator
+            .as_ref()
+            .expect("retry answered")
+            == &Coordinator {
+                key: share_persister.key.clone(),
+                node_id: i32::try_from(broker.node_id()).unwrap(),
+                host: address.ip().to_string(),
+                port: i32::from(address.port()),
+                error_code: 0,
+                error_message: None,
+                ..Default::default()
+            }
+    );
+}
+
+#[when(
+    "the persister writes state epoch {epoch}, start {start}, complete count {complete}, and acquired batch {batch}"
+)]
+async fn write_persister_state(
+    share_persister: &mut SharePersister,
+    epoch: i32,
+    start: i64,
+    complete: i32,
+    batch: String,
+) {
+    let batches = if batch == "none" {
+        vec![]
+    } else {
+        let (first, last) = batch.split_once("..").expect("acquired offset range");
+        vec![StateBatch {
+            first_offset: first.parse().unwrap(),
+            last_offset: last.parse().unwrap(),
+            delivery_state: 2,
+            delivery_count: 1,
+            ..Default::default()
+        }]
+    };
+    share_persister.write_code = Some(
+        write_state(share_persister.client(), StateWrite {
+            group: "g1",
+            topic_id: share_persister.topic(),
+            partition: 0,
+            state_epoch: epoch,
+            leader_epoch: 0,
+            start_offset: start,
+            delivery_complete_count: complete,
+            batches,
+        })
+        .await,
+    );
+}
+
+#[then("the share-state write reports {error}")]
+fn persister_write_code(share_persister: &SharePersister, error: String) {
+    let code = match error.as_str() {
+        "NONE" => 0,
+        "FENCED_STATE_EPOCH" => FENCED_STATE_EPOCH,
+        _ => panic!("unknown write error {error}"),
+    };
+    assert!(share_persister.write_code == Some(code));
+}
+
+#[when("the full state of g1's partition is read")]
+async fn read_persister_state(share_persister: &mut SharePersister) {
+    share_persister.read =
+        Some(read_state(share_persister.client(), "g1", share_persister.topic(), 0).await);
+}
+
+#[then("the full share state has start five and includes acquired offsets five through nine")]
+fn persister_state_round_trip(share_persister: &SharePersister) {
+    let state = share_persister.read.as_ref().expect("full state read");
+    check!(state.error_code == 0);
+    check!(state.start_offset == 5);
+    check!(
+        state
+            .state_batches
+            .iter()
+            .any(|batch| batch.first_offset == 5 && batch.last_offset == 9)
+    );
+}
+
+#[when("the summary of g1's partition is read")]
+async fn read_persister_summary(share_persister: &mut SharePersister) {
+    share_persister.summary =
+        Some(read_summary_ready(share_persister.client(), "g1", share_persister.topic(), 0).await);
+}
+
+#[then("the summary reports state epoch zero, start five, and complete count two")]
+fn persister_summary_round_trip(share_persister: &SharePersister) {
+    let summary = share_persister.summary.as_ref().expect("summary read");
+    check!(summary.error_code == 0);
+    check!(summary.start_offset == 5);
+    check!(summary.state_epoch == 0);
+    check!(summary.delivery_complete_count == 2);
+}
+
+#[when("g1's share-state partition is deleted")]
+async fn delete_persister_state(share_persister: &mut SharePersister) {
+    let response = share_persister
+        .client()
+        .send(DeleteShareGroupStateRequest {
+            group_id: "g1".into(),
+            topics: vec![DeleteStateData {
+                topic_id: wire(share_persister.topic()),
+                partitions: vec![DeletePart {
+                    partition: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("DeleteShareGroupState");
+    share_persister.delete_code = Some(response.results[0].partitions[0].error_code);
+}
+
+#[then("the share-state deletion succeeds")]
+fn persister_state_deleted(share_persister: &SharePersister) {
+    assert!(share_persister.delete_code == Some(0));
+}
+
+#[then("reading the deleted share partition returns the complete uninitialized-partition refusal")]
+fn deleted_persister_state(share_persister: &SharePersister) {
+    assert!(
+        share_persister.read.as_ref().expect("deleted state read")
+            == &read_share_group_state_response::PartitionResult {
+                partition: 0,
+                error_code: INVALID_REQUEST,
+                error_message: Some(
+                    "Read operation on uninitialized share partition not allowed.".to_owned()
+                ),
+                ..Default::default()
+            }
+    );
+}
+
+#[when("start offset seven is persisted and the share-state broker restarts on the same directory")]
+async fn restart_persister_state(share_persister: &mut SharePersister) {
+    share_persister
+        .broker()
+        .wait_until_share_spso("g1", share_persister.topic(), 0, 7)
+        .await;
+    share_persister
+        .broker
+        .take()
+        .expect("first broker")
+        .shutdown()
+        .await;
+    let mut config = BrokerConfig::for_tests(
+        share_persister
+            .directory
+            .as_ref()
+            .expect("durable directory")
+            .path()
+            .to_path_buf(),
+    );
+    config.bootstrap_mode = BootstrapMode::Rejoin;
+    let broker = Broker::start(config).await.unwrap();
+    share_persister.client = Some(connect(&broker.listen_addr().to_string()).await);
+    broker
+        .wait_until_share_spso("g1", share_persister.topic(), 0, 7)
+        .await;
+    share_persister.broker = Some(broker);
+}
+
+#[then("the recovered share-state summary succeeds with start offset seven")]
+fn recovered_persister_state(share_persister: &SharePersister) {
+    let summary = share_persister
+        .summary
+        .as_ref()
+        .expect("recovered summary read");
+    assert!(
+        (summary.error_code, summary.start_offset) == (0, 7),
+        "{summary:?}"
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_state.feature",
+    name = "find coordinator share creates topic and returns broker"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn find_coordinator_share_creates_topic_and_returns_broker(share_persister: SharePersister) {
+    share_persister
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_persister);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_state.feature",
+    name = "persister round trip"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn persister_round_trip(share_persister: SharePersister) {
+    share_persister
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_persister);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_state.feature",
+    name = "write fences stale state epoch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn write_fences_stale_state_epoch(share_persister: SharePersister) {
+    share_persister
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_persister);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_state.feature",
+    name = "state survives restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn state_survives_restart(share_persister: SharePersister) {
+    share_persister
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_persister);
 }

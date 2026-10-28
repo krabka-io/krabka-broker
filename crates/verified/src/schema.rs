@@ -162,108 +162,61 @@ mod tests {
         check!(schema_frame_id(magic, id_0, id_1, id_2, id_3) == expected);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "schema tests: only configured non null fields are validated for {example}"
-    )]
-    fn bdd_verify_only_configured_non_null_fields_are_validated(example: String) {
-        type Example<'a> = (
-            &'a str,
-            bool,
-            bool,
-            SchemaFieldRole,
-            bool,
-            SchemaFieldAction,
-        );
-        let (scenario, key_enabled, value_enabled, role, present, expected): Example<'_> =
-            match example.as_str() {
-                "key enabled" => (
-                    "key validation checks a key",
-                    true,
-                    false,
-                    SchemaFieldRole::Key,
-                    true,
-                    SchemaFieldAction::CheckKey,
-                ),
-                "value enabled" => (
-                    "value validation checks a value",
-                    false,
-                    true,
-                    SchemaFieldRole::Value,
-                    true,
-                    SchemaFieldAction::CheckValue,
-                ),
-                "both key" => (
-                    "both enabled checks a key",
-                    true,
-                    true,
-                    SchemaFieldRole::Key,
-                    true,
-                    SchemaFieldAction::CheckKey,
-                ),
-                "both value" => (
-                    "both enabled checks a value",
-                    true,
-                    true,
-                    SchemaFieldRole::Value,
-                    true,
-                    SchemaFieldAction::CheckValue,
-                ),
-                "null key" => (
-                    "a null key is exempt",
-                    true,
-                    true,
-                    SchemaFieldRole::Key,
-                    false,
-                    SchemaFieldAction::Skip,
-                ),
-                "null value" => (
-                    "a null value (tombstone) is exempt",
-                    true,
-                    true,
-                    SchemaFieldRole::Value,
-                    false,
-                    SchemaFieldAction::Skip,
-                ),
-                "value only skips key" => (
-                    "value-only validation skips the key",
-                    false,
-                    true,
-                    SchemaFieldRole::Key,
-                    true,
-                    SchemaFieldAction::Skip,
-                ),
-                "key only skips value" => (
-                    "key-only validation skips the value",
-                    true,
-                    false,
-                    SchemaFieldRole::Value,
-                    true,
-                    SchemaFieldAction::Skip,
-                ),
-                "disabled" => (
-                    "validation disabled skips everything",
-                    false,
-                    false,
-                    SchemaFieldRole::Value,
-                    true,
-                    SchemaFieldAction::Skip,
-                ),
-                _ => panic!("unknown BDD example: {example}"),
-            };
-
-        check!(
-            schema_field_action(key_enabled, value_enabled, role, present) == expected,
-            "{scenario}"
-        );
+    struct SchemaFieldScenario {
+        key_enabled: bool,
+        value_enabled: bool,
+        action: Option<SchemaFieldAction>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/schema.feature",
-        name = "tests: only configured non null fields are validated"
-    )]
-    fn only_configured_non_null_fields_are_validated(example: String) { let _ = example; }
+    #[rstest::fixture]
+    fn field() -> SchemaFieldScenario {
+        // Start this scenario with fresh inputs and observations.
+
+        SchemaFieldScenario {
+            key_enabled: false,
+            value_enabled: false,
+            action: None,
+        }
+    }
+
+    #[rstest_bdd_macros::given("schema validation enabled for keys {keys} and values {values}")]
+    fn schema_configuration(field: &mut SchemaFieldScenario, keys: bool, values: bool) {
+        field.key_enabled = keys;
+        field.value_enabled = values;
+    }
+
+    #[rstest_bdd_macros::when("a {role} field with a {payload} payload is inspected")]
+    fn inspect_schema_field(field: &mut SchemaFieldScenario, role: String, payload: String) {
+        let role = match role.as_str() {
+            "key" => SchemaFieldRole::Key,
+            "value" => SchemaFieldRole::Value,
+            _ => panic!("unknown schema field role: {role}"),
+        };
+        let present = match payload.as_str() {
+            "nonnull" => true,
+            "null" => false,
+            _ => panic!("unknown schema payload presence: {payload}"),
+        };
+        field.action = Some(schema_field_action(
+            field.key_enabled,
+            field.value_enabled,
+            role,
+            present,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("schema validation will {action}")]
+    fn schema_field_action_matches(field: &SchemaFieldScenario, action: String) {
+        let expected = match action.as_str() {
+            "check-key" => SchemaFieldAction::CheckKey,
+            "check-value" => SchemaFieldAction::CheckValue,
+            "skip-field" => SchemaFieldAction::Skip,
+            _ => panic!("unknown schema validation action: {action}"),
+        };
+        check!(field.action == Some(expected));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/schema.feature", fixtures = [field: SchemaFieldScenario]);
 
     #[yare::parameterized(
         empty = { true, 0, 0, SchemaBatchAdmission::Admit },

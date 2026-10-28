@@ -222,182 +222,8 @@ mod tests {
         g
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified classic ops sync tests: sync follows kafka state and validation rules"
-    )]
-    fn bdd_verify_sync_follows_kafka_state_and_validation_rules() {
-        struct Row {
-            name: &'static str,
-            start: Start,
-            member: &'static str,
-            instance: Option<&'static str>,
-            generation_delta: i32,
-            protocol_type: Option<&'static str>,
-            protocol_name: Option<&'static str>,
-            want: SyncAction,
-            state_after: GroupState,
-        }
-        let row = |name, start, member, want, state_after| Row {
-            name,
-            start,
-            member,
-            instance: None,
-            generation_delta: 0,
-            protocol_type: None,
-            protocol_name: None,
-            want,
-            state_after,
-        };
-        let immediate = |code| SyncAction::Immediate(err(code));
-        let rows = [
-            // #793: a late leader of the previous round in `PreparingRebalance`
-            // gets `REBALANCE_IN_PROGRESS` and installs nothing.
-            row(
-                "preparing leader",
-                Start::Preparing,
-                "m1",
-                immediate(codes::REBALANCE_IN_PROGRESS),
-                GroupState::PreparingRebalance,
-            ),
-            row(
-                "preparing follower",
-                Start::Preparing,
-                "m2",
-                immediate(codes::REBALANCE_IN_PROGRESS),
-                GroupState::PreparingRebalance,
-            ),
-            row(
-                "completing follower parks",
-                Start::Completing,
-                "m2",
-                SyncAction::Park,
-                GroupState::CompletingRebalance,
-            ),
-            row(
-                "completing leader installs",
-                Start::Completing,
-                "m1",
-                SyncAction::LeaderInstalled(ok(b"new-L")),
-                GroupState::Stable,
-            ),
-            row(
-                "stable follower reads current",
-                Start::Stable,
-                "m2",
-                SyncAction::Immediate(ok(b"F")),
-                GroupState::Stable,
-            ),
-            row(
-                "stable leader reads current",
-                Start::Stable,
-                "m1",
-                SyncAction::Immediate(ok(b"L")),
-                GroupState::Stable,
-            ),
-            Row {
-                protocol_type: Some("consumer"),
-                protocol_name: Some("range"),
-                ..row(
-                    "matching protocol",
-                    Start::Stable,
-                    "m2",
-                    SyncAction::Immediate(ok(b"F")),
-                    GroupState::Stable,
-                )
-            },
-            Row {
-                protocol_type: Some("connect"),
-                ..row(
-                    "other protocol type",
-                    Start::Completing,
-                    "m1",
-                    immediate(codes::INCONSISTENT_GROUP_PROTOCOL),
-                    GroupState::CompletingRebalance,
-                )
-            },
-            Row {
-                protocol_name: Some("roundrobin"),
-                ..row(
-                    "other protocol name",
-                    Start::Stable,
-                    "m2",
-                    immediate(codes::INCONSISTENT_GROUP_PROTOCOL),
-                    GroupState::Stable,
-                )
-            },
-            Row {
-                generation_delta: 1,
-                protocol_type: Some("connect"),
-                ..row(
-                    "generation before protocol",
-                    Start::Stable,
-                    "m2",
-                    immediate(codes::ILLEGAL_GENERATION),
-                    GroupState::Stable,
-                )
-            },
-            row(
-                "unknown member",
-                Start::Stable,
-                "ghost",
-                immediate(codes::UNKNOWN_MEMBER_ID),
-                GroupState::Stable,
-            ),
-            Row {
-                instance: Some("i-unknown"),
-                ..row(
-                    "unknown instance",
-                    Start::Preparing,
-                    "m1",
-                    immediate(codes::UNKNOWN_MEMBER_ID),
-                    GroupState::PreparingRebalance,
-                )
-            },
-        ];
-
-        for r in rows {
-            let mut g = group(r.start);
-            let req = SyncGroupRequest {
-                group_instance_id: r.instance.map(String::from),
-                protocol_type: r.protocol_type.map(String::from),
-                protocol_name: r.protocol_name.map(String::from),
-                assignments: vec![
-                    SyncGroupRequestAssignment {
-                        member_id: "m1".into(),
-                        assignment: Bytes::from_static(b"new-L"),
-                        ..Default::default()
-                    },
-                    SyncGroupRequestAssignment {
-                        member_id: "m2".into(),
-                        assignment: Bytes::from_static(b"new-F"),
-                        ..Default::default()
-                    },
-                ],
-                ..sync_req(r.member, g.generation_id + r.generation_delta)
-            };
-            let before: Vec<_> = ["m1", "m2"].map(|m| g.members[m].assignment.clone()).into();
-
-            let got = handle_sync(&mut g, &req);
-
-            check!(got == r.want, "{}", r.name);
-            check!(g.state == r.state_after, "{}", r.name);
-            if !matches!(r.want, SyncAction::LeaderInstalled(_)) {
-                let after: Vec<_> = ["m1", "m2"].map(|m| g.members[m].assignment.clone()).into();
-                check!(after == before, "{}: assignments must not change", r.name);
-            }
-        }
-    }
-
     /// Kafka's `classicGroupSyncToClassicGroup` and `validateSyncGroup`, row by
     /// row: the whole action and the group state after it.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/classic_ops/sync.feature",
-        name = "tests: sync follows kafka state and validation rules"
-    )]
-    fn sync_follows_kafka_state_and_validation_rules() {}
-
     #[test]
     fn sync_unknown_member_and_wrong_generation() {
         let mut g = stable_two_member_group();
@@ -542,4 +368,110 @@ mod tests {
         check!(handle_sync(&mut g, &sync_req("m1", generation)) == SyncAction::Immediate(ok(b"L")));
         check!(g.members["m2"].assignment.as_deref() == Some(&b"F"[..]));
     }
+    use {
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    };
+    #[derive(Default)]
+    struct ClassicSync {
+        group: Option<ClassicState>,
+        request: Option<SyncGroupRequest>,
+        before: Vec<Option<Bytes>>,
+        action: Option<SyncAction>,
+    }
+    #[derive(DataTableRow)]
+    struct SyncIdentity {
+        member: String,
+        instance: String,
+        generation_delta: i32,
+        protocol_type: String,
+        protocol_name: String,
+    }
+    #[rstest::fixture]
+    fn classic_sync() -> ClassicSync {
+        // Start this scenario with fresh inputs and observations.
+        ClassicSync::default()
+    }
+    #[given("classic group g is {state} with m1 leader and m2 follower")]
+    fn sync_group_state(classic_sync: &mut ClassicSync, state: String) {
+        let start = match state.as_str() {
+            "preparing" => Start::Preparing,
+            "completing" => Start::Completing,
+            "stable" => Start::Stable,
+            _ => panic!("unknown sync state"),
+        };
+        let group = group(start);
+        classic_sync.before = ["m1", "m2"]
+            .map(|member| group.members[member].assignment.clone())
+            .into();
+        classic_sync.group = Some(group);
+    }
+    #[given("the SyncGroup request proposes new-L and new-F assignments with identity")]
+    fn sync_request_identity(
+        classic_sync: &mut ClassicSync,
+        #[datatable] rows: Rows<SyncIdentity>,
+    ) {
+        let row = rows.into_iter().next().expect("SyncGroup request identity");
+        let group = classic_sync.group.as_ref().expect("group prepared");
+        let optional = |text: String| if text == "absent" { None } else { Some(text) };
+        classic_sync.request = Some(SyncGroupRequest {
+            group_instance_id: optional(row.instance),
+            protocol_type: optional(row.protocol_type),
+            protocol_name: optional(row.protocol_name),
+            assignments: vec![
+                SyncGroupRequestAssignment {
+                    member_id: "m1".into(),
+                    assignment: Bytes::from_static(b"new-L"),
+                    ..Default::default()
+                },
+                SyncGroupRequestAssignment {
+                    member_id: "m2".into(),
+                    assignment: Bytes::from_static(b"new-F"),
+                    ..Default::default()
+                },
+            ],
+            ..sync_req(&row.member, group.generation_id + row.generation_delta)
+        });
+    }
+    #[when("the coordinator handles the classic SyncGroup request")]
+    fn sync_group_operation(classic_sync: &mut ClassicSync) {
+        classic_sync.action = Some(handle_sync(
+            classic_sync.group.as_mut().expect("group prepared"),
+            classic_sync.request.as_ref().expect("request prepared"),
+        ));
+    }
+    #[then(
+        "SyncGroup returns {action} and leaves group state {state} changing assignments only on leader installation"
+    )]
+    fn sync_group_result(classic_sync: &ClassicSync, action: String, state: String) {
+        let expected = match action.as_str() {
+            "rebalance" => SyncAction::Immediate(err(codes::REBALANCE_IN_PROGRESS)),
+            "park" => SyncAction::Park,
+            "install-new-L" => SyncAction::LeaderInstalled(ok(b"new-L")),
+            "read-F" => SyncAction::Immediate(ok(b"F")),
+            "read-L" => SyncAction::Immediate(ok(b"L")),
+            "inconsistent-protocol" => {
+                SyncAction::Immediate(err(codes::INCONSISTENT_GROUP_PROTOCOL))
+            }
+            "illegal-generation" => SyncAction::Immediate(err(codes::ILLEGAL_GENERATION)),
+            "unknown-member" => SyncAction::Immediate(err(codes::UNKNOWN_MEMBER_ID)),
+            _ => panic!("unknown SyncGroup action"),
+        };
+        let state = match state.as_str() {
+            "preparing" => GroupState::PreparingRebalance,
+            "completing" => GroupState::CompletingRebalance,
+            "stable" => GroupState::Stable,
+            _ => panic!("unknown final sync state"),
+        };
+        let group = classic_sync.group.as_ref().expect("group prepared");
+        check!(classic_sync.action.as_ref() == Some(&expected));
+        check!(group.state == state);
+        if !matches!(expected, SyncAction::LeaderInstalled(_)) {
+            let after: Vec<_> = ["m1", "m2"]
+                .map(|member| group.members[member].assignment.clone())
+                .into();
+            check!(after == classic_sync.before);
+        }
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/classic_ops/sync.feature",fixtures=[classic_sync:ClassicSync]);
 }

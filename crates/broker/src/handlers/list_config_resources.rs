@@ -200,22 +200,6 @@ mod tests {
 
     const LISTENER: &str = "PLAINTEXT";
 
-    /// A resource that a listing names: its type and name.
-    #[derive(Clone, Copy)]
-    struct ListedResource<'a> {
-        resource_type: i8,
-        name: &'a str,
-    }
-
-    /// A case name, the request version, its `resource_types`, and the
-    /// rows expected in order.
-    struct Case<'a> {
-        name: &'a str,
-        version: i16,
-        requested: Vec<i8>,
-        expected: Vec<ListedResource<'a>>,
-    }
-
     fn broker_on(id: u64, listener: &str) -> MetadataRecord {
         MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
             endpoints: vec![krabka_metadata::BrokerEndpoint {
@@ -258,30 +242,6 @@ mod tests {
         img
     }
 
-    const fn listed(resource_type: i8, name: &str) -> ListedResource<'_> {
-        ListedResource {
-            resource_type,
-            name,
-        }
-    }
-
-    fn rows(expected: &[ListedResource<'_>]) -> Vec<ConfigResource> {
-        expected
-            .iter()
-            .map(
-                |&ListedResource {
-                     resource_type,
-                     name,
-                 }| {
-                    krabka_macros::tagged_wire!(ConfigResource {
-                        resource_name: name.to_owned(),
-                        resource_type,
-                    })
-                },
-            )
-            .collect()
-    }
-
     fn listed_topics(broker: &Broker, topic: &str) -> Vec<ConfigResource> {
         let topics = collect_resources(
             &broker.controller.current_image(),
@@ -297,99 +257,79 @@ mod tests {
         topics
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers list config resources tests: collect resources matches kafka filter and order"
-    )]
-    fn bdd_verify_collect_resources_matches_kafka_filter_and_order() {
-        let img = populated_image();
-        let all = [
-            listed(RESOURCE_TYPE_GROUP, "g-1"),
-            listed(RESOURCE_TYPE_CLIENT_METRICS, "sub-1"),
-            listed(RESOURCE_TYPE_BROKER_LOGGER, "2"),
-            listed(RESOURCE_TYPE_BROKER_LOGGER, "10"),
-            listed(RESOURCE_TYPE_BROKER, "2"),
-            listed(RESOURCE_TYPE_BROKER, "10"),
-            listed(RESOURCE_TYPE_TOPIC, "t-a"),
-            listed(RESOURCE_TYPE_TOPIC, "t-b"),
-        ];
-        let cases: Vec<Case<'_>> = vec![
-            Case {
-                name: "v0 lists client metrics",
-                version: 0,
-                requested: vec![],
-                expected: vec![listed(RESOURCE_TYPE_CLIENT_METRICS, "sub-1")],
-            },
-            Case {
-                name: "v1 empty filter lists every type",
-                version: 1,
-                requested: vec![],
-                expected: all.to_vec(),
-            },
-            Case {
-                name: "v1 repeated topic type lists once",
-                version: 1,
-                requested: vec![RESOURCE_TYPE_TOPIC, RESOURCE_TYPE_TOPIC],
-                expected: vec![
-                    listed(RESOURCE_TYPE_TOPIC, "t-a"),
-                    listed(RESOURCE_TYPE_TOPIC, "t-b"),
-                ],
-            },
-            Case {
-                name: "v1 filter order does not change row order",
-                version: 1,
-                requested: vec![
-                    RESOURCE_TYPE_TOPIC,
-                    RESOURCE_TYPE_BROKER,
-                    RESOURCE_TYPE_GROUP,
-                ],
-                expected: vec![
-                    listed(RESOURCE_TYPE_GROUP, "g-1"),
-                    listed(RESOURCE_TYPE_BROKER, "2"),
-                    listed(RESOURCE_TYPE_BROKER, "10"),
-                    listed(RESOURCE_TYPE_TOPIC, "t-a"),
-                    listed(RESOURCE_TYPE_TOPIC, "t-b"),
-                ],
-            },
-            Case {
-                name: "v1 broker logger names one resource per node on the listener",
-                version: 1,
-                requested: vec![RESOURCE_TYPE_BROKER_LOGGER],
-                expected: vec![
-                    listed(RESOURCE_TYPE_BROKER_LOGGER, "2"),
-                    listed(RESOURCE_TYPE_BROKER_LOGGER, "10"),
-                ],
-            },
-            Case {
-                name: "v1 client metrics filter",
-                version: 1,
-                requested: vec![RESOURCE_TYPE_CLIENT_METRICS],
-                expected: vec![listed(RESOURCE_TYPE_CLIENT_METRICS, "sub-1")],
-            },
-        ];
-        for Case {
-            name,
-            version,
-            requested,
-            expected,
-        } in cases
-        {
-            let out = collect_resources(&img, version, &requested, LISTENER);
-            assert2::check!(out == rows(&expected), "case {name}");
+    #[derive(Default)]
+    struct ConfigResourceListingScenario {
+        image: Option<MetadataImage>,
+        version: i16,
+        requested: Vec<i8>,
+        resources: Option<Vec<ConfigResource>>,
+    }
+    #[rstest::fixture]
+    fn config_resource_listing() -> ConfigResourceListingScenario {
+        let image = None;
+        ConfigResourceListingScenario {
+            image,
+            ..Default::default()
         }
     }
-
-    /// Kafka's `KafkaApis.handleListConfigResources`: membership decides which
-    /// types are listed (a repeated type lists once), the rows follow the
-    /// fixed order `GROUP`, `CLIENT_METRICS`, `BROKER_LOGGER`, `BROKER`,
-    /// `TOPIC`, and broker rows come from `getBrokerNodes(listenerName)`, so
-    /// broker 3 (SSL only) is absent. v0 lists client metrics only.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/list_config_resources.feature",
-        name = "tests: collect resources matches kafka filter and order"
+    fn requested_resource_type(name: &str) -> i8 {
+        match name {
+            "topic" => RESOURCE_TYPE_TOPIC,
+            "broker" => RESOURCE_TYPE_BROKER,
+            "broker_logger" => RESOURCE_TYPE_BROKER_LOGGER,
+            "client_metrics" => RESOURCE_TYPE_CLIENT_METRICS,
+            "group" => RESOURCE_TYPE_GROUP,
+            _ => panic!("unknown configuration resource type: {name}"),
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "metadata has topics t-b and t-a group g-1 subscription sub-1 plaintext brokers 10 and 2 and SSL-only broker 3"
     )]
-    fn collect_resources_matches_kafka_filter_and_order() {}
+    fn available_config_resources(config_resource_listing: &mut ConfigResourceListingScenario) {
+        config_resource_listing.image = Some(populated_image());
+    }
+    #[rstest_bdd_macros::given("ListConfigResources version {version} requests types {types}")]
+    fn config_resource_type_filter(
+        config_resource_listing: &mut ConfigResourceListingScenario,
+        version: i16,
+        types: String,
+    ) {
+        config_resource_listing.version = version;
+        config_resource_listing.requested = if types == "all" {
+            Vec::new()
+        } else {
+            types.split(',').map(requested_resource_type).collect()
+        };
+    }
+    #[rstest_bdd_macros::when("configuration resources are collected on the PLAINTEXT listener")]
+    fn collect_requested_config_resources(
+        config_resource_listing: &mut ConfigResourceListingScenario,
+    ) {
+        config_resource_listing.resources = Some(collect_resources(
+            config_resource_listing.image.as_ref().unwrap(),
+            config_resource_listing.version,
+            &config_resource_listing.requested,
+            LISTENER,
+        ));
+    }
+    #[rstest_bdd_macros::then("the complete configuration resource rows in order are {expected}")]
+    fn check_config_resource_listing(
+        config_resource_listing: &ConfigResourceListingScenario,
+        expected: String,
+    ) {
+        let expected: Vec<_> = expected
+            .split(',')
+            .map(|spec| {
+                let (kind, name) = spec.split_once(':').unwrap();
+                krabka_macros::tagged_wire!(ConfigResource {
+                    resource_name: name.into(),
+                    resource_type: requested_resource_type(kind)
+                })
+            })
+            .collect();
+        assert2::check!(config_resource_listing.resources.as_ref().unwrap() == &expected);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_list_config_resources",fixtures=[config_resource_listing:ConfigResourceListingScenario]);
 
     krabka_macros::wire_codec_helpers! {
         test_context ["admin-client"];

@@ -17,14 +17,17 @@ mod support;
 
 use {
     crate::support::{client::http_get, listeners},
-    assert2::{assert, check},
+    assert2::check,
     krabka_broker::{
-        Broker, BrokerConfig,
+        Broker, BrokerConfig, BrokerHandle,
         config::DEFAULT_READINESS_MAX_METADATA_LAG,
         health::{HealthState, router},
     },
     krabka_security::ListenerProtocol,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
     std::{net::SocketAddr, path::Path, time::Duration},
+    tempfile::{TempDir, tempdir},
     tokio::{net::TcpListener, time},
 };
 
@@ -66,202 +69,177 @@ fn loopback_config(log_dir: &Path) -> BrokerConfig {
     cfg
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "health probes: readyz is 503 during startup and 200 once the broker is up"
-)]
-async fn bdd_verify_readyz_is_503_during_startup_and_200_once_the_broker_is_up() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let state = HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG);
-    let probes = serve_probes(state.clone()).await;
-
-    // Before the broker starts, the process is alive and the node is not
-    // ready, and the body says which condition is holding it back.
-    let ProbeResponse { status, body } = get(probes, "/healthz").await;
-    check!(
-        status.contains("200 OK"),
-        "healthz during startup: {status}"
-    );
-    check!(body == "ok\n");
-    let ProbeResponse { status, body } = get(probes, "/readyz").await;
-    check!(
-        status.contains("503 Service Unavailable"),
-        "readyz during startup: {status}"
-    );
-    check!(
-        body.starts_with("not ready: log_dir_recovery: "),
-        "readyz body during startup: {body}"
-    );
-
-    let handle = Broker::start_with_health(loopback_config(log_dir.path()), state)
-        .await
-        .unwrap();
-
-    // Startup returned, so every condition it is responsible for is marked.
-    let ProbeResponse { status, body } = get(probes, "/readyz").await;
-    check!(status.contains("200 OK"), "readyz once started: {status}");
-    check!(body == "ready\n");
-    let ProbeResponse { status, body } = get(probes, "/healthz").await;
-    check!(status.contains("200 OK"), "healthz once started: {status}");
-    check!(body == "ok\n");
-
-    handle.shutdown().await;
+/// Each scenario owns its probe server and, when started, its broker.
+struct ProbeScenario {
+    state: Option<HealthState>,
+    address: Option<SocketAddr>,
+    directory: Option<TempDir>,
+    broker: Option<BrokerHandle>,
+    readiness: Vec<ProbeResponse>,
+    liveness: Option<ProbeResponse>,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/health_probes.feature",
-    name = "readyz is 503 during startup and 200 once the broker is up"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn readyz_is_503_during_startup_and_200_once_the_broker_is_up() {}
+#[fixture]
+fn probes() -> ProbeScenario {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("health probes: readyz names each condition as startup advances")]
-async fn bdd_verify_readyz_names_each_condition_as_startup_advances() {
+    ProbeScenario {
+        state: None,
+        address: None,
+        directory: None,
+        broker: None,
+        readiness: Vec::new(),
+        liveness: None,
+    }
+}
+
+#[given("a broker whose log directories are still recovering")]
+async fn recovering_broker(probes: &mut ProbeScenario) {
     let state = HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG);
-    let probes = serve_probes(state.clone()).await;
+    probes.address = Some(serve_probes(state.clone()).await);
+    probes.state = Some(state);
+    probes.directory = Some(tempdir().unwrap());
+}
 
-    let ProbeResponse { body, .. } = get(probes, "/readyz").await;
-    check!(body.starts_with("not ready: log_dir_recovery: "), "{body}");
+#[when("the broker finishes starting")]
+async fn start_broker(probes: &mut ProbeScenario) {
+    let state = probes.state.as_ref().expect("probe state exists").clone();
+    let directory = probes.directory.as_ref().expect("log directory exists");
+    probes.broker = Some(
+        Broker::start_with_health(loopback_config(directory.path()), state)
+            .await
+            .unwrap(),
+    );
+}
 
-    state.mark_log_dir_recovery_complete();
-    let ProbeResponse { body, .. } = get(probes, "/readyz").await;
-    check!(body.starts_with("not ready: listeners_bound: "), "{body}");
+#[given("a running broker with health probes")]
+async fn running_broker(probes: &mut ProbeScenario) {
+    recovering_broker(probes).await;
+    start_broker(probes).await;
+}
 
-    state.mark_listeners_bound();
-    let ProbeResponse { status, body } = get(probes, "/readyz").await;
-    assert!(status.contains("503 Service Unavailable"));
+#[when("readiness is requested")]
+async fn request_readiness(probes: &mut ProbeScenario) {
+    let address = probes.address.expect("probe server exists");
+    probes.readiness = vec![get(address, "/readyz").await];
+}
+
+#[when("liveness and readiness are requested")]
+async fn request_both(probes: &mut ProbeScenario) {
+    request_readiness(probes).await;
+    probes.liveness = Some(get(probes.address.expect("probe server exists"), "/healthz").await);
+}
+
+#[when("readiness is sampled three times")]
+async fn sample_readiness(probes: &mut ProbeScenario) {
+    let address = probes.address.expect("probe server exists");
+    probes.readiness.clear();
+    for _ in 0..3 {
+        probes.readiness.push(get(address, "/readyz").await);
+        time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[when("log directory recovery completes")]
+fn finish_recovery(probes: &ProbeScenario) {
+    probes
+        .state
+        .as_ref()
+        .expect("probe state exists")
+        .mark_log_dir_recovery_complete();
+}
+
+#[when("the listeners have bound")]
+fn bind_listeners(probes: &ProbeScenario) {
+    probes
+        .state
+        .as_ref()
+        .expect("probe state exists")
+        .mark_listeners_bound();
+}
+
+#[when("the broker begins shutting down")]
+fn begin_shutdown(probes: &ProbeScenario) {
+    probes
+        .state
+        .as_ref()
+        .expect("probe state exists")
+        .mark_shutting_down();
+}
+
+#[then("readiness is blocked by {condition}")]
+fn blocked_readiness(probes: &ProbeScenario, condition: String) {
+    let [ProbeResponse { status, body }] = probes.readiness.as_slice() else {
+        panic!("one readiness response was requested")
+    };
+    check!(status.contains("503 Service Unavailable"), "{status}");
     check!(
-        body.starts_with("not ready: metadata_quorum_unreached: "),
+        body.starts_with(&format!("not ready: {condition}: ")),
         "{body}"
     );
 }
 
-/// The 503 body names the condition rather than reporting a generic failure,
-/// and it names the first one that is unmet, so a partly-started node does not
-/// report the condition it already satisfied.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/health_probes.feature",
-    name = "readyz names each condition as startup advances"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn readyz_names_each_condition_as_startup_advances() {}
-
-/// A running broker, its health state, and the address its probes are served on.
-struct RunningProbes {
-    log_dir: tempfile::TempDir,
-    state: HealthState,
-    probes: SocketAddr,
-    handle: krabka_broker::BrokerHandle,
-}
-
-async fn running_probe_fixture() -> RunningProbes {
-    let dir = tempfile::tempdir().unwrap();
-    let state = HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG);
-    let probes = serve_probes(state.clone()).await;
-    let handle = Broker::start_with_health(loopback_config(dir.path()), state.clone())
-        .await
-        .unwrap();
-    RunningProbes {
-        log_dir: dir,
-        state,
-        probes,
-        handle,
-    }
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("health probes: readyz stays 200 while the broker runs")]
-async fn bdd_verify_readyz_stays_200_while_the_broker_runs() {
-    let RunningProbes {
-        log_dir: _log_dir,
-        state: _state,
-        probes,
-        handle,
-    } = running_probe_fixture().await;
-
-    for _ in 0..3 {
-        let ProbeResponse { status, .. } = get(probes, "/readyz").await;
+#[then("every readiness response is ready")]
+fn ready_responses(probes: &ProbeScenario) {
+    check!(!probes.readiness.is_empty());
+    for ProbeResponse { status, body } in &probes.readiness {
         check!(status.contains("200 OK"), "{status}");
-        time::sleep(Duration::from_millis(50)).await;
+        check!(body == "ready\n");
     }
-
-    handle.shutdown().await;
 }
 
-/// A broker that is up stays ready: the metadata condition is evaluated live
-/// on every request, so a probe some way past startup must not start failing
-/// on its own.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/health_probes.feature",
-    name = "readyz stays 200 while the broker runs"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn readyz_stays_200_while_the_broker_runs() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("health probes: readyz is 503 when shutting down")]
-async fn bdd_verify_readyz_is_503_when_shutting_down() {
-    let RunningProbes {
-        log_dir: _log_dir,
-        state,
-        probes,
-        handle,
-    } = running_probe_fixture().await;
-
-    let ProbeResponse { status, body } = get(probes, "/readyz").await;
+#[then("liveness remains healthy")]
+fn healthy_liveness(probes: &ProbeScenario) {
+    let ProbeResponse { status, body } = probes.liveness.as_ref().expect("liveness was requested");
     check!(status.contains("200 OK"), "{status}");
-    check!(body == "ready\n");
-
-    state.mark_shutting_down();
-
-    let ProbeResponse { status, body } = get(probes, "/readyz").await;
-    assert!(status.contains("503 Service Unavailable"));
-    check!(body.starts_with("not ready: shutting_down: "), "{body}");
-
-    handle.shutdown().await;
+    check!(body == "ok\n");
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/health_probes.feature",
-    name = "readyz is 503 when shutting down"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn readyz_is_503_when_shutting_down() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("health probes: shutting down outranks every other not ready condition")]
-async fn bdd_verify_shutting_down_outranks_every_other_not_ready_condition() {
-    let state = HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG);
-    let probes = serve_probes(state.clone()).await;
-
-    // A freshly built state is not ready for a startup reason, so this is the
-    // case where two conditions hold at once.
-    let ProbeResponse { status, body } = get(probes, "/readyz").await;
-    check!(status.contains("503 Service Unavailable"), "{status}");
-    check!(!body.starts_with("not ready: shutting_down"), "{body}");
-
-    state.mark_shutting_down();
-
-    let ProbeResponse { status, body } = get(probes, "/readyz").await;
-    check!(status.contains("503 Service Unavailable"), "{status}");
-    check!(body.starts_with("not ready: shutting_down: "), "{body}");
+async fn stop_broker(mut probes: ProbeScenario) {
+    if let Some(broker) = probes.broker.take() {
+        broker.shutdown().await;
+    }
 }
 
-/// A draining node reports the drain ahead of every other pending condition.
-///
-/// A roll script polls `/readyz` to decide when the previous node has left
-/// rotation. A broker that answered `log_dir_recovery` while it was in fact
-/// handing leadership away would tell that script the node is still coming
-/// up, not going down, and the two call for opposite actions.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/health_probes.feature",
-    name = "shutting down outranks every other not ready condition"
+    name = "Liveness stays healthy while readiness changes at startup"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shutting_down_outranks_every_other_not_ready_condition() {}
+async fn readyz_is_503_during_startup_and_200_once_the_broker_is_up(probes: ProbeScenario) {
+    stop_broker(probes).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/health_probes.feature",
+    name = "Readiness names the first unfinished startup condition"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn readyz_names_each_condition_as_startup_advances(probes: ProbeScenario) {
+    stop_broker(probes).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/health_probes.feature",
+    name = "A running broker stays ready across repeated probes"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn readyz_stays_200_while_the_broker_runs(probes: ProbeScenario) {
+    stop_broker(probes).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/health_probes.feature",
+    name = "A ready broker leaves readiness when shutdown begins"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn readyz_is_503_when_shutting_down(probes: ProbeScenario) { stop_broker(probes).await; }
+
+#[scenario(
+    path = "tests/features/migrated/tests/health_probes.feature",
+    name = "Shutdown takes precedence over unfinished startup"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutting_down_outranks_every_other_not_ready_condition(probes: ProbeScenario) {
+    stop_broker(probes).await;
+}

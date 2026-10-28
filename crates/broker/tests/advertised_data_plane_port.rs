@@ -31,10 +31,6 @@ fn discovery() -> DiscoveryScenario {
 #[given("a standalone broker configured with port zero")]
 async fn start_broker(discovery: &mut DiscoveryScenario) {
     let (directory, broker) = standalone_broker().await;
-    assert!(
-        broker.listen_addr().port() != 0,
-        "the broker bound an OS-assigned port"
-    );
     discovery.directory = Some(directory);
     discovery.broker = Some(broker);
 }
@@ -56,6 +52,7 @@ fn advertised_port(discovery: &DiscoveryScenario) {
     let broker = discovery.broker.as_ref().expect("a broker was started");
     let response = discovery.response.as_ref().expect("metadata was requested");
     let bound_port = i32::from(broker.listen_addr().port());
+    assert!(bound_port != 0, "the broker bound an OS-assigned port");
     assert!(response.brokers.len() == 1);
     assert!(
         response.brokers[0].port == bound_port,

@@ -262,134 +262,78 @@ mod tests {
         assert!(new == vec![da, uuid::Uuid::nil()]);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "reassignment policy tests: maybe complete reassignment follows kafka"
-    )]
-    fn bdd_verify_maybe_complete_reassignment_follows_kafka() {
-        struct Case {
-            name: &'static str,
-            replicas: &'static [u64],
-            isr: &'static [u64],
-            adding: &'static [u64],
-            removing: &'static [u64],
-            /// The replicas and ISR the reassignment completes to.
-            expected: Option<Completion>,
-        }
-        /// The replicas and ISR a reassignment completes to.
-        struct Completion {
-            replicas: &'static [u64],
-            isr: &'static [u64],
-        }
-        let done = |replicas, isr| Completion { replicas, isr };
-        let case = |name, replicas, isr, adding, removing, expected| Case {
-            name,
-            replicas,
-            isr,
-            adding,
-            removing,
-            expected,
-        };
-        let cases = [
-            case("no reassignment", &[1, 2, 3], &[1, 2, 3], &[], &[], None),
-            case(
-                "the additions are in the ISR",
-                &[1, 2, 3],
-                &[1, 2, 3],
-                &[3],
-                &[2],
-                Some(done(&[1, 3], &[1, 3])),
-            ),
-            case(
-                "an addition is not in the ISR",
-                &[1, 2, 3],
-                &[1, 2],
-                &[3],
-                &[2],
-                None,
-            ),
-            case(
-                "the ISR would keep no member",
-                &[1, 2, 3],
-                &[3],
-                &[],
-                &[3],
-                None,
-            ),
-            case(
-                "a decrease with a target replica outside the ISR",
-                &[1, 2, 3],
-                &[1, 3],
-                &[],
-                &[3],
-                None,
-            ),
-            case(
-                "a decrease with every target replica in the ISR",
-                &[1, 2, 3],
-                &[1, 2, 3],
-                &[],
-                &[3],
-                Some(done(&[1, 2], &[1, 2])),
-            ),
-            case(
-                // [0,1,2,3,4] -> [2,3,4,5] with only 0, 1 and 5 in sync would
-                // complete to an ISR of [5].
-                "Kafka's example of a decrease that would shrink the ISR",
-                &[2, 3, 4, 5, 0, 1],
-                &[0, 1, 5],
-                &[5],
-                &[0, 1],
-                None,
-            ),
-            case(
-                "the same factor does not wait for the rest of the target",
-                &[2, 3, 4, 1],
-                &[1, 2, 3],
-                &[3],
-                &[1],
-                Some(done(&[2, 3, 4], &[2, 3])),
-            ),
-            case(
-                "an increase does not wait for the rest of the target",
-                &[1, 2, 3, 4],
-                &[1, 2, 3],
-                &[3],
-                &[],
-                Some(done(&[1, 2, 3, 4], &[1, 2, 3])),
-            ),
-        ];
-        for Case {
-            name,
-            replicas,
-            isr,
-            adding,
-            removing,
-            expected,
-        } in cases
-        {
-            let ids = |nodes: &[u64]| nodes.iter().copied().map(NodeId).collect::<Vec<_>>();
-            let got = maybe_complete_reassignment(
-                &ids(replicas),
-                &ids(isr),
-                &ids(adding),
-                &ids(removing),
-            )
-            .map(|done| (done.replicas, done.isr));
-            let expected = expected.map(|Completion { replicas, isr }| (ids(replicas), ids(isr)));
-            assert!(got == expected, "{name}");
-        }
+    #[derive(serde::Deserialize)]
+    struct ReplicaReassignmentInput {
+        replicas: Vec<u64>,
+        isr: Vec<u64>,
+        adding: Vec<u64>,
+        removing: Vec<u64>,
     }
 
-    /// One row per branch of Kafka's `maybeCompleteReassignment`. The
-    /// replicas are the union a reassignment in flight carries: the target
-    /// followed by the removing replicas.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/reassignment/policy.feature",
-        name = "tests: maybe complete reassignment follows kafka"
+    #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+    struct CompletedReplicaLayout {
+        replicas: Vec<u64>,
+        isr: Vec<u64>,
+    }
+
+    #[derive(Default)]
+    struct ReplicaReassignment {
+        input: Option<ReplicaReassignmentInput>,
+        completed: rstest_bdd::Slot<Option<CompletedReplicaLayout>>,
+    }
+
+    #[rstest::fixture]
+    fn replica_reassignment() -> ReplicaReassignment {
+        // Every in-flight assignment has independent membership and completion state.
+        ReplicaReassignment::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "the in-flight replicas, ISR, additions and removals are JSON {assignment}"
     )]
-    fn maybe_complete_reassignment_follows_kafka() {}
+    fn supplied_replica_reassignment(
+        replica_reassignment: &mut ReplicaReassignment,
+        assignment: String,
+    ) {
+        replica_reassignment.input =
+            Some(serde_json::from_str(&assignment).expect("explicit reassignment replica sets"));
+    }
+
+    #[rstest_bdd_macros::when("the controller attempts to complete the replica reassignment")]
+    fn complete_supplied_reassignment(replica_reassignment: &mut ReplicaReassignment) {
+        let input = replica_reassignment
+            .input
+            .as_ref()
+            .expect("in-flight assignment was given");
+        let ids = |nodes: &[u64]| nodes.iter().copied().map(NodeId).collect::<Vec<_>>();
+        let completed = maybe_complete_reassignment(
+            &ids(&input.replicas),
+            &ids(&input.isr),
+            &ids(&input.adding),
+            &ids(&input.removing),
+        );
+        replica_reassignment
+            .completed
+            .set(completed.map(|completed| CompletedReplicaLayout {
+                replicas: completed.replicas.into_iter().map(|node| node.0).collect(),
+                isr: completed.isr.into_iter().map(|node| node.0).collect(),
+            }));
+    }
+
+    #[rstest_bdd_macros::then("the completed replica layout is JSON {completed}")]
+    fn expected_completed_reassignment(
+        replica_reassignment: &ReplicaReassignment,
+        completed: String,
+    ) {
+        let expected: Option<CompletedReplicaLayout> = serde_json::from_str(&completed)
+            .expect("independent completed membership or pending null");
+        assert!(replica_reassignment.completed.get() == Some(expected));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/reassignment/policy.feature",
+        fixtures = [replica_reassignment: ReplicaReassignment]
+    );
 
     /// A replication factor decrease completes only once every target replica
     /// is in the ISR, as in Kafka, where the change that completes it is the

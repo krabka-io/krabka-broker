@@ -32,14 +32,20 @@ use {
     },
     krabka_client_core::Client,
     krabka_protocol::owned::{
+        create_topics_response::CreateTopicsResponse,
         describe_cluster_request::DescribeClusterRequest,
-        describe_log_dirs_request::DescribeLogDirsRequest, metadata_request::MetadataRequest,
+        describe_cluster_response::DescribeClusterResponse,
+        describe_log_dirs_request::DescribeLogDirsRequest,
+        describe_quorum_response::DescribeQuorumResponse, metadata_request::MetadataRequest,
+        unregister_broker_request::UnregisterBrokerRequest,
+        unregister_broker_response::UnregisterBrokerResponse,
     },
+    rstest_bdd::datatable::Rows,
     std::{
         collections::BTreeSet,
         fs,
         io::ErrorKind,
-        iter,
+        iter, mem,
         net::SocketAddr,
         path::{Path, PathBuf},
         time::{Duration, Instant},
@@ -200,69 +206,6 @@ async fn assert_settled_unfenced(cluster: &RoleSeparated) {
     );
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("role separation observer: broker only node observes and forwards")]
-async fn bdd_verify_broker_only_node_observes_and_forwards() {
-    support::init_tracing();
-
-    let cluster = start_role_separated(1).await;
-    let broker_only = &cluster.brokers[0];
-    let broker_only_id = broker_only.node_id();
-
-    // Settle before asserting anything else. Without this the suite finishes
-    // inside the seed window, so it would pass while every broker was on its
-    // way to being fenced forever.
-    assert_settled_unfenced(&cluster).await;
-
-    // CreateTopics against the broker-only node — forwarded to the controller
-    // quorum via the observer's write path.
-    let topic = "rolesep-observed";
-    let client = connect_client(broker_only.listen_addr().to_string(), None).await;
-    let resp = client
-        .send(create_topic_request(
-            creatable_topic().name((topic).into()).call(),
-        ))
-        .await
-        .unwrap();
-    assert!(
-        resp.topics[0].error_code == 0,
-        "create via broker-only node forwards to the controller and succeeds"
-    );
-
-    // Assertion 1: the topic propagates back to the broker-only node's image
-    // via observer fetch (it is not a voter, so this cannot be a raft apply).
-    broker_only.wait_until_partition_present(topic, 0).await;
-
-    // Assertion 2: the controller itself committed the forwarded topic.
-    assert!(
-        cluster.controller.has_partition(topic, 0),
-        "controller committed the forwarded CreateTopics"
-    );
-
-    // Assertion 3: the broker-only node is NOT in the controller's voter set.
-    let quorum_voters: BTreeSet<u64> = cluster
-        .controller
-        .quorum_voters_for_test()
-        .into_iter()
-        .map(|n| n.0)
-        .collect();
-    assert!(quorum_voters.contains(&1), "the controller is a voter");
-    assert!(
-        !quorum_voters.contains(&broker_only_id),
-        "the broker-only node must never join the voter quorum"
-    );
-
-    cluster.shutdown().await;
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/role_separation_observer.feature",
-    name = "broker only node observes and forwards"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn broker_only_node_observes_and_forwards() {}
-
 /// A restarted node and the health state its startup marked.
 struct RestartedBroker {
     handle: BrokerHandle,
@@ -296,212 +239,6 @@ async fn restart_broker_only(cfg: &BrokerConfig) -> RestartedBroker {
         }
     }
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "role separation observer: a broker only node recovers after the controller prunes past its fetch offset"
-)]
-async fn bdd_verify_a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_offset()
-{
-    support::init_tracing();
-
-    // Only the controller snapshots aggressively, and it keeps no log beyond
-    // its newest snapshot, so each cleaning moves its log start up. The
-    // observer keeps the default checkpoint interval, so it writes none of its
-    // own over a handful of topics and restarts at the log start — which is
-    // the offset the controller has pruned away, and the case this test is
-    // about.
-    let cluster = start_role_separated_with(1, |index, cfg| {
-        if index == 0 {
-            cfg.metadata_snapshot_interval_records = 4;
-            cfg.metadata_log.max_retention_size = Some(krabka_units::bytes(0));
-        }
-    })
-    .await;
-    let broker_only_id = cluster.brokers[0].node_id();
-
-    // Enough topics that the committed offset crosses the 4-record interval
-    // several times, so the controller has snapshotted and pruned well past 0.
-    let topics: Vec<String> = (0..6).map(|i| format!("pruned-topic-{i}")).collect();
-    let client = connect_client(cluster.brokers[0].listen_addr().to_string(), None).await;
-    create_topics(&client, &topics).await;
-    for topic in &topics {
-        cluster.brokers[0]
-            .wait_until_partition_present(topic, 0)
-            .await;
-    }
-
-    // The controller really has taken a snapshot — the prune that strands a
-    // restarting observer happens in the same step that writes this file.
-    let checkpoints = krabka_raft::metadata_partition_dir(&cluster.controller_metadata_dir);
-    let snapshot_written = fs::read_dir(&checkpoints).is_ok_and(|entries| {
-        entries.flatten().any(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.ends_with(".checkpoint"))
-        })
-    });
-    assert!(
-        snapshot_written,
-        "the controller should have snapshotted and pruned at a 4-record interval; {checkpoints:?}"
-    );
-
-    // Stop the broker-only node and bring it back on the same ports and dir.
-    let cfg = cluster.broker_configs[0].clone();
-    let RoleSeparated {
-        controller,
-        mut brokers,
-        _dirs,
-        ..
-    } = cluster;
-    brokers.remove(0).shutdown().await;
-    let RestartedBroker {
-        handle: restarted,
-        health,
-    } = restart_broker_only(&cfg).await;
-
-    // It rebuilt its whole image from the snapshot the controller pointed it
-    // at: every topic committed before the restart is there, including the ones
-    // whose records were pruned away.
-    for topic in &topics {
-        restarted.wait_until_partition_present(topic, 0).await;
-    }
-    // And it registered again, which is what an empty image would have
-    // stopped: the controller places replicas from `image.brokers()`.
-    restarted.wait_until_brokers_registered(1).await;
-    assert!(
-        controller
-            .controller_image_for_test()
-            .brokers()
-            .any(|broker| broker.node_id.0 == broker_only_id),
-        "the restarted broker-only node re-registers with the controller"
-    );
-    // Startup marked every readiness condition, so `/readyz` answers 200
-    // instead of reporting a metadata lag this node could never close.
-    assert!(
-        health.readiness().is_ok(),
-        "restarted broker-only node is not ready: {:?}",
-        health.readiness()
-    );
-
-    restarted.shutdown().await;
-    controller.shutdown().await;
-}
-
-/// A broker-only node that comes back after the controller has snapshotted and
-/// pruned `__cluster_metadata` past the offset it asks for.
-///
-/// The observer fetches by offset, and the controller drops the log prefix
-/// behind every KIP-630 snapshot. A restarted observer therefore asks for
-/// records that no longer exist. Answered with an empty slice it re-asks for
-/// the same gone offset on every poll: the image stays empty forever, the node
-/// never registers, and `/readyz` reports a lag it can never close — until
-/// somebody deletes the controller's checkpoints by hand.
-///
-/// So the controller answers such a fetch with the id of the snapshot that
-/// replaced those records, and the observer installs it before resuming. This
-/// test drives exactly that: a snapshot interval low enough that a handful of
-/// topics crosses it several times, then a restart.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/role_separation_observer.feature",
-    name = "a broker only node recovers after the controller prunes past its fetch offset"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_offset() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "role separation observer: heartbeats keep brokers unfenced in a role separated cluster"
-)]
-async fn bdd_verify_heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster() {
-    support::init_tracing();
-
-    let cluster = start_role_separated(2).await;
-    assert_settled_unfenced(&cluster).await;
-
-    // Then hold it across several more liveness ticks, so a cluster that
-    // fences on any later tick — rather than on the first expiry — is caught
-    // too.
-    let hold_until = Instant::now() + FENCING_WINDOW;
-    while Instant::now() < hold_until {
-        let fenced = fenced_anywhere(&cluster);
-        assert!(
-            fenced.is_empty(),
-            "brokers fenced while every one of them was heartbeating: {fenced:?}"
-        );
-        time::sleep(Duration::from_millis(200)).await;
-    }
-
-    // The client-visible half (KIP-1073): `DescribeCluster` hides fenced
-    // brokers unless the caller opts in, so a fenced cluster answers with no
-    // broker rows at all.
-    for broker in &cluster.brokers {
-        let client = connect_client(broker.listen_addr().to_string(), None).await;
-        let resp = client
-            .send(DescribeClusterRequest::default())
-            .await
-            .unwrap();
-        assert!(resp.error_code == 0);
-        let rows: BTreeSet<ListedBroker> = resp
-            .brokers
-            .iter()
-            .map(|row| ListedBroker {
-                broker_id: row.broker_id,
-                is_fenced: row.is_fenced,
-            })
-            .collect();
-        assert!(
-            rows == BTreeSet::from([
-                ListedBroker {
-                    broker_id: 2,
-                    is_fenced: false,
-                },
-                ListedBroker {
-                    broker_id: 3,
-                    is_fenced: false,
-                },
-            ]),
-            "DescribeCluster on node {} must list both brokers unfenced",
-            broker.node_id()
-        );
-        // The advertised controller has to be one a client can resolve. A
-        // client reads `controller_id` back out of the `brokers` array of the
-        // same response, so the controller-only node's own id would be as
-        // useless to it as the -1 a wholly fenced cluster answers with.
-        assert!(
-            resp.controller_id == 2 || resp.controller_id == 3,
-            "DescribeCluster on node {} advertised controller_id {}, which is not a listed broker",
-            broker.node_id(),
-            resp.controller_id
-        );
-    }
-
-    assert_metadata_names_a_reachable_controller(&cluster).await;
-
-    cluster.shutdown().await;
-}
-
-/// A controller-only node never registers itself as a broker, so the only
-/// address it publishes is the CONTROLLER endpoint of its
-/// `ControllerRegistrationRecord`. When the heartbeat client looked the leader
-/// up as a broker instead, every tick bailed out, no heartbeat ever reached
-/// the controller, and roughly one `liveness_tick_interval` after boot the
-/// controller fenced the registration of every broker in the cluster —
-/// permanently, since nothing could ever unfence them.
-///
-/// So this holds the assertion across several liveness ticks and past
-/// `heartbeat_timeout`, rather than sampling it once: the broken behaviour
-/// takes a session expiry to show up, and a single early sample would see the
-/// seeded-alive state and pass.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/role_separation_observer.feature",
-    name = "heartbeats keep brokers unfenced in a role separated cluster"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster() {}
 
 /// `Metadata` has to name a `controller_id` the caller can resolve.
 ///
@@ -547,293 +284,6 @@ async fn assert_metadata_names_a_reachable_controller(cluster: &RoleSeparated) {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "role separation observer: controller only node opens no client listener"
-)]
-async fn bdd_verify_controller_only_node_opens_no_client_listener() {
-    support::init_tracing();
-
-    let cluster = start_role_separated(1).await;
-    let connect = TcpStream::connect(cluster.controller_client_addr)
-        .await
-        .map(drop)
-        .map_err(|error| error.kind());
-
-    assert!(
-        (
-            cluster.controller.data_plane_addr(),
-            cluster.controller.listen_addr(),
-            connect,
-        ) == (
-            None,
-            cluster.controller.controller_addr(),
-            Err(ErrorKind::ConnectionRefused),
-        )
-    );
-
-    cluster.shutdown().await;
-}
-
-/// The controller-only node opens no client listener, as Kafka's
-/// `ControllerServer` opens only the listeners that `controller.listener.names`
-/// names. The harness hands it a listener bound on its client address, and the
-/// node closes it, so a connect there is refused. Its one listener is the
-/// controller listener.
-///
-/// [`assert_metadata_names_a_reachable_controller`] asks the observers which
-/// node is the controller. No client can ask the controller-only node.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/role_separation_observer.feature",
-    name = "controller only node opens no client listener"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_only_node_opens_no_client_listener() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "role separation observer: broker only node forwards describe quorum to controller"
-)]
-async fn bdd_verify_broker_only_node_forwards_describe_quorum_to_controller() {
-    support::init_tracing();
-
-    let cluster = start_role_separated(1).await;
-    assert_settled_unfenced(&cluster).await;
-
-    let broker = &cluster.brokers[0];
-    let client = connect_client(broker.listen_addr().to_string(), None).await;
-
-    let req = metadata_quorum_request();
-
-    let resp = client.send(req).await.unwrap();
-    assert!(resp.error_code == 0, "top-level error_code must be NONE");
-    assert!(resp.topics.len() == 1);
-    let topic = &resp.topics[0];
-    assert!(topic.topic_name == "__cluster_metadata");
-    assert!(topic.partitions.len() == 1);
-    let part = &topic.partitions[0];
-    assert!(part.error_code == 0);
-    assert!(
-        part.leader_id == 1,
-        "controller-only node 1 is the leader; got {}",
-        part.leader_id
-    );
-    assert!(part.leader_epoch >= 1, "leader epoch must be >= 1");
-    assert!(
-        part.current_voters.iter().any(|v| v.replica_id == 1),
-        "voters must include node 1"
-    );
-
-    cluster.shutdown().await;
-}
-
-/// A broker-only node forwards `DescribeQuorum` to the active controller
-/// quorum leader (#392). The response reports the controller's real term,
-/// leader, and voter set.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/role_separation_observer.feature",
-    name = "broker only node forwards describe quorum to controller"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn broker_only_node_forwards_describe_quorum_to_controller() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "role separation observer: broker only nodes are described as quorum observers"
-)]
-async fn bdd_verify_broker_only_nodes_are_described_as_quorum_observers() {
-    support::init_tracing();
-
-    let cluster = start_role_separated(2).await;
-    let broker_ids: BTreeSet<i32> = cluster
-        .brokers
-        .iter()
-        .map(|broker| i32::try_from(broker.node_id()).expect("small node id"))
-        .collect();
-    let client = connect_client(cluster.brokers[0].listen_addr().to_string(), None).await;
-    let request = metadata_quorum_request;
-
-    // The observers appear once each has completed a fetch, and their caught-up
-    // time is set once each has fetched to the end of a log that nothing is
-    // appending to any more, so poll for both.
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let observers = loop {
-        let resp = client.send(request()).await.unwrap();
-        let partition = &resp.topics[0].partitions[0];
-        let listed: BTreeSet<i32> = partition
-            .observers
-            .iter()
-            .map(|observer| observer.replica_id)
-            .collect();
-        if partition.error_code == 0
-            && listed == broker_ids
-            && partition
-                .observers
-                .iter()
-                .all(|observer| observer.last_caught_up_timestamp > 0)
-        {
-            break partition.observers.clone();
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the brokers never appeared as observers: {:?}",
-            partition.observers
-        );
-        time::sleep(Duration::from_millis(200)).await;
-    };
-
-    for observer in &observers {
-        assert!(
-            observer.last_fetch_timestamp > 1_700_000_000_000,
-            "observer {} has a real fetch time, got {}",
-            observer.replica_id,
-            observer.last_fetch_timestamp
-        );
-        // Issue #1193's main complaint: an observer that had caught up read -1.
-        assert!(
-            observer.last_caught_up_timestamp > 1_700_000_000_000,
-            "observer {} has a real caught-up time, got {}",
-            observer.replica_id,
-            observer.last_caught_up_timestamp
-        );
-        assert!(
-            observer.last_caught_up_timestamp <= observer.last_fetch_timestamp,
-            "observer {} caught up at {}, after its last fetch at {}",
-            observer.replica_id,
-            observer.last_caught_up_timestamp,
-            observer.last_fetch_timestamp
-        );
-        assert!(
-            observer.log_end_offset >= 0,
-            "observer {} has a fetch offset",
-            observer.replica_id
-        );
-    }
-
-    cluster.shutdown().await;
-}
-
-/// Every broker-only node fetches `__cluster_metadata` from the controller, so
-/// the controller's `DescribeQuorum` lists each one as an observer under its
-/// node id, with the time of its last fetch. Kafka lists a broker the same way,
-/// and `kafka-metadata-quorum describe --replication` shows them under
-/// `Observer`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/role_separation_observer.feature",
-    name = "broker only nodes are described as quorum observers"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn broker_only_nodes_are_described_as_quorum_observers() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "role separation observer: unregister broker sent to a broker only node is decided by the controller"
-)]
-async fn bdd_verify_unregister_broker_sent_to_a_broker_only_node_is_decided_by_the_controller() {
-    use krabka_protocol::owned::unregister_broker_request::UnregisterBrokerRequest;
-
-    support::init_tracing();
-
-    let cluster = start_role_separated_with(2, |index, cfg| {
-        if index == 0 {
-            cfg.break_glass.approvers = vec!["User:alice".into(), "User:bob".into()];
-        }
-    })
-    .await;
-    let client = connect_client(cluster.brokers[0].listen_addr().to_string(), None).await;
-    let doomed = i32::try_from(cluster.brokers[1].node_id()).expect("small node id");
-
-    let resp = client
-        .send(UnregisterBrokerRequest {
-            broker_id: doomed,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-
-    assert!(
-        resp.error_code == 44,
-        "the controller's two-person rule refuses it: {resp:?}"
-    );
-    assert!(
-        resp.error_message
-            == Some(format!(
-                "break-glass refused unregister_broker on {doomed}: no approved proposal covers the request"
-            ))
-    );
-    assert!(
-        cluster
-            .controller
-            .controller_image_for_test()
-            .broker(krabka_broker::NodeId(u64::try_from(doomed).unwrap()))
-            .is_some(),
-        "the refused unregistration left the registration alone"
-    );
-
-    cluster.shutdown().await;
-}
-
-/// `UnregisterBroker` builds partition records from the image of the node that
-/// runs it, so Kafka runs it only on the active controller: `KafkaApis`
-/// forwards it. A broker-only node's image can trail the controller's, and a
-/// record built from a trailing image would roll back what the controller
-/// committed since.
-///
-/// The controller alone names break-glass approvers here, so a broker-only node
-/// that ran the request itself would let it through. The controller refuses it,
-/// which shows that the controller decided.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/role_separation_observer.feature",
-    name = "unregister broker sent to a broker only node is decided by the controller"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unregister_broker_sent_to_a_broker_only_node_is_decided_by_the_controller() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "role separation observer: unregister broker sent to a broker only node reaches the controller"
-)]
-async fn bdd_verify_unregister_broker_sent_to_a_broker_only_node_reaches_the_controller() {
-    use krabka_protocol::owned::unregister_broker_request::UnregisterBrokerRequest;
-
-    support::init_tracing();
-
-    let cluster = start_role_separated(2).await;
-    let client = connect_client(cluster.brokers[0].listen_addr().to_string(), None).await;
-    let doomed = cluster.brokers[1].node_id();
-
-    let resp = client
-        .send(UnregisterBrokerRequest {
-            broker_id: i32::try_from(doomed).expect("small node id"),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-
-    assert!(resp.error_code == 0, "{resp:?}");
-    cluster
-        .controller
-        .wait_for_image(|image| image.broker(krabka_broker::NodeId(doomed)).is_none())
-        .await;
-
-    cluster.shutdown().await;
-}
-
-/// The same request against a cluster that gates nothing is forwarded through
-/// the `Envelope` and answered by the controller, and it drops the
-/// registration from the controller's image.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/role_separation_observer.feature",
-    name = "unregister broker sent to a broker only node reaches the controller"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unregister_broker_sent_to_a_broker_only_node_reaches_the_controller() {}
-
 /// The names of the entries directly in `dir`, sorted.
 fn entries(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir).map_or_default(|entries| {
@@ -856,50 +306,513 @@ fn holds_a_checkpoint(dir: &Path) -> bool {
     })
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "role separation observer: a separate metadata log directory rolls cleans and restores a wiped node"
-)]
-async fn bdd_verify_a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_node() {
-    support::init_tracing();
+async fn create_topics(client: &Client, topics: &[String]) {
+    for topic in topics {
+        create_topic(client, topic, 1).await;
+    }
+}
 
-    let cluster = start_role_separated_with(1, |index, cfg| {
-        let root = cfg.log_dir.clone();
-        cfg.log_dir = root.join("data");
-        cfg.metadata_log_dir = Some(root.join("metadata"));
-        if index == 0 {
-            // The snapshot test's settings, with a shorter roll interval and
-            // a faster idle interval so the test does not wait for minutes.
-            cfg.metadata_max_bytes_between_snapshots = krabka_units::bytes(2048);
-            cfg.metadata_log = krabka_raft::MetadataLogConfig {
-                segment_roll_interval: krabka_units::secs(1),
-                max_retention_size: Some(krabka_units::bytes(2048)),
-                max_idle_interval: krabka_units::millis(50),
-                ..krabka_raft::MetadataLogConfig::default()
-            };
+#[derive(Default)]
+struct ObserverBehavior {
+    cluster: Option<RoleSeparated>,
+    client: Option<Client>,
+    created: Option<CreateTopicsResponse>,
+    quorum: Option<DescribeQuorumResponse>,
+    connected: rstest_bdd::Slot<Result<(), ErrorKind>>,
+    unregistered: Option<UnregisterBrokerResponse>,
+    doomed: Option<u64>,
+    restarted: Option<RestartedBroker>,
+    topics: Vec<String>,
+    cluster_responses: Vec<(u64, DescribeClusterResponse)>,
+}
+
+#[rstest::fixture]
+fn observer_behavior() -> ObserverBehavior {
+    // Broker-only observers and their controller have independent fresh images.
+    ObserverBehavior::default()
+}
+
+impl ObserverBehavior {
+    async fn stop_observer(&mut self) -> BrokerConfig {
+        drop(self.client.take());
+        let config = self.cluster().broker_configs[0].clone();
+        self.cluster
+            .as_mut()
+            .expect("role-separated cluster")
+            .brokers
+            .remove(0)
+            .shutdown()
+            .await;
+        config
+    }
+
+    fn cluster(&self) -> &RoleSeparated { self.cluster.as_ref().expect("role-separated cluster") }
+
+    fn client(&self) -> &Client { self.client.as_ref().expect("observer connection") }
+
+    async fn connect(&mut self) {
+        self.client =
+            Some(connect_client(self.cluster().brokers[0].listen_addr().to_string(), None).await);
+    }
+
+    async fn shutdown(&mut self) {
+        let Self {
+            cluster,
+            client,
+            restarted,
+            ..
+        } = mem::take(self);
+        if let Some(client) = client {
+            client.close();
         }
-    })
-    .await;
-    let broker_cfg = cluster.broker_configs[0].clone();
-    let broker_data = broker_cfg.log_dir.clone();
-    let broker_metadata = broker_cfg.metadata_dir().to_path_buf();
+        if let Some(restarted) = restarted {
+            restarted.handle.shutdown().await;
+        }
+        cluster.expect("role-separated cluster").shutdown().await;
+    }
+}
 
-    let topic_names = [
-        "metadata-dir-topic-0",
-        "metadata-dir-topic-1",
-        "metadata-dir-topic-2",
-    ];
-    let client = connect_client(cluster.brokers[0].listen_addr().to_string(), None).await;
-    create_topics(&client, &topic_names.map(String::from)).await;
-    for &topic in &topic_names {
-        cluster.brokers[0]
+#[rstest_bdd_macros::given("controller-only node 1 has {brokers} broker-only observers")]
+async fn observer_cluster(observer_behavior: &mut ObserverBehavior, brokers: usize) {
+    support::init_tracing();
+    observer_behavior.cluster = Some(start_role_separated(brokers).await);
+    observer_behavior.connect().await;
+}
+
+#[rstest_bdd_macros::given(
+    "controller-only node 1 alone requires break-glass approvers User:alice and User:bob, with broker-only nodes 2 and 3"
+)]
+async fn gated_observer_cluster(observer_behavior: &mut ObserverBehavior) {
+    support::init_tracing();
+    observer_behavior.cluster = Some(
+        start_role_separated_with(2, |index, cfg| {
+            if index == 0 {
+                cfg.break_glass.approvers = vec!["User:alice".into(), "User:bob".into()];
+            }
+        })
+        .await,
+    );
+    observer_behavior.connect().await;
+}
+
+#[rstest_bdd_macros::given("the broker heartbeats remain unfenced beyond the seed window")]
+async fn settled_observers(observer_behavior: &ObserverBehavior) {
+    assert_settled_unfenced(observer_behavior.cluster()).await;
+}
+
+#[rstest_bdd_macros::when("CreateTopics sends rolesep-observed through broker-only node 2")]
+async fn create_via_observer(observer_behavior: &mut ObserverBehavior) {
+    observer_behavior.created = Some(
+        observer_behavior
+            .client()
+            .send(create_topic_request(
+                creatable_topic().name("rolesep-observed".into()).call(),
+            ))
+            .await
+            .unwrap(),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the controller commits rolesep-observed, the observer fetches it and node 2 remains outside the voter quorum"
+)]
+async fn observed_forwarded_topic(observer_behavior: &ObserverBehavior) {
+    assert!(
+        observer_behavior
+            .created
+            .as_ref()
+            .expect("CreateTopics answered")
+            .topics[0]
+            .error_code
+            == 0,
+        "create via broker-only node forwards to the controller and succeeds"
+    );
+    observer_behavior.cluster().brokers[0]
+        .wait_until_partition_present("rolesep-observed", 0)
+        .await;
+    assert!(
+        observer_behavior
+            .cluster()
+            .controller
+            .has_partition("rolesep-observed", 0),
+        "controller committed the forwarded CreateTopics"
+    );
+    let voters: BTreeSet<u64> = observer_behavior
+        .cluster()
+        .controller
+        .quorum_voters_for_test()
+        .into_iter()
+        .map(|node| node.0)
+        .collect();
+    assert!(voters.contains(&1), "the controller is a voter");
+    assert!(
+        !voters.contains(&observer_behavior.cluster().brokers[0].node_id()),
+        "the broker-only node must never join the voter quorum"
+    );
+}
+
+#[rstest_bdd_macros::when("a TCP client connects to the controller's configured client address")]
+async fn connect_controller_client_listener(observer_behavior: &ObserverBehavior) {
+    observer_behavior.connected.set(
+        TcpStream::connect(observer_behavior.cluster().controller_client_addr)
+            .await
+            .map(drop)
+            .map_err(|error| error.kind()),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the connection is refused, the data-plane address is absent and listen_addr names only the controller listener"
+)]
+fn closed_controller_client_listener(observer_behavior: &ObserverBehavior) {
+    assert!(
+        (
+            observer_behavior.cluster().controller.data_plane_addr(),
+            observer_behavior.cluster().controller.listen_addr(),
+            observer_behavior
+                .connected
+                .get()
+                .expect("connection attempted")
+        ) == (
+            None,
+            observer_behavior.cluster().controller.controller_addr(),
+            Err(ErrorKind::ConnectionRefused)
+        )
+    );
+}
+
+#[rstest_bdd_macros::when(
+    "DescribeQuorum requests the metadata partition through broker-only node 2"
+)]
+async fn describe_observer_quorum(observer_behavior: &mut ObserverBehavior) {
+    observer_behavior.quorum = Some(
+        observer_behavior
+            .client()
+            .send(metadata_quorum_request())
+            .await
+            .unwrap(),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the quorum response succeeds for only __cluster_metadata partition 0, led by voter 1 in an epoch of at least 1"
+)]
+fn forwarded_observer_quorum(observer_behavior: &ObserverBehavior) {
+    let response = observer_behavior.quorum.as_ref().expect("quorum described");
+    assert!(
+        response.error_code == 0,
+        "top-level error_code must be NONE"
+    );
+    assert!(response.topics.len() == 1);
+    let topic = &response.topics[0];
+    assert!(topic.topic_name == "__cluster_metadata");
+    assert!(topic.partitions.len() == 1);
+    let partition = &topic.partitions[0];
+    assert!(partition.error_code == 0);
+    assert!(
+        partition.leader_id == 1,
+        "controller-only node 1 is the leader; got {}",
+        partition.leader_id
+    );
+    assert!(partition.leader_epoch >= 1, "leader epoch must be >= 1");
+    assert!(
+        partition
+            .current_voters
+            .iter()
+            .any(|voter| voter.replica_id == 1),
+        "voters must include node 1"
+    );
+}
+
+#[rstest_bdd_macros::when("UnregisterBroker targets node {node} through broker-only node 2")]
+async fn unregister_via_observer(observer_behavior: &mut ObserverBehavior, node: u64) {
+    observer_behavior.doomed = Some(node);
+    observer_behavior.unregistered = Some(
+        observer_behavior
+            .client()
+            .send(UnregisterBrokerRequest {
+                broker_id: i32::try_from(node).expect("small node id"),
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+    );
+}
+
+#[rstest_bdd_macros::then("UnregisterBroker returns error code {code}")]
+fn observer_unregister_code(observer_behavior: &ObserverBehavior, code: i16) {
+    assert!(
+        observer_behavior
+            .unregistered
+            .as_ref()
+            .expect("unregister answered")
+            .error_code
+            == code
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the controller retains node 3 and refuses the unapproved request with message"
+)]
+fn gated_observer_unregister(observer_behavior: &ObserverBehavior, docstring: String) {
+    assert!(
+        observer_behavior
+            .unregistered
+            .as_ref()
+            .expect("unregister answered")
+            .error_message
+            .as_deref()
+            == Some(docstring.trim())
+    );
+    assert!(
+        observer_behavior
+            .cluster()
+            .controller
+            .controller_image_for_test()
+            .broker(krabka_broker::NodeId(
+                observer_behavior.doomed.expect("unregistered node")
+            ))
+            .is_some(),
+        "the refused unregistration left the registration alone"
+    );
+}
+
+#[rstest_bdd_macros::then("the controller removes the target broker from its committed image")]
+async fn committed_observer_unregister(observer_behavior: &ObserverBehavior) {
+    observer_behavior
+        .cluster()
+        .controller
+        .wait_for_image(|image| {
+            image
+                .broker(krabka_broker::NodeId(
+                    observer_behavior.doomed.expect("unregistered node"),
+                ))
+                .is_none()
+        })
+        .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "broker only node observes and forwards"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn broker_only_node_observes_and_forwards(mut observer_behavior: ObserverBehavior) {
+    observer_behavior.shutdown().await;
+    drop(observer_behavior);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "controller only node opens no client listener"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_only_node_opens_no_client_listener(mut observer_behavior: ObserverBehavior) {
+    observer_behavior.shutdown().await;
+    drop(observer_behavior);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "broker only node forwards describe quorum to controller"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn broker_only_node_forwards_describe_quorum_to_controller(
+    mut observer_behavior: ObserverBehavior,
+) {
+    observer_behavior.shutdown().await;
+    drop(observer_behavior);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "unregister broker sent to a broker only node is decided by the controller"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unregister_broker_sent_to_a_broker_only_node_is_decided_by_the_controller(
+    mut observer_behavior: ObserverBehavior,
+) {
+    observer_behavior.shutdown().await;
+    drop(observer_behavior);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "unregister broker sent to a broker only node reaches the controller"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unregister_broker_sent_to_a_broker_only_node_reaches_the_controller(
+    mut observer_behavior: ObserverBehavior,
+) {
+    observer_behavior.shutdown().await;
+    drop(observer_behavior);
+}
+
+#[derive(rstest_bdd_macros::DataTableRow)]
+struct ObserverTopicInput {
+    topic: String,
+}
+
+#[rstest_bdd_macros::given(
+    "controller 1 snapshots every four records and retains zero metadata-log bytes while broker-only node 2 keeps default checkpoints"
+)]
+async fn pruning_observer_controller(observer_behavior: &mut ObserverBehavior) {
+    support::init_tracing();
+    observer_behavior.cluster = Some(
+        start_role_separated_with(1, |index, cfg| {
+            if index == 0 {
+                cfg.metadata_snapshot_interval_records = 4;
+                cfg.metadata_log.max_retention_size = Some(krabka_units::bytes(0));
+            }
+        })
+        .await,
+    );
+    observer_behavior.connect().await;
+}
+
+#[rstest_bdd_macros::given(
+    "controller 1 and observer 2 separate data and metadata directories, with 2048-byte snapshots and retention, one-second rolls and 50-millisecond metadata idle records"
+)]
+async fn separate_observer_directories(observer_behavior: &mut ObserverBehavior) {
+    support::init_tracing();
+    observer_behavior.cluster = Some(
+        start_role_separated_with(1, |index, cfg| {
+            let root = cfg.log_dir.clone();
+            cfg.log_dir = root.join("data");
+            cfg.metadata_log_dir = Some(root.join("metadata"));
+            if index == 0 {
+                cfg.metadata_max_bytes_between_snapshots = krabka_units::bytes(2048);
+                cfg.metadata_log = krabka_raft::MetadataLogConfig {
+                    segment_roll_interval: krabka_units::secs(1),
+                    max_retention_size: Some(krabka_units::bytes(2048)),
+                    max_idle_interval: krabka_units::millis(50),
+                    ..krabka_raft::MetadataLogConfig::default()
+                };
+            }
+        })
+        .await,
+    );
+    observer_behavior.connect().await;
+}
+
+#[rstest_bdd_macros::when("the broker-only observer creates these single-partition topics")]
+async fn create_observer_topics(
+    observer_behavior: &mut ObserverBehavior,
+    #[datatable] rows: Rows<ObserverTopicInput>,
+) {
+    observer_behavior.topics = rows.into_iter().map(|row| row.topic).collect();
+    create_topics(observer_behavior.client(), &observer_behavior.topics).await;
+    for topic in &observer_behavior.topics {
+        observer_behavior.cluster().brokers[0]
             .wait_until_local_log_end_offset(topic, 0, 0)
             .await;
     }
+}
 
+#[rstest_bdd_macros::then("the controller has a checkpoint replacing pruned metadata records")]
+fn pruned_observer_checkpoint(observer_behavior: &ObserverBehavior) {
+    let checkpoints =
+        krabka_raft::metadata_partition_dir(&observer_behavior.cluster().controller_metadata_dir);
+    let snapshot_written = fs::read_dir(&checkpoints).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.ends_with(".checkpoint"))
+        })
+    });
+    assert!(
+        snapshot_written,
+        "the controller should have snapshotted and pruned at a 4-record interval; {checkpoints:?}"
+    );
+}
+
+#[rstest_bdd_macros::when(
+    "broker-only node 2 restarts on its existing addresses and log directories"
+)]
+async fn restart_pruned_observer(observer_behavior: &mut ObserverBehavior) {
+    let config = observer_behavior.stop_observer().await;
+    observer_behavior.restarted = Some(restart_broker_only(&config).await);
+}
+
+#[rstest_bdd_macros::when(
+    "broker-only node 2 stops, both its data and metadata directories are wiped and it restarts on the same addresses"
+)]
+async fn wipe_pruned_observer(observer_behavior: &mut ObserverBehavior) {
+    let config = observer_behavior.stop_observer().await;
+    fs::remove_dir_all(&config.log_dir).unwrap();
+    fs::remove_dir_all(config.metadata_dir()).unwrap();
+    observer_behavior.restarted = Some(restart_broker_only(&config).await);
+}
+
+#[rstest_bdd_macros::then(
+    "the restarted observer restores every topic, re-registers with the controller and reports ready"
+)]
+async fn recovered_pruned_observer(observer_behavior: &ObserverBehavior) {
+    for topic in &observer_behavior.topics {
+        observer_behavior
+            .restarted
+            .as_ref()
+            .expect("restarted observer")
+            .handle
+            .wait_until_partition_present(topic, 0)
+            .await;
+    }
+    observer_behavior
+        .restarted
+        .as_ref()
+        .expect("restarted observer")
+        .handle
+        .wait_until_brokers_registered(1)
+        .await;
+    assert!(
+        observer_behavior
+            .cluster()
+            .controller
+            .controller_image_for_test()
+            .brokers()
+            .any(|broker| broker.node_id.0
+                == observer_behavior
+                    .restarted
+                    .as_ref()
+                    .expect("restarted observer")
+                    .handle
+                    .node_id()),
+        "the restarted broker-only node re-registers with the controller"
+    );
+    assert!(
+        observer_behavior
+            .restarted
+            .as_ref()
+            .expect("restarted observer")
+            .health
+            .readiness()
+            .is_ok(),
+        "restarted broker-only node is not ready: {:?}",
+        observer_behavior
+            .restarted
+            .as_ref()
+            .expect("restarted observer")
+            .health
+            .readiness()
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the controller cleans its first metadata segment within 100 seconds, data partitions occupy only the data directory and DescribeLogDirs reports only that directory"
+)]
+async fn separated_observer_log_directories(observer_behavior: &ObserverBehavior) {
+    let broker_data = observer_behavior.cluster().broker_configs[0]
+        .log_dir
+        .clone();
+    let broker_metadata = observer_behavior.cluster().broker_configs[0]
+        .metadata_dir()
+        .to_path_buf();
+    let topic_names = &observer_behavior.topics;
     // The controller cleans its metadata log: the first segment goes and a
     // snapshot stays, within the snapshot test's 100 seconds.
-    let partition_dir = krabka_raft::metadata_partition_dir(&cluster.controller_metadata_dir);
+    let partition_dir =
+        krabka_raft::metadata_partition_dir(&observer_behavior.cluster().controller_metadata_dir);
     let deadline = Instant::now() + Duration::from_secs(100);
     while partition_dir.join("00000000000000000000.log").exists()
         || !holds_a_checkpoint(&partition_dir)
@@ -931,7 +844,7 @@ async fn bdd_verify_a_separate_metadata_log_directory_rolls_cleans_and_restores_
         (
             partitions_in(&broker_data),
             partitions_in(&broker_metadata),
-            entries(&cluster.controller_metadata_dir),
+            entries(&observer_behavior.cluster().controller_metadata_dir),
             krabka_raft::metadata_partition_dir(&broker_data).exists(),
         ) == (
             want_data,
@@ -940,7 +853,8 @@ async fn bdd_verify_a_separate_metadata_log_directory_rolls_cleans_and_restores_
             false,
         )
     );
-    let described = client
+    let described = observer_behavior
+        .client()
         .send(DescribeLogDirsRequest {
             topics: None,
             ..Default::default()
@@ -955,51 +869,215 @@ async fn bdd_verify_a_separate_metadata_log_directory_rolls_cleans_and_restores_
             .collect::<Vec<_>>()
             == vec![broker_data.display().to_string()]
     );
-
-    // Wipe the broker-only node and bring it back on the same ports. Its log
-    // starts empty, below the controller's log start, so it has to install
-    // the controller's snapshot.
-    let RoleSeparated {
-        controller,
-        mut brokers,
-        _dirs,
-        ..
-    } = cluster;
-    brokers.remove(0).shutdown().await;
-    fs::remove_dir_all(&broker_data).unwrap();
-    fs::remove_dir_all(&broker_metadata).unwrap();
-    let RestartedBroker {
-        handle: restarted,
-        health: _health,
-    } = restart_broker_only(&broker_cfg).await;
-    for topic in &topic_names {
-        restarted.wait_until_partition_present(topic, 0).await;
-    }
-
-    restarted.shutdown().await;
-    controller.shutdown().await;
 }
 
-/// Kafka's `metadata.log.dir`, apart from the data directories, on every node.
-///
-/// This is what Kafka's `snapshot_test.py` checks. The controller keeps the
-/// `__cluster_metadata-0` log and its snapshots in its metadata directory. Its
-/// KIP-835 no-op records roll the log by `metadata.log.segment.ms`, and
-/// `metadata.max.retention.bytes` cleans it until the first segment file is
-/// gone. No partition lands in a metadata directory, and `DescribeLogDirs`
-/// reports the data directory only. A broker-only node whose directories are
-/// wiped then comes back and rebuilds its image from the controller's
-/// snapshot, because the records it would replay are gone.
-#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "all broker registrations stay unfenced throughout four additional seconds sampled every 200 milliseconds"
+)]
+async fn continually_unfenced_observers(observer_behavior: &ObserverBehavior) {
+    let hold_until = Instant::now() + FENCING_WINDOW;
+    while Instant::now() < hold_until {
+        let fenced = fenced_anywhere(observer_behavior.cluster());
+        assert!(
+            fenced.is_empty(),
+            "brokers fenced while every one of them was heartbeating: {fenced:?}"
+        );
+        time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+#[rstest_bdd_macros::when("DescribeCluster reads the default broker listing from both observers")]
+async fn describe_unfenced_observers(observer_behavior: &mut ObserverBehavior) {
+    observer_behavior.cluster_responses.clear();
+    for index in 0..observer_behavior.cluster().brokers.len() {
+        let client = connect_client(
+            observer_behavior.cluster().brokers[index]
+                .listen_addr()
+                .to_string(),
+            None,
+        )
+        .await;
+        let response = client
+            .send(DescribeClusterRequest::default())
+            .await
+            .unwrap();
+        client.close();
+        observer_behavior.cluster_responses.push((
+            observer_behavior.cluster().brokers[index].node_id(),
+            response,
+        ));
+    }
+}
+
+#[rstest_bdd_macros::then(
+    "both listings contain exactly unfenced brokers 2 and 3 and name a listed broker as controller"
+)]
+fn listed_unfenced_observers(observer_behavior: &ObserverBehavior) {
+    assert!(observer_behavior.cluster_responses.len() == 2);
+    for (node, response) in &observer_behavior.cluster_responses {
+        assert!(response.error_code == 0);
+        let rows: BTreeSet<ListedBroker> = response
+            .brokers
+            .iter()
+            .map(|row| ListedBroker {
+                broker_id: row.broker_id,
+                is_fenced: row.is_fenced,
+            })
+            .collect();
+        assert!(
+            rows == BTreeSet::from([
+                ListedBroker {
+                    broker_id: 2,
+                    is_fenced: false
+                },
+                ListedBroker {
+                    broker_id: 3,
+                    is_fenced: false
+                }
+            ]),
+            "DescribeCluster on node {node} must list both brokers unfenced"
+        );
+        assert!(
+            response.controller_id == 2 || response.controller_id == 3,
+            "DescribeCluster on node {node} advertised controller_id {}, which is not a listed broker",
+            response.controller_id
+        );
+    }
+}
+
+#[rstest_bdd_macros::then(
+    "Metadata from either observer resolves its controller id to a reachable broker returning the same cluster id"
+)]
+async fn reachable_metadata_observer_controller(observer_behavior: &ObserverBehavior) {
+    assert_metadata_names_a_reachable_controller(observer_behavior.cluster()).await;
+}
+
+#[rstest_bdd_macros::when(
+    "DescribeQuorum is polled for up to thirty seconds until observers 2 and 3 have fetched and caught up"
+)]
+async fn poll_observer_quorum(observer_behavior: &mut ObserverBehavior) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    observer_behavior.quorum = Some(loop {
+        let response = observer_behavior
+            .client()
+            .send(metadata_quorum_request())
+            .await
+            .unwrap();
+        let partition = &response.topics[0].partitions[0];
+        let listed: BTreeSet<i32> = partition
+            .observers
+            .iter()
+            .map(|observer| observer.replica_id)
+            .collect();
+        if partition.error_code == 0
+            && listed == BTreeSet::from([2, 3])
+            && partition
+                .observers
+                .iter()
+                .all(|observer| observer.last_caught_up_timestamp > 0)
+        {
+            break response;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the brokers never appeared as observers: {:?}",
+            partition.observers
+        );
+        time::sleep(Duration::from_millis(200)).await;
+    });
+}
+
+#[rstest_bdd_macros::then(
+    "the quorum lists exactly observers 2 and 3 with nonnegative log ends, fetch and caught-up times after 1700000000000, and caught-up times no later than their fetch times"
+)]
+fn caught_up_quorum_observers(observer_behavior: &ObserverBehavior) {
+    let partition = &observer_behavior
+        .quorum
+        .as_ref()
+        .expect("quorum observers read")
+        .topics[0]
+        .partitions[0];
+    assert!(partition.error_code == 0);
+    assert!(
+        partition
+            .observers
+            .iter()
+            .map(|observer| observer.replica_id)
+            .collect::<BTreeSet<_>>()
+            == BTreeSet::from([2, 3])
+    );
+    for observer in &partition.observers {
+        assert!(
+            observer.last_fetch_timestamp > 1_700_000_000_000,
+            "observer {} has a real fetch time, got {}",
+            observer.replica_id,
+            observer.last_fetch_timestamp
+        );
+        assert!(
+            observer.last_caught_up_timestamp > 1_700_000_000_000,
+            "observer {} has a real caught-up time, got {}",
+            observer.replica_id,
+            observer.last_caught_up_timestamp
+        );
+        assert!(
+            observer.last_caught_up_timestamp <= observer.last_fetch_timestamp,
+            "observer {} caught up at {}, after its last fetch at {}",
+            observer.replica_id,
+            observer.last_caught_up_timestamp,
+            observer.last_fetch_timestamp
+        );
+        assert!(
+            observer.log_end_offset >= 0,
+            "observer {} has a fetch offset",
+            observer.replica_id
+        );
+    }
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "a broker only node recovers after the controller prunes past its fetch offset"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_offset(
+    mut observer_behavior: ObserverBehavior,
+) {
+    observer_behavior.shutdown().await;
+    drop(observer_behavior);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "heartbeats keep brokers unfenced in a role separated cluster"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster(
+    mut observer_behavior: ObserverBehavior,
+) {
+    observer_behavior.shutdown().await;
+    drop(observer_behavior);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/role_separation_observer.feature",
+    name = "broker only nodes are described as quorum observers"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn broker_only_nodes_are_described_as_quorum_observers(
+    mut observer_behavior: ObserverBehavior,
+) {
+    observer_behavior.shutdown().await;
+    drop(observer_behavior);
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/role_separation_observer.feature",
     name = "a separate metadata log directory rolls cleans and restores a wiped node"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_node() {}
-
-async fn create_topics(client: &Client, topics: &[String]) {
-    for topic in topics {
-        create_topic(client, topic, 1).await;
-    }
+async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_node(
+    mut observer_behavior: ObserverBehavior,
+) {
+    observer_behavior.shutdown().await;
+    drop(observer_behavior);
 }

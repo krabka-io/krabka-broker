@@ -170,36 +170,6 @@ mod tests {
         }
     }
 
-    /// One request that differs from the one naming the served snapshot, and
-    /// what Kafka's raft client answers to it.
-    struct Case {
-        what: &'static str,
-        /// Edits the request that names the served snapshot at the leader's
-        /// epoch, from its first byte.
-        edit: Box<dyn Fn(&mut FetchSnapshotRequest)>,
-        top_level: i16,
-        partition_code: i16,
-        /// Whether the partition answer names the leader. Kafka's
-        /// `addQuorumLeader` fills `CurrentLeader` in every one but the
-        /// unknown-topic answer.
-        names_leader: bool,
-    }
-
-    fn case(
-        what: &'static str,
-        partition_code: i16,
-        names_leader: bool,
-        edit: impl Fn(&mut FetchSnapshotRequest) + 'static,
-    ) -> Case {
-        Case {
-            what,
-            edit: Box::new(edit),
-            top_level: codes::NONE,
-            partition_code,
-            names_leader,
-        }
-    }
-
     async fn snapshot_wire(
         grants: &str,
         broker: &Broker,
@@ -260,194 +230,279 @@ mod tests {
         handle.shutdown().await;
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers fetch snapshot tests: the broker listener answers as kafkas raft client does"
+    #[derive(Default)]
+    struct SnapshotFetchScenario {
+        started: Option<HandlerStartedBroker>,
+        snapshot: ReqSnapshotId,
+        size: i64,
+        first_page: Bytes,
+        leader: LeaderIdAndEpoch,
+        request: Option<FetchSnapshotRequest>,
+        response: Option<FetchSnapshotResponse>,
+    }
+    #[rstest::fixture]
+    fn snapshot_fetch() -> SnapshotFetchScenario {
+        let started = None;
+        SnapshotFetchScenario {
+            started,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "an allow-all controller has a completed metadata snapshot and a captured first 16-byte page"
     )]
-    async fn bdd_verify_the_broker_listener_answers_as_kafkas_raft_client_does() {
-        let version = fetch_snapshot_response::MAX_VERSION;
-        let HandlerStartedBroker {
-            broker: handle,
-            dir: _dir,
-        } = start_broker_no_audit_with(|config| {
+    async fn completed_metadata_snapshot(snapshot_fetch: &mut SnapshotFetchScenario) {
+        let started = start_broker_no_audit_with(|config| {
             config.authorizer = Arc::new(AllowAllAuthorizer);
         })
         .await;
-        let broker = handle.broker_arc_for_test();
-        handle
+        let broker = started.broker.broker_arc_for_test();
+        started
+            .broker
             .trigger_snapshot_for_test()
             .await
-            .expect("trigger metadata snapshot");
-        // The trigger only schedules the snapshot, so wait for its file.
+            .expect("trigger snapshot");
         let deadline = Instant::now() + Duration::from_secs(30);
-        let (snapshot, size, first_page) = loop {
+        let slice = loop {
             if let SnapshotRange::Slice(slice) = broker.controller.read_snapshot_range(0, 16) {
-                break (
-                    ReqSnapshotId {
-                        end_offset: slice.end_offset,
-                        epoch: slice.epoch,
-                        ..Default::default()
-                    },
-                    slice.total_size,
-                    slice.bytes,
-                );
+                break slice;
             }
             assert!(
                 Instant::now() <= deadline,
-                "no metadata snapshot within 30s"
+                "no metadata snapshot within 30 seconds"
             );
             time::sleep(Duration::from_millis(25)).await;
         };
-        let leader_epoch = i32::try_from(broker.controller.quorum_state().current_term)
-            .expect("the leader epoch is on the wire as an int32");
-        let leader = LeaderIdAndEpoch {
-            leader_id: i32::try_from(broker.config.node_id.0).unwrap(),
-            leader_epoch,
+        snapshot_fetch.snapshot = ReqSnapshotId {
+            end_offset: slice.end_offset,
+            epoch: slice.epoch,
             ..Default::default()
         };
-        let cluster_id = broker.controller.current_image().cluster_id();
-
-        let cases = [
-            case("the named snapshot", codes::NONE, true, |_| {}),
-            case(
-                "another end offset",
-                codes::SNAPSHOT_NOT_FOUND,
-                true,
-                |req| {
-                    req.topics[0].partitions[0].snapshot_id.end_offset += 1;
-                },
-            ),
-            case("another epoch", codes::SNAPSHOT_NOT_FOUND, true, |req| {
-                req.topics[0].partitions[0].snapshot_id.epoch += 1;
-            }),
-            case(
-                "another topic",
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-                false,
-                |req| {
-                    req.topics[0].name = "not-metadata".into();
-                },
-            ),
-            case(
-                "another partition",
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-                false,
-                |req| {
-                    req.topics[0].partitions[0].partition = 1;
-                },
-            ),
-            case(
-                "the end of the snapshot",
-                codes::POSITION_OUT_OF_RANGE,
-                true,
-                move |req| {
-                    req.topics[0].partitions[0].position = size;
-                },
-            ),
-            case(
-                "a negative position",
-                codes::POSITION_OUT_OF_RANGE,
-                true,
-                |req| {
-                    req.topics[0].partitions[0].position = -1;
-                },
-            ),
-            case(
-                "a stale leader epoch",
-                codes::FENCED_LEADER_EPOCH,
-                true,
-                |req| {
-                    req.topics[0].partitions[0].current_leader_epoch -= 1;
-                },
-            ),
-            case(
-                "a leader epoch this node has not reached",
-                codes::UNKNOWN_LEADER_EPOCH,
-                true,
-                |req| req.topics[0].partitions[0].current_leader_epoch += 1,
-            ),
-            case("the cluster id in base64", codes::NONE, true, move |req| {
-                req.cluster_id = Some(URL_SAFE_NO_PAD.encode(cluster_id.as_bytes()));
-            }),
-            case("the cluster id hyphenated", codes::NONE, true, move |req| {
-                req.cluster_id = Some(cluster_id.to_string());
-            }),
-            Case {
-                top_level: codes::INCONSISTENT_CLUSTER_ID,
-                ..case("another cluster id", codes::NONE, false, |req| {
-                    req.cluster_id = Some("another-cluster".into());
-                })
-            },
-        ];
-
-        krabka_macros::request_test_identity! {
-            bind(principal, address, ctx);
-            user ["admin"];
-            client ["snapshot-test"];
+        snapshot_fetch.size = slice.total_size;
+        snapshot_fetch.first_page = slice.bytes;
+        snapshot_fetch.leader = LeaderIdAndEpoch {
+            leader_id: i32::try_from(broker.config.node_id.0).expect("wire node ID"),
+            leader_epoch: i32::try_from(broker.controller.quorum_state().current_term)
+                .expect("wire leader epoch"),
+            ..Default::default()
         };
-        for Case {
-            what,
-            edit,
-            top_level,
-            partition_code,
-            names_leader,
-        } in cases
-        {
-            let mut req = request(snapshot.clone(), leader_epoch, 0);
-            edit(&mut req);
-            let bytes = super::handle(&broker, version, &encode_request(&req, version), &ctx)
-                .await
-                .expect("handle");
-            let resp = decode_response::<FetchSnapshotResponse>(&bytes, version);
-
-            check!(resp.error_code == top_level, "{what}: top-level code");
-            if top_level != codes::NONE {
-                check!(resp.topics.is_empty(), "{what}: no topic rows");
-                continue;
-            }
-            let [topic] = resp.topics.as_slice() else {
-                panic!("{what}: one topic row, got {resp:?}");
-            };
-            let [part] = topic.partitions.as_slice() else {
-                panic!("{what}: one partition row, got {resp:?}");
-            };
-            check!(topic.name == req.topics[0].name, "{what}: topic");
-            check!(
-                part.index == req.topics[0].partitions[0].partition,
-                "{what}"
-            );
-            check!(part.error_code == partition_code, "{what}: partition code");
-            check!(
-                part.current_leader
-                    == if names_leader {
-                        leader.clone()
+        snapshot_fetch.started = Some(started);
+    }
+    #[rstest_bdd_macros::when(
+        "FetchSnapshot reads the captured snapshot with these request fields"
+    )]
+    async fn fetch_metadata_snapshot(
+        snapshot_fetch: &mut SnapshotFetchScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let broker = snapshot_fetch
+            .started
+            .as_ref()
+            .expect("controller snapshot")
+            .broker
+            .broker_arc_for_test();
+        let mut req = request(
+            snapshot_fetch.snapshot.clone(),
+            snapshot_fetch.leader.leader_epoch,
+            0,
+        );
+        for cells in datatable.into_iter().skip(1) {
+            let value = cells[1].as_str();
+            match cells[0].as_str() {
+                "topic" => req.topics[0].name = value.to_owned(),
+                "partition" => {
+                    req.topics[0].partitions[0].partition = value.parse().expect("partition")
+                }
+                "end offset delta" => {
+                    req.topics[0].partitions[0].snapshot_id.end_offset +=
+                        value.parse::<i64>().expect("end offset delta")
+                }
+                "snapshot epoch delta" => {
+                    req.topics[0].partitions[0].snapshot_id.epoch +=
+                        value.parse::<i32>().expect("snapshot epoch delta")
+                }
+                "leader epoch delta" => {
+                    req.topics[0].partitions[0].current_leader_epoch +=
+                        value.parse::<i32>().expect("leader epoch delta")
+                }
+                "position" => {
+                    req.topics[0].partitions[0].position = if value == "snapshot size" {
+                        snapshot_fetch.size
                     } else {
-                        LeaderIdAndEpoch::default()
-                    },
-                "{what}: current leader"
-            );
-            if partition_code == codes::NONE {
-                let mut page = bytes::BytesMut::new();
-                part.unaligned_records.encode_to(&mut page).unwrap();
-                check!(part.snapshot_id.end_offset == snapshot.end_offset, "{what}");
-                check!(part.snapshot_id.epoch == snapshot.epoch, "{what}");
-                check!(part.size == size, "{what}");
-                check!(part.position == 0, "{what}");
-                check!(page.freeze() == first_page, "{what}: the first page");
+                        value.parse().expect("position")
+                    }
+                }
+                "cluster ID" => {
+                    let id = broker.controller.current_image().cluster_id();
+                    req.cluster_id = match value {
+                        "omitted" => None,
+                        "base64" => Some(URL_SAFE_NO_PAD.encode(id.as_bytes())),
+                        "hyphenated" => Some(id.to_string()),
+                        other => Some(other.to_owned()),
+                    };
+                }
+                other => panic!("unknown snapshot request field {other}"),
             }
         }
-        handle.shutdown().await;
+        krabka_macros::request_test_identity! { bind(principal, address, ctx); user ["admin"]; client ["snapshot-test"]; };
+        let version = fetch_snapshot_response::MAX_VERSION;
+        let bytes = super::handle(&broker, version, &encode_request(&req, version), &ctx)
+            .await
+            .expect("handle snapshot fetch");
+        snapshot_fetch.response = Some(decode_response::<FetchSnapshotResponse>(&bytes, version));
+        snapshot_fetch.request = Some(req);
     }
-
-    /// The broker listener answers as Kafka's `handleFetchSnapshotRequest`
-    /// does: exactly the named snapshot, and the refusals of its order.
-    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "snapshot fetch returns top-level code {top}, partition code {partition} and current leader present {leader}"
+    )]
+    async fn snapshot_fetch_response(
+        snapshot_fetch: &mut SnapshotFetchScenario,
+        top: i16,
+        partition: i16,
+        leader: bool,
+    ) {
+        let response = snapshot_fetch.response.as_ref().expect("snapshot response");
+        check!(response.error_code == top);
+        if top != codes::NONE {
+            check!(response.topics.is_empty());
+            snapshot_fetch
+                .started
+                .take()
+                .expect("snapshot controller")
+                .broker
+                .shutdown()
+                .await;
+            return;
+        }
+        let [topic] = response.topics.as_slice() else {
+            panic!("expected one topic row: {response:?}")
+        };
+        let [part] = topic.partitions.as_slice() else {
+            panic!("expected one partition row: {response:?}")
+        };
+        let requested = snapshot_fetch.request.as_ref().expect("snapshot request");
+        check!(topic.name == requested.topics[0].name);
+        check!(part.index == requested.topics[0].partitions[0].partition);
+        check!(part.error_code == partition);
+        check!(
+            part.current_leader
+                == if leader {
+                    snapshot_fetch.leader.clone()
+                } else {
+                    LeaderIdAndEpoch::default()
+                }
+        );
+        snapshot_fetch
+            .started
+            .take()
+            .expect("snapshot controller")
+            .broker
+            .shutdown()
+            .await;
+    }
+    #[rstest_bdd_macros::then(
+        "the snapshot response preserves the captured identity, total size, position zero and exact first-page bytes"
+    )]
+    fn snapshot_fetch_page(snapshot_fetch: &SnapshotFetchScenario) {
+        let part = &snapshot_fetch
+            .response
+            .as_ref()
+            .expect("snapshot response")
+            .topics[0]
+            .partitions[0];
+        let mut page = bytes::BytesMut::new();
+        part.unaligned_records
+            .encode_to(&mut page)
+            .expect("page bytes");
+        check!(part.snapshot_id.end_offset == snapshot_fetch.snapshot.end_offset);
+        check!(part.snapshot_id.epoch == snapshot_fetch.snapshot.epoch);
+        check!(part.size == snapshot_fetch.size);
+        check!(part.position == 0);
+        check!(page.freeze() == snapshot_fetch.first_page);
+    }
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/fetch_snapshot.feature",
-        name = "tests: the broker listener answers as kafkas raft client does"
+        path = "tests/features/handler_fetch_snapshot.feature",
+        name = "The named snapshot starts with the captured page"
     )]
     #[tokio::test]
-    async fn the_broker_listener_answers_as_kafkas_raft_client_does() {}
+    async fn snapshot_fetch_case_0(snapshot_fetch: SnapshotFetchScenario) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_fetch_snapshot.feature",
+        name = "Another end offset does not identify this snapshot"
+    )]
+    #[tokio::test]
+    async fn snapshot_fetch_case_1(snapshot_fetch: SnapshotFetchScenario) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_fetch_snapshot.feature",
+        name = "Another snapshot epoch does not identify this snapshot"
+    )]
+    #[tokio::test]
+    async fn snapshot_fetch_case_2(snapshot_fetch: SnapshotFetchScenario) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_fetch_snapshot.feature",
+        name = "Another topic has no metadata snapshot"
+    )]
+    #[tokio::test]
+    async fn snapshot_fetch_case_3(snapshot_fetch: SnapshotFetchScenario) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_fetch_snapshot.feature",
+        name = "Another partition has no metadata snapshot"
+    )]
+    #[tokio::test]
+    async fn snapshot_fetch_case_4(snapshot_fetch: SnapshotFetchScenario) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_fetch_snapshot.feature",
+        name = "Position at the end is outside the snapshot"
+    )]
+    #[tokio::test]
+    async fn snapshot_fetch_case_5(snapshot_fetch: SnapshotFetchScenario) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_fetch_snapshot.feature",
+        name = "Negative position is outside the snapshot"
+    )]
+    #[tokio::test]
+    async fn snapshot_fetch_case_6(snapshot_fetch: SnapshotFetchScenario) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_fetch_snapshot.feature",
+        name = "Stale leader epochs are fenced"
+    )]
+    #[tokio::test]
+    async fn snapshot_fetch_case_7(snapshot_fetch: SnapshotFetchScenario) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_fetch_snapshot.feature",
+        name = "Future leader epochs are unknown"
+    )]
+    #[tokio::test]
+    async fn snapshot_fetch_case_8(snapshot_fetch: SnapshotFetchScenario) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_fetch_snapshot.feature",
+        name = "Base64 cluster identity is accepted"
+    )]
+    #[tokio::test]
+    async fn snapshot_fetch_case_9(snapshot_fetch: SnapshotFetchScenario) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_fetch_snapshot.feature",
+        name = "Hyphenated cluster identity is accepted"
+    )]
+    #[tokio::test]
+    async fn snapshot_fetch_case_10(snapshot_fetch: SnapshotFetchScenario) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_fetch_snapshot.feature",
+        name = "Another cluster identity has no topic rows"
+    )]
+    #[tokio::test]
+    async fn snapshot_fetch_case_11(snapshot_fetch: SnapshotFetchScenario) {}
 
     /// A broker-only observer keeps no metadata log, so it answers without
     /// asking an engine.

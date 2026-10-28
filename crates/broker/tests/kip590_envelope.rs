@@ -41,7 +41,7 @@ use {
         sasl_handshake_response::SaslHandshakeResponse,
     },
     krabka_security::{ListenerProtocol, SaslMechanism, SecretBytes},
-    std::{collections::HashSet, iter, net::SocketAddr, sync::Arc},
+    std::{collections::HashSet, iter, net::SocketAddr, str, sync::Arc},
     tokio::{
         io::{AsyncReadExt as _, AsyncWriteExt as _},
         net::TcpStream,
@@ -73,11 +73,6 @@ const JVM_USER_ALICE_VIA_TOKEN: &[u8] = krabka_macros::jvm_principal_golden!(ali
 /// `clientAddress.getAddress()`, so a v4 client is these four raw octets and
 /// no port.
 const LOOPBACK_CLIENT: &[u8] = &[127, 0, 0, 1];
-
-/// A client address that is deliberately *not* the loopback address every
-/// test connection to the controller listener comes from, so a host ACL
-/// keyed on it can only match if the embedded address is what was used.
-const REMOTE_CLIENT: &[u8] = &[10, 1, 2, 3];
 
 /// The correlation id the "client" put in the embedded request header. The
 /// controller must echo this one, not the envelope's own, or the forwarding
@@ -232,19 +227,15 @@ fn embedded_create_topics(topic: &str) -> Bytes {
     framed.slice(4..)
 }
 
-fn envelope_for(request_data: Bytes, principal: Option<&'static [u8]>) -> EnvelopeRequest {
-    envelope_from(request_data, principal, LOOPBACK_CLIENT)
-}
-
 fn envelope_from(
     request_data: Bytes,
     principal: Option<&'static [u8]>,
-    client_host: &'static [u8],
+    client_host: &[u8],
 ) -> EnvelopeRequest {
     EnvelopeRequest {
         request_data,
         request_principal: principal.map(Bytes::from_static),
-        client_host_address: Bytes::from_static(client_host),
+        client_host_address: Bytes::copy_from_slice(client_host),
         unknown_tagged_fields: UnknownTaggedFields::default(),
     }
 }
@@ -270,129 +261,6 @@ fn check_refused(broker: &BrokerHandle, topic: &str, response: &EnvelopeResponse
     );
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip590 envelope: a forwarded create topics is served and answered in the clients own bytes"
-)]
-async fn bdd_verify_a_forwarded_create_topics_is_served_and_answered_in_the_clients_own_bytes() {
-    const TOPIC: &str = "envelope-forwarded-topic";
-
-    let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
-
-    let response = send_envelope(
-        broker.controller_addr(),
-        &envelope_for(embedded_create_topics(TOPIC), Some(JVM_USER_ALICE)),
-    )
-    .await;
-
-    let mut body = served_embedded_body(&response, &[0x5A, 0x5A, 0x12, 0x34, 0x00], "");
-
-    let version = create_topics_response::MAX_VERSION;
-    assert!(let Ok(created) = CreateTopicsResponse::decode(&mut body, version));
-    check!(
-        body.is_empty(),
-        "the embedded response consumed its own bytes"
-    );
-    check!(created.topics.len() == 1);
-    check!(
-        (
-            created.topics[0].name.as_str(),
-            created.topics[0].error_code,
-            created.topics[0].num_partitions,
-            created.topics[0].replication_factor,
-        ) == (TOPIC, 0, 1, 1)
-    );
-    assert!(let Some(topic) = created.topics.into_iter().next());
-    check!(topic.error_message.is_none());
-    check!(topic != CreatableTopicResult::default());
-
-    // The forward is only real if the write landed: the controller's own image
-    // must now hold the topic the envelope asked for.
-    check!(
-        broker
-            .controller_image_for_test()
-            .topic(TOPIC)
-            .is_some_and(|created| created.partitions == 1),
-        "the forwarded CreateTopics did not reach the metadata image"
-    );
-}
-
-/// The whole forwarding round trip: an `Envelope` carrying a `CreateTopics`
-/// reaches the controller, the topic is created, and the bytes that come back
-/// are exactly what the client would have received had it reached the
-/// controller itself — the client's own correlation id, the client's own
-/// response header shape, and the client's own response body.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip590_envelope.feature",
-    name = "a forwarded create topics is served and answered in the clients own bytes"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_forwarded_create_topics_is_served_and_answered_in_the_clients_own_bytes() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip590 envelope: an envelope the controller refuses reports kafkas own error code"
-)]
-async fn bdd_verify_an_envelope_the_controller_refuses_reports_kafkas_own_error_code() {
-    let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
-    let addr = broker.controller_addr();
-
-    let produce = request_frame(RequestFrameSetup {
-        api_key: krabka_ids::ApiKey(produce_request::API_KEY),
-        api_version: krabka_ids::ApiVersion(produce_request::MAX_VERSION),
-        correlation_id: FrameCorrelationId(7),
-        client_id: Some(b"adminclient-1"),
-        tagged: Some(&[0]),
-        body: &encode(&ProduceRequest::default(), produce_request::MAX_VERSION),
-    })
-    .slice(4..);
-
-    let cases = [
-        (
-            "a null request_principal is a deserialization failure",
-            envelope_for(embedded_create_topics("envelope-no-principal"), None),
-            97,
-        ),
-        (
-            "an embedded api key outside ApiKeys.forwardable is an invalid request",
-            envelope_for(produce, Some(JVM_USER_ALICE)),
-            42,
-        ),
-        (
-            "an embedded frame too short to hold a request header",
-            envelope_for(Bytes::from_static(&[0, 19, 0]), Some(JVM_USER_ALICE)),
-            35,
-        ),
-    ];
-
-    for (case, envelope, want) in cases {
-        let response = send_envelope(addr, &envelope).await;
-
-        check!(
-            (response.error_code, response.response_data.clone()) == (want, None),
-            "case: {case}"
-        );
-    }
-}
-
-/// Envelopes the controller must refuse, and the `error_code` Kafka's
-/// `kafka.server.EnvelopeUtils` assigns to each. A refusal still comes back as
-/// a well-formed `EnvelopeResponse` with a null `response_data`, because the
-/// forwarding hop has to translate the code for its own client.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip590_envelope.feature",
-    name = "an envelope the controller refuses reports kafkas own error code"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_envelope_the_controller_refuses_reports_kafkas_own_error_code() {}
-
-/// Read the `ApiVersions` v0 table a listener advertises.
-///
-/// v0 is deliberate: its request header is v1 and its response header is v0,
-/// so neither carries a tagged-fields byte and the reply starts with the
-/// correlation id followed straight by the body.
 async fn advertised_api_versions(addr: SocketAddr) -> ApiVersionsResponse {
     let frame = request_frame(RequestFrameSetup {
         client_id: Some(b"probe"),
@@ -406,43 +274,6 @@ async fn advertised_api_versions(addr: SocketAddr) -> ApiVersionsResponse {
     cur = rest;
     ApiVersionsResponse::decode(&mut cur, 0).expect("decode ApiVersionsResponse")
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip590 envelope: envelope is advertised on the controller listener and nowhere else"
-)]
-async fn bdd_verify_envelope_is_advertised_on_the_controller_listener_and_nowhere_else() {
-    let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
-
-    let controller = advertised_api_versions(broker.controller_addr()).await;
-    let client = advertised_api_versions(broker.listen_addr()).await;
-
-    let envelope = |response: &ApiVersionsResponse| {
-        response
-            .api_keys
-            .iter()
-            .find(|api| api.api_key == envelope_request::API_KEY)
-            .map(|api| (api.min_version, api.max_version))
-    };
-
-    check!(envelope(&controller) == Some((0, 0)), "controller listener");
-    check!(envelope(&client).is_none(), "client listener");
-}
-
-/// `Envelope` is advertised on the controller listener and on no other.
-///
-/// `ApiKeys.ENVELOPE.messageType.listeners()` in the pinned image is exactly
-/// `[CONTROLLER]`, and both `ApiKeys.clientApis()` and `ApiKeys.brokerApis()`
-/// exclude it. Advertising it to clients would invite them to forward on their
-/// own behalf; not advertising it on the controller listener would leave a
-/// JVM broker with no forwarding path at all.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip590_envelope.feature",
-    name = "envelope is advertised on the controller listener and nowhere else"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn envelope_is_advertised_on_the_controller_listener_and_nowhere_else() {}
 
 /// Decode the embedded `CreateTopicsResponse` out of a served `Envelope`.
 ///
@@ -463,484 +294,6 @@ struct TopicOutcome {
     topic: String,
     error_code: i16,
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip590 envelope: a forwarded request authorizes against the embedded client host"
-)]
-async fn bdd_verify_a_forwarded_request_authorizes_against_the_embedded_client_host() {
-    let EnvelopeBroker { broker, dir: _dir } = start_forwarder().await;
-
-    for (principal, host) in [("User:alice", "10.1.2.3"), ("User:bob", "127.0.0.1")] {
-        broker
-            .submit_metadata_record_for_test(
-                cluster_acl_record()
-                    .principal(principal)
-                    .host(host)
-                    .operation(AclOperation::Create)
-                    .call(),
-            )
-            .await
-            .expect("seed host ACL");
-    }
-
-    // Both directions are driven before anything is asserted, so one failing
-    // case cannot hide the other: reading the connection's address gets the
-    // first wrong *and* the second wrong, and a report of only one of them
-    // would read like a one-sided mistake.
-    let mut outcome: Vec<TopicOutcome> = Vec::new();
-    for (principal, topic) in [
-        (JVM_USER_ALICE, "envelope-host-acl-alice"),
-        (JVM_USER_BOB, "envelope-host-acl-bob"),
-    ] {
-        let response = send_envelope(
-            broker.controller_addr(),
-            &envelope_from(
-                embedded_create_topics(topic),
-                Some(principal),
-                REMOTE_CLIENT,
-            ),
-        )
-        .await;
-
-        let rows: Vec<TopicOutcome> = embedded_create_topics_response(&response)
-            .topics
-            .into_iter()
-            .map(|row| TopicOutcome {
-                topic: row.name,
-                error_code: row.error_code,
-            })
-            .collect();
-        check!(
-            rows.len() == 1,
-            "one row per single-topic CreateTopics: {rows:?}"
-        );
-        outcome.push(TopicOutcome {
-            topic: topic.to_owned(),
-            error_code: rows.first().map_or(i16::MIN, |row| row.error_code),
-        });
-    }
-
-    check!(
-        outcome
-            == vec![
-                // Allowed from the address the envelope names.
-                TopicOutcome {
-                    topic: "envelope-host-acl-alice".to_owned(),
-                    error_code: 0,
-                },
-                // Allowed only from the forwarding hop's address, so the
-                // cluster-wide Create is refused; the per-topic Create
-                // fallback (#698) has no ACL for this topic either, so the
-                // per-topic error, TOPIC_AUTHORIZATION_FAILED, wins.
-                TopicOutcome {
-                    topic: "envelope-host-acl-bob".to_owned(),
-                    error_code: 29,
-                },
-            ]
-    );
-}
-
-/// A host ACL on a forwarded request must be evaluated against the client's
-/// own address, not the forwarding broker's.
-///
-/// Both envelopes below reach the controller listener over loopback, so the
-/// connection's peer is `127.0.0.1` for both, while `client_host_address`
-/// names `10.1.2.3`. The two seeded ACLs are the two ways the connection's
-/// address is the wrong answer:
-///
-/// - `User:alice` may create only from `10.1.2.3`, the address the envelope
-///   names. Reading the connection instead denies a client that the host ACL
-///   allows.
-/// - `User:bob` may create only from `127.0.0.1`, which is the address the
-///   *forwarding hop* happens to connect from. Reading the connection instead
-///   authorizes a client that the host ACL denies — the broker's own address
-///   launders the request.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip590_envelope.feature",
-    name = "a forwarded request authorizes against the embedded client host"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip590 envelope: an unparseable client host address is an invalid request"
-)]
-async fn bdd_verify_an_unparseable_client_host_address_is_an_invalid_request() {
-    const TOPIC: &str = "envelope-bad-client-host";
-
-    let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
-
-    let response = send_envelope(
-        broker.controller_addr(),
-        &envelope_from(embedded_create_topics(TOPIC), Some(JVM_USER_ALICE), &[
-            10, 1, 2,
-        ]),
-    )
-    .await;
-
-    check_refused(&broker, TOPIC, &response, 42);
-}
-
-/// An `EnvelopeRequest.client_host_address` `InetAddress.getByAddress` would
-/// refuse is an invalid request, and the embedded handler never runs.
-///
-/// `EnvelopeUtils.parseForwardedClientAddress` catches `UnknownHostException`
-/// and rethrows it as `InvalidRequestException` (42), and it does so before
-/// the embedded request header is parsed at all.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip590_envelope.feature",
-    name = "an unparseable client host address is an invalid request"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_unparseable_client_host_address_is_an_invalid_request() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip590 envelope: a forwarded allocate producer ids needs cluster action for the embedded principal"
-)]
-async fn bdd_verify_a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded_principal()
- {
-    let EnvelopeBroker { broker, dir: _dir } = start_forwarder().await;
-    broker.wait_until_brokers_registered(1).await;
-    broker
-        .submit_metadata_record_for_test(cluster_acl_record().call())
-        .await
-        .expect("seed ClusterAction ACL");
-
-    let image = broker.controller_image_for_test();
-    let registered = image
-        .brokers()
-        .next()
-        .expect("the broker self-registers before it serves");
-    let broker_id = i32::try_from(registered.node_id.0).expect("broker id");
-
-    let version = allocate_producer_ids_request::MAX_VERSION;
-    let request_data = request_frame(RequestFrameSetup {
-        api_key: krabka_ids::ApiKey(allocate_producer_ids_request::API_KEY),
-        api_version: krabka_ids::ApiVersion(version),
-        correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
-        client_id: Some(b"forwarding-broker"),
-        tagged: Some(&[0]),
-        body: &encode(
-            &AllocateProducerIdsRequest {
-                broker_id,
-                broker_epoch: registered.broker_epoch,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            version,
-        ),
-    })
-    .slice(4..);
-
-    let cases = [
-        ("User:bob", JVM_USER_BOB, AllocateProducerIdsResponse {
-            throttle_time_ms: 0,
-            error_code: 31,
-            producer_id_start: 0,
-            producer_id_len: 0,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }),
-        ("User:alice", JVM_USER_ALICE, AllocateProducerIdsResponse {
-            throttle_time_ms: 0,
-            error_code: 0,
-            producer_id_start: 0,
-            producer_id_len: 1_000,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }),
-    ];
-    for (name, principal, expected) in cases {
-        let response = send_envelope(
-            broker.controller_addr(),
-            &envelope_for(request_data.clone(), Some(principal)),
-        )
-        .await;
-
-        let mut body = served_embedded_body(&response, &[0x5A, 0x5A, 0x12, 0x34, 0x00], name);
-
-        let allocated = AllocateProducerIdsResponse::decode(
-            &mut body,
-            allocate_producer_ids_response::MAX_VERSION,
-        )
-        .expect("decode the embedded AllocateProducerIdsResponse");
-        check!(
-            body.is_empty(),
-            "the embedded response consumed its own bytes"
-        );
-        check!(allocated == expected, "{name}");
-    }
-}
-
-/// A forwarded `AllocateProducerIds` (67) is authorized against the principal
-/// that the envelope names, and a principal with `ClusterAction` gets a block.
-///
-/// 67 is in `ApiKeys.forwardable`, and a JVM broker forwards it to the
-/// controller to obtain the producer-ID block every producer on it needs
-/// before it can initialise. `ControllerApis.handleAllocateProducerIdsRequest`
-/// checks `ClusterAction` for the request principal before the controller
-/// runs (#681). The outer gate holds for the plaintext `ANONYMOUS` peer, so
-/// only the embedded principal decides. `User:bob` goes first: its refusal
-/// must allocate nothing, so `User:alice` still gets the block that starts at
-/// 0.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip590_envelope.feature",
-    name = "a forwarded allocate producer ids needs cluster action for the embedded principal"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded_principal() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip590 envelope: an envelope from a peer without cluster action is refused"
-)]
-async fn bdd_verify_an_envelope_from_a_peer_without_cluster_action_is_refused() {
-    const TOPIC: &str = "envelope-no-cluster-action";
-
-    let EnvelopeBroker { broker, dir: _dir } = start_broker_with(|config| {
-        config.super_users = HashSet::new();
-        config.authorizer = Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
-    })
-    .await;
-
-    let response = send_envelope(
-        broker.controller_addr(),
-        &envelope_for(embedded_create_topics(TOPIC), Some(JVM_USER_ALICE)),
-    )
-    .await;
-
-    check_refused(&broker, TOPIC, &response, 31);
-}
-
-/// Only a peer that holds `ClusterAction` may speak for another identity.
-///
-/// `ApiKeys.ENVELOPE.clusterAction` is true, so `EnvelopeUtils` runs that gate
-/// on the *forwarding connection's* principal before it looks at the payload
-/// at all. Without it, anything that can reach the controller listener can
-/// mint an envelope naming any principal it likes and have the controller run
-/// the request as that identity -- the forwarding wrapper becomes an
-/// impersonation primitive.
-///
-/// The broker here runs a real ACL authorizer with no super-users, so the
-/// plaintext connection's `ANONYMOUS` holds nothing. The refusal has to arrive
-/// as an `EnvelopeResponse` carrying the code and a null `response_data`, and
-/// the embedded `CreateTopics` must never have run.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip590_envelope.feature",
-    name = "an envelope from a peer without cluster action is refused"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_envelope_from_a_peer_without_cluster_action_is_refused() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip590 envelope: an embedded version the broker does not serve is refused"
-)]
-async fn bdd_verify_an_embedded_version_the_broker_does_not_serve_is_refused() {
-    const TOPIC: &str = "envelope-unsupported-version";
-
-    let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
-
-    let beyond = create_topics_request::MAX_VERSION + 1;
-    let request_data = request_frame(RequestFrameSetup {
-        api_key: krabka_ids::ApiKey(create_topics_request::API_KEY),
-        api_version: krabka_ids::ApiVersion(beyond),
-        correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
-        client_id: Some(b"adminclient-1"),
-        tagged: Some(&[0]),
-        body: &encode(
-            &create_topic_request(creatable_topic().name(TOPIC.into()).call()),
-            create_topics_request::MAX_VERSION,
-        ),
-    })
-    .slice(4..);
-
-    let response = send_envelope(
-        broker.controller_addr(),
-        &envelope_for(request_data, Some(JVM_USER_ALICE)),
-    )
-    .await;
-
-    check_refused(&broker, TOPIC, &response, 35);
-}
-
-/// An embedded request at a version this broker does not serve is an
-/// `UNSUPPORTED_VERSION`, and the handler never sees it.
-///
-/// The embedded header carries its own `api_version`, and nothing on the
-/// controller connection has negotiated it: the forwarding hop negotiated
-/// `Envelope`, and the *client* negotiated the inner api against the hop.
-/// So the version has to be re-checked against this broker's own registry
-/// before dispatch, or a handler is handed a version it never advertised.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip590_envelope.feature",
-    name = "an embedded version the broker does not serve is refused"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_embedded_version_the_broker_does_not_serve_is_refused() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip590 envelope: an embedded request the controller cannot parse is answered in the envelope"
-)]
-async fn bdd_verify_an_embedded_request_the_controller_cannot_parse_is_answered_in_the_envelope() {
-    const TOPIC: &str = "envelope-after-refusals";
-
-    let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
-    let create_topics_version = create_topics_request::MAX_VERSION;
-    let embedded = |api_key: i16, version: i16, body: &[u8]| {
-        request_frame(RequestFrameSetup {
-            api_key: krabka_ids::ApiKey(api_key),
-            api_version: krabka_ids::ApiVersion(version),
-            correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
-            client_id: Some(b"adminclient-1"),
-            tagged: Some(&[0]),
-            body,
-        })
-        .slice(4..)
-    };
-    let truncated_body = {
-        let whole = embedded_create_topics(TOPIC);
-        whole.slice(..whole.len() - 2)
-    };
-    let cases = [
-        (
-            "a body that does not decode",
-            embedded(19, create_topics_version, b"not a CreateTopics body"),
-            35,
-        ),
-        (
-            "a body cut short",
-            // The embedded header and body of a valid CreateTopics, minus the
-            // tail of its last field.
-            truncated_body,
-            35,
-        ),
-        (
-            "an api key the release does not have",
-            embedded(93, 0, &[]),
-            35,
-        ),
-        ("a removed api key", embedded(5, 0, &[]), 35),
-        (
-            "a known api key that is not forwardable",
-            embedded(0, 9, &[]),
-            42,
-        ),
-    ];
-
-    let mut stream = TcpStream::connect(broker.controller_addr())
-        .await
-        .expect("connect controller listener");
-    for (case, request_data, want) in cases {
-        let response = send_envelope_on(
-            &mut stream,
-            &envelope_for(request_data, Some(JVM_USER_ALICE)),
-        )
-        .await;
-        check!(
-            (response.error_code, response.response_data) == (want, None),
-            "{case}"
-        );
-    }
-
-    // The same connection still serves a request that parses.
-    let response = send_envelope_on(
-        &mut stream,
-        &envelope_for(embedded_create_topics(TOPIC), Some(JVM_USER_ALICE)),
-    )
-    .await;
-    check!(response.error_code == 0, "{response:?}");
-    check!(broker.controller_image_for_test().topic(TOPIC).is_some());
-    broker.shutdown().await;
-}
-
-/// `EnvelopeUtils` answers an embedded request it cannot parse in the
-/// envelope, and the controller keeps the connection for the next one:
-/// `RequestHeader.parse` refuses an api key the release does not have (93 and
-/// up on 4.3.1) or that has no valid version (the removed keys 4 to 7), and
-/// `RequestContext.parseRequest` refuses a body that does not decode. Both are
-/// `UNSUPPORTED_VERSION`. A known key that Kafka does not forward is
-/// `INVALID_REQUEST`. A forwarder that saw the connection drop instead could
-/// not tell any of these from a network fault.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip590_envelope.feature",
-    name = "an embedded request the controller cannot parse is answered in the envelope"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_embedded_request_the_controller_cannot_parse_is_answered_in_the_envelope() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip590 envelope: an embedded trunk api key is refused unless unstable api versions are enabled"
-)]
-async fn bdd_verify_an_embedded_trunk_api_key_is_refused_unless_unstable_api_versions_are_enabled()
-{
-    use krabka_protocol::owned::unregister_controller_request::{
-        self, UnregisterControllerRequest,
-    };
-
-    for unstable in [UnstableApiVersions::Disabled, UnstableApiVersions::Enabled] {
-        let EnvelopeBroker { broker, dir: _dir } = start_broker_with(|config| {
-            config.features.unstable_api_versions = unstable;
-        })
-        .await;
-        let version = unregister_controller_request::MAX_VERSION;
-        let body = encode(
-            &UnregisterControllerRequest {
-                controller_id: 9,
-                ..Default::default()
-            },
-            version,
-        );
-        let request_data =
-            embedded_request_frame(unregister_controller_request::API_KEY, version, &body);
-
-        let response = send_envelope(
-            broker.controller_addr(),
-            &envelope_for(request_data, Some(JVM_USER_ALICE)),
-        )
-        .await;
-        let served = unstable == UnstableApiVersions::Enabled;
-        if served {
-            check!(response.error_code == 0, "{unstable:?}: {response:?}");
-            check!(response.response_data.is_some(), "{unstable:?}");
-        } else {
-            check!(
-                (response.error_code, response.response_data) == (35, None),
-                "{unstable:?}"
-            );
-        }
-        broker.shutdown().await;
-    }
-}
-
-/// #784: `UnregisterController` (94) is Kafka trunk's, so a 4.3.1 controller
-/// cannot parse an embedded header naming it, and `EnvelopeUtils` reports
-/// that as `UNSUPPORTED_VERSION`. krabka answers the same while
-/// `unstable.api.versions.enable` is off, and serves the embedded request --
-/// here refused by the handler's own `metadata.version` gate, a response the
-/// envelope carries back -- when it is on.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip590_envelope.feature",
-    name = "an embedded trunk api key is refused unless unstable api versions are enabled"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_embedded_trunk_api_key_is_refused_unless_unstable_api_versions_are_enabled() {}
-
-/// Canonical Kafka error code that mirrors `krabka_broker::codes::
-/// DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`. The broker's `codes` module is
-/// private to the crate, so this file keeps a local copy, as
-/// `tests/delegation_tokens.rs` does. Keep it in sync with
-/// `crates/broker/src/codes.rs` and the Apache Kafka error table.
-const DELEGATION_TOKEN_REQUEST_NOT_ALLOWED: i16 = 64;
 
 /// The `request_data` for an embedded `CreateDelegationToken` that names no
 /// owner, so KIP-48 owner resolution falls back to whoever the envelope says
@@ -1071,67 +424,505 @@ async fn sasl_plain(stream: &mut TcpStream, user: &str, password: &str) {
     check!((decoded.error_code, decoded.error_message) == (0, None));
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip590 envelope: a forwarded request carries the clients own delegation token flag"
-)]
-async fn bdd_verify_a_forwarded_request_carries_the_clients_own_delegation_token_flag() {
-    struct Credential {
-        user: &'static str,
-        password: &'static str,
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+struct Forwarding {
+    server: Option<EnvelopeBroker>,
+    stream: Option<TcpStream>,
+    principal: Option<&'static [u8]>,
+    host: Vec<u8>,
+    unstable: Option<UnstableApiVersions>,
+    responses: Vec<(String, EnvelopeResponse)>,
+    versions: Option<(ApiVersionsResponse, ApiVersionsResponse)>,
+}
+#[fixture]
+fn forwarding() -> Forwarding {
+    // Start this scenario with fresh inputs and observations.
+
+    Forwarding {
+        server: None,
+        stream: None,
+        principal: None,
+        host: LOOPBACK_CLIENT.to_vec(),
+        unstable: None,
+        responses: Vec::new(),
+        versions: None,
     }
-
-    const FORWARDER: Credential = Credential {
-        user: "forwarder",
-        password: "forwarder-secret",
-    };
-
-    let EnvelopeBroker { broker, dir: _dir } = start_broker_with(|config| {
+}
+fn principal_bytes(name: &str, token: bool) -> &'static [u8] {
+    match (name, token) {
+        ("alice", false) => JVM_USER_ALICE,
+        ("bob", false) => JVM_USER_BOB,
+        ("alice", true) => JVM_USER_ALICE_VIA_TOKEN,
+        _ => panic!("no serialized fixture principal User:{name} token={token}"),
+    }
+}
+fn octets(text: &str) -> Vec<u8> {
+    text.split(',')
+        .map(|octet| octet.parse().expect("address octet"))
+        .collect()
+}
+fn hex_bytes(text: &str) -> Vec<u8> {
+    assert!(text.len().is_multiple_of(2), "whole hexadecimal bytes");
+    text.as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| {
+            u8::from_str_radix(str::from_utf8(pair).expect("hex text"), 16).expect("hex byte")
+        })
+        .collect()
+}
+#[given("the controller uses the compatibility authorizer on its plaintext listener")]
+async fn compatible(forwarding: &mut Forwarding) {
+    forwarding.server = Some(if let Some(unstable) = forwarding.unstable {
+        start_broker_with(|config| config.features.unstable_api_versions = unstable).await
+    } else {
+        start_broker().await
+    });
+}
+#[given(
+    "the plaintext forwarding peer ANONYMOUS is a superuser while embedded principals use ACLs"
+)]
+async fn authorized_forwarder(forwarding: &mut Forwarding) {
+    forwarding.server = Some(start_forwarder().await);
+}
+#[given("the controller ACL authorizer has no superusers or forwarding peer grants")]
+async fn unauthorized_forwarder(forwarding: &mut Forwarding) {
+    forwarding.server = Some(
+        start_broker_with(|config| {
+            config.super_users = HashSet::new();
+            config.authorizer = Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
+        })
+        .await,
+    );
+}
+#[given("unstable API versions are enabled {enabled}")]
+fn unstable(forwarding: &mut Forwarding, enabled: bool) {
+    forwarding.unstable = Some(if enabled {
+        UnstableApiVersions::Enabled
+    } else {
+        UnstableApiVersions::Disabled
+    });
+}
+#[given("the forwarded User principal is {name} with delegation token flag {token}")]
+fn principal(forwarding: &mut Forwarding, name: String, token: bool) {
+    forwarding.principal = Some(principal_bytes(&name, token));
+}
+#[given("the forwarded request has no serialized principal")]
+fn no_principal(forwarding: &mut Forwarding) { forwarding.principal = None; }
+#[given("the forwarded client address contains octets {address}")]
+fn client_host(forwarding: &mut Forwarding, address: String) { forwarding.host = octets(&address); }
+#[given("cluster grants authorize these principal host and operation combinations")]
+async fn grants(forwarding: &mut Forwarding, datatable: Vec<Vec<String>>) {
+    let broker = &forwarding
+        .server
+        .as_ref()
+        .expect("controller started")
+        .broker;
+    for row in datatable.into_iter().skip(1) {
+        let [principal, host, operation]: [String; 3] =
+            row.try_into().expect("principal host operation");
+        let operation = match operation.as_str() {
+            "Create" => AclOperation::Create,
+            "ClusterAction" => AclOperation::ClusterAction,
+            _ => panic!("unsupported grant operation {operation}"),
+        };
+        broker
+            .submit_metadata_record_for_test(
+                cluster_acl_record()
+                    .principal(&principal)
+                    .host(&host)
+                    .operation(operation)
+                    .call(),
+            )
+            .await
+            .expect("seed cluster ACL");
+    }
+}
+#[given("one controller TCP connection is reused for every forwarded request")]
+async fn persistent_connection(forwarding: &mut Forwarding) {
+    forwarding.stream = Some(
+        TcpStream::connect(
+            forwarding
+                .server
+                .as_ref()
+                .expect("controller started")
+                .broker
+                .controller_addr(),
+        )
+        .await
+        .expect("controller connection"),
+    );
+}
+#[given(
+    "a SASL PLAIN forwarding connection authenticates user {user} password {password} with delegation master key {secret}"
+)]
+async fn authenticated_connection(
+    forwarding: &mut Forwarding,
+    user: String,
+    password: String,
+    secret: String,
+) {
+    let server = start_broker_with(|config| {
         config.controller_listener_protocol = ListenerProtocol::SaslPlaintext;
         config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
         config
             .plain_credentials
-            .insert(FORWARDER.user.to_owned(), FORWARDER.password.to_owned());
+            .insert(user.clone(), password.clone());
         config.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
-            username: FORWARDER.user.to_owned(),
-            password: FORWARDER.password.to_owned(),
+            username: user.clone(),
+            password: password.clone(),
         });
-        // Without a master key the handler answers
-        // `DELEGATION_TOKEN_AUTH_DISABLED` before it ever reads the flag, and
-        // both halves of this test would agree for the wrong reason.
-        config.delegation_token_secret_key =
-            Some(SecretBytes::new(b"envelope-master-key".to_vec()));
+        config.delegation_token_secret_key = Some(SecretBytes::new(secret.as_bytes().to_vec()));
     })
     .await;
-
-    let mut stream = TcpStream::connect(broker.controller_addr())
+    let mut stream = TcpStream::connect(server.broker.controller_addr())
         .await
-        .expect("connect controller listener");
-    sasl_plain(&mut stream, FORWARDER.user, FORWARDER.password).await;
-
-    let refused = send_envelope_on(
-        &mut stream,
-        &envelope_for(
-            embedded_create_delegation_token(),
-            Some(JVM_USER_ALICE_VIA_TOKEN),
+        .expect("SASL controller connection");
+    sasl_plain(&mut stream, &user, &password).await;
+    forwarding.server = Some(server);
+    forwarding.stream = Some(stream);
+}
+async fn forward(forwarding: &mut Forwarding, label: String, request_data: Bytes) {
+    let envelope = envelope_from(request_data, forwarding.principal, &forwarding.host);
+    let response = if let Some(stream) = &mut forwarding.stream {
+        send_envelope_on(stream, &envelope).await
+    } else {
+        send_envelope(
+            forwarding
+                .server
+                .as_ref()
+                .expect("controller started")
+                .broker
+                .controller_addr(),
+            &envelope,
+        )
+        .await
+    };
+    forwarding.responses.push((label, response));
+}
+fn latest(forwarding: &Forwarding) -> &EnvelopeResponse {
+    &forwarding
+        .responses
+        .last()
+        .expect("Envelope request completed")
+        .1
+}
+#[when("CreateTopics for topic {topic} is forwarded in an envelope")]
+async fn create(forwarding: &mut Forwarding, topic: String) {
+    forward(forwarding, topic.clone(), embedded_create_topics(&topic)).await;
+}
+#[when("a default Produce request is forwarded despite not being a forwardable API")]
+async fn forbidden_produce(forwarding: &mut Forwarding) {
+    let data = request_frame(RequestFrameSetup {
+        api_key: krabka_ids::ApiKey(produce_request::API_KEY),
+        api_version: krabka_ids::ApiVersion(produce_request::MAX_VERSION),
+        correlation_id: FrameCorrelationId(7),
+        client_id: Some(b"adminclient-1"),
+        tagged: Some(&[0]),
+        body: &encode(&ProduceRequest::default(), produce_request::MAX_VERSION),
+    })
+    .slice(4..);
+    forward(forwarding, "Produce".into(), data).await;
+}
+#[when("the embedded raw request header bytes hex {hex} are forwarded")]
+async fn raw_header(forwarding: &mut Forwarding, hex: String) {
+    forward(
+        forwarding,
+        "raw header".into(),
+        Bytes::from(hex_bytes(&hex)),
+    )
+    .await;
+}
+#[when("CreateTopics for topic {topic} advertises one version above the latest supported version")]
+async fn unsupported_version(forwarding: &mut Forwarding, topic: String) {
+    let data = request_frame(RequestFrameSetup {
+        api_key: krabka_ids::ApiKey(create_topics_request::API_KEY),
+        api_version: krabka_ids::ApiVersion(create_topics_request::MAX_VERSION + 1),
+        correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
+        client_id: Some(b"adminclient-1"),
+        tagged: Some(&[0]),
+        body: &encode(
+            &create_topic_request(creatable_topic().name(topic.clone()).call()),
+            create_topics_request::MAX_VERSION,
         ),
+    })
+    .slice(4..);
+    forward(forwarding, topic, data).await;
+}
+#[when("the latest CreateTopics header forwards this undecodable UTF8 body")]
+async fn malformed_body(forwarding: &mut Forwarding, docstring: String) {
+    let body = docstring.trim_matches('\n').as_bytes();
+    forward(
+        forwarding,
+        "undecodable body".into(),
+        embedded_request_frame(19, create_topics_request::MAX_VERSION, body),
     )
     .await;
-    let minted = send_envelope_on(
-        &mut stream,
-        &envelope_for(embedded_create_delegation_token(), Some(JVM_USER_ALICE)),
+}
+#[when("the valid CreateTopics frame for {topic} is forwarded with {bytes} trailing bytes removed")]
+async fn truncated_body(forwarding: &mut Forwarding, topic: String, bytes: usize) {
+    let frame = embedded_create_topics(&topic);
+    let truncated = frame.slice(..frame.len() - bytes);
+    forward(forwarding, topic, truncated).await;
+}
+#[when("embedded API key {key} version {version} with an empty body is forwarded")]
+async fn empty_body(forwarding: &mut Forwarding, key: i16, version: i16) {
+    forward(
+        forwarding,
+        format!("API{key}v{version}"),
+        embedded_request_frame(key, version, &[]),
     )
     .await;
-
-    // The whole refusal, not just its code: Kafka's `ControllerApis` answers
-    // it with `CreateDelegationTokenResponse.prepareResponse`, which names the
-    // owner and the requester and writes `DelegationTokenManager`'s -1
-    // `ERROR_TIMESTAMP`, and leaves the token id and HMAC empty, which a
-    // handler that got as far as minting would have populated.
+}
+#[when("UnregisterController for controller nine is forwarded at its latest version")]
+async fn unregister(forwarding: &mut Forwarding) {
+    use krabka_protocol::owned::unregister_controller_request::{
+        self, UnregisterControllerRequest,
+    };
+    let version = unregister_controller_request::MAX_VERSION;
+    let body = encode(
+        &UnregisterControllerRequest {
+            controller_id: 9,
+            ..Default::default()
+        },
+        version,
+    );
+    forward(
+        forwarding,
+        "UnregisterController".into(),
+        embedded_request_frame(unregister_controller_request::API_KEY, version, &body),
+    )
+    .await;
+}
+#[when("API versions are requested from both controller and client listeners")]
+async fn versions(forwarding: &mut Forwarding) {
+    let broker = &forwarding
+        .server
+        .as_ref()
+        .expect("controller started")
+        .broker;
+    forwarding.versions = Some((
+        advertised_api_versions(broker.controller_addr()).await,
+        advertised_api_versions(broker.listen_addr()).await,
+    ));
+}
+#[when("these embedded principals forward CreateTopics using the configured client address")]
+async fn host_requests(forwarding: &mut Forwarding, datatable: Vec<Vec<String>>) {
+    for row in datatable.into_iter().skip(1) {
+        let [principal, topic]: [String; 2] = row.try_into().expect("principal and topic");
+        forwarding.principal = Some(principal_bytes(&principal, false));
+        forward(forwarding, topic.clone(), embedded_create_topics(&topic)).await;
+    }
+}
+#[when("these embedded principals request a producer ID block for the live broker in order")]
+async fn producer_ids(forwarding: &mut Forwarding, datatable: Vec<Vec<String>>) {
+    let broker = &forwarding
+        .server
+        .as_ref()
+        .expect("controller started")
+        .broker;
+    broker.wait_until_brokers_registered(1).await;
+    let (id, epoch) = {
+        let image = broker.controller_image_for_test();
+        let registered = image.brokers().next().expect("broker registered");
+        (
+            i32::try_from(registered.node_id.0).expect("broker ID"),
+            registered.broker_epoch,
+        )
+    };
+    let version = allocate_producer_ids_request::MAX_VERSION;
+    let request = request_frame(RequestFrameSetup {
+        api_key: krabka_ids::ApiKey(allocate_producer_ids_request::API_KEY),
+        api_version: krabka_ids::ApiVersion(version),
+        correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
+        client_id: Some(b"forwarding-broker"),
+        tagged: Some(&[0]),
+        body: &encode(
+            &AllocateProducerIdsRequest {
+                broker_id: id,
+                broker_epoch: epoch,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+            version,
+        ),
+    })
+    .slice(4..);
+    for row in datatable.into_iter().skip(1) {
+        let name = row.into_iter().next().expect("principal");
+        forwarding.principal = Some(principal_bytes(&name, false));
+        forward(forwarding, name, request.clone()).await;
+    }
+}
+#[when("the embedded client requests a delegation token without an explicit owner")]
+async fn token(forwarding: &mut Forwarding) {
+    forward(
+        forwarding,
+        "CreateDelegationToken".into(),
+        embedded_create_delegation_token(),
+    )
+    .await;
+}
+#[then("the envelope returns error code {code} with response data {presence}")]
+fn envelope_outcome(forwarding: &Forwarding, code: i16, presence: String) {
+    let response = latest(forwarding);
+    check!(response.error_code == code);
+    match presence.as_str() {
+        "absent" => {
+            check!(response.response_data.is_none());
+        }
+        "present" => {
+            check!(response.response_data.is_some());
+        }
+        _ => panic!("unknown response data presence {presence}"),
+    }
+}
+#[then("topic {topic} remains absent from the controller metadata after refusal code {code}")]
+fn absent_topic(forwarding: &Forwarding, topic: String, code: i16) {
+    check_refused(
+        &forwarding
+            .server
+            .as_ref()
+            .expect("controller started")
+            .broker,
+        &topic,
+        latest(forwarding),
+        code,
+    );
+}
+#[then("controller metadata contains topic {topic} with {partitions} partitions")]
+fn created_topic(forwarding: &Forwarding, topic: String, partitions: i32) {
     check!(
-        embedded_create_delegation_token_response(&refused)
+        forwarding
+            .server
+            .as_ref()
+            .expect("controller started")
+            .broker
+            .controller_image_for_test()
+            .topic(&topic)
+            .is_some_and(|created| created.partitions == partitions)
+    );
+}
+#[then("the embedded header is hex {header} and the fully consumed CreateTopics response contains")]
+fn create_response(forwarding: &Forwarding, header: String, datatable: Vec<Vec<String>>) {
+    let expected_header = hex_bytes(&header);
+    let mut body = served_embedded_body(latest(forwarding), &expected_header, "");
+    assert!(let Ok(response)=CreateTopicsResponse::decode(&mut body,create_topics_response::MAX_VERSION));
+    check!(body.is_empty());
+    let rows: Vec<[String; 4]> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| row.try_into().expect("topic code partitions replication"))
+        .collect();
+    check!(response.topics.len() == rows.len());
+    for (actual, [topic, code, partitions, replication]) in response.topics.into_iter().zip(rows) {
+        check!(
+            (
+                actual.name.as_str(),
+                actual.error_code,
+                actual.num_partitions,
+                actual.replication_factor
+            ) == (
+                topic.as_str(),
+                code.parse().expect("error code"),
+                partitions.parse().expect("partitions"),
+                replication.parse().expect("replication factor")
+            )
+        );
+        check!(actual.error_message.is_none());
+        check!(actual != CreatableTopicResult::default());
+    }
+}
+#[then("Envelope is advertised only on the controller at versions zero through zero")]
+fn envelope_advertised(forwarding: &Forwarding) {
+    let (controller, client) = forwarding
+        .versions
+        .as_ref()
+        .expect("both API tables requested");
+    let find = |response: &ApiVersionsResponse| {
+        response
+            .api_keys
+            .iter()
+            .find(|api| api.api_key == envelope_request::API_KEY)
+            .map(|api| (api.min_version, api.max_version))
+    };
+    check!(find(controller) == Some((0, 0)));
+    check!(find(client).is_none());
+}
+#[then("the host authorized CreateTopics responses contain exactly")]
+fn host_outcomes(forwarding: &Forwarding, datatable: Vec<Vec<String>>) {
+    let mut observed = Vec::new();
+    for (_, response) in &forwarding.responses {
+        let rows: Vec<TopicOutcome> = embedded_create_topics_response(response)
+            .topics
+            .into_iter()
+            .map(|row| TopicOutcome {
+                topic: row.name,
+                error_code: row.error_code,
+            })
+            .collect();
+        check!(
+            rows.len() == 1,
+            "one row per single-topic CreateTopics: {rows:?}"
+        );
+        observed.extend(rows);
+    }
+    let expected: Vec<TopicOutcome> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [topic, code]: [String; 2] = row.try_into().expect("topic and code");
+            TopicOutcome {
+                topic,
+                error_code: code.parse().expect("error code"),
+            }
+        })
+        .collect();
+    check!(observed == expected);
+}
+#[then("producer ID replies echo header hex {header} and contain these complete response fields")]
+fn allocated(forwarding: &Forwarding, header: String, datatable: Vec<Vec<String>>) {
+    let expected_header = hex_bytes(&header);
+    let rows: Vec<[String; 4]> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| row.try_into().expect("principal code start length"))
+        .collect();
+    check!(forwarding.responses.len() == rows.len());
+    for ((name, response), [principal, code, start, length]) in
+        forwarding.responses.iter().zip(rows)
+    {
+        check!(name == &principal);
+        let mut body = served_embedded_body(response, &expected_header, name);
+        let allocated = AllocateProducerIdsResponse::decode(
+            &mut body,
+            allocate_producer_ids_response::MAX_VERSION,
+        )
+        .expect("embedded AllocateProducerIdsResponse");
+        check!(body.is_empty());
+        check!(
+            allocated
+                == AllocateProducerIdsResponse {
+                    throttle_time_ms: 0,
+                    error_code: code.parse().expect("error code"),
+                    producer_id_start: start.parse().expect("producer ID start"),
+                    producer_id_len: length.parse().expect("producer ID length"),
+                    unknown_tagged_fields: UnknownTaggedFields::default()
+                }
+        );
+    }
+}
+#[then(
+    "the whole refused delegation token response has code {code} and identifies User alice as owner and requester with timestamps minus one and empty token fields"
+)]
+fn refused_token(forwarding: &Forwarding, code: i16) {
+    check!(
+        embedded_create_delegation_token_response(latest(forwarding))
             == CreateDelegationTokenResponse {
-                error_code: DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+                error_code: code,
                 principal_type: "User".into(),
                 principal_name: "alice".into(),
                 token_requester_principal_type: "User".into(),
@@ -1142,48 +933,134 @@ async fn bdd_verify_a_forwarded_request_carries_the_clients_own_delegation_token
                 ..CreateDelegationTokenResponse::default()
             }
     );
-
-    // The same request over the same connection, differing only in that byte,
-    // is minted -- and minted for the *embedded* principal, which is what says
-    // the client's identity and its flag crossed the hop together.
-    let minted = embedded_create_delegation_token_response(&minted);
+}
+#[then("the minted delegation token succeeds for User alice and carries a nonempty HMAC")]
+fn minted_token(forwarding: &Forwarding) {
+    let response = embedded_create_delegation_token_response(latest(forwarding));
     check!(
         (
-            minted.error_code,
-            minted.principal_type.as_str(),
-            minted.principal_name.as_str(),
+            response.error_code,
+            response.principal_type.as_str(),
+            response.principal_name.as_str()
         ) == (0, "User", "alice")
     );
-    check!(!minted.hmac.is_empty(), "a minted token carries its HMAC");
+    check!(!response.hmac.is_empty());
+}
+async fn shutdown(forwarding: Forwarding) {
+    let EnvelopeBroker { broker, dir } = forwarding.server.expect("controller started");
+    broker.shutdown().await;
+    drop(dir);
 }
 
-/// A forwarded request runs under the *client's* delegation-token flag, not
-/// the forwarding hop's.
-///
-/// KIP-48 forbids a caller who authenticated with a delegation token from
-/// minting another one, and `CreateDelegationToken` is in
-/// `ApiKeys.forwardable`, so the rule has to survive the hop. Both envelopes
-/// below go down one SASL/PLAIN controller connection authenticated as
-/// `User:forwarder`, whose own `authenticated_via_token` is false, and they
-/// differ in a single byte: the `token_authenticated` flag inside
-/// `request_principal`. Reading the connection's flag rather than the
-/// envelope's mints a token for a token-authenticated client, which is the
-/// escalation KIP-48 closes; reading it the other way round refuses every
-/// forwarded mint a cluster makes.
-///
-/// The listener has to speak SASL for this to be observable at all: KIP-48
-/// admits no anonymous caller to any of the four token APIs, so on a plaintext
-/// controller listener both halves are refused and the flag never decides
-/// anything.
-///
-/// This is also the one test that drives a forwarded request into the
-/// `DispatchKind::Auth` arm of the shared dispatch. The delegation-token APIs
-/// are the forwardable keys registered that way, and that arm rebuilds a
-/// `ConnectionAuth` out of the envelope rather than a `RequestContext`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/kip590_envelope.feature",
-    name = "a forwarded request carries the clients own delegation token flag"
+    name = "A forwarded admin write returns client framed response bytes and reaches metadata"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_forwarded_request_carries_the_clients_own_delegation_token_flag() {}
+async fn a_forwarded_create_topics_is_served_and_answered_in_the_clients_own_bytes(
+    forwarding: Forwarding,
+) {
+    shutdown(forwarding).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "Outer refusals distinguish absent principals forbidden APIs and truncated headers"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_envelope_the_controller_refuses_reports_kafkas_own_error_code(forwarding: Forwarding) {
+    shutdown(forwarding).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "Envelope discovery is restricted to the controller listener"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn envelope_is_advertised_on_the_controller_listener_and_nowhere_else(
+    forwarding: Forwarding,
+) {
+    shutdown(forwarding).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "Host ACLs evaluate the embedded client address rather than the forwarding connection"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forwarded_request_authorizes_against_the_embedded_client_host(forwarding: Forwarding) {
+    shutdown(forwarding).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "Malformed client address octets refuse the envelope before dispatch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unparseable_client_host_address_is_an_invalid_request(forwarding: Forwarding) {
+    shutdown(forwarding).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "Producer ID allocation checks the embedded principal without consuming denied blocks"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded_principal(
+    forwarding: Forwarding,
+) {
+    shutdown(forwarding).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "An unauthorized forwarding peer cannot impersonate a client"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_envelope_from_a_peer_without_cluster_action_is_refused(forwarding: Forwarding) {
+    shutdown(forwarding).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "The embedded API version is rechecked before dispatch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_embedded_version_the_broker_does_not_serve_is_refused(forwarding: Forwarding) {
+    shutdown(forwarding).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "Malformed embedded requests return errors while the controller connection remains usable"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_embedded_request_the_controller_cannot_parse_is_answered_in_the_envelope(
+    forwarding: Forwarding,
+) {
+    shutdown(forwarding).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "Unstable API configuration controls forwarding of a trunk API"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_embedded_trunk_api_key_is_refused_unless_unstable_api_versions_are_enabled(
+    forwarding: Forwarding,
+    enabled: bool,
+    code: i16,
+    presence: String,
+) {
+    let _ = (enabled, code, presence);
+    shutdown(forwarding).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip590_envelope.feature",
+    name = "Delegation token minting follows the embedded client token authentication flag"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forwarded_request_carries_the_clients_own_delegation_token_flag(forwarding: Forwarding) {
+    shutdown(forwarding).await;
+}

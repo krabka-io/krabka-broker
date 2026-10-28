@@ -122,12 +122,28 @@ fn leader_count(observer: &BrokerHandle, topic: &str, partitions: i32, target: u
     count
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "controlled shutdown: controlled shutdown drains leadership and returns ok"
+#[derive(Default)]
+struct LeadershipDrainScenario {
+    lock: Option<MutexGuard<'static, ()>>,
+    cluster: Vec<(BrokerHandle, krabka_broker::BrokerConfig, tempfile::TempDir)>,
+    target: Option<BrokerHandle>,
+    target_directory: Option<tempfile::TempDir>,
+    target_node: Option<MetadataNodeId>,
+    result: Option<Result<(), krabka_broker::BrokerError>>,
+}
+#[rstest::fixture]
+fn leadership_drain() -> LeadershipDrainScenario {
+    let lock = None;
+    LeadershipDrainScenario {
+        lock,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "a three-broker cluster has four drain-me partitions replicated on all brokers and led by a noncontroller broker"
 )]
-async fn bdd_verify_controlled_shutdown_drains_leadership_and_returns_ok() {
-    let _g = support::cluster_lock().lock().await;
+async fn concentrated_partition_leadership(leadership_drain: &mut LeadershipDrainScenario) {
+    leadership_drain.lock = Some(support::cluster_lock().lock().await);
 
     support::init_tracing();
 
@@ -214,78 +230,114 @@ async fn bdd_verify_controlled_shutdown_drains_leadership_and_returns_ok() {
         "target should lead all partitions before shutdown"
     );
 
-    // Pop the target out of the cluster vec — `controlled_shutdown`
-    // consumes the handle, and we need to keep the surviving brokers
-    // alive afterward to verify the post-shutdown image.
-    let (target_handle, target_cfg, _target_dir) = cluster.remove(target_idx);
-    drop(target_cfg);
-
-    // Drive controlled shutdown. The handler-side leader transfer
-    // submits records on each heartbeat tick (default 200ms in
-    // for_tests config). Allow several ticks plus raft commit
-    // latency.
-    target_handle
-        .controlled_shutdown(Duration::from_secs(30))
-        .await
-        .expect("controlled_shutdown should drain and exit cleanly");
-
-    // After the controlled-shutdown future resolves, the target's
-    // heartbeat client has observed should_shut_down=true. That means
-    // the controller's image, at the moment of that response, had zero
-    // partitions led by the target. Verify on a surviving broker.
-    for (observer, _, _) in &cluster {
+    let (target, _, directory) = cluster.remove(target_idx);
+    leadership_drain.cluster = cluster;
+    leadership_drain.target = Some(target);
+    leadership_drain.target_directory = Some(directory);
+    leadership_drain.target_node = Some(target_node_id);
+}
+#[rstest_bdd_macros::when(
+    "the noncontroller broker requests controlled shutdown with a 30-second drain deadline"
+)]
+async fn drain_partition_leadership(leadership_drain: &mut LeadershipDrainScenario) {
+    leadership_drain.result = Some(
+        leadership_drain
+            .target
+            .take()
+            .expect("target broker")
+            .controlled_shutdown(Duration::from_secs(30))
+            .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "shutdown succeeds and every surviving broker observes zero drain-me partitions led by the stopped broker"
+)]
+async fn drained_partition_leadership(leadership_drain: &mut LeadershipDrainScenario) {
+    assert!(let Some(Ok(())) = leadership_drain.result.as_ref());
+    let target = leadership_drain.target_node.expect("target broker ID");
+    for (observer, _, _) in &leadership_drain.cluster {
         observer
-            .wait_for_image(|img| {
-                (0..partitions)
-                    .all(|p| img.partition(topic, p).map(|pr| pr.leader) != Some(target_node_id))
+            .wait_for_image(|image| {
+                (0..4).all(|partition| {
+                    image.partition("drain-me", partition).map(|row| row.leader) != Some(target)
+                })
             })
             .await;
+        assert!(leader_count(observer, "drain-me", 4, target.0) == 0);
     }
-
-    // Tidy up surviving brokers.
-    shutdown_cluster(cluster).await;
+    shutdown_cluster(mem::take(&mut leadership_drain.cluster)).await;
 }
-
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controlled_shutdown.feature",
-    name = "controlled shutdown drains leadership and returns ok"
+    path = "tests/features/controller/controlled_shutdown.feature",
+    name = "Shutdown drains every partition from a broker"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controlled_shutdown_drains_leadership_and_returns_ok() {}
+async fn controlled_shutdown_drains_leadership_and_returns_ok(
+    leadership_drain: LeadershipDrainScenario,
+) {
+}
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "controlled shutdown: controlled shutdown of a controller only node stops at once"
+#[derive(Default)]
+struct ControllerOnlyShutdown {
+    directory: Option<tempfile::TempDir>,
+    controller: Option<BrokerHandle>,
+    result: Option<Result<Result<(), krabka_broker::BrokerError>, time::error::Elapsed>>,
+}
+#[rstest::fixture]
+fn controller_only_shutdown() -> ControllerOnlyShutdown {
+    let directory = None;
+    ControllerOnlyShutdown {
+        directory,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "an elected controller-only node has no data partitions or broker heartbeat client"
 )]
-async fn bdd_verify_controlled_shutdown_of_a_controller_only_node_stops_at_once() {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let mut config = krabka_broker::BrokerConfig::for_tests(dir.path().to_path_buf());
+async fn isolated_controller_role(controller_only_shutdown: &mut ControllerOnlyShutdown) {
+    let directory = tempfile::TempDir::new().expect("controller directory");
+    let mut config = krabka_broker::BrokerConfig::for_tests(directory.path().to_path_buf());
     config.roles = vec![NodeRole::Controller];
     let controller = krabka_broker::Broker::start(config)
         .await
         .expect("controller-only start");
-    controller.wait_until_controller_leader().await.unwrap();
-
-    let stopped = time::timeout(
-        Duration::from_secs(20),
-        controller.controlled_shutdown(Duration::from_secs(10)),
-    )
-    .await
-    .expect("the stop does not wait out the drain timeout");
-
-    assert!(let Ok(()) = stopped);
+    controller
+        .wait_until_controller_leader()
+        .await
+        .expect("elected controller");
+    controller_only_shutdown.controller = Some(controller);
+    controller_only_shutdown.directory = Some(directory);
 }
-
-/// A controller-only node has no partitions to drain and no heartbeat client
-/// to carry the request, so the drain must not wait for an answer that never
-/// comes. Before, it waited out the whole timeout and returned
-/// `ShutdownTimeout`, so every stop of an isolated controller took the full
-/// drain timeout.
-#[cfg(test)]
+#[rstest_bdd_macros::when(
+    "the controller-only node requests controlled shutdown with a 10-second drain deadline"
+)]
+async fn stop_controller_only_role(controller_only_shutdown: &mut ControllerOnlyShutdown) {
+    let controller = controller_only_shutdown
+        .controller
+        .take()
+        .expect("controller-only node");
+    controller_only_shutdown.result = Some(
+        time::timeout(
+            Duration::from_secs(20),
+            controller.controlled_shutdown(Duration::from_secs(10)),
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "the controller-only shutdown succeeds within the 20-second observation deadline"
+)]
+fn controller_only_stopped(controller_only_shutdown: &ControllerOnlyShutdown) {
+    assert!(let Some(Ok(Ok(()))) = controller_only_shutdown.result.as_ref());
+}
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controlled_shutdown.feature",
-    name = "controlled shutdown of a controller only node stops at once"
+    path = "tests/features/controller/controlled_shutdown.feature",
+    name = "A controller-only node shuts down without waiting for a broker heartbeat"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controlled_shutdown_of_a_controller_only_node_stops_at_once() {}
+async fn controlled_shutdown_of_a_controller_only_node_stops_at_once(
+    controller_only_shutdown: ControllerOnlyShutdown,
+) {
+}
+
+use {std::mem, tokio::sync::MutexGuard};

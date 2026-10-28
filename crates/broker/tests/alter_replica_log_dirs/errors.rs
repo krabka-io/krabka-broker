@@ -7,121 +7,83 @@
 
 use {
     crate::{
-        harness::start_two_dir_broker,
+        ReplicaDirectoryScenario, replica_directory,
         support::{acl::use_simple_acl_authorizer, storage::two_dir_config},
-        two_dir_topic::start,
-        wire::{CLIENT_ID, alter_replica_log_dirs},
     },
     assert2::assert,
     krabka_broker::Broker,
     std::collections::HashSet,
 };
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "alter replica log dirs errors: alter replica log dirs rejects unknown target"
+#[rstest_bdd_macros::given(
+    "a two-log-directory broker grants no principal Cluster Alter and hosts no requested topic"
 )]
-async fn bdd_verify_alter_replica_log_dirs_rejects_unknown_target() {
-    let (handle, _primary, _extra, addr) = start().client_id(CLIENT_ID).call().await;
-
-    let bogus = tempfile::tempdir().unwrap();
-    let resp = alter_replica_log_dirs(addr, bogus.path(), "t", vec![0]).await;
-    let topic = resp
+async fn denied_directory_move_broker(replica_directory: &mut ReplicaDirectoryScenario) {
+    let primary = tempfile::tempdir().expect("primary directory");
+    let extra = tempfile::tempdir().expect("extra directory");
+    let mut config = two_dir_config(primary.path(), extra.path());
+    config.super_users = HashSet::new();
+    use_simple_acl_authorizer(&mut config);
+    replica_directory.handle = Some(Broker::start(config).await.expect("broker start"));
+    replica_directory.primary = Some(primary);
+    replica_directory.extra = Some(extra);
+}
+#[rstest_bdd_macros::then(
+    "the move response returns exactly these partition error codes for the requested topic"
+)]
+async fn refused_directory_move(
+    replica_directory: &mut ReplicaDirectoryScenario,
+    datatable: Vec<Vec<String>>,
+) {
+    let topic = replica_directory
+        .response
+        .as_ref()
+        .expect("move response")
         .results
         .iter()
-        .find(|t| t.topic_name == "t")
-        .expect("topic in response");
-    // 57 == LOG_DIR_NOT_FOUND
-    assert!(topic.partitions[0].error_code == 57);
-
-    handle.shutdown().await;
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/alter_replica_log_dirs/errors.feature",
-    name = "alter replica log dirs rejects unknown target"
-)]
-#[tokio::test]
-async fn alter_replica_log_dirs_rejects_unknown_target() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "alter replica log dirs errors: alter replica log dirs rejects unknown replica"
-)]
-async fn bdd_verify_alter_replica_log_dirs_rejects_unknown_replica() {
-    let (handle, _primary, extra, addr) = start_two_dir_broker().await;
-
-    // Don't create the topic — naming a partition we don't host
-    // should return REPLICA_NOT_AVAILABLE.
-    let resp = alter_replica_log_dirs(addr, extra.path(), "missing", vec![0]).await;
-    let topic = resp
-        .results
+        .find(|row| row.topic_name == replica_directory.topic)
+        .expect("requested topic response");
+    let actual = topic
+        .partitions
         .iter()
-        .find(|t| t.topic_name == "missing")
-        .expect("topic in response");
-    // 9 == REPLICA_NOT_AVAILABLE
-    assert!(topic.partitions[0].error_code == 9);
-
-    handle.shutdown().await;
+        .map(|row| (row.partition_index, row.error_code))
+        .collect::<Vec<_>>();
+    let expected = datatable
+        .into_iter()
+        .skip(1)
+        .map(|cells| {
+            (
+                cells[0].parse().expect("partition index"),
+                cells[1].parse().expect("partition error"),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(actual == expected);
+    replica_directory.shutdown().await;
 }
-
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/alter_replica_log_dirs/errors.feature",
-    name = "alter replica log dirs rejects unknown replica"
+    path = "tests/features/storage/replica_directory_errors.feature",
+    name = "Unknown destination directories are refused"
 )]
 #[tokio::test]
-async fn alter_replica_log_dirs_rejects_unknown_replica() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "alter replica log dirs errors: alter replica log dirs denied without cluster alter"
-)]
-async fn bdd_verify_alter_replica_log_dirs_denied_without_cluster_alter() {
-    let primary = tempfile::tempdir().unwrap();
-    let extra = tempfile::tempdir().unwrap();
-    let mut cfg = two_dir_config(primary.path(), extra.path());
-    // Default authorizer for `for_tests` is AllowAll; swap in a deny-
-    // everything SimpleAclAuthorizer (empty super-users + empty ACL
-    // image) so the Cluster Alter gate engages.
-    cfg.super_users = HashSet::new();
-    use_simple_acl_authorizer(&mut cfg);
-    let handle = Broker::start(cfg).await.expect("broker start");
-    let addr = handle.listen_addr();
-
-    // We never create the topic — irrelevant; the ACL gate fires
-    // before the partition lookup, so the per-partition row is
-    // CLUSTER_AUTHORIZATION_FAILED regardless of whether the replica
-    // exists locally.
-    let resp = alter_replica_log_dirs(addr, extra.path(), "t", vec![0, 1]).await;
-    let topic = resp
-        .results
-        .iter()
-        .find(|t| t.topic_name == "t")
-        .expect("topic in response");
-    assert!(topic.partitions.len() == 2);
-    for p in &topic.partitions {
-        // 31 == CLUSTER_AUTHORIZATION_FAILED
-        assert!(
-            p.error_code == 31,
-            "partition {} must be denied, got {}",
-            p.partition_index,
-            p.error_code
-        );
-    }
-
-    handle.shutdown().await;
+async fn alter_replica_log_dirs_rejects_unknown_target(
+    replica_directory: ReplicaDirectoryScenario,
+) {
 }
-
-/// Boot a two-dir broker with `SimpleAclAuthorizer`, no super-users, and
-/// no ACL grants, so every `authorize()` returns Deny. Cluster.Alter on
-/// `AlterReplicaLogDirs` (`api_key` 34) must come back as
-/// `CLUSTER_AUTHORIZATION_FAILED` for every listed partition.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/alter_replica_log_dirs/errors.feature",
-    name = "alter replica log dirs denied without cluster alter"
+    path = "tests/features/storage/replica_directory_errors.feature",
+    name = "Configured destinations cannot move unhosted replicas"
 )]
 #[tokio::test]
-async fn alter_replica_log_dirs_denied_without_cluster_alter() {}
+async fn alter_replica_log_dirs_rejects_unknown_replica(
+    replica_directory: ReplicaDirectoryScenario,
+) {
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/storage/replica_directory_errors.feature",
+    name = "Cluster Alter authorization precedes replica lookup"
+)]
+#[tokio::test]
+async fn alter_replica_log_dirs_denied_without_cluster_alter(
+    replica_directory: ReplicaDirectoryScenario,
+) {
+}

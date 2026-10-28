@@ -165,6 +165,7 @@ use {
         support::{load_test::*, producer::producer_record, topics::topic_configs},
     },
     assert2::{assert, check},
+    rstest_bdd::datatable::Rows,
 };
 
 /// How long the load runs when `KRABKA_SOAK_SECONDS` is unset.
@@ -217,41 +218,6 @@ const COMPACTION_PACE: Duration = Duration::from_millis(50);
 /// end, so a four-hour run has to leave a set that can be read back inside a
 /// bounded poll.
 const VERIFY_PACE: Duration = Duration::from_secs(1);
-
-/// Resident set a broker under this load may not exceed.
-const RSS_CEILING: f64 = 1.5 * 1024.0 * 1024.0 * 1024.0;
-
-/// Open descriptors a broker under this load may not exceed.
-///
-/// The default `ulimit -n` on a container is 1024 and the image raises nothing,
-/// so a broker approaching this is already close to `EMFILE`: the ceiling is
-/// four times the soft limit precisely so that crossing it is a finding rather
-/// than a crash nobody can attribute.
-const FD_CEILING: f64 = 4_096.0;
-
-/// `/metrics` cardinality a broker may not exceed.
-///
-/// The checked-in body under `docs/operations/` is a few hundred series; ten
-/// partitions' worth of per-partition families is a few thousand. Twenty
-/// thousand is the point at which a family has stopped dropping members.
-const SERIES_CEILING: f64 = 20_000.0;
-
-/// Bytes one broker's log directory, less `soak-verify`, may not exceed.
-///
-/// `soak-retention` is capped at 4 MiB per partition by `retention.bytes` over
-/// six partitions, all three replicas of which land on every broker, and the
-/// compacted topic, the offsets topic and the metadata log are far smaller.
-/// 512 MiB leaves an order of magnitude of head-room over that and still
-/// catches retention that has stopped working.
-const LOG_DIR_CEILING: f64 = 512.0 * 1024.0 * 1024.0;
-
-/// Files one broker's log directory, less `soak-verify`, may hold.
-///
-/// About a hundred partition directories of a handful of files each, plus the
-/// segments `soak-retention` and the cleaner keep in flight and the minute of
-/// retired files `file.delete.delay.ms` holds: a few thousand. A hundred
-/// thousand is a sidecar that is never deleted.
-const LOG_FILES_CEILING: f64 = 100_000.0;
 
 /// How many of the top-level entries that grew most the run prints per broker.
 const GROWTH_REPORTED: usize = 8;
@@ -324,104 +290,6 @@ async fn producer(bootstrap: &str) -> Producer {
         .build()
         .await
         .expect("build a producer")
-}
-
-/// Create the three topics the load runs over.
-async fn create_topics(bootstrap: &str) {
-    let topics = vec![
-        topic(RETENTION_TOPIC, 6, &[
-            ConfigEntry {
-                name: "cleanup.policy",
-                value: "delete",
-            },
-            ConfigEntry {
-                name: "internal.segment.bytes",
-                value: "65536",
-            },
-            ConfigEntry {
-                name: "segment.ms",
-                value: "5000",
-            },
-            ConfigEntry {
-                name: "retention.ms",
-                value: "60000",
-            },
-            ConfigEntry {
-                name: "retention.bytes",
-                value: "4194304",
-            },
-        ]),
-        topic(COMPACTED_TOPIC, 3, &[
-            ConfigEntry {
-                name: "cleanup.policy",
-                value: "compact",
-            },
-            ConfigEntry {
-                name: "internal.segment.bytes",
-                value: "65536",
-            },
-            ConfigEntry {
-                name: "segment.ms",
-                value: "5000",
-            },
-            ConfigEntry {
-                name: "min.cleanable.dirty.ratio",
-                value: "0.01",
-            },
-            ConfigEntry {
-                name: "min.compaction.lag.ms",
-                value: "0",
-            },
-        ]),
-        topic(VERIFY_TOPIC, 1, &[
-            ConfigEntry {
-                name: "cleanup.policy",
-                value: "delete",
-            },
-            // Kafka's default, set explicitly: the cluster's `log.roll.ms` of a
-            // minute would otherwise apply, and an unlimited topic would keep
-            // a segment per minute.
-            ConfigEntry {
-                name: "segment.ms",
-                value: "604800000",
-            },
-            ConfigEntry {
-                name: "retention.ms",
-                value: "-1",
-            },
-            ConfigEntry {
-                name: "retention.bytes",
-                value: "-1",
-            },
-        ]),
-    ];
-
-    if let Err(last) = cluster::create_topics(bootstrap, &topics).await {
-        panic!("could not create the soak topics on {bootstrap}: {last}");
-    }
-}
-
-/// One topic config name and the value it is set to.
-struct ConfigEntry {
-    name: &'static str,
-    value: &'static str,
-}
-
-fn topic(name: &str, partitions: i32, configs: &[ConfigEntry]) -> CreatableTopic {
-    CreatableTopic {
-        name: name.into(),
-        num_partitions: partitions,
-        // Three replicas over three brokers: every broker holds every
-        // partition, so each one's descriptors and log directory carry the
-        // whole load rather than a third of it.
-        replication_factor: 3,
-        configs: topic_configs(
-            configs
-                .iter()
-                .map(|ConfigEntry { name, value }| (*name, *value)),
-        ),
-        ..Default::default()
-    }
 }
 
 /// One broker's cleaner counters at a sample.
@@ -653,68 +521,110 @@ async fn read_back(bootstrap: &str, want: usize) -> BTreeSet<String> {
     keys
 }
 
-/// The bounds each series is judged against, in the order the samples are
-/// collected.
-fn bounds() -> [Bound; 5] {
-    [
-        // A resident set that climbs 15% over the second half of a four-hour
-        // run is on course to double inside a day.
-        Bound {
-            ceiling: RSS_CEILING,
-            drift_fraction: 0.15,
-            floor: 64.0 * 1024.0 * 1024.0,
-        },
-        // Descriptors should be flat once the connection count is: a segment
-        // handle per replica plus a connection per client, both bounded.
-        Bound {
-            ceiling: FD_CEILING,
-            drift_fraction: 0.15,
-            floor: 128.0,
-        },
-        // Cardinality is the tightest, because the partition and client sets
-        // are fixed for the whole run: a family that keeps growing here is one
-        // that never drops a label set.
-        Bound {
-            ceiling: SERIES_CEILING,
-            drift_fraction: 0.10,
-            floor: 200.0,
-        },
-        // The loosest, because this is the series that is a sawtooth by
-        // construction -- it grows to `retention.bytes` and is cut back, over
-        // and over.
-        Bound {
-            ceiling: LOG_DIR_CEILING,
-            drift_fraction: 0.25,
-            floor: 16.0 * 1024.0 * 1024.0,
-        },
-        // The same sawtooth, counted in files: a segment rolls and is
-        // deleted, and a compaction's retired files wait out
-        // `file.delete.delay.ms`. A file that is never deleted climbs it.
-        Bound {
-            ceiling: LOG_FILES_CEILING,
-            drift_fraction: 0.25,
-            floor: 1_000.0,
-        },
-    ]
+#[derive(Default)]
+struct ResourceSoak {
+    duration: Duration,
+    http: Option<reqwest::Client>,
+    cluster: Option<SoakCluster>,
+    samples: Option<Vec<BrokerSamples>>,
+    baseline: Option<Vec<CleanerCounters>>,
+    verified: BTreeSet<String>,
+    readable: BTreeSet<String>,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("soak: a three broker cluster holds its resources over a soak")]
-async fn bdd_verify_a_three_broker_cluster_holds_its_resources_over_a_soak() {
-    let duration = soak_duration();
+#[derive(rstest_bdd_macros::DataTableRow)]
+struct SoakTopicConfig {
+    topic: String,
+    partitions: i32,
+    key: String,
+    value: String,
+}
+
+#[derive(rstest_bdd_macros::DataTableRow)]
+struct SoakResourceBound {
+    series: String,
+    ceiling: f64,
+    drift_fraction: f64,
+    floor: f64,
+}
+
+#[rstest::fixture]
+fn soak_run() -> ResourceSoak {
+    // Three real container processes and the final acknowledged ledger share this run.
+    ResourceSoak::default()
+}
+
+impl ResourceSoak {
+    fn cluster(&self) -> &SoakCluster { self.cluster.as_ref().expect("soak containers") }
+}
+
+#[rstest_bdd_macros::given(
+    "three broker containers roll offsets and metadata every minute and run for KRABKA_SOAK_SECONDS or 180 seconds with no shorter run permitted"
+)]
+async fn resource_soak_cluster(soak_run: &mut ResourceSoak) {
+    soak_run.duration = soak_duration();
+    soak_run.http = Some(
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .expect("build an HTTP client"),
+    );
+    soak_run.cluster = Some(
+        SoakCluster::configured()
+            .tables_toml(STEADY_STATE_TABLES.to_owned())
+            .call(),
+    );
+    soak_run
+        .cluster()
+        .wait_metrics_up(soak_run.http.as_ref().expect("HTTP sampler"))
+        .await;
+}
+
+#[rstest_bdd_macros::given("these RF3 topic configurations are applied to the soak cluster")]
+async fn resource_soak_topics(soak_run: &ResourceSoak, #[datatable] rows: Rows<SoakTopicConfig>) {
+    let mut configurations: BTreeMap<String, (i32, Vec<(String, String)>)> = BTreeMap::new();
+    let mut topic_order = Vec::new();
+    for row in rows {
+        if !configurations.contains_key(&row.topic) {
+            topic_order.push(row.topic.clone());
+        }
+        let (partitions, configs) = configurations
+            .entry(row.topic)
+            .or_insert((row.partitions, Vec::new()));
+        assert!(*partitions == row.partitions);
+        configs.push((row.key, row.value));
+    }
+    let topics: Vec<CreatableTopic> = topic_order
+        .into_iter()
+        .map(|name| {
+            let (partitions, configs) = configurations
+                .remove(&name)
+                .expect("declared topic configuration");
+            CreatableTopic {
+                name,
+                num_partitions: partitions,
+                replication_factor: 3,
+                configs: topic_configs(
+                    configs
+                        .iter()
+                        .map(|(name, value)| (name.as_str(), value.as_str())),
+                ),
+                ..Default::default()
+            }
+        })
+        .collect();
+    if let Err(last) = cluster::create_topics(&soak_run.cluster().bootstrap(), &topics).await {
+        panic!("could not create the soak topics: {last}");
+    }
+}
+
+#[rstest_bdd_macros::when(
+    "256-byte retention, 64-key compaction and verification producers run every 20ms,50ms,1s with continuous consumers while sixty resource samples are paced at least three seconds apart"
+)]
+async fn sustained_resource_soak(soak_run: &mut ResourceSoak) {
+    let duration = soak_run.duration;
     let interval = (duration / SAMPLES).max(MIN_SAMPLE_INTERVAL);
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .expect("build an HTTP client");
-
-    let cluster = SoakCluster::configured()
-        .tables_toml(STEADY_STATE_TABLES.to_owned())
-        .call();
-    cluster.wait_metrics_up(&http).await;
-    let bootstrap = cluster.bootstrap();
-    create_topics(&bootstrap).await;
-
+    let bootstrap = soak_run.cluster().bootstrap();
     let load = Arc::new(Load::new());
     let mut tasks = vec![
         tokio::spawn(produce_loop(
@@ -747,7 +657,8 @@ async fn bdd_verify_a_three_broker_cluster_holds_its_resources_over_a_soak() {
         bootstrap.clone(),
     )));
 
-    let mut samples: Vec<BrokerSamples> = cluster
+    let mut samples: Vec<BrokerSamples> = soak_run
+        .cluster()
         .brokers
         .iter()
         .map(|broker| BrokerSamples::new(&broker.name))
@@ -760,13 +671,16 @@ async fn bdd_verify_a_three_broker_cluster_holds_its_resources_over_a_soak() {
         time::sleep(interval).await;
         let elapsed = started.elapsed();
         let mut counters = Vec::new();
-        for (broker, sample) in cluster.brokers.iter().zip(&mut samples) {
+        for (broker, sample) in soak_run.cluster().brokers.iter().zip(&mut samples) {
             let pid = broker.host_pid();
             let rss = probe::resident_bytes(pid)
                 .unwrap_or_else(|| panic!("{} vanished mid-soak", broker.name));
             let fds = probe::open_descriptors(pid)
                 .unwrap_or_else(|| panic!("{} vanished mid-soak", broker.name));
-            let body = http
+            let body = soak_run
+                .http
+                .as_ref()
+                .expect("HTTP sampler")
                 .get(broker.metrics_url())
                 .send()
                 .await
@@ -815,8 +729,23 @@ async fn bdd_verify_a_three_broker_cluster_holds_its_resources_over_a_soak() {
     );
 
     let verified = load.verified.lock().await.clone();
-    let readable = read_back(&bootstrap, verified.len()).await;
-    let lost: Vec<&String> = verified.difference(&readable).collect();
+    soak_run.verified = verified;
+    soak_run.samples = Some(samples);
+    soak_run.baseline = baseline;
+}
+
+#[rstest_bdd_macros::when(
+    "a fresh consumer reads back the complete acknowledged verification ledger"
+)]
+async fn read_resource_soak_ledger(soak_run: &mut ResourceSoak) {
+    soak_run.readable = read_back(&soak_run.cluster().bootstrap(), soak_run.verified.len()).await;
+}
+
+#[rstest_bdd_macros::then("the verification ledger is nonempty and no acknowledged key is missing")]
+fn intact_resource_soak_ledger(soak_run: &ResourceSoak) {
+    let verified = &soak_run.verified;
+    let readable = &soak_run.readable;
+    let lost: Vec<&String> = verified.difference(readable).collect();
     assert!(
         lost.is_empty(),
         "{} of {} acked records on {VERIFY_TOPIC} are gone after the soak: {:?}",
@@ -828,14 +757,26 @@ async fn bdd_verify_a_three_broker_cluster_holds_its_resources_over_a_soak() {
         !verified.is_empty(),
         "the soak acked no records at all on {VERIFY_TOPIC}"
     );
+}
 
+#[rstest_bdd_macros::then(
+    "the cleaner has no failed sweeps and cluster sweeps, compactions, rolls and retention deletions each reach at least {minimum}"
+)]
+fn active_resource_soak_cycles(soak_run: &ResourceSoak, minimum: u64) {
     // The cycles happened. Read off counters rather than inferred from the
     // wall clock: a soak that silently never rolled a segment or never swept
     // must fail rather than report four quiet hours.
-    let baseline = baseline.expect("the sampler took at least one sample");
+    let baseline = soak_run
+        .baseline
+        .as_ref()
+        .expect("the sampler took at least one sample");
+    let samples = soak_run
+        .samples
+        .as_ref()
+        .expect("resource samples collected");
     let mut sweeps = 0.0;
     let mut compactions = 0.0;
-    for (first, sample) in baseline.iter().zip(&samples) {
+    for (first, sample) in baseline.iter().zip(samples) {
         sweeps += sample.cleaner_runs - first.runs;
         compactions += sample.compactions - first.compactions;
         // A counter, so any rise at all is a failed sweep: `< 1.0` is "the
@@ -850,27 +791,44 @@ async fn bdd_verify_a_three_broker_cluster_holds_its_resources_over_a_soak() {
     let rolls: u64 = samples.iter().map(BrokerSamples::segment_rolls).sum();
     let retention: u64 = samples.iter().map(|s| s.retention_cycles).sum();
 
-    let want = probe::sampled(MIN_CYCLES);
+    let want = probe::sampled(minimum);
     check!(
         sweeps >= want,
-        "the cleaner swept {sweeps} times across the cluster, fewer than {MIN_CYCLES}"
+        "the cleaner swept {sweeps} times across the cluster, fewer than {minimum}"
     );
     check!(
         compactions >= want,
-        "{compactions} compactions completed, fewer than {MIN_CYCLES}"
+        "{compactions} compactions completed, fewer than {minimum}"
     );
     check!(
-        rolls >= MIN_CYCLES,
-        "{rolls} segments rolled, fewer than {MIN_CYCLES}"
+        rolls >= minimum,
+        "{rolls} segments rolled, fewer than {minimum}"
     );
     check!(
-        retention >= MIN_CYCLES,
+        retention >= minimum,
         "retention deleted a partition's oldest segment {retention} times, \
-         fewer than {MIN_CYCLES}"
+         fewer than {minimum}"
     );
+}
 
+#[rstest_bdd_macros::then(
+    "every broker's resource series stays within these ceilings and second-half drift bounds"
+)]
+fn bounded_resource_soak(soak_run: &mut ResourceSoak, #[datatable] rows: Rows<SoakResourceBound>) {
     // And nothing drifted.
-    let [rss, fds, series, log_dir, log_files] = bounds();
+    let bounds: BTreeMap<_, _> = rows
+        .into_iter()
+        .map(|row| {
+            (row.series, Bound {
+                ceiling: row.ceiling,
+                drift_fraction: row.drift_fraction,
+                floor: row.floor,
+            })
+        })
+        .collect();
+    let [rss, fds, series, log_dir, log_files] = ["rss", "fds", "series", "log_dir", "log_files"]
+        .map(|name| *bounds.get(name).expect("bound for each resource"));
+    let samples = soak_run.samples.take().expect("resource samples collected");
     let mut judged = Vec::new();
     for sample in samples {
         sample.report_growth();
@@ -912,16 +870,12 @@ async fn bdd_verify_a_three_broker_cluster_holds_its_resources_over_a_soak() {
     );
 }
 
-/// Four hours of continuous produce and consume across three brokers, and a
-/// failure when any resource level drifts.
-///
-/// See the module documentation for the topics, the cycle counts and how a
-/// developer runs a short version.
 #[ignore = "requires Docker and //packaging:image; runs in the scheduled soak lane"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/soak.feature",
     name = "a three broker cluster holds its resources over a soak"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn a_three_broker_cluster_holds_its_resources_over_a_soak() {}
+async fn a_three_broker_cluster_holds_its_resources_over_a_soak(soak_run: ResourceSoak) {
+    drop(soak_run);
+}

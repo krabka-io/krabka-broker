@@ -12,11 +12,7 @@ use {
         *,
     },
     crate::{
-        codes::{
-            DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_AUTHORIZATION_FAILED,
-            DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, INVALID_PRINCIPAL_TYPE, INVALID_REQUEST, NONE,
-            UNKNOWN_SERVER_ERROR,
-        },
+        codes::{DELEGATION_TOKEN_AUTHORIZATION_FAILED, INVALID_REQUEST, NONE},
         handlers::{
             delegation_token_test_support::{
                 DAY_MS as RENEW_24H_MS, SecretProvision, TokenFixture, anonymous, authed,
@@ -108,378 +104,343 @@ fn refusal(
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers create delegation token tests: refusals follow kafka order and name both principals"
+#[derive(Default)]
+struct TokenCreationScenario {
+    resources: Option<TokenFixture>,
+    auth: Option<crate::network::auth::ConnectionAuth>,
+    provision: SecretProvision,
+    super_users: Vec<String>,
+    ceiling: i64,
+    request: CreateDelegationTokenRequest,
+    response: Option<CreateDelegationTokenResponse>,
+}
+#[rstest::fixture]
+fn token_creation() -> TokenCreationScenario {
+    let resources = None;
+    TokenCreationScenario {
+        resources,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "a token controller with requester {requester} authenticated by {method}, tokens enabled {enabled}, super users {supers} and lifetime ceiling {ceiling}"
 )]
-async fn bdd_verify_refusals_follow_kafka_order_and_name_both_principals() {
-    let TokenFixture {
-        directory: _dir,
-        controller,
-        secret,
-    } = TokenFixture::new().await;
-    let self_mint = self_mint_request();
-    let group_renewer = CreateDelegationTokenRequest {
-        renewers: vec![renewer("User", "bob"), renewer("Group", "eng")],
-        ..self_mint.clone()
+async fn token_creation_context(
+    token_creation: &mut TokenCreationScenario,
+    requester: String,
+    method: String,
+    enabled: bool,
+    supers: String,
+    ceiling: i64,
+) {
+    let mut resources = TokenFixture::new().await;
+    resources.secret = SecretBytes::new(b"master-key".to_vec());
+    token_creation.resources = Some(resources);
+    token_creation.auth = Some(match method.as_str() {
+        "token" => token_authed(&requester),
+        "plain" => authed(&requester),
+        "anonymous" => anonymous(),
+        other => panic!("unknown authentication method {other}"),
+    });
+    token_creation.provision = if enabled {
+        SecretProvision::Configured
+    } else {
+        SecretProvision::Absent
     };
-    let name_only = CreateDelegationTokenRequest {
-        owner_principal_name: Some("alice".into()),
-        owner_principal_type: None,
-        ..self_mint.clone()
+    token_creation.super_users = supers
+        .split(',')
+        .filter(|name| *name != "none")
+        .map(str::to_owned)
+        .collect();
+    token_creation.ceiling = ceiling;
+}
+#[rstest_bdd_macros::given(
+    "the token request has owner type \"{kind}\", owner name \"{name}\", lifetime {lifetime} and renewers {renewers}"
+)]
+fn token_creation_request(
+    token_creation: &mut TokenCreationScenario,
+    kind: String,
+    name: String,
+    lifetime: i64,
+    renewers: String,
+) {
+    token_creation.request = CreateDelegationTokenRequest {
+        owner_principal_type: (kind != "null").then_some(kind),
+        owner_principal_name: (name != "null").then(|| {
+            if name == "<empty>" {
+                String::new()
+            } else {
+                name
+            }
+        }),
+        max_lifetime_ms: lifetime,
+        renewers: renewers
+            .split(',')
+            .filter(|value| *value != "none")
+            .map(|value| {
+                let (kind, name) = value.split_once(':').expect("renewer principal");
+                renewer(kind, name)
+            })
+            .collect(),
+        ..Default::default()
     };
-    let unbuildable_owner = UNKNOWN_SERVER_ERROR;
-    let not_allowed = DELEGATION_TOKEN_REQUEST_NOT_ALLOWED;
-    let unauthorized = DELEGATION_TOKEN_AUTHORIZATION_FAILED;
-    let bad_renewer = INVALID_PRINCIPAL_TYPE;
-    let disabled = DELEGATION_TOKEN_AUTH_DISABLED;
-
-    // (case, requester, tokens enabled, request, super users, response)
-    let unbuildable_owner_response = refusal()
-        .code(unbuildable_owner)
-        .owner(user("ANONYMOUS"))
-        .requester(user("ANONYMOUS"))
+}
+#[rstest_bdd_macros::when(
+    "the controller handles CreateDelegationToken with a 24-hour renew period"
+)]
+async fn mint_delegation_token(token_creation: &mut TokenCreationScenario) {
+    let resources = token_creation.resources.as_ref().expect("controller");
+    let super_names = token_creation
+        .super_users
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let authorizer = super_users_with(&super_names);
+    token_creation.response = Some(
+        handle(
+            &token_creation.request,
+            token_creation.auth.as_ref().expect("connection identity"),
+            token_creation.provision.get(&resources.secret),
+            token_creation.ceiling,
+            RENEW_24H_MS,
+            &*resources.controller,
+            token_acl(&authorizer),
+        )
+        .await,
+    );
+}
+fn token_principal(value: &str) -> KafkaPrincipal {
+    let (kind, name) = value.split_once(':').expect("principal type:name");
+    principal(kind, name)
+}
+#[rstest_bdd_macros::then(
+    "token creation refuses with code {code}, owner {owner}, requester {requester} and timestamps {timestamp} without persisting tokens"
+)]
+async fn refused_token_creation(
+    token_creation: &mut TokenCreationScenario,
+    code: i16,
+    owner: String,
+    requester: String,
+    timestamp: i64,
+) {
+    let expected = refusal()
+        .code(code)
+        .owner(token_principal(&owner))
+        .requester(token_principal(&requester))
+        .timestamp(timestamp)
         .call();
-    let cases = [
-        // `new KafkaPrincipal(null, "alice")` throws before
-        // `allowTokenRequests` runs, so even a token-authenticated
-        // requester gets the generic error response.
-        (
-            "owner name without a type",
-            token_authed("admin"),
-            SecretProvision::Configured,
-            name_only.clone(),
-            super_users_with(&["admin"]),
-            unbuildable_owner_response.clone(),
-        ),
-        (
-            "owner name without a type, super user",
-            authed("admin"),
-            SecretProvision::Configured,
-            name_only,
-            super_users_with(&["admin"]),
-            unbuildable_owner_response.clone(),
-        ),
-        (
-            "token-authenticated requester",
-            token_authed("alice"),
-            SecretProvision::Configured,
-            self_mint.clone(),
-            empty_super_users(),
-            refusal().code(not_allowed).call(),
-        ),
-        (
-            "token-authenticated super user acting as another owner",
-            token_authed("admin"),
-            SecretProvision::Configured,
-            act_as("User", "alice"),
-            super_users_with(&["admin"]),
-            refusal().code(not_allowed).requester(user("admin")).call(),
-        ),
-        (
-            "anonymous requester",
-            anonymous(),
-            SecretProvision::Configured,
-            self_mint.clone(),
-            empty_super_users(),
-            refusal()
-                .code(not_allowed)
-                .owner(user("ANONYMOUS"))
-                .requester(user("ANONYMOUS"))
-                .call(),
-        ),
-        (
-            "token-authenticated requester with tokens disabled",
-            token_authed("alice"),
-            SecretProvision::Absent,
-            self_mint.clone(),
-            empty_super_users(),
-            refusal().code(not_allowed).call(),
-        ),
-        (
-            "another owner without authorization",
-            authed("bob"),
-            SecretProvision::Configured,
-            act_as("User", "alice"),
-            super_users_with(&["admin"]),
-            refusal().code(unauthorized).requester(user("bob")).call(),
-        ),
-        (
-            "another owner of another type without authorization, tokens disabled",
-            authed("bob"),
-            SecretProvision::Absent,
-            act_as("Group", "eng"),
-            empty_super_users(),
-            refusal()
-                .code(unauthorized)
-                .owner(principal("Group", "eng"))
-                .requester(user("bob"))
-                .call(),
-        ),
-        (
-            "renewer that is not a User",
-            authed("alice"),
-            SecretProvision::Configured,
-            group_renewer.clone(),
-            empty_super_users(),
-            refusal().code(bad_renewer).call(),
-        ),
-        (
-            "renewer that is not a User, tokens disabled",
-            authed("alice"),
-            SecretProvision::Absent,
-            group_renewer,
-            empty_super_users(),
-            refusal().code(bad_renewer).call(),
-        ),
-        (
-            "tokens disabled",
-            authed("alice"),
-            SecretProvision::Absent,
-            act_as("User", "alice"),
-            empty_super_users(),
-            refusal().code(disabled).timestamp(0).call(),
-        ),
-    ];
-    for (case, auth, provision, req, super_users, expected) in cases {
-        let resp = handle(
-            &req,
-            &auth,
-            provision.get(&secret),
-            60_000,
-            RENEW_24H_MS,
-            &*controller,
-            token_acl(&super_users),
-        )
-        .await;
-        assert!(resp == expected, "{case}");
-    }
-    assert!(controller.current_image().all_delegation_tokens().count() == 0);
-    controller.cancel().await;
+    assert!(token_creation.response.as_ref().expect("creation response") == &expected);
+    let resources = token_creation.resources.take().expect("controller");
+    assert!(
+        resources
+            .controller
+            .current_image()
+            .all_delegation_tokens()
+            .count()
+            == 0
+    );
+    resources.controller.cancel().await;
 }
-
-/// `KafkaApis.handleCreateTokenRequest` first builds the owner principal,
-/// which fails for a name with a null type (-1, `ANONYMOUS` on both sides).
-/// It then checks `allowTokenRequests` (64),
-/// then the `CreateTokens` authorization (65), then the renewer types (67),
-/// all before the controller's `DELEGATION_TOKEN_AUTH_DISABLED` (61). No
-/// refusal mints a token, and each names the owner and the requester.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/create_delegation_token/tests.feature",
-    name = "refusals follow kafka order and name both principals"
-)]
-#[tokio::test]
-async fn refusals_follow_kafka_order_and_name_both_principals() {}
-
-#[cfg(test)]
 #[rstest_bdd_macros::then(
-    "handlers create delegation token tests: mints for the resolved owner with kafka deadlines"
+    "the minted token belongs to {owner}, names requester {requester}, renewers {renewers}, expiry delta {expiry} and maximum delta {maximum}"
 )]
-async fn bdd_verify_mints_for_the_resolved_owner_with_kafka_deadlines() {
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"master-key".to_vec());
-    let one_hour: i64 = 60 * 60 * 1_000;
-    let seven_days: i64 = 7 * 24 * one_hour;
-    let with_lifetime = |max_lifetime_ms| CreateDelegationTokenRequest {
-        max_lifetime_ms,
-        ..Default::default()
+async fn persisted_token_creation(
+    token_creation: &mut TokenCreationScenario,
+    owner: String,
+    requester: String,
+    renewers: String,
+    expiry: i64,
+    maximum: i64,
+) {
+    let response = token_creation.response.as_ref().expect("creation response");
+    assert!((response.token_id.is_empty(), response.hmac.len()) == (false, 64));
+    assert!(response.hmac == compute_token_hmac(b"master-key", &response.token_id));
+    let owner = token_principal(&owner);
+    let requester = token_principal(&requester);
+    let expected = CreateDelegationTokenResponse {
+        issue_timestamp_ms: response.issue_timestamp_ms,
+        expiry_timestamp_ms: response.issue_timestamp_ms + expiry,
+        max_timestamp_ms: response.issue_timestamp_ms + maximum,
+        token_id: response.token_id.clone(),
+        hmac: response.hmac.clone(),
+        ..refusal()
+            .code(NONE)
+            .owner(owner.clone())
+            .requester(requester.clone())
+            .timestamp(0)
+            .call()
     };
-    let type_only = CreateDelegationTokenRequest {
-        owner_principal_type: Some("User".into()),
-        owner_principal_name: Some(String::new()),
-        max_lifetime_ms: -1,
-        ..Default::default()
+    assert!(response == &expected);
+    let expected_stored = krabka_metadata::DelegationToken {
+        token_id: response.token_id.clone(),
+        owner,
+        requester,
+        issue_timestamp_ms: response.issue_timestamp_ms,
+        expiry_timestamp_ms: response.expiry_timestamp_ms,
+        max_timestamp_ms: response.max_timestamp_ms,
+        renewers: renewers
+            .split(',')
+            .filter(|value| *value != "none")
+            .map(token_principal)
+            .collect(),
     };
-    let with_renewer = CreateDelegationTokenRequest {
-        renewers: vec![renewer("User", "bob")],
-        ..with_lifetime(-1)
-    };
-
-    // (case, requester, super users, request, broker ceiling, owner,
-    //  renewers, expiry delta, max delta)
-    let cases = [
-        (
-            "default lifetime under the renew period",
-            "alice",
-            empty_super_users(),
-            with_lifetime(-1),
-            60_000,
-            user("alice"),
-            vec![],
-            60_000,
-            60_000,
-        ),
-        (
-            "zero lifetime takes the ceiling",
-            "alice",
-            empty_super_users(),
-            with_lifetime(0),
-            seven_days,
-            user("alice"),
-            vec![],
-            RENEW_24H_MS,
-            seven_days,
-        ),
-        (
-            "negative lifetime takes the ceiling",
-            "alice",
-            empty_super_users(),
-            with_lifetime(-5),
-            seven_days,
-            user("alice"),
-            vec![],
-            RENEW_24H_MS,
-            seven_days,
-        ),
-        (
-            "request above the ceiling",
-            "alice",
-            empty_super_users(),
-            with_lifetime(seven_days),
-            one_hour,
-            user("alice"),
-            vec![],
-            one_hour,
-            one_hour,
-        ),
-        (
-            "request below the ceiling",
-            "alice",
-            empty_super_users(),
-            with_lifetime(one_hour),
-            seven_days,
-            user("alice"),
-            vec![],
-            one_hour,
-            one_hour,
-        ),
-        (
-            "owner named as the requester",
-            "alice",
-            empty_super_users(),
-            act_as("User", "alice"),
-            seven_days,
-            user("alice"),
-            vec![],
-            RENEW_24H_MS,
-            seven_days,
-        ),
-        (
-            "empty owner name means the requester",
-            "alice",
-            empty_super_users(),
-            type_only,
-            seven_days,
-            user("alice"),
-            vec![],
-            RENEW_24H_MS,
-            seven_days,
-        ),
-        (
-            "super user for another owner",
-            "admin",
-            super_users_with(&["admin"]),
-            act_as("User", "alice"),
-            60_000,
-            user("alice"),
-            vec![],
-            60_000,
-            60_000,
-        ),
-        (
-            "super user for another owner type",
-            "admin",
-            super_users_with(&["admin"]),
-            act_as("Group", "eng"),
-            60_000,
-            principal("Group", "eng"),
-            vec![],
-            60_000,
-            60_000,
-        ),
-        (
-            "User renewer",
-            "alice",
-            empty_super_users(),
-            with_renewer,
-            60_000,
-            user("alice"),
-            vec![user("bob")],
-            60_000,
-            60_000,
-        ),
-    ];
-    for (case, requester, super_users, req, ceiling_ms, owner, renewers, expiry_delta, max_delta) in
-        cases
+    let resources = token_creation.resources.take().expect("controller");
     {
-        let resp = handle(
-            &req,
-            &authed(requester),
-            Some(&secret),
-            ceiling_ms,
-            RENEW_24H_MS,
-            &*controller,
-            token_acl(&super_users),
-        )
-        .await;
-        // The token id is a random UUID and the HMAC-SHA-512 output is 64
-        // bytes; the response carries both raw.
-        assert!(
-            (resp.token_id.is_empty(), resp.hmac.len()) == (false, 64),
-            "{case}"
-        );
-        assert!(
-            resp.hmac == compute_token_hmac(b"master-key", &resp.token_id),
-            "{case}"
-        );
-        let expected = CreateDelegationTokenResponse {
-            issue_timestamp_ms: resp.issue_timestamp_ms,
-            expiry_timestamp_ms: resp.issue_timestamp_ms + expiry_delta,
-            max_timestamp_ms: resp.issue_timestamp_ms + max_delta,
-            token_id: resp.token_id.clone(),
-            hmac: resp.hmac.clone(),
-            ..refusal()
-                .code(NONE)
-                .owner(owner.clone())
-                .requester(user(requester))
-                .timestamp(0)
-                .call()
-        };
-        assert!(resp == expected, "{case}");
-
-        let image = controller.current_image();
+        let image = resources.controller.current_image();
         let stored = image
-            .delegation_token_by_id(&resp.token_id)
-            .expect("token in image");
-        let expected_stored = krabka_metadata::DelegationToken {
-            token_id: resp.token_id.clone(),
-            owner,
-            // Kafka stores the connection principal as the token requester,
-            // whoever the owner is.
-            requester: user(requester),
-            issue_timestamp_ms: resp.issue_timestamp_ms,
-            expiry_timestamp_ms: resp.expiry_timestamp_ms,
-            max_timestamp_ms: resp.max_timestamp_ms,
-            renewers,
-        };
-        assert!(*stored == expected_stored, "{case}");
+            .delegation_token_by_id(&response.token_id)
+            .expect("persisted token");
+        assert!(*stored == expected_stored);
     }
-    controller.cancel().await;
+    resources.controller.cancel().await;
 }
 
-/// Owner resolution and Kafka's lifetime rules: a null or empty owner
-/// name means the requester, naming the requester needs no authorization, any
-/// owner type is kept, a `max_lifetime_ms` of 0 or less takes the configured
-/// ceiling, and the first expiry is `issue + min(renew period, lifetime)`.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/create_delegation_token/tests.feature",
-    name = "mints for the resolved owner with kafka deadlines"
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Owner construction precedes token credential refusal"
 )]
 #[tokio::test]
-async fn mints_for_the_resolved_owner_with_kafka_deadlines() {}
+async fn token_creation_case_0(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Owner construction also precedes super-user authorization"
+)]
+#[tokio::test]
+async fn token_creation_case_1(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Token credentials cannot mint tokens"
+)]
+#[tokio::test]
+async fn token_creation_case_2(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Token credentials cannot mint for another owner even as super user"
+)]
+#[tokio::test]
+async fn token_creation_case_3(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Anonymous principals cannot mint tokens"
+)]
+#[tokio::test]
+async fn token_creation_case_4(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Token credential refusal precedes disabled token support"
+)]
+#[tokio::test]
+async fn token_creation_case_5(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Acting as another owner requires authorization"
+)]
+#[tokio::test]
+async fn token_creation_case_6(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Act-as authorization precedes disabled token support"
+)]
+#[tokio::test]
+async fn token_creation_case_7(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Renewers must be User principals"
+)]
+#[tokio::test]
+async fn token_creation_case_8(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Renewer validation precedes disabled token support"
+)]
+#[tokio::test]
+async fn token_creation_case_9(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Disabled token support returns controller timestamps"
+)]
+#[tokio::test]
+async fn token_creation_case_10(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Default lifetime below renew period"
+)]
+#[tokio::test]
+async fn token_creation_case_11(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Zero lifetime takes the ceiling"
+)]
+#[tokio::test]
+async fn token_creation_case_12(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Negative lifetime takes the ceiling"
+)]
+#[tokio::test]
+async fn token_creation_case_13(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Requested lifetime is capped by broker ceiling"
+)]
+#[tokio::test]
+async fn token_creation_case_14(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Requested lifetime below ceiling is retained"
+)]
+#[tokio::test]
+async fn token_creation_case_15(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Naming self needs no act-as permission"
+)]
+#[tokio::test]
+async fn token_creation_case_16(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Empty owner name resolves to requester"
+)]
+#[tokio::test]
+async fn token_creation_case_17(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Super user mints for another user"
+)]
+#[tokio::test]
+async fn token_creation_case_18(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "Super user retains another principal type"
+)]
+#[tokio::test]
+async fn token_creation_case_19(token_creation: TokenCreationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "User renewer is persisted"
+)]
+#[tokio::test]
+async fn token_creation_case_20(token_creation: TokenCreationScenario) {}
 
 /// KIP-373: `CreateTokens` on `User:<owner>` lets a requester mint a token for
 /// that owner, and for no other (Kafka's `handleCreateTokenRequest`).

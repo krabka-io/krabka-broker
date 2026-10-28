@@ -24,7 +24,11 @@ use {
     },
     krabka_protocol::records::{Record, RecordBatch},
     krabka_raft::{kraft::KraftLog, serialize_metadata_snapshot},
-    std::{collections::BTreeMap, path::Path, process::Command},
+    std::{
+        collections::BTreeMap,
+        path::Path,
+        process::{Command, Output},
+    },
     uuid::Uuid,
 };
 
@@ -58,9 +62,34 @@ fn committed_log_timestamp(dir: &Path) -> i64 {
         .expect("the committed batch has a create-time")
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("kraft checkpoint jvm: jvm dump log parses engine snapshot")]
-fn bdd_verify_jvm_dump_log_parses_engine_snapshot() {
+use rstest_bdd_macros::{given, then, when};
+struct JvmCheckpoint {
+    image: Option<MetadataImage>,
+    timestamp: Option<i64>,
+    directory: Option<tempfile::TempDir>,
+    dump: Option<Output>,
+    dump_text: Option<String>,
+    shell: Option<Output>,
+    shell_text: Option<String>,
+}
+#[rstest::fixture]
+fn checkpoint() -> JvmCheckpoint {
+    // Start this scenario with fresh inputs and observations.
+
+    JvmCheckpoint {
+        image: None,
+        timestamp: None,
+        directory: None,
+        dump: None,
+        dump_text: None,
+        shell: None,
+        shell_text: None,
+    }
+}
+#[given(
+    "a metadata image contains broker registration, topic partitions, configuration, finalized features and private control records"
+)]
+fn checkpoint_image(checkpoint: &mut JvmCheckpoint) {
     let cid = Uuid::new_v4();
     let mut image = MetadataImage::new(cid);
     // RegisterBroker (apiKey 0).
@@ -138,9 +167,15 @@ fn bdd_verify_jvm_dump_log_parses_engine_snapshot() {
     // written into `SnapshotHeaderRecord.lastContainedLogTimestamp`.
     let log_dir = tempfile::tempdir().expect("tempdir");
     let last_contained_log_timestamp = committed_log_timestamp(log_dir.path());
-    check!(last_contained_log_timestamp == APPEND_TIMESTAMP_MS);
 
-    let bytes = serialize_metadata_snapshot(&image, last_contained_log_timestamp).unwrap();
+    checkpoint.image = Some(image);
+    checkpoint.timestamp = Some(last_contained_log_timestamp);
+}
+#[when("Kafka dump-log decodes the engine snapshot checkpoint")]
+fn decode_checkpoint(checkpoint: &mut JvmCheckpoint) {
+    let image = checkpoint.image.as_ref().expect("metadata image");
+    let last_contained_log_timestamp = checkpoint.timestamp.expect("committed timestamp");
+    let bytes = serialize_metadata_snapshot(image, last_contained_log_timestamp).unwrap();
     let dir = tempfile::tempdir().expect("tempdir");
     // kafka-dump-log infers the snapshot base offset from the file name.
     let out = dump_checkpoint(
@@ -155,6 +190,18 @@ fn bdd_verify_jvm_dump_log_parses_engine_snapshot() {
         String::from_utf8_lossy(&out.stderr)
     );
     eprintln!("{text}");
+    checkpoint.directory = Some(dir);
+    checkpoint.dump = Some(out);
+    checkpoint.dump_text = Some(text);
+}
+#[then(
+    "all Kafka record families decode with valid CRCs, identities, partition epochs and the committed timestamp"
+)]
+fn checkpoint_dump_records(checkpoint: &JvmCheckpoint) {
+    let out = checkpoint.dump.as_ref().expect("dump-log executed");
+    let text = checkpoint.dump_text.as_ref().expect("dump text");
+    let last_contained_log_timestamp = checkpoint.timestamp.expect("committed timestamp");
+    check!(last_contained_log_timestamp == APPEND_TIMESTAMP_MS);
     assert2::assert!(out.status.success());
     // The JVM decoder names each record by its KIP-631 type. Their presence
     // (and a clean exit) proves the translated bytes decode as real records.
@@ -208,6 +255,10 @@ fn bdd_verify_jvm_dump_log_parses_engine_snapshot() {
     // `kafka-metadata-shell` replays the whole snapshot through
     // `MetadataRecordSerde` and `MetadataDelta`. A record it cannot read
     // fails the load, and the shell then prints no topic.
+}
+#[when("Kafka metadata-shell replays the same checkpoint")]
+fn replay_checkpoint(checkpoint: &mut JvmCheckpoint) {
+    let dir = checkpoint.directory.as_ref().expect("checkpoint directory");
     let shell = Command::new("docker")
         .args([
             "run",
@@ -229,6 +280,13 @@ fn bdd_verify_jvm_dump_log_parses_engine_snapshot() {
         String::from_utf8_lossy(&shell.stderr)
     );
     eprintln!("{shell_text}");
+    checkpoint.shell = Some(shell);
+    checkpoint.shell_text = Some(shell_text);
+}
+#[then("Kafka metadata-shell successfully lists the orders topic")]
+fn checkpoint_shell_topic(checkpoint: &JvmCheckpoint) {
+    let shell = checkpoint.shell.as_ref().expect("metadata-shell executed");
+    let shell_text = checkpoint.shell_text.as_ref().expect("shell text");
     check!(
         shell.status.success(),
         "metadata shell failed: {shell_text}"
@@ -238,11 +296,9 @@ fn bdd_verify_jvm_dump_log_parses_engine_snapshot() {
         "metadata shell did not load the snapshot: {shell_text}"
     );
 }
-
 #[ignore = "requires Docker"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/kraft_checkpoint_jvm.feature",
-    name = "jvm dump log parses engine snapshot"
+    name = "Kafka JVM tools decode and replay the engine checkpoint"
 )]
-fn jvm_dump_log_parses_engine_snapshot() {}
+fn jvm_dump_log_parses_engine_snapshot(checkpoint: JvmCheckpoint) { let _ = checkpoint; }

@@ -39,3 +39,126 @@ mod moves;
 mod startup;
 #[path = "alter_replica_log_dirs/wire.rs"]
 mod wire;
+
+#[derive(Default)]
+struct ReplicaDirectoryScenario {
+    handle: Option<krabka_broker::BrokerHandle>,
+    primary: Option<tempfile::TempDir>,
+    extra: Option<tempfile::TempDir>,
+    unconfigured: Option<tempfile::TempDir>,
+    target: PathBuf,
+    source: PathBuf,
+    future: PathBuf,
+    topic: String,
+    response: Option<AlterReplicaLogDirsResponse>,
+    repeated: Option<AlterReplicaLogDirsResponse>,
+    config_result: Option<wire::ConfigAlterOutcome>,
+    described: Option<DescribeLogDirsResponse>,
+    records: Vec<String>,
+}
+#[rstest::fixture]
+fn replica_directory() -> ReplicaDirectoryScenario {
+    let handle = None;
+    ReplicaDirectoryScenario {
+        handle,
+        ..Default::default()
+    }
+}
+impl ReplicaDirectoryScenario {
+    fn primary(&self) -> &Path { self.primary.as_ref().expect("primary log directory").path() }
+
+    fn extra(&self) -> &Path { self.extra.as_ref().expect("extra log directory").path() }
+
+    fn address(&self) -> SocketAddr {
+        self.handle
+            .as_ref()
+            .expect("two-directory broker")
+            .listen_addr()
+    }
+
+    async fn shutdown(&mut self) {
+        self.handle
+            .take()
+            .expect("two-directory broker")
+            .shutdown()
+            .await;
+    }
+}
+#[rstest_bdd_macros::given("a two-log-directory broker hosts topic t with {partitions} partitions")]
+async fn hosted_directory_move_topic(
+    replica_directory: &mut ReplicaDirectoryScenario,
+    partitions: i32,
+) {
+    let (handle, primary, extra, _) = two_dir_topic::start()
+        .client_id(wire::CLIENT_ID)
+        .partitions(partitions)
+        .call()
+        .await;
+    replica_directory.handle = Some(handle);
+    replica_directory.primary = Some(primary);
+    replica_directory.extra = Some(extra);
+}
+#[rstest_bdd_macros::given("a two-log-directory broker hosts no requested topic")]
+async fn empty_directory_move_broker(replica_directory: &mut ReplicaDirectoryScenario) {
+    let (handle, primary, extra, _) = harness::start_two_dir_broker().await;
+    replica_directory.handle = Some(handle);
+    replica_directory.primary = Some(primary);
+    replica_directory.extra = Some(extra);
+}
+#[rstest_bdd_macros::when(
+    "AlterReplicaLogDirs moves topic {topic} partitions {partitions} to the {destination} directory"
+)]
+async fn request_replica_directory_move(
+    replica_directory: &mut ReplicaDirectoryScenario,
+    topic: String,
+    partitions: String,
+    destination: String,
+) {
+    replica_directory.target = match destination.as_str() {
+        "extra" => replica_directory.extra().to_path_buf(),
+        "unconfigured" => {
+            let directory = tempfile::tempdir().expect("unconfigured destination");
+            let path = directory.path().to_path_buf();
+            replica_directory.unconfigured = Some(directory);
+            path
+        }
+        "opposite" => {
+            if replica_directory.primary().join("t-0").exists() {
+                replica_directory.extra().to_path_buf()
+            } else {
+                replica_directory.primary().to_path_buf()
+            }
+        }
+        other => panic!("unknown destination resource {other}"),
+    };
+    replica_directory.source = if replica_directory.target == replica_directory.primary() {
+        replica_directory.extra().to_path_buf()
+    } else {
+        replica_directory.primary().to_path_buf()
+    };
+    let partitions = partitions
+        .split(',')
+        .map(|partition| partition.parse().expect("partition index"))
+        .collect();
+    replica_directory.response = Some(
+        wire::alter_replica_log_dirs(
+            replica_directory.address(),
+            &replica_directory.target,
+            &topic,
+            partitions,
+        )
+        .await,
+    );
+    replica_directory.topic = topic;
+}
+
+use {
+    krabka_protocol::owned::{
+        alter_replica_log_dirs_response::AlterReplicaLogDirsResponse,
+        describe_log_dirs_response::DescribeLogDirsResponse,
+    },
+    std::{
+        net::SocketAddr,
+        path::{Path, PathBuf},
+    },
+};

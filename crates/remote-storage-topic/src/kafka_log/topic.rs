@@ -189,71 +189,56 @@ fn to_wire_uuid(u: uuid::Uuid) -> WireUuid { WireUuid(*u.as_bytes()) }
 mod tests {
     use {super::*, assert2::assert};
 
-    #[cfg(test)]
+    struct MetadataTopicScenario {
+        config: KafkaMetadataLogConfig,
+        created: Option<BTreeMap<String, String>>,
+    }
+    #[rstest::fixture]
+    fn metadata_topic() -> MetadataTopicScenario {
+        let config = KafkaMetadataLogConfig::new("127.0.0.1:9092");
+        MetadataTopicScenario {
+            config,
+            created: None,
+        }
+    }
+    #[rstest_bdd_macros::given("metadata topic compaction {compacted} and minimum ISR {minimum}")]
+    fn metadata_topic_policy(
+        metadata_topic: &mut MetadataTopicScenario,
+        compacted: bool,
+        minimum: String,
+    ) {
+        metadata_topic.config.compacted = compacted;
+        metadata_topic.config.min_isr =
+            (minimum != "cluster-default").then(|| minimum.parse().expect("minimum ISR"));
+    }
+    #[rstest_bdd_macros::when("metadata topic creation configs are built")]
+    fn build_metadata_topic_configs(metadata_topic: &mut MetadataTopicScenario) {
+        metadata_topic.created = Some(creation_configs(&metadata_topic.config));
+    }
     #[rstest_bdd_macros::then(
-        "kafka log topic tests: creation configs follow kafkas metadata topic for {example}"
+        "metadata topic creation uses {policy} cleanup with minimum ISR {minimum} and unlimited retention"
     )]
-    fn bdd_verify_creation_configs_follow_kafkas_metadata_topic(example: String) {
-        type Example<'a> = (KafkaMetadataLogConfig, [(&'a str, &'a str); 3]);
-        let (cfg, expected): Example<'_> = match example.as_str() {
-            "defaults" => (KafkaMetadataLogConfig::new("127.0.0.1:9092"), [
-                ("cleanup.policy", "delete"),
-                ("min.insync.replicas", "2"),
-                ("retention.ms", "-1"),
-            ]),
-            "min isr override" => (
-                KafkaMetadataLogConfig {
-                    min_isr: Some(1),
-                    ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
-                },
-                [
-                    ("cleanup.policy", "delete"),
-                    ("min.insync.replicas", "1"),
-                    ("retention.ms", "-1"),
-                ],
-            ),
-            "compacted" => (
-                KafkaMetadataLogConfig {
-                    compacted: true,
-                    ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
-                },
-                [
-                    ("cleanup.policy", "compact"),
-                    ("min.insync.replicas", "2"),
-                    ("retention.ms", "-1"),
-                ],
-            ),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let expected = expected
-            .into_iter()
-            .map(|(k, v)| (k.to_owned(), v.to_owned()))
-            .collect::<BTreeMap<_, _>>();
-        assert2::assert!(creation_configs(&cfg) == expected);
+    fn kafka_metadata_topic_configs(
+        metadata_topic: &MetadataTopicScenario,
+        policy: String,
+        minimum: String,
+    ) {
+        let expected = BTreeMap::from([
+            ("cleanup.policy".into(), policy),
+            ("min.insync.replicas".into(), minimum),
+            ("retention.ms".into(), "-1".into()),
+        ]);
+        assert!(metadata_topic.created.as_ref() == Some(&expected));
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/topic.feature",
-        name = "tests: creation configs follow kafkas metadata topic"
-    )]
-    fn creation_configs_follow_kafkas_metadata_topic(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("kafka log topic tests: unset min isr leaves the cluster default")]
-    fn bdd_verify_unset_min_isr_leaves_the_cluster_default() {
-        let cfg = KafkaMetadataLogConfig {
-            min_isr: None,
-            ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
-        };
-        assert!(!creation_configs(&cfg).contains_key("min.insync.replicas"));
+    #[rstest_bdd_macros::then("metadata topic creation leaves minimum ISR to the cluster")]
+    fn omitted_metadata_min_isr(metadata_topic: &MetadataTopicScenario) {
+        assert!(
+            !metadata_topic
+                .created
+                .as_ref()
+                .expect("topic creation configs built")
+                .contains_key("min.insync.replicas")
+        );
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/topic.feature",
-        name = "tests: unset min isr leaves the cluster default"
-    )]
-    fn unset_min_isr_leaves_the_cluster_default() {}
+    rstest_bdd_macros::scenarios!("tests/features/metadata_topic_creation", fixtures = [metadata_topic: MetadataTopicScenario]);
 }

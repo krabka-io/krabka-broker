@@ -6,24 +6,53 @@
 //! and resumes at the JVM leader's exact log end offset.
 
 use {
-    crate::test_support::truncation::{prelude::*, *},
+    crate::{
+        mixed_cluster::MixedCluster,
+        test_support::truncation::{prelude::*, *},
+    },
+    krabka_metadata::PartitionRecord,
     tokio::time,
 };
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm kip320 divergence krabka follower truncation: kip320 krabka follower truncates from jvm leader"
+const TOPIC: &str = "krabka-kip320-krabka-follower";
+#[derive(Default)]
+struct KrabkaFollowerRecovery {
+    cluster: Option<MixedCluster>,
+    container: String,
+    bootstrap_all: String,
+    prefix_leo: i64,
+    partition: Option<PartitionRecord>,
+    parked_epoch: Option<LeaderEpoch>,
+    diverged_leo: Option<i64>,
+    truncated_leo: Option<i64>,
+    prefix_dump: Option<String>,
+    final_leo: Option<i64>,
+}
+#[rstest::fixture]
+fn krabka_follower_recovery() -> KrabkaFollowerRecovery {
+    // Each recovery owns a real mixed cluster and its independently authored logs.
+    KrabkaFollowerRecovery::default()
+}
+#[rstest_bdd_macros::given(
+    "a mixed topic krabka-kip320-krabka-follower with a committed shared prefix"
 )]
-async fn bdd_verify_kip320_krabka_follower_truncates_from_jvm_leader() {
-    const TOPIC: &str = "krabka-kip320-krabka-follower";
+async fn reverse_divergence_prefix(krabka_follower_recovery: &mut KrabkaFollowerRecovery) {
     let (container, cluster, bootstrap_all, prefix_leo) =
         prepare_divergence(TOPIC, DivergenceDirection::KrabkaFollower).await;
+    krabka_follower_recovery.cluster = Some(cluster);
+    krabka_follower_recovery.container = container;
+    krabka_follower_recovery.bootstrap_all = bootstrap_all;
+    krabka_follower_recovery.prefix_leo = prefix_leo;
+}
+#[rstest_bdd_macros::when(
+    "replication is parked behind phantom leader 99 and Krabka appends {count} divergent records"
+)]
+async fn park_krabka_suffix(krabka_follower_recovery: &mut KrabkaFollowerRecovery, count: usize) {
+    let cluster = krabka_follower_recovery
+        .cluster
+        .as_ref()
+        .expect("mixed cluster");
     let c1 = &cluster.krabka[0].0;
-
-    // 3. Park replication behind a phantom leader before appending the
-    //    Krabka-only suffix. This makes the divergent state deterministic:
-    //    neither the JVM replica nor broker 2 can copy the forged records.
-
+    let container = &krabka_follower_recovery.container;
     c1.wait_until_partition_present(TOPIC, 0).await;
     let partition = c1
         .partition_record_for_test(TOPIC, 0)
@@ -33,7 +62,7 @@ async fn bdd_verify_kip320_krabka_follower_truncates_from_jvm_leader() {
     // Freeze the JVM replica before parking replication. Otherwise it can
     // copy part of the deliberately forged suffix while the phantom-leader
     // metadata is still propagating, making its authoritative prefix longer.
-    set_container_paused(&container, true);
+    set_container_paused(container, true);
 
     c1.submit_metadata_record_for_test(MetadataRecord::V1Partition(
         single_leader_record()
@@ -48,24 +77,43 @@ async fn bdd_verify_kip320_krabka_follower_truncates_from_jvm_leader() {
     c1.wait_until_local_partition_target(TOPIC, 0, krabka_broker::NodeId(99), parked_epoch)
         .await;
 
-    c1.produce_records_for_test(TOPIC, 0, 5)
+    c1.produce_records_for_test(TOPIC, 0, count)
         .await
         .expect("append divergent suffix on parked Krabka replica");
-    let krabka_leo_diverged = c1.local_log_end_offset(TOPIC, 0).unwrap_or(0);
-    eprintln!(
-        "KRABKA[kip320] reverse: Krabka replica LEO {prefix_leo} -> {krabka_leo_diverged} (forced divergent suffix)"
-    );
-    assert2::assert!(
-        krabka_leo_diverged == prefix_leo + 5,
-        "Krabka-only divergent suffix should add five records"
-    );
 
-    // 4. Promote the JVM replica at the next epoch. Its log still ends at the
-    //    shared prefix, so the Krabka follower must truncate before fetching.
+    krabka_follower_recovery.diverged_leo = Some(c1.local_log_end_offset(TOPIC, 0).unwrap_or(0));
+    krabka_follower_recovery.partition = Some(partition);
+    krabka_follower_recovery.parked_epoch = Some(parked_epoch);
+}
+#[rstest_bdd_macros::then("the parked Krabka log ends {count} offsets beyond the shared prefix")]
+fn parked_krabka_bounds(krabka_follower_recovery: &KrabkaFollowerRecovery, count: i64) {
+    assert2::assert!(
+        krabka_follower_recovery
+            .diverged_leo
+            .expect("divergent append executed")
+            == krabka_follower_recovery.prefix_leo + count
+    );
+}
+#[rstest_bdd_macros::when("the JVM replica is promoted in the next epoch and Krabka recovers")]
+async fn promote_reverse_jvm(krabka_follower_recovery: &mut KrabkaFollowerRecovery) {
+    let cluster = krabka_follower_recovery
+        .cluster
+        .as_ref()
+        .expect("mixed cluster");
+    let c1 = &cluster.krabka[0].0;
+    let container = &krabka_follower_recovery.container;
+    let bootstrap_all = &krabka_follower_recovery.bootstrap_all;
+    let prefix_leo = krabka_follower_recovery.prefix_leo;
+    let partition = krabka_follower_recovery
+        .partition
+        .as_ref()
+        .expect("partition metadata");
+    let parked_epoch = krabka_follower_recovery.parked_epoch.expect("parked epoch");
+    let krabka_leo_diverged = krabka_follower_recovery.diverged_leo.expect("diverged log");
     let jvm_epoch = LeaderEpoch(parked_epoch.0 + 1);
     c1.submit_metadata_record_for_test(MetadataRecord::V1Partition(
         single_leader_record()
-            .previous(&partition)
+            .previous(partition)
             .topic(TOPIC)
             .leader(3)
             .epoch(jvm_epoch)
@@ -75,9 +123,9 @@ async fn bdd_verify_kip320_krabka_follower_truncates_from_jvm_leader() {
     .await
     .expect("promote JVM broker for reverse-direction recovery");
 
-    set_container_paused(&container, false);
+    set_container_paused(container, false);
 
-    wait_for_described_leader(&bootstrap_all, TOPIC, 3, LEADER_WAIT).await;
+    wait_for_described_leader(bootstrap_all, TOPIC, 3, LEADER_WAIT).await;
 
     // 5. Observe the truncation itself, before adding any new leader records.
     //    Equal final LEOs alone would not distinguish truncate-and-refetch from
@@ -96,43 +144,82 @@ async fn bdd_verify_kip320_krabka_follower_truncates_from_jvm_leader() {
         time::sleep(Duration::from_millis(500)).await;
     }
     let jvm_prefix_dump =
-        dump_log_in_container(&container, &format!("/tmp/kraft-mixed-logs/{TOPIC}-0"));
-    assert2::assert!(
-        max_offset_in_dump(&jvm_prefix_dump) == Some(prefix_leo - 1),
-        "JVM leader should retain exactly the shared prefix:\n{jvm_prefix_dump}"
-    );
-    assert2::assert!(
-        !jvm_prefix_dump.contains("test-record-"),
-        "Krabka-only divergent suffix leaked to JVM leader:\n{jvm_prefix_dump}"
-    );
+        dump_log_in_container(container, &format!("/tmp/kraft-mixed-logs/{TOPIC}-0"));
 
-    // 6. Prove that replication resumes from the truncated boundary by writing
-    //    a shorter, JVM-authored suffix and waiting for Krabka's exact LEO.
-    let authoritative = (0..3)
-        .map(|i| format!("jvm-authoritative-{i}"))
-        .collect::<Vec<_>>();
-    produce_lines_via_jvm(&bootstrap_all, TOPIC, &authoritative);
-    c1.wait_until_local_log_end_offset(TOPIC, 0, prefix_leo + 3)
-        .await;
-    final_leo = c1.local_log_end_offset(TOPIC, 0).unwrap_or(0);
-    assert2::assert!(
-        final_leo == prefix_leo + 3,
-        "Krabka follower did not resume at the JVM leader's exact LEO"
-    );
-    eprintln!(
-        "KRABKA[kip320] reverse: truncated from {krabka_leo_diverged} to {prefix_leo}, then followed JVM to {final_leo}"
-    );
-
-    cluster.shutdown().await;
+    krabka_follower_recovery.truncated_leo = Some(final_leo);
+    krabka_follower_recovery.prefix_dump = Some(jvm_prefix_dump);
 }
-
-/// Parks the Krabka replica behind a phantom leader, then verifies that it
-/// adopts the promoted JVM leader's divergent epoch and resumes replication.
+#[rstest_bdd_macros::then(
+    "Krabka truncates exactly to the shared prefix and the JVM dump excludes {forbidden}"
+)]
+fn reverse_truncation_boundary(
+    krabka_follower_recovery: &KrabkaFollowerRecovery,
+    forbidden: String,
+) {
+    let prefix = krabka_follower_recovery.prefix_leo;
+    let dump = krabka_follower_recovery
+        .prefix_dump
+        .as_ref()
+        .expect("JVM prefix dump");
+    assert2::assert!(
+        krabka_follower_recovery
+            .truncated_leo
+            .expect("truncation observed")
+            == prefix
+    );
+    assert2::assert!(
+        max_offset_in_dump(dump) == Some(prefix - 1),
+        "JVM prefix dump: {dump}"
+    );
+    assert2::assert!(
+        !dump.contains(&forbidden),
+        "Krabka suffix leaked to JVM: {dump}"
+    );
+}
+#[rstest_bdd_macros::when("the JVM leader appends authoritative payloads {records}")]
+async fn authoritative_jvm_suffix(
+    krabka_follower_recovery: &mut KrabkaFollowerRecovery,
+    records: String,
+) {
+    let records: Vec<String> = serde_json::from_str(&records).expect("authoritative payloads");
+    produce_lines_via_jvm(&krabka_follower_recovery.bootstrap_all, TOPIC, &records);
+    let c1 = &krabka_follower_recovery
+        .cluster
+        .as_ref()
+        .expect("mixed cluster")
+        .krabka[0]
+        .0;
+    let count = i64::try_from(records.len()).expect("record count");
+    c1.wait_until_local_log_end_offset(TOPIC, 0, krabka_follower_recovery.prefix_leo + count)
+        .await;
+    krabka_follower_recovery.final_leo = Some(c1.local_log_end_offset(TOPIC, 0).unwrap_or(0));
+}
+#[rstest_bdd_macros::then("the recovered Krabka log ends {count} offsets beyond the shared prefix")]
+fn recovered_krabka_bounds(krabka_follower_recovery: &KrabkaFollowerRecovery, count: i64) {
+    assert2::assert!(
+        krabka_follower_recovery
+            .final_leo
+            .expect("replication observed")
+            == krabka_follower_recovery.prefix_leo + count
+    );
+}
+#[rstest_bdd_macros::then("the reverse divergence cluster is shut down")]
+async fn finish_reverse_recovery(krabka_follower_recovery: &mut KrabkaFollowerRecovery) {
+    krabka_follower_recovery
+        .cluster
+        .take()
+        .expect("mixed cluster")
+        .shutdown()
+        .await;
+}
 #[ignore = "requires Docker + a published controller/data port; Linux-bound"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/jvm_kip320_divergence/krabka_follower_truncation.feature",
-    name = "kip320 krabka follower truncates from jvm leader"
+    name = "Krabka removes its isolated suffix before following a promoted JVM leader"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn kip320_krabka_follower_truncates_from_jvm_leader() {}
+async fn kip320_krabka_follower_truncates_from_jvm_leader(
+    krabka_follower_recovery: KrabkaFollowerRecovery,
+) {
+    let _ = krabka_follower_recovery;
+}

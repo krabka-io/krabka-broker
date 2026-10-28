@@ -370,100 +370,84 @@ mod tests {
         assert!(error_code(&cache, &r2, NAME_FETCH_VERSION) == codes::FETCH_SESSION_ID_NOT_FOUND);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "fetch session classify tests: classification matches kafkas epoch only rule"
-    )]
-    fn bdd_verify_classification_matches_kafkas_epoch_only_rule() {
-        enum Want {
-            Sessionless,
-            NewSession,
-            Error(i16),
-        }
+    struct FetchClassification {
+        cache: FetchSessionCache,
+        session_id: Option<i32>,
+        decision: Option<SessionDecision>,
+    }
 
-        /// `Existing` allocates a session first and requests classify against
-        /// its own id. `Fixed` requests classify against a literal id, which
-        /// names no session in a fresh cache.
-        enum RequestId {
-            Existing,
-            Fixed(i32),
-        }
+    #[rstest::fixture]
+    fn fetch_classification() -> FetchClassification {
+        // Start this scenario with fresh inputs and observations.
 
-        struct Case {
-            name: &'static str,
-            request_id: RequestId,
-            epoch: i32,
-            want: Want,
-        }
-
-        let cases = [
-            Case {
-                name: "id=N>0, epoch=0 (reconnect): closes old, opens new",
-                request_id: RequestId::Existing,
-                epoch: INITIAL_EPOCH,
-                want: Want::NewSession,
-            },
-            Case {
-                name: "id=0, epoch>0: incremental lookup of id 0 misses",
-                request_id: RequestId::Fixed(0),
-                epoch: 5,
-                want: Want::Error(codes::FETCH_SESSION_ID_NOT_FOUND),
-            },
-            Case {
-                name: "id=N unknown, epoch=-1: full and final, no error",
-                request_id: RequestId::Fixed(12345),
-                epoch: FINAL_EPOCH,
-                want: Want::Sessionless,
-            },
-            Case {
-                name: "id=N known, epoch=-1: closes and answers sessionless",
-                request_id: RequestId::Existing,
-                epoch: FINAL_EPOCH,
-                want: Want::Sessionless,
-            },
-            Case {
-                name: "id=0, epoch=0: ordinary new-session open",
-                request_id: RequestId::Fixed(0),
-                epoch: INITIAL_EPOCH,
-                want: Want::NewSession,
-            },
-        ];
-
-        for case in cases {
-            let cache = FetchSessionCache::new(10);
-            let requested_id = match case.request_id {
-                RequestId::Existing => allocate_session().cache(&cache).call(),
-                RequestId::Fixed(id) => id,
-            };
-            let r = req()
-                .session_id(RequestSessionId(requested_id))
-                .session_epoch(case.epoch)
-                .call();
-            match (cache.classify(&r, NAME_FETCH_VERSION), case.want) {
-                (SessionDecision::Sessionless, Want::Sessionless)
-                | (SessionDecision::NewSession, Want::NewSession) => {}
-                (SessionDecision::Error { code }, Want::Error(want_code)) => {
-                    check!(code == want_code, "{}", case.name);
-                }
-                (other, _) => panic!("{}: unexpected decision {other:?}", case.name),
-            }
-            // Every branch above closes or never opens a session, so the
-            // cache holds nothing afterward in any case.
-            check!(cache.len() == 0, "{}", case.name);
+        FetchClassification {
+            cache: FetchSessionCache::new(10),
+            session_id: None,
+            decision: None,
         }
     }
 
-    /// Table over `(session_id, session_epoch, session exists?)` to
-    /// `(top-level error code or decision, whether the cache still holds the
-    /// id)`. Matches Kafka's `FetchMetadata.isFull()` classification (#871):
-    /// full/final is decided by `session_epoch` alone, and a full fetch's
-    /// session id (if any) is closed rather than epoch-checked.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/fetch_session/classify.feature",
-        name = "tests: classification matches kafkas epoch only rule"
-    )]
-    fn classification_matches_kafkas_epoch_only_rule() {}
+    #[rstest_bdd_macros::given("a fetch request names an existing cached session")]
+    fn existing_classification_session(fetch_classification: &mut FetchClassification) {
+        fetch_classification.session_id =
+            Some(allocate_session().cache(&fetch_classification.cache).call());
+    }
+
+    #[rstest_bdd_macros::given("a fetch request names uncached session id {id}")]
+    fn uncached_classification_session(fetch_classification: &mut FetchClassification, id: i32) {
+        fetch_classification.session_id = Some(id);
+    }
+
+    #[rstest_bdd_macros::when("the name-based fetch is classified with session epoch {epoch}")]
+    fn classify_supplied_fetch(fetch_classification: &mut FetchClassification, epoch: i32) {
+        let request = req()
+            .session_id(RequestSessionId(
+                fetch_classification
+                    .session_id
+                    .expect("request session was given"),
+            ))
+            .session_epoch(epoch)
+            .call();
+        fetch_classification.decision = Some(
+            fetch_classification
+                .cache
+                .classify(&request, NAME_FETCH_VERSION),
+        );
+    }
+
+    #[rstest_bdd_macros::then("the fetch is classified as opening a new session")]
+    fn classified_new_fetch(fetch_classification: &FetchClassification) {
+        check!(matches!(
+            fetch_classification.decision,
+            Some(SessionDecision::NewSession)
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the fetch is classified as sessionless")]
+    fn classified_sessionless_fetch(fetch_classification: &FetchClassification) {
+        check!(matches!(
+            fetch_classification.decision,
+            Some(SessionDecision::Sessionless)
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the fetch fails with FETCH_SESSION_ID_NOT_FOUND")]
+    fn classified_missing_fetch(fetch_classification: &FetchClassification) {
+        let Some(SessionDecision::Error { code }) = fetch_classification.decision else {
+            panic!("uncached incremental fetch must fail");
+        };
+        check!(code == codes::FETCH_SESSION_ID_NOT_FOUND);
+    }
+
+    #[rstest_bdd_macros::then("the fetch session cache contains no sessions")]
+    fn empty_classification_cache(fetch_classification: &FetchClassification) {
+        check!(fetch_classification.cache.len() == 0);
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/fetch_session/classify.feature",
+        fixtures = [fetch_classification: FetchClassification]
+    );
 
     #[test]
     fn incremental_merges_request_topics_and_bumps_epoch() {

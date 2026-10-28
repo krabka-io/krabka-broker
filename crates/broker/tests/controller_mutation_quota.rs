@@ -43,7 +43,6 @@ use {
         topic_admin::{TopicMutationResult, drive_create_topics_sasl, drive_delete_topics_sasl},
     },
     assert2::{assert, check},
-    krabka_broker::codes,
     krabka_metadata::AclOperation,
     std::net::SocketAddr,
 };
@@ -71,12 +70,24 @@ async fn set_controller_mutation_quota(addr: SocketAddr) -> Vec<(QuotaEntity, i1
         .await
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "controller mutation quota: controller mutation rate throttles create topics"
-)]
-async fn bdd_verify_controller_mutation_rate_throttles_create_topics() {
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
+struct MutationQuota {
+    broker: Option<krabka_broker::BrokerHandle>,
+    directory: Option<tempfile::TempDir>,
+    result: Option<TopicMutationResult>,
+}
+#[rstest::fixture]
+fn mutation() -> MutationQuota {
+    // Start this scenario with fresh inputs and observations.
+
+    MutationQuota {
+        broker: None,
+        directory: None,
+        result: None,
+    }
+}
+#[rstest_bdd_macros::given("alice has Cluster Create permission and controller mutation rate 2")]
+async fn limited_topic_creator(mutation: &mut MutationQuota) {
+    let (handle, directory, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
         ("admin", "admin-secret"),
         ("alice", "alice-secret"),
     ])
@@ -101,76 +112,75 @@ async fn bdd_verify_controller_mutation_rate_throttles_create_topics() {
     // so image visibility — not the refresh task — is the real precondition.
     wait_for_mutation_quota_in_image(&handle).await;
 
-    // This operation crosses the limit but is accepted under strict quota
-    // semantics because the bucket was not already exhausted.
-    let TopicMutationResult {
-        throttle_time_ms: throttle_ms,
-        error_code: err_code,
-    } = drive_create_topics_sasl(addr, "alice", "alice-secret", "throttled-topic", 10).await;
-    check!(
-        err_code == 0,
-        "create-topics should succeed (alice has Cluster Create ACL)"
-    );
-    check!(throttle_ms == 0);
-
-    let TopicMutationResult {
-        throttle_time_ms: throttle_ms,
-        error_code: err_code,
-    } = drive_create_topics_sasl(addr, "alice", "alice-secret", "rejected-topic", 1).await;
-    check!(
-        err_code == codes::THROTTLING_QUOTA_EXCEEDED,
-        "expected strict quota rejection, got error {err_code}"
-    );
-    check!(
-        throttle_ms > 0,
-        "expected throttle_time_ms > 0, got {throttle_ms}"
-    );
+    mutation.broker = Some(handle);
+    mutation.directory = Some(directory);
 }
-
-/// Test 1: Set `controller_mutation_rate=2.0` for alice. A strict v7 request
-/// may cross the limit, but the following mutation is rejected while debt
-/// remains.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_mutation_quota.feature",
-    name = "controller mutation rate throttles create topics"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_mutation_rate_throttles_create_topics() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("controller mutation quota: unthrottled create topics unaffected")]
-async fn bdd_verify_unthrottled_create_topics_unaffected() {
-    let (handle, _dir, addr) =
+#[rstest_bdd_macros::given("admin is a super user without a controller mutation quota")]
+async fn unlimited_topic_creator(mutation: &mut MutationQuota) {
+    let (handle, directory, _) =
         start_single_broker_sasl_plaintext_with_users("admin", &[("admin", "admin-secret")]).await;
     // No controller_mutation_rate quota configured.
     // admin is super_user, no ACL seeding needed.
-    let _ = handle; // keep alive
 
-    let TopicMutationResult {
-        throttle_time_ms: throttle_ms,
-        error_code: err_code,
-    } = drive_create_topics_sasl(addr, "admin", "admin-secret", "unthrottled-topic", 10).await;
-    assert!(err_code == 0);
-    assert!(throttle_ms == 0);
+    mutation.broker = Some(handle);
+    mutation.directory = Some(directory);
 }
-
-/// Test 2: No quota configured. Create a topic. Assert
-/// `throttle_time_ms` == 0.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_mutation_quota.feature",
-    name = "unthrottled create topics unaffected"
+#[rstest_bdd_macros::when("{user} creates topic {topic} with {partitions} partitions")]
+async fn quota_create_topic(
+    mutation: &mut MutationQuota,
+    user: String,
+    topic: String,
+    partitions: i32,
+) {
+    let password = match user.as_str() {
+        "alice" => "alice-secret",
+        "admin" => "admin-secret",
+        other => panic!("unknown principal {other}"),
+    };
+    let addr = mutation
+        .broker
+        .as_ref()
+        .expect("broker started")
+        .listen_addr();
+    mutation.result =
+        Some(drive_create_topics_sasl(addr, &user, password, &topic, partitions).await);
+}
+#[rstest_bdd_macros::then("the topic mutation has error code {error}")]
+fn quota_mutation_result(mutation: &MutationQuota, error: i16) {
+    let result = mutation.result.as_ref().expect("topic mutation attempted");
+    check!(
+        result.error_code == error,
+        "expected error {error}, got {}",
+        result.error_code
+    );
+}
+#[rstest_bdd_macros::then("the topic mutation reports no throttle delay")]
+fn quota_mutation_unthrottled(mutation: &MutationQuota) {
+    check!(
+        mutation
+            .result
+            .as_ref()
+            .expect("topic mutation attempted")
+            .throttle_time_ms
+            == 0
+    );
+}
+#[rstest_bdd_macros::then("the topic mutation reports a positive throttle delay")]
+fn quota_mutation_throttled(mutation: &MutationQuota) {
+    check!(
+        mutation
+            .result
+            .as_ref()
+            .expect("topic mutation attempted")
+            .throttle_time_ms
+            > 0
+    );
+}
+#[rstest_bdd_macros::given(
+    "alice may Delete a ten partition topic and has controller mutation rate 2"
 )]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unthrottled_create_topics_unaffected() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "controller mutation quota: controller mutation rate throttles delete topics"
-)]
-async fn bdd_verify_controller_mutation_rate_throttles_delete_topics() {
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
+async fn limited_topic_deleter(mutation: &mut MutationQuota) {
+    let (handle, directory, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
         ("admin", "admin-secret"),
         ("alice", "alice-secret"),
     ])
@@ -225,23 +235,36 @@ async fn bdd_verify_controller_mutation_rate_throttles_delete_topics() {
     // before deleting; DeleteTopics reads the rate from the image on consume.
     wait_for_mutation_quota_in_image(&handle).await;
 
-    let TopicMutationResult {
-        throttle_time_ms: throttle_ms,
-        error_code: err_code,
-    } = drive_delete_topics_sasl(addr, "alice", "alice-secret", "to-delete").await;
-    assert!(err_code == 0);
-    assert!(
-        throttle_ms > 0,
-        "expected throttle_time_ms > 0, got {throttle_ms}"
-    );
-
+    mutation.broker = Some(handle);
+    mutation.directory = Some(directory);
+}
+#[rstest_bdd_macros::when("alice deletes to-delete")]
+async fn quota_delete_topic(mutation: &mut MutationQuota) {
+    let addr = mutation
+        .broker
+        .as_ref()
+        .expect("broker started")
+        .listen_addr();
+    mutation.result =
+        Some(drive_delete_topics_sasl(addr, "alice", "alice-secret", "to-delete").await);
+}
+#[rstest_bdd_macros::then(
+    "quota and DeleteTopics latency metrics both cover the reported applied throttle"
+)]
+async fn quota_applied_metrics(mutation: &MutationQuota) {
+    let handle = mutation.broker.as_ref().expect("broker started");
+    let throttle_ms = mutation
+        .result
+        .as_ref()
+        .expect("topic mutation attempted")
+        .throttle_time_ms;
     // The broker sleeps on the KIP-599 delay, so it is an applied throttle and
     // has to be visible as one: an operator watching DeleteTopics latency rise
     // must be able to tell "alice is over her mutation quota" from "the
     // controller is wedged".
     let applied_seconds = f64::from(throttle_ms) / 1000.0;
     let by_quota = metric_value(
-        &handle,
+        handle,
         "krabka_broker_quota_throttle_duration_seconds_sum{quota_type=\"ControllerMutation\"}",
     )
     .await;
@@ -251,7 +274,7 @@ async fn bdd_verify_controller_mutation_rate_throttles_delete_topics() {
          ({applied_seconds}s); got {by_quota}"
     );
     let phase = metric_value(
-        &handle,
+        handle,
         "krabka_broker_request_throttle_duration_seconds_sum{api_key=\"DeleteTopics\"}",
     )
     .await;
@@ -262,12 +285,29 @@ async fn bdd_verify_controller_mutation_rate_throttles_delete_topics() {
     );
 }
 
-/// Test 3: Pre-create a topic as admin with no quota. Set rate=2.0 for
-/// alice. Alice deletes. Assert `throttle_time_ms` > 0.
-#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_mutation_quota.feature",
+    name = "controller mutation rate throttles create topics"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_mutation_rate_throttles_create_topics(mutation: MutationQuota) {
+    mutation.broker.expect("broker started").shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_mutation_quota.feature",
+    name = "unthrottled create topics unaffected"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unthrottled_create_topics_unaffected(mutation: MutationQuota) {
+    mutation.broker.expect("broker started").shutdown().await;
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/controller_mutation_quota.feature",
     name = "controller mutation rate throttles delete topics"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_mutation_rate_throttles_delete_topics() {}
+async fn controller_mutation_rate_throttles_delete_topics(mutation: MutationQuota) {
+    mutation.broker.expect("broker started").shutdown().await;
+}

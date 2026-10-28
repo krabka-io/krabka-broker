@@ -136,43 +136,8 @@ mod tests {
         std::{borrow::Cow, collections::BTreeMap},
     };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("coordinator unified share config tests: defaults are kafkas")]
-    fn bdd_verify_defaults_are_kafkas() {
-        let expected = ShareGroupConfig {
-            session_timeout: Duration::from_secs(45),
-            heartbeat_interval: Duration::from_secs(5),
-            assignment_interval: Duration::from_secs(1),
-            min_session_timeout: Duration::from_secs(45),
-            max_session_timeout: Duration::from_mins(1),
-            min_heartbeat_interval: Duration::from_secs(5),
-            max_heartbeat_interval: Duration::from_secs(15),
-            max_size: 200,
-            record_lock_duration: Duration::from_secs(30),
-            min_record_lock_duration: Duration::from_secs(15),
-            max_record_lock_duration: Duration::from_mins(1),
-            max_delivery_attempts: 5,
-            min_delivery_count_limit: 2,
-            max_delivery_count_limit: 10,
-            max_inflight_records: 2000,
-            min_partition_max_record_locks: 100,
-            max_partition_max_record_locks: 4000,
-            backlog_poll_interval: Duration::from_secs(15),
-            actor_mailbox_capacity: 64,
-            initialize_retry_interval: Duration::from_secs(30),
-        };
-        assert!(ShareGroupConfig::default() == expected);
-    }
-
     /// The defaults of the share keys of Kafka 4.3.1's
     /// `GroupCoordinatorConfig` and of its `ShareGroupConfig`.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/share/config.feature",
-        name = "tests: defaults are kafkas"
-    )]
-    fn defaults_are_kafkas() {}
-
     /// Kafka's `shareGroupSessionTimeoutMs`, `shareGroupHeartbeatIntervalMs`
     /// and `shareGroupAssignmentIntervalMs`: a `share.*` override replaces the
     /// broker value, another coordinator's key and a value that does not parse
@@ -268,4 +233,53 @@ mod tests {
         assert!(actual == expected);
         assert!(matches!(broker.for_group(None), Cow::Borrowed(_)));
     }
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct ShareDefaults {
+        overrides: BTreeMap<String, String>,
+        config: Option<ShareGroupConfig>,
+    }
+    #[rstest::fixture]
+    fn share_defaults() -> ShareDefaults {
+        // Start this scenario with fresh inputs and observations.
+        ShareDefaults::default()
+    }
+    #[given("a Share group has no dynamic configuration overrides")]
+    fn no_share_overrides(share_defaults: &mut ShareDefaults) { share_defaults.overrides.clear(); }
+    #[when("the coordinator resolves the Share group configuration")]
+    fn resolve_share_defaults(share_defaults: &mut ShareDefaults) {
+        share_defaults.config = Some(
+            ShareGroupConfig::default()
+                .for_group(Some(&share_defaults.overrides))
+                .into_owned(),
+        );
+    }
+    #[then("every Share setting equals the Kafka 4.3.1 default")]
+    fn kafka_share_defaults(share_defaults: &ShareDefaults) {
+        let expected = ShareGroupConfig {
+            session_timeout: Duration::from_secs(45),
+            heartbeat_interval: Duration::from_secs(5),
+            assignment_interval: Duration::from_secs(1),
+            min_session_timeout: Duration::from_secs(45),
+            max_session_timeout: Duration::from_mins(1),
+            min_heartbeat_interval: Duration::from_secs(5),
+            max_heartbeat_interval: Duration::from_secs(15),
+            max_size: 200,
+            record_lock_duration: Duration::from_secs(30),
+            min_record_lock_duration: Duration::from_secs(15),
+            max_record_lock_duration: Duration::from_mins(1),
+            max_delivery_attempts: 5,
+            min_delivery_count_limit: 2,
+            max_delivery_count_limit: 10,
+            max_inflight_records: 2000,
+            min_partition_max_record_locks: 100,
+            max_partition_max_record_locks: 4000,
+            backlog_poll_interval: Duration::from_secs(15),
+            actor_mailbox_capacity: 64,
+            initialize_retry_interval: Duration::from_secs(30),
+        };
+
+        assert!(share_defaults.config.as_ref() == Some(&expected));
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/share/config.feature",fixtures=[share_defaults:ShareDefaults]);
 }

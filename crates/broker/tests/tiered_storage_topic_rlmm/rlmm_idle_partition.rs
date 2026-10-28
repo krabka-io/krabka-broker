@@ -10,14 +10,14 @@
 
 use {
     crate::{
-        rlmm_cluster::{await_activation, build_client, start_broker_with_topic_rlmm},
+        TopicRlmmScenario,
         rlmm_round_trip::remote_log_files,
-        run_broker_test,
         support::{
             offsets::{list_offset_partition, single_partition_list_offsets},
             topics::topic_configs,
         },
         topic_fixture::create_configured_topic,
+        topic_rlmm,
     },
     assert2::{assert, check},
     krabka_broker::BrokerHandle,
@@ -35,55 +35,68 @@ const EARLIEST_TIMESTAMP: i64 = -2;
 /// Kafka's `ListOffsetsRequest.EARLIEST_LOCAL_TIMESTAMP` (KIP-405).
 const EARLIEST_LOCAL_TIMESTAMP: i64 = -4;
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "tiered storage topic rlmm rlmm idle partition: an idle tiered partition leaves local disk through its last record"
+#[rstest_bdd_macros::given(
+    "a topic-backed tiered partition retains remote records indefinitely and local records for 1000 milliseconds"
 )]
-fn bdd_verify_an_idle_tiered_partition_leaves_local_disk_through_its_last_record() {
-    run_broker_test(an_idle_tiered_partition_leaves_local_disk_through_its_last_record_case());
+fn idle_tiered_topic(topic_rlmm: &mut TopicRlmmScenario) {
+    topic_rlmm.start_active_plaintext();
+    topic_rlmm
+        .runtime
+        .block_on(create_idle_tiered_topic(topic_rlmm.client()));
+    topic_rlmm
+        .runtime
+        .block_on(await_idle_tiered_config(topic_rlmm.broker()));
 }
 
-#[cfg(test)]
+#[rstest_bdd_macros::when(
+    "ten timestamp-zero records are appended and the partition receives no more writes"
+)]
+fn write_idle_tiered_partition(topic_rlmm: &TopicRlmmScenario) {
+    topic_rlmm
+        .runtime
+        .block_on(topic_rlmm.broker().produce_records_for_test(
+            TOPIC,
+            0,
+            RECORDS.try_into().unwrap(),
+        ))
+        .expect("produce records");
+}
+
+#[rstest_bdd_macros::then(
+    "EARLIEST_LOCAL reaches log end 10 while EARLIEST remains 0 and remote log objects exist"
+)]
+fn retained_idle_remote_records(topic_rlmm: &TopicRlmmScenario) {
+    topic_rlmm.runtime.block_on(async {
+        // intentional: the local log start moves on the remote-log-manager's
+        // timer and has no metric, so poll the wire answer (bounded loop).
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let earliest_local = list_offset(topic_rlmm.client(), EARLIEST_LOCAL_TIMESTAMP).await;
+            if earliest_local == RECORDS {
+                break;
+            }
+            assert!(
+                Instant::now() <= deadline,
+                "the local log start stayed at {earliest_local}, short of the log end {RECORDS}"
+            );
+            time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // The records left local disk, and the remote tier still answers for
+        // every one of them.
+        check!(list_offset(topic_rlmm.client(), EARLIEST_TIMESTAMP).await == 0);
+        check!(!remote_log_files(topic_rlmm.remote_dir()).is_empty());
+    });
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/tiered_storage_topic_rlmm/rlmm_idle_partition.feature",
     name = "an idle tiered partition leaves local disk through its last record"
 )]
-fn an_idle_tiered_partition_leaves_local_disk_through_its_last_record() {}
-
-async fn an_idle_tiered_partition_leaves_local_disk_through_its_last_record_case() {
-    let (broker, _log_dir, remote_dir) = start_broker_with_topic_rlmm().await;
-    await_activation(&broker).await;
-    let client = build_client(&broker).await;
-    create_idle_tiered_topic(&client).await;
-    await_idle_tiered_config(&broker).await;
-
-    broker
-        .produce_records_for_test(TOPIC, 0, RECORDS.try_into().unwrap())
-        .await
-        .expect("produce records");
-
-    // intentional: the local log start moves on the remote-log-manager's
-    // timer and has no metric, so poll the wire answer (bounded loop).
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let earliest_local = list_offset(&client, EARLIEST_LOCAL_TIMESTAMP).await;
-        if earliest_local == RECORDS {
-            break;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "the local log start stayed at {earliest_local}, short of the log end {RECORDS}"
-        );
-        time::sleep(Duration::from_millis(100)).await;
-    }
-
-    // The records left local disk, and the remote tier still answers for
-    // every one of them.
-    check!(list_offset(&client, EARLIEST_TIMESTAMP).await == 0);
-    check!(!remote_log_files(remote_dir.path()).is_empty());
-
-    drop(client);
-    broker.shutdown().await;
+fn an_idle_tiered_partition_leaves_local_disk_through_its_last_record(
+    topic_rlmm: TopicRlmmScenario,
+) {
+    topic_rlmm.shutdown();
 }
 
 // A tiered topic whose records outlive `local.retention.ms` at once:

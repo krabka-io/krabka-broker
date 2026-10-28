@@ -376,288 +376,182 @@ impl GroupCoordinator {
         Ok(())
     }
 }
-
 #[cfg(test)]
-mod tests {
-
+mod persisted_group_behavior {
     use {
         super::*,
-        crate::coordinator::unified::{
-            persistence_next_gen::{
-                AssignedTopicPartitions, GroupMetadataValue, NextGenKey, RegularExpressionValue,
-                TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
-            },
-            share::persistence::ShareGroupMetadataValue,
-            test_support::{
-                ReplayCase, check_replay_cases, deletion_replay_cases,
-                group_deletion_with_member_case, member_deletion_with_target_case, next_current,
-                next_member, proto_uuid, replay_tombstone_constructor,
+        crate::coordinator::{
+            bootstrap::test_support::replay_compacted_group_log,
+            unified::{
+                persistence::encode_string_key,
+                seeds::{ShareGroupSeed, StreamsGroupSeed},
+                test_support::{make_coord, persisted_snapshots},
             },
         },
+        assert2::check,
+        bytes::Bytes,
+        rstest_bdd::{Slot, datatable::Rows},
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+        serde_json::{Value, json},
+        std::{mem, sync::Arc},
     };
-
-    /// One record of the replayed log.
-    #[derive(Clone)]
-    enum Record {
-        Group(i32),
-        Member(&'static str),
-        TargetEpoch(i32),
-        Target(&'static str),
-        Current(&'static str, i32),
-        Regex(&'static str),
-        ShareGroup,
-        Tombstone(NextGenKey),
+    enum GroupProtocol {
+        Consumer,
+        Share,
+        Streams,
     }
-
-    fn key(kind: &str, id: &str) -> NextGenKey {
-        let group_id = "g".to_owned();
-        let member_id = id.to_owned();
-        match kind {
-            "group" => NextGenKey::GroupMetadata { group_id },
-            "partition" => NextGenKey::PartitionMetadata { group_id },
-            "member" => NextGenKey::MemberMetadata {
-                group_id,
-                member_id,
-            },
-            "target-epoch" => NextGenKey::TargetAssignmentMetadata { group_id },
-            "target" => NextGenKey::TargetAssignmentMember {
-                group_id,
-                member_id,
-            },
-            "current" => NextGenKey::CurrentMemberAssignment {
-                group_id,
-                member_id,
-            },
-            _ => NextGenKey::RegularExpression {
-                group_id,
-                regex: member_id,
-            },
-        }
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum RecoveredSeed {
+        Consumer(GroupSeed),
+        Share(ShareGroupSeed),
+        Streams(StreamsGroupSeed),
     }
-
-    fn target() -> TargetAssignmentMemberValue {
-        TargetAssignmentMemberValue {
-            topic_partitions: vec![AssignedTopicPartitions {
-                topic_id: proto_uuid(3),
-                partitions: vec![0],
-            }],
-        }
-    }
-
-    fn resolved() -> RegularExpressionValue {
-        RegularExpressionValue {
-            topics: vec!["t".into()],
-            version: 1,
-            timestamp_ms: 2,
-        }
-    }
-
-    fn replay(coord: &GroupCoordinator, record: &Record) -> Result<(), BrokerError> {
-        match record.clone() {
-            Record::Group(epoch) => coord.replay_group_metadata("g", GroupMetadataValue {
-                epoch,
-                metadata_hash: 9,
-            }),
-            Record::Member(member) => {
-                coord.replay_member_metadata("g", member, next_member(member))
+    impl RecoveredSeed {
+        fn snapshot(&self) -> Value {
+            match self {
+                Self::Consumer(seed) => persisted_snapshots::consumer_seed(seed),
+                Self::Share(seed) => persisted_snapshots::share_seed(seed),
+                Self::Streams(seed) => persisted_snapshots::streams_seed(seed),
             }
-            Record::TargetEpoch(epoch) => {
-                coord.replay_target_assignment_metadata("g", TargetAssignmentMetadataValue {
-                    assignment_epoch: epoch,
-                    assignment_timestamp_ms: 4,
-                })
-            }
-            Record::Target(member) => coord.replay_target_assignment_member("g", member, target()),
-            Record::Current(member, epoch) => {
-                coord.replay_current_member_assignment("g", member, next_current(epoch))
-            }
-            Record::Regex(regex) => coord.replay_regular_expression("g", regex, resolved()),
-            Record::ShareGroup => coord.replay_share_group_metadata("g", ShareGroupMetadataValue {
-                epoch: 1,
-                metadata_hash: 0,
-            }),
-            Record::Tombstone(key) => coord.replay_next_gen_tombstone(&key),
         }
     }
-
-    /// The deletion of a group with member `m` and regex `r`, in the order of
-    /// Kafka's `ConsumerGroup.createGroupTombstoneRecords`.
-    fn kafka_deletion() -> Vec<Record> {
-        [
-            ("current", "m"),
-            ("target", "m"),
-            ("target-epoch", ""),
-            ("member", "m"),
-            ("regex", "r"),
-            ("partition", ""),
-            ("group", ""),
-        ]
-        .into_iter()
-        .map(|(kind, id)| Record::Tombstone(key(kind, id)))
-        .collect()
+    #[derive(Default)]
+    struct CompactedGroupRecovery {
+        coordinator: Option<Arc<GroupCoordinator>>,
+        protocol: Option<GroupProtocol>,
+        records: Vec<(Bytes, Option<Bytes>)>,
+        recovered: Option<Result<Option<RecoveredSeed>, String>>,
+        cache: Slot<Option<RecoveredSeed>>,
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified replay next gen tests: consumer records replay as kafka"
+    #[rstest::fixture]
+    fn compacted_recovery() -> CompactedGroupRecovery {
+        // Every recovery starts with an unread log and no observed bootstrap result.
+        CompactedGroupRecovery::default()
+    }
+    #[derive(DataTableRow)]
+    struct CompactedGroupRecord {
+        family: String,
+        member_or_regex: String,
+        value_hex: String,
+    }
+    #[given(
+        "a fresh coordinator will recover {protocol} group g from these compacted offsets records"
     )]
-    fn bdd_verify_consumer_records_replay_as_kafka() {
-        let group = |update: &dyn Fn(&mut GroupSeed)| {
-            let mut seed = GroupSeed::new_group();
-            update(&mut seed);
-            Ok(Some(seed))
-        };
-        let full_group = || {
-            vec![
-                Record::Group(5),
-                Record::Member("m"),
-                Record::TargetEpoch(5),
-                Record::Target("m"),
-                Record::Current("m", 5),
-                Record::Regex("r"),
-            ]
-        };
-        let tombstone = replay_tombstone_constructor(key, Record::Tombstone);
-        let mut rows: Vec<ReplayCase<'_, Record, GroupSeed>> = vec![
-            ReplayCase {
-                case: "a member record creates the group and the member",
-                records: vec![Record::Member("m")],
-                expected: group(&|seed| {
-                    seed.members.insert("m".into(), next_member("m"));
-                }),
-            },
-            ReplayCase {
-                case: "a current assignment creates an uninitialized member",
-                records: vec![Record::Current("m", 3)],
-                expected: group(&|seed| {
-                    seed.members.insert("m".into(), uninitialized_member());
-                    seed.current_per_member.insert("m".into(), next_current(3));
-                }),
-            },
-            ReplayCase {
-                case: "a target assignment creates the group but no member",
-                records: vec![Record::Target("m")],
-                expected: group(&|seed| {
-                    seed.target_per_member.insert("m".into(), target());
-                }),
-            },
-            ReplayCase {
-                case: "a regular expression creates the group",
-                records: vec![Record::Regex("r")],
-                expected: group(&|seed| {
-                    seed.resolved_regexes.insert("r".into(), resolved());
-                }),
-            },
-            ReplayCase {
-                case: "an epoch replaces the last one, lower or not",
-                records: vec![Record::Group(5), Record::Group(2), Record::TargetEpoch(0)],
-                expected: group(&|seed| {
-                    seed.group_epoch = 2;
-                    seed.metadata_hash = 9;
-                    seed.target_epoch = 0;
-                    seed.assignment_timestamp_ms = 4;
-                }),
-            },
-            ReplayCase {
-                case: "the tombstone of a current assignment leaves the member at epoch -1",
-                records: vec![
-                    Record::Member("m"),
-                    Record::Current("m", 3),
-                    tombstone("current", "m"),
-                    tombstone("target", "other"),
-                    tombstone("member", "other"),
-                ],
-                expected: group(&|seed| {
-                    seed.members.insert("m".into(), next_member("m"));
-                    seed.current_per_member
-                        .insert("m".into(), next_current(LEAVE_GROUP_MEMBER_EPOCH));
-                    let current = seed.current_per_member.get_mut("m").unwrap();
-                    current.previous_member_epoch = LEAVE_GROUP_MEMBER_EPOCH;
-                    current.assigned_partitions.clear();
-                    current.partitions_pending_revocation.clear();
-                }),
-            },
-            ReplayCase {
-                case: "a member tombstone before its current assignment tombstone",
-                records: vec![
-                    Record::Member("m"),
-                    Record::Current("m", 3),
-                    tombstone("member", "m"),
-                ],
-                expected: Err(
-                    "Received a tombstone record to delete member m but did not receive \
-                     ConsumerGroupCurrentMemberAssignmentValue tombstone."
-                        .into(),
-                ),
-            },
-            ReplayCase {
-                case: "a member tombstone of a member that never had a current assignment",
-                records: vec![Record::Member("m"), tombstone("member", "m")],
-                expected: Err(
-                    "Received a tombstone record to delete member m but did not receive \
-                     ConsumerGroupCurrentMemberAssignmentValue tombstone."
-                        .into(),
-                ),
-            },
-            member_deletion_with_target_case(
-                Record::Member("m"),
-                Record::Target("m"),
-                tombstone,
-                "Received a tombstone record to delete member m but did not receive \
-                     ConsumerGroupTargetAssignmentMetadataValue tombstone.",
+    fn persisted_group_log(
+        compacted_recovery: &mut CompactedGroupRecovery,
+        protocol: String,
+        #[datatable] rows: Rows<CompactedGroupRecord>,
+    ) {
+        compacted_recovery.coordinator = Some(make_coord());
+        compacted_recovery.protocol = Some(match protocol.as_str() {
+            "consumer" => GroupProtocol::Consumer,
+            "share" => GroupProtocol::Share,
+            "streams" => GroupProtocol::Streams,
+            _ => panic!("unknown group protocol"),
+        });
+        compacted_recovery.records = rows
+            .into_iter()
+            .map(|row| {
+                let version = match row.family.as_str() {
+                    "consumer-group-metadata" => 3,
+                    "consumer-subscription-metadata" => 4,
+                    "consumer-member" => 5,
+                    "consumer-target-epoch" => 6,
+                    "consumer-target" => 7,
+                    "consumer-current" => 8,
+                    "share-member" => 10,
+                    "share-group-metadata" => 11,
+                    "share-target-epoch" => 12,
+                    "share-target" => 13,
+                    "share-current" => 14,
+                    "share-state-partitions" => 15,
+                    "consumer-regex" => 16,
+                    "streams-group-metadata" => 17,
+                    "streams-member" => 19,
+                    "streams-target-epoch" => 20,
+                    "streams-target" => 21,
+                    "streams-current" => 22,
+                    "streams-topology" => 23,
+                    _ => panic!("unknown persisted group record family"),
+                };
+                let parts = if row.member_or_regex.is_empty() {
+                    vec!["g"]
+                } else {
+                    vec!["g", row.member_or_regex.as_str()]
+                };
+                let key = encode_string_key(version, &parts).expect("literal compacted record key");
+                let value = if row.value_hex == "tombstone" {
+                    None
+                } else {
+                    Some(Bytes::from(
+                        hex::decode(&row.value_hex).expect("complete literal Kafka value"),
+                    ))
+                };
+                (key, value)
+            })
+            .collect();
+    }
+    #[when("bootstrap reads the persisted group records in order")]
+    fn recover_compacted_group(compacted_recovery: &mut CompactedGroupRecovery) {
+        let coordinator = compacted_recovery
+            .coordinator
+            .as_ref()
+            .expect("fresh coordinator prepared");
+        let loaded =
+            replay_compacted_group_log(coordinator, mem::take(&mut compacted_recovery.records));
+        let (seed, cached) = match compacted_recovery
+            .protocol
+            .as_ref()
+            .expect("group protocol")
+        {
+            GroupProtocol::Consumer => (
+                coordinator
+                    .seeds
+                    .get("g")
+                    .map(|seed| RecoveredSeed::Consumer(seed.value().clone())),
+                coordinator.cached_seed("g").map(RecoveredSeed::Consumer),
             ),
-            ReplayCase {
-                case: "a target metadata tombstone while a member has a target",
-                records: vec![Record::Target("m"), tombstone("target-epoch", "")],
-                expected: Err(
-                    "Received a tombstone record to delete target assignment of g but the \
-                     assignment still has 1 members."
-                        .into(),
-                ),
-            },
-            group_deletion_with_member_case(Record::Member("m"), tombstone),
-            ReplayCase {
-                case: "a group tombstone before the target metadata tombstone",
-                records: vec![Record::Group(3), tombstone("group", "")],
-                expected: Err(
-                    "Received a tombstone record to delete group g but did not receive \
-                     ConsumerGroupTargetAssignmentMetadataValue tombstone."
-                        .into(),
-                ),
-            },
-            ReplayCase {
-                case: "an assignment epoch below -1",
-                records: vec![Record::TargetEpoch(-2)],
-                expected: Err("The assignment epoch must be non-negative or -1.".into()),
-            },
-            ReplayCase {
-                case: "a consumer record for a share group",
-                records: vec![Record::ShareGroup, Record::Member("m")],
-                expected: Err("Group g is not a consumer group".into()),
-            },
-            ReplayCase {
-                case: "a consumer tombstone for a share group",
-                records: vec![Record::ShareGroup, tombstone("member", "m")],
-                expected: Err("Group g is not a consumer group".into()),
-            },
-        ];
-        rows.splice(5..5, deletion_replay_cases(full_group(), kafka_deletion()));
-        check_replay_cases(
-            &rows,
-            replay,
-            |coord| coord.seeds.get("g").map(|seed| seed.value().clone()),
-            |coord| coord.cached_seed("g"),
-        );
+            GroupProtocol::Share => (
+                coordinator
+                    .share_seeds
+                    .get("g")
+                    .map(|seed| RecoveredSeed::Share(seed.value().clone())),
+                coordinator.cached_share_seed("g").map(RecoveredSeed::Share),
+            ),
+            GroupProtocol::Streams => (
+                coordinator
+                    .streams_seeds
+                    .get("g")
+                    .map(|seed| RecoveredSeed::Streams(seed.value().clone())),
+                coordinator
+                    .cached_streams_seed("g")
+                    .map(RecoveredSeed::Streams),
+            ),
+        };
+        compacted_recovery.recovered = Some(loaded.map(|()| seed).map_err(|error| match error {
+            BrokerError::Startup(message) => message,
+            other => other.to_string(),
+        }));
+        compacted_recovery.cache.set(cached);
     }
-
-    /// Kafka's `GroupMetadataManager.replay` of the consumer group records,
-    /// one log per row: the whole group that replay holds afterwards, or the
-    /// `IllegalStateException` or `IllegalArgumentException` that fails the
-    /// load.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/replay_next_gen.feature",
-        name = "tests: consumer records replay as kafka"
+    #[then(
+        "the complete recovered seed or exact startup error is as follows and successful replay has the same cached seed"
     )]
-    fn consumer_records_replay_as_kafka() {}
+    fn recovered_group_state(compacted_recovery: &CompactedGroupRecovery, docstring: String) {
+        let expected: Value =
+            serde_json::from_str(&docstring).expect("literal independent full seed or exact error");
+        let recovered = compacted_recovery
+            .recovered
+            .as_ref()
+            .expect("bootstrap replay completed");
+        let observed = match recovered {
+            Ok(seed) => json!({"seed":seed.as_ref().map(RecoveredSeed::snapshot)}),
+            Err(error) => json!({"error":error}),
+        };
+        check!(observed == expected);
+        if let Ok(seed) = recovered {
+            check!(compacted_recovery.cache.get().as_ref() == Some(seed));
+        }
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/replay.feature",fixtures=[compacted_recovery:CompactedGroupRecovery]);
 }

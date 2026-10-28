@@ -2,8 +2,6 @@ use super::*;
 #[cfg(test)]
 use std::vec;
 
-krabka_macros::remote_segment_transition_matrix!(expected_transitions);
-
 #[test]
 fn local_truncation_kernels_cover_boundaries_and_invalid_offsets() {
     assert2::check!(
@@ -63,64 +61,125 @@ fn future_log_swap_requires_equal_frontiers() {
     assert2::assert!(!future_log_swap_admission(7, 8));
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "storage tests local truncation kernels cover boundaries and invalid offsets: remote segment transition matrix matches kafka"
-)]
-fn bdd_verify_remote_segment_transition_matrix_matches_kafka() {
+use {
+    rstest::fixture,
+    rstest_bdd::datatable::Rows,
+    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+};
+
+struct RemoteLifecycles {
+    segments: Option<[RemoteSegmentLifecycle; 4]>,
+    partitions: Option<[Option<RemotePartitionDeleteLifecycle>; 4]>,
+    segment_transitions: Option<[[bool; 4]; 4]>,
+    partition_transitions: Option<[[bool; 3]; 4]>,
+}
+
+#[fixture]
+fn lifecycle() -> RemoteLifecycles {
+    // Start this scenario with fresh inputs and observations.
+
+    RemoteLifecycles {
+        segments: None,
+        partitions: None,
+        segment_transitions: None,
+        partition_transitions: None,
+    }
+}
+
+#[given("remote segment states copying, copied, deleting and deleted")]
+fn segment_states(lifecycle: &mut RemoteLifecycles) {
     use RemoteSegmentLifecycle::{CopyFinished, CopyStarted, DeleteFinished, DeleteStarted};
-
-    let states = [CopyStarted, CopyFinished, DeleteStarted, DeleteFinished];
-    // Kafka's `RemoteLogSegmentState.isValidTransition`, row = source.
-    let expected = expected_transitions();
-    for (from, row) in states.into_iter().zip(expected) {
-        for (to, want) in states.into_iter().zip(row) {
-            assert2::check!(
-                remote_segment_transition(from, to) == want,
-                "{from:?} -> {to:?}"
-            );
-        }
-    }
+    lifecycle.segments = Some([CopyStarted, CopyFinished, DeleteStarted, DeleteFinished]);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/storage/tests/local_truncation_kernels_cover_boundaries_and_invalid_offsets.feature",
-    name = "remote segment transition matrix matches kafka"
-)]
-fn remote_segment_transition_matrix_matches_kafka() {}
+#[when("every remote segment state transition is validated")]
+fn segment_transition_graph(lifecycle: &mut RemoteLifecycles) {
+    let states = lifecycle
+        .segments
+        .expect("segment lifecycle states were given");
+    lifecycle.segment_transitions =
+        Some(states.map(|from| states.map(|to| remote_segment_transition(from, to))));
+}
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "storage tests local truncation kernels cover boundaries and invalid offsets: remote partition delete transition matrix matches kafka"
-)]
-fn bdd_verify_remote_partition_delete_transition_matrix_matches_kafka() {
+#[derive(DataTableRow)]
+struct SegmentTransitionRow {
+    source: String,
+    copying: String,
+    copied: String,
+    deleting: String,
+    deleted: String,
+}
+
+#[then("remote segment transitions are permitted by this matrix:")]
+fn segment_permissions(
+    lifecycle: &RemoteLifecycles,
+    #[datatable] rows: Rows<SegmentTransitionRow>,
+) {
+    let rows: Vec<_> = rows.into_iter().collect();
+    let sources: Vec<_> = rows.iter().map(|row| row.source.as_str()).collect();
+    assert2::check!(sources == vec!["copying", "copied", "deleting", "deleted"]);
+    let expected: Vec<_> = rows
+        .into_iter()
+        .map(|row| {
+            [row.copying, row.copied, row.deleting, row.deleted].map(|permission| match permission
+                .as_str()
+            {
+                "allowed" => true,
+                "forbidden" => false,
+                _ => panic!("unknown segment transition permission"),
+            })
+        })
+        .collect();
+    let actual = lifecycle
+        .segment_transitions
+        .expect("segment transitions were validated");
+    assert2::check!(actual.as_slice() == expected.as_slice());
+}
+
+#[given("remote partition deletion states unregistered, marked, started and finished")]
+fn partition_states(lifecycle: &mut RemoteLifecycles) {
     use RemotePartitionDeleteLifecycle::{Finished, Marked, Started};
-
-    // Kafka's `RemotePartitionDeleteState.isValidTransition`, row =
-    // source, the first row being no prior state.
-    let expected = [
-        (None, [true, false, false]),
-        (Some(Marked), [true, true, false]),
-        (Some(Started), [false, true, true]),
-        (Some(Finished), [false, false, true]),
-    ];
-    for (from, row) in expected {
-        for (to, want) in [Marked, Started, Finished].into_iter().zip(row) {
-            assert2::check!(
-                remote_partition_delete_transition(from, to) == want,
-                "{from:?} -> {to:?}"
-            );
-        }
-    }
+    lifecycle.partitions = Some([None, Some(Marked), Some(Started), Some(Finished)]);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/storage/tests/local_truncation_kernels_cover_boundaries_and_invalid_offsets.feature",
-    name = "remote partition delete transition matrix matches kafka"
-)]
-fn remote_partition_delete_transition_matrix_matches_kafka() {}
+#[when("every remote partition deletion transition is validated")]
+fn partition_transition_graph(lifecycle: &mut RemoteLifecycles) {
+    use RemotePartitionDeleteLifecycle::{Finished, Marked, Started};
+    let states = lifecycle
+        .partitions
+        .expect("partition deletion states were given");
+    lifecycle.partition_transitions = Some(states.map(|from| {
+        [Marked, Started, Finished].map(|to| remote_partition_delete_transition(from, to))
+    }));
+}
+
+#[derive(DataTableRow)]
+struct PartitionTransitionRow {
+    source: String,
+    marked: bool,
+    started: bool,
+    finished: bool,
+}
+
+#[then("remote partition deletion transitions are permitted by this matrix:")]
+fn partition_permissions(
+    lifecycle: &RemoteLifecycles,
+    #[datatable] rows: Rows<PartitionTransitionRow>,
+) {
+    let rows: Vec<_> = rows.into_iter().collect();
+    let sources: Vec<_> = rows.iter().map(|row| row.source.as_str()).collect();
+    assert2::check!(sources == vec!["unregistered", "marked", "started", "finished"]);
+    let expected: Vec<_> = rows
+        .into_iter()
+        .map(|row| [row.marked, row.started, row.finished])
+        .collect();
+    let actual = lifecycle
+        .partition_transitions
+        .expect("partition transitions were validated");
+    assert2::check!(actual.as_slice() == expected.as_slice());
+}
+
+scenarios!("tests/features/migrated/src/storage/tests/local_truncation_kernels_cover_boundaries_and_invalid_offsets.feature", fixtures = [lifecycle: RemoteLifecycles]);
 
 #[yare::parameterized(
     cannot_resurrect = {

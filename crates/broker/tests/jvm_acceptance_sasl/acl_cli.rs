@@ -1,182 +1,25 @@
-//! The `kafka-acls` administration round-trip: add a binding, list it, remove
-//! it, and list again.
-//!
-//! This file covers the ACL *administration* surface -- `CreateAcls`,
-//! `DescribeAcls` and `DeleteAcls` as the JVM CLI drives them -- and is
-//! separate from the files that check what those bindings then permit or
-//! deny on the data plane.
-
+//! Kafka ACL administration and shorthand expansion, checked through real JVM clients.
 use {
     crate::{
+        acl_output::{AclBinding, parse_acls},
         jvm_acceptance::{
-            ADMIN, ADMIN_PASS, KAFKA_IMAGE_TXN, broker0_advertised,
+            ADMIN, ADMIN_PASS, ClientPropsFile, KAFKA_IMAGE_TXN, broker0_advertised,
             docker_run_kafka_tool_with_image_and_mount, nc_check_connectivity,
             plain_client_properties, start_sasl_plaintext_broker_with_super_user,
             write_plain_props,
         },
-        oracle::{SecuredSide, secured_sides},
+        oracle::{CliRun, Oracle, SecuredSide, Side, ToolFile, secured_sides},
     },
     assert2::{assert, check},
+    krabka_broker::BrokerHandle,
+    std::{
+        collections::{BTreeMap, BTreeSet},
+        process::Output,
+    },
+    tempfile::TempDir,
     tokio::task,
 };
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm acceptance sasl acl cli: jvm kafka acls provision via cli")]
-async fn bdd_verify_jvm_kafka_acls_provision_via_cli() {
-    let (broker, _dir) =
-        start_sasl_plaintext_broker_with_super_user(ADMIN, &[(ADMIN, ADMIN_PASS)]).await;
-    nc_check_connectivity();
-
-    let admin_props = write_plain_props(ADMIN, ADMIN_PASS);
-    let mount = admin_props.mount_str();
-
-    // 1. --add.
-    docker_run_kafka_tool_with_image_and_mount(KAFKA_IMAGE_TXN, &mount, &[
-        "kafka-acls",
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--command-config",
-        "/client.properties",
-        "--add",
-        "--allow-principal",
-        "User:alice",
-        "--operation",
-        "Read",
-        "--topic",
-        "foo",
-    ]);
-
-    // 2. --list --topic foo. Expect a line containing alice + READ + ALLOW.
-    let list_out = docker_run_kafka_tool_with_image_and_mount(KAFKA_IMAGE_TXN, &mount, &[
-        "kafka-acls",
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--command-config",
-        "/client.properties",
-        "--list",
-        "--topic",
-        "foo",
-    ]);
-    let listed = String::from_utf8_lossy(&list_out.stdout);
-    check!(
-        listed.contains("User:alice"),
-        "expected alice in --list output; got: {listed}"
-    );
-    check!(
-        listed.to_ascii_uppercase().contains("READ"),
-        "expected READ in --list output; got: {listed}"
-    );
-    check!(
-        listed.to_ascii_uppercase().contains("ALLOW"),
-        "expected ALLOW in --list output; got: {listed}"
-    );
-
-    // 3. --remove --force. Then re-list and assert alice is no longer present.
-    docker_run_kafka_tool_with_image_and_mount(KAFKA_IMAGE_TXN, &mount, &[
-        "kafka-acls",
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--command-config",
-        "/client.properties",
-        "--remove",
-        "--force",
-        "--allow-principal",
-        "User:alice",
-        "--operation",
-        "Read",
-        "--topic",
-        "foo",
-    ]);
-
-    let list_out2 = docker_run_kafka_tool_with_image_and_mount(KAFKA_IMAGE_TXN, &mount, &[
-        "kafka-acls",
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--command-config",
-        "/client.properties",
-        "--list",
-        "--topic",
-        "foo",
-    ]);
-    let listed2 = String::from_utf8_lossy(&list_out2.stdout);
-    assert!(
-        !listed2.contains("User:alice"),
-        "alice should be gone after --remove; got: {listed2}"
-    );
-
-    broker.shutdown().await;
-}
-
-/// JVM acceptance: `kafka-acls.sh` end-to-end provision flow.
-///
-/// The test drives the modern `kafka-acls.sh` flag set (cp-kafka:7.5.0,
-/// Kafka 3.5+) against the Rust broker's `CreateAcls (30)`,
-/// `DescribeAcls (29)`, and `DeleteAcls (31)` handlers. Admin authenticates
-/// as PLAIN super-user, so the super-user short-circuit in `authorize()`
-/// bypasses its `Cluster Alter` and `Cluster Describe` checks.
-///
-/// Sequence:
-/// 1. `--add` an Allow Read on `Topic LITERAL "foo"` for `User:alice`.
-/// 2. `--list --topic foo` must show that binding.
-/// 3. `--remove --force` removes it. `--list --topic foo` must be empty.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_cli.feature",
-    name = "jvm kafka acls provision via cli"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn jvm_kafka_acls_provision_via_cli() {}
-
-// ── the `kafka-acls` shorthands, against the stock broker ───────────────────
-//
-// `--producer`, `--consumer`, `--idempotent`, `--transactional-id`,
-// `--deny-principal` and `--deny-host` are not requests: `AclCommand` expands
-// each of them, client-side, into several bindings across several resource
-// types, and sends those. So what a broker can be held to is not the flag but
-// its consequence -- the set that `--list` reports afterwards -- and the only
-// authority on what that set should be is Kafka itself.
-//
-// Every case below therefore runs the same `kafka-acls` binary, from the same
-// `apache/kafka:4.3.1` image, against a stock broker of that release and
-// against krabka, and compares the two sets. Each case also states the part of
-// the expansion that is certain, so a pair of brokers that both expanded a
-// shorthand into nothing at all cannot pass.
-//
-// Each case owns a principal, and `--list --principal` is what isolates its
-// bindings from the ones the cases before it left behind. That flag is under
-// test as much as it is a tool here: a broker whose `DescribeAcls` ignored the
-// principal filter would answer every case with every case's bindings, and the
-// set comparison would fail on the second one.
-
-use {
-    crate::{
-        acl_output::{AclBinding, parse_acls},
-        oracle::{CliRun, Oracle, Side, ToolFile},
-    },
-    std::collections::BTreeSet,
-};
-
-/// The topic every shorthand is scoped to.
-const ACL_TOPIC: &str = "krabka-acl-shorthand-topic";
-/// The group `--consumer` is scoped to.
-const ACL_GROUP: &str = "krabka-acl-shorthand-group";
-/// The transactional id `--transactional-id` is scoped to.
-const ACL_TXN_ID: &str = "krabka-acl-shorthand-txn";
-/// The host `--deny-host` names.
-const DENIED_HOST: &str = "10.11.12.13";
-
-/// Where the SASL client configuration is mounted for krabka's half.
 const CONTAINER_PROPS: &str = "/tmp/client.properties";
-
-/// One `kafka-acls` invocation on `side`.
-///
-/// The two halves differ by exactly one thing: krabka's authorizer has nothing
-/// to say until a connection carries a principal, so its half authenticates as
-/// a PLAIN super-user and the tool needs a client configuration; the oracle's
-/// half runs inside the oracle over its own plaintext listener, as the
-/// `User:ANONYMOUS` its `super.users` names. Nothing about the bindings
-/// differs, which is what makes the two listings comparable.
 fn acls(side: &Side<'_>, props: Option<&str>, args: &[&str]) -> CliRun {
     let mut full = vec!["--bootstrap-server", side.bootstrap()];
     full.extend_from_slice(args);
@@ -188,329 +31,232 @@ fn acls(side: &Side<'_>, props: Option<&str>, args: &[&str]) -> CliRun {
     side.run_with_files("kafka-acls", &full, &files, None)
 }
 
-/// One expected binding, in the four fields that identify it: resource type,
-/// resource name, operation and permission.
-struct Expected {
-    resource_type: &'static str,
-    resource_name: &'static str,
-    operation: &'static str,
-    permission: &'static str,
+struct Provision {
+    broker: Option<(BrokerHandle, TempDir)>,
+    props: Option<ClientPropsFile>,
+    output: Option<Output>,
+    listed: Option<Output>,
 }
+#[rstest::fixture]
+fn provision() -> Provision {
+    // Start this scenario with fresh inputs and observations.
 
-/// One shorthand, the principal that owns its bindings, and the part of its
-/// expansion that is not in doubt.
-struct ShorthandCase {
-    label: &'static str,
-    /// `User:<name>`. Each case owns one, so `--list --principal` isolates it.
-    principal: &'static str,
-    /// The `--add` arguments after `--bootstrap-server`.
-    add: &'static [&'static str],
-    /// The bindings the expansion certainly contains. It need not be the whole
-    /// expansion; the oracle settles the rest.
-    must_contain: &'static [Expected],
-    /// The host every binding of this case carries.
-    host: &'static str,
+    Provision {
+        broker: None,
+        props: None,
+        output: None,
+        listed: None,
+    }
 }
-
-/// Every `kafka-acls` shorthand the tool offers, each on its own principal.
-const SHORTHAND_CASES: &[ShorthandCase] = &[
-    ShorthandCase {
-        label: "--producer",
-        principal: "User:krabka-acl-producer",
-        add: &[
-            "--add",
-            "--allow-principal",
-            "User:krabka-acl-producer",
-            "--producer",
-            "--topic",
-            ACL_TOPIC,
-        ],
-        must_contain: &[
-            Expected {
-                resource_type: "TOPIC",
-                resource_name: ACL_TOPIC,
-                operation: "WRITE",
-                permission: "ALLOW",
-            },
-            Expected {
-                resource_type: "TOPIC",
-                resource_name: ACL_TOPIC,
-                operation: "DESCRIBE",
-                permission: "ALLOW",
-            },
-        ],
-        host: "*",
-    },
-    ShorthandCase {
-        label: "--producer --idempotent",
-        principal: "User:krabka-acl-idempotent-producer",
-        add: &[
-            "--add",
-            "--allow-principal",
-            "User:krabka-acl-idempotent-producer",
-            "--producer",
-            "--idempotent",
-            "--topic",
-            ACL_TOPIC,
-        ],
-        // The cluster binding is the whole point of `--idempotent`: without it
-        // the producer cannot claim a producer id, however complete its topic
-        // rights are.
-        must_contain: &[
-            Expected {
-                resource_type: "TOPIC",
-                resource_name: ACL_TOPIC,
-                operation: "WRITE",
-                permission: "ALLOW",
-            },
-            Expected {
-                resource_type: "CLUSTER",
-                resource_name: "kafka-cluster",
-                operation: "IDEMPOTENT_WRITE",
-                permission: "ALLOW",
-            },
-        ],
-        host: "*",
-    },
-    ShorthandCase {
-        label: "--producer --transactional-id",
-        principal: "User:krabka-acl-transactional-producer",
-        add: &[
-            "--add",
-            "--allow-principal",
-            "User:krabka-acl-transactional-producer",
-            "--producer",
-            "--topic",
-            ACL_TOPIC,
-            "--transactional-id",
-            ACL_TXN_ID,
-        ],
-        must_contain: &[
-            Expected {
-                resource_type: "TOPIC",
-                resource_name: ACL_TOPIC,
-                operation: "WRITE",
-                permission: "ALLOW",
-            },
-            Expected {
-                resource_type: "TRANSACTIONAL_ID",
-                resource_name: ACL_TXN_ID,
-                operation: "WRITE",
-                permission: "ALLOW",
-            },
-            Expected {
-                resource_type: "TRANSACTIONAL_ID",
-                resource_name: ACL_TXN_ID,
-                operation: "DESCRIBE",
-                permission: "ALLOW",
-            },
-        ],
-        host: "*",
-    },
-    ShorthandCase {
-        label: "--consumer",
-        principal: "User:krabka-acl-consumer",
-        add: &[
-            "--add",
-            "--allow-principal",
-            "User:krabka-acl-consumer",
-            "--consumer",
-            "--topic",
-            ACL_TOPIC,
-            "--group",
-            ACL_GROUP,
-        ],
-        must_contain: &[
-            Expected {
-                resource_type: "TOPIC",
-                resource_name: ACL_TOPIC,
-                operation: "READ",
-                permission: "ALLOW",
-            },
-            Expected {
-                resource_type: "TOPIC",
-                resource_name: ACL_TOPIC,
-                operation: "DESCRIBE",
-                permission: "ALLOW",
-            },
-            Expected {
-                resource_type: "GROUP",
-                resource_name: ACL_GROUP,
-                operation: "READ",
-                permission: "ALLOW",
-            },
-        ],
-        host: "*",
-    },
-    ShorthandCase {
-        label: "--cluster",
-        principal: "User:krabka-acl-cluster",
-        add: &[
-            "--add",
-            "--allow-principal",
-            "User:krabka-acl-cluster",
-            "--operation",
-            "ClusterAction",
-            "--cluster",
-        ],
-        must_contain: &[Expected {
-            resource_type: "CLUSTER",
-            resource_name: "kafka-cluster",
-            operation: "CLUSTER_ACTION",
-            permission: "ALLOW",
-        }],
-        host: "*",
-    },
-    ShorthandCase {
-        label: "--deny-principal --deny-host",
-        principal: "User:krabka-acl-denied",
-        add: &[
-            "--add",
-            "--deny-principal",
-            "User:krabka-acl-denied",
-            "--deny-host",
-            DENIED_HOST,
-            "--operation",
-            "Read",
-            "--topic",
-            ACL_TOPIC,
-        ],
-        // A deny binding that lost its host would deny that principal from
-        // everywhere, which is a far larger outage than the one the operator
-        // asked for -- so the host is asserted, not just the permission.
-        must_contain: &[Expected {
-            resource_type: "TOPIC",
-            resource_name: ACL_TOPIC,
-            operation: "READ",
-            permission: "DENY",
-        }],
-        host: DENIED_HOST,
-    },
-];
-
-/// The bindings a case certainly produced, in the parser's own shape.
-fn expected_bindings(case: &ShorthandCase) -> BTreeSet<AclBinding> {
-    case.must_contain
-        .iter()
-        .map(|expected| AclBinding {
-            resource_type: expected.resource_type.to_owned(),
-            resource_name: expected.resource_name.to_owned(),
-            pattern_type: "LITERAL".to_owned(),
-            principal: case.principal.to_owned(),
-            host: case.host.to_owned(),
-            operation: expected.operation.to_owned(),
-            permission: expected.permission.to_owned(),
-        })
-        .collect()
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance sasl acl cli: acl shorthands expand as apache kafka expands them"
+#[rstest_bdd_macros::given(
+    "a PLAIN SASL broker authenticates admin as superuser for Kafka ACL provisioning"
 )]
-async fn bdd_verify_acl_shorthands_expand_as_apache_kafka_expands_them() {
-    // Kafka first. Every expectation below is a claim about somebody else's
-    // client, and this is where a wrong one is reported as such.
-    let oracle = task::spawn_blocking(|| {
-        Oracle::start_with_env("acls", &[
-            "KAFKA_AUTHORIZER_CLASS_NAME=org.apache.kafka.metadata.authorizer.StandardAuthorizer",
-            // The tool runs inside the container over the plaintext
-            // listener, so it arrives as `ANONYMOUS`. Naming it a super
-            // user is what lets it administer ACLs; it changes nothing
-            // about the bindings it then creates.
-            "KAFKA_SUPER_USERS=User:ANONYMOUS",
-            "KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND=false",
-        ])
-    })
-    .await
-    .expect("oracle boot");
-    let oracle_side = Side::Oracle(&oracle);
-
-    let (broker, _dir) =
-        start_sasl_plaintext_broker_with_super_user(ADMIN, &[(ADMIN, ADMIN_PASS)]).await;
+async fn provision_broker(provision: &mut Provision) {
+    provision.broker =
+        Some(start_sasl_plaintext_broker_with_super_user(ADMIN, &[(ADMIN, ADMIN_PASS)]).await);
     nc_check_connectivity();
-    let advertised = broker0_advertised().to_owned();
+    provision.props = Some(write_plain_props(ADMIN, ADMIN_PASS));
+}
+#[rstest_bdd_macros::when("the Kafka 3.5 ACL tool applies these arguments and lists topic foo")]
+fn provision_acl(provision: &mut Provision, docstring: String) {
+    let mount = provision.props.as_ref().expect("properties").mount_str();
+    let mut args = vec![
+        "kafka-acls",
+        "--bootstrap-server",
+        broker0_advertised(),
+        "--command-config",
+        "/client.properties",
+    ];
+    args.extend(docstring.split_whitespace());
+    provision.output = Some(docker_run_kafka_tool_with_image_and_mount(
+        KAFKA_IMAGE_TXN,
+        &mount,
+        &args,
+    ));
+    provision.listed = Some(docker_run_kafka_tool_with_image_and_mount(
+        KAFKA_IMAGE_TXN,
+        &mount,
+        &[
+            "kafka-acls",
+            "--bootstrap-server",
+            broker0_advertised(),
+            "--command-config",
+            "/client.properties",
+            "--list",
+            "--topic",
+            "foo",
+        ],
+    ));
+}
+#[rstest_bdd_macros::then("the listing contains these ACL fields")]
+fn provision_fields(provision: &Provision, datatable: Vec<Vec<String>>) {
+    let listed = String::from_utf8_lossy(&provision.listed.as_ref().expect("listed").stdout);
+    for row in datatable.into_iter().skip(1) {
+        let [field]: [String; 1] = row.try_into().expect("field");
+        if matches!(field.as_str(), "READ" | "ALLOW") {
+            check!(listed.to_ascii_uppercase().contains(&field), "{listed}");
+        } else {
+            check!(listed.contains(&field), "{listed}");
+        }
+    }
+}
+#[rstest_bdd_macros::then("the listing no longer contains User:alice")]
+fn removed_binding(provision: &Provision) {
+    assert!(
+        !String::from_utf8_lossy(&provision.listed.as_ref().expect("listed").stdout)
+            .contains("User:alice")
+    );
+}
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_cli.feature",
+    name = "jvm kafka acls provision via cli"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_kafka_acls_provision_via_cli(provision: Provision) {
+    provision.broker.take().expect("broker").0.shutdown().await;
+    drop(provision);
+}
+
+struct ExpandedAcl {
+    principal: String,
+    added: CliRun,
+    listed: CliRun,
+}
+struct Shorthands {
+    oracle: Option<Oracle>,
+    broker: Option<(BrokerHandle, TempDir)>,
+    expansions: Vec<ExpandedAcl>,
+    removals: Vec<(CliRun, CliRun)>,
+}
+#[rstest::fixture]
+fn shorthands() -> Shorthands {
+    // Start this scenario with fresh inputs and observations.
+
+    Shorthands {
+        oracle: None,
+        broker: None,
+        expansions: Vec::new(),
+        removals: Vec::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "Kafka authorizes anonymous administration and Krabka authorizes the PLAIN admin superuser"
+)]
+async fn comparable_acl_brokers(shorthands: &mut Shorthands) {
+    shorthands.oracle = Some(task::spawn_blocking(|| Oracle::start_with_env("acls", &["KAFKA_AUTHORIZER_CLASS_NAME=org.apache.kafka.metadata.authorizer.StandardAuthorizer", "KAFKA_SUPER_USERS=User:ANONYMOUS", "KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND=false"])).await.expect("oracle"));
+    shorthands.broker =
+        Some(start_sasl_plaintext_broker_with_super_user(ADMIN, &[(ADMIN, ADMIN_PASS)]).await);
+    nc_check_connectivity();
+}
+#[rstest_bdd_macros::when(
+    "both Kafka ACL clients add these shorthand bindings and list only the named principal"
+)]
+fn expand_shorthands(shorthands: &mut Shorthands, datatable: Vec<Vec<String>>) {
+    let oracle_side = Side::Oracle(shorthands.oracle.as_ref().expect("oracle"));
     let krabka_side = Side::Krabka {
-        bootstrap: &advertised,
+        bootstrap: broker0_advertised(),
     };
     let admin_props = plain_client_properties(ADMIN, ADMIN_PASS);
-
-    for case in SHORTHAND_CASES {
-        let mut listings: Vec<BTreeSet<AclBinding>> = Vec::new();
+    for row in datatable.into_iter().skip(1) {
+        let [principal, arguments]: [String; 2] = row.try_into().expect("principal arguments");
+        let args: Vec<&str> = arguments.split_whitespace().collect();
         for SecuredSide { side, props } in secured_sides(&oracle_side, &krabka_side, &admin_props) {
-            let added = acls(side, props, case.add);
-            assert!(
-                added.succeeded(),
-                "{}: {} was refused:\n{}",
-                side.label(),
-                case.label,
-                added.text(),
-            );
-
-            let listed = acls(side, props, &["--list", "--principal", case.principal]);
-            assert!(
-                listed.succeeded(),
-                "{}: --list --principal after {} failed:\n{}",
-                side.label(),
-                case.label,
-                listed.text(),
-            );
-            let bindings = parse_acls(&listed.stdout);
-            let expected = expected_bindings(case);
-            assert!(
-                expected.is_subset(&bindings),
-                "{}: {} must expand to at least {expected:?}, got {bindings:?}\n{}",
-                side.label(),
-                case.label,
-                listed.stdout,
-            );
-            assert!(
-                bindings.iter().all(|b| b.principal == case.principal),
-                "{}: --list --principal {} returned another principal's bindings: {bindings:?}",
-                side.label(),
-                case.principal,
-            );
-            listings.push(bindings);
+            let added = acls(side, props, &args);
+            let listed = acls(side, props, &["--list", "--principal", &principal]);
+            shorthands.expansions.push(ExpandedAcl {
+                principal: principal.clone(),
+                added,
+                listed,
+            });
         }
-        assert!(
-            listings[0] == listings[1],
-            "{}: krabka and Apache Kafka expanded it differently: {listings:?}",
-            case.label,
-        );
     }
-
-    // The removal half, so the suite does not certify a broker that accepts
-    // every `--add` and forgets none of them. One case is enough: `--remove`
-    // takes the same expansion the `--add` took, so a shorthand that removed
-    // the wrong set would leave a difference the listing reports.
-    let removing = SHORTHAND_CASES
-        .iter()
-        .find(|case| case.label == "--consumer")
-        .expect("the --consumer case");
-    let mut remaining: Vec<BTreeSet<AclBinding>> = Vec::new();
-    for SecuredSide { side, props } in secured_sides(&oracle_side, &krabka_side, &admin_props) {
-        let mut remove: Vec<&str> = vec!["--remove", "--force"];
-        remove.extend(removing.add.iter().skip(1).copied());
-        acls(side, props, &remove).expect_success();
-        let listed =
-            acls(side, props, &["--list", "--principal", removing.principal]).expect_success();
-        remaining.push(parse_acls(&listed.stdout));
-    }
-    assert!(
-        remaining[0].is_empty() && remaining[1] == remaining[0],
-        "--remove must undo exactly what --consumer added: {remaining:?}",
-    );
-
-    broker.shutdown().await;
 }
-
-/// Every `kafka-acls` shorthand expands to the same binding set on krabka as
-/// on Apache Kafka, and `--list --principal` reports exactly that set.
+#[rstest_bdd_macros::then(
+    "both listings contain these required bindings, isolate each principal, and match Kafka exactly"
+)]
+fn expansion_parity(shorthands: &Shorthands, datatable: Vec<Vec<String>>) {
+    let mut expected: BTreeMap<String, BTreeSet<AclBinding>> = BTreeMap::new();
+    for row in datatable.into_iter().skip(1) {
+        let [
+            principal,
+            host,
+            resource_type,
+            resource_name,
+            operation,
+            permission,
+        ]: [String; 6] = row
+            .try_into()
+            .expect("principal host resource type name operation permission");
+        expected
+            .entry(principal.clone())
+            .or_default()
+            .insert(AclBinding {
+                resource_type,
+                resource_name,
+                pattern_type: "LITERAL".to_owned(),
+                principal,
+                host,
+                operation,
+                permission,
+            });
+    }
+    assert!(!shorthands.expansions.is_empty());
+    for pair in shorthands.expansions.as_chunks::<2>().0 {
+        let mut bindings = Vec::new();
+        for expansion in pair {
+            assert!(expansion.added.succeeded(), "{}", expansion.added.text());
+            assert!(expansion.listed.succeeded(), "{}", expansion.listed.text());
+            let actual = parse_acls(&expansion.listed.stdout);
+            assert!(
+                expected
+                    .get(&expansion.principal)
+                    .expect("required bindings")
+                    .is_subset(&actual)
+            );
+            assert!(
+                actual
+                    .iter()
+                    .all(|binding| binding.principal == expansion.principal)
+            );
+            bindings.push(actual);
+        }
+        assert!(bindings[0] == bindings[1]);
+    }
+}
+#[rstest_bdd_macros::when(
+    "both clients remove these shorthand arguments and list principal {principal}"
+)]
+fn remove_shorthand(shorthands: &mut Shorthands, principal: String, docstring: String) {
+    let oracle_side = Side::Oracle(shorthands.oracle.as_ref().expect("oracle"));
+    let krabka_side = Side::Krabka {
+        bootstrap: broker0_advertised(),
+    };
+    let props = plain_client_properties(ADMIN, ADMIN_PASS);
+    let args: Vec<&str> = docstring.split_whitespace().collect();
+    for SecuredSide { side, props } in secured_sides(&oracle_side, &krabka_side, &props) {
+        shorthands.removals.push((
+            acls(side, props, &args),
+            acls(side, props, &["--list", "--principal", &principal]),
+        ));
+    }
+}
+#[rstest_bdd_macros::then("both removals and listings succeed and no consumer bindings remain")]
+fn removed_shorthand(shorthands: &Shorthands) {
+    assert!(shorthands.removals.len() == 2);
+    for (removed, listed) in &shorthands.removals {
+        assert!(removed.succeeded(), "{}", removed.text());
+        assert!(listed.succeeded(), "{}", listed.text());
+        assert!(parse_acls(&listed.stdout).is_empty());
+    }
+}
 #[ignore = "requires Docker"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_cli.feature",
     name = "acl shorthands expand as apache kafka expands them"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acl_shorthands_expand_as_apache_kafka_expands_them() {}
+async fn acl_shorthands_expand_as_apache_kafka_expands_them(shorthands: Shorthands) {
+    shorthands.broker.take().expect("broker").0.shutdown().await;
+    drop(shorthands);
+}

@@ -903,21 +903,48 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("api catalog tests: the default table is kafka 4 3 1s")]
-    fn bdd_verify_the_default_table_is_kafka_4_3_1s() {
-        let released: BTreeMap<i16, VersionRange> = krabka_raft::KAFKA_4_3_1_APIS
+    #[derive(Default)]
+    struct ReleasedApiCatalog {
+        released: BTreeMap<i16, VersionRange>,
+        advertised: Option<Vec<ApiVersion>>,
+    }
+
+    #[rstest::fixture]
+    fn api_catalog() -> ReleasedApiCatalog {
+        // Keep api catalog inputs and observations fresh for each scenario.
+        ReleasedApiCatalog::default()
+    }
+
+    #[rstest_bdd_macros::given("Kafka 4.3.1's released API version ranges")]
+    fn released_versions(api_catalog: &mut ReleasedApiCatalog) {
+        api_catalog.released = krabka_raft::KAFKA_4_3_1_APIS
             .iter()
             .map(|api| (api.api_key, range(api.min_version, api.max_version)))
             .collect();
-        let apis = supported_apis(
+    }
+
+    #[rstest_bdd_macros::when(
+        "an inter-broker client requests API versions with metrics configured and both compatibility opt-ins disabled"
+    )]
+    fn request_default_versions(api_catalog: &mut ReleasedApiCatalog) {
+        api_catalog.advertised = Some(supported_apis(
             ListenerKind::InterBroker,
             ClientMetricsReceiver::Configured,
             STRICT,
-        );
-        for api in &apis {
+        ));
+    }
+
+    #[rstest_bdd_macros::then(
+        "the advertised ranges match Kafka's release except Produce starts at version zero and private APIs remain private"
+    )]
+    fn released_api_ranges(api_catalog: &ReleasedApiCatalog) {
+        let apis = api_catalog
+            .advertised
+            .as_ref()
+            .expect("API versions were requested");
+        for api in apis {
             let advertised = range(api.min_version, api.max_version);
-            match (api.api_key, released.get(&api.api_key)) {
+            match (api.api_key, api_catalog.released.get(&api.api_key)) {
                 (0, Some(&VersionRange { min: 3, max })) => {
                     assert!(advertised == range(0, max), "Produce");
                 }
@@ -929,18 +956,6 @@ mod tests {
             }
         }
     }
-
-    /// #784: with both switches at their defaults every listener advertises
-    /// exactly Kafka 4.3.1's table -- each key's range is the release's
-    /// `validVersions`, `Produce` advertised from v0 (KAFKA-18659) -- and no
-    /// key that release lacks except krabka-private `GetReplicaLogInfo` on
-    /// the inter-broker listener.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/api_catalog.feature",
-        name = "tests: the default table is kafka 4 3 1s"
-    )]
-    fn the_default_table_is_kafka_4_3_1s() {}
 
     /// #784: what each switch moves, in the whole table. Table-driven over
     /// every combination: each row names the keys whose advertised range
@@ -1116,4 +1131,6 @@ mod tests {
             "{gates:?}"
         );
     }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/api_catalog.feature", fixtures = [api_catalog: ReleasedApiCatalog]);
 }

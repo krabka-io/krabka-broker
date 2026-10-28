@@ -228,38 +228,6 @@ async fn await_cold_row(tiered: &TieredBroker, topic: &str, topic_id: WireUuid, 
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "tiered dynamic remote log: the remote fetch quota holds back cold reads until it is raised"
-)]
-async fn bdd_verify_the_remote_fetch_quota_holds_back_cold_reads_until_it_is_raised() {
-    const TOPIC: &str = "tiered-fetch-quota";
-    let tiered = start_tiered_broker().await;
-    let topic_id = tiered_topic_with_records(&tiered, TOPIC).await;
-    await_offset_zero_only_in_the_archive(&tiered, TOPIC).await;
-    check!(fetch_offset_zero(&tiered, TOPIC, topic_id).await == ColdRow::served());
-
-    // One byte a second: the batch just read is far over it, so the next read
-    // of the archive is skipped.
-    alter_broker_config(&tiered, FETCH_QUOTA, Some("1")).await;
-    await_cold_row(&tiered, TOPIC, topic_id, &ColdRow::throttled()).await;
-    check!(fetch_offset_zero(&tiered, TOPIC, topic_id).await == ColdRow::throttled());
-
-    // Back to Kafka's unlimited default: the same bytes are under it.
-    alter_broker_config(&tiered, FETCH_QUOTA, None).await;
-    await_cold_row(&tiered, TOPIC, topic_id, &ColdRow::served()).await;
-
-    tiered.broker.shutdown().await;
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/tiered_dynamic_remote_log.feature",
-    name = "the remote fetch quota holds back cold reads until it is raised"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_remote_fetch_quota_holds_back_cold_reads_until_it_is_raised() {}
-
 /// How many segments of `topic` the archive under `root` holds.
 fn archived_segments(root: &Path, topic: &str) -> usize {
     topic_remote_log_files(root, topic).len()
@@ -281,36 +249,168 @@ async fn await_archived_segments(root: &Path, topic: &str, wanted: usize) {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "tiered dynamic remote log: the remote copy quota holds back uploads until it is raised"
-)]
-async fn bdd_verify_the_remote_copy_quota_holds_back_uploads_until_it_is_raised() {
-    const TOPIC: &str = "tiered-copy-quota";
-    let tiered = start_tiered_broker().await;
-    // One byte a second, set before the topic exists so the first copy pass
-    // already runs under it.
-    alter_broker_config(&tiered, COPY_QUOTA, Some("1")).await;
-    tiered_topic_with_records(&tiered, TOPIC).await;
-
-    // The first segment goes up at once and is counted; it alone is a rate
-    // hundreds of times the bound, so every later segment waits. Five copy
-    // ticks would upload every sealed segment without the quota.
-    await_archived_segments(tiered.remote_dir.path(), TOPIC, 1).await;
-    time::sleep(Duration::from_secs(5)).await;
-    check!(archived_segments(tiered.remote_dir.path(), TOPIC) == 1);
-
-    // Back to Kafka's unlimited default: the held segments go up.
-    alter_broker_config(&tiered, COPY_QUOTA, None).await;
-    await_archived_segments(tiered.remote_dir.path(), TOPIC, 3).await;
-
-    tiered.broker.shutdown().await;
+#[derive(Default)]
+struct DynamicTieredQuota {
+    tiered: Option<TieredBroker>,
+    topic: String,
+    topic_id: Option<WireUuid>,
 }
 
-#[cfg(test)]
+#[rstest::fixture]
+fn dynamic_tiered_quota() -> DynamicTieredQuota {
+    // A new archive and dynamic broker-config image are used by each scenario.
+    DynamicTieredQuota::default()
+}
+
+impl DynamicTieredQuota {
+    fn tiered(&self) -> &TieredBroker { self.tiered.as_ref().expect("tiered broker") }
+
+    fn topic_id(&self) -> WireUuid { self.topic_id.expect("tiered topic") }
+
+    async fn shutdown(self) {
+        let TieredBroker {
+            broker,
+            client,
+            remote_dir,
+            log_dir,
+        } = self.tiered.expect("tiered broker");
+        client.close();
+        broker.shutdown().await;
+        drop((remote_dir, log_dir));
+    }
+}
+
+#[rstest_bdd_macros::given("a broker copies to a local archive every second")]
+async fn dynamic_archive(dynamic_tiered_quota: &mut DynamicTieredQuota) {
+    dynamic_tiered_quota.tiered = Some(start_tiered_broker().await);
+}
+
+#[rstest_bdd_macros::when("topic {topic} receives 80 records with 1-KiB segments")]
+async fn dynamic_archive_records(dynamic_tiered_quota: &mut DynamicTieredQuota, topic: String) {
+    dynamic_tiered_quota.topic = topic;
+    dynamic_tiered_quota.topic_id = Some(
+        tiered_topic_with_records(dynamic_tiered_quota.tiered(), &dynamic_tiered_quota.topic).await,
+    );
+}
+
+#[rstest_bdd_macros::when("local retention evicts offset zero so that only the archive holds it")]
+async fn dynamic_archive_eviction(dynamic_tiered_quota: &DynamicTieredQuota) {
+    await_offset_zero_only_in_the_archive(
+        dynamic_tiered_quota.tiered(),
+        &dynamic_tiered_quota.topic,
+    )
+    .await;
+}
+
+#[rstest_bdd_macros::when("the broker sets the remote fetch quota to 1 byte per second")]
+async fn limit_dynamic_remote_fetch(dynamic_tiered_quota: &DynamicTieredQuota) {
+    alter_broker_config(dynamic_tiered_quota.tiered(), FETCH_QUOTA, Some("1")).await;
+}
+
+#[rstest_bdd_macros::when("the broker deletes the remote fetch quota override")]
+async fn unlimit_dynamic_remote_fetch(dynamic_tiered_quota: &DynamicTieredQuota) {
+    alter_broker_config(dynamic_tiered_quota.tiered(), FETCH_QUOTA, None).await;
+}
+
+#[rstest_bdd_macros::then(
+    "the cold fetch serves offset 0 with HWM and LSO 80, log start 0, no error and no aborted-transaction list"
+)]
+async fn served_dynamic_remote_fetch(dynamic_tiered_quota: &DynamicTieredQuota) {
+    await_cold_row(
+        dynamic_tiered_quota.tiered(),
+        &dynamic_tiered_quota.topic,
+        dynamic_tiered_quota.topic_id(),
+        &ColdRow::served(),
+    )
+    .await;
+    check!(
+        fetch_offset_zero(
+            dynamic_tiered_quota.tiered(),
+            &dynamic_tiered_quota.topic,
+            dynamic_tiered_quota.topic_id()
+        )
+        .await
+            == ColdRow::served()
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the cold fetch returns no records with HWM and LSO 80, log start 0, no error and no aborted-transaction list"
+)]
+async fn throttled_dynamic_remote_fetch(dynamic_tiered_quota: &DynamicTieredQuota) {
+    await_cold_row(
+        dynamic_tiered_quota.tiered(),
+        &dynamic_tiered_quota.topic,
+        dynamic_tiered_quota.topic_id(),
+        &ColdRow::throttled(),
+    )
+    .await;
+    check!(
+        fetch_offset_zero(
+            dynamic_tiered_quota.tiered(),
+            &dynamic_tiered_quota.topic,
+            dynamic_tiered_quota.topic_id()
+        )
+        .await
+            == ColdRow::throttled()
+    );
+}
+
+#[rstest_bdd_macros::when("the broker sets the remote copy quota to 1 byte per second")]
+async fn limit_dynamic_remote_copy(dynamic_tiered_quota: &DynamicTieredQuota) {
+    alter_broker_config(dynamic_tiered_quota.tiered(), COPY_QUOTA, Some("1")).await;
+}
+
+#[rstest_bdd_macros::when("the broker deletes the remote copy quota override")]
+async fn unlimit_dynamic_remote_copy(dynamic_tiered_quota: &DynamicTieredQuota) {
+    alter_broker_config(dynamic_tiered_quota.tiered(), COPY_QUOTA, None).await;
+}
+
+#[rstest_bdd_macros::then("the archive holds only the first segment after five further copy ticks")]
+async fn throttled_dynamic_remote_copy(dynamic_tiered_quota: &DynamicTieredQuota) {
+    await_archived_segments(
+        dynamic_tiered_quota.tiered().remote_dir.path(),
+        &dynamic_tiered_quota.topic,
+        1,
+    )
+    .await;
+    time::sleep(Duration::from_secs(5)).await;
+    check!(
+        archived_segments(
+            dynamic_tiered_quota.tiered().remote_dir.path(),
+            &dynamic_tiered_quota.topic
+        ) == 1
+    );
+}
+
+#[rstest_bdd_macros::then("the archive eventually holds at least three segments")]
+async fn resumed_dynamic_remote_copy(dynamic_tiered_quota: &DynamicTieredQuota) {
+    await_archived_segments(
+        dynamic_tiered_quota.tiered().remote_dir.path(),
+        &dynamic_tiered_quota.topic,
+        3,
+    )
+    .await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/tiered_dynamic_remote_log.feature",
+    name = "the remote fetch quota holds back cold reads until it is raised"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_remote_fetch_quota_holds_back_cold_reads_until_it_is_raised(
+    dynamic_tiered_quota: DynamicTieredQuota,
+) {
+    dynamic_tiered_quota.shutdown().await;
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/tiered_dynamic_remote_log.feature",
     name = "the remote copy quota holds back uploads until it is raised"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_remote_copy_quota_holds_back_uploads_until_it_is_raised() {}
+async fn the_remote_copy_quota_holds_back_uploads_until_it_is_raised(
+    dynamic_tiered_quota: DynamicTieredQuota,
+) {
+    dynamic_tiered_quota.shutdown().await;
+}

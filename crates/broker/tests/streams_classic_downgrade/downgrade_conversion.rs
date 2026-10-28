@@ -4,188 +4,211 @@
 
 use {
     crate::{
-        CONVERGE_TRIES, ERR_NONE,
+        ERR_NONE,
         downgrade_classic_join::classic_join_sync,
         downgrade_harness::{
-            boot, commit_offset_as_member, connect, create_topic, finalize_streams_version,
-            rejoin_config, topic_id_for,
+            DowngradeScenario, commit_offset_as_member, downgrade_case, rejoin_config,
         },
-        downgrade_streams_join::{streams_join_and_converge, streams_leave, topology},
+        downgrade_streams_join::streams_leave,
         support::{
             client::start_client,
-            heartbeat_config,
             offsets::{offset_fetch_group, offset_fetch_request, offset_fetch_topic},
         },
     },
     assert2::{assert, check},
-    krabka_broker::{Broker, coordinator::unified::GroupType},
+    krabka_broker::coordinator::unified::GroupType,
+    krabka_protocol::owned::offset_fetch_response::OffsetFetchResponse,
+    rstest::fixture,
+    rstest_bdd_macros::{scenario, then, when},
     std::{sync::Arc, time::Duration},
-    tokio::time,
+    tokio::{time, time::error::Elapsed},
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "streams classic downgrade downgrade conversion: drained streams group downgrades and preserves offsets"
-)]
-async fn bdd_verify_drained_streams_group_downgrades_and_preserves_offsets() {
-    let (broker, bootstrap, _dir) = boot().await;
-    let (streams_client, classic_client) = (connect(&bootstrap).await, connect(&bootstrap).await);
+#[derive(Default)]
+struct DowngradeOffsets {
+    empty_wait: Option<Result<(), Elapsed>>,
+    fetched: Option<OffsetFetchResponse>,
+}
 
-    create_topic(&streams_client, "in", 1).await;
-    finalize_streams_version(&streams_client).await;
-    let topic_id = topic_id_for(&streams_client, "in").await;
+#[fixture]
+fn downgrade_offsets() -> DowngradeOffsets {
+    // Store timeout and offset-fetch results as actual observations of the live group.
+    DowngradeOffsets::default()
+}
 
-    // ── Phase 1: form a streams group, commit offset 42, then leave. ──
-    let (member_id, resp) =
-        streams_join_and_converge(&streams_client, "g", topology("in"), 1, CONVERGE_TRIES).await;
-    broker.wait_until_group_type("g", GroupType::Streams).await;
-    let group_type = broker.group_type_for_test("g");
-    let empty_waiter_timed_out = time::timeout(
-        Duration::from_millis(75),
-        broker.wait_until_streams_group_empty("g"),
-    )
-    .await
-    .is_err();
-    check!(
-        resp.error_code == ERR_NONE,
-        "streams member must converge without error (precondition for the downgrade): {resp:?}"
+#[when("the empty-group waiter observes the live streams group for 75 milliseconds")]
+async fn observe_live_downgrade_group(
+    downgrade_case: &DowngradeScenario,
+    downgrade_offsets: &mut DowngradeOffsets,
+) {
+    downgrade_offsets.empty_wait = Some(
+        time::timeout(
+            Duration::from_millis(75),
+            downgrade_case
+                .broker()
+                .wait_until_streams_group_empty(&downgrade_case.group),
+        )
+        .await,
     );
-    check!(
-        group_type == Some(GroupType::Streams),
-        "streams member must converge on a Streams-typed group (precondition for the \
-         downgrade): {resp:?}"
-    );
-    check!(
-        empty_waiter_timed_out,
-        "the streams-group-empty waiter must not complete while a member is live: {resp:?}"
-    );
+}
 
-    // Commit offset 42 as the live streams member.
+#[then("the empty-group waiter times out while the streams member remains live")]
+fn occupied_downgrade_group(downgrade_offsets: &DowngradeOffsets) {
+    check!(
+        downgrade_offsets
+            .empty_wait
+            .as_ref()
+            .expect("empty waiter observed")
+            .is_err()
+    );
+}
+
+#[when("the streams downgrade member commits input offset forty-two")]
+async fn commit_streams_downgrade_offset(downgrade_case: &DowngradeScenario) {
     commit_offset_as_member(
-        &streams_client,
-        "g",
-        (&member_id, resp.member_epoch),
-        "in",
-        topic_id,
+        downgrade_case.streams(),
+        &downgrade_case.group,
+        (&downgrade_case.member, downgrade_case.epoch),
+        &downgrade_case.topic,
+        downgrade_case.topic_id.expect("topic identity"),
         0,
         42,
     )
     .await;
+}
 
-    // Leave so the streams group is drained.
-    streams_leave(&streams_client, "g", &member_id).await;
-    // Wait for the leave to propagate through the streams actor before the
-    // classic JoinGroup triggers the streams→classic conversion.
-    broker.wait_until_streams_group_empty("g").await;
+#[when("the streams member leaves and the downgrade group drains")]
+async fn drain_streams_downgrade(downgrade_case: &DowngradeScenario) {
+    streams_leave(
+        downgrade_case.streams(),
+        &downgrade_case.group,
+        &downgrade_case.member,
+    )
+    .await;
+    downgrade_case
+        .broker()
+        .wait_until_streams_group_empty(&downgrade_case.group)
+        .await;
+}
 
-    // ── Phase 2: classic JoinGroup for the same id → downgrade to classic. ──
-    let (_cm, _gen) = classic_join_sync(&classic_client, "g").await;
-    broker.wait_until_group_type("g", GroupType::Classic).await;
+#[when("a classic JoinGroup synchronizes the drained streams group")]
+async fn convert_streams_downgrade(downgrade_case: &DowngradeScenario) {
+    classic_join_sync(downgrade_case.classic(), &downgrade_case.group).await;
+}
+
+#[then("the drained group becomes Classic-typed")]
+async fn converted_streams_downgrade(downgrade_case: &DowngradeScenario) {
+    downgrade_case
+        .broker()
+        .wait_until_group_type(&downgrade_case.group, GroupType::Classic)
+        .await;
     assert!(
-        broker.group_type_for_test("g") == Some(GroupType::Classic),
-        "group_type must be Classic after downgrade"
-    );
-
-    // ── Phase 3: committed offset survives the flip. ──
-    let fr = classic_client
-        .send(offset_fetch_request(offset_fetch_group(
-            "g",
-            Some(vec![offset_fetch_topic("in", topic_id, vec![0])]),
-        )))
-        .await
-        .expect("OffsetFetch");
-    let part = &fr.groups[0].topics[0].partitions[0];
-    assert!(part.error_code == ERR_NONE, "OffsetFetch error: {part:?}");
-    assert!(
-        part.committed_offset == 42,
-        "committed offset must survive classic↔streams downgrade, got {}",
-        part.committed_offset
+        downgrade_case
+            .broker()
+            .group_type_for_test(&downgrade_case.group)
+            == Some(GroupType::Classic)
     );
 }
 
-/// A drained streams group with a committed offset converts to classic on a
-/// classic `JoinGroup`. The committed offset survives the flip.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[when("the classic client fetches the downgraded group's input offset")]
+async fn read_streams_downgrade_offset(
+    downgrade_case: &DowngradeScenario,
+    downgrade_offsets: &mut DowngradeOffsets,
+) {
+    downgrade_offsets.fetched = Some(
+        downgrade_case
+            .classic()
+            .send(offset_fetch_request(offset_fetch_group(
+                &downgrade_case.group,
+                Some(vec![offset_fetch_topic(
+                    &downgrade_case.topic,
+                    downgrade_case.topic_id.expect("topic identity"),
+                    vec![0],
+                )]),
+            )))
+            .await
+            .expect("OffsetFetch"),
+    );
+}
+
+#[then("the downgraded group's committed offset is forty-two without a partition error")]
+fn retained_streams_downgrade_offset(downgrade_offsets: &DowngradeOffsets) {
+    let partition = &downgrade_offsets
+        .fetched
+        .as_ref()
+        .expect("offset fetched")
+        .groups[0]
+        .topics[0]
+        .partitions[0];
+    assert!(partition.error_code == ERR_NONE, "{partition:?}");
+    assert!(partition.committed_offset == 42);
+}
+
+#[when("the downgraded broker restarts on the same data directory")]
+async fn restart_streams_downgrade(downgrade_case: &mut DowngradeScenario) {
+    downgrade_case
+        .broker
+        .take()
+        .expect("first downgrade broker")
+        .shutdown()
+        .await;
+    let (broker, _, client) = start_client(
+        rejoin_config(
+            downgrade_case
+                .directory
+                .as_ref()
+                .expect("durable directory")
+                .path()
+                .to_path_buf(),
+        ),
+        Some("c1"),
+    )
+    .await;
+    downgrade_case.broker = Some(broker);
+    downgrade_case.classic = Some(Arc::new(client));
+}
+
+#[then("replay seeds a classic actor and does not restore the group as Streams")]
+async fn replayed_streams_downgrade(downgrade_case: &DowngradeScenario) {
+    assert!(
+        downgrade_case
+            .broker()
+            .classic_group_inspect_for_test(&downgrade_case.group)
+            .await
+            .is_some()
+    );
+    assert!(
+        downgrade_case
+            .broker()
+            .group_type_for_test(&downgrade_case.group)
+            != Some(GroupType::Streams)
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/streams_classic_downgrade/downgrade_conversion.feature",
     name = "drained streams group downgrades and preserves offsets"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn drained_streams_group_downgrades_and_preserves_offsets() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "streams classic downgrade downgrade conversion: downgrade survives restart"
-)]
-async fn bdd_verify_downgrade_survives_restart() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let log_dir = dir.path().to_path_buf();
-    let topic_id;
-    {
-        let broker = Broker::start(heartbeat_config(log_dir.clone()))
-            .await
-            .unwrap();
-        broker.wait_until_broker_alive(broker.node_id()).await;
-        broker.wait_until_group_coordinator_ready().await;
-        let bootstrap = broker.listen_addr().to_string();
-        let sc = connect(&bootstrap).await;
-        let cc = connect(&bootstrap).await;
-        finalize_streams_version(&sc).await;
-        create_topic(&sc, "in4", 1).await;
-        topic_id = topic_id_for(&sc, "in4").await;
-
-        let (mid, resp) =
-            streams_join_and_converge(&sc, "g4", topology("in4"), 1, CONVERGE_TRIES).await;
-        assert!(resp.error_code == ERR_NONE, "streams converge: {resp:?}");
-
-        // Commit offset 42 as the live streams member.
-        commit_offset_as_member(&sc, "g4", (&mid, resp.member_epoch), "in4", topic_id, 0, 42).await;
-
-        // Leave to drain.
-        streams_leave(&sc, "g4", &mid).await;
-        // Wait for the streams leave to propagate before the downgrade JoinGroup.
-        broker.wait_until_streams_group_empty("g4").await;
-
-        // Downgrade: classic JoinGroup on drained streams group.
-        let _ = classic_join_sync(&cc, "g4").await;
-        broker.wait_until_group_type("g4", GroupType::Classic).await;
-        assert!(broker.group_type_for_test("g4") == Some(GroupType::Classic));
-        broker.shutdown().await;
-    }
-    {
-        let (broker, _bootstrap, client) = start_client(rejoin_config(log_dir), Some("c1")).await;
-        let cc = Arc::new(client);
-        // Replay must reconstruct g4 as a classic actor from the committed
-        // offset. Offset-only groups are Kafka-typeless, so they do not carry a
-        // Classic type lock in `group_type_for_test`.
-        assert!(
-            broker.classic_group_inspect_for_test("g4").await.is_some(),
-            "offset-only replay must seed a classic actor for g4"
-        );
-        assert!(
-            broker.group_type_for_test("g4") != Some(GroupType::Streams),
-            "group must not replay as Streams after downgrade"
-        );
-        let fr = cc
-            .send(offset_fetch_request(offset_fetch_group(
-                "g4",
-                Some(vec![offset_fetch_topic("in4", topic_id, vec![0])]),
-            )))
-            .await
-            .expect("OffsetFetch");
-        assert!(
-            fr.groups[0].topics[0].partitions[0].committed_offset == 42,
-            "committed offset must survive downgrade + restart"
-        );
-    }
+async fn drained_streams_group_downgrades_and_preserves_offsets(
+    downgrade_case: DowngradeScenario,
+    downgrade_offsets: DowngradeOffsets,
+) {
+    let _ = downgrade_offsets;
+    downgrade_case.shutdown().await;
+    drop(downgrade_case);
 }
 
-/// A downgrade from streams to classic survives a broker restart. After
-/// replay the group is Classic and its committed offset is intact.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/streams_classic_downgrade/downgrade_conversion.feature",
     name = "downgrade survives restart"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn downgrade_survives_restart() {}
+async fn downgrade_survives_restart(
+    downgrade_case: DowngradeScenario,
+    downgrade_offsets: DowngradeOffsets,
+) {
+    let _ = downgrade_offsets;
+    downgrade_case.shutdown().await;
+    drop(downgrade_case);
+}

@@ -26,7 +26,10 @@ impl EventQueueRecorder for BrokerMetrics {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::metrics::test_support::encode_metrics, assert2::check};
+    use {
+        super::*, crate::metrics::test_support::encode_metrics, assert2::check,
+        rstest_bdd::datatable::Rows,
+    };
 
     /// The event-queue series one scrape shows.
     #[derive(Debug, Default, PartialEq)]
@@ -67,85 +70,105 @@ mod tests {
         }
     }
 
-    /// One recorder call and the scrape it leaves on a fresh registry.
-    struct RecorderCase {
-        name: &'static str,
-        record: fn(&BrokerMetrics),
-        expected: EventQueueScrape,
+    struct ControllerQueueMetrics {
+        metrics: BrokerMetrics,
+        scrape: Option<EventQueueScrape>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "metrics event queue tests: each recorder call reaches its kafka named series"
-    )]
-    fn bdd_verify_each_recorder_call_reaches_its_kafka_named_series() {
-        let cases = [
-            RecorderCase {
-                name: "nothing recorded",
-                record: |_| {},
-                expected: EventQueueScrape::default(),
-            },
-            RecorderCase {
-                name: "EventQueueTimeMs",
-                record: |metrics| metrics.queue_time(Duration::from_millis(250)),
-                expected: EventQueueScrape {
-                    queue_count: 1.0,
-                    queue_sum: 0.25,
-                    ..EventQueueScrape::default()
-                },
-            },
-            RecorderCase {
-                name: "EventQueueProcessingTimeMs",
-                record: |metrics| {
-                    metrics.processing_time(Duration::from_millis(500));
-                    metrics.processing_time(Duration::from_millis(250));
-                },
-                expected: EventQueueScrape {
-                    processing_count: 2.0,
-                    processing_sum: 0.75,
-                    ..EventQueueScrape::default()
-                },
-            },
-            RecorderCase {
-                name: "EventQueueOperationsStartedCount and TimedOutCount",
-                record: |metrics| {
-                    metrics.operation_started();
-                    metrics.operation_started();
-                    metrics.operation_timed_out();
-                },
-                expected: EventQueueScrape {
-                    started: 2.0,
-                    timed_out: 1.0,
-                    ..EventQueueScrape::default()
-                },
-            },
-            RecorderCase {
-                name: "AvgIdleRatio as a counter of idle seconds",
-                record: |metrics| {
-                    metrics.idle_time(Duration::from_millis(1_500));
-                    metrics.idle_time(Duration::from_millis(500));
-                },
-                expected: EventQueueScrape {
-                    idle_seconds: 2.0,
-                    ..EventQueueScrape::default()
-                },
-            },
-        ];
-        for case in cases {
-            let metrics = BrokerMetrics::new();
-            (case.record)(&metrics);
-            check!(
-                EventQueueScrape::read(&metrics) == case.expected,
-                "{}",
-                case.name
-            );
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct ExpectedQueueMetrics {
+        queue_count: f64,
+        queue_sum: f64,
+        processing_count: f64,
+        processing_sum: f64,
+        started: f64,
+        timed_out: f64,
+        idle_seconds: f64,
+    }
+
+    #[rstest::fixture]
+    fn controller_queue_metrics() -> ControllerQueueMetrics {
+        // Start this scenario with fresh inputs and observations.
+
+        ControllerQueueMetrics {
+            metrics: BrokerMetrics::new(),
+            scrape: None,
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/metrics/event_queue.feature",
-        name = "tests: each recorder call reaches its kafka named series"
+    #[rstest_bdd_macros::given("a fresh controller event queue metrics registry")]
+    fn fresh_controller_queue_metrics(controller_queue_metrics: &mut ControllerQueueMetrics) {
+        controller_queue_metrics.metrics = BrokerMetrics::new();
+    }
+
+    #[rstest_bdd_macros::when(
+        "a controller operation waits {milliseconds} milliseconds in the queue"
     )]
-    fn each_recorder_call_reaches_its_kafka_named_series() {}
+    fn record_queue_wait(controller_queue_metrics: &ControllerQueueMetrics, milliseconds: u64) {
+        controller_queue_metrics
+            .metrics
+            .queue_time(Duration::from_millis(milliseconds));
+    }
+
+    #[rstest_bdd_macros::when(
+        "a controller operation takes {milliseconds} milliseconds to process"
+    )]
+    fn record_queue_processing(
+        controller_queue_metrics: &ControllerQueueMetrics,
+        milliseconds: u64,
+    ) {
+        controller_queue_metrics
+            .metrics
+            .processing_time(Duration::from_millis(milliseconds));
+    }
+
+    #[rstest_bdd_macros::when("a controller operation starts")]
+    fn record_queue_operation(controller_queue_metrics: &ControllerQueueMetrics) {
+        controller_queue_metrics.metrics.operation_started();
+    }
+
+    #[rstest_bdd_macros::when("a controller operation times out")]
+    fn record_queue_timeout(controller_queue_metrics: &ControllerQueueMetrics) {
+        controller_queue_metrics.metrics.operation_timed_out();
+    }
+
+    #[rstest_bdd_macros::when("the controller queue is idle for {milliseconds} milliseconds")]
+    fn record_queue_idle(controller_queue_metrics: &ControllerQueueMetrics, milliseconds: u64) {
+        controller_queue_metrics
+            .metrics
+            .idle_time(Duration::from_millis(milliseconds));
+    }
+
+    #[rstest_bdd_macros::when("the Kafka named controller queue series are scraped")]
+    fn scrape_controller_queue(controller_queue_metrics: &mut ControllerQueueMetrics) {
+        controller_queue_metrics.scrape =
+            Some(EventQueueScrape::read(&controller_queue_metrics.metrics));
+    }
+
+    #[rstest_bdd_macros::then("the controller event queue metrics contain:")]
+    fn expected_controller_queue_metrics(
+        controller_queue_metrics: &ControllerQueueMetrics,
+        #[datatable] rows: Rows<ExpectedQueueMetrics>,
+    ) {
+        let mut rows = rows.into_iter();
+        let row = rows.next().expect("one independent expected metric sample");
+        check!(rows.next().is_none());
+        check!(
+            controller_queue_metrics.scrape.as_ref()
+                == Some(&EventQueueScrape {
+                    queue_count: row.queue_count,
+                    queue_sum: row.queue_sum,
+                    processing_count: row.processing_count,
+                    processing_sum: row.processing_sum,
+                    started: row.started,
+                    timed_out: row.timed_out,
+                    idle_seconds: row.idle_seconds
+                })
+        );
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/metrics/event_queue.feature",
+        fixtures = [controller_queue_metrics: ControllerQueueMetrics]
+    );
 }

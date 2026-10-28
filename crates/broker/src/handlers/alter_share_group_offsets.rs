@@ -290,34 +290,28 @@ mod tests {
                 RequestContext,
                 create_topics::handle as create_topics_handle,
                 test_support::{
-                    self as handler_fixture_support, CreateTopicSetup, ShareRefusalCase,
-                    ShareRefusalPolicy, configured_topic_request_from,
+                    self as handler_fixture_support, CreateTopicSetup,
+                    configured_topic_request_from,
                 },
             },
-            share_coordinator::{
-                coordinator::message::UNKNOWN_TOPIC_OR_PARTITION,
-                handlers::test_support::lead_share_state_partitions,
-            },
+            share_coordinator::handlers::test_support::lead_share_state_partitions,
             test_support::{
                 ShareApiSupport, StartedBroker as HandlerStartedBroker, start_share_broker,
             },
         },
         assert2::assert,
-        krabka_protocol::{
-            owned::{
-                alter_share_group_offsets_request::{
-                    AlterShareGroupOffsetsRequest, AlterShareGroupOffsetsRequestPartition,
-                    AlterShareGroupOffsetsRequestTopic,
-                },
-                alter_share_group_offsets_response::{
-                    self, AlterShareGroupOffsetsResponse, AlterShareGroupOffsetsResponsePartition,
-                    AlterShareGroupOffsetsResponseTopic,
-                },
-                create_topics_response,
-                share_group_heartbeat_request::ShareGroupHeartbeatRequest,
-                share_group_heartbeat_response::ShareGroupHeartbeatResponse,
+        krabka_protocol::owned::{
+            alter_share_group_offsets_request::{
+                AlterShareGroupOffsetsRequest, AlterShareGroupOffsetsRequestPartition,
+                AlterShareGroupOffsetsRequestTopic,
             },
-            primitives::uuid::Uuid,
+            alter_share_group_offsets_response::{
+                self, AlterShareGroupOffsetsResponse, AlterShareGroupOffsetsResponsePartition,
+                AlterShareGroupOffsetsResponseTopic,
+            },
+            create_topics_response,
+            share_group_heartbeat_request::ShareGroupHeartbeatRequest,
+            share_group_heartbeat_response::ShareGroupHeartbeatResponse,
         },
         std::sync::Arc,
         tokio::sync::oneshot,
@@ -349,7 +343,6 @@ mod tests {
             .expect("send heartbeat");
         rx.await.expect("heartbeat response")
     }
-    const UNKNOWN_TOPIC_OR_PARTITION_MESSAGE: &str = UNKNOWN_TOPIC_OR_PARTITION;
 
     /// An authorizer with independently controllable answers for `Group`
     /// `Read`/`Alter` and per-topic `Read`, for the KIP-932
@@ -436,263 +429,266 @@ mod tests {
         .await;
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers alter share group offsets tests: handle error scenarios preserve expected rows"
-    )]
-    async fn bdd_verify_handle_error_scenarios_preserve_expected_rows() {
-        struct AlterOffsetsInput {
-            topic_name: &'static str,
-            partitions: Vec<i32>,
-        }
-        let version = alter_share_group_offsets_response::MAX_VERSION;
-        let cases: Vec<ShareRefusalCase<AlterOffsetsInput, AlterShareGroupOffsetsResponse>> = vec![
-            ShareRefusalPolicy::unsupported(
-                "disabled feature returns top-level unsupported version",
-            )
-            .with_input(
-                AlterOffsetsInput {
-                    topic_name: "missing",
-                    partitions: vec![0],
-                },
-                krabka_macros::unthrottled_wire!(AlterShareGroupOffsetsResponse {
-                    error_code: codes::UNSUPPORTED_VERSION,
-                    error_message: None,
-                    responses: Vec::new(),
-                }),
-            ),
-            ShareRefusalPolicy::group_denied(
-                "denied group returns top-level authorization failure",
-            )
-            .with_input(
-                AlterOffsetsInput {
-                    topic_name: "missing",
-                    partitions: vec![0],
-                },
-                krabka_macros::unthrottled_wire!(AlterShareGroupOffsetsResponse {
-                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                    error_message: None,
-                    responses: Vec::new(),
-                }),
-            ),
-            ShareRefusalCase {
-                name: "unknown topic preserves topic and partition fields",
-                authorizer: Arc::new(AllowAllAuthorizer),
-                enabled: ShareApiSupport::Enabled,
-                input: AlterOffsetsInput {
-                    topic_name: "missing-topic",
-                    partitions: vec![3, 5],
-                },
-                expected: krabka_macros::unthrottled_wire!(AlterShareGroupOffsetsResponse {
-                    error_code: codes::NONE,
-                    error_message: None,
-                    responses: vec![krabka_macros::tagged_wire!(
-                        AlterShareGroupOffsetsResponseTopic {
-                            topic_name: "missing-topic".into(),
-                            topic_id: Uuid::default(),
-                            partitions: vec![
-                                krabka_macros::tagged_wire!(
-                                    AlterShareGroupOffsetsResponsePartition {
-                                        partition_index: 3,
-                                        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                                        error_message: Some(
-                                            UNKNOWN_TOPIC_OR_PARTITION_MESSAGE.into()
-                                        ),
-                                    }
-                                ),
-                                krabka_macros::tagged_wire!(
-                                    AlterShareGroupOffsetsResponsePartition {
-                                        partition_index: 5,
-                                        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                                        error_message: Some(
-                                            UNKNOWN_TOPIC_OR_PARTITION_MESSAGE.into()
-                                        ),
-                                    }
-                                ),
-                            ],
-                        }
-                    )],
-                }),
-            },
-        ];
-        krabka_macros::share_refusal_matrix! {
-            case(row) [cases];
-            bind(broker_handle, _dir, broker, ctx, resp);
-            invoke [alter_share_group_offsets_handle(&broker, request("g1", row.input.topic_name, &row.input.partitions), version, &ctx)];
-        };
+    #[derive(Default)]
+    struct ShareOffsetAlteration {
+        started: Option<HandlerStartedBroker>,
+        response: Option<AlterShareGroupOffsetsResponse>,
+        summary_before: Vec<Option<crate::share_coordinator::coordinator::ShareStateSummary>>,
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/alter_share_group_offsets.feature",
-        name = "tests: handle error scenarios preserve expected rows"
+    #[rstest::fixture]
+    fn share_offset_alteration() -> ShareOffsetAlteration {
+        let started = None;
+        ShareOffsetAlteration {
+            started,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "a share offset reset broker with API enabled {enabled} and group access allowed {allowed}"
     )]
-    #[tokio::test]
-    async fn handle_error_scenarios_preserve_expected_rows() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers alter share group offsets tests: acl scenarios match kafka semantics"
-    )]
-    async fn bdd_verify_acl_scenarios_match_kafka_semantics() {
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        enum GroupGrant {
-            ReadOnly,
-            AlterOnly,
-        }
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        enum TopicState {
-            Granted,
-            Denied,
-            Unknown,
-        }
-        struct AclRow {
-            case: &'static str,
-            group: GroupGrant,
-            topic: TopicState,
-            top: i16,
-            partition: Option<i16>,
-        }
-        let rows: [AclRow; 4] = [
-            AclRow {
-                case: "group Read only is allowed (the normal share-consumer grant)",
-                group: GroupGrant::ReadOnly,
-                topic: TopicState::Granted,
-                top: codes::NONE,
-                partition: Some(codes::NONE),
-            },
-            AclRow {
-                case: "group Alter only, with no Read, is refused",
-                group: GroupGrant::AlterOnly,
-                topic: TopicState::Granted,
-                top: codes::GROUP_AUTHORIZATION_FAILED,
-                partition: None,
-            },
-            AclRow {
-                case: "group Read granted but the topic is denied",
-                group: GroupGrant::ReadOnly,
-                topic: TopicState::Denied,
-                top: codes::NONE,
-                partition: Some(codes::TOPIC_AUTHORIZATION_FAILED),
-            },
-            AclRow {
-                case: "group Read granted, topic unknown to the cluster",
-                group: GroupGrant::ReadOnly,
-                topic: TopicState::Unknown,
-                top: codes::NONE,
-                partition: Some(codes::UNKNOWN_TOPIC_OR_PARTITION),
-            },
-        ];
-
-        for (
-            index,
-            AclRow {
-                case,
-                group,
-                topic,
-                top,
-                partition,
-            },
-        ) in rows.into_iter().enumerate()
-        {
-            let topic_name = "acl-topic";
-            let authorizer = Arc::new(ScenarioAuthorizer {
-                group_read: group == GroupGrant::ReadOnly,
-                group_alter: group == GroupGrant::AlterOnly,
-                denied_topics: if topic == TopicState::Denied {
-                    vec![topic_name.to_owned()]
+    async fn share_reset_feature_policy(
+        share_offset_alteration: &mut ShareOffsetAlteration,
+        enabled: bool,
+        allowed: bool,
+    ) {
+        let authorizer: Arc<dyn crate::authorizer::Authorizer> = if allowed {
+            Arc::new(AllowAllAuthorizer)
+        } else {
+            Arc::new(crate::test_support::ControllerPeerAllowed(
+                crate::test_support::DenyAll,
+            ))
+        };
+        share_offset_alteration.started = Some(
+            start_share_broker()
+                .authorizer(authorizer)
+                .support(if enabled {
+                    ShareApiSupport::Enabled
                 } else {
-                    Vec::new()
-                },
-            });
-            let HandlerStartedBroker {
-                broker: broker_handle,
-                dir: _dir,
-            } = start_share_broker().authorizer(authorizer).call().await;
-            let broker = broker_handle.broker_arc_for_test();
-            krabka_macros::request_test_identity! {
-                bind(ctx);
-                user ["alice"];
-            };
-            let topic_exists = topic != TopicState::Unknown;
-            if topic_exists {
-                create_topic(&broker_handle, &ctx, CreateTopicSetup {
-                    topic: topic_name,
-                    ..Default::default()
+                    ShareApiSupport::Disabled
                 })
-                .await;
-                lead_share_state_partitions(&broker).await;
-            }
-            let topic_id_before = if topic_exists {
-                let topic_id = broker
-                    .controller
-                    .current_image()
-                    .topic(topic_name)
-                    .expect("topic metadata")
-                    .topic_id;
+                .call()
+                .await,
+        );
+    }
+    #[rstest_bdd_macros::given(
+        "alice has group Read {read}, group Alter {alter}, topic Read {topic_read} and acl-topic exists {exists}"
+    )]
+    async fn share_reset_acl_policy(
+        share_offset_alteration: &mut ShareOffsetAlteration,
+        read: bool,
+        alter: bool,
+        topic_read: bool,
+        exists: bool,
+    ) {
+        let authorizer = Arc::new(ScenarioAuthorizer {
+            group_read: read,
+            group_alter: alter,
+            denied_topics: if topic_read {
+                Vec::new()
+            } else {
+                vec!["acl-topic".into()]
+            },
+        });
+        let started = start_share_broker().authorizer(authorizer).call().await;
+        if exists {
+            let broker = started.broker.broker_arc_for_test();
+            krabka_macros::request_test_identity! { bind(ctx); user ["alice"]; };
+            create_topic(&started.broker, &ctx, CreateTopicSetup {
+                topic: "acl-topic",
+                ..Default::default()
+            })
+            .await;
+            lead_share_state_partitions(&broker).await;
+            let topic_id = broker
+                .controller
+                .current_image()
+                .topic("acl-topic")
+                .expect("topic metadata")
+                .topic_id;
+            share_offset_alteration.summary_before.push(
                 broker
                     .group_coordinator
                     .share_persister()
                     .expect("share persister")
                     .read_state_summary("g-acl", topic_id, 0)
                     .await
-                    .expect("read state")
-            } else {
-                None
-            };
-
-            let resp = alter_share_group_offsets_handle(
+                    .expect("state summary"),
+            );
+        }
+        share_offset_alteration.started = Some(started);
+    }
+    #[rstest_bdd_macros::when(
+        "alice resets share group {group}, topic {topic}, partitions {partitions} to start offset 42"
+    )]
+    async fn alter_share_offset_request(
+        share_offset_alteration: &mut ShareOffsetAlteration,
+        group: String,
+        topic: String,
+        partitions: String,
+    ) {
+        let broker = share_offset_alteration
+            .started
+            .as_ref()
+            .expect("started broker")
+            .broker
+            .broker_arc_for_test();
+        krabka_macros::request_test_identity! { bind(ctx); user ["alice"]; };
+        let partitions = partitions
+            .split(',')
+            .map(|partition| partition.parse().expect("partition index"))
+            .collect::<Vec<_>>();
+        share_offset_alteration.response = Some(
+            alter_share_group_offsets_handle(
                 &broker,
-                request("g-acl", topic_name, &[0]),
+                request(&group, &topic, &partitions),
                 alter_share_group_offsets_response::MAX_VERSION,
                 &ctx,
             )
             .await
-            .expect("handle");
-
-            assert!(resp.error_code == top, "row {index} ({case}): {resp:?}");
-            if let Some(expected_partition_code) = partition {
-                assert!(
-                    resp.responses[0].partitions[0].error_code == expected_partition_code,
-                    "row {index} ({case}): {resp:?}"
-                );
-            }
-            if topic_exists && partition != Some(codes::NONE) {
-                // A denied or otherwise-refused topic must not have its
-                // start offset reset.
-                let topic_id = broker
-                    .controller
-                    .current_image()
-                    .topic(topic_name)
-                    .expect("topic metadata")
-                    .topic_id;
-                let after = broker
-                    .group_coordinator
-                    .share_persister()
-                    .expect("share persister")
-                    .read_state_summary("g-acl", topic_id, 0)
-                    .await
-                    .expect("read state");
-                assert!(after == topic_id_before, "row {index} ({case})");
-            }
-            broker_handle.shutdown().await;
+            .expect("handle reset"),
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "the full share reset response has top-level code {code} and these unknown-topic partitions"
+    )]
+    async fn share_reset_full_response(
+        share_offset_alteration: &mut ShareOffsetAlteration,
+        code: i16,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let mut responses = Vec::new();
+        for cells in datatable.into_iter().skip(1) {
+            responses.push(AlterShareGroupOffsetsResponseTopic {
+                topic_name: cells[0].clone(),
+                partitions: cells[1]
+                    .split(',')
+                    .map(|partition| AlterShareGroupOffsetsResponsePartition {
+                        partition_index: partition.parse().expect("partition index"),
+                        error_code: cells[2].parse().expect("partition error code"),
+                        error_message: Some(cells[3].clone()),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            });
         }
+        let expected = AlterShareGroupOffsetsResponse {
+            error_code: code,
+            responses,
+            ..Default::default()
+        };
+        assert!(
+            share_offset_alteration
+                .response
+                .as_ref()
+                .expect("reset response")
+                == &expected
+        );
+        share_offset_alteration
+            .started
+            .take()
+            .expect("started broker")
+            .broker
+            .shutdown()
+            .await;
+    }
+    #[rstest_bdd_macros::then(
+        "the share reset has top-level code {top} and partition code {partition}"
+    )]
+    async fn share_reset_acl_response(
+        share_offset_alteration: &mut ShareOffsetAlteration,
+        top: i16,
+        partition: String,
+    ) {
+        let response = share_offset_alteration
+            .response
+            .as_ref()
+            .expect("reset response");
+        assert!(response.error_code == top);
+        let partition =
+            (partition != "none").then(|| partition.parse::<i16>().expect("partition code"));
+        if let Some(code) = partition {
+            assert!(response.responses[0].partitions[0].error_code == code);
+        }
+        if !share_offset_alteration.summary_before.is_empty() && partition != Some(codes::NONE) {
+            let broker = share_offset_alteration
+                .started
+                .as_ref()
+                .expect("started broker")
+                .broker
+                .broker_arc_for_test();
+            let topic_id = broker
+                .controller
+                .current_image()
+                .topic("acl-topic")
+                .expect("topic metadata")
+                .topic_id;
+            let after = broker
+                .group_coordinator
+                .share_persister()
+                .expect("share persister")
+                .read_state_summary("g-acl", topic_id, 0)
+                .await
+                .expect("state summary");
+            assert!(share_offset_alteration.summary_before.as_slice() == [after]);
+        }
+        share_offset_alteration
+            .started
+            .take()
+            .expect("started broker")
+            .broker
+            .shutdown()
+            .await;
     }
 
-    /// Issue #727: krabka checked `Alter` on the group and never checked
-    /// topic `Read`. Kafka checks `Read` on the group and `Read` on each
-    /// topic, the topic check running BEFORE the unknown-topic lookup. Every
-    /// row uses a fresh broker and group id.
-    ///
-    /// `(group Read granted, group Alter granted, topic name is denied,
-    /// topic exists, expected top-level code, expected partition code)`.
-    #[cfg(test)]
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/alter_share_group_offsets.feature",
-        name = "tests: acl scenarios match kafka semantics"
+        path = "tests/features/handler_alter_share_offsets.feature",
+        name = "Disabled API refuses the whole reset"
     )]
     #[tokio::test]
-    async fn acl_scenarios_match_kafka_semantics() {}
+    async fn share_offset_reset_case_0(share_offset_alteration: ShareOffsetAlteration) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_alter_share_offsets.feature",
+        name = "Denied group refuses the whole reset"
+    )]
+    #[tokio::test]
+    async fn share_offset_reset_case_1(share_offset_alteration: ShareOffsetAlteration) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_alter_share_offsets.feature",
+        name = "Unknown topic preserves partition identities"
+    )]
+    #[tokio::test]
+    async fn share_offset_reset_case_2(share_offset_alteration: ShareOffsetAlteration) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_alter_share_offsets.feature",
+        name = "Group Read alone permits offset reset"
+    )]
+    #[tokio::test]
+    async fn share_offset_reset_case_3(share_offset_alteration: ShareOffsetAlteration) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_alter_share_offsets.feature",
+        name = "Group Alter without Read refuses reset and preserves stored state"
+    )]
+    #[tokio::test]
+    async fn share_offset_reset_case_4(share_offset_alteration: ShareOffsetAlteration) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_alter_share_offsets.feature",
+        name = "Topic Read denial preserves stored state"
+    )]
+    #[tokio::test]
+    async fn share_offset_reset_case_5(share_offset_alteration: ShareOffsetAlteration) {}
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_alter_share_offsets.feature",
+        name = "Authorized unknown topic reports missing partition"
+    )]
+    #[tokio::test]
+    async fn share_offset_reset_case_6(share_offset_alteration: ShareOffsetAlteration) {}
 
     /// Issue #944: an empty `group_id` is refused with `INVALID_GROUP_ID`
     /// (24), and a `group_id` already locked to another protocol type is

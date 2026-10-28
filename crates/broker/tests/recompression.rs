@@ -159,139 +159,198 @@ async fn fetch_first_batch(addr: SocketAddr, topic: &str, topic_id: Uuid) -> Rec
         .expect("Fetch returned at least one v2 batch")
 }
 
-use crate::support::partitions::wait_for_compression;
+use {
+    crate::support::partitions::wait_for_compression,
+    krabka_log::{Log, LogConfig},
+    krabka_units::gibibytes,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+};
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("recompression: topic compression lz4 recompresses producer gzip batch")]
-async fn bdd_verify_topic_compression_lz4_recompresses_producer_gzip_batch() {
-    const TOPIC: &str = "recompress-target";
-    let StartedBroker { handle, addr } = start_broker().await;
-
-    create_topic_with_compression(addr, TOPIC, "lz4").await;
-    // The CreateTopics path → metadata → replicator-supervisor
-    // reconcile loop pushes the LogConfig override into the partition
-    // writer's log. Wait until the writer has applied it; otherwise
-    // the produce can land before the override and the broker passes
-    // gzip through unmodified.
-    wait_for_compression(&handle, TOPIC, Some(CompressionType::Lz4)).await;
-
-    let topic_id = get_topic_id(addr, TOPIC).await;
-    let payload = b"broker-side recompression smoke";
-    produce_gzip(addr, TOPIC, topic_id, payload).await;
-
-    let served = fetch_first_batch(addr, TOPIC, topic_id).await;
-    check!(
-        served.attributes.compression() == CompressionType::Lz4,
-        "broker must re-encode the gzip batch to lz4 before write"
-    );
-    assert!(served.records.len() == 1);
-    check!(
-        served.records[0].value.as_deref() == Some(payload.as_slice()),
-        "record payload must survive the recompress round-trip"
-    );
-
-    handle.shutdown().await;
+#[derive(Default)]
+struct CompressionScenario {
+    broker: Option<StartedBroker>,
+    topic: String,
+    topic_id: Option<Uuid>,
+    payload: Vec<u8>,
+    served: Option<RecordBatch>,
+    directory: Option<TempDir>,
+    log: Option<Log>,
+    batch: Option<RecordBatch>,
+    stored: Option<Bytes>,
+    encoded: Option<Bytes>,
+    level: i32,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[fixture]
+fn compression_case() -> CompressionScenario {
+    // Broker round trips and owned log writes retain their actual encoded observations.
+    CompressionScenario::default()
+}
+
+#[given("a topic {topic} whose compression policy is {policy}")]
+async fn compression_topic(
+    compression_case: &mut CompressionScenario,
+    topic: String,
+    policy: String,
+) {
+    let broker = start_broker().await;
+    create_topic_with_compression(broker.addr, &topic, &policy).await;
+    let compression = match policy.as_str() {
+        "lz4" => Some(CompressionType::Lz4),
+        "producer" => None,
+        _ => panic!("unsupported policy {policy}"),
+    };
+    wait_for_compression(&broker.handle, &topic, compression).await;
+    compression_case.topic_id = Some(get_topic_id(broker.addr, &topic).await);
+    compression_case.broker = Some(broker);
+    compression_case.topic = topic;
+}
+
+#[when("a gzip producer appends payload {payload} and a consumer fetches the first batch")]
+async fn compressed_round_trip(compression_case: &mut CompressionScenario, payload: String) {
+    let broker = compression_case.broker.as_ref().expect("topic broker");
+    let topic_id = compression_case.topic_id.expect("topic identity");
+    compression_case.payload = payload.into_bytes();
+    produce_gzip(
+        broker.addr,
+        &compression_case.topic,
+        topic_id,
+        &compression_case.payload,
+    )
+    .await;
+    compression_case.served =
+        Some(fetch_first_batch(broker.addr, &compression_case.topic, topic_id).await);
+}
+
+#[then("the fetched batch uses {codec} compression and preserves the original payload")]
+fn compressed_batch(compression_case: &CompressionScenario, codec: String) {
+    let expected = match codec.as_str() {
+        "lz4" => CompressionType::Lz4,
+        "gzip" => CompressionType::Gzip,
+        _ => panic!("unsupported codec {codec}"),
+    };
+    let served = compression_case.served.as_ref().expect("batch fetched");
+    check!(served.attributes.compression() == expected);
+    assert!(served.records.len() == 1);
+    check!(served.records[0].value.as_deref() == Some(compression_case.payload.as_slice()));
+}
+
+#[given("an owned record batch using {codec} at compression level {level}")]
+fn owned_compression(compression_case: &mut CompressionScenario, codec: String, level: i32) {
+    let codec = match codec.as_str() {
+        "gzip" => CompressionType::Gzip,
+        "lz4" => CompressionType::Lz4,
+        "zstd" => CompressionType::Zstd,
+        _ => panic!("unsupported codec {codec}"),
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let log = Log::open(directory.path(), LogConfig::default()).unwrap();
+    log.set_config(LogConfig {
+        compression_gzip_level: if codec == CompressionType::Gzip {
+            level
+        } else {
+            -1
+        },
+        compression_lz4_level: if codec == CompressionType::Lz4 {
+            level
+        } else {
+            9
+        },
+        compression_zstd_level: if codec == CompressionType::Zstd {
+            level
+        } else {
+            3
+        },
+        ..LogConfig::default()
+    });
+    let value: Vec<u8> = (0..16 * 1024u32)
+        .map(|i| u8::try_from((i * 7 + i / 13) % 251).unwrap())
+        .collect();
+    compression_case.batch = Some(RecordBatch {
+        attributes: Attributes::default().with_compression(codec),
+        ..batch_from_records(vec![value_record(0, Some(Bytes::from(value)))])
+    });
+    compression_case.directory = Some(directory);
+    compression_case.log = Some(log);
+    compression_case.level = level;
+}
+
+#[when("the log appends the owned batch and reads its stored encoded bytes")]
+fn append_owned_compression(compression_case: &mut CompressionScenario) {
+    let log = compression_case.log.as_mut().expect("configured log");
+    let batch = compression_case.batch.as_mut().expect("owned batch");
+    let (base, _) = log.append(batch).unwrap();
+    compression_case.encoded = Some(encoded_at_level(
+        batch,
+        CompressionLevel(compression_case.level),
+    ));
+    compression_case.stored = Some(
+        log.read_raw(base, log.log_end_offset(), gibibytes(1))
+            .unwrap()
+            .bytes,
+    );
+}
+
+#[then("the stored batch exactly matches encoding at the configured compression level")]
+fn stored_compression_level(compression_case: &CompressionScenario) {
+    check!(
+        compression_case
+            .stored
+            .as_ref()
+            .expect("stored encoded bytes")
+            == compression_case
+                .encoded
+                .as_ref()
+                .expect("reference encoding")
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/recompression.feature",
     name = "topic compression lz4 recompresses producer gzip batch"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn topic_compression_lz4_recompresses_producer_gzip_batch() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("recompression: topic compression producer preserves producer gzip")]
-async fn bdd_verify_topic_compression_producer_preserves_producer_gzip() {
-    const TOPIC: &str = "passthrough";
-    let StartedBroker { handle, addr } = start_broker().await;
-
-    create_topic_with_compression(addr, TOPIC, "producer").await;
-    wait_for_compression(&handle, TOPIC, None).await;
-
-    let topic_id = get_topic_id(addr, TOPIC).await;
-    let payload = b"passthrough payload";
-    produce_gzip(addr, TOPIC, topic_id, payload).await;
-
-    let served = fetch_first_batch(addr, TOPIC, topic_id).await;
-    assert!(
-        served.attributes.compression() == CompressionType::Gzip,
-        "compression.type=producer must preserve the producer's gzip flag"
-    );
-    assert!(served.records[0].value.as_deref() == Some(payload.as_slice()));
-
-    handle.shutdown().await;
+async fn topic_compression_lz4_recompresses_producer_gzip_batch(
+    compression_case: CompressionScenario,
+) {
+    compression_case
+        .broker
+        .take()
+        .expect("broker")
+        .handle
+        .shutdown()
+        .await;
+    drop(compression_case);
 }
 
-/// Sanity check: when `compression.type=producer` (the Kafka default),
-/// the broker does NOT recompress. The served batch keeps the
-/// producer's gzip flag verbatim. Without this guard a regression that
-/// always recompresses would still satisfy the lz4 happy-path test.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/recompression.feature",
     name = "topic compression producer preserves producer gzip"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn topic_compression_producer_preserves_producer_gzip() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("recompression: stored owned batches honor every codec level")]
-fn bdd_verify_stored_owned_batches_honor_every_codec_level() {
-    use {
-        krabka_log::{Log, LogConfig},
-        krabka_units::gibibytes,
-    };
-
-    for (codec, levels) in [
-        (CompressionType::Gzip, [1, 9]),
-        (CompressionType::Lz4, [9, 17]),
-        (CompressionType::Zstd, [-5, 12]),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-        for level in levels {
-            log.set_config(LogConfig {
-                compression_gzip_level: if codec == CompressionType::Gzip {
-                    level
-                } else {
-                    -1
-                },
-                compression_lz4_level: if codec == CompressionType::Lz4 {
-                    level
-                } else {
-                    9
-                },
-                compression_zstd_level: if codec == CompressionType::Zstd {
-                    level
-                } else {
-                    3
-                },
-                ..LogConfig::default()
-            });
-            let value: Vec<u8> = (0..16 * 1024u32)
-                .map(|i| u8::try_from((i * 7 + i / 13) % 251).unwrap())
-                .collect();
-            let mut batch = RecordBatch {
-                attributes: Attributes::default().with_compression(codec),
-                ..batch_from_records(vec![value_record(0, Some(Bytes::from(value)))])
-            };
-            let (base, _) = log.append(&mut batch).unwrap();
-            let expected = encoded_at_level(&batch, CompressionLevel(level));
-            let stored = log
-                .read_raw(base, log.log_end_offset(), gibibytes(1))
-                .unwrap();
-            check!(stored.bytes == expected, "{codec:?} level={level}");
-        }
-    }
+async fn topic_compression_producer_preserves_producer_gzip(compression_case: CompressionScenario) {
+    compression_case
+        .broker
+        .take()
+        .expect("broker")
+        .handle
+        .shutdown()
+        .await;
+    drop(compression_case);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/recompression.feature",
     name = "stored owned batches honor every codec level"
 )]
-fn stored_owned_batches_honor_every_codec_level() {}
+fn stored_owned_batches_honor_every_codec_level(
+    compression_case: CompressionScenario,
+    codec: String,
+    level: i32,
+) {
+    let _ = (compression_case, codec, level);
+}
 
 krabka_macros::compression_bytes_fixture!(encoded_at_level, CompressionLevel);

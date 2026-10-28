@@ -96,37 +96,42 @@ fn whole(code: i16) -> OffsetDeleteResponse {
     }
 }
 
-/// #734 and #813, row by row. Topics `t` and `u` exist with one partition
-/// each; `ghost` does not.
-/// An `OffsetDelete` case: name, broker, group id, request topics, and the
-/// whole expected response.
-struct Case<'a> {
-    name: &'a str,
-    broker: &'a BrokerHandle,
-    group_id: &'a str,
-    topics: &'a [RequestTopic<'a>],
-    want: OffsetDeleteResponse,
+#[derive(Default)]
+struct OffsetDeletionScenario {
+    started: Option<HandlerStartedBroker>,
+    response: Option<OffsetDeleteResponse>,
+    before_ms: i64,
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers offset delete tests: offset delete matches kafka whole responses"
+#[rstest::fixture]
+fn offset_deletion() -> OffsetDeletionScenario {
+    let started = None;
+    OffsetDeletionScenario {
+        started,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given("an offset deletion broker with group Delete allowed {allowed}")]
+async fn offset_deletion_authorization(
+    offset_deletion: &mut OffsetDeletionScenario,
+    allowed: bool,
+) {
+    let authorizer: Arc<dyn crate::authorizer::Authorizer> = if allowed {
+        Arc::new(AllowAllAuthorizer)
+    } else {
+        Arc::new(DenyAll)
+    };
+    offset_deletion.started = Some(start_group_broker_no_audit(authorizer).await);
+}
+#[rstest_bdd_macros::given(
+    "topics t and u have one partition, classic-g subscribes to t and ghost and commits u-0 at offset 5, connect-g speaks connect, garbled-g has consumer metadata byte 00 and kip848-g resolves regex t.* to t"
 )]
-async fn bdd_verify_offset_delete_matches_kafka_whole_responses() {
-    let HandlerStartedBroker {
-        broker: allowed,
-        dir: _allowed_dir,
-    } = start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
-    let HandlerStartedBroker {
-        broker: denied,
-        dir: _denied_dir,
-    } = start_group_broker_no_audit(Arc::new(DenyAll)).await;
-    create_topic(&allowed, "t").await;
-    create_topic(&allowed, "u").await;
-    let coordinator = Arc::clone(&allowed.broker_arc_for_test().group_coordinator);
+async fn offset_deletion_group_state(offset_deletion: &mut OffsetDeletionScenario) {
+    let started = offset_deletion.started.as_ref().expect("started broker");
+    create_topic(&started.broker, "t").await;
+    create_topic(&started.broker, "u").await;
+    let coordinator = Arc::clone(&started.broker.broker_arc_for_test().group_coordinator);
     for group in [
         classic_group("connect-g", "connect", Bytes::from_static(b"opaque")),
-        // `u-0` holds an offset, so its delete writes the tombstone below.
         CoordinatorGroup::seeded(
             "classic-g",
             classic_group("classic-g", "consumer", subscription(&["t", "ghost"])).kind,
@@ -138,174 +143,166 @@ async fn bdd_verify_offset_delete_matches_kafka_whole_responses() {
         let group_id = group.group_id.clone();
         coordinator.seed_classic(&group_id, Box::new(group));
     }
-
-    let rows: Vec<Case<'_>> = vec![
-        Case {
-            name: "group Delete denied: top-level only",
-            broker: &denied,
-            group_id: "classic-g",
-            topics: &[RequestTopic {
-                name: "t",
-                partitions: &[0],
-            }],
-            want: whole(codes::GROUP_AUTHORIZATION_FAILED),
+}
+#[rstest_bdd_macros::when("alice deletes offsets for group \"{group}\" and these topic partitions")]
+async fn delete_group_offsets(
+    offset_deletion: &mut OffsetDeletionScenario,
+    group: String,
+    datatable: Vec<Vec<String>>,
+) {
+    let input = datatable
+        .into_iter()
+        .skip(1)
+        .map(|cells| {
+            (
+                cells[0].clone(),
+                cells[1]
+                    .split(',')
+                    .map(|p| p.parse::<i32>().expect("partition"))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let topics = input
+        .iter()
+        .map(|(name, partitions)| RequestTopic { name, partitions })
+        .collect::<Vec<_>>();
+    let request = OffsetDeleteRequest {
+        group_id: if group == "<empty>" {
+            String::new()
+        } else {
+            group
         },
-        Case {
-            name: "empty group id",
-            broker: &allowed,
-            group_id: "",
-            topics: &[RequestTopic {
-                name: "t",
-                partitions: &[0],
-            }],
-            want: whole(codes::INVALID_GROUP_ID),
-        },
-        Case {
-            name: "missing group: top-level only",
-            broker: &allowed,
-            group_id: "ghost-g",
-            topics: &[RequestTopic {
-                name: "t",
-                partitions: &[0],
-            }],
-            want: whole(codes::GROUP_ID_NOT_FOUND),
-        },
-        Case {
-            name: "non-empty group without the consumer protocol",
-            broker: &allowed,
-            group_id: "connect-g",
-            topics: &[RequestTopic {
-                name: "t",
-                partitions: &[0],
-            }],
-            want: whole(codes::NON_EMPTY_GROUP),
-        },
-        Case {
-            name: "undecodable metadata subscribes to every topic",
-            broker: &allowed,
-            group_id: "garbled-g",
-            topics: &[RequestTopic {
-                name: "u",
-                partitions: &[0],
-            }],
-            want: OffsetDeleteResponse {
-                topics: vec![expected_topic("u", vec![expected_row(
-                    0,
-                    codes::GROUP_SUBSCRIBED_TO_TOPIC,
-                )])],
-                ..whole(codes::NONE)
-            },
-        },
-        Case {
-            name: "KIP-848 group subscribed by regex",
-            broker: &allowed,
-            group_id: "kip848-g",
-            topics: &[RequestTopic {
-                name: "t",
-                partitions: &[0],
-            }],
-            want: OffsetDeleteResponse {
-                topics: vec![expected_topic("t", vec![expected_row(
-                    0,
-                    codes::GROUP_SUBSCRIBED_TO_TOPIC,
-                )])],
-                ..whole(codes::NONE)
-            },
-        },
-        Case {
-            name: "existence before subscription, broker rows before the coordinator's",
-            broker: &allowed,
-            group_id: "classic-g",
-            topics: &[
-                RequestTopic {
-                    name: "t",
-                    partitions: &[0],
-                },
-                RequestTopic {
-                    name: "ghost",
-                    partitions: &[0],
-                },
-                RequestTopic {
-                    name: "u",
-                    partitions: &[0, 5],
-                },
-            ],
-            want: OffsetDeleteResponse {
-                topics: vec![
-                    expected_topic("ghost", vec![expected_row(
-                        0,
-                        codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    )]),
-                    expected_topic("u", vec![
-                        expected_row(5, codes::UNKNOWN_TOPIC_OR_PARTITION),
-                        expected_row(0, codes::NONE),
-                    ]),
-                    expected_topic("t", vec![expected_row(0, codes::GROUP_SUBSCRIBED_TO_TOPIC)]),
-                ],
-                ..whole(codes::NONE)
-            },
-        },
-    ];
-
-    krabka_macros::request_test_identity! {
-        bind(principal, peer, ctx);
-        user ["alice"];
-        client ["offset-delete-client"];
+        ..req_with_topics(&topics)
     };
-    let version = offset_delete_response::MAX_VERSION;
-    let before_ms = now_ms();
-    for Case {
-        name,
-        broker,
-        group_id,
-        topics,
-        want,
-    } in rows
-    {
-        let req = OffsetDeleteRequest {
-            group_id: group_id.into(),
-            ..req_with_topics(topics)
-        };
-        let resp = handle(&broker.broker_arc_for_test(), req, version, &ctx)
+    let broker = offset_deletion
+        .started
+        .as_ref()
+        .expect("started broker")
+        .broker
+        .broker_arc_for_test();
+    krabka_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; client ["offset-delete-client"]; };
+    offset_deletion.before_ms = now_ms();
+    offset_deletion.response = Some(
+        handle(&broker, request, offset_delete_response::MAX_VERSION, &ctx)
             .await
-            .expect("OffsetDelete");
-        check!(resp == want, "{name}");
+            .expect("OffsetDelete"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "the complete offset deletion response has top-level code {code} and these ordered topic partitions"
+)]
+async fn offset_deletion_response(
+    offset_deletion: &mut OffsetDeletionScenario,
+    code: i16,
+    datatable: Vec<Vec<String>>,
+) {
+    let mut topics: Vec<krabka_protocol::owned::offset_delete_response::OffsetDeleteResponseTopic> =
+        Vec::new();
+    for cells in datatable.into_iter().skip(1) {
+        if topics.last().is_none_or(|topic| topic.name != cells[0]) {
+            topics.push(expected_topic(&cells[0], Vec::new()));
+        }
+        topics
+            .last_mut()
+            .expect("topic row")
+            .partitions
+            .push(expected_row(
+                cells[1].parse().expect("partition"),
+                cells[2].parse().expect("partition error"),
+            ));
     }
-
-    // The successful delete writes a tombstone whose record timestamp must
-    // be the broker's clock, so later commits do not age this segment from 1970.
-    {
-        let broker = allowed.broker_arc_for_test();
+    let expected = OffsetDeleteResponse {
+        topics,
+        ..whole(code)
+    };
+    check!(offset_deletion.response.as_ref().expect("delete response") == &expected);
+    if expected.topics.iter().any(|topic| {
+        topic
+            .partitions
+            .iter()
+            .any(|partition| partition.error_code == codes::NONE)
+    }) {
+        let broker = offset_deletion
+            .started
+            .as_ref()
+            .expect("started broker")
+            .broker
+            .broker_arc_for_test();
         let partition = local_partition_for_group(
             &broker.controller.current_image(),
             broker.config.node_id,
             "classic-g",
         )
-        .unwrap();
+        .expect("local offsets partition");
         let part = broker
             .partitions
             .get(OFFSETS_TOPIC, krabka_ids::PartitionIndex(partition))
-            .unwrap();
-        let log = part.log.lock().unwrap();
+            .expect("offsets partition");
+        let log = part.log.lock().expect("offsets log");
         let (offset, timestamp) = log
-            .offset_for_timestamp(before_ms)
+            .offset_for_timestamp(offset_deletion.before_ms)
             .expect("dated tombstone");
         check!(offset == log.log_end_offset() - 1);
         check!(timestamp <= now_ms());
-        drop(log);
     }
-
-    allowed.shutdown().await;
-    denied.shutdown().await;
+    offset_deletion
+        .started
+        .take()
+        .expect("started broker")
+        .broker
+        .shutdown()
+        .await;
 }
 
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/offset_delete/tests.feature",
-    name = "offset delete matches kafka whole responses"
+    path = "tests/features/handler_offset_deletion.feature",
+    name = "Group Delete denial returns only a top-level error"
 )]
 #[tokio::test]
-async fn offset_delete_matches_kafka_whole_responses() {}
+async fn offset_deletion_case_0(offset_deletion: OffsetDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_deletion.feature",
+    name = "Empty group IDs are invalid"
+)]
+#[tokio::test]
+async fn offset_deletion_case_1(offset_deletion: OffsetDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_deletion.feature",
+    name = "Missing groups return only a top-level error"
+)]
+#[tokio::test]
+async fn offset_deletion_case_2(offset_deletion: OffsetDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_deletion.feature",
+    name = "A non-consumer nonempty classic group cannot delete offsets"
+)]
+#[tokio::test]
+async fn offset_deletion_case_3(offset_deletion: OffsetDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_deletion.feature",
+    name = "Undecodable consumer metadata protects every topic"
+)]
+#[tokio::test]
+async fn offset_deletion_case_4(offset_deletion: OffsetDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_deletion.feature",
+    name = "Resolved consumer regex subscriptions protect matching topics"
+)]
+#[tokio::test]
+async fn offset_deletion_case_5(offset_deletion: OffsetDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_deletion.feature",
+    name = "Existence precedes subscription and successful deletions write clock-dated tombstones"
+)]
+#[tokio::test]
+async fn offset_deletion_case_6(offset_deletion: OffsetDeletionScenario) {}
 
 /// The group that a [`StreamsDeleteRow`] deletes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

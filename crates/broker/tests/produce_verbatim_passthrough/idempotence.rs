@@ -1,150 +1,133 @@
-//! Idempotent-producer dedup over the verbatim path, including the wrap of the
-//! producer sequence at `i32::MAX`.
-//!
-//! Both tests matter to the passthrough because dedup reads only the batch
-//! header fields the verbatim append leaves untouched: the producer id, the
-//! epoch, `base_sequence`, and `last_offset_delta`.
+//! Producer sequence and retry behavior for LZ4 batches retained verbatim.
 
 use {
     crate::{
         harness::{boot, create_topic, idempotent_lz4_batch, produce_one, topic_id_for},
         support::client::connect_client,
     },
-    assert2::{assert, check},
+    assert2::check,
+    krabka_broker::BrokerHandle,
+    krabka_client_core::Client,
+    krabka_protocol::primitives::uuid::Uuid,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "produce verbatim passthrough idempotence: idempotent dedup over verbatim path"
-)]
-async fn bdd_verify_idempotent_dedup_over_verbatim_path() {
-    let (broker, bootstrap, _dir) = boot().await;
-    create_topic(&broker, &bootstrap, "idem").await;
-
-    let client = connect_client(bootstrap.clone(), None).await;
-    let topic_id = topic_id_for(&client, "idem").await;
-
-    // seq 0..=2 (3 records) → base offset 0.
-    let base0 = produce_one(&client, "idem", topic_id, idempotent_lz4_batch(9_001, 0, 3))
-        .await
-        .expect("first append ok");
-    assert!(base0 == 0);
-
-    // seq 3..=4 (2 records) → base offset 3.
-    let base1 = produce_one(&client, "idem", topic_id, idempotent_lz4_batch(9_001, 3, 2))
-        .await
-        .expect("second append ok");
-    assert!(base1 == 3);
-    broker.wait_until_local_log_end_offset("idem", 0, 5).await;
-
-    // Retry the MOST RECENT batch (seq 3..=4) → DUPLICATE: the dedup tracker
-    // tracks the last committed batch and echoes its base offset (3), no error.
-    // This is driven purely by the header pid/epoch/base_sequence — the lz4
-    // body is never re-encoded.
-    let base_dup = produce_one(&client, "idem", topic_id, idempotent_lz4_batch(9_001, 3, 2))
-        .await
-        .expect("duplicate must be NONE");
-    assert!(base_dup == 3, "duplicate returns the committed base offset");
-
-    // An out-of-order sequence (skip ahead past last+1) →
-    // OUT_OF_ORDER_SEQUENCE_NUMBER (45). The last committed sequence is 4, so
-    // base_sequence 99 leaves a gap.
-    let err = produce_one(
-        &client,
-        "idem",
-        topic_id,
-        idempotent_lz4_batch(9_001, 99, 1),
-    )
-    .await
-    .expect_err("out-of-order must error");
-    assert!(err == 45, "out-of-order sequence must be 45; got {err}");
-
-    broker.shutdown().await;
+struct ProducerSequences {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    client: Option<Client>,
+    topic: String,
+    topic_id: Uuid,
+    producer: i64,
+    answer: Option<Result<i64, i16>>,
 }
 
-/// Idempotent-producer dedup runs on the HEADER fields that the verbatim path
-/// exposes: pid, epoch, `base_sequence`, and `last_offset_delta`. Two appends
-/// with increasing sequences both succeed. A retry of the latest sequence is a
-/// duplicate and returns the SAME base offset. An out-of-order sequence is
-/// rejected. Structural validation may transiently decompress the lz4 body,
-/// but the append retains the producer's original compressed bytes.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/produce_verbatim_passthrough/idempotence.feature",
-    name = "idempotent dedup over verbatim path"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn idempotent_dedup_over_verbatim_path() {}
+#[fixture]
+fn sequences() -> ProducerSequences {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "produce verbatim passthrough idempotence: idempotent sequence rollover over verbatim path"
-)]
-async fn bdd_verify_idempotent_sequence_rollover_over_verbatim_path() {
-    let (broker, bootstrap, _dir) = boot().await;
-    create_topic(&broker, &bootstrap, "idem-rollover").await;
+    ProducerSequences {
+        broker: None,
+        directory: None,
+        client: None,
+        topic: String::new(),
+        topic_id: Uuid::ZERO,
+        producer: -1,
+        answer: None,
+    }
+}
 
+#[given("topic {topic} receives LZ4 batches from producer {producer}")]
+async fn producer_topic(sequences: &mut ProducerSequences, topic: String, producer: i64) {
+    let (broker, bootstrap, directory) = boot().await;
+    create_topic(&broker, &bootstrap, &topic).await;
     let client = connect_client(bootstrap, None).await;
-    let topic_id = topic_id_for(&client, "idem-rollover").await;
-
-    // This batch spans MAX-1, MAX, 0. Kafka sequences wrap modulo 2^31.
-    let first = produce_one(
-        &client,
-        "idem-rollover",
-        topic_id,
-        idempotent_lz4_batch(9_002, i32::MAX - 1, 3),
-    )
-    .await
-    .expect("batch crossing producer-sequence rollover");
-    check!(first == 0);
-
-    let next = produce_one(
-        &client,
-        "idem-rollover",
-        topic_id,
-        idempotent_lz4_batch(9_002, 1, 1),
-    )
-    .await
-    .expect("wrapped successor");
-    check!(next == 3);
-
-    let duplicate = produce_one(
-        &client,
-        "idem-rollover",
-        topic_id,
-        idempotent_lz4_batch(9_002, 1, 1),
-    )
-    .await
-    .expect("exact retry");
-    check!(duplicate == 3);
-
-    let wrong_span = produce_one(
-        &client,
-        "idem-rollover",
-        topic_id,
-        idempotent_lz4_batch(9_002, 1, 2),
-    )
-    .await
-    .expect_err("same base sequence with a different span is not a duplicate");
-    check!(wrong_span == 45);
-
-    let gap = produce_one(
-        &client,
-        "idem-rollover",
-        topic_id,
-        idempotent_lz4_batch(9_002, 3, 1),
-    )
-    .await
-    .expect_err("sequence gap after rollover");
-    check!(gap == 45);
-
-    broker.shutdown().await;
+    sequences.topic_id = topic_id_for(&client, &topic).await;
+    sequences.broker = Some(broker);
+    sequences.directory = Some(directory);
+    sequences.client = Some(client);
+    sequences.topic = topic;
+    sequences.producer = producer;
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[when("a producer batch starts at sequence {sequence} with record count {records}")]
+async fn send_sequence(sequences: &mut ProducerSequences, records: usize, sequence: i32) {
+    let client = sequences
+        .client
+        .as_ref()
+        .expect("a producer topic was created");
+    sequences.answer = Some(
+        produce_one(
+            client,
+            &sequences.topic,
+            sequences.topic_id,
+            idempotent_lz4_batch(sequences.producer, sequence, records),
+        )
+        .await,
+    );
+}
+
+#[when("the producer sends three records starting just before sequence rollover")]
+async fn cross_rollover(sequences: &mut ProducerSequences) {
+    send_sequence(sequences, 3, i32::MAX - 1).await;
+}
+
+#[when("the partition settles at log end five")]
+async fn settle_first_batches(sequences: &ProducerSequences) {
+    sequences
+        .broker
+        .as_ref()
+        .expect("a broker was started")
+        .wait_until_local_log_end_offset(&sequences.topic, 0, 5)
+        .await;
+}
+
+#[then("the batch succeeds at base offset {offset}")]
+fn accepted_sequence(sequences: &ProducerSequences, offset: i64) {
+    check!(sequences.answer.as_ref().expect("the batch was sent") == &Ok(offset));
+}
+
+#[then("the batch is refused with OUT_OF_ORDER_SEQUENCE_NUMBER 45")]
+fn rejected_sequence(sequences: &ProducerSequences) {
+    check!(sequences.answer.as_ref().expect("the batch was sent") == &Err(45));
+}
+
+#[then("the producer topic log end remains {offset}")]
+fn unchanged_log(sequences: &ProducerSequences, offset: i64) {
+    check!(
+        sequences
+            .broker
+            .as_ref()
+            .expect("a broker was started")
+            .local_log_end_offset(&sequences.topic, 0)
+            == Some(offset)
+    );
+}
+
+async fn stop_sequence_broker(sequences: ProducerSequences) {
+    sequences
+        .broker
+        .expect("a broker was started")
+        .shutdown()
+        .await;
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/produce_verbatim_passthrough/idempotence.feature",
-    name = "idempotent sequence rollover over verbatim path"
+    name = "A retry reuses its assigned offset while a sequence gap is refused"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn idempotent_sequence_rollover_over_verbatim_path() {}
+async fn idempotent_dedup_over_verbatim_path(sequences: ProducerSequences) {
+    stop_sequence_broker(sequences).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/produce_verbatim_passthrough/idempotence.feature",
+    name = "Producer sequences wrap modulo 2^31 without weakening exact-retry matching"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idempotent_sequence_rollover_over_verbatim_path(sequences: ProducerSequences) {
+    stop_sequence_broker(sequences).await;
+}

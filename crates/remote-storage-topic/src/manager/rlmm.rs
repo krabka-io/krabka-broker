@@ -258,108 +258,113 @@ mod tests {
         }
     }
 
-    /// The state the manager is in when the test asks `caught_up`.
-    #[derive(Clone, Copy)]
-    enum Scenario {
-        /// Assigned, and every published event applied.
-        Seeded,
-        /// Assigned and past the read gate, but another writer committed an
-        /// event that the pump has not applied yet.
-        Behind,
-        /// The manager does not consume the metadata partition.
-        Unassigned,
-        /// Assigned, but the assignment-time HWM is still unknown.
-        NotReady,
-        /// Assigned and ready, but the current HWM cannot be fetched.
-        HwmFailure,
-        /// The manager has shut down.
-        Shutdown,
-    }
-
     async fn ask(m: &Arc<TopicBasedRemoteLogMetadataManager>) -> CaughtUp {
         let m = Arc::clone(m);
         on_blocking(move || m.caught_up(&tp())).await.into()
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "manager rlmm tests: caught up answers from the current high water mark for {example}"
-    )]
-    async fn bdd_verify_caught_up_answers_from_the_current_high_water_mark(example: String) {
-        type Example = (Scenario, fn(i32) -> CaughtUp);
-        let (scenario, expected): Example = match example.as_str() {
-            "seeded" => (Scenario::Seeded, |_| CaughtUp::Answer(true)),
-            "behind" => (Scenario::Behind, |_| CaughtUp::Answer(false)),
-            "unassigned" => (Scenario::Unassigned, |_| CaughtUp::Answer(false)),
-            "not ready" => (Scenario::NotReady, CaughtUp::NotReady),
-            "hwm failure" => (Scenario::HwmFailure, |_| CaughtUp::Io),
-            "shutdown" => (Scenario::Shutdown, |_| CaughtUp::Io),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let log = HwmFlakyLog::new(4);
-        let mp = metadata_partition_for(&tp(), log.partition_count()).unwrap();
-        // The expectation takes the metadata partition, which a NotReady
-        // answer names.
-        let expected = expected(mp);
-        let (m, got) = match scenario {
-            Scenario::Seeded => {
-                let m = start_manager_all(Arc::<HwmFlakyLog>::clone(&log)).await;
-                seed_finished(&m, &[seed(10, 0, 99)]).await;
-                let got = ask(&m).await;
-                (m, got)
-            }
-            Scenario::Behind => {
-                let m = start_manager_all(Arc::<HwmFlakyLog>::clone(&log)).await;
-                seed_finished(&m, &[seed(10, 0, 99)]).await;
-                // The pump takes this lock before it applies a record, so
-                // holding it keeps the next record committed but unapplied.
-                let pump_stall = m.mutation_waiters.stall_pump().await;
-                let event = MetadataEvent::AddSegment(started(11, 100, 199))
-                    .encode()
-                    .unwrap();
-                log.publish(mp, event).await.unwrap();
-                let got = ask(&m).await;
-                drop(pump_stall);
-                (m, got)
-            }
-            Scenario::Unassigned => {
-                let m = start_manager(Arc::<HwmFlakyLog>::clone(&log));
-                let got = ask(&m).await;
-                (m, got)
-            }
-            Scenario::NotReady => {
-                let m = start_manager(Arc::<HwmFlakyLog>::clone(&log));
-                log.set_fail_hwm(true);
-                m.reconcile_assignment(&[mp]).await;
-                let got = ask(&m).await;
-                (m, got)
-            }
-            Scenario::HwmFailure => {
-                let m = start_manager_all(Arc::<HwmFlakyLog>::clone(&log)).await;
-                log.set_fail_hwm(true);
-                let got = ask(&m).await;
-                (m, got)
-            }
-            Scenario::Shutdown => {
-                let m = start_manager_all(Arc::<HwmFlakyLog>::clone(&log)).await;
-                m.shutdown();
-                let got = ask(&m).await;
-                (m, got)
-            }
-        };
-        check!(got == expected);
-        m.shutdown();
+    struct CatchUpScenario {
+        log: Arc<HwmFlakyLog>,
+        manager: Option<Arc<TopicBasedRemoteLogMetadataManager>>,
+        observed: Option<CaughtUp>,
     }
 
-    #[cfg(test)]
+    #[rstest::fixture]
+    fn catch_up_scenario() -> CatchUpScenario {
+        let log = HwmFlakyLog::new(4);
+        CatchUpScenario {
+            log,
+            manager: None,
+            observed: None,
+        }
+    }
+
+    #[rstest_bdd_macros::given("the metadata manager is {state}")]
+    async fn manager_readiness(catch_up_scenario: &mut CatchUpScenario, state: String) {
+        let log = &catch_up_scenario.log;
+        let mp = metadata_partition_for(&tp(), log.partition_count()).unwrap();
+        let manager = match state.as_str() {
+            "unassigned" => start_manager(Arc::<HwmFlakyLog>::clone(log)),
+            "awaiting the assignment high water mark" => {
+                let manager = start_manager(Arc::<HwmFlakyLog>::clone(log));
+                log.set_fail_hwm(true);
+                manager.reconcile_assignment(&[mp]).await;
+                manager
+            }
+            "caught up" => {
+                let manager = start_manager_all(Arc::<HwmFlakyLog>::clone(log)).await;
+                seed_finished(&manager, &[seed(10, 0, 99)]).await;
+                manager
+            }
+            "unable to fetch the current high water mark" => {
+                let manager = start_manager_all(Arc::<HwmFlakyLog>::clone(log)).await;
+                log.set_fail_hwm(true);
+                manager
+            }
+            "shut down" => {
+                let manager = start_manager_all(Arc::<HwmFlakyLog>::clone(log)).await;
+                manager.shutdown();
+                manager
+            }
+            _ => panic!("unknown manager state: {state}"),
+        };
+        catch_up_scenario.manager = Some(manager);
+    }
+
+    #[rstest_bdd_macros::when("the manager is asked whether its metadata is caught up")]
+    async fn observe_caught_up(catch_up_scenario: &mut CatchUpScenario) {
+        catch_up_scenario.observed = Some(ask(catch_up_scenario.manager.as_ref().unwrap()).await);
+    }
+
+    #[rstest_bdd_macros::when(
+        "a peer commits an event while the metadata pump is stalled and readiness is queried"
+    )]
+    async fn observe_unapplied_peer_event(catch_up_scenario: &mut CatchUpScenario) {
+        let manager = catch_up_scenario.manager.as_ref().unwrap();
+        let stall = manager.mutation_waiters.stall_pump().await;
+        let mp = metadata_partition_for(&tp(), catch_up_scenario.log.partition_count()).unwrap();
+        let event = MetadataEvent::AddSegment(started(11, 100, 199))
+            .encode()
+            .unwrap();
+        catch_up_scenario.log.publish(mp, event).await.unwrap();
+        catch_up_scenario.observed = Some(ask(manager).await);
+        drop(stall);
+    }
+
+    #[rstest_bdd_macros::then("the readiness result is {answer}")]
+    fn assert_caught_up(catch_up_scenario: &CatchUpScenario, answer: String) {
+        let mp = metadata_partition_for(&tp(), catch_up_scenario.log.partition_count()).unwrap();
+        let expected = match answer.as_str() {
+            "caught up" => CaughtUp::Answer(true),
+            "behind" => CaughtUp::Answer(false),
+            "not ready for the assigned partition" => CaughtUp::NotReady(mp),
+            "an I/O error" => CaughtUp::Io,
+            _ => panic!("unknown readiness answer: {answer}"),
+        };
+        check!(catch_up_scenario.observed.as_ref().unwrap() == &expected);
+        catch_up_scenario.manager.as_ref().unwrap().shutdown();
+    }
+
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/manager/rlmm.feature",
-        name = "tests: caught up answers from the current high water mark"
+        path = "tests/features/manager_readiness/readiness.feature",
+        name = "Readiness reflects assignment and current high water mark"
     )]
     #[tokio::test(flavor = "multi_thread")]
-    async fn caught_up_answers_from_the_current_high_water_mark(example: String) {
-        let _ = example;
+    async fn caught_up_answers_from_the_current_high_water_mark(
+        catch_up_scenario: CatchUpScenario,
+        state: String,
+        answer: String,
+    ) {
+        let _ = (catch_up_scenario, state, answer);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/manager_readiness/readiness.feature",
+        name = "Committed peer writes make a previously caught up manager fall behind"
+    )]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn readiness_accounts_for_unapplied_peer_events(catch_up_scenario: CatchUpScenario) {
+        let _ = catch_up_scenario;
     }
 
     #[tokio::test(flavor = "multi_thread")]

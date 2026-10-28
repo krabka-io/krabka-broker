@@ -1,36 +1,12 @@
-//! What the producer-state snapshot reports for idempotent, non-transactional
-//! producers: nothing on a fresh partition, one fully populated row after a
-//! produce, and one row per producer when several share a partition.
-
+//! `DescribeProducers` snapshots actual empty and idempotent append history.
 use {
-    crate::{
-        producers_harness::{batch, create_topic, init_producer, topic_id_for},
-        support::{
-            self,
-            admin::describe_producers_request,
-            produce::{SinglePartitionProduceSetup, send_batch},
-            records::ProducerValuesSetup,
-            transactions::ProducerEpoch,
-        },
-    },
+    crate::producers_harness::{ProducerSnapshot, snapshot},
     assert2::{assert, check},
     std::collections::HashSet,
 };
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "describe producers producers idempotent: empty partition returns no active producers"
-)]
-async fn bdd_verify_empty_partition_returns_no_active_producers() {
-    let p = support::start().await;
-    create_topic(&p.client, "fresh").await;
-
-    let resp = p
-        .client
-        .send(describe_producers_request("fresh".into(), vec![0]))
-        .await
-        .expect("DescribeProducers");
-
+#[rstest_bdd_macros::then("fresh partition 0 succeeds with no active producer rows")]
+fn fresh_producer_snapshot(snapshot: &ProducerSnapshot) {
+    let resp = snapshot.response.as_ref().expect("producers described");
     assert!(resp.topics.len() == 1);
     check!(resp.topics[0].name == "fresh");
     assert!(resp.topics[0].partitions.len() == 1);
@@ -45,52 +21,13 @@ async fn bdd_verify_empty_partition_returns_no_active_producers() {
         "no produce has happened — list must be empty: {:?}",
         part.active_producers,
     );
-
-    p.broker.shutdown().await;
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/describe_producers/producers_idempotent.feature",
-    name = "empty partition returns no active producers"
-)]
-#[tokio::test]
-async fn empty_partition_returns_no_active_producers() {}
-
-#[cfg(test)]
 #[rstest_bdd_macros::then(
-    "describe producers producers idempotent: after idempotent produce describe returns the producer"
+    "the single producer snapshot matches its identity epoch and sequence 2 without transaction fields"
 )]
-async fn bdd_verify_after_idempotent_produce_describe_returns_the_producer() {
-    let p = support::start().await;
-    create_topic(&p.client, "t").await;
-    let topic_id = topic_id_for(&p.client, "t").await;
-
-    let (pid, epoch) = init_producer(&p).await;
-    assert!(pid >= 0);
-
-    produce_values(
-        &p.client,
-        ProducerValuesSetup {
-            pid: krabka_ids::ProducerId(pid),
-            epoch: ProducerEpoch(epoch),
-            values: &["a", "b", "c"],
-            ..Default::default()
-        },
-        SinglePartitionProduceSetup {
-            topic: ("t").into(),
-            topic_id,
-            ..SinglePartitionProduceSetup::replicated()
-        },
-    )
-    .await;
-
-    let resp = p
-        .client
-        .send(describe_producers_request("t".into(), vec![0]))
-        .await
-        .expect("DescribeProducers");
-
+fn single_producer_snapshot(snapshot: &ProducerSnapshot) {
+    let resp = snapshot.response.as_ref().expect("producers described");
+    let (pid, epoch) = snapshot.identities[0];
     let [topic] = &resp.topics[..] else {
         panic!("expected 1 topic")
     };
@@ -111,58 +48,14 @@ async fn bdd_verify_after_idempotent_produce_describe_returns_the_producer() {
     // An idempotent (non-transactional) producer has no transaction fields.
     check!(producer.coordinator_epoch == -1);
     check!(producer.current_txn_start_offset == -1);
-
-    p.broker.shutdown().await;
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/describe_producers/producers_idempotent.feature",
-    name = "after idempotent produce describe returns the producer"
-)]
-#[tokio::test]
-async fn after_idempotent_produce_describe_returns_the_producer() {}
-
-#[cfg(test)]
 #[rstest_bdd_macros::then(
-    "describe producers producers idempotent: multiple producers on same partition all surfaced"
+    "the shared partition snapshot contains exactly both claimed producer identities"
 )]
-async fn bdd_verify_multiple_producers_on_same_partition_all_surfaced() {
-    let p = support::start().await;
-    create_topic(&p.client, "shared").await;
-    let topic_id = topic_id_for(&p.client, "shared").await;
-
-    let (pid_a, epoch_a) = init_producer(&p).await;
-    let (pid_b, epoch_b) = init_producer(&p).await;
-    assert!(
-        pid_a != pid_b,
-        "InitProducerId must return distinct ids on back-to-back calls"
-    );
-
-    for (pid, epoch) in [(pid_a, epoch_a), (pid_b, epoch_b)] {
-        produce_values(
-            &p.client,
-            ProducerValuesSetup {
-                pid: krabka_ids::ProducerId(pid),
-                epoch: ProducerEpoch(epoch),
-                values: &["x"],
-                ..Default::default()
-            },
-            SinglePartitionProduceSetup {
-                topic: ("shared").into(),
-                topic_id,
-                ..SinglePartitionProduceSetup::replicated()
-            },
-        )
-        .await;
-    }
-
-    let resp = p
-        .client
-        .send(describe_producers_request("shared".into(), vec![0]))
-        .await
-        .expect("DescribeProducers");
-
+fn multiple_producer_snapshot(snapshot: &ProducerSnapshot) {
+    let resp = snapshot.response.as_ref().expect("producers described");
+    let (pid_a, _) = snapshot.identities[0];
+    let (pid_b, _) = snapshot.identities[1];
     let producers = &resp.topics[0].partitions[0].active_producers;
     assert!(
         producers.len() == 2,
@@ -170,34 +63,31 @@ async fn bdd_verify_multiple_producers_on_same_partition_all_surfaced() {
     );
     let seen: HashSet<i64> = producers.iter().map(|p| p.producer_id).collect();
     assert!(seen.contains(&pid_a) && seen.contains(&pid_b));
-
-    p.broker.shutdown().await;
 }
 
-#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_producers/producers_idempotent.feature",
+    name = "empty partition returns no active producers"
+)]
+#[tokio::test]
+async fn empty_partition_returns_no_active_producers(snapshot: ProducerSnapshot) {
+    snapshot.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_producers/producers_idempotent.feature",
+    name = "after idempotent produce describe returns the producer"
+)]
+#[tokio::test]
+async fn after_idempotent_produce_describe_returns_the_producer(snapshot: ProducerSnapshot) {
+    snapshot.shutdown().await;
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/describe_producers/producers_idempotent.feature",
     name = "multiple producers on same partition all surfaced"
 )]
 #[tokio::test]
-async fn multiple_producers_on_same_partition_all_surfaced() {}
-
-/// The common successful idempotent append; the snapshot assertions stay in each scenario.
-async fn produce_values(
-    client: &krabka_client_core::Client,
-    values: ProducerValuesSetup<'_>,
-    setup: SinglePartitionProduceSetup,
-) {
-    let response = send_batch(
-        client,
-        batch()
-            .pid(values.pid.0)
-            .epoch(values.epoch.0)
-            .base_seq(values.base_seq.0)
-            .values(values.values)
-            .call(),
-        setup,
-    )
-    .await;
-    assert!(response.responses[0].partition_responses[0].error_code == 0);
+async fn multiple_producers_on_same_partition_all_surfaced(snapshot: ProducerSnapshot) {
+    snapshot.shutdown().await;
 }

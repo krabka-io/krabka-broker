@@ -12,7 +12,7 @@ use {
     crate::{
         CLIENT_ID,
         cluster::{
-            add_follower, add_follower_in_isr, create_topic_plaintext,
+            add_follower, add_follower_in_isr, create_topic_plaintext, leader_rate_matches,
             start_single_broker_plaintext, wait_partition_exists,
         },
         configs::drive_incremental_alter_configs_plaintext,
@@ -20,35 +20,43 @@ use {
         support::topics::ConfiguredTopicSetup,
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::net::SocketAddr,
+    tempfile::TempDir,
 };
 
-/// The sizes of the responses to the replica fetches of one run.
-struct ReplicaFetchBytes {
-    /// The size of the first response.
-    first: usize,
-    /// The size of the fetch after a second append, when one was asked for.
-    followup: Option<usize>,
+#[derive(Default)]
+struct ReplicaThrottle {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    address: Option<SocketAddr>,
+    responses: Vec<usize>,
 }
 
-/// Sets a leader throttle rate of 512 bytes/sec and the given
-/// `leader.replication.throttled.replicas` list on a topic of one partition,
-/// fills the partition with 8 KB, and returns the size of the response to a
-/// Fetch with `replica_id=2`, which is a follower outside the ISR, or in it
-/// when `follower_in_isr` says so.
-///
-/// `list` gets the broker id of the leader, the one the topic lists it by.
-async fn replica_fetch_bytes(
-    list: impl FnOnce(u64) -> String,
-    follower_in_isr: bool,
-    fetch_again_after_append: bool,
-) -> ReplicaFetchBytes {
-    let (handle, _dir, addr) = start_single_broker_plaintext().await;
-    let node_id = handle.node_id();
+#[fixture]
+fn replica_throttle() -> ReplicaThrottle {
+    // Each replica-fetch scenario owns its broker and recorded wire responses.
+    ReplicaThrottle::default()
+}
 
-    // Create topic rf=1 so this broker is always the leader, then assign
-    // replica 2 as a follower so its fetch is served.
+impl ReplicaThrottle {
+    fn broker(&self) -> &BrokerHandle { self.broker.as_ref().expect("running leader") }
+
+    fn address(&self) -> SocketAddr { self.address.expect("leader listener") }
+
+    async fn shutdown(&mut self) {
+        self.broker.take().expect("running leader").shutdown().await;
+        self.directory.take();
+    }
+}
+
+#[given("a replication leader with follower 2 whose ISR membership is {in_isr}")]
+async fn replica_leader(replica_throttle: &mut ReplicaThrottle, in_isr: bool) {
+    let (broker, directory, address) = start_single_broker_plaintext().await;
     create_topic_plaintext()
-        .addr(addr)
+        .addr(address)
         .client_id(CLIENT_ID)
         .topic(ConfiguredTopicSetup {
             name: "bar".into(),
@@ -56,204 +64,144 @@ async fn replica_fetch_bytes(
         })
         .call()
         .await;
-    wait_partition_exists(&handle, "bar", 0).await;
-    if follower_in_isr {
-        add_follower_in_isr(&handle, "bar", 2).await;
+    wait_partition_exists(&broker, "bar", 0).await;
+    if in_isr {
+        add_follower_in_isr(&broker, "bar", 2).await;
     } else {
-        add_follower(&handle, "bar", 2).await;
+        add_follower(&broker, "bar", 2).await;
     }
+    replica_throttle.broker = Some(broker);
+    replica_throttle.directory = Some(directory);
+    replica_throttle.address = Some(address);
+}
 
-    // The token bucket has a one-second burst capacity at the configured rate.
-    let err = drive_incremental_alter_configs_plaintext(addr, vec![(
-        4, // resource_type = Broker
+#[given("the leader rate is 512 bytes per second and the throttled replica list names {selection}")]
+async fn throttle_selection(replica_throttle: &mut ReplicaThrottle, selection: String) {
+    let node_id = replica_throttle.broker().node_id();
+    let list = match selection.as_str() {
+        "the leader" => format!("0:{node_id}"),
+        "only follower 2" => "0:2".into(),
+        "every replica" => "*".into(),
+        _ => panic!("unknown throttle selection {selection}"),
+    };
+    let error = drive_incremental_alter_configs_plaintext(replica_throttle.address(), vec![(
+        4,
         node_id.to_string(),
         vec![(
             "leader.replication.throttled.rate".into(),
             Some("512".into()),
-            0, // OP_SET
+            0,
         )],
     )])
     .await;
-    assert!(err == 0, "broker throttle alter failed: error_code={err}");
-
-    let list = list(node_id);
-    let err = drive_incremental_alter_configs_plaintext(addr, vec![(
-        2, // resource_type = Topic
+    assert!(
+        error == 0,
+        "broker throttle alter failed: error_code={error}"
+    );
+    let error = drive_incremental_alter_configs_plaintext(replica_throttle.address(), vec![(
+        2,
         "bar".into(),
         vec![(
             "leader.replication.throttled.replicas".into(),
             Some(list.clone()),
-            0, // OP_SET
+            0,
         )],
     )])
     .await;
-    assert!(err == 0, "topic throttle alter failed: error_code={err}");
-
-    // Wait for the configs to appear in the image before producing (so the
-    // throttle enforcement is armed when the Fetch arrives).
-    handle
-        .wait_for_image(|img| {
-            img.broker_throttle_rate(
-                krabka_metadata::NodeId(node_id),
-                krabka_metadata::ThrottleKind::Leader,
-            ) == Some(krabka_units::bytes_per_sec(512))
-                && img
+    assert!(
+        error == 0,
+        "topic throttle alter failed: error_code={error}"
+    );
+    replica_throttle
+        .broker()
+        .wait_for_image(|image| {
+            leader_rate_matches(image, node_id, 512)
+                && image
                     .topic_config("bar")
-                    .and_then(|configs| configs.get("leader.replication.throttled.replicas"))
+                    .and_then(|config| config.get("leader.replication.throttled.replicas"))
                     == Some(&list)
         })
         .await;
-
-    // Produce 8 KB of data (8 records of 1 KB each).
-    produce_plaintext(addr, "bar", 1024, 8).await;
-
-    // Fetch with replica_id=2 (inter-broker follower path → leader throttle applies).
-    let resp_bytes = fetch_plaintext_replica(addr, "bar", 2).await;
-    let followup_bytes = if fetch_again_after_append {
-        // The first over-burst partition payload is allowed to make progress;
-        // append another payload so the next fetch tests the debt it incurred.
-        produce_plaintext(addr, "bar", 1024, 8).await;
-        Some(fetch_plaintext_replica(addr, "bar", 2).await)
-    } else {
-        None
-    };
-    handle.shutdown().await;
-    ReplicaFetchBytes {
-        first: resp_bytes,
-        followup: followup_bytes,
-    }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("throttle fetch size: throttle rate caps fetch response size")]
-async fn bdd_verify_throttle_rate_caps_fetch_response_size() {
-    let ReplicaFetchBytes {
-        first: first_bytes,
-        followup: followup_bytes,
-    } = replica_fetch_bytes(|leader| format!("0:{leader}"), false, true).await;
+#[given("the replicated partition contains eight 1024-byte records")]
+async fn replication_payload(replica_throttle: &mut ReplicaThrottle) {
+    produce_plaintext(replica_throttle.address(), "bar", 1024, 8).await;
+}
 
-    // A single indivisible partition payload larger than the burst progresses
-    // once; its bounded debt throttles the next fetch, which must return no
-    // records (up to protocol framing overhead).
+#[when("follower 2 fetches the replicated partition")]
+async fn replica_fetch(replica_throttle: &mut ReplicaThrottle) {
+    replica_throttle
+        .responses
+        .push(fetch_plaintext_replica(replica_throttle.address(), "bar", 2).await);
+}
+
+#[when("another eight 1024-byte records are appended before follower 2 fetches again")]
+async fn replica_fetch_after_append(replica_throttle: &mut ReplicaThrottle) {
+    produce_plaintext(replica_throttle.address(), "bar", 1024, 8).await;
+    replica_fetch(replica_throttle).await;
+}
+
+#[then("the first replica response contains at least 4096 bytes")]
+fn full_replica_payload(replica_throttle: &ReplicaThrottle) {
+    let response = *replica_throttle
+        .responses
+        .first()
+        .expect("replica fetch completed");
     assert!(
-        first_bytes >= 4096,
-        "expected the over-burst payload to make progress, got {first_bytes} bytes"
-    );
-    let followup_bytes = followup_bytes.expect("requested a follow-up fetch");
-    assert!(
-        followup_bytes <= 2048,
-        "expected the debt-throttled fetch response <= 2048 bytes, got {followup_bytes} bytes"
+        response >= 4096,
+        "expected full or over-burst payload, got {response} bytes"
     );
 }
 
-/// Test 3: After setting a very low leader throttle rate (512 bytes/sec) and
-/// marking partition 0 as throttled on this broker, a Fetch issued with
-/// `replica_id=2`, a follower outside the ISR, must return a response well
-/// under 8 KB.
-///
-/// An 8 KB response must be capped to at most 512 bytes of record data. The
-/// list names the leader, as Kafka reads it:
-/// `leader.replication.throttled.replicas` is `partition:replica` for the
-/// replicas that leader holds (#1210).
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[then("the second replica response contains at most 2048 bytes of framing and records")]
+fn indebted_replica_payload(replica_throttle: &ReplicaThrottle) {
+    assert!(replica_throttle.responses.len() == 2);
+    let response = replica_throttle.responses[1];
+    assert!(
+        response <= 2048,
+        "expected debt-throttled response <= 2048 bytes, got {response}"
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/throttle/fetch_size.feature",
     name = "throttle rate caps fetch response size"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn throttle_rate_caps_fetch_response_size() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("throttle fetch size: unthrottled partition unaffected")]
-async fn bdd_verify_unthrottled_partition_unaffected() {
-    let (handle, _dir, addr) = start_single_broker_plaintext().await;
-
-    // Create topic rf=1.
-    create_topic_plaintext()
-        .addr(addr)
-        .client_id(CLIENT_ID)
-        .topic(ConfiguredTopicSetup {
-            name: "baz".into(),
-            ..Default::default()
-        })
-        .call()
-        .await;
-    wait_partition_exists(&handle, "baz", 0).await;
-    add_follower(&handle, "baz", 2).await;
-
-    // Produce 8 KB of data (8 records of 1 KB each). No throttle configured.
-    produce_plaintext(addr, "baz", 1024, 8).await;
-
-    // Fetch with replica_id=2 (inter-broker path). No throttle → full data.
-    let resp_bytes = fetch_plaintext_replica(addr, "baz", 2).await;
-
-    // Full 8 KB data plus framing. The response should be well over 4 KB.
-    assert!(
-        resp_bytes >= 4096,
-        "expected unthrottled fetch response >= 4096 bytes, got {resp_bytes} bytes"
-    );
-
-    handle.shutdown().await;
+async fn throttle_rate_caps_fetch_response_size(replica_throttle: ReplicaThrottle) {
+    replica_throttle.shutdown().await;
+    drop(replica_throttle);
 }
 
-/// Test 4: Without any throttle config, a Fetch with `replica_id >= 0` delivers
-/// all 8 KB of data unimpeded.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/throttle/fetch_size.feature",
     name = "unthrottled partition unaffected"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unthrottled_partition_unaffected() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "throttle fetch size: a list naming only the follower throttles nothing on the leader"
-)]
-async fn bdd_verify_a_list_naming_only_the_follower_throttles_nothing_on_the_leader() {
-    let ReplicaFetchBytes {
-        first: resp_bytes, ..
-    } = replica_fetch_bytes(|_| "0:2".to_owned(), false, false).await;
-
-    assert!(
-        resp_bytes >= 4096,
-        "expected an unthrottled fetch response >= 4096 bytes, got {resp_bytes} bytes"
-    );
+async fn unthrottled_partition_unaffected(replica_throttle: ReplicaThrottle) {
+    replica_throttle.shutdown().await;
+    drop(replica_throttle);
 }
 
-/// Test 5: The leader reads its own id from the list, so a list that names
-/// only the fetching follower, the reading the old code made, throttles
-/// nothing on the leader: `kafka-reassign-partitions --throttle` lists the
-/// source replicas on the leader side, and never the destination that fetches
-/// (#1210).
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/throttle/fetch_size.feature",
     name = "a list naming only the follower throttles nothing on the leader"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_list_naming_only_the_follower_throttles_nothing_on_the_leader() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("throttle fetch size: a follower in the isr is not throttled")]
-async fn bdd_verify_a_follower_in_the_isr_is_not_throttled() {
-    let ReplicaFetchBytes {
-        first: resp_bytes, ..
-    } = replica_fetch_bytes(|_| "*".to_owned(), true, false).await;
-
-    assert!(
-        resp_bytes >= 4096,
-        "expected an in-sync follower's fetch response >= 4096 bytes, got {resp_bytes} bytes"
-    );
+async fn a_list_naming_only_the_follower_throttles_nothing_on_the_leader(
+    replica_throttle: ReplicaThrottle,
+) {
+    replica_throttle.shutdown().await;
+    drop(replica_throttle);
 }
 
-/// Test 6: A follower in the ISR is never throttled, whatever the list and the
-/// rate say, so a throttle left configured after a reassignment cannot starve
-/// the replicas that keep the partition available (#1211).
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/throttle/fetch_size.feature",
     name = "a follower in the isr is not throttled"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_follower_in_the_isr_is_not_throttled() {}
+async fn a_follower_in_the_isr_is_not_throttled(replica_throttle: ReplicaThrottle) {
+    replica_throttle.shutdown().await;
+    drop(replica_throttle);
+}

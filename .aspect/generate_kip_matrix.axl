@@ -871,33 +871,257 @@ def calls_function(body, name):
             return True
     fail("generate-kip-matrix: unbounded scan for a call to %s" % name)
 
-def client_cases_by_function(suite, count, source = _LIBRDKAFKA):
-    """Which `CLIENTS` rows each free function of the suite drives.
+def _bdd_attributes(suite):
+    """Rustfmt attributes attached to each free function, excluding body attributes."""
+    found = {}
+    pending = []
+    multiline = False
+    for line in suite.splitlines():
+        if multiline:
+            pending.append(line)
+            multiline = not line.strip().endswith("]")
+            continue
+        if line.startswith("#["):
+            pending.append(line)
+            multiline = not line.strip().endswith("]")
+            continue
+        name = function_name(line)
+        if name:
+            found[name] = "\n".join(pending)
+            pending = []
+        elif line and not line.startswith("//"):
+            pending = []
+    return found
 
-    A function reaches a client either itself or through a helper that returns
-    one, which is the shape the suite has: the shared test iterates the table
-    and the newer test calls a helper for the single row it is about. One level
-    of call is as far as this looks, which is as far as Starlark's missing
-    recursion allows and as far as the suite goes.
+def _bdd_attribute_string(attribute, key, source):
+    opening = attribute.find(key + " = ")
+    value = _quoted(attribute, opening + len(key + " = ")) if opening >= 0 else None
+    if value == None or not value.value:
+        fail("unreadable BDD %s in %s" % (key, source))
+    return value.value
+
+def bdd_scenario_bindings(suite, source = _LIBRDKAFKA):
+    """Explicit rstest-bdd scenario attributes as function -> feature path/name."""
+    found = {}
+    for name, attributes in _bdd_attributes(suite).items():
+        for attribute in attributes.split("#["):
+            if attribute.startswith("scenario(") or attribute.startswith("rstest_bdd_macros::scenario("):
+                found[name] = struct(
+                    path = _bdd_attribute_string(attribute, "path", source),
+                    name = _bdd_attribute_string(attribute, "name", source),
+                )
+    return found
+
+def _bdd_step_bindings(suite):
+    found = []
+    for name, attributes in _bdd_attributes(suite).items():
+        for attribute in attributes.split("#["):
+            for kind in ("given", "when", "then"):
+                for prefix in (kind + "(", "rstest_bdd_macros::" + kind + "("):
+                    if attribute.startswith(prefix):
+                        at = _skip_whitespace(attribute, len(prefix))
+                        pattern = _quoted(attribute, at)
+                        if pattern == None:
+                            fail("unreadable BDD %s binding for %s" % (kind, name))
+                        found.append(struct(kind = kind, pattern = pattern.value, function = name))
+    return found
+
+def bdd_step_matches(pattern, text):
+    """Match literal step text and nonempty rstest-bdd `{parameter}` captures."""
+    positions = [0]
+    rest = pattern
+    for _ in range(1000):
+        opening = rest.find("{")
+        if opening < 0:
+            return any([text[at:] == rest for at in positions])
+        literal = rest[:opening]
+        starts = [at + len(literal) for at in positions if text[at:].startswith(literal)]
+        if not starts:
+            return False
+        close = rest.find("}", opening + 1)
+        if close < 0 or close == opening + 1:
+            fail("unreadable BDD parameter pattern %s" % pattern)
+        rest = rest[close + 1:]
+        next_open = rest.find("{")
+        next_literal = rest if next_open < 0 else rest[:next_open]
+        if not next_literal:
+            if next_open >= 0:
+                fail("adjacent BDD parameters are ambiguous in %s" % pattern)
+            return any([at < len(text) for at in starts])
+        positions = {}
+        for start in starts:
+            at = start + 1
+            for _ in range(len(text) + 1):
+                end = text.find(next_literal, at)
+                if end < 0:
+                    break
+                positions[end] = True
+                at = end + 1
+        if not positions:
+            return False
+    fail("unbounded BDD parameter scan")
+
+def _bdd_table_row(line):
+    return [cell.strip() for cell in line.strip()[1:-1].split("|")]
+
+def _bdd_expand(text, values):
+    for name, value in values.items():
+        text = text.replace("<" + name + ">", value)
+    return text
+
+def bdd_feature_scenarios(feature, source = "feature"):
+    """Concrete steps, including Background and Examples rows, indexed by scenario title."""
+    background = []
+    scenarios = {}
+    current = None
+    steps = background
+    kind = ""
+    examples = False
+    headers = []
+    docstring = False
+    for raw in feature.splitlines():
+        line = raw.strip()
+        if line.startswith('"""') or line.startswith("```"):
+            docstring = not docstring
+            continue
+        if docstring or not line or line.startswith("#") or line.startswith("@"):
+            continue
+        if line.startswith("Background:"):
+            steps = background
+            kind = ""
+            continue
+        if line.startswith("Scenario:") or line.startswith("Scenario Outline:"):
+            title = line.partition(":")[2].strip()
+            if title in scenarios:
+                fail("duplicate BDD scenario %s in %s" % (title, source))
+            current = {"steps": [], "examples": [], "outline": line.startswith("Scenario Outline:")}
+            scenarios[title] = current
+            steps = current["steps"]
+            examples = False
+            kind = ""
+            continue
+        if line.startswith("Examples:"):
+            if current == None or not current["outline"]:
+                fail("BDD Examples without an outline in %s" % source)
+            examples = True
+            headers = []
+            continue
+        if line.startswith("|"):
+            cells = _bdd_table_row(line)
+            if examples:
+                if not headers:
+                    headers = cells
+                elif len(cells) != len(headers):
+                    fail("BDD Examples width mismatch in %s" % source)
+                else:
+                    current["examples"].append(dict(zip(headers, cells)))
+            elif steps:
+                steps[-1]["table"].append(cells)
+            else:
+                fail("BDD table without a step in %s" % source)
+            continue
+        word, _, text = line.partition(" ")
+        if word in ("Given", "When", "Then", "And", "But", "*"):
+            if word in ("Given", "When", "Then"):
+                kind = word.lower()
+            if not kind:
+                fail("BDD continuation without a step kind in %s" % source)
+            steps.append({"kind": kind, "text": text, "table": []})
+    result = {}
+    for title, scenario in scenarios.items():
+        if scenario["outline"] and not scenario["examples"]:
+            fail("BDD outline without Examples in %s" % source)
+        concrete = []
+        for values in scenario["examples"] if scenario["outline"] else [{}]:
+            for step in background + scenario["steps"]:
+                concrete.append(struct(
+                    kind = step["kind"],
+                    text = _bdd_expand(step["text"], values),
+                    table = [[_bdd_expand(cell, values) for cell in row] for row in step["table"]],
+                ))
+        result[title] = concrete
+    return result
+
+def _bdd_table_clients(table, clients, source):
+    if not table or not clients:
+        fail("BDD client selection needs its feature table and pinned client catalog in %s" % source)
+    headers = table[0]
+    columns = []
+    for field in ("image", "program", "library"):
+        if field not in headers:
+            fail("BDD client table lacks %s in %s" % (field, source))
+        columns.append(headers.index(field))
+    found = {}
+    for row in table[1:]:
+        if len(row) != len(headers):
+            fail("BDD client table width mismatch in %s" % source)
+        client = tuple([row[column] for column in columns])
+        if client not in clients:
+            fail("BDD feature selects an unpinned client %s in %s" % (client, source))
+        found[clients.index(client)] = True
+    if not found:
+        fail("empty BDD client selection in %s" % source)
+    return sorted(found)
+
+def client_cases_by_function(suite, count, source = _LIBRDKAFKA, features = {}, clients = []):
+    """Client evidence through Rust calls and the scenario's actual bound Gherkin steps.
+
+    A table-driven scenario gets only the pinned clients its inputs declare;
+    a native catalog assertion cannot add an unselected client. Other scenarios
+    and unrelated steps cannot grant evidence to this function.
+    Rust helper reachability is a bounded fixed point, including helper chains.
     """
     functions = suite_functions(suite, source)
     direct = {found.name: direct_client_cases(found.body, count, source) for found in functions}
-    resolved = {}
-    for found in functions:
-        cases = {index: True for index in direct[found.name]}
-        for other in functions:
-            if other.name != found.name and calls_function(found.body, other.name):
-                for index in direct[other.name]:
-                    cases[index] = True
-        resolved[found.name] = sorted(cases)
+    resolved = dict(direct)
+    for _ in range(len(functions)):
+        updated = {}
+        for found in functions:
+            cases = {index: True for index in resolved[found.name]}
+            for other in functions:
+                if other.name != found.name and calls_function(found.body, other.name):
+                    for index in resolved[other.name]:
+                        cases[index] = True
+            updated[found.name] = sorted(cases)
+        if updated == resolved:
+            break
+        resolved = updated
 
-    # Migrated BDD scenarios keep their acceptance body in a Then helper.
-    # Credit the scenario's public test name with the clients that helper drives.
-    for found in functions:
-        if found.name.startswith("bdd_verify_"):
-            scenario = found.name[len("bdd_verify_"):]
-            if scenario in resolved:
-                resolved[scenario] = sorted({index: True for index in resolved[scenario] + resolved[found.name]})
+    bindings = bdd_scenario_bindings(suite, source)
+    steps = _bdd_step_bindings(suite)
+    datatables = {found.name: "#[datatable]" in found.body for found in functions}
+    for line in suite.splitlines():
+        name = function_name(line)
+        if name and "#[datatable]" in line:
+            datatables[name] = True
+    for name, binding in bindings.items():
+        if binding.path not in features:
+            fail("missing BDD feature %s for %s in %s" % (binding.path, name, source))
+        scenarios = bdd_feature_scenarios(features[binding.path], binding.path)
+        if binding.name not in scenarios:
+            fail("missing BDD scenario %s in %s" % (binding.name, binding.path))
+        cases = {index: True for index in resolved[name]}
+        bound_cases = {}
+        selected_clients = {}
+        has_selection = False
+        for step in scenarios[binding.name]:
+            matched = [bound for bound in steps if bound.kind == step.kind and bdd_step_matches(bound.pattern, step.text)]
+            if len(matched) != 1:
+                fail("BDD step %s in %s has %d bindings" % (step.text, binding.path, len(matched)))
+            function = matched[0].function
+            reached = resolved[function]
+            if reached and datatables[function]:
+                selected = _bdd_table_clients(step.table, clients, binding.path)
+                has_selection = True
+                for index in selected:
+                    selected_clients[index] = True
+                reached = [index for index in reached if index in selected]
+            for index in reached:
+                bound_cases[index] = True
+        for index in bound_cases:
+            if not has_selection or index in selected_clients:
+                cases[index] = True
+        resolved[name] = sorted(cases)
     return resolved
 
 def citations(note):
@@ -1388,7 +1612,11 @@ def _librdkafka_evidence(fs, root, pins, broker_build):
         if image not in loaded:
             fail("librdkafka client image %s is not one Bazel loads" % image)
         _require_pinned(pins, keys[loaded.index(image)])
-    return clients, client_cases_by_function(suite, len(clients))
+    features = {}
+    suite_root = _LIBRDKAFKA.rsplit("/tests/", 1)[0]
+    for binding in bdd_scenario_bindings(suite).values():
+        features[binding.path] = _read(fs, root, suite_root + "/" + binding.path)
+    return clients, client_cases_by_function(suite, len(clients), features = features, clients = clients)
 
 def _kip_inventory(fs, root, catalog):
     """Every `KIP-<n>` a file under `crates/` names.

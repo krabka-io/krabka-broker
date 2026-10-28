@@ -779,189 +779,12 @@ mod tests {
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified actor pending records tests: records follow kafkas order"
-    )]
-    fn bdd_verify_records_follow_kafkas_order() {
-        use crate::coordinator::unified::persistence::{Key, encode_key as encode_classic_key};
-
-        let ng = |key: NextGenKey| encode_next_gen_key(&key).unwrap();
-        let group = || "g".to_owned();
-        let member = |id: &str| id.to_owned();
-        let k3 = ng(NextGenKey::GroupMetadata { group_id: group() });
-        let k5 = |id: &str| {
-            ng(NextGenKey::MemberMetadata {
-                group_id: group(),
-                member_id: member(id),
-            })
-        };
-        let k4 = ng(NextGenKey::PartitionMetadata { group_id: group() });
-        let k6 = ng(NextGenKey::TargetAssignmentMetadata { group_id: group() });
-        let k7 = |id: &str| {
-            ng(NextGenKey::TargetAssignmentMember {
-                group_id: group(),
-                member_id: member(id),
-            })
-        };
-        let k8 = |id: &str| {
-            ng(NextGenKey::CurrentMemberAssignment {
-                group_id: group(),
-                member_id: member(id),
-            })
-        };
-        let k2 = encode_classic_key(&Key::GroupMetadata { group_id: group() }).unwrap();
-        let metadata = MemberMetadataValue {
-            client_id: "c".into(),
-            client_host: "h".into(),
-            rebalance_timeout_ms: 1,
-            ..MemberMetadataValue::default()
-        };
-        let current = CurrentMemberAssignmentValue {
-            member_epoch: 2,
-            previous_member_epoch: 1,
-            state: MemberAssignmentState::Stable,
-            assigned_partitions: vec![],
-            partitions_pending_revocation: vec![],
-        };
-        let target = TargetAssignmentMemberValue {
-            topic_partitions: vec![],
-        };
-        // (case, the delta, its (key, is a tombstone) in order)
-        let rows = [
-            (
-                "a member leaves and the group assigns again",
-                PendingRecords {
-                    group_metadata: Some(GroupMetadataValue {
-                        epoch: 2,
-                        metadata_hash: 0,
-                    }),
-                    member_metadata: vec![
-                        ("stays".into(), Some(metadata.clone())),
-                        ("leaves".into(), None),
-                    ],
-                    target_metadata: Some(TargetAssignmentMetadataValue {
-                        assignment_epoch: 2,
-                        assignment_timestamp_ms: 0,
-                    }),
-                    target_per_member: vec![
-                        ("leaves".into(), None),
-                        ("stays".into(), Some(target.clone())),
-                    ],
-                    current_per_member: vec![
-                        ("stays".into(), Some(current.clone())),
-                        ("leaves".into(), None),
-                    ],
-                    ..Default::default()
-                },
-                vec![
-                    (k8("leaves"), true),
-                    (k7("leaves"), true),
-                    (k5("leaves"), true),
-                    (k5("stays"), false),
-                    (k3.clone(), false),
-                    (k7("stays"), false),
-                    (k6.clone(), false),
-                    (k8("stays"), false),
-                ],
-            ),
-            (
-                "an upgrade tombstones the classic group first",
-                PendingRecords {
-                    classic_group_metadata_tombstone: true,
-                    group_metadata: Some(GroupMetadataValue {
-                        epoch: 2,
-                        metadata_hash: 0,
-                    }),
-                    member_metadata: vec![("m".into(), Some(metadata.clone()))],
-                    target_metadata: Some(TargetAssignmentMetadataValue {
-                        assignment_epoch: 2,
-                        assignment_timestamp_ms: 0,
-                    }),
-                    target_per_member: vec![("m".into(), Some(target.clone()))],
-                    current_per_member: vec![("m".into(), Some(current.clone()))],
-                    ..Default::default()
-                },
-                vec![
-                    (k2, true),
-                    (k5("m"), false),
-                    (k3, false),
-                    (k7("m"), false),
-                    (k6, false),
-                    (k8("m"), false),
-                ],
-            ),
-            // Kafka's `replaceMember` records come first in the batch, then
-            // the heartbeat's own.
-            (
-                "a static replacement precedes the heartbeat's records",
-                PendingRecords {
-                    member_metadata: vec![
-                        ("leaves".into(), None),
-                        ("stays".into(), Some(metadata.clone())),
-                    ],
-                    target_per_member: vec![
-                        ("leaves".into(), None),
-                        ("stays".into(), Some(target)),
-                    ],
-                    current_per_member: vec![
-                        ("leaves".into(), None),
-                        ("stays".into(), Some(current.clone())),
-                    ],
-                    ..Default::default()
-                }
-                .followed_by(PendingRecords {
-                    member_metadata: vec![("stays".into(), Some(metadata))],
-                    current_per_member: vec![("stays".into(), Some(current))],
-                    ..Default::default()
-                }),
-                vec![
-                    (k8("leaves"), true),
-                    (k7("leaves"), true),
-                    (k5("leaves"), true),
-                    (k5("stays"), false),
-                    (k7("stays"), false),
-                    (k8("stays"), false),
-                    (k5("stays"), false),
-                    (k8("stays"), false),
-                ],
-            ),
-            // `updateSubscriptionMetadata` without a bump: only the k4
-            // tombstone.
-            (
-                "a metadata refresh without a bump tombstones only the k4 record",
-                PendingRecords {
-                    partition_metadata: PartitionMetadataWrite::Tombstone,
-                    ..Default::default()
-                },
-                vec![(k4, true)],
-            ),
-        ];
-        for (case, pending, expected) in rows {
-            let written: Vec<_> = pending
-                .to_batch("g", 0)
-                .unwrap()
-                .records
-                .into_iter()
-                .map(|record| (record.key.unwrap(), record.value.is_none()))
-                .collect();
-            assert!(written == expected, "{case}");
-        }
-    }
-
     /// The records of one transition come in the order of Kafka's
     /// `GroupMetadataManager`, which is also the order its replay accepts: a
     /// classic tombstone before the consumer records of an upgrade, a removed
     /// member's k8, k7 and k5 tombstones first, then the subscriptions, the
     /// epoch, the targets and their metadata, the current assignments, and
     /// the group tombstones of `createGroupTombstoneRecords` last.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/actor/pending_records.feature",
-        name = "tests: records follow kafkas order"
-    )]
-    fn records_follow_kafkas_order() {}
-
     #[test]
     fn pending_group_tombstone_removes_cached_seed() {
         let (coordinator, _) = make_coordinator();
@@ -974,4 +797,158 @@ mod tests {
 
         assert!(coordinator.cached_seed("g").is_none());
     }
+    use {
+        crate::coordinator::unified::{
+            persistence::{Key as ClassicLogKey, encode_key as encode_classic_key},
+            test_support::wire_bytes,
+        },
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{given, scenarios, then, when},
+        std::collections::BTreeMap,
+    };
+    #[derive(Default)]
+    struct DurableTransition {
+        pending: Option<PendingRecords>,
+        keys: Option<Vec<(bytes::Bytes, bool)>>,
+    }
+    #[rstest::fixture]
+    fn durable_transition() -> DurableTransition {
+        // Start this scenario with fresh inputs and observations.
+        DurableTransition::default()
+    }
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct PendingLogRecord {
+        segment: usize,
+        family: String,
+        member: String,
+        value_hex: String,
+    }
+    #[given(
+        "the pending consumer delta for group g contains these record values in chained segments"
+    )]
+    fn pending_consumer_delta(
+        durable_transition: &mut DurableTransition,
+        #[datatable] rows: Rows<PendingLogRecord>,
+    ) {
+        let mut segments = BTreeMap::<usize, PendingRecords>::new();
+        for row in rows {
+            let pending = segments.entry(row.segment).or_default();
+            let value = if row.value_hex == "tombstone" {
+                None
+            } else {
+                Some(wire_bytes(&[&row.value_hex]))
+            };
+            match row.family.as_str() {
+                "classic-group" => pending.classic_group_metadata_tombstone = true,
+                "subscription-metadata" => {
+                    pending.partition_metadata = PartitionMetadataWrite::Tombstone
+                }
+                "group-epoch" => {
+                    pending.group_metadata = Some(
+                        GroupMetadataValue::decode(value.as_deref().expect("group metadata value"))
+                            .expect("literal group metadata"),
+                    )
+                }
+                "subscription" => pending.member_metadata.push((
+                    row.member,
+                    value.as_deref().map(|bytes| {
+                        MemberMetadataValue::decode(bytes).expect("literal member subscription")
+                    }),
+                )),
+                "target-epoch" => {
+                    pending.target_metadata = Some(
+                        TargetAssignmentMetadataValue::decode(
+                            value.as_deref().expect("target metadata value"),
+                        )
+                        .expect("literal assignment metadata"),
+                    )
+                }
+                "target" => pending.target_per_member.push((
+                    row.member,
+                    value.as_deref().map(|bytes| {
+                        TargetAssignmentMemberValue::decode(bytes)
+                            .expect("literal target assignment")
+                    }),
+                )),
+                "current" => pending.current_per_member.push((
+                    row.member,
+                    value.as_deref().map(|bytes| {
+                        CurrentMemberAssignmentValue::decode(bytes)
+                            .expect("literal current assignment")
+                    }),
+                )),
+                _ => panic!("unknown consumer record family"),
+            }
+        }
+        durable_transition.pending = segments.into_values().reduce(PendingRecords::followed_by);
+    }
+    #[when("the coordinator encodes the complete transition as one compacted group log batch")]
+    fn encode_consumer_transition(durable_transition: &mut DurableTransition) {
+        durable_transition.keys = Some(
+            durable_transition
+                .pending
+                .as_ref()
+                .expect("pending transition prepared")
+                .to_batch("g", 0)
+                .expect("write group transition")
+                .records
+                .into_iter()
+                .map(|record| {
+                    (
+                        record.key.expect("group log record key"),
+                        record.value.is_none(),
+                    )
+                })
+                .collect(),
+        );
+    }
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct ExpectedLogKey {
+        family: String,
+        member: String,
+        tombstone: bool,
+    }
+    #[then("the compacted batch contains exactly these keys and tombstones in Kafka replay order")]
+    fn ordered_consumer_transition(
+        durable_transition: &DurableTransition,
+        #[datatable] rows: Rows<ExpectedLogKey>,
+    ) {
+        let expected = rows
+            .into_iter()
+            .map(|row| {
+                let group_id = "g".to_owned();
+                let member_id = row.member;
+                let key = match row.family.as_str() {
+                    "classic-group" => {
+                        encode_classic_key(&ClassicLogKey::GroupMetadata { group_id })
+                            .expect("classic group key")
+                    }
+                    family => {
+                        let key = match family {
+                            "group-epoch" => NextGenKey::GroupMetadata { group_id },
+                            "subscription-metadata" => NextGenKey::PartitionMetadata { group_id },
+                            "subscription" => NextGenKey::MemberMetadata {
+                                group_id,
+                                member_id,
+                            },
+                            "target-epoch" => NextGenKey::TargetAssignmentMetadata { group_id },
+                            "target" => NextGenKey::TargetAssignmentMember {
+                                group_id,
+                                member_id,
+                            },
+                            "current" => NextGenKey::CurrentMemberAssignment {
+                                group_id,
+                                member_id,
+                            },
+                            _ => panic!("unknown expected record family"),
+                        };
+                        encode_next_gen_key(&key).expect("consumer group key")
+                    }
+                };
+                (key, row.tombstone)
+            })
+            .collect::<Vec<_>>();
+        assert!(durable_transition.keys.as_ref() == Some(&expected));
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/actor/pending_records.feature",fixtures=[durable_transition:DurableTransition]);
 }

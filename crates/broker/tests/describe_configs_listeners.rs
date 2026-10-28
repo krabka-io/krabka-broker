@@ -24,6 +24,8 @@ use {
             },
         },
     },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
     std::{iter, net::SocketAddr},
     tempfile::TempDir,
     tokio::net::TcpListener,
@@ -293,77 +295,120 @@ enum Roles {
     Combined,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "describe configs listeners: each role reports the listener keys through the listener a client uses"
-)]
-async fn bdd_verify_each_role_reports_the_listener_keys_through_the_listener_a_client_uses() {
-    for roles in [Roles::ControllerOnly, Roles::BrokerOnly, Roles::Combined] {
-        // The nodes of the cluster, the node described, the listeners a client
-        // reaches it on, and what it reports.
-        let (nodes, described, dialed, want) = match roles {
-            Roles::ControllerOnly => {
-                let node = start_node(NodeId(1), &[NodeRole::Controller], None).await;
-                let controller = node.handle.controller_addr();
-                let want = expected()
-                    .listeners(&format!("CONTROLLER://{controller}"))
-                    .protocol_map("CONTROLLER:PLAINTEXT")
-                    .call();
-                (vec![node], 1, vec![("controller", controller)], want)
-            }
-            Roles::BrokerOnly => {
-                let controller = start_node(NodeId(1), &[NodeRole::Controller], None).await;
-                let broker =
-                    start_node(NodeId(2), &[NodeRole::Broker], Some(&controller.handle)).await;
-                let data = broker.data_addr;
-                let want = expected()
-                    .node(2)
-                    .listeners(&format!("PLAINTEXT://{data}"))
-                    .maybe_advertised(Some(&format!("PLAINTEXT://{data}")))
-                    .protocol_map("PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT")
-                    .call();
-                (
-                    vec![broker, controller],
-                    2,
-                    vec![("data-plane", data)],
-                    want,
-                )
-            }
-            Roles::Combined => {
-                let node =
-                    start_node(NodeId(1), &[NodeRole::Controller, NodeRole::Broker], None).await;
-                let data = node.data_addr;
-                let controller = node.handle.controller_addr();
-                let want = expected()
-                    .listeners(&format!("PLAINTEXT://{data},CONTROLLER://{controller}"))
-                    .maybe_advertised(Some(&format!("PLAINTEXT://{data}")))
-                    .protocol_map("PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT")
-                    .call();
-                (
-                    vec![node],
-                    1,
-                    vec![("data-plane", data), ("controller", controller)],
-                    want,
-                )
-            }
-        };
+struct ListenerDescription {
+    roles: Option<Roles>,
+    nodes: Vec<Node>,
+    described: u64,
+    dialed: Vec<(&'static str, SocketAddr)>,
+    expected: Option<DescribeConfigsResult>,
+    observed: Vec<(&'static str, DescribeConfigsResult)>,
+}
 
-        for (listener, address) in dialed {
-            check!(
-                describe_listener_keys(address, described).await == want,
-                "{roles:?} through the {listener} listener"
-            );
-        }
-        for node in nodes {
-            node.handle.shutdown().await;
-        }
+#[fixture]
+fn listeners() -> ListenerDescription {
+    // Start this scenario with fresh inputs and observations.
+
+    ListenerDescription {
+        roles: None,
+        nodes: Vec::new(),
+        described: 0,
+        dialed: Vec::new(),
+        expected: None,
+        observed: Vec::new(),
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[given("a node configured with {roles} process roles")]
+async fn configured_listeners(listeners: &mut ListenerDescription, roles: String) {
+    let roles = match roles.as_str() {
+        "controller-only" => Roles::ControllerOnly,
+        "broker-only" => Roles::BrokerOnly,
+        "combined" => Roles::Combined,
+        other => panic!("unknown node roles {other}"),
+    };
+    let (nodes, described, dialed, want) = match roles {
+        Roles::ControllerOnly => {
+            let node = start_node(NodeId(1), &[NodeRole::Controller], None).await;
+            let controller = node.handle.controller_addr();
+            let want = expected()
+                .listeners(&format!("CONTROLLER://{controller}"))
+                .protocol_map("CONTROLLER:PLAINTEXT")
+                .call();
+            (vec![node], 1, vec![("controller", controller)], want)
+        }
+        Roles::BrokerOnly => {
+            let controller = start_node(NodeId(1), &[NodeRole::Controller], None).await;
+            let broker = start_node(NodeId(2), &[NodeRole::Broker], Some(&controller.handle)).await;
+            let data = broker.data_addr;
+            let want = expected()
+                .node(2)
+                .listeners(&format!("PLAINTEXT://{data}"))
+                .maybe_advertised(Some(&format!("PLAINTEXT://{data}")))
+                .protocol_map("PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT")
+                .call();
+            (
+                vec![broker, controller],
+                2,
+                vec![("data-plane", data)],
+                want,
+            )
+        }
+        Roles::Combined => {
+            let node = start_node(NodeId(1), &[NodeRole::Controller, NodeRole::Broker], None).await;
+            let data = node.data_addr;
+            let controller = node.handle.controller_addr();
+            let want = expected()
+                .listeners(&format!("PLAINTEXT://{data},CONTROLLER://{controller}"))
+                .maybe_advertised(Some(&format!("PLAINTEXT://{data}")))
+                .protocol_map("PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT")
+                .call();
+            (
+                vec![node],
+                1,
+                vec![("data-plane", data), ("controller", controller)],
+                want,
+            )
+        }
+    };
+    listeners.roles = Some(roles);
+    listeners.nodes = nodes;
+    listeners.described = described;
+    listeners.dialed = dialed;
+    listeners.expected = Some(want);
+}
+
+#[when("DescribeConfigs requests listener keys through every endpoint that serves the node")]
+async fn describe_listeners(listeners: &mut ListenerDescription) {
+    for &(listener, address) in &listeners.dialed {
+        let response = describe_listener_keys(address, listeners.described).await;
+        listeners.observed.push((listener, response));
+    }
+}
+
+#[then("every endpoint reports the role-specific listener values sources synonyms and mutability")]
+fn described_listeners(listeners: &ListenerDescription) {
+    let expected = listeners.expected.as_ref().expect("configured node roles");
+    let roles = listeners.roles.expect("configured node roles");
+    check!(listeners.observed.len() == listeners.dialed.len());
+    for (listener, actual) in &listeners.observed {
+        check!(
+            actual == expected,
+            "{roles:?} through the {listener} listener"
+        );
+    }
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/describe_configs_listeners.feature",
     name = "each role reports the listener keys through the listener a client uses"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn each_role_reports_the_listener_keys_through_the_listener_a_client_uses() {}
+async fn each_role_reports_the_listener_keys_through_the_listener_a_client_uses(
+    listeners: ListenerDescription,
+    roles: String,
+) {
+    let _ = roles;
+    for node in listeners.nodes {
+        node.handle.shutdown().await;
+    }
+}

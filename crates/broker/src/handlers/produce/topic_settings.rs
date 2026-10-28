@@ -665,164 +665,89 @@ mod tests {
         assert!(resolve_topic_compression(&img, "t", None) == None);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers produce topic settings tests: the window is kafkas record timestamp test"
+    struct ProduceTimestampContract {
+        policy: TimestampPolicy,
+        now: i64,
+        rejected: Option<bool>,
+        window: Option<TimestampWindow>,
+    }
+
+    #[rstest::fixture]
+    fn produce_timestamp() -> ProduceTimestampContract {
+        // Start this scenario with fresh inputs and observations.
+
+        ProduceTimestampContract {
+            policy: TimestampPolicy::default(),
+            now: 0,
+            rejected: None,
+            window: None,
+        }
+    }
+
+    fn timestamp_bound(value: &str) -> Option<i64> {
+        if value == "unbounded" {
+            None
+        } else {
+            Some(value.parse().expect("a millisecond bound"))
+        }
+    }
+
+    #[rstest_bdd_macros::given("the broker timestamp clock is {now} milliseconds")]
+    fn timestamp_clock(produce_timestamp: &mut ProduceTimestampContract, now: i64) {
+        produce_timestamp.now = now;
+    }
+
+    #[rstest_bdd_macros::given(
+        "the topic uses {timestamp_type} with past tolerance {before} and future tolerance {after} milliseconds"
     )]
-    fn bdd_verify_the_window_is_kafkas_record_timestamp_test() {
-        const NOW: i64 = 1_000_000;
-        let policy = |timestamp_type, before, after| TimestampPolicy {
-            timestamp_type,
-            before_max_ms: before,
-            after_max_ms: after,
+    fn topic_timestamp_limits(
+        produce_timestamp: &mut ProduceTimestampContract,
+        timestamp_type: String,
+        before: String,
+        after: String,
+    ) {
+        produce_timestamp.policy = TimestampPolicy {
+            timestamp_type: match timestamp_type.as_str() {
+                "CreateTime" => TimestampType::CreateTime,
+                "LogAppendTime" => TimestampType::LogAppendTime,
+                other => panic!("unknown timestamp type {other}"),
+            },
+            before_max_ms: timestamp_bound(&before),
+            after_max_ms: timestamp_bound(&after),
             max_timestamp: MaxTimestampSource::Records,
         };
-        let cases = [
-            (
-                "a topic that configured neither window admits any timestamp",
-                policy(TimestampType::CreateTime, None, None),
-                0,
-                false,
-            ),
-            (
-                "exactly at the past bound is still inside the window",
-                policy(TimestampType::CreateTime, Some(100), None),
-                NOW - 100,
-                false,
-            ),
-            (
-                "one millisecond past the past bound is outside it",
-                policy(TimestampType::CreateTime, Some(100), None),
-                NOW - 101,
-                true,
-            ),
-            (
-                "exactly at the future bound is still inside the window",
-                policy(TimestampType::CreateTime, None, Some(100)),
-                NOW + 100,
-                false,
-            ),
-            (
-                "one millisecond past the future bound is outside it",
-                policy(TimestampType::CreateTime, None, Some(100)),
-                NOW + 101,
-                true,
-            ),
-            (
-                "the past bound says nothing about a future timestamp",
-                policy(TimestampType::CreateTime, Some(100), None),
-                NOW + 100_000,
-                false,
-            ),
-            (
-                "NO_TIMESTAMP carries no time to judge, so Kafka exempts it",
-                policy(TimestampType::CreateTime, Some(100), Some(100)),
-                -1,
-                false,
-            ),
-            (
-                "a LogAppendTime topic overwrites the timestamp, so it ignores the window",
-                policy(TimestampType::LogAppendTime, Some(100), Some(100)),
-                0,
-                false,
-            ),
-            // Java's `now - timestamp` and `-1 * diff` wrap near
-            // `Long.MIN_VALUE`, and Kafka answers what the wrapped values say.
-            (
-                "Long.MIN_VALUE wraps into the future test, which refuses it",
-                policy(TimestampType::CreateTime, Some(100), Some(100)),
-                i64::MIN,
-                true,
-            ),
-            (
-                "a stock topic refuses Long.MIN_VALUE through the wrapped future test",
-                policy(TimestampType::CreateTime, None, Some(3_600_000)),
-                i64::MIN,
-                true,
-            ),
-            (
-                "with only the past bounded, Long.MIN_VALUE's wrapped difference passes",
-                policy(TimestampType::CreateTime, Some(100), None),
-                i64::MIN,
-                false,
-            ),
-            (
-                "a difference of exactly Long.MIN_VALUE negates to itself and passes",
-                policy(TimestampType::CreateTime, Some(100), Some(100)),
-                NOW.wrapping_add(i64::MIN),
-                false,
-            ),
-        ];
-        for (label, policy, timestamp_ms, want_rejected) in cases {
-            check!(
-                policy.rejects_record(timestamp_ms, NOW) == want_rejected,
-                "{label}"
-            );
-        }
     }
 
-    /// Kafka's `LogValidator.recordHasInvalidTimestamp`, which is
-    /// `now - timestamp > before.max.ms || timestamp - now > after.max.ms`,
-    /// applied only under `CreateTime` and only to a record that carries a
-    /// timestamp at all.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/produce/topic_settings.feature",
-        name = "tests: the window is kafkas record timestamp test"
-    )]
-    fn the_window_is_kafkas_record_timestamp_test() {}
+    #[rstest_bdd_macros::when("the topic validates record timestamp {timestamp}")]
+    fn validate_record_timestamp(produce_timestamp: &mut ProduceTimestampContract, timestamp: i64) {
+        produce_timestamp.rejected = Some(
+            produce_timestamp
+                .policy
+                .rejects_record(timestamp, produce_timestamp.now),
+        );
+    }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers produce topic settings tests: the reported window is kafkas wrapping arithmetic"
-    )]
-    fn bdd_verify_the_reported_window_is_kafkas_wrapping_arithmetic() {
-        const NOW: i64 = 1_000_000;
-        let policy = |before, after| TimestampPolicy {
-            before_max_ms: before,
-            after_max_ms: after,
-            ..TimestampPolicy::default()
+    #[rstest_bdd_macros::when("the broker reports the allowed timestamp window")]
+    fn report_timestamp_window(produce_timestamp: &mut ProduceTimestampContract) {
+        produce_timestamp.window = Some(produce_timestamp.policy.window(produce_timestamp.now));
+    }
+
+    #[rstest_bdd_macros::then("the record timestamp is {admission}")]
+    fn timestamp_admission(produce_timestamp: &ProduceTimestampContract, admission: String) {
+        let expected_rejection = match admission.as_str() {
+            "accepted" => false,
+            "rejected" => true,
+            other => panic!("unknown timestamp admission {other}"),
         };
-        let cases = [
-            (
-                "both sides bounded",
-                policy(Some(100), Some(200)),
-                TimestampWindow {
-                    low: 999_900,
-                    high: 1_000_200,
-                },
-            ),
-            (
-                "an open past side reads now - Long.MAX_VALUE, which does not wrap",
-                policy(None, Some(3_600_000)),
-                TimestampWindow {
-                    low: NOW - i64::MAX,
-                    high: 4_600_000,
-                },
-            ),
-            (
-                "an open future side reads now + Long.MAX_VALUE, which wraps negative",
-                policy(Some(100), None),
-                TimestampWindow {
-                    low: 999_900,
-                    high: i64::MIN + NOW - 1,
-                },
-            ),
-        ];
-        for (label, policy, want) in cases {
-            check!(policy.window(NOW) == want, "{label}");
-        }
+        check!(produce_timestamp.rejected == Some(expected_rejection));
     }
 
-    /// The `[low, high]` Kafka's `validateTimestamp` message prints:
-    /// `now - timestampBeforeMaxMs` and `now + timestampAfterMaxMs` in Java's
-    /// wrapping `long` arithmetic, with an unbounded side at `Long.MAX_VALUE`.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/produce/topic_settings.feature",
-        name = "tests: the reported window is kafkas wrapping arithmetic"
-    )]
-    fn the_reported_window_is_kafkas_wrapping_arithmetic() {}
+    #[rstest_bdd_macros::then("the reported timestamp window is {low} through {high} inclusive")]
+    fn timestamp_window_bounds(produce_timestamp: &ProduceTimestampContract, low: i64, high: i64) {
+        check!(produce_timestamp.window.as_ref() == Some(&TimestampWindow { low, high }));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/handlers/produce/topic_settings.feature", fixtures = [produce_timestamp: ProduceTimestampContract]);
 
     /// Kafka's own default policy: `CreateTime`, no bound on how old a record
     /// may be, and one hour of tolerance on how far ahead of the broker's

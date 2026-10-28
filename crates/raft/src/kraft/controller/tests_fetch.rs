@@ -416,47 +416,14 @@ fn answer_from_epoch_seven(leader_id: Option<NodeId>) -> bytes::Bytes {
     refusal_from_node_one(NOT_LEADER_OR_FOLLOWER, 7, leader_id)
 }
 
-/// Kafka's `FENCED_LEADER_EPOCH`.
-const FENCED_LEADER_EPOCH: i16 = 74;
-/// Kafka's `UNKNOWN_LEADER_EPOCH`.
-const UNKNOWN_LEADER_EPOCH: i16 = 75;
 /// Kafka's `INVALID_REQUEST`.
 const INVALID_REQUEST: i16 = 42;
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kraft controller tests fetch: a refusal from the followed leader refetches as kafka does for {example}"
-)]
-fn bdd_verify_a_refusal_from_the_followed_leader_refetches_as_kafka_does(example: String) {
-    type Example = (Option<NodeId>, NodeId, Epoch, i16, bool);
-    let (following, from, answer_epoch, error_code, refetches): Example = match example.as_str() {
-        "not leader in its epoch" => (Some(NodeId(1)), NodeId(1), 5, NOT_LEADER_OR_FOLLOWER, true),
-        "fenced in its epoch" => (Some(NodeId(1)), NodeId(1), 5, FENCED_LEADER_EPOCH, true),
-        "unknown leader epoch" => (Some(NodeId(1)), NodeId(1), 5, UNKNOWN_LEADER_EPOCH, true),
-        "older epoch" => (Some(NodeId(1)), NodeId(1), 4, 0, true),
-        "invalid request" => (Some(NodeId(1)), NodeId(1), 5, INVALID_REQUEST, false),
-        "from another node" => (Some(NodeId(1)), NodeId(3), 5, NOT_LEADER_OR_FOLLOWER, false),
-        "following no one" => (None, NodeId(1), 5, NOT_LEADER_OR_FOLLOWER, false),
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    assert2::assert!(
-        refetches_after_refusal(following, 5, from, answer_epoch, error_code) == refetches
-    );
-}
 
 /// A refused Fetch answer from the leader a replica follows sends it straight
 /// back to that leader exactly when Kafka's `maybeHandleCommonResponse`
 /// handles the answer: one from an older epoch, an `UNKNOWN_LEADER_EPOCH`, or
 /// a `FENCED_LEADER_EPOCH` or `NOT_LEADER_OR_FOLLOWER` in the replica's own
 /// epoch. Node 2 follows node 1 at epoch 5 in every case but the last.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_fetch.feature",
-    name = "a refusal from the followed leader refetches as kafka does"
-)]
-fn a_refusal_from_the_followed_leader_refetches_as_kafka_does(example: String) { let _ = example; }
-
 /// A leader that has resigned in the follower's own epoch answers
 /// `NOT_LEADER_OR_FOLLOWER` and names no leader. The follower sends its next
 /// Fetch to that leader at once, as Kafka's does, and leaves its fetch timer as
@@ -1518,67 +1485,9 @@ fn leader_with_a_running_clock() -> EngineInDir {
     EngineInDir { engine, dir }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kraft controller tests fetch: an observer is tracked with kafkas caught up rule"
-)]
-fn bdd_verify_an_observer_is_tracked_with_kafkas_caught_up_rule() {
-    let EngineInDir {
-        mut engine,
-        dir: _dir,
-    } = leader_with_a_running_clock();
-    let observer = NodeId(9);
-    let directory = uuid::Uuid::from_u128(9);
-    let epoch = engine.core.quorum_state().leader_epoch;
-    let first_end = engine.log.log_end_offset().0;
-    assert!(first_end > 0);
-    // The observer's row as (fetch offset, last fetch, last caught up).
-    let row = |engine: &Engine| {
-        let snapshot = engine.quorum_state_snapshot();
-        let [row] = snapshot.observers.as_slice() else {
-            panic!("one observer, got {:?}", snapshot.observers);
-        };
-        (row.log_end_offset, row.last_fetch_ms, row.last_caught_up_ms)
-    };
-
-    // Short of the log end on its first fetch: fetched, never caught up.
-    fetch_at(&mut engine, observer, directory, 0, 0);
-    let (offset, first_fetch, caught_up) = row(&engine);
-    assert!(offset == 0);
-    assert!(first_fetch > 0);
-    assert!(caught_up == -1);
-
-    // The log grows. A fetch that reaches the log end the previous fetch saw is
-    // caught up as of that previous fetch, though it is short of the log end
-    // now: a follower keeping pace under continuous appends is not stale.
-    engine.test_append_and_commit(&topic_record("grows"));
-    assert!(engine.log.log_end_offset().0 > first_end);
-    engine.clock_base -= StdDuration::from_millis(20);
-    fetch_at(&mut engine, observer, directory, epoch, first_end);
-    let (offset, second_fetch, caught_up) = row(&engine);
-    assert!(offset == first_end);
-    assert!(second_fetch > first_fetch);
-    assert!(caught_up == first_fetch);
-
-    // A fetch at the log end is caught up now.
-    engine.clock_base -= StdDuration::from_millis(20);
-    let end = engine.log.log_end_offset().0;
-    fetch_at(&mut engine, observer, directory, epoch, end);
-    let (_, third_fetch, caught_up) = row(&engine);
-    assert!(third_fetch > second_fetch);
-    assert!(caught_up == third_fetch);
-}
-
 /// Kafka's `LeaderState.observerStates` tracks a non-voter that fetches like a
 /// voter: the offset and time of each valid fetch, and the time it was last
 /// caught up, by the two-branch rule of `ReplicaState.updateFollowerState`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_fetch.feature",
-    name = "an observer is tracked with kafkas caught up rule"
-)]
-fn an_observer_is_tracked_with_kafkas_caught_up_rule() {}
-
 /// `tryCompleteFetchRequest` moves replica state only for a fetch that
 /// validates against the log: one at an epoch the leader does not hold, or past
 /// its log end, is answered with a divergence and records nothing.
@@ -1659,4 +1568,136 @@ async fn quorum_state_snapshot_negative_timestamp_fallback() {
     assert2::assert!(snap.per_replica_last_caught_up_ms.get(&NodeId(1)) == Some(&-1));
     assert2::assert!(snap.per_replica_last_fetch_ms.get(&NodeId(2)) == Some(&-1));
     assert2::assert!(snap.per_replica_last_caught_up_ms.get(&NodeId(2)) == Some(&-1));
+}
+
+use {
+    assert2::check,
+    rstest_bdd_macros::{given, scenarios, then, when},
+};
+#[derive(Default)]
+struct RefetchDecision {
+    following: Option<NodeId>,
+    refetches: Option<bool>,
+}
+#[rstest::fixture]
+fn refetch() -> RefetchDecision {
+    // Start this scenario with fresh inputs and observations.
+
+    RefetchDecision::default()
+}
+#[given("a replica follows node {leader} at epoch 5")]
+fn followed_leader(refetch: &mut RefetchDecision, leader: String) {
+    refetch.following = if leader == "none" {
+        None
+    } else {
+        Some(NodeId(leader.parse().expect("leader id")))
+    };
+}
+#[when("node {sender} answers Fetch at epoch {epoch} with error {error}")]
+fn refused_fetch(refetch: &mut RefetchDecision, sender: u64, epoch: Epoch, error: i16) {
+    refetch.refetches = Some(refetches_after_refusal(
+        refetch.following,
+        5,
+        NodeId(sender),
+        epoch,
+        error,
+    ));
+}
+#[then("the replica immediately refetches {expected}")]
+fn refetch_decision(refetch: &RefetchDecision, expected: bool) {
+    check!(refetch.refetches == Some(expected));
+}
+
+struct ObserverProgress {
+    leader: EngineInDir,
+    first_end: i64,
+    observations: Vec<(i64, i64, i64)>,
+}
+#[rstest::fixture]
+fn observer_progress() -> ObserverProgress {
+    let leader = leader_with_a_running_clock();
+    let first_end = leader.engine.log.log_end_offset().0;
+    ObserverProgress {
+        leader,
+        first_end,
+        observations: vec![],
+    }
+}
+#[given("an observer has not fetched from the running single voter leader")]
+fn observer_initial(observer_progress: &ObserverProgress) {
+    check!(observer_progress.first_end > 0);
+    check!(
+        observer_progress
+            .leader
+            .engine
+            .quorum_state_snapshot()
+            .observers
+            .is_empty()
+    );
+}
+#[when("observer 9 fetches {position} after {advance_ms} milliseconds with log growth {grow}")]
+fn observer_fetch(
+    observer_progress: &mut ObserverProgress,
+    position: String,
+    advance_ms: u64,
+    grow: bool,
+) {
+    let engine = &mut observer_progress.leader.engine;
+    if grow {
+        engine.test_append_and_commit(&topic_record("grows"));
+    }
+    engine.clock_base -= StdDuration::from_millis(advance_ms);
+    let (epoch, offset) = match position.as_str() {
+        "zero" => (0, 0),
+        "previous-end" => (
+            engine.core.quorum_state().leader_epoch,
+            observer_progress.first_end,
+        ),
+        "current-end" => (
+            engine.core.quorum_state().leader_epoch,
+            engine.log.log_end_offset().0,
+        ),
+        _ => panic!("unknown fetch position"),
+    };
+    fetch_at(engine, NodeId(9), uuid::Uuid::from_u128(9), epoch, offset);
+    let snapshot = engine.quorum_state_snapshot();
+    let [row] = snapshot.observers.as_slice() else {
+        panic!("exactly one observer expected")
+    };
+    observer_progress.observations.push((
+        row.log_end_offset,
+        row.last_fetch_ms,
+        row.last_caught_up_ms,
+    ));
+}
+#[then("the observer has fetched offset zero but has never caught up")]
+fn observer_initial_credit(observer_progress: &ObserverProgress) {
+    let (offset, fetched, caught_up) = observer_progress.observations[0];
+    check!(offset == 0);
+    check!(fetched > 0);
+    check!(caught_up == -1);
+}
+#[then("the growing log credits the observer at its previous fetch time")]
+fn observer_previous_credit(observer_progress: &ObserverProgress) {
+    let (_, first_fetch, _) = observer_progress.observations[0];
+    let (offset, second_fetch, caught_up) = observer_progress.observations[1];
+    check!(observer_progress.leader.engine.log.log_end_offset().0 > observer_progress.first_end);
+    check!(offset == observer_progress.first_end);
+    check!(second_fetch > first_fetch);
+    check!(caught_up == first_fetch);
+}
+#[then("fetching the current end credits the observer at its latest fetch time")]
+fn observer_current_credit(observer_progress: &ObserverProgress) {
+    let (_, second_fetch, _) = observer_progress.observations[1];
+    let (_, third_fetch, caught_up) = observer_progress.observations[2];
+    check!(third_fetch > second_fetch);
+    check!(caught_up == third_fetch);
+}
+mod refetch_cases {
+    use super::*;
+    scenarios!("tests/features/migrated/src/kraft/controller/tests_fetch.feature", tags = "@refetch", fixtures = [refetch: RefetchDecision]);
+}
+mod observer_cases {
+    use super::*;
+    scenarios!("tests/features/migrated/src/kraft/controller/tests_fetch.feature", tags = "@observer", fixtures = [observer_progress: ObserverProgress]);
 }

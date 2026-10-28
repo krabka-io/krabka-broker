@@ -1,4 +1,7 @@
 Feature: src coordinator unified share persistence partition metadata
 
-  Scenario: tests: state partition metadata bytes match kafka schema
-    Then coordinator unified share persistence partition metadata tests: state partition metadata bytes match kafka schema
+  @state_partition_metadata
+  Scenario: Persist a Share group has initialized orders partition 0 and is deleting carts
+    Given a Share group has initialized orders partition 0 and is deleting carts
+    When the coordinator persists and reads this state_partition_metadata record
+    Then the state_partition_metadata bytes match Kafka exactly and decoding recovers all original record fields

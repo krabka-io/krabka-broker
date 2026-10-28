@@ -52,104 +52,104 @@ fn token_api_admission_requires_identity_and_blocks_every_token_authed_call(api:
     check!(token_api_admission(true, true, api) == TokenApiAdmission::Reject);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "delegation token tests token visibility requires owner filter plus a relationship: create matches kafka lifetime and saturation for {example}"
-)]
-fn bdd_verify_create_matches_kafka_lifetime_and_saturation(example: String) {
-    type Example = (i64, i64, i64, i64, TokenCreateDecision);
-    let (now, requested, ceiling, renew, expected): Example = match example.as_str() {
-        "negative request uses ceiling" => (0, -1, 1_000, 100, created(1_000, 100)),
-        "later time adds deadlines" => (100, -1, 1_000, 100, created(1_100, 200)),
-        "zero request uses ceiling" => (100, 0, 1_000, 100, created(1_100, 200)),
-        "other negative request uses ceiling" => (100, -2, 1_000, 100, created(1_100, 200)),
-        "minimum request uses ceiling" => (100, i64::MIN, 1_000, 100, created(1_100, 200)),
-        "positive request caps lifetime" => (100, 50, 1_000, 100, created(150, 150)),
-        "oversized request uses ceiling" => (100, 5_000, 1_000, 100, created(1_100, 200)),
-        "renewal period can extend expiry" => (100, -1, 100, 101, created(200, 200)),
-        "maximum expiry saturates" => (100, -1, i64::MAX - 100, 100, created(i64::MAX, 200)),
-        "both deadlines saturate" => (i64::MAX, -1, 1, 1, created(i64::MAX, i64::MAX)),
-        "only expiry saturates" => (1, -1, i64::MAX, 1, created(i64::MAX, 2)),
-        "expiry and renewal saturate" => (1, -1, i64::MAX, i64::MAX, created(i64::MAX, i64::MAX)),
-        "zero ceiling is invalid" => (100, -1, 0, 100, TokenCreateDecision::Invalid),
-        "zero renewal is invalid" => (100, -1, 1_000, 0, TokenCreateDecision::Invalid),
-        "negative ceiling is invalid" => (100, -1, -1, 100, TokenCreateDecision::Invalid),
-        _ => panic!("unknown BDD example: {example}"),
-    };
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenarios, then, when},
+};
 
-    check!(create_token_deadlines(now, requested, ceiling, renew) == expected);
+struct TokenDeadlinesScenario {
+    creation_policy: Option<(i64, i64)>,
+    renewal_context: Option<(i64, i64, i64)>,
+    creation: Option<TokenCreateDecision>,
+    renewal: Option<TokenRenewDecision>,
 }
 
-/// `DelegationTokenControlManager.createDelegationToken`: a request of 0
-/// or less takes the configured lifetime, a positive one the smaller of
-/// the two, and both sums saturate at `i64::MAX`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/delegation_token/tests/token_visibility_requires_owner_filter_plus_a_relationship.feature",
-    name = "create matches kafka lifetime and saturation"
-)]
-fn create_matches_kafka_lifetime_and_saturation(example: String) { let _ = example; }
+#[fixture]
+fn token() -> TokenDeadlinesScenario {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "delegation token tests token visibility requires owner filter plus a relationship: renew matches kafka period cap and expiry for {example}"
-)]
-fn bdd_verify_renew_matches_kafka_period_cap_and_expiry(example: String) {
-    type Example = (i64, i64, i64, i64, i64, TokenRenewDecision);
-    let (now, requested, default, current, max, expected): Example = match example.as_str() {
-        "requested shorter period" => (100, 25, 50, 150, 1_000, TokenRenewDecision::Renew(125)),
-        "requested longer period" => (100, 75, 50, 150, 1_000, TokenRenewDecision::Renew(150)),
-        "requested much longer period" => {
-            (100, 500, 50, 150, 1_000, TokenRenewDecision::Renew(150))
-        }
-        "negative period uses default" => (100, -1, 50, 150, 1_000, TokenRenewDecision::Renew(150)),
-        "zero period uses default" => (100, 0, 50, 150, 1_000, TokenRenewDecision::Renew(150)),
-        "other negative period uses default" => {
-            (100, -5, 50, 150, 1_000, TokenRenewDecision::Renew(150))
-        }
-        "short period can shorten expiry" => {
-            (100, 10, 50, 900, 1_000, TokenRenewDecision::Renew(110))
-        }
-        "capped by maximum" => (100, 500, 1_000, 150, 200, TokenRenewDecision::Renew(200)),
-        "saturated expiry capped by maximum" => (
-            100,
-            i64::MAX,
-            i64::MAX,
-            150,
-            200,
-            TokenRenewDecision::Renew(200),
-        ),
-        "saturated expiry" => (
-            1,
-            i64::MAX,
-            i64::MAX,
-            150,
-            i64::MAX,
-            TokenRenewDecision::Renew(i64::MAX),
-        ),
-        "deadline equal to now is live" => {
-            (100, 25, 50, 100, 1_000, TokenRenewDecision::Renew(125))
-        }
-        "max equal to now caps renewal" => (100, 25, 50, 100, 100, TokenRenewDecision::Renew(100)),
-        "expired deadline" => (100, 25, 50, 99, 1_000, TokenRenewDecision::Expired),
-        "max before now is expired" => (100, 25, 50, 150, 99, TokenRenewDecision::Expired),
-        "zero default cannot renew expired" => (100, 25, 0, 99, 1_000, TokenRenewDecision::Expired),
-        "zero default is invalid while live" => {
-            (100, 25, 0, 150, 1_000, TokenRenewDecision::Invalid)
-        }
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    check!(renew_token_expiry(now, requested, default, current, max) == expected);
+    TokenDeadlinesScenario {
+        creation_policy: None,
+        renewal_context: None,
+        creation: None,
+        renewal: None,
+    }
 }
 
-/// `DelegationTokenControlManager.renewDelegationToken`: `Expired` only
-/// for a deadline strictly before `now`; the expiry is
-/// `min(max, now + min(default, period))` for a positive period and
-/// `min(max, now + default)` otherwise, even when that shortens it.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/delegation_token/tests/token_visibility_requires_owner_filter_plus_a_relationship.feature",
-    name = "renew matches kafka period cap and expiry"
+#[given("a token policy ceiling of {ceiling} ms and renewal interval of {renewal} ms")]
+fn token_policy(token: &mut TokenDeadlinesScenario, ceiling: String, renewal: String) {
+    token.creation_policy = Some((token_millis(&ceiling), token_millis(&renewal)));
+}
+
+#[when("a token is created at {now} ms with requested lifetime {requested} ms")]
+fn create_token(token: &mut TokenDeadlinesScenario, now: String, requested: String) {
+    let (ceiling, renewal) = token.creation_policy.expect("a token policy was given");
+    token.creation = Some(create_token_deadlines(
+        token_millis(&now),
+        token_millis(&requested),
+        ceiling,
+        renewal,
+    ));
+}
+
+#[then(
+    "token creation is {outcome} with maximum timestamp {maximum} ms and initial expiry {expiry} ms"
 )]
-fn renew_matches_kafka_period_cap_and_expiry(example: String) { let _ = example; }
+fn created_token(token: &TokenDeadlinesScenario, outcome: String, maximum: String, expiry: String) {
+    let expected = match outcome.as_str() {
+        "create" => created(token_millis(&maximum), token_millis(&expiry)),
+        "invalid" => {
+            check!(maximum == "none" && expiry == "none");
+            TokenCreateDecision::Invalid
+        }
+        _ => panic!("unknown token creation outcome: {outcome}"),
+    };
+    check!(token.creation == Some(expected));
+}
+
+#[given(
+    "a token expiring at {current} ms with maximum timestamp {maximum} ms and default renewal interval {default} ms"
+)]
+fn renewable_token(
+    token: &mut TokenDeadlinesScenario,
+    current: String,
+    maximum: String,
+    default: String,
+) {
+    token.renewal_context = Some((
+        token_millis(&current),
+        token_millis(&maximum),
+        token_millis(&default),
+    ));
+}
+
+#[when("renewal is requested at {now} ms for a period of {requested} ms")]
+fn renew_token(token: &mut TokenDeadlinesScenario, now: String, requested: String) {
+    let (current, maximum, default) = token.renewal_context.expect("a renewable token was given");
+    token.renewal = Some(renew_token_expiry(
+        token_millis(&now),
+        token_millis(&requested),
+        default,
+        current,
+        maximum,
+    ));
+}
+
+#[then("token renewal is {outcome} with expiry {expiry} ms")]
+fn renewed_token(token: &TokenDeadlinesScenario, outcome: String, expiry: String) {
+    let expected = match outcome.as_str() {
+        "renewed" => TokenRenewDecision::Renew(token_millis(&expiry)),
+        "expired" => {
+            check!(expiry == "none");
+            TokenRenewDecision::Expired
+        }
+        "invalid" => {
+            check!(expiry == "none");
+            TokenRenewDecision::Invalid
+        }
+        _ => panic!("unknown token renewal outcome: {outcome}"),
+    };
+    check!(token.renewal == Some(expected));
+}
+
+scenarios!("tests/features/migrated/src/delegation_token/tests/token_visibility_requires_owner_filter_plus_a_relationship.feature", fixtures = [token: TokenDeadlinesScenario]);

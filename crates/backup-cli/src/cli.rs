@@ -247,42 +247,70 @@ mod tests {
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("cli tests: cluster commands accept kafka command config")]
-    fn bdd_verify_cluster_commands_accept_kafka_command_config() {
-        let capture = Cli::try_parse_from([
-            "krabka-backup",
-            "capture",
-            "-b",
-            "broker-1:9093",
-            "--command-config",
-            "/etc/krabka/backup-client.properties",
-            "--archive-local",
-            "/mnt/backups",
-        ])
-        .expect("capture command config");
-        assert!(let Command::Capture { .. } = &capture.command);
-
-        let restore = Cli::try_parse_from([
-            "krabka-backup",
-            "restore-offsets",
-            "-b",
-            "broker-1:9093",
-            "--command-config",
-            "/etc/krabka/backup-client.properties",
-            "--archive-local",
-            "/mnt/backups",
-        ])
-        .expect("restore command config");
-        assert!(let Command::RestoreOffsets { .. } = &restore.command);
+    struct CommandConfigScenario {
+        operation: String,
+        arguments: Vec<String>,
+        parsed: Option<Cli>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/cli.feature",
-        name = "tests: cluster commands accept kafka command config"
-    )]
-    fn cluster_commands_accept_kafka_command_config() {}
+    #[rstest::fixture]
+    fn command_config() -> CommandConfigScenario {
+        // Start this scenario with fresh inputs and observations.
+
+        CommandConfigScenario {
+            operation: String::new(),
+            arguments: Vec::new(),
+            parsed: None,
+        }
+    }
+
+    #[rstest_bdd_macros::given("a {operation} command targeting broker-1:9093")]
+    fn cluster_operation(command_config: &mut CommandConfigScenario, operation: String) {
+        command_config.arguments = vec![
+            "krabka-backup".into(),
+            operation.clone(),
+            "-b".into(),
+            "broker-1:9093".into(),
+        ];
+        command_config.operation = operation;
+    }
+
+    #[rstest_bdd_macros::given("Kafka client properties at /etc/krabka/backup-client.properties")]
+    fn client_properties(command_config: &mut CommandConfigScenario) {
+        command_config.arguments.extend([
+            "--command-config".into(),
+            "/etc/krabka/backup-client.properties".into(),
+        ]);
+    }
+
+    #[rstest_bdd_macros::given("a local archive at /mnt/backups")]
+    fn backup_archive(command_config: &mut CommandConfigScenario) {
+        command_config
+            .arguments
+            .extend(["--archive-local".into(), "/mnt/backups".into()]);
+    }
+
+    #[rstest_bdd_macros::when("the backup command line is parsed")]
+    fn parse_command_config(command_config: &mut CommandConfigScenario) {
+        command_config.parsed =
+            Some(Cli::try_parse_from(&command_config.arguments).expect("command config accepted"));
+    }
+
+    #[rstest_bdd_macros::then("the requested backup operation is selected")]
+    fn selected_operation(command_config: &CommandConfigScenario) {
+        let parsed = command_config.parsed.as_ref().expect("command line parsed");
+        match command_config.operation.as_str() {
+            "capture" => {
+                assert!(let Command::Capture { .. } = &parsed.command);
+            }
+            "restore-offsets" => {
+                assert!(let Command::RestoreOffsets { .. } = &parsed.command);
+            }
+            operation => panic!("unknown backup operation {operation}"),
+        }
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/command_config", fixtures = [command_config: CommandConfigScenario]);
 
     #[test]
     fn diskless_capture_signing_key_is_an_explicit_pair() {

@@ -5,102 +5,125 @@
 //! livelock, which the staggered topologies cannot reach.
 
 use {
-    crate::harness::{
-        await_single_leader, build_engine, start_engines, three_voter_network, uniform,
+    crate::{
+        harness::{await_single_leader, build_engine, start_engines, three_voter_network, uniform},
+        sim_net::SimNet,
     },
     krabka_raft::kraft::NodeId,
     krabka_units::prelude::millis,
+    rstest_bdd_macros::{given, then, when},
     std::time::Duration,
 };
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("kraft engine sim election: three engines elect one leader")]
-async fn bdd_verify_three_engines_elect_one_leader() {
+struct ElectionCluster {
+    net: SimNet,
+    ids: [NodeId; 3],
+    live: Vec<NodeId>,
+    directories: Vec<tempfile::TempDir>,
+    leader: Option<NodeId>,
+    epoch: Option<u32>,
+    self_leaders: Option<usize>,
+}
+#[rstest::fixture]
+fn election_cluster() -> ElectionCluster {
     let (net, ids) = three_voter_network();
-    let cid = uuid::Uuid::from_u128(100);
-
-    // Staggered election timeouts so one node reliably wins the first round.
-    let _dirs = start_engines().net(&net).ids(&ids).cluster_id(cid).call();
-
-    let (leader, epoch) = await_single_leader(&net, &ids, Duration::from_secs(10)).await;
-    assert2::assert!(epoch >= 1);
-    // Exactly one node reports itself as the leader.
+    ElectionCluster {
+        net,
+        ids,
+        live: vec![],
+        directories: vec![],
+        leader: None,
+        epoch: None,
+        self_leaders: None,
+    }
+}
+#[given("three voters run with staggered election timeouts")]
+fn staggered_election(election_cluster: &mut ElectionCluster) {
+    election_cluster.directories = start_engines()
+        .net(&election_cluster.net)
+        .ids(&election_cluster.ids)
+        .cluster_id(uuid::Uuid::from_u128(100))
+        .call();
+    election_cluster.live = election_cluster.ids.to_vec();
+}
+#[given("only voters 1 and 2 run with uniform 200 millisecond election timeouts")]
+fn uniform_election(election_cluster: &mut ElectionCluster) {
+    for id in [NodeId(1), NodeId(2)] {
+        let (controller, directory) = build_engine()
+            .net(&election_cluster.net)
+            .me(id)
+            .ids(&election_cluster.ids)
+            .cluster_id(uuid::Uuid::from_u128(150))
+            .timeouts(uniform(millis(200)))
+            .call();
+        election_cluster.net.register(id, controller);
+        election_cluster.directories.push(directory);
+        election_cluster.live.push(id);
+    }
+}
+#[when("the live voters converge within {seconds} seconds and report their quorum states")]
+async fn elected_cluster(election_cluster: &mut ElectionCluster, seconds: u64) {
+    let (leader, epoch) = await_single_leader(
+        &election_cluster.net,
+        &election_cluster.live,
+        Duration::from_secs(seconds),
+    )
+    .await;
+    election_cluster.leader = Some(leader);
+    election_cluster.epoch = Some(epoch);
     let mut self_leaders = 0;
-    for &id in &ids {
-        let qs = net.get(id).unwrap().quorum_state().await.unwrap();
-        if qs.leader_id == Some(id) {
+    for &id in &election_cluster.live {
+        let state = election_cluster
+            .net
+            .get(id)
+            .expect("live voter")
+            .quorum_state()
+            .await
+            .expect("quorum state");
+        if state.leader_id == Some(id) {
             self_leaders += 1;
         }
     }
-    assert2::assert!(self_leaders == 1);
-    assert2::assert!(ids.contains(&leader));
-
-    for &id in &ids {
-        net.get(id).unwrap().shutdown().await;
-    }
+    election_cluster.self_leaders = Some(self_leaders);
 }
-
-/// 1. Three engines elect exactly one leader and agree on the epoch.
-#[cfg(test)]
+#[then("exactly one live voter leads at an epoch of at least one")]
+fn unique_elected_leader(election_cluster: &ElectionCluster) {
+    assert2::assert!(election_cluster.epoch.is_some_and(|epoch| epoch >= 1));
+    assert2::assert!(
+        election_cluster
+            .live
+            .contains(&election_cluster.leader.expect("leader elected"))
+    );
+    assert2::assert!(election_cluster.self_leaders == Some(1));
+}
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/kraft_engine_sim/election.feature",
-    name = "three engines elect one leader"
+    name = "Three engines elect exactly one leader"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn three_engines_elect_one_leader() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kraft engine sim election: bare majority two of three elects with uniform timeouts"
-)]
-async fn bdd_verify_bare_majority_two_of_three_elects_with_uniform_timeouts() {
-    let (net, ids) = three_voter_network();
-    let cid = uuid::Uuid::from_u128(150);
-
-    // UNIFORM timeout for both live voters (no manual stagger) — the production
-    // controller config uses a single election timeout for every node. Only
-    // voters 1 and 2 are started; voter 3 stays down, so {1,2} is the bare
-    // majority of the 3-voter set.
-    let mut dirs = Vec::new();
-    for &id in &[NodeId(1), NodeId(2)] {
-        let (ctrl, dir) = build_engine()
-            .net(&net)
-            .me(id)
-            .ids(&ids)
-            .cluster_id(cid)
-            .timeouts(uniform(millis(200)))
-            .call();
-        net.register(id, ctrl);
-        dirs.push(dir);
+async fn three_engines_elect_one_leader(election_cluster: ElectionCluster) {
+    for id in election_cluster.live {
+        election_cluster
+            .net
+            .get(id)
+            .expect("live voter")
+            .shutdown()
+            .await;
     }
-
-    // Must converge quickly via self-staggering; without the jitter fix this
-    // livelocks well past the deadline.
-    let (leader, epoch) =
-        await_single_leader(&net, &[NodeId(1), NodeId(2)], Duration::from_secs(8)).await;
-    assert2::assert!(epoch >= 1);
-    assert2::assert!(leader == 1 || leader == 2);
-
-    for &id in &[NodeId(1), NodeId(2)] {
-        net.get(id).unwrap().shutdown().await;
-    }
-    // The data directories outlive the engines that wrote to them.
-    drop(dirs);
 }
-
-/// 1b. A bare majority, exactly 2 of a 3-voter set, elects a stable leader even
-///     with UNIFORM election timeouts and in-process lockstep.
-///
-///     This guards the split-vote livelock fix. Without per-node, per-epoch
-///     election-timeout jitter, the two closely-synchronized voters both become
-///     candidates every round, self-vote, and never reach a majority, because
-///     the third voter is down. They then churn for tens of seconds. The
-///     `start_n_node`-style topologies with all voters up never exercised this.
-///     The mixed JVM and Krabka quorum did, because the JVM boots slowly.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/kraft_engine_sim/election.feature",
-    name = "bare majority two of three elects with uniform timeouts"
+    name = "A bare majority elects with uniform timeouts"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn bare_majority_two_of_three_elects_with_uniform_timeouts() {}
+async fn bare_majority_two_of_three_elects_with_uniform_timeouts(
+    election_cluster: ElectionCluster,
+) {
+    for id in election_cluster.live {
+        election_cluster
+            .net
+            .get(id)
+            .expect("live voter")
+            .shutdown()
+            .await;
+    }
+}

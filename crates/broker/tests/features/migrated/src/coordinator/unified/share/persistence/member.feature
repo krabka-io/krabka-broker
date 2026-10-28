@@ -1,4 +1,7 @@
 Feature: src coordinator unified share persistence member
 
-  Scenario: tests: member metadata bytes match kafka schema
-    Then coordinator unified share persistence member tests: member metadata bytes match kafka schema
+  @member_metadata
+  Scenario: Persist a Share member c at host h in rack r subscribes to topic a
+    Given a Share member c at host h in rack r subscribes to topic a
+    When the coordinator persists the Share member metadata in the compacted group log
+    Then the persisted Share member metadata matches Kafka schema bytes including compact lengths and tagged trailers

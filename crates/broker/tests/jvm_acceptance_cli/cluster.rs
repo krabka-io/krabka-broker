@@ -1,5 +1,4 @@
-//! The `kafka-cluster` tool, whose `cluster-id` subcommand exercises
-//! `DescribeCluster`.
+//! Cluster identity discovery through Kafka's stock administration tool.
 
 use {
     crate::jvm_acceptance::{
@@ -7,40 +6,81 @@ use {
         nc_check_connectivity, start_host_broker,
     },
     assert2::assert,
+    base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm acceptance cli cluster: kafka cluster describe")]
-async fn bdd_verify_kafka_cluster_describe() {
-    let (_broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
+struct ClusterDiscovery {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    expected_id: String,
+    stdout: String,
+}
 
-    let out = docker_run_kafka_tool_with_image(KAFKA_IMAGE_TXN, &[
+#[fixture]
+fn cluster() -> ClusterDiscovery {
+    // Start this scenario with fresh inputs and observations.
+
+    ClusterDiscovery {
+        broker: None,
+        directory: None,
+        expected_id: String::new(),
+        stdout: String::new(),
+    }
+}
+
+#[given("a host broker with its immutable cluster identity is reachable by Kafka tools")]
+async fn reachable_cluster(cluster: &mut ClusterDiscovery) {
+    let (broker, directory) = start_host_broker().await;
+    nc_check_connectivity();
+    let image = broker.controller_image_for_test();
+    cluster.expected_id = URL_SAFE_NO_PAD.encode(image.cluster_id().as_bytes());
+    cluster.broker = Some(broker);
+    cluster.directory = Some(directory);
+}
+
+#[when("the Kafka 7.5 cluster-id subcommand queries the broker")]
+fn query_cluster_id(cluster: &mut ClusterDiscovery) {
+    let output = docker_run_kafka_tool_with_image(KAFKA_IMAGE_TXN, &[
         "kafka-cluster",
         "cluster-id",
         "--bootstrap-server",
         broker0_advertised(),
     ]);
-    let s = String::from_utf8_lossy(&out.stdout);
-    // `kafka-cluster cluster-id` prints a line like:
-    //   "Cluster ID: <uuid>"
+    cluster.stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+}
+
+#[then("the tool identifies the broker's current cluster id")]
+fn cluster_identity(cluster: &ClusterDiscovery) {
     assert!(
-        s.contains("Cluster ID") || s.contains("cluster ID") || s.contains("00000000"),
-        "cluster-id output missing cluster id: {s}"
+        cluster.stdout.contains("Cluster ID")
+            || cluster.stdout.contains("cluster ID")
+            || cluster.stdout.contains("00000000"),
+        "cluster-id output missing cluster id: {}",
+        cluster.stdout
+    );
+    assert!(
+        cluster.stdout.contains(&cluster.expected_id),
+        "cluster-id output did not report {}: {}",
+        cluster.expected_id,
+        cluster.stdout
     );
 }
 
-/// `kafka-cluster cluster-id` exercises `DescribeCluster` (`api_key` 60).
-///
-/// Uses `cp-kafka:7.5.0` (= [`KAFKA_IMAGE_TXN`]) because:
-/// - `cp-kafka:6.1.1` does not ship the `kafka-cluster` binary at all.
-/// - `cp-kafka:7.5.0` ships it but the subcommand is `cluster-id`
-///   (not `describe`; that alias does not exist in this version).
+// This image ships `cluster-id`; older suite images do not ship kafka-cluster.
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_cli/cluster.feature",
-    name = "kafka cluster describe"
+    name = "The stock Kafka tool discovers the broker's immutable cluster identity"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kafka_cluster_describe() {}
+async fn kafka_cluster_describe(cluster: ClusterDiscovery) {
+    cluster
+        .broker
+        .expect("a host broker was started")
+        .shutdown()
+        .await;
+}

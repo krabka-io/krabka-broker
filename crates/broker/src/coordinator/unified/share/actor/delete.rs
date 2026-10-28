@@ -212,18 +212,6 @@ mod tests {
         tokio::{sync::oneshot, time::timeout},
     };
 
-    struct Row {
-        /// The share group seed, `None` for no group.
-        group_seed: Option<ShareGroupSeed>,
-        /// Whether a share persister is wired.
-        persister: bool,
-        expected: Result<(), DeleteGroupError>,
-        /// Whether the group is kept.
-        kept: bool,
-        /// The expected appended records.
-        appended: Appended,
-    }
-
     fn seed(members: usize, initialized_partitions: &[i32]) -> ShareGroupSeed {
         let initialized = if initialized_partitions.is_empty() {
             Vec::new()
@@ -248,27 +236,6 @@ mod tests {
         }
     }
 
-    /// An empty group whose only partitions are still initializing.
-    fn initializing_seed(partitions: &[i32]) -> ShareGroupSeed {
-        let mut seed = seed(0, &[]);
-        seed.state_partition_metadata.initializing = vec![TopicPartitionsInfo {
-            topic_id: uuid::Uuid::from_bytes([9; 16]),
-            topic_name: "orders".to_owned(),
-            partitions: partitions.to_vec(),
-        }];
-        seed
-    }
-
-    /// An empty group whose only topic an earlier delete left deleting.
-    fn deleting_seed() -> ShareGroupSeed {
-        let mut seed = seed(0, &[]);
-        seed.state_partition_metadata.deleting = vec![DeletingTopic {
-            topic_id: uuid::Uuid::from_bytes([9; 16]),
-            topic_name: "orders".to_owned(),
-        }];
-        seed
-    }
-
     /// The `(key, value)` of a `ShareGroupStatePartitionMetadata` record of
     /// `sg` holding `value`.
     fn metadata_record(value: ShareGroupStatePartitionMetadataValue) -> Appended {
@@ -284,149 +251,10 @@ mod tests {
         .collect()
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified share actor delete tests: delete share group answers as kafka"
-    )]
-    async fn bdd_verify_delete_share_group_answers_as_kafka() {
-        let tombstones: Appended = tombstone_batch("sg", 0)
-            .unwrap()
-            .records
-            .into_iter()
-            .map(|record| (record.key, record.value))
-            .collect();
-        // Kafka's `shareGroupBuildPartitionDeleteRequest` records every
-        // initialized topic as deleting before the persister runs.
-        let orders_deleting = metadata_record(ShareGroupStatePartitionMetadataValue {
-            deleting: vec![DeletingTopic {
-                topic_id: uuid::Uuid::from_bytes([9; 16]),
-                topic_name: "orders".to_owned(),
-            }],
-            ..Default::default()
-        });
-        let rows: [Row; 7] = [
-            Row {
-                group_seed: None,
-                persister: true,
-                expected: Err(DeleteGroupError::NotFound),
-                kept: false,
-                appended: Vec::new(),
-            },
-            Row {
-                group_seed: Some(seed(1, &[])),
-                persister: true,
-                expected: Err(DeleteGroupError::NonEmpty),
-                kept: true,
-                appended: Vec::new(),
-            },
-            Row {
-                group_seed: Some(seed(0, &[])),
-                persister: false,
-                expected: Ok(()),
-                kept: false,
-                appended: tombstones.clone(),
-            },
-            Row {
-                group_seed: Some(seed(0, &[0, 1])),
-                persister: true,
-                expected: Err(DeleteGroupError::ShareState(
-                    codes::COORDINATOR_NOT_AVAILABLE,
-                )),
-                kept: true,
-                appended: orders_deleting,
-            },
-            // A deleting topic that the metadata image no longer holds is
-            // dropped from the record, and with nothing left to delete the
-            // group goes.
-            Row {
-                group_seed: Some(deleting_seed()),
-                persister: true,
-                expected: Ok(()),
-                kept: false,
-                appended: [
-                    metadata_record(ShareGroupStatePartitionMetadataValue::default()),
-                    tombstones.clone(),
-                ]
-                .concat(),
-            },
-            Row {
-                group_seed: Some(seed(0, &[0])),
-                persister: false,
-                expected: Err(DeleteGroupError::ShareState(
-                    codes::COORDINATOR_NOT_AVAILABLE,
-                )),
-                kept: true,
-                appended: Vec::new(),
-            },
-            // Kafka's `shareGroupBuildPartitionDeleteRequest` deletes the
-            // initializing partitions too, so a group that holds only those
-            // still needs the persister.
-            Row {
-                group_seed: Some(initializing_seed(&[0])),
-                persister: false,
-                expected: Err(DeleteGroupError::ShareState(
-                    codes::COORDINATOR_NOT_AVAILABLE,
-                )),
-                kept: true,
-                appended: Vec::new(),
-            },
-        ];
-
-        for (
-            index,
-            Row {
-                group_seed,
-                persister,
-                expected,
-                kept,
-                appended,
-            },
-        ) in rows.into_iter().enumerate()
-        {
-            let (coordinator, log) = make_coord_with_log();
-            if persister {
-                coordinator.set_share_persister(make_share_persister(fixed_source(
-                    krabka_metadata::MetadataImage::default(),
-                )));
-            }
-            if let Some(group_seed) = group_seed {
-                coordinator.mark_share("sg");
-                let handle = coordinator.get_or_create_share("sg");
-                handle
-                    .tx
-                    .send(ShareGroupActorMessage::Seed(group_seed))
-                    .await
-                    .expect("seed the share group");
-            }
-
-            let result = coordinator.delete_group("sg").await;
-
-            check!(result == expected, "row {index}");
-            check!(
-                coordinator.share_group_ids().contains(&"sg".to_owned()) == kept,
-                "row {index}"
-            );
-            check!(
-                (coordinator.group_type("sg") == Some(GroupType::Share)) == kept,
-                "row {index}"
-            );
-            let written = appended_records(log.as_ref()).await;
-            check!(written == appended, "row {index}");
-        }
-    }
-
     /// `DeleteGroups` on a share group, per row: whether the group exists,
     /// its members and initialized or initializing partitions, and whether a share persister
     /// is wired. The persister runs over a metadata image with no brokers, so
     /// it cannot reach a share coordinator and every state delete fails.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/share/actor/delete.feature",
-        name = "tests: delete share group answers as kafka"
-    )]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn delete_share_group_answers_as_kafka() {}
-
     /// A share actor that stopped after a log-write failure leaves a closed
     /// handle and a cached seed. `DeleteGroups` respawns the actor from the
     /// seed and deletes the group, and the seeds are gone afterwards.
@@ -514,4 +342,244 @@ mod tests {
             check!(series(&metrics, "other") == [true; 3], "{members} members");
         }
     }
+    use {
+        crate::coordinator::unified::test_support::InMemoryOffsetsLog,
+        krabka_metadata::MetadataImage,
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{DataTableRow, given, then, when},
+        serde::Deserialize,
+        std::sync::Arc,
+    };
+    #[derive(Default)]
+    struct ShareDeletionBehavior {
+        coordinator: Option<Arc<GroupCoordinator>>,
+        log: Option<Arc<InMemoryOffsetsLog>>,
+        result: Option<Result<(), DeleteGroupError>>,
+        group_ids: Vec<String>,
+        group_type: Option<GroupType>,
+        appended: Appended,
+    }
+    #[derive(DataTableRow)]
+    struct PersistedShareState {
+        exists: bool,
+        members: usize,
+        initialized: String,
+        initializing: String,
+        deleting: bool,
+    }
+    #[derive(DataTableRow)]
+    struct ExpectedShareRecord {
+        family: String,
+        value: String,
+    }
+    #[derive(Deserialize)]
+    struct ExpectedTopicPartitions {
+        topic_id: String,
+        topic_name: String,
+        partitions: Vec<i32>,
+    }
+    #[derive(Deserialize)]
+    struct ExpectedDeletingTopic {
+        topic_id: String,
+        topic_name: String,
+    }
+    #[derive(Deserialize)]
+    struct ExpectedStateRecord {
+        initializing: Vec<ExpectedTopicPartitions>,
+        initialized: Vec<ExpectedTopicPartitions>,
+        deleting: Vec<ExpectedDeletingTopic>,
+    }
+    #[rstest::fixture]
+    fn share_deletion() -> ShareDeletionBehavior {
+        // Start this scenario with fresh inputs and observations.
+        ShareDeletionBehavior::default()
+    }
+    #[given(
+        "the Share coordinator has a persister {persister} and no brokers in its metadata image"
+    )]
+    fn share_delete_coordinator(share_deletion: &mut ShareDeletionBehavior, persister: bool) {
+        let (coordinator, log) = make_coord_with_log();
+        if persister {
+            coordinator
+                .set_share_persister(make_share_persister(fixed_source(MetadataImage::default())));
+        }
+        share_deletion.coordinator = Some(coordinator);
+        share_deletion.log = Some(log);
+    }
+    #[given(
+        "Share group sg at epoch 3 has orders topic UUID 09090909-0909-0909-0909-090909090909 and this persisted state"
+    )]
+    async fn share_delete_seed(
+        share_deletion: &mut ShareDeletionBehavior,
+        #[datatable] rows: Rows<PersistedShareState>,
+    ) {
+        let input = rows
+            .into_iter()
+            .next()
+            .expect("persisted Share group state");
+        if !input.exists {
+            return;
+        }
+        let initialized = serde_json::from_str::<Vec<i32>>(&input.initialized)
+            .expect("initialized partition numbers");
+        let initializing = serde_json::from_str::<Vec<i32>>(&input.initializing)
+            .expect("initializing partition numbers");
+        let mut stored = seed(input.members, &initialized);
+        if !initializing.is_empty() {
+            stored.state_partition_metadata.initializing = vec![TopicPartitionsInfo {
+                topic_id: uuid::Uuid::from_bytes([9; 16]),
+                topic_name: "orders".into(),
+                partitions: initializing,
+            }];
+        }
+        if input.deleting {
+            stored.state_partition_metadata.deleting = vec![DeletingTopic {
+                topic_id: uuid::Uuid::from_bytes([9; 16]),
+                topic_name: "orders".into(),
+            }];
+        }
+        let coordinator = share_deletion
+            .coordinator
+            .as_ref()
+            .expect("coordinator prepared");
+        coordinator.mark_share("sg");
+        coordinator
+            .get_or_create_share("sg")
+            .tx
+            .send(ShareGroupActorMessage::Seed(stored))
+            .await
+            .expect("seed Share group");
+    }
+    #[when(
+        "DeleteGroups deletes sg and the coordinator observes its registry and appended records"
+    )]
+    async fn delete_share_group(share_deletion: &mut ShareDeletionBehavior) {
+        let coordinator = share_deletion
+            .coordinator
+            .as_ref()
+            .expect("coordinator prepared");
+        share_deletion.result = Some(coordinator.delete_group("sg").await);
+        share_deletion.group_ids = coordinator.share_group_ids();
+        share_deletion.group_type = coordinator.group_type("sg");
+        share_deletion.appended =
+            appended_records(share_deletion.log.as_ref().expect("offsets log").as_ref()).await;
+    }
+    #[then("Share deletion returns {outcome} and the group remains registered {kept}")]
+    fn share_deletion_result(share_deletion: &ShareDeletionBehavior, outcome: String, kept: bool) {
+        let expected = match outcome.as_str() {
+            "deleted" => Ok(()),
+            "not-found" => Err(DeleteGroupError::NotFound),
+            "non-empty" => Err(DeleteGroupError::NonEmpty),
+            "coordinator-unavailable" => Err(DeleteGroupError::ShareState(
+                codes::COORDINATOR_NOT_AVAILABLE,
+            )),
+            _ => panic!("unknown Share deletion outcome"),
+        };
+        check!(share_deletion.result.as_ref() == Some(&expected));
+        check!(share_deletion.group_ids.contains(&"sg".to_owned()) == kept);
+        check!((share_deletion.group_type == Some(GroupType::Share)) == kept);
+    }
+    fn expected_topic_partitions(input: ExpectedTopicPartitions) -> TopicPartitionsInfo {
+        TopicPartitionsInfo {
+            topic_id: uuid::Uuid::parse_str(&input.topic_id).expect("expected topic UUID"),
+            topic_name: input.topic_name,
+            partitions: input.partitions,
+        }
+    }
+    #[then("the complete Share deletion log contains these records in order")]
+    fn share_deletion_records(
+        share_deletion: &ShareDeletionBehavior,
+        #[datatable] rows: Rows<ExpectedShareRecord>,
+    ) {
+        let mut expected = vec![];
+        for row in rows {
+            let key = match row.family.as_str() {
+                "target-epoch" => ShareGroupKey::TargetAssignmentMetadata {
+                    group_id: "sg".into(),
+                },
+                "state-metadata" => ShareGroupKey::StatePartitionMetadata {
+                    group_id: "sg".into(),
+                },
+                "group-epoch" => ShareGroupKey::GroupMetadata {
+                    group_id: "sg".into(),
+                },
+                _ => panic!("unknown Share record family"),
+            };
+            if row.value == "tombstone" {
+                expected.push((
+                    Some(encode_share_key(&key).expect("expected Share key")),
+                    None,
+                ));
+            } else {
+                let state = serde_json::from_str::<ExpectedStateRecord>(&row.value)
+                    .expect("complete Share state record");
+                expected.extend(metadata_record(ShareGroupStatePartitionMetadataValue {
+                    initializing: state
+                        .initializing
+                        .into_iter()
+                        .map(expected_topic_partitions)
+                        .collect(),
+                    initialized: state
+                        .initialized
+                        .into_iter()
+                        .map(expected_topic_partitions)
+                        .collect(),
+                    deleting: state
+                        .deleting
+                        .into_iter()
+                        .map(|topic| DeletingTopic {
+                            topic_id: uuid::Uuid::parse_str(&topic.topic_id)
+                                .expect("expected topic UUID"),
+                            topic_name: topic.topic_name,
+                        })
+                        .collect(),
+                }));
+            }
+        }
+        check!(share_deletion.appended == expected);
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/delete.feature",
+        name = "A missing Share group is not found"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_share_group_answers_as_kafka(share_deletion: ShareDeletionBehavior) {
+        let _ = share_deletion;
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/delete.feature",
+        name = "A Share group with members cannot be deleted"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_share_group_2(share_deletion: ShareDeletionBehavior) { let _ = share_deletion; }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/delete.feature",
+        name = "An empty Share group without state deletes without a persister"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_share_group_3(share_deletion: ShareDeletionBehavior) { let _ = share_deletion; }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/delete.feature",
+        name = "Initialized Share state is marked deleting before an unavailable coordinator refuses deletion"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_share_group_4(share_deletion: ShareDeletionBehavior) { let _ = share_deletion; }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/delete.feature",
+        name = "Deleting state whose topic disappeared is cleared before group tombstones"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_share_group_5(share_deletion: ShareDeletionBehavior) { let _ = share_deletion; }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/delete.feature",
+        name = "Initialized Share state requires a wired persister"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_share_group_6(share_deletion: ShareDeletionBehavior) { let _ = share_deletion; }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/share/actor/delete.feature",
+        name = "Initializing Share state also requires a wired persister"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_share_group_7(share_deletion: ShareDeletionBehavior) { let _ = share_deletion; }
 }

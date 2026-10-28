@@ -68,96 +68,66 @@ mod tests {
         krabka_protocol::owned::describe_log_dirs_request::DescribableLogDirTopic,
     };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers describe log dirs filter tests: filter matches kafka partition set"
-    )]
-    fn bdd_verify_filter_matches_kafka_partition_set() {
-        /// A requested topic and the partitions of it that the request lists.
-        struct RequestedTopic {
-            topic: &'static str,
-            partitions: Vec<i32>,
-        }
-
-        let request = |topics: Option<Vec<RequestedTopic>>| DescribeLogDirsRequest {
-            topics: topics.map(|topics| {
-                topics
-                    .into_iter()
-                    .map(
-                        |RequestedTopic { topic, partitions }| DescribableLogDirTopic {
-                            topic: topic.into(),
-                            partitions,
-                            ..Default::default()
-                        },
-                    )
-                    .collect()
-            }),
-            ..Default::default()
-        };
-        let cases = [
-            ("null topics", None, ("any", 9), true),
-            (
-                "listed partition",
-                Some(vec![RequestedTopic {
-                    topic: "t",
-                    partitions: vec![0, 2],
-                }]),
-                ("t", 2),
-                true,
-            ),
-            (
-                "unlisted partition",
-                Some(vec![RequestedTopic {
-                    topic: "t",
-                    partitions: vec![0, 2],
-                }]),
-                ("t", 1),
-                false,
-            ),
-            (
-                "unlisted topic",
-                Some(vec![RequestedTopic {
-                    topic: "t",
-                    partitions: vec![0],
-                }]),
-                ("u", 0),
-                false,
-            ),
-            (
-                "empty partition list",
-                Some(vec![RequestedTopic {
-                    topic: "t",
-                    partitions: vec![],
-                }]),
-                ("t", 0),
-                false,
-            ),
-            (
-                "repeated topic entries union",
-                Some(vec![
-                    RequestedTopic {
-                        topic: "t",
-                        partitions: vec![0],
-                    },
-                    RequestedTopic {
-                        topic: "t",
-                        partitions: vec![1],
-                    },
-                ]),
-                ("t", 0),
-                true,
-            ),
-        ];
-        for (name, topics, (topic, partition), expected) in cases {
-            let filter = request_filter(request(topics));
-            check!(filter.allows(topic, partition) == expected, "case {name}");
+    struct LogDirectoryFilterScenario {
+        request: Option<DescribeLogDirsRequest>,
+        filter: Option<Filter>,
+        allowed: Option<bool>,
+    }
+    #[rstest::fixture]
+    fn directory_filter() -> LogDirectoryFilterScenario {
+        let request = None;
+        LogDirectoryFilterScenario {
+            request,
+            filter: None,
+            allowed: None,
         }
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/describe_log_dirs/filter.feature",
-        name = "tests: filter matches kafka partition set"
+    #[rstest_bdd_macros::given("the log directory request lists {requested}")]
+    fn requested_directory_partitions(
+        directory_filter: &mut LogDirectoryFilterScenario,
+        requested: String,
+    ) {
+        let topics = if requested == "all topics" {
+            None
+        } else {
+            Some(
+                requested
+                    .split(';')
+                    .map(|entry| {
+                        let (topic, partitions) = entry.split_once(':').unwrap();
+                        DescribableLogDirTopic {
+                            topic: topic.into(),
+                            partitions: if partitions == "none" {
+                                Vec::new()
+                            } else {
+                                partitions.split(',').map(|p| p.parse().unwrap()).collect()
+                            },
+                            ..Default::default()
+                        }
+                    })
+                    .collect(),
+            )
+        };
+        directory_filter.request = Some(DescribeLogDirsRequest {
+            topics,
+            ..Default::default()
+        });
+    }
+    #[rstest_bdd_macros::when(
+        "the log directory filter checks topic {topic} partition {partition}"
     )]
-    fn filter_matches_kafka_partition_set() {}
+    fn check_requested_directory_partition(
+        directory_filter: &mut LogDirectoryFilterScenario,
+        topic: String,
+        partition: i32,
+    ) {
+        let filter = request_filter(directory_filter.request.take().unwrap());
+        directory_filter.allowed = Some(filter.allows(&topic, partition));
+        directory_filter.filter = Some(filter);
+    }
+    #[rstest_bdd_macros::then("that log partition is included {expected}")]
+    fn assert_directory_filter(directory_filter: &LogDirectoryFilterScenario, expected: bool) {
+        check!(directory_filter.allowed.unwrap() == expected);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_log_directory_filter",fixtures=[directory_filter:LogDirectoryFilterScenario]);
 }

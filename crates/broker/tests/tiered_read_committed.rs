@@ -49,14 +49,18 @@ const MARKER_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Reads from `from` until the `read_committed` view is `want`, so the
 /// coordinator's asynchronous markers have all landed.
-async fn await_committed_read(tiered: &TieredPartition, from: i64, want: &CommittedRead) {
+async fn await_committed_read(
+    tiered: &TieredPartition,
+    from: i64,
+    want: &CommittedRead,
+) -> CommittedRead {
     let deadline = Instant::now() + MARKER_DEADLINE;
     // intentional: `EndTxn` answers before its markers are written, and the
     // last stable offset is the only signal that they were.
     loop {
         let read = read_committed_fetch(tiered, from).await;
         if read == *want {
-            return;
+            return read;
         }
         assert!(
             Instant::now() <= deadline,
@@ -83,94 +87,310 @@ fn committed_below_open(workload: &Workload) -> CommittedRead {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "tiered read committed: read committed reads of a transactional range agree across local eviction"
-)]
-async fn bdd_verify_read_committed_reads_of_a_transactional_range_agree_across_local_eviction() {
-    let tiered = start_tiered_partition().await;
-    let workload = write_workload(&tiered.client, TOPIC, tiered.topic_id).await;
-    let lso = workload.open_first_offset;
-    let expected = committed_below_open(&workload);
-    let expected_acquisitions = acquisitions_of(&expected.visible);
-    await_committed_read(&tiered, 0, &expected).await;
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
 
-    // Both tiers hold `[0, tiered_end)`: the copy pass ran, retention did not.
-    let tiered_end = tiered.copy_bound(lso);
-    tiered.await_tiered_through(tiered_end).await;
-    // The tier holds data of `a-last`, whose abort marker is local only.
-    assert!(
-        workload.last_abort.1 < tiered_end,
-        "a-last starts at {}, the tier ends at {tiered_end}",
-        workload.last_abort.1
-    );
-    check!(tiered.local_log_start().await == 0);
-    let before = read_committed_fetch(&tiered, 0).await;
-    let mut before_eviction = ShareReader::join(&tiered, "rc-before-eviction").await;
-    before_eviction
-        .acquire_through(&tiered, &offsets(&expected.visible))
-        .await;
-
-    // Only the tier holds `[0, tiered_end)`.
-    tiered.evict_local_segments(tiered_end).await;
-    let after = read_committed_fetch(&tiered, 0).await;
-    let mut after_eviction = ShareReader::join(&tiered, "rc-after-eviction").await;
-    after_eviction
-        .acquire_through(&tiered, &offsets(&expected.visible))
-        .await;
-    let local_start_after_reads = tiered.local_log_start().await;
-
-    check!(before == expected);
-    check!(after == expected);
-    check!(before_eviction.acquired == expected_acquisitions);
-    check!(after_eviction.acquired == expected_acquisitions);
-    // The reads after eviction came from the tier: the local log started at
-    // `tiered_end` throughout, and most of what they saw lies below it.
-    check!(local_start_after_reads == tiered_end);
-    let remote_only = offsets(&expected.visible).range(..tiered_end).count();
-    check!(
-        remote_only * 2 > expected.visible.len(),
-        "{remote_only} of {} below {tiered_end}",
-        expected.visible.len()
-    );
-    check!(
-        tiered.broker.high_watermark_for_test(TOPIC, 0).await
-            == Some(workload.log_end_while_open())
-    );
-
-    // Committing the open transaction moves the LSO past it: its records and
-    // the plain records after it become visible, and the `a-last` abort,
-    // whose marker lies past the old LSO, is reported for that range.
-    let last_abort = workload.last_abort;
-    let committed = workload.visible_once_open_commits();
-    // The commit marker is the last offset.
-    let high_watermark = workload.log_end_while_open() + 1;
-    workload
-        .open
-        .end(&tiered.client, TransactionOutcome::Commit)
-        .await;
-    let after_commit = CommittedRead {
-        last_stable_offset: high_watermark,
-        visible: committed.clone(),
-        aborted: BTreeSet::from([last_abort]),
-        batches_past_last_stable_offset: Vec::new(),
-        records_without_aborted_list: Vec::new(),
-    };
-    await_committed_read(&tiered, lso, &after_commit).await;
-    after_eviction
-        .acquire_through(&tiered, &offsets(&committed))
-        .await;
-    let mut all = expected_acquisitions;
-    all.extend(acquisitions_of(&committed));
-    check!(after_eviction.acquired == all);
-
-    tiered.broker.shutdown().await;
+#[derive(Default)]
+struct TieredVisibility {
+    partition: Option<TieredPartition>,
+    workload: Option<Workload>,
+    expected: Option<CommittedRead>,
+    before: Option<CommittedRead>,
+    after: Option<CommittedRead>,
+    before_reader: Option<ShareReader>,
+    after_reader: Option<ShareReader>,
+    tiered_end: Option<i64>,
+    local_start: Option<i64>,
+    open_lso: Option<i64>,
+    committed_suffix: Option<Vec<Written>>,
+    suffix_expected: Option<CommittedRead>,
+    suffix_read: Option<CommittedRead>,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[fixture]
+fn tiered_visibility() -> TieredVisibility {
+    // Keep both readers and their real Fetch observations across the physical tier eviction.
+    TieredVisibility::default()
+}
+
+impl TieredVisibility {
+    fn partition(&self) -> &TieredPartition { self.partition.as_ref().expect("tiered partition") }
+
+    fn expected(&self) -> &CommittedRead { self.expected.as_ref().expect("pre-commit visibility") }
+}
+
+#[given("a tiered partition has 1-KiB segments and retains all local segments")]
+async fn tiered_visibility_partition(tiered_visibility: &mut TieredVisibility) {
+    tiered_visibility.partition = Some(start_tiered_partition().await);
+}
+
+#[given(
+    "five interleaved commit-abort rounds each write three two-record batches and one plain record, followed by eight abort batches, two open batches and two plain tail records"
+)]
+async fn tiered_visibility_workload(tiered_visibility: &mut TieredVisibility) {
+    tiered_visibility.workload = Some(
+        write_workload(
+            &tiered_visibility.partition().client,
+            TOPIC,
+            tiered_visibility.partition().topic_id,
+        )
+        .await,
+    );
+    tiered_visibility.open_lso = Some(
+        tiered_visibility
+            .workload
+            .as_ref()
+            .expect("transaction workload")
+            .open_first_offset,
+    );
+    tiered_visibility.expected = Some(committed_below_open(
+        tiered_visibility
+            .workload
+            .as_ref()
+            .expect("transaction workload"),
+    ));
+    await_committed_read(
+        tiered_visibility.partition(),
+        0,
+        tiered_visibility.expected(),
+    )
+    .await;
+}
+
+#[when("the remote tier copies every segment eligible below the open transaction's LSO")]
+async fn copy_tiered_visibility_prefix(tiered_visibility: &mut TieredVisibility) {
+    let end = tiered_visibility
+        .partition()
+        .copy_bound(tiered_visibility.open_lso.expect("open transaction LSO"));
+    tiered_visibility
+        .partition()
+        .await_tiered_through(end)
+        .await;
+    tiered_visibility.tiered_end = Some(end);
+}
+
+#[then(
+    "the tier holds a-last data while its abort marker stays local and local start remains zero"
+)]
+async fn copied_tiered_visibility_prefix(tiered_visibility: &TieredVisibility) {
+    assert!(
+        tiered_visibility
+            .workload
+            .as_ref()
+            .expect("transaction workload")
+            .last_abort
+            .1
+            < tiered_visibility.tiered_end.expect("copied prefix end")
+    );
+    check!(tiered_visibility.partition().local_log_start().await == 0);
+}
+
+#[when("Fetch and a fresh committed share group read the range before local eviction")]
+async fn read_before_tiered_eviction(tiered_visibility: &mut TieredVisibility) {
+    tiered_visibility.before = Some(read_committed_fetch(tiered_visibility.partition(), 0).await);
+    tiered_visibility.before_reader =
+        Some(ShareReader::join(tiered_visibility.partition(), "rc-before-eviction").await);
+    let visible = offsets(&tiered_visibility.expected().visible);
+    tiered_visibility
+        .before_reader
+        .as_mut()
+        .expect("before-eviction share reader")
+        .acquire_through(
+            tiered_visibility
+                .partition
+                .as_ref()
+                .expect("tiered partition"),
+            &visible,
+        )
+        .await;
+}
+
+#[then(
+    "both pre-eviction readers see exactly committed and plain records below the open LSO with complete abort metadata"
+)]
+fn before_tiered_visibility(tiered_visibility: &TieredVisibility) {
+    check!(
+        tiered_visibility
+            .before
+            .as_ref()
+            .expect("pre-eviction Fetch")
+            == tiered_visibility.expected()
+    );
+    check!(
+        tiered_visibility
+            .before_reader
+            .as_ref()
+            .expect("pre-eviction share read")
+            .acquired
+            == acquisitions_of(&tiered_visibility.expected().visible)
+    );
+}
+
+#[when("all copied prefix segments are evicted from local disk")]
+async fn evict_tiered_visibility_prefix(tiered_visibility: &TieredVisibility) {
+    tiered_visibility
+        .partition()
+        .evict_local_segments(tiered_visibility.tiered_end.expect("copied prefix end"))
+        .await;
+}
+
+#[when("Fetch and a different committed share group read the same range after eviction")]
+async fn read_after_tiered_eviction(tiered_visibility: &mut TieredVisibility) {
+    tiered_visibility.after = Some(read_committed_fetch(tiered_visibility.partition(), 0).await);
+    tiered_visibility.after_reader =
+        Some(ShareReader::join(tiered_visibility.partition(), "rc-after-eviction").await);
+    let visible = offsets(&tiered_visibility.expected().visible);
+    tiered_visibility
+        .after_reader
+        .as_mut()
+        .expect("after-eviction share reader")
+        .acquire_through(
+            tiered_visibility
+                .partition
+                .as_ref()
+                .expect("tiered partition"),
+            &visible,
+        )
+        .await;
+    tiered_visibility.local_start = Some(tiered_visibility.partition().local_log_start().await);
+}
+
+#[then(
+    "post-eviction visibility matches both original readers and most returned records are remote-only"
+)]
+async fn after_tiered_visibility(tiered_visibility: &TieredVisibility) {
+    check!(
+        tiered_visibility
+            .after
+            .as_ref()
+            .expect("post-eviction Fetch")
+            == tiered_visibility.expected()
+    );
+    check!(
+        tiered_visibility
+            .after_reader
+            .as_ref()
+            .expect("post-eviction share read")
+            .acquired
+            == acquisitions_of(&tiered_visibility.expected().visible)
+    );
+    let end = tiered_visibility.tiered_end.expect("copied prefix end");
+    check!(tiered_visibility.local_start == Some(end));
+    let remote_only = offsets(&tiered_visibility.expected().visible)
+        .range(..end)
+        .count();
+    check!(remote_only * 2 > tiered_visibility.expected().visible.len());
+    check!(
+        tiered_visibility
+            .partition()
+            .broker
+            .high_watermark_for_test(TOPIC, 0)
+            .await
+            == Some(
+                tiered_visibility
+                    .workload
+                    .as_ref()
+                    .expect("transaction workload")
+                    .log_end_while_open()
+            )
+    );
+}
+
+#[when("the open transaction commits and both readers continue beyond the old LSO")]
+async fn commit_tiered_visibility_tail(tiered_visibility: &mut TieredVisibility) {
+    let workload = tiered_visibility
+        .workload
+        .take()
+        .expect("open transaction workload");
+    let committed = workload.visible_once_open_commits();
+    let high_watermark = workload.log_end_while_open() + 1;
+    tiered_visibility.suffix_expected = Some(CommittedRead {
+        last_stable_offset: high_watermark,
+        visible: committed.clone(),
+        aborted: BTreeSet::from([workload.last_abort]),
+        batches_past_last_stable_offset: vec![],
+        records_without_aborted_list: vec![],
+    });
+    workload
+        .open
+        .end(
+            &tiered_visibility.partition().client,
+            TransactionOutcome::Commit,
+        )
+        .await;
+    tiered_visibility.suffix_read = Some(
+        await_committed_read(
+            tiered_visibility.partition(),
+            tiered_visibility.open_lso.expect("old LSO"),
+            tiered_visibility
+                .suffix_expected
+                .as_ref()
+                .expect("committed-tail visibility"),
+        )
+        .await,
+    );
+    tiered_visibility
+        .after_reader
+        .as_mut()
+        .expect("after-eviction share reader")
+        .acquire_through(
+            tiered_visibility
+                .partition
+                .as_ref()
+                .expect("tiered partition"),
+            &offsets(&committed),
+        )
+        .await;
+    tiered_visibility.committed_suffix = Some(committed);
+}
+
+#[then(
+    "the new LSO includes the committed open transaction and plain tail while reporting the late abort"
+)]
+fn committed_tiered_visibility_tail(tiered_visibility: &TieredVisibility) {
+    check!(
+        tiered_visibility
+            .suffix_read
+            .as_ref()
+            .expect("committed-tail Fetch")
+            == tiered_visibility
+                .suffix_expected
+                .as_ref()
+                .expect("committed-tail visibility")
+    );
+    let mut expected = acquisitions_of(&tiered_visibility.expected().visible);
+    expected.extend(acquisitions_of(
+        tiered_visibility
+            .committed_suffix
+            .as_ref()
+            .expect("committed tail"),
+    ));
+    check!(
+        tiered_visibility
+            .after_reader
+            .as_ref()
+            .expect("continued share reader")
+            .acquired
+            == expected
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/tiered_read_committed.feature",
     name = "read committed reads of a transactional range agree across local eviction"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn read_committed_reads_of_a_transactional_range_agree_across_local_eviction() {}
+async fn read_committed_reads_of_a_transactional_range_agree_across_local_eviction(
+    tiered_visibility: TieredVisibility,
+) {
+    tiered_visibility
+        .partition
+        .take()
+        .expect("tiered partition")
+        .broker
+        .shutdown()
+        .await;
+    drop(tiered_visibility);
+}

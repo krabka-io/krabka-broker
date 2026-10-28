@@ -21,7 +21,6 @@ use {
     krabka_units::Time,
     std::{
         collections::BTreeSet,
-        net::SocketAddr,
         time::{Duration, Instant},
     },
     tempfile::TempDir,
@@ -50,11 +49,15 @@ struct DynamicNode {
 }
 
 async fn start_dynamic_cluster(n: u64) -> Vec<DynamicNode> {
-    let cluster_id = uuid::Uuid::from_u128(853);
     let mut cluster = Vec::new();
-    let mut bootstrap_controller: Option<SocketAddr> = None;
-
-    for id in 1..=n {
+    join_dynamic_nodes(&mut cluster, n).await;
+    cluster
+}
+async fn join_dynamic_nodes(cluster: &mut Vec<DynamicNode>, n: u64) {
+    let cluster_id = uuid::Uuid::from_u128(853);
+    let mut bootstrap_controller = cluster.first().map(|node| node.handle.controller_addr());
+    let first_id = u64::try_from(cluster.len()).expect("existing voter count") + 1;
+    for id in first_id..=n {
         let data_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let controller_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let data_addr = data_listener.local_addr().unwrap();
@@ -105,52 +108,140 @@ async fn start_dynamic_cluster(n: u64) -> Vec<DynamicNode> {
         );
         cluster.push(DynamicNode { handle, dir });
     }
-    cluster
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("dynamic voters: auto join grows quorum to three")]
-async fn bdd_verify_auto_join_grows_quorum_to_three() {
-    let cluster = start_dynamic_cluster(3).await;
-
-    // The last join can start an election, so a node may not lead yet.
-    let leader = wait_for_leader(&cluster).await;
-
-    leader.wait_for_image(|img| img.voters().len() == 3).await;
-
-    // Every node should eventually agree on the 3-voter set, not just the
-    // leader.
-    for node in &cluster {
-        node.handle
-            .wait_for_image(|img| img.voters().len() == 3)
-            .await;
+#[derive(Default)]
+struct DynamicVoterScenario {
+    cluster: Vec<DynamicNode>,
+    removal: Option<RemoveVoter>,
+    remaining: BTreeSet<NodeId>,
+    answers: Vec<String>,
+}
+#[rstest::fixture]
+fn dynamic_voter() -> DynamicVoterScenario {
+    let cluster = Vec::new();
+    DynamicVoterScenario {
+        cluster,
+        ..Default::default()
     }
 }
-
-/// Auto-join must grow a fresh cluster from one voter to three. Broker 0
-/// bootstraps alone, and brokers 1 and 2 join over the wire.
-///
-/// `start_n_node` already waits for convergence. This test asserts again
-/// against the leader's committed image, so that a convergence regression
-/// fails here rather than through the harness's `Startup` error.
-#[cfg(test)]
+#[rstest_bdd_macros::given(
+    "node 1 bootstraps alone with kraft.version 1 and a 500ms controller fetch timeout"
+)]
+async fn initial_dynamic_voter(dynamic_voter: &mut DynamicVoterScenario) {
+    dynamic_voter.cluster = start_dynamic_cluster(1).await;
+}
+#[rstest_bdd_macros::when(
+    "nodes 2 and 3 join using AddRaftVoter auto-join over the controller listener"
+)]
+async fn grow_dynamic_voter_set(dynamic_voter: &mut DynamicVoterScenario) {
+    join_dynamic_nodes(&mut dynamic_voter.cluster, 3).await;
+}
+#[rstest_bdd_macros::then("the leader and every joined node commit exactly voter IDs 1, 2 and 3")]
+async fn committed_dynamic_voter_growth(dynamic_voter: &mut DynamicVoterScenario) {
+    let leader = wait_for_leader(&dynamic_voter.cluster).await;
+    leader
+        .wait_for_image(|image| image.voters().len() == 3)
+        .await;
+    let expected = BTreeSet::from([NodeId(1), NodeId(2), NodeId(3)]);
+    for node in &dynamic_voter.cluster {
+        node.handle
+            .wait_for_image(|image| image.voters().ids() == expected)
+            .await;
+        assert!(node.handle.voter_ids_for_test() == expected);
+    }
+    for DynamicNode { handle, dir: _dir } in mem::take(&mut dynamic_voter.cluster) {
+        handle.shutdown().await;
+    }
+}
+#[rstest_bdd_macros::given(
+    "a three-voter dynamic quorum selects its {role} for removal by its committed directory ID"
+)]
+async fn selected_dynamic_voter(dynamic_voter: &mut DynamicVoterScenario, role: String) {
+    let cluster = start_dynamic_cluster(3).await;
+    for node in &cluster {
+        node.handle
+            .wait_for_image(|image| image.voters().len() == 3)
+            .await;
+    }
+    let leader = wait_for_leader(&cluster).await;
+    let voters = leader.voter_ids_for_test();
+    let leader_id = NodeId(leader.node_id());
+    let victim = match role.as_str() {
+        "leader" => leader_id,
+        "follower" => voters
+            .iter()
+            .copied()
+            .find(|id| *id != leader_id)
+            .expect("follower voter"),
+        other => panic!("unknown voter role {other}"),
+    };
+    dynamic_voter.removal = Some(RemoveVoter {
+        id: victim,
+        directory_id: leader
+            .voter_directory_id_for_test(victim)
+            .expect("committed voter directory"),
+    });
+    dynamic_voter.remaining = voters.into_iter().filter(|id| *id != victim).collect();
+    dynamic_voter.cluster = cluster;
+}
+#[rstest_bdd_macros::when(
+    "the admin removes that voter starting at a follower and follows controller leadership changes"
+)]
+async fn remove_selected_dynamic_voter(dynamic_voter: &mut DynamicVoterScenario) {
+    dynamic_voter.answers = remove_through_leader(
+        &dynamic_voter.cluster,
+        dynamic_voter.removal.as_ref().expect("selected voter"),
+        &dynamic_voter.remaining,
+    )
+    .await;
+}
+#[rstest_bdd_macros::then(
+    "every node commits the remaining two-voter set, the removed node follows as an observer and a remaining voter leads"
+)]
+async fn committed_dynamic_voter_removal(dynamic_voter: &mut DynamicVoterScenario) {
+    let victim = dynamic_voter.removal.as_ref().expect("removed voter").id;
+    let expected = &dynamic_voter.remaining;
+    assert!(expected.len() == 2);
+    for entry in &dynamic_voter.cluster {
+        if NodeId(entry.handle.node_id()) != victim {
+            entry
+                .handle
+                .wait_for_image(|image| image.voters().ids() == *expected)
+                .await;
+        }
+    }
+    node(&dynamic_voter.cluster, victim)
+        .expect("removed observer")
+        .wait_for_image(|image| image.voters().ids() == *expected)
+        .await;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !self_reported_leader(&dynamic_voter.cluster)
+        .is_some_and(|handle| expected.contains(&NodeId(handle.node_id())))
+    {
+        assert!(
+            Instant::now() <= deadline,
+            "no remaining voter leads after removal of {victim}; answers {:?}",
+            dynamic_voter.answers
+        );
+        time::sleep(Duration::from_millis(20)).await;
+    }
+    for DynamicNode { handle, dir: _dir } in mem::take(&mut dynamic_voter.cluster) {
+        handle.shutdown().await;
+    }
+}
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/dynamic_voters.feature",
-    name = "auto join grows quorum to three"
+    path = "tests/features/controller/dynamic_voters.feature",
+    name = "Auto-join grows a standalone quorum to three"
 )]
 #[tokio::test]
-async fn auto_join_grows_quorum_to_three() {}
-
-/// The voter that the shrink test removes.
-#[derive(Debug, Clone, Copy)]
-enum Victim {
-    /// A voter that does not lead when the test starts.
-    Follower,
-    /// The voter that leads when the test starts. Its removal moves the
-    /// leadership: a leader that commits its own removal resigns, as Kafka's
-    /// `RemoveVoterHandler.highWatermarkUpdated` does.
-    Leader,
-}
+async fn auto_join_grows_quorum_to_three(dynamic_voter: DynamicVoterScenario) {}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/controller/dynamic_voters.feature",
+    name = "Removing either controller role shrinks the committed quorum"
+)]
+#[tokio::test]
+async fn remove_voter_shrinks_quorum(dynamic_voter: DynamicVoterScenario, role: String) {}
 
 /// The node that believes that it leads the controller quorum, if one does.
 fn self_reported_leader(cluster: &[DynamicNode]) -> Option<&BrokerHandle> {
@@ -260,86 +351,4 @@ async fn remove_through_leader(
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("dynamic voters: remove voter shrinks quorum")]
-async fn bdd_verify_remove_voter_shrinks_quorum() {
-    for victim_kind in [Victim::Follower, Victim::Leader] {
-        let cluster = start_dynamic_cluster(3).await;
-        for node in &cluster {
-            node.handle
-                .wait_for_image(|img| img.voters().len() == 3)
-                .await;
-        }
-
-        let leader = wait_for_leader(&cluster).await;
-        let voters = leader.voter_ids_for_test();
-        let leader_id = NodeId(leader.node_id());
-        let victim = match victim_kind {
-            Victim::Leader => leader_id,
-            Victim::Follower => voters
-                .iter()
-                .copied()
-                .find(|&id| id != leader_id)
-                .expect("a follower voter to remove"),
-        };
-        // `remove_voter` keys on (id, directory_id). Read the directory id
-        // from the committed image.
-        let request = RemoveVoter {
-            id: victim,
-            directory_id: leader
-                .voter_directory_id_for_test(victim)
-                .expect("victim's directory id present in image"),
-        };
-        let expected: BTreeSet<NodeId> = voters.into_iter().filter(|&id| id != victim).collect();
-
-        let answers = remove_through_leader(&cluster, &request, &expected).await;
-        eprintln!("{victim_kind:?} {victim}: {answers:?}");
-
-        // Every node commits the same two-voter set. A node that still held
-        // the victim, or that lost the other voter, fails here. The remaining
-        // voters come first. The removed node follows: it keeps fetching as an
-        // observer, as a removed Kafka voter does.
-        for node in &cluster {
-            if NodeId(node.handle.node_id()) != victim {
-                node.handle
-                    .wait_for_image(|img| img.voters().ids() == expected)
-                    .await;
-            }
-        }
-        let removed = node(&cluster, victim).expect("the removed node");
-        removed
-            .wait_for_image(|img| img.voters().ids() == expected)
-            .await;
-        // A leader from the remaining voters must lead the smaller quorum.
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !self_reported_leader(&cluster)
-            .is_some_and(|handle| expected.contains(&NodeId(handle.node_id())))
-        {
-            assert!(
-                Instant::now() <= deadline,
-                "no voter from {expected:?} leads after the removal of {victim}",
-            );
-            time::sleep(Duration::from_millis(20)).await;
-        }
-
-        // Stop this cluster before the next case starts its own.
-        for DynamicNode { handle, dir: _dir } in cluster {
-            handle.shutdown().await;
-        }
-    }
-}
-
-/// After the cluster grows to three, the removal of one voter through the
-/// controller leader must shrink the committed voter set to two on every node.
-///
-/// The test does not depend on a leader that stays still. The removal starts
-/// at a controller that does not lead, follows the leader through
-/// `NotLeader` answers, and survives a leadership change. The leader case
-/// moves the leadership on every run.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/dynamic_voters.feature",
-    name = "remove voter shrinks quorum"
-)]
-#[tokio::test]
-async fn remove_voter_shrinks_quorum() {}
+use std::mem;

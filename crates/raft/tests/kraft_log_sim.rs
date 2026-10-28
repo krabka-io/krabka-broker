@@ -179,11 +179,9 @@ struct StableSim {
     leader: NodeId,
 }
 
-fn stable_three_voter_sim(appends: usize) -> StableSim {
+fn stable_three_voter_sim() -> StableSim {
     let mut sim = new_with_kraft_log(&[NodeId(1), NodeId(2), NodeId(3)]);
     let leader = sim.stabilize_one_leader(10_000);
-    sim.leader_append(leader, appends);
-    sim.run_until_stable(10_000);
     StableSim { sim, leader }
 }
 
@@ -215,7 +213,7 @@ fn committed_batches(sim: &Sim<KraftBackedLog>, node: NodeId, hwm: i64) -> Vec<R
 use {
     assert2::check,
     rstest::fixture,
-    rstest_bdd_macros::{given, scenario, then, when},
+    rstest_bdd_macros::{given, scenarios, then, when},
 };
 
 struct DiskScenario {
@@ -225,15 +223,31 @@ struct DiskScenario {
 
 #[fixture]
 fn disk() -> DiskScenario {
+    // Start this scenario with fresh inputs and observations.
+
     DiskScenario {
         stable: None,
         follower: None,
     }
 }
 
+#[given("three disk-backed voters with an elected leader")]
+fn disk_cluster(disk: &mut DiskScenario) { disk.stable = Some(stable_three_voter_sim()); }
+
+#[when("the disk-backed leader appends {records} records and replication settles")]
+fn replicate_disk_records(disk: &mut DiskScenario, records: usize) {
+    let StableSim { sim, leader } = disk
+        .stable
+        .as_mut()
+        .expect("a disk-backed cluster was given");
+    sim.leader_append(*leader, records);
+    sim.run_until_stable(10_000);
+}
+
 #[given("three disk-backed voters have replicated {records} records")]
 fn replicated_disk_cluster(disk: &mut DiskScenario, records: usize) {
-    disk.stable = Some(stable_three_voter_sim(records));
+    disk_cluster(disk);
+    replicate_disk_records(disk, records);
 }
 
 #[then("the committed batches and raw bytes agree on every voter")]
@@ -360,20 +374,4 @@ fn safe_watermark(disk: &DiskScenario, minimum: i64) {
     }
 }
 
-#[scenario(
-    path = "tests/features/kraft_log_sim.feature",
-    name = "Committed logs agree byte for byte"
-)]
-fn voters_logs_byte_identical_up_to_hwm_over_real_log(disk: DiskScenario) {}
-
-#[scenario(
-    path = "tests/features/kraft_log_sim.feature",
-    name = "A divergent follower truncates and reconverges"
-)]
-fn follower_truncates_real_log_on_divergence_then_reconverges(disk: DiskScenario) {}
-
-#[scenario(
-    path = "tests/features/kraft_log_sim.feature",
-    name = "Committed watermarks fit in every voter log"
-)]
-fn hwm_agrees_and_never_exceeds_any_voter_log_end(disk: DiskScenario) {}
+scenarios!("tests/features/kraft_log_sim.feature", fixtures = [disk: DiskScenario]);

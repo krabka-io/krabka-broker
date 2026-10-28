@@ -1,11 +1,4 @@
-//! The follower side of KIP-320, end to end: a follower holding a divergent
-//! suffix truncates it in band on the leader's `diverging_epoch` response and
-//! converges back, without ever issuing an `OffsetForLeaderEpoch` RPC.
-//!
-//! This is the only test in the suite that needs a real three-broker cluster,
-//! because the truncation is done by the follower's own running replicator, so
-//! it carries the cluster setup that the single-broker fixture cannot give it.
-
+//! A running follower removes a divergent local suffix and matches its leader again.
 use {
     crate::{
         cluster_lock,
@@ -19,131 +12,125 @@ use {
         },
     },
     assert2::assert,
+    krabka_broker::{BrokerConfig, BrokerHandle},
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+    tokio::sync::MutexGuard,
 };
+type ReplicaCluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
+struct DivergentFollower {
+    cluster: Option<ReplicaCluster>,
+    permit: Option<MutexGuard<'static, ()>>,
+    topic: String,
+    follower: Option<usize>,
+    divergent_end: Option<i64>,
+}
+#[fixture]
+fn follower() -> DivergentFollower {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "leader epoch epoch diverge follower: follower truncates in band on diverging epoch"
+    DivergentFollower {
+        cluster: None,
+        permit: None,
+        topic: String::new(),
+        follower: None,
+        divergent_end: None,
+    }
+}
+#[given(
+    "three replicas of topic {topic} have acknowledged {records} numbered epoch zero records led by broker one"
 )]
-async fn bdd_verify_follower_truncates_in_band_on_diverging_epoch() {
-    let _g = cluster_lock().lock().await;
+async fn replicated_prefix(follower: &mut DivergentFollower, topic: String, records: i64) {
+    follower.permit = Some(cluster_lock().lock().await);
     let cluster = registered_cluster(3).await;
-
-    // cluster[0] is node 1, and the topic pins it as the leader of partition 0
-    // (the same placement the replication tests use).
-    let leader_addr = cluster[0].1.listen_addr.to_string();
-    let admin = connect_client(leader_addr.clone(), None).await;
-    let topic_id = support::topics::create_assigned_partition()
+    let address = cluster[0].1.listen_addr.to_string();
+    let admin = connect_client(address.clone(), None).await;
+    let assignment = AssignedTopicSetup::three_replicas(&topic);
+    let id = support::topics::create_assigned_partition()
         .client(&admin)
-        .name(AssignedTopicSetup::three_replicas("divtrunc").name)
-        .replicas(AssignedTopicSetup::three_replicas("divtrunc").replicas)
+        .name(assignment.name)
+        .replicas(assignment.replicas)
         .brokers(cluster.iter().map(|(broker, _, _)| broker))
         .call()
         .await;
-
-    // Produce k = 8 records to the leader at epoch 0 (acks=-1 so it lands
-    // on the followers too). One record per batch keeps offsets dense.
-    let k: i64 = 8;
-    let producer = connect_client(leader_addr, None).await;
-    for i in 0..k {
-        let prod = producer
+    let producer = connect_client(address, None).await;
+    for index in 0..records {
+        let response = producer
             .send(batch_request(
-                record(&format!("v{i}")),
-                replicated_topic_produce_for("divtrunc", topic_id.0),
+                record(&format!("v{index}")),
+                replicated_topic_produce_for(&topic, id.0),
             ))
             .await
-            .unwrap();
-        assert!(prod.responses[0].partition_responses[0].error_code == 0);
+            .expect("replicated prefix produce");
+        assert!(response.responses[0].partition_responses[0].error_code == 0);
     }
-
-    // Wait for all three brokers to converge to LEO k.
-    for (h, _, _) in &cluster {
-        h.wait_until_local_log_end_offset("divtrunc", 0, k).await;
+    for (broker, _, _) in &cluster {
+        broker
+            .wait_until_local_log_end_offset(&topic, 0, records)
+            .await;
     }
-
-    // Pick a follower: a broker that is not the partition leader.
-    let leader_id = cluster[0]
+    let leader = cluster[0]
         .0
-        .partition_leader_for_test("divtrunc", 0)
+        .partition_leader_for_test(&topic, 0)
         .expect("partition leader known");
-    let follower_idx = cluster
-        .iter()
-        .position(|(h, _, _)| h.node_id() != leader_id)
-        .expect("a non-leader replica exists");
-    let follower = &cluster[follower_idx].0;
-
-    // Append a divergent suffix to the follower's local log. These batches
-    // carry epoch -1 (no checkpoint row), so the follower's latest recorded
-    // epoch stays 0 while its LEO jumps past the leader's epoch-0 boundary.
-    let suffix: i64 = 5;
-    follower
-        .produce_records_for_test("divtrunc", 0, usize::try_from(suffix).unwrap())
+    follower.follower = Some(
+        cluster
+            .iter()
+            .position(|(broker, _, _)| broker.node_id() != leader)
+            .expect("non leader replica exists"),
+    );
+    follower.cluster = Some(cluster);
+    follower.topic = topic;
+}
+#[when(
+    "a follower's local log receives a divergent suffix of {records} records without a new epoch checkpoint"
+)]
+async fn inject(follower: &mut DivergentFollower, records: usize) {
+    let cluster = follower.cluster.as_ref().expect("replica cluster ready");
+    let broker = &cluster[follower.follower.expect("follower selected")].0;
+    broker
+        .produce_records_for_test(&follower.topic, 0, records)
         .await
         .expect("inject divergent suffix");
-    let diverged_leo = follower
-        .local_log_end_offset("divtrunc", 0)
-        .expect("follower leo after suffix");
+    follower.divergent_end = broker.local_log_end_offset(&follower.topic, 0);
+}
+#[then("the divergent follower initially has log end offset {offset}")]
+fn divergent(follower: &DivergentFollower, offset: i64) {
     assert!(
-        diverged_leo == k + suffix,
-        "follower should hold a divergent suffix (expected {}, got {diverged_leo})",
-        k + suffix
+        follower.divergent_end == Some(offset),
+        "follower must actually hold the injected divergent suffix"
     );
-
-    // The leader stays at LEO k, so its epoch-0 boundary (8) is below the
-    // follower's fetch offset (13): the next follower Fetch gets a
-    // `diverging_epoch` and the replicator truncates in band back to k.
-    // Follower truncates its divergent suffix and re-replicates to match the
-    // leader exactly. Wait for the follower to settle at exactly k (it may
-    // transiently sit above k with divergent data before truncating).
-    follower
-        .wait_until_local_log_end_offset_eq("divtrunc", 0, k)
+}
+#[then("the running follower converges to its leader at log end offset {offset}")]
+async fn converged(follower: &DivergentFollower, offset: i64) {
+    let cluster = follower.cluster.as_ref().expect("replica cluster ready");
+    let broker = &cluster[follower.follower.expect("follower selected")].0;
+    broker
+        .wait_until_local_log_end_offset_eq(&follower.topic, 0, offset)
         .await;
-    let f_leo = follower.local_log_end_offset("divtrunc", 0).unwrap_or(-1);
-    let l_leo = cluster[0]
+    let follower_end = broker
+        .local_log_end_offset(&follower.topic, 0)
+        .unwrap_or(-1);
+    let leader_end = cluster[0]
         .0
-        .local_log_end_offset("divtrunc", 0)
+        .local_log_end_offset(&follower.topic, 0)
         .unwrap_or(-1);
     assert!(
-        f_leo == l_leo && f_leo == k,
-        "follower did not converge to leader (follower={f_leo}, leader={l_leo}, k={k})"
+        follower_end == leader_end && follower_end == offset,
+        "follower did not converge (follower={follower_end},leader={leader_end},expected={offset})"
     );
-
-    // Final cross-check: leader LEO and follower LEO agree.
     assert!(
-        follower.local_log_end_offset("divtrunc", 0)
-            == cluster[0].0.local_log_end_offset("divtrunc", 0)
+        broker.local_log_end_offset(&follower.topic, 0)
+            == cluster[0].0.local_log_end_offset(&follower.topic, 0)
     );
-
-    shutdown_cluster(cluster).await;
 }
-
-/// KIP-320 follower side, end to end. A follower whose local log has a
-/// divergent suffix beyond the leader's epoch boundary must truncate that
-/// suffix *in band*, on the leader's `diverging_epoch` Fetch response. It must
-/// never issue an `OffsetForLeaderEpoch` RPC. That path serves the `FENCED`
-/// and `UNKNOWN_LEADER_EPOCH` error codes, which this scenario never produces.
-///
-/// The test reaches determinism without racing a real unclean election:
-///   1. A 3-broker cluster, a topic with rf=3, and broker 1 as the partition
-///      leader.
-///   2. Produce `k = 8` records through the leader with acks=-1. Every replica
-///      converges to LEO 8 with checkpoint `0 -> 0`, because the produce
-///      handler stamps leader epoch 0 onto each batch.
-///   3. On a *follower*, append a divergent suffix of 5 extra records straight
-///      to its local log with `produce_records_for_test`. Those batches carry
-///      epoch -1, so they add no checkpoint entry. The follower's latest
-///      recorded epoch stays 0 while its LEO jumps to 13, so it holds records
-///      the leader does not have.
-///   4. The follower's already-running replicator fetches at offset 13 and
-///      advertises `last_fetched_epoch = 0`. The leader, at LEO 8 and latest
-///      epoch 0, computes `epoch_and_offset_for(0, 8) = (0, 8)`. The epoch-0
-///      end, 8, is below the fetch offset, 13, so the leader answers
-///      `diverging_epoch { end_offset: 8 }`. The replicator truncates to 8 and
-///      converges back to the leader.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/leader_epoch/epoch_diverge_follower.feature",
-    name = "follower truncates in band on diverging epoch"
+    name = "A running follower removes its divergent suffix and matches the leader"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn follower_truncates_in_band_on_diverging_epoch() {}
+async fn follower_truncates_in_band_on_diverging_epoch(follower: DivergentFollower) {
+    shutdown_cluster(follower.cluster.take().expect("replica cluster started")).await;
+    drop(follower);
+}

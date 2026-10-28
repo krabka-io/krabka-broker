@@ -239,240 +239,267 @@ fn kafka_add_controller() -> Output {
     output
 }
 
-/// Require the requested feature alteration to succeed through the stock JVM tool.
-fn alter_feature(verb: &str, spec: &str) {
-    let out = kafka_features(&[verb, "--feature", spec]);
-    assert!(
-        out.status.success(),
-        "{verb} {spec} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+struct FeatureAdministration {
+    broker: Option<StartedBroker>,
+    observer: Option<StartedObserver>,
+    mutation: Option<Output>,
+    description: Option<Output>,
 }
+#[rstest::fixture]
+fn features() -> FeatureAdministration {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm features: kafka features describe and round trip")]
-async fn bdd_verify_kafka_features_describe_and_round_trip() {
-    let StartedBroker { handle, dir: _dir } = start_host_broker().await;
-
-    // 1. describe — Krabka advertises + finalizes the feature surface.
-    let desc = kafka_features(&["describe"]);
-    assert!(desc.status.success(), "describe failed");
-    let out = String::from_utf8_lossy(&desc.stdout);
-    // (feature, pinned starting finalized level; None = only presence is pinned)
-    let features = [
-        ("metadata.version", None),
-        ("group.version", Some(1)),
-        ("transaction.version", Some(2)),
-    ];
-    for (feature, want_level) in features {
-        assert!(
-            out.contains(feature),
-            "describe must list {feature}:\n{out}"
-        );
-        if let Some(want) = want_level {
+    FeatureAdministration {
+        broker: None,
+        observer: None,
+        mutation: None,
+        description: None,
+    }
+}
+#[rstest_bdd_macros::given("a standalone broker finalizes the latest-release feature defaults")]
+async fn latest_features(features: &mut FeatureAdministration) {
+    features.broker = Some(start_host_broker().await);
+}
+#[rstest_bdd_macros::when("the Kafka 4.3.1 feature tool describes finalized features")]
+fn describe_features(features: &mut FeatureAdministration) {
+    features.description = Some(kafka_features(&["describe"]));
+}
+#[rstest_bdd_macros::then("feature description succeeds and contains these finalized levels")]
+fn described_levels(features: &FeatureAdministration, datatable: Vec<Vec<String>>) {
+    let output = features.description.as_ref().expect("features described");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    for row in datatable.into_iter().skip(1) {
+        let [feature, level]: [String; 2] = row.try_into().expect("feature level");
+        assert!(text.contains(&feature), "{text}");
+        if level != "present" {
             assert!(
-                support::jvm_finalized_level(&out, feature) == Some(want),
-                "{feature} must start finalized at {want}:\n{out}"
+                support::jvm_finalized_level(&text, &feature)
+                    == Some(level.parse().expect("level")),
+                "{text}"
             );
         }
     }
-
-    // 2. downgrade transaction.version 2 -> 1 (within the advertised range),
-    // 3. then upgrade it 1 -> 2 again; a follow-up describe reflects each change.
-    let round_trip = [
-        ("downgrade", "transaction.version=1", 1),
-        ("upgrade", "transaction.version=2", 2),
-    ];
-    for (verb, spec, want) in round_trip {
-        alter_feature(verb, spec);
-        let desc = kafka_features(&["describe"]);
-        let text = String::from_utf8_lossy(&desc.stdout);
-        assert!(
-            support::jvm_finalized_level(&text, "transaction.version") == Some(want),
-            "transaction.version should be {want} after {verb}:\n{text}"
-        );
-    }
-
-    // 4. KIP-853 activation is a Raft control operation, not an ordinary
-    // FeatureLevelRecord. Kafka 4.3.1 must observe the finalized level and the
-    // irreversible level-one boundary.
-    let upgrade = kafka_features(&["upgrade", "--feature", "kraft.version=1"]);
+}
+#[rstest_bdd_macros::when("the feature tool requests {verb} of {feature} to level {level}")]
+fn feature_change(features: &mut FeatureAdministration, verb: String, feature: String, level: i64) {
+    features.mutation = Some(kafka_features(&[
+        &verb,
+        "--feature",
+        &format!("{feature}={level}"),
+    ]));
+    features.description = Some(kafka_features(&["describe"]));
+}
+#[rstest_bdd_macros::then(
+    "the feature mutation succeeds and {feature} reads finalized level {level}"
+)]
+fn mutation_applied(features: &FeatureAdministration, feature: String, level: i64) {
+    let output = features.mutation.as_ref().expect("feature mutation");
     assert!(
-        upgrade.status.success(),
-        "kraft.version upgrade failed: {}",
-        String::from_utf8_lossy(&upgrade.stderr)
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let desc = kafka_features(&["describe"]);
-    let text = String::from_utf8_lossy(&desc.stdout);
+    let description = features.description.as_ref().expect("description");
+    let text = String::from_utf8_lossy(&description.stdout);
     assert!(
-        support::jvm_finalized_level(&text, "kraft.version") == Some(1),
-        "kraft.version should be finalized at 1:\n{text}"
+        support::jvm_finalized_level(&text, &feature) == Some(level),
+        "{text}"
     );
-    let downgrade = kafka_features(&["downgrade", "--feature", "kraft.version=0"]);
+}
+#[rstest_bdd_macros::then(
+    "the feature mutation succeeds and eligible.leader.replicas.version is disabled by an absent or zero level"
+)]
+fn elr_disabled(features: &FeatureAdministration) {
     assert!(
-        !downgrade.status.success(),
-        "kraft.version downgrade must fail"
+        features
+            .mutation
+            .as_ref()
+            .expect("mutation")
+            .status
+            .success()
     );
-
-    // 5. Exercise the official quorum tool on the controller listener. A live
-    // observer is promoted by `add-controller`, then removed by
-    // `remove-controller` before the last-voter rejection is checked.
-    let StartedObserver {
-        handle: observer,
-        dir: _observer_dir,
-    } = start_host_observer().await;
+    let text = String::from_utf8_lossy(&features.description.as_ref().expect("description").stdout);
+    assert!(
+        support::jvm_finalized_level(&text, "eligible.leader.replicas.version").unwrap_or(0) == 0
+    );
+}
+#[rstest_bdd_macros::then("the irreversible kraft.version downgrade is refused")]
+fn irreversible(features: &FeatureAdministration) {
+    assert!(
+        !features
+            .mutation
+            .as_ref()
+            .expect("mutation")
+            .status
+            .success()
+    );
+}
+#[rstest_bdd_macros::given(
+    "controller observer 2 with directory AAAAAAAAAAAAAAAAAAAAAg has fetched kraft.version 1"
+)]
+async fn live_observer(features: &mut FeatureAdministration) {
+    features.observer = Some(start_host_observer().await);
     time::timeout(
         Duration::from_secs(30),
-        observer
+        features
+            .observer
+            .as_ref()
+            .expect("observer")
+            .handle
             .watch_image()
             .wait_for(|image| image.kraft_version() == 1),
     )
     .await
-    .expect("observer did not fetch kraft.version=1 within 30s")
-    .expect("observer image channel closed");
-    let add = kafka_add_controller();
-    assert!(
-        add.status.success(),
-        "add-controller failed: {}",
-        String::from_utf8_lossy(&add.stderr)
-    );
-    handle
+    .expect("observer fetched kraft.version 1")
+    .expect("observer image channel");
+}
+#[rstest_bdd_macros::when("the quorum tool adds controller observer 2 and describes quorum status")]
+async fn promote_observer(features: &mut FeatureAdministration) {
+    features.mutation = Some(kafka_add_controller());
+    features
+        .broker
+        .as_ref()
+        .expect("broker")
+        .handle
         .wait_for_image(|image| image.voters().len() == 2)
         .await;
     time::timeout(
         Duration::from_secs(30),
-        observer
+        features
+            .observer
+            .as_ref()
+            .expect("observer")
+            .handle
             .watch_image()
             .wait_for(|image| image.voters().len() == 2),
     )
     .await
-    .expect("observer did not commit the second voter within 30s")
-    .expect("observer image channel closed");
-
-    let quorum = kafka_metadata_quorum(&["describe", "--status"]);
+    .expect("observer committed second voter")
+    .expect("observer image channel");
+    features.description = Some(kafka_metadata_quorum(&["describe", "--status"]));
+}
+#[rstest_bdd_macros::then(
+    "controller addition succeeds and quorum status names leader 1 and voters 1 and 2 with their configured endpoints"
+)]
+fn quorum_membership(features: &FeatureAdministration) {
     assert!(
-        quorum.status.success(),
-        "metadata quorum describe failed: {}",
-        String::from_utf8_lossy(&quorum.stderr)
+        features
+            .mutation
+            .as_ref()
+            .expect("addition")
+            .status
+            .success()
     );
-    let quorum_text = String::from_utf8_lossy(&quorum.stdout);
+    let output = features.description.as_ref().expect("quorum described");
     assert!(
-        quorum_text
-            .lines()
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.lines()
             .any(|line| line.starts_with("LeaderId:") && line.ends_with('1'))
     );
     assert!(
-        quorum_text.lines().any(|line| {
-            line.starts_with("CurrentVoters:")
-                && line.contains("\"id\": 1")
-                && line.contains(&format!("CONTROLLER://{}", controller_bootstrap()))
-                && line.contains("\"id\": 2")
-                && line.contains(joiner_controller())
-        }),
-        "unexpected voter projection:\n{quorum_text}"
+        text.lines().any(|line| line.starts_with("CurrentVoters:")
+            && line.contains("\"id\": 1")
+            && line.contains(&format!("CONTROLLER://{}", controller_bootstrap()))
+            && line.contains("\"id\": 2")
+            && line.contains(joiner_controller())),
+        "{text}"
     );
-
-    let remove_joiner = kafka_metadata_quorum(&[
+}
+#[rstest_bdd_macros::when(
+    "the quorum tool removes controller 2 using directory AAAAAAAAAAAAAAAAAAAAAg"
+)]
+async fn remove_observer(features: &mut FeatureAdministration) {
+    features.mutation = Some(kafka_metadata_quorum(&[
         "remove-controller",
         "--controller-id",
         "2",
         "--controller-directory-id",
         JOINER_DIRECTORY_ID_BASE64,
-    ]);
-    assert!(
-        remove_joiner.status.success(),
-        "remove-controller failed: {}",
-        String::from_utf8_lossy(&remove_joiner.stderr)
-    );
-    handle
+    ]));
+    features
+        .broker
+        .as_ref()
+        .expect("broker")
+        .handle
         .wait_for_image(|image| image.voters().len() == 1)
         .await;
-
-    let remove = kafka_metadata_quorum(&[
+}
+#[rstest_bdd_macros::then("controller removal succeeds leaving one committed voter")]
+fn one_voter(features: &FeatureAdministration) {
+    assert!(
+        features
+            .mutation
+            .as_ref()
+            .expect("removal")
+            .status
+            .success()
+    );
+    assert!(
+        features
+            .broker
+            .as_ref()
+            .expect("broker")
+            .handle
+            .controller_image_for_test()
+            .voters()
+            .len()
+            == 1
+    );
+}
+#[rstest_bdd_macros::when(
+    "the quorum tool removes the last controller 1 using directory AAAAAAAAAAAAAAAAAAAAAQ"
+)]
+fn remove_last(features: &mut FeatureAdministration) {
+    features.mutation = Some(kafka_metadata_quorum(&[
         "remove-controller",
         "--controller-id",
         "1",
         "--controller-directory-id",
         DIRECTORY_ID_BASE64,
-    ]);
-    assert!(
-        !remove.status.success(),
-        "removing the last voter must fail"
-    );
-    // Kafka's `VoterSet.removeVoter` yields no new set when only one voter
-    // remains, and `RemoveVoterHandler` answers that with `VOTER_NOT_FOUND`.
-    let remove_error = String::from_utf8_lossy(&remove.stderr);
-    assert!(
-        remove_error.contains("VoterNotFoundException"),
-        "unexpected remove-controller error: {remove_error}"
-    );
-
-    observer.shutdown().await;
-    handle.shutdown().await;
+    ]));
 }
-
+#[rstest_bdd_macros::then("last-voter removal fails with VoterNotFoundException")]
+fn protected_quorum(features: &FeatureAdministration) {
+    let output = features.mutation.as_ref().expect("last removal");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("VoterNotFoundException"));
+}
+async fn shutdown(features: &mut FeatureAdministration) {
+    if let Some(StartedObserver { handle, dir }) = features.observer.take() {
+        handle.shutdown().await;
+        drop(dir);
+    }
+    let StartedBroker { handle, dir } = features.broker.take().expect("broker");
+    handle.shutdown().await;
+    drop(dir);
+}
 #[ignore = "requires Docker"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/jvm_features.feature",
     name = "kafka features describe and round trip"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kafka_features_describe_and_round_trip() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm features: kafka features describes and round trips elr")]
-async fn bdd_verify_kafka_features_describes_and_round_trips_elr() {
-    const ELR: &str = "eligible.leader.replicas.version";
-
-    let StartedBroker { handle, dir: _dir } = start_host_broker().await;
-
-    let desc = kafka_features(&["describe"]);
-    assert!(
-        desc.status.success(),
-        "describe failed: {}",
-        String::from_utf8_lossy(&desc.stderr)
-    );
-    let out = String::from_utf8_lossy(&desc.stdout);
-    assert!(out.contains(ELR), "describe must list {ELR}:\n{out}");
-    assert!(
-        support::jvm_finalized_level(&out, ELR) == Some(1),
-        "{ELR} must start enabled:\n{out}"
-    );
-
-    for (verb, want) in [("downgrade", 0), ("upgrade", 1)] {
-        let spec = format!("{ELR}={want}");
-        alter_feature(verb, &spec);
-        let desc = kafka_features(&["describe"]);
-        let text = String::from_utf8_lossy(&desc.stdout);
-        // A level-0 finalize is KIP-584's delete, so the finalized level is
-        // either absent or 0 after the downgrade; both read as disabled.
-        assert!(
-            support::jvm_finalized_level(&text, ELR).unwrap_or(0) == i64::from(want),
-            "{ELR} should read {want} after {verb}:\n{text}"
-        );
-    }
-
-    handle.shutdown().await;
+async fn kafka_features_describe_and_round_trip(features: FeatureAdministration) {
+    shutdown(&mut features).await;
+    drop(features);
 }
-
-/// KIP-966: `eligible.leader.replicas.version` is a row the stock tool can
-/// describe, disable and enable.
-///
-/// `kafka-features describe` lists every feature the broker advertises in
-/// `ApiVersions.supported_features`. A fresh cluster bootstraps at
-/// `4.3-IV0`, and `ELRV_1` bootstraps at 4.1-IV0, so the row starts finalized
-/// at 1, as it does on a freshly formatted Kafka 4.3 cluster. An operator then
-/// turns it off with `downgrade` and on again with `upgrade`, which is what a
-/// runbook or a Terraform apply that pins the flag does. The broker-side
-/// effect of each level (the controller publishing or clearing ELR) is pinned
-/// by the in-process tests; this case pins that the JVM tool can drive it at
-/// all, which is the bug the row's absence caused.
 #[ignore = "requires Docker"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/jvm_features.feature",
     name = "kafka features describes and round trips elr"
 )]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn kafka_features_describes_and_round_trips_elr() {}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_features_describes_and_round_trips_elr(features: FeatureAdministration) {
+    shutdown(&mut features).await;
+    drop(features);
+}

@@ -726,6 +726,7 @@ mod connections_max_idle_tests {
         },
         assert2::assert,
         krabka_units::{Time, convert::TimeExt as _, millis, secs},
+        rstest_bdd::Slot,
         std::time::Duration,
     };
 
@@ -738,25 +739,39 @@ mod connections_max_idle_tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "config listener connections max idle tests: an unnamed listener gets kafkas ten minute default"
-    )]
-    fn bdd_verify_an_unnamed_listener_gets_kafkas_ten_minute_default() {
-        // Kafka spells the default 600000, which is the ten minutes below.
-        assert!(DEFAULT_CONNECTIONS_MAX_IDLE.millis_i64() == 600_000);
-        assert!(
-            BrokerConfig::default().connections_max_idle_for("PLAINTEXT")
-                == Some(Duration::from_mins(10))
-        );
+    #[derive(Default)]
+    struct IdleTimeoutScenario {
+        config: Option<BrokerConfig>,
+        resolved: Slot<Option<Duration>>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/config/listener.feature",
-        name = "connections max idle tests: an unnamed listener gets kafkas ten minute default"
-    )]
-    fn an_unnamed_listener_gets_kafkas_ten_minute_default() {}
+    #[rstest::fixture]
+    fn idle_timeout() -> IdleTimeoutScenario {
+        // Keep idle timeout inputs and observations fresh for each scenario.
+        IdleTimeoutScenario::default()
+    }
+
+    #[rstest_bdd_macros::given("no broker-wide or listener-specific idle timeout is configured")]
+    fn default_idle_timeout(idle_timeout: &mut IdleTimeoutScenario) {
+        idle_timeout.config = Some(BrokerConfig::default());
+    }
+
+    #[rstest_bdd_macros::when("the broker resolves the PLAINTEXT listener idle timeout")]
+    fn resolve_idle_timeout(idle_timeout: &mut IdleTimeoutScenario) {
+        let config = idle_timeout
+            .config
+            .as_ref()
+            .expect("a broker config was given");
+        idle_timeout
+            .resolved
+            .set(config.connections_max_idle_for("PLAINTEXT"));
+    }
+
+    #[rstest_bdd_macros::then("the PLAINTEXT idle timeout is Kafka's 600000 milliseconds")]
+    fn kafka_idle_timeout(idle_timeout: &IdleTimeoutScenario) {
+        assert!(DEFAULT_CONNECTIONS_MAX_IDLE.millis_i64() == 600_000);
+        assert!(idle_timeout.resolved.get() == Some(Some(Duration::from_mins(10))));
+    }
 
     #[test]
     fn a_listener_override_wins_over_the_broker_wide_window() {
@@ -794,6 +809,8 @@ mod connections_max_idle_tests {
                 .is_none()
         );
     }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/config/listener.feature", fixtures = [idle_timeout: IdleTimeoutScenario]);
 }
 
 #[cfg(test)]

@@ -280,7 +280,7 @@ mod tests {
             PreparedBatch, RecordBatch, RecordBatchBorrowed, prepare_batch, prepare_owned_batch,
             validate_one_v2_batch,
         },
-        crate::materialize::test_support::args_from,
+        crate::{RestoreError, materialize::test_support::args_from},
         assert2::check,
         krabka_ids::{Offset, ProducerId},
         krabka_log::{Log, LogConfig},
@@ -343,35 +343,70 @@ mod tests {
         check!(prepare_owned_batch(overflow).is_err());
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "materialize prepare tests: owned rewrite checks timestamps by kafka timestamp type for {example}"
+    #[derive(Default)]
+    struct RewriteTimestampScenario {
+        batch: Option<RecordBatch>,
+        prepared: Option<Result<PreparedBatch, RestoreError>>,
+    }
+    #[rstest::fixture]
+    fn rewrite_timestamps() -> RewriteTimestampScenario {
+        let batch = None;
+        RewriteTimestampScenario {
+            batch,
+            ..RewriteTimestampScenario::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "an archived batch with producer timestamp 2000 and maximum timestamp 1000"
     )]
-    fn bdd_verify_owned_rewrite_checks_timestamps_by_kafka_timestamp_type(example: String) {
-        type Example<'a> = (&'a str, TimestampType, bool);
-        let (name, timestamp_type, admitted): Example<'_> = match example.as_str() {
-            "log append time" => ("log append time", TimestampType::LogAppendTime, true),
-            "create time" => ("create time", TimestampType::CreateTime, false),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
+    fn archived_timestamp_skew(rewrite_timestamps: &mut RewriteTimestampScenario) {
         let mut batch = rewrite(vec![record(0, 0), record(3, 50)]);
-        batch.attributes = batch.attributes.with_timestamp_type(timestamp_type);
         batch.base_timestamp = 2_000;
         batch.max_timestamp = 1_000;
-        check!(prepare_owned_batch(batch).is_ok() == admitted, "{name}");
+        rewrite_timestamps.batch = Some(batch);
     }
-
-    /// Kafka reads a `LogAppendTime` record's timestamp as the batch
-    /// `max_timestamp` and leaves the producer's deltas untouched, so a
-    /// producer clock ahead of the broker is legal there and a contradiction
-    /// under `CreateTime`.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/materialize/prepare.feature",
-        name = "tests: owned rewrite checks timestamps by kafka timestamp type"
-    )]
-    fn owned_rewrite_checks_timestamps_by_kafka_timestamp_type(example: String) { let _ = example; }
+    #[rstest_bdd_macros::given("the archived batch uses {timestamp_type} timestamps")]
+    fn archived_timestamp_type(
+        rewrite_timestamps: &mut RewriteTimestampScenario,
+        timestamp_type: String,
+    ) {
+        let timestamp_type = match timestamp_type.as_str() {
+            "LogAppendTime" => TimestampType::LogAppendTime,
+            "CreateTime" => TimestampType::CreateTime,
+            _ => panic!("unknown timestamp type {timestamp_type}"),
+        };
+        let batch = rewrite_timestamps
+            .batch
+            .as_mut()
+            .expect("archived batch given");
+        batch.attributes = batch.attributes.with_timestamp_type(timestamp_type);
+    }
+    #[rstest_bdd_macros::when("the archived batch is prepared for an owned rewrite")]
+    fn prepare_timestamped_rewrite(rewrite_timestamps: &mut RewriteTimestampScenario) {
+        rewrite_timestamps.prepared = Some(prepare_owned_batch(
+            rewrite_timestamps
+                .batch
+                .take()
+                .expect("archived batch given"),
+        ));
+    }
+    #[rstest_bdd_macros::then("the archived batch rewrite is {decision}")]
+    fn timestamp_rewrite_decision(rewrite_timestamps: &RewriteTimestampScenario, decision: String) {
+        let accepted = match decision.as_str() {
+            "accepted" => true,
+            "refused" => false,
+            _ => panic!("unknown rewrite decision {decision}"),
+        };
+        check!(
+            rewrite_timestamps
+                .prepared
+                .as_ref()
+                .expect("rewrite prepared")
+                .is_ok()
+                == accepted
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/rewrite_timestamps", fixtures = [rewrite_timestamps: RewriteTimestampScenario]);
 
     #[test]
     fn owned_rewrite_rejects_control_and_illegal_producer_semantics() {

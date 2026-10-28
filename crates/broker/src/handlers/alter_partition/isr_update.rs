@@ -295,158 +295,117 @@ mod tests {
         assert2::assert,
     };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers alter partition isr update tests: a row is validated in kafkas order with kafkas codes"
-    )]
-    fn bdd_verify_a_row_is_validated_in_kafkas_order_with_kafkas_codes() {
-        struct Case {
-            name: &'static str,
-            broker_id: i32,
-            leader_epoch: i32,
-            partition_epoch: i32,
-            isr: &'static [i32],
-            error_code: i16,
-        }
-        let valid = Case {
-            name: "valid",
-            broker_id: 2,
-            leader_epoch: 9,
-            partition_epoch: 11,
-            isr: &[2, 4],
-            error_code: codes::NONE,
-        };
-        let cases = [
-            Case {
-                name: "leader epoch above the controller's",
-                leader_epoch: 10,
-                error_code: codes::NOT_CONTROLLER,
-                ..valid
-            },
-            Case {
-                name: "partition epoch above the controller's",
-                partition_epoch: 12,
-                error_code: codes::NOT_CONTROLLER,
-                ..valid
-            },
-            Case {
-                name: "higher partition epoch wins over a lower leader epoch",
-                leader_epoch: 8,
-                partition_epoch: 12,
-                error_code: codes::NOT_CONTROLLER,
-                ..valid
-            },
-            Case {
-                name: "leader epoch below the controller's",
-                leader_epoch: 8,
-                error_code: codes::FENCED_LEADER_EPOCH,
-                ..valid
-            },
-            Case {
-                name: "fenced epoch wins over a sender that does not lead",
-                broker_id: 4,
-                leader_epoch: 8,
-                error_code: codes::FENCED_LEADER_EPOCH,
-                ..valid
-            },
-            Case {
-                name: "sender is not the leader",
-                broker_id: 4,
-                error_code: codes::INVALID_REQUEST,
-                ..valid
-            },
-            Case {
-                name: "partition epoch below the controller's",
-                partition_epoch: 10,
-                error_code: codes::INVALID_UPDATE_VERSION,
-                ..valid
-            },
-            Case {
-                name: "stale partition epoch wins over an invalid ISR",
-                partition_epoch: 10,
-                isr: &[4, 4],
-                error_code: codes::INVALID_UPDATE_VERSION,
-                ..valid
-            },
-            Case {
-                name: "duplicate ISR member",
-                isr: &[2, 4, 4],
-                error_code: codes::INVALID_REQUEST,
-                ..valid
-            },
-            Case {
-                name: "ISR member outside the replicas",
-                isr: &[2, 5],
-                error_code: codes::INVALID_REQUEST,
-                ..valid
-            },
-            Case {
-                name: "ISR without the leader",
-                isr: &[4, 6],
-                error_code: codes::INVALID_REQUEST,
-                ..valid
-            },
-            Case {
-                name: "empty ISR",
-                isr: &[],
-                error_code: codes::INVALID_REQUEST,
-                ..valid
-            },
-            Case { ..valid },
-        ];
-        let image = non_default_partition_image();
-        let active = image.brokers().map(|broker| broker.node_id.0).collect();
-        for case in cases {
-            let mut changes = Vec::new();
-            let response = handle_partition_with_recovery(
-                &image,
-                &active,
-                case.broker_id,
-                "t",
-                &ReqPartitionData {
-                    partition_index: 7,
-                    leader_epoch: case.leader_epoch,
-                    partition_epoch: case.partition_epoch,
-                    new_isr: case.isr.to_vec(),
-                    ..Default::default()
-                },
-                &mut changes,
-            );
-            let expected = if case.error_code == codes::NONE {
-                RespPartitionData {
-                    partition_index: 7,
-                    leader_id: 2,
-                    leader_epoch: 9,
-                    isr: case.isr.to_vec(),
-                    partition_epoch: 12,
-                    ..Default::default()
-                }
-            } else {
-                RespPartitionData {
-                    partition_index: 7,
-                    error_code: case.error_code,
-                    ..Default::default()
-                }
-            };
-            assert2::check!(response == expected, "{}", case.name);
-            assert2::check!(
-                changes.len() == usize::from(case.error_code == codes::NONE),
-                "{}",
-                case.name
-            );
+    #[derive(Default)]
+    struct IsrUpdateScenario {
+        image: Option<krabka_metadata::MetadataImage>,
+        request: Option<ReqPartitionData>,
+        requester: i32,
+        response: Option<RespPartitionData>,
+        changes: Vec<MetadataRecord>,
+    }
+    #[rstest::fixture]
+    fn isr_update() -> IsrUpdateScenario {
+        let image = None;
+        IsrUpdateScenario {
+            image,
+            ..Default::default()
         }
     }
-
-    /// Kafka's `ReplicationControlManager.validateAlterPartitionData`, in its
-    /// order. The partition has leader 2, replicas `[2, 4, 6]`, leader epoch 9
-    /// and partition epoch 11. Each row changes one input of an otherwise
-    /// valid request, or two where the order between two checks is the point.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/alter_partition/isr_update.feature",
-        name = "tests: a row is validated in kafkas order with kafkas codes"
+    #[rstest_bdd_macros::given(
+        "partition 7 has leader 2 replicas 2,4,6 leader epoch 9 and partition epoch 11"
     )]
-    fn a_row_is_validated_in_kafkas_order_with_kafkas_codes() {}
+    fn non_default_isr_partition(isr_update: &mut IsrUpdateScenario) {
+        isr_update.image = Some(non_default_partition_image());
+        isr_update.request = Some(ReqPartitionData {
+            partition_index: 7,
+            ..Default::default()
+        });
+    }
+    #[rstest_bdd_macros::given(
+        "partition 0 has leader 1 replicas 1,2,3 ISR 1,2 leader epoch 5 and partition epoch 10"
+    )]
+    fn default_isr_partition(isr_update: &mut IsrUpdateScenario) {
+        let fixture = PartitionFixture {
+            partition_epoch: PartitionEpoch(10),
+            ..Default::default()
+        };
+        isr_update.image = Some(image_with_partition(&fixture, THREE_REGISTERED_BROKERS));
+        isr_update.request = Some(ReqPartitionData {
+            partition_index: 0,
+            ..Default::default()
+        });
+    }
+    #[rstest_bdd_macros::given(
+        "broker {requester} proposes ISR {isr} at leader epoch {leader_epoch} and partition epoch {partition_epoch}"
+    )]
+    fn proposed_isr(
+        isr_update: &mut IsrUpdateScenario,
+        requester: i32,
+        isr: String,
+        leader_epoch: i32,
+        partition_epoch: i32,
+    ) {
+        isr_update.requester = requester;
+        let request = isr_update.request.as_mut().unwrap();
+        request.leader_epoch = leader_epoch;
+        request.partition_epoch = partition_epoch;
+        request.new_isr = if isr == "empty" {
+            Vec::new()
+        } else {
+            isr.split(',').map(|id| id.parse().unwrap()).collect()
+        };
+    }
+    #[rstest_bdd_macros::when("the controller validates and stages the ISR proposal")]
+    fn validate_isr_proposal(isr_update: &mut IsrUpdateScenario) {
+        let image = isr_update.image.as_ref().unwrap();
+        let active = image.brokers().map(|broker| broker.node_id.0).collect();
+        isr_update.response = Some(handle_partition_with_recovery(
+            image,
+            &active,
+            isr_update.requester,
+            "t",
+            isr_update.request.as_ref().unwrap(),
+            &mut isr_update.changes,
+        ));
+    }
+    #[rstest_bdd_macros::then(
+        "the ISR response code is {code} and a metadata change is staged only on success"
+    )]
+    fn check_isr_response_code(isr_update: &IsrUpdateScenario, code: i16) {
+        assert2::check!(isr_update.response.as_ref().unwrap().error_code == code);
+        assert2::check!(isr_update.changes.is_empty() == (code != codes::NONE));
+    }
+    #[rstest_bdd_macros::then(
+        "the complete partition 7 ISR response has code {code} and exactly the matching staged change count"
+    )]
+    fn check_complete_isr_response(isr_update: &IsrUpdateScenario, code: i16) {
+        let expected = if code == codes::NONE {
+            RespPartitionData {
+                partition_index: 7,
+                leader_id: 2,
+                leader_epoch: 9,
+                isr: isr_update.request.as_ref().unwrap().new_isr.clone(),
+                partition_epoch: 12,
+                ..Default::default()
+            }
+        } else {
+            RespPartitionData {
+                partition_index: 7,
+                error_code: code,
+                ..Default::default()
+            }
+        };
+        assert2::check!(isr_update.response.as_ref().unwrap() == &expected);
+        assert2::check!(isr_update.changes.len() == usize::from(code == codes::NONE));
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_isr_validation/isr.feature",
+        name = "A fenced epoch returns only the partition index and error"
+    )]
+    fn error_response_matches_kafkas_default_fields(isr_update: IsrUpdateScenario) {
+        let _ = isr_update;
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_isr_validation",tags="not @named_kip_evidence",fixtures=[isr_update:IsrUpdateScenario]);
 
     #[derive(Clone, Copy)]
     enum EpochStateAdmission {
@@ -562,134 +521,6 @@ mod tests {
         assert!(record.partition_epoch == 12);
     }
 
-    /// Kafka's `ReplicationControlManager.validateAlterPartitionData` over a
-    /// partition led by broker 1 at leader epoch 5 and partition epoch 10,
-    /// with replicas `[1, 2, 3]` and ISR `[1, 2]`. Each row is one request and
-    /// the error code a Kafka controller answers it with.
-    /// A validation row: its label, then the request's broker id, leader
-    /// epoch and partition epoch, the proposed ISR, and the expected error.
-    struct ValidationCase<'a> {
-        label: &'a str,
-        requester: i32,
-        leader_epoch: i32,
-        partition_epoch: i32,
-        new_isr: &'a [i32],
-        expected: i16,
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers alter partition isr update tests: rows are validated in kafkas order"
-    )]
-    fn bdd_verify_rows_are_validated_in_kafkas_order() {
-        let fixture = PartitionFixture {
-            partition_epoch: PartitionEpoch(10),
-            ..Default::default()
-        };
-        let image = image_with_partition(&fixture, THREE_REGISTERED_BROKERS);
-        let active = image.brokers().map(|broker| broker.node_id.0).collect();
-        let cases: &[ValidationCase<'_>] = &[
-            ValidationCase {
-                label: "current epochs",
-                requester: 1,
-                leader_epoch: 5,
-                partition_epoch: 10,
-                new_isr: &[1],
-                expected: codes::NONE,
-            },
-            ValidationCase {
-                label: "a leader epoch the controller has not seen",
-                requester: 1,
-                leader_epoch: 6,
-                partition_epoch: 10,
-                new_isr: &[1],
-                expected: codes::NOT_CONTROLLER,
-            },
-            ValidationCase {
-                label: "a partition epoch the controller has not seen",
-                requester: 1,
-                leader_epoch: 4,
-                partition_epoch: 11,
-                new_isr: &[1],
-                expected: codes::NOT_CONTROLLER,
-            },
-            ValidationCase {
-                label: "an older leader epoch",
-                requester: 2,
-                leader_epoch: 4,
-                partition_epoch: 9,
-                new_isr: &[1],
-                expected: codes::FENCED_LEADER_EPOCH,
-            },
-            ValidationCase {
-                label: "a requester that is not the leader",
-                requester: 2,
-                leader_epoch: 5,
-                partition_epoch: 9,
-                new_isr: &[1],
-                expected: codes::INVALID_REQUEST,
-            },
-            ValidationCase {
-                label: "an older partition epoch",
-                requester: 1,
-                leader_epoch: 5,
-                partition_epoch: 9,
-                new_isr: &[1, 4],
-                expected: codes::INVALID_UPDATE_VERSION,
-            },
-            ValidationCase {
-                label: "an ISR without the leader",
-                requester: 1,
-                leader_epoch: 5,
-                partition_epoch: 10,
-                new_isr: &[2],
-                expected: codes::INVALID_REQUEST,
-            },
-            ValidationCase {
-                label: "an ISR naming a replica twice",
-                requester: 1,
-                leader_epoch: 5,
-                partition_epoch: 10,
-                new_isr: &[1, 2, 2],
-                expected: codes::INVALID_REQUEST,
-            },
-        ];
-        for &ValidationCase {
-            label,
-            requester,
-            leader_epoch,
-            partition_epoch,
-            new_isr,
-            expected,
-        } in cases
-        {
-            let mut changes = Vec::new();
-            let response = handle_partition_with_recovery(
-                &image,
-                &active,
-                requester,
-                "t",
-                &ReqPartitionData {
-                    partition_index: 0,
-                    leader_epoch,
-                    partition_epoch,
-                    new_isr: new_isr.to_vec(),
-                    ..Default::default()
-                },
-                &mut changes,
-            );
-            assert2::check!(response.error_code == expected, "{label}");
-            assert2::check!(changes.is_empty() == (expected != codes::NONE), "{label}");
-        }
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/alter_partition/isr_update.feature",
-        name = "tests: rows are validated in kafkas order"
-    )]
-    fn rows_are_validated_in_kafkas_order() {}
-
     /// Two proposals built from the same ISR: the leader shrinks to `[1]`,
     /// then a stale expand to `[1, 2, 3]` built at the same leader epoch
     /// arrives. The controller has moved to partition epoch 11, so Kafka
@@ -763,31 +594,6 @@ mod tests {
         assert!(response.error_code == codes::INVALID_REQUEST);
         assert!(changes.is_empty());
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers alter partition isr update tests: error response matches kafkas default fields"
-    )]
-    fn bdd_verify_error_response_matches_kafkas_default_fields() {
-        let image = non_default_partition_image();
-        let mut changes = Vec::new();
-        let resp = response_for_non_default_partition(&image, &mut changes, 8);
-
-        let expected = RespPartitionData {
-            partition_index: 7,
-            error_code: codes::FENCED_LEADER_EPOCH,
-            ..Default::default()
-        };
-        assert!(resp == expected);
-        assert!(changes.is_empty());
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/alter_partition/isr_update.feature",
-        name = "tests: error response matches kafkas default fields"
-    )]
-    fn error_response_matches_kafkas_default_fields() {}
 
     #[test]
     fn explicit_v2_isr_wins_when_epoch_states_are_also_present() {

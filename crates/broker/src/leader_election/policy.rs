@@ -1108,259 +1108,122 @@ mod tests {
         }
     }
 
-    /// One row of the leaderless table.
-    struct LeaderlessCase<'a> {
-        label: &'a str,
-        replicas: &'a [u64],
-        isr: &'a [u64],
-        elr: PartitionElr,
-        alive: &'a [u64],
-        witness_ids: &'a [u64],
-        strategy: RecoveryStrategy,
+    #[derive(serde::Deserialize)]
+    struct LeaderlessReplicaInput {
+        leader: u64,
+        replicas: Vec<u64>,
+        isr: Vec<u64>,
+        eligible: Vec<i32>,
+        last_known: Vec<i32>,
+        alive: Vec<u64>,
+        witness_ids: Vec<u64>,
+        strategy: String,
         unclean_enabled: bool,
-        expected: super::FailoverDecision,
     }
 
-    /// The decision for a partition that lost its leader: the record still
-    /// names broker 1 as leader and lists it in the ISR, which is how krabka
-    /// holds a partition Kafka holds as `leader = -1`.
-    fn decide_leaderless(case: &LeaderlessCase<'_>) -> super::FailoverDecision {
-        let pr = partition_record(1, case.replicas, case.isr);
-        let alive: HashSet<NodeId> = case.alive.iter().copied().map(NodeId).collect();
-        let witness_set = witnesses(case.witness_ids);
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "kind")]
+    enum LeaderlessDecisionExpectation {
+        Elect {
+            leader: u64,
+            isr: Vec<u64>,
+            unclean: bool,
+        },
+        Unavailable,
+        NoChange,
+    }
+
+    #[derive(Default)]
+    struct LeaderlessElection {
+        partition: Option<PartitionRecord>,
+        alive: HashSet<NodeId>,
+        witnesses: HashSet<NodeId>,
+        elr: Option<PartitionElr>,
+        strategy: Option<RecoveryStrategy>,
+        unclean_enabled: bool,
+        decision: Option<FailoverDecision>,
+    }
+
+    #[rstest::fixture]
+    fn leaderless_election() -> LeaderlessElection {
+        // Each election uses its own assignment, availability and recovery policy.
+        LeaderlessElection::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "the recorded leader, replicas, ISR, ELR, live brokers and recovery policy are JSON {partition}"
+    )]
+    fn supplied_leaderless_election(
+        leaderless_election: &mut LeaderlessElection,
+        partition: String,
+    ) {
+        let input: LeaderlessReplicaInput = serde_json::from_str(&partition)
+            .expect("explicit leaderless partition and broker eligibility facts");
+        leaderless_election.partition =
+            Some(partition_record(input.leader, &input.replicas, &input.isr));
+        leaderless_election.alive = input.alive.into_iter().map(NodeId).collect();
+        leaderless_election.witnesses = witnesses(&input.witness_ids);
+        leaderless_election.elr = Some(elr(&input.eligible, &input.last_known));
+        leaderless_election.strategy = Some(match input.strategy.as_str() {
+            "None" => RecoveryStrategy::None,
+            "Balanced" => RecoveryStrategy::Balanced,
+            "Aggressive" => RecoveryStrategy::Aggressive,
+            _ => panic!("unknown recovery strategy {}", input.strategy),
+        });
+        leaderless_election.unclean_enabled = input.unclean_enabled;
+    }
+
+    #[rstest_bdd_macros::when("the controller elects a leader for the leaderless partition")]
+    fn elect_supplied_leaderless_partition(leaderless_election: &mut LeaderlessElection) {
         let ladder = Ladder::builder()
-            .alive(&alive)
-            .witnesses(&witness_set)
-            .elr(&case.elr)
-            .strategy(case.strategy)
-            .unclean_enabled(case.unclean_enabled)
+            .alive(&leaderless_election.alive)
+            .witnesses(&leaderless_election.witnesses)
+            .elr(
+                leaderless_election
+                    .elr
+                    .as_ref()
+                    .expect("ELR metadata was given"),
+            )
+            .strategy(
+                leaderless_election
+                    .strategy
+                    .expect("recovery strategy was given"),
+            )
+            .unclean_enabled(leaderless_election.unclean_enabled)
             .build();
-        elect_leaderless_one(&pr, &ladder)
+        leaderless_election.decision = Some(elect_leaderless_one(
+            leaderless_election
+                .partition
+                .as_ref()
+                .expect("recorded partition was given"),
+            &ladder,
+        ));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "leader election policy tests: the last known leader is elected unclean as kafka does"
-    )]
-    fn bdd_verify_the_last_known_leader_is_elected_unclean_as_kafka_does() {
-        let elected = |leader: u64, unclean: bool| super::FailoverDecision::Elect {
-            leader: NodeId(leader),
-            isr: vec![NodeId(leader)],
-            unclean,
+    #[rstest_bdd_macros::then("the complete leaderless election decision is JSON {decision}")]
+    fn expected_leaderless_election(leaderless_election: &LeaderlessElection, decision: String) {
+        let expected: LeaderlessDecisionExpectation =
+            serde_json::from_str(&decision).expect("independent complete election outcome");
+        let expected = match expected {
+            LeaderlessDecisionExpectation::Elect {
+                leader,
+                isr,
+                unclean,
+            } => FailoverDecision::Elect {
+                leader: NodeId(leader),
+                isr: isr.into_iter().map(NodeId).collect(),
+                unclean,
+            },
+            LeaderlessDecisionExpectation::Unavailable => FailoverDecision::Unavailable,
+            LeaderlessDecisionExpectation::NoChange => FailoverDecision::NoChange,
         };
-        // The replicas are `[1, 2, 3, 4]` and the record's ISR is `[1]`, the
-        // last leader alone, unless a row says otherwise.
-        let case =
-            |label, elr, alive, witness_ids, strategy, unclean_enabled, expected| LeaderlessCase {
-                label,
-                replicas: &[1, 2, 3, 4],
-                isr: &[1],
-                elr,
-                alive,
-                witness_ids,
-                strategy,
-                unclean_enabled,
-                expected,
-            };
-        let none = RecoveryStrategy::None;
-        let cases = [
-            // ElectLastKnownLeader: ISR and ELR empty, `lastKnownElr = [1]`, every
-            // broker acceptable. Broker 1 leads under a singleton ISR and
-            // `RECOVERING`, which is `unclean: true`.
-            case(
-                "the last known leader returns",
-                elr(&[], &[1]),
-                &[1, 2, 3, 4][..],
-                &[][..],
-                none,
-                false,
-                elected(1, true),
-            ),
-            // No `unclean.leader.election.enable` and no
-            // `unclean.recovery.strategy` sits in front of it.
-            case(
-                "with the unclean election on",
-                elr(&[], &[1]),
-                &[1, 2, 3, 4],
-                &[],
-                none,
-                true,
-                elected(1, true),
-            ),
-            case(
-                "over balanced recovery",
-                elr(&[], &[1]),
-                &[1, 2, 3, 4],
-                &[],
-                RecoveryStrategy::Balanced,
-                false,
-                elected(1, true),
-            ),
-            case(
-                "over aggressive recovery and the unclean election",
-                elr(&[], &[1]),
-                &[1, 2, 3, 4],
-                &[],
-                RecoveryStrategy::Aggressive,
-                true,
-                elected(1, true),
-            ),
-            // It is broker 1 that is elected, though broker 2 comes first in
-            // the assignment and the unclean election is on: the rung sits
-            // above `Election.UNCLEAN`, which would pick broker 2.
-            LeaderlessCase {
-                label: "the last known leader wins over the first live replica",
-                replicas: &[2, 3, 1, 4],
-                isr: &[1],
-                elr: elr(&[], &[1]),
-                alive: &[1, 2, 3, 4],
-                witness_ids: &[],
-                strategy: none,
-                unclean_enabled: true,
-                expected: elected(1, true),
-            },
-            // ElectLastKnownLeaderShouldFail: the ELR is not empty, and its
-            // one member is offline, so nothing is elected.
-            case(
-                "a non-empty ELR shuts the last-known rung",
-                elr(&[3], &[1]),
-                &[1, 2, 4],
-                &[],
-                none,
-                false,
-                super::FailoverDecision::Unavailable,
-            ),
-            // ElrCanBeElected: an electable ELR member wins over the last
-            // known leader, and its election is clean.
-            case(
-                "an ELR member outranks the last known leader",
-                elr(&[3], &[1]),
-                &[1, 3],
-                &[],
-                none,
-                false,
-                elected(3, false),
-            ),
-            case(
-                "the last known leader in the ELR is a clean election",
-                elr(&[1, 2, 3], &[1]),
-                &[1, 2, 3, 4],
-                &[],
-                none,
-                false,
-                elected(1, false),
-            ),
-            // NotEligibleLastKnownLeader: nobody is acceptable, whichever
-            // election type the topic asks for.
-            case(
-                "nobody alive, unclean election off",
-                elr(&[], &[1]),
-                &[],
-                &[],
-                none,
-                false,
-                super::FailoverDecision::Unavailable,
-            ),
-            case(
-                "nobody alive, unclean election on",
-                elr(&[], &[1]),
-                &[],
-                &[],
-                none,
-                true,
-                super::FailoverDecision::Unavailable,
-            ),
-            // `isAcceptableLeader` is false for the last known leader, so the
-            // `Election.UNCLEAN` branch below the rung decides.
-            case(
-                "the last known leader is down: KIP-841 is what is left",
-                elr(&[], &[1]),
-                &[2, 3],
-                &[],
-                none,
-                true,
-                elected(2, true),
-            ),
-            case(
-                "the last known leader is down and the unclean election is off",
-                elr(&[], &[1]),
-                &[2, 3],
-                &[],
-                none,
-                false,
-                super::FailoverDecision::Unavailable,
-            ),
-            // krabka adds the witness rule to every election path.
-            case(
-                "a witness is never the last known leader",
-                elr(&[], &[1]),
-                &[1, 2, 3, 4],
-                &[1],
-                none,
-                false,
-                super::FailoverDecision::Unavailable,
-            ),
-            // A live ISR member is an ordinary clean election under the ISR
-            // Kafka holds, which lost the last leader when the partition lost
-            // its leader.
-            LeaderlessCase {
-                label: "a live ISR member leads before any out-of-ISR rung",
-                replicas: &[1, 2, 3, 4],
-                isr: &[1, 2],
-                elr: elr(&[], &[1]),
-                alive: &[1, 2],
-                witness_ids: &[],
-                strategy: none,
-                unclean_enabled: false,
-                expected: elected(2, false),
-            },
-            // `lastKnownElr.length != 1`: not a last known leader, and not a
-            // partition that lost its leader either.
-            case(
-                "a multi-member last-known set is no marker",
-                elr(&[], &[1, 2]),
-                &[1, 2, 3, 4],
-                &[],
-                none,
-                false,
-                super::FailoverDecision::NoChange,
-            ),
-            case(
-                "a partition that has a leader is not touched",
-                elr(&[], &[]),
-                &[1, 2, 3, 4],
-                &[],
-                none,
-                false,
-                super::FailoverDecision::NoChange,
-            ),
-            case(
-                "the marker names the recorded leader and nobody else",
-                elr(&[], &[2]),
-                &[1, 2, 3, 4],
-                &[],
-                none,
-                false,
-                super::FailoverDecision::NoChange,
-            ),
-        ];
-        for case in cases {
-            assert!(decide_leaderless(&case) == case.expected, "{}", case.label);
-        }
+        assert!(leaderless_election.decision.as_ref() == Some(&expected));
     }
 
-    /// `PartitionChangeBuilderTest` at 4.3.1: `testEligibleLeaderReplicas_ElectLastKnownLeader`,
-    /// `_ElectLastKnownLeaderShouldFail`, `_NotEligibleLastKnownLeader` and
-    /// `_ElrCanBeElected`, each with `useLastKnownLeaderInBalancedRecovery` on,
-    /// which is how Kafka runs it. The partition there has `leader = -1`, an
-    /// empty ISR and replicas `[1, 2, 3, 4]`; the state here is the same one
-    /// under krabka's marker.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/leader_election/policy.feature",
-        name = "tests: the last known leader is elected unclean as kafka does"
-    )]
-    fn the_last_known_leader_is_elected_unclean_as_kafka_does() {}
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/leader_election/policy.feature",
+        fixtures = [leaderless_election: LeaderlessElection]
+    );
 
     /// Kafka's target ELR is `(elr ∪ isr) - targetIsr - uncleanShutdownReplicas`
     /// and `canElectLastKnownLeader` needs it empty. A fenced broker in the ISR

@@ -26,109 +26,157 @@
 //! the latest level a released Kafka knows. This test guards the fresh-broker
 //! surface.
 
-use assert2::assert;
+use {
+    assert2::assert,
+    krabka_protocol::owned::api_versions_response::ApiVersionsResponse,
+    rstest::fixture,
+    rstest_bdd::datatable::Rows,
+    rstest_bdd_macros::{DataTableRow, given, scenario, then, when},
+    support::InProcess,
+};
 
 mod support;
 
 use krabka_format::LATEST_PRODUCTION_METADATA_VERSION;
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "api versions features: v3 response advertises supported and bootstrapped finalized features"
-)]
-async fn bdd_verify_v3_response_advertises_supported_and_bootstrapped_finalized_features() {
-    let p = support::start().await;
-
-    let resp = support::discovery::api_versions(&p.client).await;
-
-    assert!(resp.error_code == 0, "{resp:?}");
-
-    // KIP-584 write-side: supported_features advertises metadata.version over
-    // the supported range; the standalone broker self-bootstraps the release
-    // defaults, so finalized_features carries metadata.version=4.3-IV0 and
-    // group.version=1 with a real (>= 0) epoch. See the module-level note for
-    // the JVM compatibility rationale.
-    let mv = resp
-        .supported_features
-        .iter()
-        .find(|f| f.name == "metadata.version")
-        .expect("metadata.version advertised in supported_features");
-    assert!(mv.min_version == 7, "{resp:?}");
-    assert!(
-        mv.max_version == LATEST_PRODUCTION_METADATA_VERSION,
-        "{resp:?}"
-    );
-    let gv = resp
-        .supported_features
-        .iter()
-        .find(|f| f.name == "group.version")
-        .expect("group.version advertised in supported_features");
-    // The client negotiates ApiVersions v4, where Kafka advertises every
-    // feature from its minimum production level, 0 for all but
-    // metadata.version (`BrokerFeatures.defaultSupportedFeatures`). Below v4
-    // Kafka omits a zero-minimum feature instead (`alterFeatureLevel0`).
-    assert!(gv.min_version == 0, "{resp:?}");
-    assert!(gv.max_version == 1, "{resp:?}");
-    let tv = resp
-        .supported_features
-        .iter()
-        .find(|f| f.name == "transaction.version")
-        .expect("transaction.version advertised in supported_features");
-    assert!(tv.min_version == 0, "{resp:?}");
-    assert!(tv.max_version == 2, "{resp:?}");
-
-    // A self-bootstrapped broker finalizes the release defaults.
-    let finalized_metadata_version = resp
-        .finalized_features
-        .iter()
-        .find(|f| f.name == "metadata.version")
-        .expect("metadata.version finalized at bootstrap");
-    assert!(
-        finalized_metadata_version.max_version_level == LATEST_PRODUCTION_METADATA_VERSION,
-        "{resp:?}"
-    );
-    let finalized_group_version = resp
-        .finalized_features
-        .iter()
-        .find(|f| f.name == "group.version")
-        .expect("group.version finalized at bootstrap");
-    assert!(finalized_group_version.max_version_level == 1, "{resp:?}");
-    let finalized_transaction_version = resp
-        .finalized_features
-        .iter()
-        .find(|f| f.name == "transaction.version")
-        .expect("transaction.version finalized at bootstrap");
-    assert!(
-        finalized_transaction_version.max_version_level == 2,
-        "{resp:?}"
-    );
-    // The krabka-owned `krabka.version` is advertised over [0, 2] but
-    // bootstraps at level 0, which Kafka omits from the finalized features,
-    // so that a JVM node can still join. An operator finalizes it later.
-    let kv = resp
-        .supported_features
-        .iter()
-        .find(|f| f.name == "krabka.version")
-        .expect("krabka.version advertised in supported_features");
-    assert!((kv.min_version, kv.max_version) == (0, 2), "{resp:?}");
-    assert!(
-        resp.finalized_features
-            .iter()
-            .all(|f| f.name != "krabka.version"),
-        "{resp:?}"
-    );
-    assert!(
-        resp.finalized_features_epoch >= 0,
-        "self-bootstrapped broker finalizes defaults so epoch must be >= 0: {resp:?}"
-    );
-
-    p.broker.shutdown().await;
+struct FeatureDiscovery {
+    broker: Option<InProcess>,
+    response: Option<ApiVersionsResponse>,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[fixture]
+fn features() -> FeatureDiscovery {
+    // Start this scenario with fresh inputs and observations.
+
+    FeatureDiscovery {
+        broker: None,
+        response: None,
+    }
+}
+
+#[given("a fresh standalone broker at the release feature defaults")]
+async fn fresh_broker(features: &mut FeatureDiscovery) {
+    features.broker = Some(support::start().await);
+}
+
+#[when("a client negotiates ApiVersions")]
+async fn discover_features(features: &mut FeatureDiscovery) {
+    let broker = features.broker.as_ref().expect("a fresh standalone broker");
+    features.response = Some(support::discovery::api_versions(&broker.client).await);
+}
+
+#[derive(DataTableRow)]
+struct SupportedLevel {
+    feature: String,
+    minimum: i16,
+    maximum: String,
+}
+
+#[derive(DataTableRow)]
+struct FinalizedLevel {
+    feature: String,
+    level: String,
+}
+
+fn feature_level(value: &str) -> i16 {
+    if value == "latest-production" {
+        LATEST_PRODUCTION_METADATA_VERSION
+    } else {
+        value.parse().expect("a feature level or latest-production")
+    }
+}
+
+#[then("the feature negotiation succeeds")]
+fn negotiation_succeeds(features: &FeatureDiscovery) {
+    let response = features
+        .response
+        .as_ref()
+        .expect("ApiVersions was negotiated");
+    assert!(response.error_code == 0, "{response:?}");
+}
+
+#[then("the supported feature levels are:")]
+fn supported_levels(features: &FeatureDiscovery, #[datatable] rows: Rows<SupportedLevel>) {
+    let response = features
+        .response
+        .as_ref()
+        .expect("ApiVersions was negotiated");
+    for row in rows {
+        let actual = response
+            .supported_features
+            .iter()
+            .find(|feature| feature.name == row.feature)
+            .unwrap_or_else(|| panic!("{} must be advertised: {response:?}", row.feature));
+        assert!(
+            (actual.min_version, actual.max_version) == (row.minimum, feature_level(&row.maximum)),
+            "{response:?}"
+        );
+    }
+}
+
+#[then("the bootstrapped finalized levels are:")]
+fn finalized_levels(features: &FeatureDiscovery, #[datatable] rows: Rows<FinalizedLevel>) {
+    let response = features
+        .response
+        .as_ref()
+        .expect("ApiVersions was negotiated");
+    for row in rows {
+        let actual = response
+            .finalized_features
+            .iter()
+            .find(|feature| feature.name == row.feature)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{} must be finalized at bootstrap: {response:?}",
+                    row.feature
+                )
+            });
+        assert!(
+            actual.max_version_level == feature_level(&row.level),
+            "{response:?}"
+        );
+    }
+}
+
+#[then("krabka.version is omitted from finalized features until explicitly enabled")]
+fn unfinalized_krabka_version(features: &FeatureDiscovery) {
+    let response = features
+        .response
+        .as_ref()
+        .expect("ApiVersions was negotiated");
+    assert!(
+        response
+            .finalized_features
+            .iter()
+            .all(|feature| feature.name != "krabka.version"),
+        "{response:?}"
+    );
+}
+
+#[then("the finalized feature epoch is nonnegative")]
+fn finalized_epoch(features: &FeatureDiscovery) {
+    let response = features
+        .response
+        .as_ref()
+        .expect("ApiVersions was negotiated");
+    assert!(
+        response.finalized_features_epoch >= 0,
+        "self-bootstrapped broker finalizes defaults so epoch must be >= 0: {response:?}"
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/api_versions_features.feature",
     name = "v3 response advertises supported and bootstrapped finalized features"
 )]
 #[tokio::test]
-async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() {}
+async fn v3_response_advertises_supported_and_bootstrapped_finalized_features(
+    features: FeatureDiscovery,
+) {
+    features
+        .broker
+        .expect("a fresh standalone broker")
+        .broker
+        .shutdown()
+        .await;
+}

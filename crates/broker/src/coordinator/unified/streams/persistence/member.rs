@@ -118,6 +118,7 @@ mod tests {
     use {
         super::*,
         crate::coordinator::unified::{
+            codec_observations::EncodedRecord,
             streams::persistence::{
                 KEY_STREAMS_MEMBER_METADATA, StreamsGroupKey, encode_member_metadata_key,
                 parse_streams_key,
@@ -143,49 +144,6 @@ mod tests {
             topology_epoch: 3,
         }
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams persistence member tests: member metadata bytes match kafka schema"
-    )]
-    fn bdd_verify_member_metadata_bytes_match_kafka_schema() {
-        let v = StreamsGroupMemberMetadataValue {
-            instance_id: None,
-            rack_id: None,
-            client_id: "c".into(),
-            client_host: "h".into(),
-            process_id: "p".into(),
-            user_endpoint: Some(StreamsEndpoint {
-                host: "e".into(),
-                port: 8080,
-            }),
-            client_tags: vec![("k".into(), "v".into())],
-            rebalance_timeout_ms: 1,
-            topology_epoch: 2,
-        };
-        let want = wire_bytes(&[
-            "0000", "0000",     // InstanceId, RackId null
-            "02630268", // ClientId, ClientHost
-            "00000001", // RebalanceTimeoutMs
-            "00000002", // TopologyEpoch
-            "0270",     // ProcessId
-            "01",       // UserEndpoint present
-            "0265",     // Host
-            "1f90",     // Port, uint16
-            "00",       // Endpoint tagged fields
-            "02",       // one ClientTags entry
-            "026b0276", "00", // KeyValue tagged fields
-            "00", // message tagged fields
-        ]);
-        assert!(&v.encode()[..] == &want[..]);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/member.feature",
-        name = "tests: member metadata bytes match kafka schema"
-    )]
-    fn member_metadata_bytes_match_kafka_schema() {}
 
     #[test]
     fn null_user_endpoint_is_one_negative_byte() {
@@ -247,5 +205,71 @@ mod tests {
     fn member_metadata_rejects_a_missing_tagged_trailer() {
         let full = sample().encode();
         assert!(StreamsGroupMemberMetadataValue::decode(&full[..full.len() - 1]).is_err());
+    }
+    mod bdd_member_metadata {
+        use {
+            super::*,
+            assert2::assert,
+            rstest_bdd_macros::{given, scenarios, then, when},
+        };
+        type EncodedValue = EncodedRecord<StreamsGroupMemberMetadataValue>;
+        #[rstest::fixture]
+        fn stored_value() -> EncodedValue {
+            // Start this scenario with fresh inputs and observations.
+            EncodedValue::default()
+        }
+        #[given(
+            "a Streams member c at host h with process p endpoint e:8080 tag k=v timeout 1 and topology epoch 2"
+        )]
+        fn prepared_value(stored_value: &mut EncodedValue) {
+            let v = StreamsGroupMemberMetadataValue {
+                instance_id: None,
+                rack_id: None,
+                client_id: "c".into(),
+                client_host: "h".into(),
+                process_id: "p".into(),
+                user_endpoint: Some(StreamsEndpoint {
+                    host: "e".into(),
+                    port: 8080,
+                }),
+                client_tags: vec![("k".into(), "v".into())],
+                rebalance_timeout_ms: 1,
+                topology_epoch: 2,
+            };
+
+            stored_value.value = Some(v);
+        }
+        #[when("the coordinator persists the Streams member metadata in the compacted group log")]
+        fn encode_group_record(stored_value: &mut EncodedValue) {
+            stored_value.encoded = Some(
+                stored_value
+                    .value
+                    .as_ref()
+                    .expect("group record prepared")
+                    .encode(),
+            );
+        }
+        #[then(
+            "the persisted Streams member metadata matches Kafka schema bytes including compact lengths and tagged trailers"
+        )]
+        fn kafka_record_layout(stored_value: &EncodedValue) {
+            let want = wire_bytes(&[
+                "0000", "0000",     // InstanceId, RackId null
+                "02630268", // ClientId, ClientHost
+                "00000001", // RebalanceTimeoutMs
+                "00000002", // TopologyEpoch
+                "0270",     // ProcessId
+                "01",       // UserEndpoint present
+                "0265",     // Host
+                "1f90",     // Port, uint16
+                "00",       // Endpoint tagged fields
+                "02",       // one ClientTags entry
+                "026b0276", "00", // KeyValue tagged fields
+                "00", // message tagged fields
+            ]);
+
+            assert!(&stored_value.encoded.as_ref().expect("record encoded")[..] == &want[..]);
+        }
+        scenarios!("tests/features/migrated/src/coordinator/unified/streams/persistence/member.feature",tags="@member_metadata",fixtures=[stored_value: EncodedValue]);
     }
 }

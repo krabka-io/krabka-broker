@@ -39,18 +39,20 @@ use {
         KAFKA_IMAGE_TXN, docker_run_kafka_tool_with_image, rlmm_broker0_advertised,
         start_host_broker_with,
     },
+    krabka_broker::BrokerHandle,
     krabka_client_admin::AdminClient,
     krabka_client_core::Client,
     krabka_client_producer::{Producer, ProducerRecord},
     krabka_protocol::krabka::barrier::{
         AlterBarrierGroupsRequest, AlterableBarrierGroup, CUT_STATUS_COMPLETE,
-        DescribeBarrierGroupsRequest, TriggerBarrierRequest,
+        DescribeBarrierGroupsRequest, TriggerBarrierRequest, TriggerBarrierResponse,
     },
     std::{
         collections::BTreeMap,
         slice,
         time::{Duration, Instant},
     },
+    tempfile::TempDir,
     tokio::time,
 };
 
@@ -61,9 +63,6 @@ const PARTITIONS: i32 = 3;
 /// between the two cuts. Every partition therefore ends with twice this many
 /// records and two markers.
 const RECORDS_PER_ROUND: i32 = 4;
-/// How many cuts the test injects. Each one puts one marker in every
-/// partition.
-const CUTS: i64 = 2;
 
 /// The value of record `index` in partition `partition`.
 ///
@@ -143,42 +142,15 @@ async fn create_barrier_group(client: &Client) {
 }
 
 /// Inject one cut and return the marker offset it took in each partition.
-async fn inject_cut(client: &Client) -> BTreeMap<i32, i64> {
-    let response = client
+async fn inject_cut(client: &Client) -> TriggerBarrierResponse {
+    client
         .send(TriggerBarrierRequest {
             group: BARRIER_GROUP.to_owned(),
             timeout_ms: 30_000,
             ..TriggerBarrierRequest::default()
         })
         .await
-        .expect("trigger barrier");
-    assert!(
-        response.error_code == 0,
-        "trigger failed: code={} message={:?}",
-        response.error_code,
-        response.error_message
-    );
-    assert!(
-        response.status == CUT_STATUS_COMPLETE,
-        "cut is partial, so a partition took no marker: {:?}",
-        response.missing
-    );
-
-    let topic = response
-        .topics
-        .iter()
-        .find(|t| t.topic == TOPIC)
-        .expect("the cut names the topic");
-    let offsets: BTreeMap<i32, i64> = topic
-        .partitions
-        .iter()
-        .map(|p| (p.partition, p.offset))
-        .collect();
-    assert!(
-        offsets.len() == usize::try_from(PARTITIONS).expect("partition count fits"),
-        "the cut must name every partition, got {offsets:?}"
-    );
-    offsets
+        .expect("trigger barrier")
 }
 
 /// Read one partition from the beginning with the JVM console consumer, and
@@ -232,15 +204,35 @@ fn jvm_log_end_offset(partition: i32) -> i64 {
     jvm_parse_offset(line)
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm barrier markers: a jvm consumer reads across barrier markers unchanged"
+struct BarrierReads {
+    broker: Option<(BrokerHandle, TempDir)>,
+    producer: Option<Producer>,
+    client: Option<Client>,
+    cuts: Vec<TriggerBarrierResponse>,
+    ends: BTreeMap<i32, i64>,
+    reads: BTreeMap<(i32, String), Vec<String>>,
+}
+#[rstest::fixture]
+fn barriers() -> BarrierReads {
+    // Start this scenario with fresh inputs and observations.
+
+    BarrierReads {
+        broker: None,
+        producer: None,
+        client: None,
+        cuts: Vec::new(),
+        ends: BTreeMap::new(),
+        reads: BTreeMap::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "a three-partition topic barrier-invisibility and manual barrier group invisibility-cut on a single broker"
 )]
-async fn bdd_verify_a_jvm_consumer_reads_across_barrier_markers_unchanged() {
+async fn manual_barriers(barriers: &mut BarrierReads) {
     // One state partition at replication factor one, because this is a single
     // node: the 50-at-factor-3 default leaves the partition this group hashes
     // to without a leader, and the coordinator then refuses every request.
-    let (_broker, _dir) = start_host_broker_with(|config| {
+    let (broker, dir) = start_host_broker_with(|config| {
         config.barrier_state_num_partitions = 1;
         config.barrier_state_replication_factor = 1;
     })
@@ -270,55 +262,93 @@ async fn bdd_verify_a_jvm_consumer_reads_across_barrier_markers_unchanged() {
     wait_for_coordinator(&client).await;
     create_barrier_group(&client).await;
 
-    // Records, a cut, more records, a second cut. Every partition ends with
-    // two rounds of records and two markers, and the markers are interleaved
-    // rather than trailing, so a consumer that stops at the first one fails.
-    produce_round(&producer, 0).await;
-    let first_cut = inject_cut(&client).await;
-    produce_round(&producer, 1).await;
-    let second_cut = inject_cut(&client).await;
-
-    let records_per_partition = i64::from(RECORDS_PER_ROUND) * 2;
-    let expected_end_offset = records_per_partition + CUTS;
-
+    barriers.broker = Some((broker, dir));
+    barriers.producer = Some(producer);
+    barriers.client = Some(client);
+}
+#[rstest_bdd_macros::when(
+    "four records per partition are written, a cut completes, four more records are written, and a second cut completes"
+)]
+async fn interleaved_cuts(barriers: &mut BarrierReads) {
+    produce_round(barriers.producer.as_ref().expect("producer"), 0).await;
+    barriers
+        .cuts
+        .push(inject_cut(barriers.client.as_ref().expect("client")).await);
+    produce_round(barriers.producer.as_ref().expect("producer"), 1).await;
+    barriers
+        .cuts
+        .push(inject_cut(barriers.client.as_ref().expect("client")).await);
     for partition in 0..PARTITIONS {
-        let first = first_cut[&partition];
-        let second = second_cut[&partition];
-
-        // The cut offsets are where the markers went. The first marker sits
-        // after the first round, and the second after the second round, each
-        // displaced by the markers already written.
+        barriers
+            .ends
+            .insert(partition, jvm_log_end_offset(partition));
+    }
+}
+#[rstest_bdd_macros::then(
+    "both cuts succeed completely and JVM offsets include exactly two marker offsets per partition"
+)]
+fn marker_offsets(barriers: &BarrierReads, datatable: Vec<Vec<String>>) {
+    assert!(barriers.cuts.len() == 2);
+    for cut in &barriers.cuts {
+        check!(cut.error_code == 0);
         check!(
-            first == i64::from(RECORDS_PER_ROUND),
-            "partition {partition}: first marker offset"
+            cut.status == CUT_STATUS_COMPLETE,
+            "missing: {:?}",
+            cut.missing
         );
         check!(
-            second == i64::from(RECORDS_PER_ROUND) * 2 + 1,
-            "partition {partition}: second marker offset"
+            cut.topics
+                .iter()
+                .find(|t| t.topic == TOPIC)
+                .expect("topic in cut")
+                .partitions
+                .len()
+                == 3
         );
-
-        // The markers hold real offsets. Without this a broker that silently
-        // dropped every marker would pass the consumption check below.
-        let end_offset = jvm_log_end_offset(partition);
-        check!(
-            end_offset == expected_end_offset,
-            "partition {partition}: the JVM tooling reports end offset {end_offset}, \
-             and {records_per_partition} records plus {CUTS} markers is {expected_end_offset}"
-        );
-
+    }
+    for row in datatable.into_iter().skip(1) {
+        let [partition, first, second, end]: [String; 4] =
+            row.try_into().expect("partition first second end");
+        let partition: i32 = partition.parse().expect("partition");
+        for (cut, expected) in barriers.cuts.iter().zip([first, second]) {
+            let offset = cut
+                .topics
+                .iter()
+                .find(|t| t.topic == TOPIC)
+                .expect("cut topic")
+                .partitions
+                .iter()
+                .find(|p| p.partition == partition)
+                .expect("cut partition")
+                .offset;
+            check!(offset == expected.parse::<i64>().expect("marker offset"));
+        }
+        check!(barriers.ends[&partition] == end.parse::<i64>().expect("end offset"));
+    }
+}
+#[rstest_bdd_macros::when(
+    "JVM consumers read eight records per partition using read_uncommitted and read_committed"
+)]
+fn jvm_reads(barriers: &mut BarrierReads) {
+    for partition in 0..PARTITIONS {
         for isolation in ["read_uncommitted", "read_committed"] {
-            let served = jvm_consume(
-                partition,
-                usize::try_from(records_per_partition).expect("record count fits"),
-                isolation,
+            barriers.reads.insert(
+                (partition, isolation.to_owned()),
+                jvm_consume(partition, 8, isolation),
             );
-            let expected: Vec<String> = (0..RECORDS_PER_ROUND * 2)
-                .map(|index| value_of(partition, index))
-                .collect();
-            check!(
-                served == expected,
-                "partition {partition} at {isolation}: the JVM consumer served {served:?}"
-            );
+        }
+    }
+}
+#[rstest_bdd_macros::then(
+    "both isolation levels return only these ordered record values and no markers"
+)]
+fn invisible_markers(barriers: &BarrierReads, datatable: Vec<Vec<String>>) {
+    for row in datatable.into_iter().skip(1) {
+        let [partition, values]: [String; 2] = row.try_into().expect("partition values");
+        let partition: i32 = partition.parse().expect("partition");
+        let expected: Vec<String> = values.split(',').map(str::to_owned).collect();
+        for isolation in ["read_uncommitted", "read_committed"] {
+            check!(barriers.reads[&(partition, isolation.to_owned())] == expected);
         }
     }
 }
@@ -331,4 +361,14 @@ async fn bdd_verify_a_jvm_consumer_reads_across_barrier_markers_unchanged() {
     name = "a jvm consumer reads across barrier markers unchanged"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_jvm_consumer_reads_across_barrier_markers_unchanged() {}
+async fn a_jvm_consumer_reads_across_barrier_markers_unchanged(barriers: BarrierReads) {
+    barriers
+        .producer
+        .take()
+        .expect("producer")
+        .close()
+        .await
+        .expect("producer close");
+    barriers.broker.take().expect("broker").0.shutdown().await;
+    drop(barriers);
+}

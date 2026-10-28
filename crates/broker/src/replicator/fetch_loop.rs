@@ -549,40 +549,65 @@ mod tests {
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "replicator fetch loop tests: the default envelope asks for kafka s response and partition maximums"
+    #[derive(Default)]
+    struct DefaultReplicationFetch {
+        follower: Option<(Config, tempfile::TempDir)>,
+        request: Option<FetchRequest>,
+    }
+
+    #[rstest::fixture]
+    fn default_replication_fetch() -> DefaultReplicationFetch {
+        // Building one fetch envelope cannot reuse another follower's request.
+        DefaultReplicationFetch::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "a follower replicates a partition with default replication fetch limits"
     )]
-    fn bdd_verify_the_default_envelope_asks_for_kafka_s_response_and_partition_maximums() {
-        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-        let fetcher = test_fetcher(&cfg, FollowedPartitions::default());
-        let replication = &cfg.connection.replication;
-        let req = build_fetch_request(
+    fn supplied_default_replication_fetch(default_replication_fetch: &mut DefaultReplicationFetch) {
+        default_replication_fetch.follower = Some(test_config(image_with_leader(LEADER_ID)));
+    }
+
+    #[rstest_bdd_macros::when("the follower builds its initial partition fetch request")]
+    fn build_default_replication_fetch(default_replication_fetch: &mut DefaultReplicationFetch) {
+        let (config, _) = default_replication_fetch
+            .follower
+            .as_ref()
+            .expect("follower was configured");
+        let fetcher = test_fetcher(config, FollowedPartitions::default());
+        let replication = &config.connection.replication;
+        default_replication_fetch.request = Some(build_fetch_request(
             &fetcher,
             &mut FollowerFetchSession::default(),
             iter::once(wanted_row(PARTITION, 0, replication.fetch_max.bytes_i32())).collect(),
             &[],
-        );
+        ));
+    }
 
+    #[rstest_bdd_macros::then(
+        "the fetch response budget is {response} bytes and its partition budget is {partition} bytes"
+    )]
+    fn kafka_default_replication_budgets(
+        default_replication_fetch: &DefaultReplicationFetch,
+        response: i32,
+        partition: i32,
+    ) {
+        let request = default_replication_fetch
+            .request
+            .as_ref()
+            .expect("initial fetch was built");
         check!(
             (
-                req.max_bytes,
-                req.topics[0].partitions[0].partition_max_bytes
-            ) == (10 * 1024 * 1024, 1024 * 1024)
+                request.max_bytes,
+                request.topics[0].partitions[0].partition_max_bytes
+            ) == (response, partition)
         );
     }
 
-    /// Kafka's `RemoteLeaderEndPoint` asks for `replica.fetch.response.max.bytes`
-    /// (10 MiB) across the response and `replica.fetch.max.bytes` (1 MiB) for
-    /// each partition. A response budget of one partition's share lets one
-    /// partition with a full batch waiting take every response, and starve the
-    /// other partitions that the fetcher follows from the same leader.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/replicator/fetch_loop.feature",
-        name = "tests: the default envelope asks for kafka s response and partition maximums"
-    )]
-    fn the_default_envelope_asks_for_kafka_s_response_and_partition_maximums() {}
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/replicator/fetch_loop.feature",
+        fixtures = [default_replication_fetch: DefaultReplicationFetch]
+    );
 
     #[test]
     fn a_later_request_names_only_the_partition_that_moved() {

@@ -46,50 +46,89 @@ fn drain(captured: &Captured) -> Vec<String> {
     mem::take(&mut *captured.lock().unwrap_or_else(PoisonError::into_inner))
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("log levels tests: kafka level names round trip for {example}")]
-fn bdd_verify_kafka_level_names_round_trip(example: String) {
-    type Example = (LogLevel,);
-    let (level,): Example = match example.as_str() {
-        "fatal" => (LogLevel::Fatal,),
-        "error" => (LogLevel::Error,),
-        "warn" => (LogLevel::Warn,),
-        "info" => (LogLevel::Info,),
-        "debug" => (LogLevel::Debug,),
-        "trace" => (LogLevel::Trace,),
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    check!(LogLevel::from_kafka_name(level.kafka_name()) == Some(level));
+#[derive(Debug, PartialEq, Eq)]
+enum LevelNameObservation {
+    Accepted(LogLevel),
+    Rejected,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/log_levels/tests.feature",
-    name = "kafka level names round trip"
-)]
-fn kafka_level_names_round_trip(example: String) { let _ = example; }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("log levels tests: kafka level names reject non levels for {example}")]
-fn bdd_verify_kafka_level_names_reject_non_levels(example: String) {
-    type Example<'a> = (&'a str,);
-    let (name,): Example<'_> = match example.as_str() {
-        "lowercase" => ("info",),
-        "off" => ("OFF",),
-        "empty" => ("",),
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    check!(LogLevel::from_kafka_name(name) == None);
+struct LevelNameScenario {
+    level: Option<LogLevel>,
+    text: String,
+    parsed: Option<LevelNameObservation>,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/log_levels/tests.feature",
-    name = "kafka level names reject non levels"
-)]
-fn kafka_level_names_reject_non_levels(example: String) { let _ = example; }
+#[rstest::fixture]
+fn level_name() -> LevelNameScenario {
+    // Start this scenario with fresh inputs and observations.
+
+    LevelNameScenario {
+        level: None,
+        text: String::new(),
+        parsed: None,
+    }
+}
+
+#[rstest_bdd_macros::given("log severity {name}")]
+fn severity(level_name: &mut LevelNameScenario, name: String) {
+    level_name.level = Some(match name.as_str() {
+        "FATAL" => LogLevel::Fatal,
+        "ERROR" => LogLevel::Error,
+        "WARN" => LogLevel::Warn,
+        "INFO" => LogLevel::Info,
+        "DEBUG" => LogLevel::Debug,
+        "TRACE" => LogLevel::Trace,
+        _ => panic!("unknown severity: {name}"),
+    });
+    level_name.text = name;
+}
+
+#[rstest_bdd_macros::when("the severity is encoded and decoded using Kafka names")]
+fn round_trip_level(level_name: &mut LevelNameScenario) {
+    let level = level_name.level.expect("a severity was supplied");
+    level_name.parsed = Some(LogLevel::from_kafka_name(level.kafka_name()).map_or(
+        LevelNameObservation::Rejected,
+        LevelNameObservation::Accepted,
+    ));
+}
+
+#[rstest_bdd_macros::then("the decoded severity equals the original severity")]
+fn decoded_level(level_name: &LevelNameScenario) {
+    check!(
+        level_name.parsed
+            == Some(LevelNameObservation::Accepted(
+                level_name.level.expect("a severity was supplied")
+            ))
+    );
+    check!(
+        level_name
+            .level
+            .expect("a severity was supplied")
+            .kafka_name()
+            == level_name.text
+    );
+}
+
+#[rstest_bdd_macros::given("Kafka log level text {name}")]
+fn level_text(level_name: &mut LevelNameScenario, name: String) { level_name.text = name; }
+
+#[rstest_bdd_macros::given("an empty Kafka log level text")]
+fn empty_level_text(level_name: &mut LevelNameScenario) { level_name.text.clear(); }
+
+#[rstest_bdd_macros::when("the Kafka log level text is decoded")]
+fn decode_level(level_name: &mut LevelNameScenario) {
+    level_name.parsed = Some(LogLevel::from_kafka_name(&level_name.text).map_or(
+        LevelNameObservation::Rejected,
+        LevelNameObservation::Accepted,
+    ));
+}
+
+#[rstest_bdd_macros::then("the text is rejected as a log severity")]
+fn rejected_level(level_name: &LevelNameScenario) {
+    check!(level_name.parsed == Some(LevelNameObservation::Rejected));
+}
+
+rstest_bdd_macros::scenarios!("tests/features/log_level_names", fixtures = [level_name: LevelNameScenario]);
 
 #[test]
 fn directives_in_the_spec_seed_the_logger_list() {

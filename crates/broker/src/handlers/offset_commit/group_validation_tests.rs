@@ -9,7 +9,7 @@ use {
     super::WireUuid,
     crate::{
         authorizer::{AllowAllAuthorizer, AuthorizationResult},
-        broker::{Broker, BrokerHandle},
+        broker::Broker,
         codes,
         coordinator::unified::{
             GroupSeed,
@@ -96,17 +96,6 @@ enum Group {
     StoppedStreams,
 }
 
-/// One row: the group, the request version, member id and generation, and
-/// the error code Kafka answers on the partition row.
-#[derive(Debug, Clone, Copy)]
-struct Case {
-    group: Group,
-    version: i16,
-    member_id: &'static str,
-    generation: i32,
-    error_code: i16,
-}
-
 /// The partitions of `TOPIC` in the KIP-1251 test: partition 2 exists but is
 /// assigned to no member.
 const KIP_1251_TOPIC_PARTITIONS: i32 = 3;
@@ -164,153 +153,183 @@ async fn seed(broker: &Broker, group_id: &str, group: Group) {
     }
 }
 
-/// What one row answered, and whether its group exists afterwards.
-struct Driven {
-    response: OffsetCommitResponse,
-    group_exists: bool,
+#[derive(Default)]
+struct CommitGroupScenario {
+    started: Option<HandlerStartedBroker>,
+    version: i16,
+    request: Option<OffsetCommitRequest>,
+    response: Option<OffsetCommitResponse>,
+    group_exists: Option<bool>,
 }
-
-/// Runs one row in a group of its own, and returns the response and whether
-/// the group exists afterwards.
-async fn drive(broker: &BrokerHandle, row: usize, case: Case) -> Driven {
-    let shared = broker.broker_arc_for_test();
-    let group_id = format!("group-validation-{row}");
-    seed(&shared, &group_id, case.group).await;
-    let request = offset_commit_request(group_id.clone(), case.generation, case.member_id, vec![
-        super::test_topic_row().name(TOPIC.to_owned()).call(),
-    ]);
-    let identity = consumer_identity();
-    let ctx = identity.context();
-    let response = dispatch_wire(&shared, API_KEY, case.version, &request, &ctx).await;
-    Driven {
-        response,
-        group_exists: shared.group_coordinator.find(&group_id).is_some(),
+#[rstest::fixture]
+fn commit_group() -> CommitGroupScenario {
+    let started = None;
+    CommitGroupScenario {
+        started,
+        ..Default::default()
     }
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers offset commit group validation tests: commit is fenced by kafka group rule"
+#[rstest_bdd_macros::given("a ready offset coordinator and a group that is {state}")]
+async fn offset_commit_group_state(commit_group: &mut CommitGroupScenario, state: String) {
+    let group = match state.as_str() {
+        "missing" => Group::Missing,
+        "classic stable with member m1 at generation 3" => Group::ClassicWithMember,
+        "an empty consumer group" => Group::EmptyConsumer,
+        "a streams group whose actor stopped" => Group::StoppedStreams,
+        _ => panic!("unknown commit group state: {state}"),
+    };
+    let started = start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
+    let broker = started.broker.broker_arc_for_test();
+    create_topic(&broker).await;
+    started.broker.wait_until_partition_present(TOPIC, 0).await;
+    seed(&broker, "group-validation-0", group).await;
+    commit_group.started = Some(started);
+}
+#[rstest_bdd_macros::given(
+    "an OffsetCommit version {version} request uses member {member} and generation {generation}"
 )]
-async fn bdd_verify_commit_is_fenced_by_kafka_group_rule() {
-    let cases = [
-        // A group that does not exist is created as a simple group for a
-        // negative generation.
-        Case {
-            group: Group::Missing,
-            version: 9,
-            member_id: "",
-            generation: -1,
-            error_code: codes::NONE,
+fn offset_commit_group_request(
+    commit_group: &mut CommitGroupScenario,
+    version: i16,
+    member: String,
+    generation: i32,
+) {
+    commit_group.version = version;
+    commit_group.request = Some(offset_commit_request(
+        "group-validation-0",
+        generation,
+        if member == "empty" {
+            String::new()
+        } else {
+            member
         },
-        // Otherwise it is not found from v9 on, and an illegal generation
-        // before, and it is not created.
-        Case {
-            group: Group::Missing,
-            version: 9,
-            member_id: MEMBER,
-            generation: GENERATION,
-            error_code: codes::GROUP_ID_NOT_FOUND,
-        },
-        Case {
-            group: Group::Missing,
-            version: 8,
-            member_id: MEMBER,
-            generation: GENERATION,
-            error_code: codes::ILLEGAL_GENERATION,
-        },
-        // The admin client may not move the offsets of a classic group that
-        // has members.
-        Case {
-            group: Group::ClassicWithMember,
-            version: 8,
-            member_id: "",
-            generation: -1,
-            error_code: codes::UNKNOWN_MEMBER_ID,
-        },
-        Case {
-            group: Group::ClassicWithMember,
-            version: 9,
-            member_id: "",
-            generation: -1,
-            error_code: codes::UNKNOWN_MEMBER_ID,
-        },
-        Case {
-            group: Group::ClassicWithMember,
-            version: 9,
-            member_id: MEMBER,
-            generation: GENERATION,
-            error_code: codes::NONE,
-        },
-        // The admin client may move the offsets of a consumer group that has
-        // no members.
-        Case {
-            group: Group::EmptyConsumer,
-            version: 9,
-            member_id: "",
-            generation: -1,
-            error_code: codes::NONE,
-        },
-        // A streams actor that exited is respawned to validate the commit,
-        // rather than refusing it with `UNKNOWN_SERVER_ERROR`.
-        Case {
-            group: Group::StoppedStreams,
-            version: 9,
-            member_id: "",
-            generation: -1,
-            error_code: codes::NONE,
-        },
-    ];
-    let HandlerStartedBroker { broker, dir: _dir } =
-        start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
-    create_topic(&broker.broker_arc_for_test()).await;
-    broker.wait_until_partition_present(TOPIC, 0).await;
-
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for (row, case) in cases.into_iter().enumerate() {
-        let Driven {
-            response,
-            group_exists,
-        } = drive(&broker, row, case).await;
-        actual.push((
-            case.group,
-            case.version,
-            case.member_id,
-            response,
-            group_exists,
-        ));
-        let resp_parts = vec![OffsetCommitResponsePartition {
-            partition_index: 0,
-            error_code: case.error_code,
-            ..Default::default()
-        }];
-        expected.push((
-            case.group,
-            case.version,
-            case.member_id,
-            OffsetCommitResponse {
+        vec![super::test_topic_row().name(TOPIC.to_owned()).call()],
+    ));
+}
+#[rstest_bdd_macros::when("the consumer commits its offset through the group coordinator")]
+async fn handle_offset_commit_group(commit_group: &mut CommitGroupScenario) {
+    let broker = commit_group
+        .started
+        .as_ref()
+        .unwrap()
+        .broker
+        .broker_arc_for_test();
+    let identity = consumer_identity();
+    let ctx = identity.context();
+    commit_group.response = Some(
+        dispatch_wire(
+            &broker,
+            API_KEY,
+            commit_group.version,
+            commit_group.request.as_ref().unwrap(),
+            &ctx,
+        )
+        .await,
+    );
+    commit_group.group_exists = Some(
+        broker
+            .group_coordinator
+            .find("group-validation-0")
+            .is_some(),
+    );
+}
+#[rstest_bdd_macros::then(
+    "the complete commit response has partition error {code} and group existence is {exists}"
+)]
+async fn check_offset_commit_group(
+    commit_group: &mut CommitGroupScenario,
+    code: i16,
+    exists: bool,
+) {
+    assert!(
+        commit_group.response.as_ref().unwrap()
+            == &OffsetCommitResponse {
                 topics: vec![OffsetCommitResponseTopic {
                     name: TOPIC.to_owned(),
-                    partitions: resp_parts,
+                    partitions: vec![OffsetCommitResponsePartition {
+                        partition_index: 0,
+                        error_code: code,
+                        ..Default::default()
+                    }],
                     ..Default::default()
                 }],
                 ..Default::default()
-            },
-            case.group != Group::Missing || case.error_code == codes::NONE,
-        ));
-    }
-    assert!(actual == expected);
-    broker.shutdown().await;
+            }
+    );
+    assert!(commit_group.group_exists.unwrap() == exists);
+    commit_group.started.take().unwrap().broker.shutdown().await;
 }
-
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/offset_commit/group_validation_tests.feature",
-    name = "commit is fenced by kafka group rule"
+    path = "tests/features/handler_offset_commit_group_fencing/group.feature",
+    name = "Group kind membership generation and protocol version determine commit fencing: state=missing, version=9, member=empty (1)"
 )]
 #[tokio::test]
-async fn commit_is_fenced_by_kafka_group_rule() {}
+async fn commit_is_fenced_by_kafka_group_rule(commit_group: CommitGroupScenario) {
+    let _ = (commit_group,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_commit_group_fencing/group.feature",
+    name = "Group kind membership generation and protocol version determine commit fencing: state=missing, version=9, member=m1 (2)"
+)]
+#[tokio::test]
+async fn commit_is_fenced_by_kafka_group_rule_case_2(commit_group: CommitGroupScenario) {
+    let _ = (commit_group,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_commit_group_fencing/group.feature",
+    name = "Group kind membership generation and protocol version determine commit fencing: state=missing, version=8, member=m1 (3)"
+)]
+#[tokio::test]
+async fn commit_is_fenced_by_kafka_group_rule_case_3(commit_group: CommitGroupScenario) {
+    let _ = (commit_group,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_commit_group_fencing/group.feature",
+    name = "Group kind membership generation and protocol version determine commit fencing: state=classic stable with member m1 at generation 3, version=8, member=empty (4)"
+)]
+#[tokio::test]
+async fn commit_is_fenced_by_kafka_group_rule_case_4(commit_group: CommitGroupScenario) {
+    let _ = (commit_group,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_commit_group_fencing/group.feature",
+    name = "Group kind membership generation and protocol version determine commit fencing: state=classic stable with member m1 at generation 3, version=9, member=empty (5)"
+)]
+#[tokio::test]
+async fn commit_is_fenced_by_kafka_group_rule_case_5(commit_group: CommitGroupScenario) {
+    let _ = (commit_group,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_commit_group_fencing/group.feature",
+    name = "Group kind membership generation and protocol version determine commit fencing: state=classic stable with member m1 at generation 3, version=9, member=m1 (6)"
+)]
+#[tokio::test]
+async fn commit_is_fenced_by_kafka_group_rule_case_6(commit_group: CommitGroupScenario) {
+    let _ = (commit_group,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_commit_group_fencing/group.feature",
+    name = "Group kind membership generation and protocol version determine commit fencing: state=an empty consumer group, version=9, member=empty (7)"
+)]
+#[tokio::test]
+async fn commit_is_fenced_by_kafka_group_rule_case_7(commit_group: CommitGroupScenario) {
+    let _ = (commit_group,);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_commit_group_fencing/group.feature",
+    name = "Group kind membership generation and protocol version determine commit fencing: state=a streams group whose actor stopped, version=9, member=empty (8)"
+)]
+#[tokio::test]
+async fn commit_is_fenced_by_kafka_group_rule_case_8(commit_group: CommitGroupScenario) {
+    let _ = (commit_group,);
+}
 
 /// Allows everything but `Read` on the topic `DENIED_TOPIC`.
 #[derive(Debug)]

@@ -127,120 +127,6 @@ async fn start_sasl_controller() -> ControllerNode {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "controller listener api versions: sasl controller listener answers api versions before authentication"
-)]
-async fn bdd_verify_sasl_controller_listener_answers_api_versions_before_authentication() {
-    let ControllerNode {
-        broker,
-        controller_addr,
-        dir: _dir,
-    } = start_sasl_controller().await;
-
-    // Kafka 4.3.1 serves `ApiVersions` v0-v4; v5 is trunk's, so it is
-    // refused below like an unknown version, while
-    // `unstable.api.versions.enable` is off.
-    for version in [0, 3, 4] {
-        let mut stream = TcpStream::connect(controller_addr).await.expect("connect");
-
-        // An unsupported version gets Kafka's v0 refusal, and the connection
-        // stays open for the next request.
-        let refusal = round_trip(&mut stream, frame(18, 5, 1, true, &[0xff]), 1).await;
-        check!(
-            ApiVersionsResponse::decode(&mut &refusal[..], 0).expect("decode refusal")
-                == ApiVersionsResponse {
-                    error_code: 35,
-                    api_keys: vec![ApiVersion {
-                        api_key: 18,
-                        min_version: 0,
-                        max_version: 4,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                },
-            "v{version}"
-        );
-
-        let before = api_versions(&mut stream, version, 2).await;
-
-        let handshake = round_trip(
-            &mut stream,
-            frame(
-                17,
-                1,
-                3,
-                false,
-                &encode(
-                    &SaslHandshakeRequest {
-                        mechanism: "PLAIN".into(),
-                        ..Default::default()
-                    },
-                    1,
-                ),
-            ),
-            3,
-        )
-        .await;
-        assert!(handshake[..2] == 0i16.to_be_bytes());
-        let authenticate = round_trip(
-            &mut stream,
-            frame(
-                36,
-                2,
-                4,
-                true,
-                &encode(
-                    &SaslAuthenticateRequest {
-                        auth_bytes: bytes::Bytes::from_static(b"\0broker\0secret"),
-                        ..Default::default()
-                    },
-                    2,
-                ),
-            ),
-            4,
-        )
-        .await;
-        // The flexible response header's tagged-fields byte, then error 0.
-        assert!(authenticate[..3] == [0, 0, 0]);
-
-        let after = api_versions(&mut stream, version, 5).await;
-        // `finalized_features_epoch` is the controller's metadata offset, as
-        // Kafka's `KRaftMetadataCache.features` reports it, so a record the
-        // controller commits between the two requests may move it on. The
-        // rest of the answer is unchanged by authentication.
-        check!(
-            after.finalized_features_epoch >= before.finalized_features_epoch,
-            "v{version}"
-        );
-        check!(
-            ApiVersionsResponse {
-                finalized_features_epoch: before.finalized_features_epoch,
-                ..after
-            } == before,
-            "v{version}"
-        );
-        check!(before.error_code == 0, "v{version}");
-        check!(
-            before.api_keys.iter().any(|key| key.api_key == 52),
-            "v{version}: Vote is advertised"
-        );
-        if version >= 3 {
-            check!(!before.supported_features.is_empty(), "v{version}");
-        }
-    }
-
-    broker.shutdown().await;
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_listener_api_versions.feature",
-    name = "sasl controller listener answers api versions before authentication"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sasl_controller_listener_answers_api_versions_before_authentication() {}
-
 /// A broker whose controller listener is PLAINTEXT, on `customize`d settings.
 async fn start_plaintext_controller(customize: impl FnOnce(&mut BrokerConfig)) -> ControllerNode {
     let ControllerListenerFixture {
@@ -275,84 +161,331 @@ async fn assert_closed(stream: &mut TcpStream, what: &str) {
     );
 }
 
-#[cfg(test)]
+struct ControllerDiscovery {
+    node: Option<ControllerNode>,
+    stream: Option<TcpStream>,
+    idle: Option<TcpStream>,
+    before: Option<ApiVersionsResponse>,
+    after: Option<ApiVersionsResponse>,
+    refusal: Option<ApiVersionsResponse>,
+    handshake: Option<Vec<u8>>,
+    authenticate: Option<Vec<u8>>,
+    busy_errors: Vec<i16>,
+}
+#[rstest::fixture]
+fn discovery() -> ControllerDiscovery {
+    // Start this scenario with fresh inputs and observations.
+
+    ControllerDiscovery {
+        node: None,
+        stream: None,
+        idle: None,
+        before: None,
+        after: None,
+        refusal: None,
+        handshake: None,
+        authenticate: None,
+        busy_errors: Vec::new(),
+    }
+}
+#[rstest_bdd_macros::given("an unauthenticated PLAIN connection to a SASL controller listener")]
+async fn sasl_controller_source(discovery: &mut ControllerDiscovery) {
+    let node = start_sasl_controller().await;
+    discovery.stream = Some(
+        TcpStream::connect(node.controller_addr)
+            .await
+            .expect("connect"),
+    );
+    discovery.node = Some(node);
+}
+#[rstest_bdd_macros::when("the client sends unsupported API versions v5 with an invalid body")]
+async fn unsupported_controller_versions(discovery: &mut ControllerDiscovery) {
+    let response = round_trip(
+        discovery.stream.as_mut().expect("controller connection"),
+        frame(18, 5, 1, true, &[0xff]),
+        1,
+    )
+    .await;
+    discovery.refusal =
+        Some(ApiVersionsResponse::decode(&mut &response[..], 0).expect("decode refusal"));
+}
 #[rstest_bdd_macros::then(
-    "controller listener api versions: the controller listener refuses a request over socket request max"
+    "the controller returns the exact v0 refusal advertising API versions 0 through 4"
 )]
-async fn bdd_verify_the_controller_listener_refuses_a_request_over_socket_request_max() {
-    let ControllerNode {
-        broker,
-        controller_addr,
-        dir: _dir,
-    } = start_plaintext_controller(|cfg| {
-        cfg.socket_request_max = krabka_units::kibibytes(4);
-    })
+fn controller_version_refusal(discovery: &ControllerDiscovery) {
+    check!(
+        discovery.refusal.as_ref().expect("v5 requested")
+            == &ApiVersionsResponse {
+                error_code: 35,
+                api_keys: vec![ApiVersion {
+                    api_key: 18,
+                    min_version: 0,
+                    max_version: 4,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }
+    );
+}
+#[rstest_bdd_macros::when("the unauthenticated client requests API versions v{version}")]
+async fn preauth_controller_versions(discovery: &mut ControllerDiscovery, version: i16) {
+    discovery.before = Some(
+        api_versions(
+            discovery.stream.as_mut().expect("controller connection"),
+            version,
+            2,
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::when("the client authenticates as broker with PLAIN")]
+async fn authenticate_controller_client(discovery: &mut ControllerDiscovery) {
+    let stream = discovery.stream.as_mut().expect("controller connection");
+    let handshake = round_trip(
+        stream,
+        frame(
+            17,
+            1,
+            3,
+            false,
+            &encode(
+                &SaslHandshakeRequest {
+                    mechanism: "PLAIN".into(),
+                    ..Default::default()
+                },
+                1,
+            ),
+        ),
+        3,
+    )
     .await;
 
-    let mut stream = TcpStream::connect(controller_addr).await.expect("connect");
-    let served = api_versions(&mut stream, 0, 1).await;
-    check!(served.error_code == 0);
+    let authenticate = round_trip(
+        stream,
+        frame(
+            36,
+            2,
+            4,
+            true,
+            &encode(
+                &SaslAuthenticateRequest {
+                    auth_bytes: bytes::Bytes::from_static(b"\0broker\0secret"),
+                    ..Default::default()
+                },
+                2,
+            ),
+        ),
+        4,
+    )
+    .await;
+    // The flexible response header's tagged-fields byte, then error 0.
 
-    // 1 MiB declared, no body behind it.
-    stream
+    discovery.handshake = Some(handshake);
+    discovery.authenticate = Some(authenticate);
+}
+#[rstest_bdd_macros::then("both PLAIN handshake and authentication return success")]
+fn controller_auth_succeeded(discovery: &ControllerDiscovery) {
+    assert!(discovery.handshake.as_ref().expect("handshake requested")[..2] == 0i16.to_be_bytes());
+    assert!(
+        discovery
+            .authenticate
+            .as_ref()
+            .expect("authentication requested")[..3]
+            == [0, 0, 0]
+    );
+}
+#[rstest_bdd_macros::when("the authenticated client requests API versions v{version}")]
+async fn postauth_controller_versions(discovery: &mut ControllerDiscovery, version: i16) {
+    discovery.after = Some(
+        api_versions(
+            discovery.stream.as_mut().expect("controller connection"),
+            version,
+            5,
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "the v{version} controller API and feature table is unchanged and its epoch does not regress"
+)]
+fn controller_catalog_preserved(discovery: &ControllerDiscovery, version: i16) {
+    let before = discovery.before.as_ref().expect("pre-auth table requested");
+    let after = discovery.after.as_ref().expect("post-auth table requested");
+    // `finalized_features_epoch` is the controller's metadata offset, as
+    // Kafka's `KRaftMetadataCache.features` reports it, so a record the
+    // controller commits between the two requests may move it on. The
+    // rest of the answer is unchanged by authentication.
+    check!(
+        after.finalized_features_epoch >= before.finalized_features_epoch,
+        "v{version}"
+    );
+    check!(
+        ApiVersionsResponse {
+            finalized_features_epoch: before.finalized_features_epoch,
+            ..after.clone()
+        } == *before,
+        "v{version}"
+    );
+    check!(before.error_code == 0, "v{version}");
+    check!(
+        before.api_keys.iter().any(|key| key.api_key == 52),
+        "v{version}: Vote is advertised"
+    );
+    if version >= 3 {
+        check!(!before.supported_features.is_empty(), "v{version}");
+    }
+}
+#[rstest_bdd_macros::given("a PLAINTEXT controller with a 4 KiB request size limit")]
+async fn bounded_controller_source(discovery: &mut ControllerDiscovery) {
+    let node =
+        start_plaintext_controller(|cfg| cfg.socket_request_max = krabka_units::kibibytes(4)).await;
+    discovery.stream = Some(
+        TcpStream::connect(node.controller_addr)
+            .await
+            .expect("connect"),
+    );
+    discovery.node = Some(node);
+}
+#[rstest_bdd_macros::when("the client requests API versions v0 on the bounded controller")]
+async fn bounded_controller_request(discovery: &mut ControllerDiscovery) {
+    discovery.before = Some(
+        api_versions(
+            discovery.stream.as_mut().expect("controller connection"),
+            0,
+            1,
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then("the bounded controller serves the valid request")]
+fn bounded_controller_served(discovery: &ControllerDiscovery) {
+    check!(
+        discovery
+            .before
+            .as_ref()
+            .expect("API versions requested")
+            .error_code
+            == 0
+    );
+}
+#[rstest_bdd_macros::when("the client declares a 1 MiB frame without sending its body")]
+async fn oversized_controller_frame(discovery: &mut ControllerDiscovery) {
+    discovery
+        .stream
+        .as_mut()
+        .expect("controller connection")
         .write_all(&(1024 * 1024_u32).to_be_bytes())
         .await
         .expect("write the size prefix");
-    assert_closed(&mut stream, "an oversize request").await;
+}
+#[rstest_bdd_macros::then("the controller closes the oversize connection without returning bytes")]
+async fn controller_oversize_closed(discovery: &mut ControllerDiscovery) {
+    assert_closed(
+        discovery.stream.as_mut().expect("controller connection"),
+        "an oversize request",
+    )
+    .await;
+}
+#[rstest_bdd_macros::given(
+    "a PLAINTEXT controller with an 800 millisecond idle timeout and two clients"
+)]
+async fn idle_controller_source(discovery: &mut ControllerDiscovery) {
+    let node = start_plaintext_controller(|cfg| {
+        cfg.connections_max_idle_overrides
+            .insert("CONTROLLER".to_owned(), krabka_units::millis(800));
+    })
+    .await;
+    discovery.idle = Some(
+        TcpStream::connect(node.controller_addr)
+            .await
+            .expect("connect"),
+    );
+    discovery.stream = Some(
+        TcpStream::connect(node.controller_addr)
+            .await
+            .expect("connect"),
+    );
+    discovery.node = Some(node);
+}
+#[rstest_bdd_macros::when(
+    "one client remains idle while the other requests API versions every 200 milliseconds for 1600 milliseconds"
+)]
+async fn keep_controller_client_busy(discovery: &mut ControllerDiscovery) {
+    let window = Duration::from_millis(800);
+    let started = Instant::now();
+    let mut correlation_id = 1;
+    while started.elapsed() < window * 2 {
+        let response = api_versions(
+            discovery.stream.as_mut().expect("busy connection"),
+            0,
+            correlation_id,
+        )
+        .await;
+        discovery.busy_errors.push(response.error_code);
+        correlation_id += 1;
+        time::sleep(window / 4).await;
+    }
+}
+#[rstest_bdd_macros::then("every request on the active client succeeds")]
+fn busy_controller_survived(discovery: &ControllerDiscovery) {
+    check!(!discovery.busy_errors.is_empty());
+    for error in &discovery.busy_errors {
+        check!(*error == 0);
+    }
+}
+#[rstest_bdd_macros::then("the idle client is closed without returning bytes")]
+async fn idle_controller_closed(discovery: &mut ControllerDiscovery) {
+    assert_closed(
+        discovery.idle.as_mut().expect("idle connection"),
+        "an idle connection",
+    )
+    .await;
+}
 
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_listener_api_versions.feature",
+    name = "sasl controller listener answers api versions before authentication"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sasl_controller_listener_answers_api_versions_before_authentication(
+    discovery: ControllerDiscovery,
+    version: i16,
+) {
+    let _ = version;
+    let ControllerNode {
+        broker,
+        dir: _directory,
+        ..
+    } = discovery.node.expect("controller started");
     broker.shutdown().await;
 }
 
-/// The controller listener is one of `SocketServer`'s listeners, so it holds
-/// a peer to `socket.request.max.bytes`: a request within the limit is served,
-/// and a size prefix over it closes the connection before the frame is read,
-/// where it used to allocate for whatever the four bytes said.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/controller_listener_api_versions.feature",
     name = "the controller listener refuses a request over socket request max"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_controller_listener_refuses_a_request_over_socket_request_max() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "controller listener api versions: the controller listener closes an idle connection"
-)]
-async fn bdd_verify_the_controller_listener_closes_an_idle_connection() {
-    let window = Duration::from_millis(800);
+async fn the_controller_listener_refuses_a_request_over_socket_request_max(
+    discovery: ControllerDiscovery,
+) {
     let ControllerNode {
         broker,
-        controller_addr,
-        dir: _dir,
-    } = start_plaintext_controller(|cfg| {
-        cfg.connections_max_idle_overrides
-            .insert("CONTROLLER".to_owned(), krabka_units::millis(800));
-    })
-    .await;
-
-    let mut idle = TcpStream::connect(controller_addr).await.expect("connect");
-    let mut busy = TcpStream::connect(controller_addr).await.expect("connect");
-    let started = Instant::now();
-    let mut correlation_id = 1;
-    while started.elapsed() < window * 2 {
-        let answered = api_versions(&mut busy, 0, correlation_id).await;
-        check!(answered.error_code == 0);
-        correlation_id += 1;
-        time::sleep(window / 4).await;
-    }
-    assert_closed(&mut idle, "an idle connection").await;
-
+        dir: _directory,
+        ..
+    } = discovery.node.expect("controller started");
     broker.shutdown().await;
 }
 
-/// `connections.max.idle.ms` covers the controller listener, under the
-/// listener's own name: a connection that sends nothing is closed once the
-/// window passes, and one that keeps sending requests is not.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/controller_listener_api_versions.feature",
     name = "the controller listener closes an idle connection"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_controller_listener_closes_an_idle_connection() {}
+async fn the_controller_listener_closes_an_idle_connection(discovery: ControllerDiscovery) {
+    let ControllerNode {
+        broker,
+        dir: _directory,
+        ..
+    } = discovery.node.expect("controller started");
+    broker.shutdown().await;
+}

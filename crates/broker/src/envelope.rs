@@ -473,6 +473,7 @@ mod tests {
             incremental_alter_configs_request::IncrementalAlterConfigsRequest,
             unregister_controller_request::UnregisterControllerRequest,
         },
+        rstest_bdd::datatable::Rows,
         std::{collections::BTreeSet, net::Ipv6Addr},
     };
 
@@ -531,92 +532,214 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "envelope tests: a principal kafka would refuse is a deserialization failure"
-    )]
-    fn bdd_verify_a_principal_kafka_would_refuse_is_a_deserialization_failure() {
-        struct Case {
-            label: &'static str,
-            bytes: Option<Vec<u8>>,
-        }
+    #[derive(Default)]
+    struct ForwardedEnvelopeScenario {
+        principal_bytes: Option<Vec<u8>>,
+        principal: Option<Result<ForwardedPrincipal, EnvelopeError>>,
+        failure: Option<EnvelopeError>,
+        code: Option<i16>,
+        declared_keys: Vec<i16>,
+        forwardable_keys: Option<BTreeSet<i16>>,
+        nested_envelope: Option<bool>,
+        produce: Option<bool>,
+        frame: Option<Bytes>,
+        unstable: Option<UnstableApiVersions>,
+        embedded: Option<Result<(), EnvelopeError>>,
+    }
 
-        let valid = JVM_USER_ALICE;
-        let mut wrong_version = valid.to_vec();
-        wrong_version[1] = 1;
-        let mut truncated_body = valid.to_vec();
-        truncated_body.truncate(4);
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct ForwardableApiKey {
+        key: i16,
+    }
 
-        let cases: [Case; 5] = [
-            Case {
-                label: "null principal",
-                bytes: None,
-            },
-            Case {
-                label: "empty principal",
-                bytes: Some(Vec::new()),
-            },
-            Case {
-                label: "version prefix only",
-                bytes: Some(vec![0x00]),
-            },
-            Case {
-                label: "schema version above the supported range",
-                bytes: Some(wrong_version),
-            },
-            Case {
-                label: "body truncated mid-string",
-                bytes: Some(truncated_body),
-            },
-        ];
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct EmbeddedFrame {
+        api: i16,
+        version: i16,
+        body: String,
+        unstable: bool,
+    }
 
-        for Case { label, bytes } in cases {
-            check!(
-                deserialize_principal(bytes.as_deref())
-                    == Err(EnvelopeError::PrincipalDeserializationFailure),
-                "label: {label}"
-            );
+    #[rstest::fixture]
+    fn forwarded_envelope() -> ForwardedEnvelopeScenario {
+        // Each forwarded request carries independent bytes, flags, and outcomes.
+        ForwardedEnvelopeScenario::default()
+    }
+
+    fn envelope_failure(name: &str) -> EnvelopeError {
+        match name {
+            "ClusterAuthorizationFailed" => EnvelopeError::ClusterAuthorizationFailed,
+            "PrincipalDeserializationFailure" => EnvelopeError::PrincipalDeserializationFailure,
+            "UnsupportedVersion" => EnvelopeError::UnsupportedVersion,
+            "InvalidRequest" => EnvelopeError::InvalidRequest,
+            other => panic!("unknown Envelope failure {other}"),
         }
     }
 
-    /// Every shape Kafka's `deserialize` refuses. A missing principal is
-    /// included because `request_principal` is nullable on the wire: KIP-590
-    /// always populates it, and a null one leaves the controller with no
-    /// identity to authorize the embedded request against.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/envelope.feature",
-        name = "tests: a principal kafka would refuse is a deserialization failure"
-    )]
-    fn a_principal_kafka_would_refuse_is_a_deserialization_failure() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "envelope tests: each failure carries the error code kafka assigns it"
-    )]
-    fn bdd_verify_each_failure_carries_the_error_code_kafka_assigns_it() {
-        let cases = [
-            (EnvelopeError::ClusterAuthorizationFailed, 31),
-            (EnvelopeError::PrincipalDeserializationFailure, 97),
-            (EnvelopeError::UnsupportedVersion, 35),
-            (EnvelopeError::InvalidRequest, 42),
-        ];
-
-        for (error, want) in cases {
-            check!(error.code() == want, "{error:?}");
-        }
+    #[rstest_bdd_macros::given("the Envelope request principal is null")]
+    fn absent_forwarded_principal(forwarded_envelope: &mut ForwardedEnvelopeScenario) {
+        forwarded_envelope.principal_bytes = None;
     }
 
-    /// The `EnvelopeResponse.error_code` for each failure, as
-    /// `kafka.server.EnvelopeUtils` assigns them. A substitution here is
-    /// invisible to a Rust caller and changes what a JVM forwarder reports to
-    /// its own client.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/envelope.feature",
-        name = "tests: each failure carries the error code kafka assigns it"
+    #[rstest_bdd_macros::given("the serialized Envelope principal has these hexadecimal bytes:")]
+    fn forwarded_principal_bytes(
+        forwarded_envelope: &mut ForwardedEnvelopeScenario,
+        docstring: String,
+    ) {
+        forwarded_envelope.principal_bytes = Some(
+            docstring
+                .split_whitespace()
+                .map(|byte| u8::from_str_radix(byte, 16).expect("principal bytes are hexadecimal"))
+                .collect(),
+        );
+    }
+
+    #[rstest_bdd_macros::when("the controller deserializes the forwarded Kafka principal")]
+    fn deserialize_forwarded_principal(forwarded_envelope: &mut ForwardedEnvelopeScenario) {
+        forwarded_envelope.principal = Some(deserialize_principal(
+            forwarded_envelope.principal_bytes.as_deref(),
+        ));
+    }
+
+    #[rstest_bdd_macros::then(
+        "the forwarded principal is rejected as PrincipalDeserializationFailure"
     )]
-    fn each_failure_carries_the_error_code_kafka_assigns_it() {}
+    fn refused_forwarded_principal(forwarded_envelope: &ForwardedEnvelopeScenario) {
+        check!(
+            forwarded_envelope.principal
+                == Some(Err(EnvelopeError::PrincipalDeserializationFailure))
+        );
+    }
+
+    #[rstest_bdd_macros::given("the Envelope failure is {failure}")]
+    fn forwarded_failure(forwarded_envelope: &mut ForwardedEnvelopeScenario, failure: String) {
+        forwarded_envelope.failure = Some(envelope_failure(&failure));
+    }
+
+    #[rstest_bdd_macros::when("the Envelope failure is translated to its Kafka wire code")]
+    fn forwarded_failure_code(forwarded_envelope: &mut ForwardedEnvelopeScenario) {
+        forwarded_envelope.code = Some(
+            forwarded_envelope
+                .failure
+                .expect("an Envelope failure was given")
+                .code(),
+        );
+    }
+
+    #[rstest_bdd_macros::then("the Envelope wire error code is {code}")]
+    fn kafka_forwarded_failure_code(forwarded_envelope: &ForwardedEnvelopeScenario, code: i16) {
+        check!(forwarded_envelope.code == Some(code));
+    }
+
+    #[rstest_bdd_macros::given("the router uses its declared Envelope forwarding policy")]
+    fn declared_forwarding_policy(forwarded_envelope: &mut ForwardedEnvelopeScenario) {
+        forwarded_envelope.declared_keys = FORWARDABLE_API_KEYS.to_vec();
+    }
+
+    #[rstest_bdd_macros::when(
+        "the forwardability predicate checks the declared requests, Envelope, and Produce"
+    )]
+    fn evaluate_forwarding_policy(forwarded_envelope: &mut ForwardedEnvelopeScenario) {
+        forwarded_envelope.forwardable_keys = Some(
+            forwarded_envelope
+                .declared_keys
+                .iter()
+                .copied()
+                .filter(|key| is_forwardable(*key))
+                .collect(),
+        );
+        forwarded_envelope.nested_envelope = Some(is_forwardable(58));
+        forwarded_envelope.produce = Some(is_forwardable(0));
+    }
+
+    #[rstest_bdd_macros::then("the declared and admitted forwardable API keys are exactly:")]
+    fn kafka_forwarding_policy(
+        forwarded_envelope: &ForwardedEnvelopeScenario,
+        #[datatable] rows: Rows<ForwardableApiKey>,
+    ) {
+        let expected: BTreeSet<_> = rows.into_iter().map(|row| row.key).collect();
+        let declared: BTreeSet<_> = forwarded_envelope.declared_keys.iter().copied().collect();
+        check!(declared == expected);
+        check!(forwarded_envelope.forwardable_keys.as_ref() == Some(&expected));
+    }
+
+    #[rstest_bdd_macros::then(
+        "neither a nested Envelope nor a data-plane Produce request is forwardable"
+    )]
+    fn no_nested_or_data_plane_forwarding(forwarded_envelope: &ForwardedEnvelopeScenario) {
+        check!(forwarded_envelope.nested_envelope == Some(false));
+        check!(forwarded_envelope.produce == Some(false));
+    }
+
+    #[rstest_bdd_macros::given("the embedded frame has only three header bytes")]
+    fn short_embedded_header(forwarded_envelope: &mut ForwardedEnvelopeScenario) {
+        forwarded_envelope.frame = Some(Bytes::from_static(&[0, 19, 0]));
+        forwarded_envelope.unstable = Some(UnstableApiVersions::Disabled);
+    }
+
+    #[rstest_bdd_macros::given("the embedded forwarded frame is:")]
+    fn embedded_forwarded_frame(
+        forwarded_envelope: &mut ForwardedEnvelopeScenario,
+        #[datatable] rows: Rows<EmbeddedFrame>,
+    ) {
+        let mut rows = rows.into_iter();
+        let row = rows.next().expect("one embedded frame was specified");
+        assert!(rows.next().is_none());
+        let body = match row.body.as_str() {
+            "empty" => Vec::new(),
+            "garbage" => b"garbage".to_vec(),
+            "CreateTopics-v7" => body_of::<CreateTopicsRequest>(7),
+            "truncated-CreateTopics-v7" => {
+                let mut body = body_of::<CreateTopicsRequest>(7);
+                body.truncate(body.len() - 1);
+                body
+            }
+            "UnregisterController-v0" => body_of::<UnregisterControllerRequest>(0),
+            body => panic!("unknown embedded body fixture {body}"),
+        };
+        forwarded_envelope.frame = Some(
+            request_frame()
+                .api_key(row.api)
+                .api_version(row.version)
+                .body(&body)
+                .call(),
+        );
+        forwarded_envelope.unstable = Some(if row.unstable {
+            UnstableApiVersions::Enabled
+        } else {
+            UnstableApiVersions::Disabled
+        });
+    }
+
+    #[rstest_bdd_macros::when(
+        "the controller unwraps the embedded request after cluster authorization succeeds"
+    )]
+    fn unwrap_forwarded_frame(forwarded_envelope: &mut ForwardedEnvelopeScenario) {
+        let frame = forwarded_envelope
+            .frame
+            .as_ref()
+            .expect("an embedded frame was given");
+        let unstable = forwarded_envelope
+            .unstable
+            .expect("the API-version policy was given");
+        forwarded_envelope.embedded =
+            Some(unwrap_request(frame, |_, _| true, unstable).map(|_| ()));
+    }
+
+    #[rstest_bdd_macros::then("the embedded request is rejected as {failure}")]
+    fn rejected_embedded_request(forwarded_envelope: &ForwardedEnvelopeScenario, failure: String) {
+        check!(forwarded_envelope.embedded == Some(Err(envelope_failure(&failure))));
+    }
+
+    #[rstest_bdd_macros::then("the embedded request is admitted for controller dispatch")]
+    fn admitted_embedded_request(forwarded_envelope: &ForwardedEnvelopeScenario) {
+        check!(forwarded_envelope.embedded == Some(Ok(())));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/envelope",
+        fixtures = [forwarded_envelope: ForwardedEnvelopeScenario]
+    );
 
     /// `client_host_address` is exactly what `InetAddress.getByAddress`
     /// accepts: four octets or sixteen, with an IPv4-mapped sixteen folded
@@ -946,32 +1069,6 @@ mod tests {
         check!(decode_request(&encoded, 0) == Ok(want));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("envelope tests: the forwardable set is the one kafka publishes")]
-    fn bdd_verify_the_forwardable_set_is_the_one_kafka_publishes() {
-        let want: BTreeSet<i16> = maplit::btreeset! {
-            19, 20, 30, 31, 33, 37, 38, 39, 40, 43, 44, 45, 46, 49, 51, 55, 57, 64, 67, 80, 81,
-            94,
-        };
-        let declared: BTreeSet<i16> = FORWARDABLE_API_KEYS.iter().copied().collect();
-
-        check!(declared == want);
-        // Envelope itself is not forwardable, so an envelope cannot nest.
-        check!(!is_forwardable(58));
-        // Produce is a data-plane api the controller never serves.
-        check!(!is_forwardable(0));
-    }
-
-    /// The forwardable set is `ApiKeys.forwardable` from
-    /// `kafka-clients-4.3.1.jar`. The five write APIs issue #82 names are in
-    /// it, and so is `UpdateFeatures`, which `kafka-features.sh` drives.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/envelope.feature",
-        name = "tests: the forwardable set is the one kafka publishes"
-    )]
-    fn the_forwardable_set_is_the_one_kafka_publishes() {}
-
     krabka_macros::request_frame_fixture!(wire_request_frame);
 
     #[derive(
@@ -1110,162 +1207,6 @@ mod tests {
             check!(forwarded == want, "case: {case}");
         }
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "envelope tests: an embedded request kafka would refuse gets the code kafka gives"
-    )]
-    fn bdd_verify_an_embedded_request_kafka_would_refuse_gets_the_code_kafka_gives() {
-        struct Case {
-            label: &'static str,
-            frame: Bytes,
-            unstable: UnstableApiVersions,
-            want: Result<(), EnvelopeError>,
-        }
-
-        use crate::api_catalog::UnstableApiVersions::{Disabled, Enabled};
-
-        /// A row whose empty version-0 frame for `api_key` is refused as an
-        /// unsupported version.
-        fn unsupported_version(
-            label: &'static str,
-            api_key: i16,
-            unstable: UnstableApiVersions,
-        ) -> Case {
-            Case {
-                label,
-                frame: request_frame()
-                    .api_key(api_key)
-                    .api_version(0)
-                    .body(b"")
-                    .call(),
-                unstable,
-                want: Err(EnvelopeError::UnsupportedVersion),
-            }
-        }
-
-        let create_topics = body_of::<CreateTopicsRequest>(7);
-        let unregister_controller = body_of::<UnregisterControllerRequest>(0);
-        let truncated = &create_topics[..create_topics.len() - 1];
-        let cases: [Case; 14] = [
-            Case {
-                label: "a frame too short to hold a header",
-                frame: Bytes::from_static(&[0, 19, 0]),
-                unstable: Disabled,
-                want: Err(EnvelopeError::UnsupportedVersion),
-            },
-            Case {
-                label: "Produce is not forwardable",
-                frame: request_frame().api_key(0).api_version(9).body(b"").call(),
-                unstable: Disabled,
-                want: Err(EnvelopeError::InvalidRequest),
-            },
-            Case {
-                label: "a nested Envelope is not forwardable",
-                frame: request_frame().api_key(58).api_version(0).body(b"").call(),
-                unstable: Disabled,
-                want: Err(EnvelopeError::InvalidRequest),
-            },
-            Case {
-                label: "a non-forwardable key is refused before its body is read",
-                frame: request_frame()
-                    .api_key(3)
-                    .api_version(12)
-                    .body(b"garbage")
-                    .call(),
-                unstable: Disabled,
-                want: Err(EnvelopeError::InvalidRequest),
-            },
-            unsupported_version("the removed LeaderAndIsr has no valid version", 4, Disabled),
-            unsupported_version(
-                "the removed ControlledShutdown has no valid version",
-                7,
-                Enabled,
-            ),
-            unsupported_version(
-                "an api key past the release's last is unknown",
-                93,
-                Disabled,
-            ),
-            unsupported_version("a negative api key is unknown", -1, Enabled),
-            Case {
-                label: "trunk's UnregisterController is unknown to 4.3.1",
-                frame: request_frame()
-                    .api_key(94)
-                    .api_version(0)
-                    .body(&unregister_controller)
-                    .call(),
-                unstable: Disabled,
-                want: Err(EnvelopeError::UnsupportedVersion),
-            },
-            Case {
-                label: "trunk's UnregisterController is known under the flag",
-                frame: request_frame()
-                    .api_key(94)
-                    .api_version(0)
-                    .body(&unregister_controller)
-                    .call(),
-                unstable: Enabled,
-                want: Ok(()),
-            },
-            Case {
-                label: "a body that does not decode",
-                frame: request_frame().body(b"garbage").call(),
-                unstable: Disabled,
-                want: Err(EnvelopeError::UnsupportedVersion),
-            },
-            Case {
-                label: "a body cut short",
-                frame: request_frame().body(truncated).call(),
-                unstable: Disabled,
-                want: Err(EnvelopeError::UnsupportedVersion),
-            },
-            Case {
-                label: "a version the request type does not have",
-                frame: request_frame().api_version(99).body(&create_topics).call(),
-                unstable: Disabled,
-                want: Err(EnvelopeError::UnsupportedVersion),
-            },
-            Case {
-                label: "a body that decodes",
-                frame: request_frame().body(&create_topics).call(),
-                unstable: Disabled,
-                want: Ok(()),
-            },
-        ];
-
-        for Case {
-            label,
-            frame,
-            unstable,
-            want,
-        } in cases
-        {
-            check!(
-                unwrap_request(&frame, |_, _| true, unstable).map(|_| ()) == want,
-                "label: {label}"
-            );
-        }
-    }
-
-    /// `EnvelopeUtils.handleEnvelopeRequest` answers each way an embedded
-    /// request can fail with the code its own throw site gives.
-    ///
-    /// - A header `RequestHeader.parse` refuses is `UNSUPPORTED_VERSION`: a
-    ///   frame too short for one, an api key the release does not have (93 and
-    ///   up on 4.3.1, trunk's own keys until `unstable.api.versions.enable`),
-    ///   and the removed keys 4 to 7.
-    /// - A known key outside `ApiKeys.forwardable` is `INVALID_REQUEST`, and
-    ///   the forwardable test runs before the body is read.
-    /// - A forwardable key whose body does not decode is
-    ///   `UNSUPPORTED_VERSION`, since `parseForwardedRequest` rewraps the
-    ///   `InvalidRequestException` of `RequestContext.parseRequest`.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/envelope.feature",
-        name = "tests: an embedded request kafka would refuse gets the code kafka gives"
-    )]
-    fn an_embedded_request_kafka_would_refuse_gets_the_code_kafka_gives() {}
 
     /// `response_data` is the embedded response header followed by the
     /// handler's body, and the header is v1 exactly when the embedded body is

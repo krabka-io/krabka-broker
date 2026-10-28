@@ -24,332 +24,343 @@ use {
     },
     assert2::{assert, check},
     krabka_broker::BrokerHandle,
+    krabka_metadata::{MetadataRecord, NodeId, PartitionRecord},
+    krabka_protocol::owned::list_partition_reassignments_response::OngoingTopicReassignment,
     std::{
         collections::HashSet,
         fs,
+        net::SocketAddr,
         sync::OnceLock,
         time::{Duration, Instant},
     },
+    tempfile::TempDir,
     tokio::{
         sync::{Mutex, MutexGuard},
         time,
     },
 };
 
-async fn shutdown_three(h1: BrokerHandle, h2: BrokerHandle, h3: BrokerHandle) {
-    h1.shutdown().await;
-    h2.shutdown().await;
-    h3.shutdown().await;
+#[derive(Default)]
+struct ReassignmentBehavior {
+    guard: Option<MutexGuard<'static, ()>>,
+    brokers: Vec<Option<BrokerHandle>>,
+    directories: Vec<TempDir>,
+    extra_directories: Vec<TempDir>,
+    topic: String,
+    original: Vec<NodeId>,
+    staying: i32,
+    removing: i32,
+    new_replica: i32,
+    controller: Option<SocketAddr>,
+    altered: Vec<(String, Vec<(i32, i16)>)>,
+    listed: Vec<OngoingTopicReassignment>,
+    partition: Option<PartitionRecord>,
+    preference_code: Option<i16>,
 }
 
-// Each scenario retains its own static mutex while its broker cluster is alive.
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "partition reassignment reassign lifecycle: preplacement log dir preference survives until reassignment materializes the replica"
+#[rstest::fixture]
+fn reassignment() -> ReassignmentBehavior {
+    // The replica target and original assignment remain explicit across each operation.
+    ReassignmentBehavior::default()
+}
+
+impl ReassignmentBehavior {
+    fn install(&mut self, cluster: ThreeBrokerCluster) {
+        let ThreeBrokerCluster {
+            h1,
+            h2,
+            h3,
+            d1,
+            d2,
+            d3,
+            ..
+        } = cluster;
+        self.brokers = vec![Some(h1), Some(h2), Some(h3)];
+        self.directories = vec![d1, d2, d3];
+    }
+
+    fn broker(&self, index: usize) -> &BrokerHandle {
+        self.brokers[index]
+            .as_ref()
+            .expect("live reassignment broker")
+    }
+
+    fn handles(&self) -> Vec<&BrokerHandle> { self.brokers.iter().flatten().collect() }
+
+    fn observer(&self) -> &BrokerHandle {
+        self.brokers
+            .iter()
+            .flatten()
+            .find(|broker| {
+                self.original
+                    .iter()
+                    .any(|replica| replica.0 == broker.node_id())
+            })
+            .expect("live original replica")
+    }
+
+    fn target_index(&self) -> usize {
+        usize::try_from(self.new_replica - 1).expect("positive broker id")
+    }
+
+    fn target(&self) -> Vec<i32> { vec![self.staying, self.new_replica] }
+
+    fn select_target(&mut self) {
+        self.original = self
+            .broker(0)
+            .partition_record_for_test(&self.topic, 0)
+            .expect("partition")
+            .replicas;
+        assert!(self.original.len() == 2);
+        self.new_replica = (1..=3)
+            .find(|id| !self.original.contains(&node_id(*id)))
+            .expect("unassigned broker");
+        self.staying = broker_id(self.original[0]);
+        self.removing = broker_id(*self.original.last().expect("RF2 replicas"));
+    }
+
+    async fn shutdown(self) {
+        let Self {
+            guard,
+            brokers,
+            directories,
+            extra_directories,
+            ..
+        } = self;
+        for broker in brokers.into_iter().flatten() {
+            broker.shutdown().await;
+        }
+        drop((directories, extra_directories));
+        drop(guard);
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "three plaintext brokers host RF2 foo partition 0 and the replacement keeps the first replica while adding the unassigned broker"
 )]
-async fn bdd_verify_preplacement_log_dir_preference_survives_until_reassignment_materializes_the_replica()
- {
-    let extras = [
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-    ];
-    let paths = extras.each_ref().map(|dir| dir.path().to_path_buf());
-    let ThreeBrokerCluster {
-        h1,
-        h2,
-        h3,
-        d1: _d1,
-        d2: _d2,
-        d3: _d3,
-        addr1: addr,
-    } = start_three_broker_plaintext_cluster_with_log_dirs(&paths).await;
+async fn foo_reassignment_cluster(reassignment: &mut ReassignmentBehavior) {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    reassignment.guard = Some(lazy_mutex(&LOCK).lock().await);
+    reassignment.topic = "foo".into();
+    reassignment.install(foo_cluster().await);
+    reassignment.select_target();
+}
+
+#[rstest_bdd_macros::given(
+    "three plaintext brokers each have an extra log directory and RF2 preplaced partition 0 leaves one broker unassigned"
+)]
+async fn preplaced_reassignment_cluster(reassignment: &mut ReassignmentBehavior) {
+    reassignment.topic = "preplaced".into();
+    reassignment.extra_directories = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let paths = [0, 1, 2].map(|index| reassignment.extra_directories[index].path().to_path_buf());
+    reassignment.install(start_three_broker_plaintext_cluster_with_log_dirs(&paths).await);
     create_automatic_topic_plaintext()
-        .addr(addr)
+        .addr(reassignment.broker(0).listen_addr())
         .client_id(CLIENT_ID)
         .topic(ConfiguredTopicSetup {
-            name: "preplaced".into(),
+            name: reassignment.topic.clone(),
             replicas: TopicReplicationFactor(2),
             ..Default::default()
         })
         .call()
         .await;
-    wait_partition_exists(&h1, "preplaced", 0).await;
-
-    let partition = h1
-        .partition_record_for_test("preplaced", 0)
-        .expect("partition");
-    let new_replica = (1..=3)
-        .find(|id| !partition.replicas.contains(&node_id(*id)))
-        .expect("unassigned broker");
-    let target_idx = usize::try_from(new_replica - 1).unwrap();
-    let handles = [&h1, &h2, &h3];
-    let target_addr = handles[target_idx].listen_addr();
-    let target_dir = extras[target_idx].path();
-    // The preference is keyed by topic ID from the target broker's metadata.
-    wait_partition_exists(handles[target_idx], "preplaced", 0).await;
-
-    let preference = alter_replica_log_dirs(target_addr, target_dir, "preplaced", vec![0]).await;
-    assert!(preference.results[0].partitions[0].error_code == 9);
-
-    let staying = broker_id(partition.replicas[0]);
-    let raft_addr = controller_leader_addr(&handles).await;
-    let response = drive_alter_reassignments(raft_addr, vec![(
-        "preplaced",
+    wait_partition_exists(reassignment.broker(0), &reassignment.topic, 0).await;
+    reassignment.select_target();
+    wait_partition_exists(
+        reassignment.broker(reassignment.target_index()),
+        &reassignment.topic,
         0,
-        Some(vec![staying, new_replica]),
+    )
+    .await;
+}
+
+#[rstest_bdd_macros::when(
+    "AlterReplicaLogDirs prefers the unassigned broker's extra directory for preplaced partition 0"
+)]
+async fn prefer_preplaced_replica_directory(reassignment: &mut ReassignmentBehavior) {
+    let response = alter_replica_log_dirs(
+        reassignment
+            .broker(reassignment.target_index())
+            .listen_addr(),
+        reassignment.extra_directories[reassignment.target_index()].path(),
+        &reassignment.topic,
+        vec![0],
+    )
+    .await;
+    reassignment.preference_code = Some(response.results[0].partitions[0].error_code);
+}
+
+#[rstest_bdd_macros::then(
+    "the preference returns REPLICA_NOT_AVAILABLE code 9 before the replica exists"
+)]
+fn unmaterialized_preplaced_replica(reassignment: &ReassignmentBehavior) {
+    assert!(reassignment.preference_code == Some(9));
+}
+
+#[rstest_bdd_macros::when(
+    "AlterPartitionReassignments targets the staying and new replicas through the active controller"
+)]
+async fn start_replica_reassignment(reassignment: &mut ReassignmentBehavior) {
+    let address = if let Some(address) = reassignment.controller {
+        address
+    } else {
+        controller_leader_addr(&reassignment.handles()).await
+    };
+    reassignment.controller = Some(address);
+    reassignment.altered = drive_alter_reassignments(address, vec![(
+        &reassignment.topic,
+        0,
+        Some(reassignment.target()),
     )])
     .await;
-    assert!(response[0].1 == vec![(0, 0)]);
-
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        let described = describe_log_dirs(target_addr).await;
-        let materialized = described.results.iter().any(|result| {
-            fs::canonicalize(&result.log_dir).ok().as_deref()
-                == fs::canonicalize(target_dir).ok().as_deref()
-                && result.topics.iter().any(|topic| {
-                    topic.name == "preplaced"
-                        && topic.partitions.iter().any(|partition| {
-                            partition.partition_index == 0 && !partition.is_future_key
-                        })
-                })
-        });
-        if materialized {
-            break;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "replica was not materialized in the preferred log dir"
-        );
-        time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(target_dir.join("preplaced-0").is_dir());
-
-    shutdown_three(h1, h2, h3).await;
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/partition_reassignment/reassign_lifecycle.feature",
-    name = "preplacement log dir preference survives until reassignment materializes the replica"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn preplacement_log_dir_preference_survives_until_reassignment_materializes_the_replica() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "partition reassignment reassign lifecycle: alter then complete via isr catchup"
-)]
-async fn bdd_verify_alter_then_complete_via_isr_catchup() {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let CaseCluster { guard: _g, cluster } = case_cluster(&LOCK).await;
-
-    let ThreeBrokerCluster {
-        h1,
-        h2,
-        h3,
-        d1: _d1,
-        d2: _d2,
-        d3: _d3,
-        ..
-    } = cluster;
-
-    // Find which brokers are in `replicas` initially — choose target accordingly.
-    let pr = h1.partition_record_for_test("foo", 0).expect("partition");
-    let initial_replicas = pr.replicas.clone();
-    assert!(initial_replicas.len() == 2);
-    // Pick the third broker (not in initial_replicas) as the new replica.
-    let new_replica: i32 = (1..=3)
-        .find(|n| !initial_replicas.contains(&node_id(*n)))
-        .expect("free broker");
-    let removing = broker_id(*initial_replicas.last().unwrap());
-    let staying = broker_id(*initial_replicas.first().unwrap());
-    let target = vec![staying, new_replica];
-
-    // Send alter to controller leader (whichever broker leads raft).
-    let raft_addr = controller_leader_addr(&[&h1, &h2, &h3]).await;
-    let resp = drive_alter_reassignments(raft_addr, vec![("foo", 0, Some(target.clone()))]).await;
+#[rstest_bdd_macros::then("the partition reassignment response is exactly partition 0 error 0")]
+fn accepted_replica_reassignment(reassignment: &ReassignmentBehavior) {
     assert!(
-        resp[0].1 == vec![(0, 0)],
+        reassignment.altered[0].1 == vec![(0, 0)],
         "expected error_code=0; got {:?}",
-        resp
+        reassignment.altered
     );
+}
 
-    // Wait for the image to reflect the in-flight reassignment.
-    h1.wait_for_image(|img| {
-        img.partition("foo", 0)
-            .is_some_and(|p| !p.adding_replicas.is_empty())
-    })
-    .await;
-    let pr_after_alter = h1.partition_record_for_test("foo", 0).expect("partition");
+#[rstest_bdd_macros::then(
+    "the assignment is in flight with the new broker adding and the original last broker removing"
+)]
+async fn in_flight_replica_reassignment(reassignment: &mut ReassignmentBehavior) {
+    reassignment
+        .observer()
+        .wait_for_image(|image| {
+            image
+                .partition(&reassignment.topic, 0)
+                .is_some_and(|partition| !partition.adding_replicas.is_empty())
+        })
+        .await;
+    reassignment.partition = Some(
+        reassignment
+            .observer()
+            .partition_record_for_test(&reassignment.topic, 0)
+            .expect("partition"),
+    );
+    let partition = reassignment
+        .partition
+        .as_ref()
+        .expect("in-flight partition");
     assert!(
-        pr_after_alter
+        partition
             .adding_replicas
-            .contains(&node_id(new_replica)),
-        "adding_replicas should contain new_replica; pr={pr_after_alter:?}"
+            .contains(&node_id(reassignment.new_replica)),
+        "adding_replicas should contain new_replica; pr={partition:?}"
     );
     assert!(
-        pr_after_alter
+        partition
             .removing_replicas
-            .contains(&node_id(removing)),
-        "removing_replicas should contain removing; pr={pr_after_alter:?}"
+            .contains(&node_id(reassignment.removing)),
+        "removing_replicas should contain removing; pr={partition:?}"
     );
+}
 
-    // Inject ISR including the new replica so the background task completes the reassignment.
-    let injected = krabka_metadata::PartitionRecord {
-        isr: vec![node_id(staying), node_id(new_replica), node_id(removing)],
-        ..pr_after_alter.clone()
+#[rstest_bdd_macros::when("the ISR includes the staying, new and removing replicas")]
+async fn catch_up_reassigned_replica(reassignment: &ReassignmentBehavior) {
+    let injected = PartitionRecord {
+        isr: vec![
+            node_id(reassignment.staying),
+            node_id(reassignment.new_replica),
+            node_id(reassignment.removing),
+        ],
+        ..reassignment
+            .partition
+            .as_ref()
+            .expect("in-flight partition")
+            .clone()
     };
-    h1.submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(injected))
+    reassignment
+        .observer()
+        .submit_metadata_record_for_test(MetadataRecord::V1Partition(injected))
         .await
         .expect("inject");
-
-    // The background task should observe adding ⊆ isr and complete, clearing
-    // adding_replicas and removing_replicas.
-    h1.wait_for_image(|img| {
-        img.partition("foo", 0)
-            .is_some_and(|p| p.adding_replicas.is_empty() && p.removing_replicas.is_empty())
-    })
-    .await;
-    let pr = h1.partition_record_for_test("foo", 0).expect("partition");
-    let actual: HashSet<u64> = pr.replicas.iter().map(|n| n.0).collect();
-    let expected: HashSet<u64> = target.iter().map(|n| node_id(*n).0).collect();
-    assert!(
-        actual == expected,
-        "replicas after completion should match target; pr={pr:?}"
-    );
-    // Clean up.
-    shutdown_three(h1, h2, h3).await;
 }
 
-/// Test 1: send `AlterPartitionReassignments`, then inject an ISR that
-/// includes the new replica. The background task sees that the adding set is
-/// inside the ISR, completes the reassignment, and clears `adding_replicas`
-/// and `removing_replicas`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/partition_reassignment/reassign_lifecycle.feature",
-    name = "alter then complete via isr catchup"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn alter_then_complete_via_isr_catchup() {}
-
-#[cfg(test)]
 #[rstest_bdd_macros::then(
-    "partition reassignment reassign lifecycle: list in flight returns pending rows"
+    "completion clears adding and removing replicas and leaves exactly the target replica set"
 )]
-async fn bdd_verify_list_in_flight_returns_pending_rows() {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let CaseCluster { guard: _g, cluster } = case_cluster(&LOCK).await;
+async fn completed_replica_reassignment(reassignment: &ReassignmentBehavior) {
+    reassignment
+        .observer()
+        .wait_for_image(|image| {
+            image
+                .partition(&reassignment.topic, 0)
+                .is_some_and(|partition| {
+                    partition.adding_replicas.is_empty() && partition.removing_replicas.is_empty()
+                })
+        })
+        .await;
+    let partition = reassignment
+        .observer()
+        .partition_record_for_test(&reassignment.topic, 0)
+        .expect("partition");
+    let actual: HashSet<u64> = partition.replicas.iter().map(|node| node.0).collect();
+    let expected: HashSet<u64> = reassignment
+        .target()
+        .into_iter()
+        .map(|node| node_id(node).0)
+        .collect();
+    assert!(
+        actual == expected,
+        "replicas after completion should match target; pr={partition:?}"
+    );
+}
 
-    let h1 = cluster.h1;
-    let (h2, h3) = (cluster.h2, cluster.h3);
+#[rstest_bdd_macros::when("ListPartitionReassignments requests every in-flight partition")]
+async fn list_replica_reassignment(reassignment: &mut ReassignmentBehavior) {
+    reassignment.listed =
+        drive_list_reassignments(reassignment.controller.expect("active controller"), None).await;
+}
 
-    let pr = h1.partition_record_for_test("foo", 0).expect("partition");
-    let new_replica: i32 = (1..=3)
-        .find(|n| !pr.replicas.contains(&node_id(*n)))
-        .expect("free");
-    let staying = broker_id(*pr.replicas.first().unwrap());
-    let target = vec![staying, new_replica];
-
-    let raft_addr = controller_leader_addr(&[&h1, &h2, &h3]).await;
-    drive_alter_reassignments(raft_addr, vec![("foo", 0, Some(target))]).await;
-
-    // Wait for the image to reflect adding_replicas, then list.
-    h1.wait_for_image(|img| {
-        img.partition("foo", 0)
-            .is_some_and(|p| !p.adding_replicas.is_empty())
-    })
-    .await;
-
-    let listed = drive_list_reassignments(raft_addr, None).await;
-    let foo = listed
+#[rstest_bdd_macros::then(
+    "foo has one pending row for partition 0 whose adding replicas contain exactly the new broker"
+)]
+fn listed_replica_reassignment(reassignment: &ReassignmentBehavior) {
+    let topic = reassignment
+        .listed
         .iter()
         .find(|topic| topic.name == "foo")
         .expect("foo should appear in list");
     assert!(
-        foo.partitions.len() == 1,
+        topic.partitions.len() == 1,
         "expected 1 partition in-flight; got {:?}",
-        foo.partitions
+        topic.partitions
     );
     check!(
-        foo.partitions[0].partition_index == 0,
+        topic.partitions[0].partition_index == 0,
         "expected partition_index=0"
     );
     check!(
-        foo.partitions[0].adding_replicas == vec![new_replica],
+        topic.partitions[0].adding_replicas == vec![reassignment.new_replica],
         "expected adding_replicas=[new_replica]; got {:?}",
-        foo.partitions[0].adding_replicas
+        topic.partitions[0].adding_replicas
     );
-
-    // Clean up.
-    shutdown_three(h1, h2, h3).await;
 }
 
-/// Test 2: after `AlterPartitionReassignments` starts a reassignment, the
-/// `ListPartitionReassignments` handler must return the in-flight rows.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/partition_reassignment/reassign_lifecycle.feature",
-    name = "list in flight returns pending rows"
+#[rstest_bdd_macros::when(
+    "the registered new replica shuts down before joining ISR and a surviving controller is elected"
 )]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn list_in_flight_returns_pending_rows() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "partition reassignment reassign lifecycle: cancel via null replicas reverts"
-)]
-async fn bdd_verify_cancel_via_null_replicas_reverts() {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let CaseCluster {
-        guard: _lock,
-        cluster,
-    } = case_cluster(&LOCK).await;
-    let (h1, h2, h3) = (cluster.h1, cluster.h2, cluster.h3);
-
-    let pr = h1.partition_record_for_test("foo", 0).expect("partition");
-    let original_replicas = pr.replicas.clone();
-    let new_replica: i32 = (1..=3)
-        .find(|n| !original_replicas.contains(&node_id(*n)))
-        .expect("free");
-    let new_replica_id = u64::try_from(new_replica).expect("broker ID is non-negative");
-    let staying = broker_id(*original_replicas.first().unwrap());
-    let target = vec![staying, new_replica];
-
-    // Stop the target broker after registration. It remains a valid target in
-    // metadata, but cannot join the ISR and let the background task complete
-    // the reassignment before this test cancels it.
-    let mut handles = [Some(h1), Some(h2), Some(h3)];
-    let offline = handles
-        .iter_mut()
-        .find(|handle| {
-            handle
-                .as_ref()
-                .is_some_and(|handle| handle.node_id() == new_replica_id)
-        })
-        .and_then(Option::take)
-        .expect("new replica handle");
-    offline.shutdown().await;
-
-    let observer = handles
-        .iter()
-        .flatten()
-        .find(|handle| {
-            original_replicas
-                .iter()
-                .any(|replica| replica.0 == handle.node_id())
-        })
-        .expect("live original replica");
-    let mut leader_rx = observer.watch_leader_for_test();
+async fn stop_reassignment_target(reassignment: &mut ReassignmentBehavior) {
+    let index = reassignment.target_index();
+    reassignment.brokers[index]
+        .take()
+        .expect("new replica handle")
+        .shutdown()
+        .await;
+    let mut leader_rx = reassignment.observer().watch_leader_for_test();
     let leader = time::timeout(Duration::from_secs(30), async {
         loop {
             if let Some(leader) = *leader_rx.borrow_and_update()
-                && handles
+                && reassignment
+                    .brokers
                     .iter()
                     .flatten()
-                    .any(|handle| handle.node_id() == leader.0)
+                    .any(|broker| broker.node_id() == leader.0)
             {
                 return leader;
             }
@@ -361,62 +372,85 @@ async fn bdd_verify_cancel_via_null_replicas_reverts() {
     })
     .await
     .expect("surviving controller leader");
-    let raft_addr = handles
-        .iter()
-        .flatten()
-        .find(|handle| handle.node_id() == leader.0)
-        .expect("leader handle")
-        .listen_addr();
-    drive_alter_reassignments(raft_addr, vec![("foo", 0, Some(target))]).await;
-
-    observer
-        .wait_for_image(|img| {
-            img.partition("foo", 0)
-                .is_some_and(|p| !p.adding_replicas.is_empty())
-        })
-        .await;
-
-    // Cancel: replicas = None.
-    let resp = drive_alter_reassignments(raft_addr, vec![("foo", 0, None)]).await;
-    assert!(
-        resp[0].1 == vec![(0, 0)],
-        "cancel should succeed; got {:?}",
-        resp
+    reassignment.controller = Some(
+        reassignment
+            .brokers
+            .iter()
+            .flatten()
+            .find(|broker| broker.node_id() == leader.0)
+            .expect("leader handle")
+            .listen_addr(),
     );
-
-    // Wait for the image to reflect the cancellation.
-    observer
-        .wait_for_image(|img| {
-            img.partition("foo", 0).is_some_and(|p| {
-                p.replicas == original_replicas
-                    && p.adding_replicas.is_empty()
-                    && p.removing_replicas.is_empty()
-            })
-        })
-        .await;
-    let pr_after_cancel = observer
-        .partition_record_for_test("foo", 0)
-        .expect("partition");
-    assert!(
-        pr_after_cancel.replicas == original_replicas,
-        "replicas should revert to original after cancel; pr={pr_after_cancel:?}"
-    );
-    // Clean up.
-    for handle in handles.into_iter().flatten() {
-        handle.shutdown().await;
-    }
 }
 
-/// Test 3: cancel an in-flight reassignment with `target=None`, that is null
-/// replicas. The partition record must return to the original replica set,
-/// with empty `adding_replicas` and `removing_replicas`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/partition_reassignment/reassign_lifecycle.feature",
-    name = "cancel via null replicas reverts"
+#[rstest_bdd_macros::when("AlterPartitionReassignments cancels partition 0 with null replicas")]
+async fn cancel_replica_reassignment(reassignment: &mut ReassignmentBehavior) {
+    reassignment.altered = drive_alter_reassignments(
+        reassignment.controller.expect("surviving controller"),
+        vec![(&reassignment.topic, 0, None)],
+    )
+    .await;
+}
+
+#[rstest_bdd_macros::then(
+    "cancellation restores the original ordered replica set and clears adding and removing replicas"
 )]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cancel_via_null_replicas_reverts() {}
+async fn cancelled_replica_reassignment(reassignment: &ReassignmentBehavior) {
+    reassignment
+        .observer()
+        .wait_for_image(|image| {
+            image
+                .partition(&reassignment.topic, 0)
+                .is_some_and(|partition| {
+                    partition.replicas == reassignment.original
+                        && partition.adding_replicas.is_empty()
+                        && partition.removing_replicas.is_empty()
+                })
+        })
+        .await;
+    let partition = reassignment
+        .observer()
+        .partition_record_for_test(&reassignment.topic, 0)
+        .expect("partition");
+    assert!(
+        partition.replicas == reassignment.original,
+        "replicas should revert to original after cancel; pr={partition:?}"
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the new replica materializes as a non-future partition in its preferred extra directory within sixty seconds"
+)]
+async fn materialized_preplaced_replica(reassignment: &ReassignmentBehavior) {
+    let target_dir = reassignment.extra_directories[reassignment.target_index()].path();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let described = describe_log_dirs(
+            reassignment
+                .broker(reassignment.target_index())
+                .listen_addr(),
+        )
+        .await;
+        if described.results.iter().any(|result| {
+            fs::canonicalize(&result.log_dir).ok().as_deref()
+                == fs::canonicalize(target_dir).ok().as_deref()
+                && result.topics.iter().any(|topic| {
+                    topic.name == "preplaced"
+                        && topic.partitions.iter().any(|partition| {
+                            partition.partition_index == 0 && !partition.is_future_key
+                        })
+                })
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "replica was not materialized in the preferred log dir"
+        );
+        time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(target_dir.join("preplaced-0").is_dir());
+}
 
 async fn foo_cluster() -> ThreeBrokerCluster {
     let cluster = start_three_broker_plaintext_cluster().await;
@@ -434,13 +468,40 @@ async fn foo_cluster() -> ThreeBrokerCluster {
     cluster
 }
 
-struct CaseCluster {
-    guard: MutexGuard<'static, ()>,
-    cluster: ThreeBrokerCluster,
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/partition_reassignment/reassign_lifecycle.feature",
+    name = "preplacement log dir preference survives until reassignment materializes the replica"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn preplacement_log_dir_preference_survives_until_reassignment_materializes_the_replica(
+    reassignment: ReassignmentBehavior,
+) {
+    reassignment.shutdown().await;
 }
 
-async fn case_cluster(lock: &'static OnceLock<Mutex<()>>) -> CaseCluster {
-    let guard = lazy_mutex(lock).lock().await;
-    let cluster = foo_cluster().await;
-    CaseCluster { guard, cluster }
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/partition_reassignment/reassign_lifecycle.feature",
+    name = "alter then complete via isr catchup"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn alter_then_complete_via_isr_catchup(reassignment: ReassignmentBehavior) {
+    reassignment.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/partition_reassignment/reassign_lifecycle.feature",
+    name = "list in flight returns pending rows"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn list_in_flight_returns_pending_rows(reassignment: ReassignmentBehavior) {
+    reassignment.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/partition_reassignment/reassign_lifecycle.feature",
+    name = "cancel via null replicas reverts"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_via_null_replicas_reverts(reassignment: ReassignmentBehavior) {
+    reassignment.shutdown().await;
 }

@@ -159,43 +159,6 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified share persistence partition metadata tests: state partition metadata bytes match kafka schema"
-    )]
-    fn bdd_verify_state_partition_metadata_bytes_match_kafka_schema() {
-        let v = ShareGroupStatePartitionMetadataValue {
-            initializing: vec![],
-            initialized: vec![initialized(1, "orders", vec![0])],
-            deleting: vec![deleting(9, "carts")],
-        };
-        let want = wire_bytes(&[
-            "0000",
-            "01", // empty InitializingTopics
-            "02", // one InitializedTopics entry
-            "01010101010101010101010101010101",
-            "07", // TopicName "orders"
-            "6f7264657273",
-            "02", // one partition
-            "00000000",
-            "00", // TopicPartitionsInfo tagged fields
-            "02", // one DeletingTopics entry
-            "09090909090909090909090909090909",
-            "06", // TopicName "carts"
-            "6361727473",
-            "00", // TopicInfo tagged fields
-            "00", // message tagged fields
-        ]);
-        assert!(&v.encode()[..] == &want[..]);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/share/persistence/partition_metadata.feature",
-        name = "tests: state partition metadata bytes match kafka schema"
-    )]
-    fn state_partition_metadata_bytes_match_kafka_schema() {}
-
     #[test]
     fn state_partition_metadata_round_trip() {
         let key = ShareGroupKey::StatePartitionMetadata {
@@ -257,5 +220,61 @@ mod tests {
     fn state_partition_metadata_rejects_a_missing_tagged_trailer() {
         let full = ShareGroupStatePartitionMetadataValue::default().encode();
         assert!(ShareGroupStatePartitionMetadataValue::decode(&full[..full.len() - 1]).is_err());
+    }
+    mod bdd_state_partition_metadata {
+        use {
+            super::*,
+            crate::coordinator::unified::codec_observations::KafkaDecodedRecord,
+            rstest_bdd_macros::{given, scenarios, then, when},
+        };
+        type RecordCompatibility =
+            KafkaDecodedRecord<ShareGroupStatePartitionMetadataValue, BrokerError>;
+        #[rstest::fixture]
+        fn record() -> RecordCompatibility {
+            // Start this scenario with fresh inputs and observations.
+            RecordCompatibility::default()
+        }
+        #[given("a Share group has initialized orders partition 0 and is deleting carts")]
+        fn native_record(record: &mut RecordCompatibility) {
+            let v = ShareGroupStatePartitionMetadataValue {
+                initializing: vec![],
+                initialized: vec![initialized(1, "orders", vec![0])],
+                deleting: vec![deleting(9, "carts")],
+            };
+
+            let want = wire_bytes(&[
+                "0000",
+                "01", // empty InitializingTopics
+                "02", // one InitializedTopics entry
+                "01010101010101010101010101010101",
+                "07", // TopicName "orders"
+                "6f7264657273",
+                "02", // one partition
+                "00000000",
+                "00", // TopicPartitionsInfo tagged fields
+                "02", // one DeletingTopics entry
+                "09090909090909090909090909090909",
+                "06", // TopicName "carts"
+                "6361727473",
+                "00", // TopicInfo tagged fields
+                "00", // message tagged fields
+            ]);
+
+            record.value = Some(v);
+            record.golden = want;
+        }
+        #[when("the coordinator persists and reads this state_partition_metadata record")]
+        fn record_codec(record: &mut RecordCompatibility) {
+            record.encoded = Some(record.value.as_ref().expect("record prepared").encode());
+            record.decoded = Some(ShareGroupStatePartitionMetadataValue::decode(
+                record.encoded.as_ref().expect("record encoded"),
+            ));
+        }
+        #[then(
+            "the state_partition_metadata bytes match Kafka exactly and decoding recovers all original record fields"
+        )]
+        fn complete_record_layout(record: &RecordCompatibility) { record.assert_compatible(); }
+
+        scenarios!("tests/features/migrated/src/coordinator/unified/share/persistence/partition_metadata.feature",tags="@state_partition_metadata",fixtures=[record:RecordCompatibility]);
     }
 }

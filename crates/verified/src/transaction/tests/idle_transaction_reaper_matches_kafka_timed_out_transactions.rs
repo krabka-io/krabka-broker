@@ -1,240 +1,217 @@
-#[cfg(test)]
-use std::vec;
-use {super::*, assert2::assert};
+use {
+    super::*,
+    assert2::assert,
+    rstest::fixture,
+    rstest_bdd::Slot,
+    rstest_bdd_macros::{given, scenarios, then, when},
+    std::vec,
+};
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transaction tests idle transaction reaper matches kafka timed out transactions: idle transaction reaper matches kafka timed out transactions"
-)]
-fn bdd_verify_idle_transaction_reaper_matches_kafka_timed_out_transactions() {
-    use IdleTransactionState::{Ongoing, Other};
+#[derive(Default)]
+struct CoordinatorDecisions {
+    idle: Option<(IdleTransactionState, i32, i64)>,
+    abort_idle: Option<bool>,
+    allocation: Option<(bool, bool, i64, i16, Option<i64>)>,
+    next_identity: Slot<Option<(i64, i16)>>,
+    initialization: Option<(i64, i16, i16, i64)>,
+    initialized: Option<InitProducerIdIdentityDecision>,
+    completion: Option<(
+        TransactionSnapshot,
+        TransactionIdentity,
+        TransactionIdentity,
+    )>,
+    completed: Option<TransactionCompletionDecision>,
+}
 
-    // (state, timeout, start, now, expected).
-    let cases = [
-        // `txnStartTimestamp + txnTimeoutMs < now` is strict.
-        (Ongoing, 60_000, 0, 60_001, true),
-        (Ongoing, 60_000, 0, 60_000, false),
-        (Ongoing, 60_000, 0, 59_999, false),
-        (Ongoing, 1, 10, 11, false),
-        (Ongoing, 1, 10, 12, true),
-        // Only an ONGOING transaction times out.
-        (Other, 1, 0, i64::MAX, false),
-        // KIP-939: a two-phase-commit transaction never times out.
-        (Ongoing, NO_TRANSACTION_TIMEOUT_MS, 0, i64::MAX, false),
-        (
-            Ongoing,
-            NO_TRANSACTION_TIMEOUT_MS,
-            i64::MIN,
-            i64::MAX,
-            false,
-        ),
-        // A backwards clock never aborts a nonnegative timeout.
-        (Ongoing, 60_000, 100_000, 0, false),
-        (Ongoing, 0, 10, 9, false),
-        (Ongoing, 0, 10, 10, false),
-        (Ongoing, 0, i64::MAX, i64::MIN, false),
-        // A zero timeout expires one millisecond after the start.
-        (Ongoing, 0, 10, 11, true),
-        // A negative timeout from a foreign log record is arithmetic too.
-        (Ongoing, -5, 10, 6, true),
-        (Ongoing, -5, 10, 5, false),
-        // The elapsed time does not wrap at the `i64` edges.
-        (Ongoing, 60_000, i64::MIN, i64::MAX, true),
-        (Ongoing, i32::MAX - 1, i64::MAX, i64::MIN, false),
-    ];
-    for (state, timeout, start, now, expected) in cases {
-        assert!(
-            should_abort_idle_transaction(state, timeout, start, now) == expected,
-            "state={state:?}, timeout={timeout}, start={start}, now={now}"
-        );
+#[fixture]
+fn coordinator() -> CoordinatorDecisions {
+    // Start this scenario with fresh inputs and observations.
+
+    CoordinatorDecisions {
+        idle: None,
+        ..CoordinatorDecisions::default()
     }
 }
 
-/// Kafka `TransactionStateManager.timedOutTransactions`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature",
-    name = "idle transaction reaper matches kafka timed out transactions"
-)]
-fn idle_transaction_reaper_matches_kafka_timed_out_transactions() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transaction tests idle transaction reaper matches kafka timed out transactions: producer identity boundary table"
-)]
-fn bdd_verify_producer_identity_boundary_table() {
-    let cases = [
-        (false, false, i16::MAX, None, Some((7, i16::MAX))),
-        (false, true, i16::MAX, Some(11), Some((7, i16::MAX))),
-        (true, false, i16::MAX - 2, None, Some((7, i16::MAX - 1))),
-        (true, false, i16::MAX - 1, None, None),
-        (true, false, i16::MAX - 1, Some(11), Some((11, 0))),
-        (true, true, i16::MAX - 1, None, Some((7, i16::MAX))),
-        (true, true, i16::MAX, None, None),
-        (true, true, i16::MAX, Some(11), Some((11, 0))),
-    ];
-    for (verified, recovery, epoch, fresh, expected) in cases {
-        assert!(
-            next_producer_identity(verified, recovery, 7, epoch, fresh) == expected,
-            "verified={verified}, recovery={recovery}, epoch={epoch}, fresh={fresh:?}"
-        );
-    }
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature",
-    name = "producer identity boundary table"
-)]
-fn producer_identity_boundary_table() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transaction tests idle transaction reaper matches kafka timed out transactions: init producer id identity bumps retries or fences"
-)]
-fn bdd_verify_init_producer_id_identity_bumps_retries_or_fences() {
-    use InitProducerIdIdentityDecision::{Bump, BumpWithoutIdentity, Fenced, Retry};
-
-    // (entry pid, entry epoch, last epoch, prev pid, request pid,
-    //  request epoch, expected).
-    let cases = [
-        (
-            7_i64,
-            4_i16,
-            -1_i16,
-            -1_i64,
-            -1_i64,
-            -1_i16,
-            BumpWithoutIdentity,
-        ),
-        (7, 4, -1, -1, -1, 4, BumpWithoutIdentity),
-        (7, 4, -1, -1, 7, 4, Bump),
-        (7, 5, 4, -1, 7, 4, Retry),
-        (7, 5, 4, -1, 7, 3, Fenced),
-        (7, 4, -1, -1, 7, 5, Fenced),
-        (7, 4, -1, -1, 9, 4, Fenced),
-        // A producer id rotated at the epoch ceiling: the old id retries
-        // with its exhausted epoch and gets the rotated identity back.
-        (
-            11,
-            0,
-            EXHAUSTED_PRODUCER_EPOCH,
-            7,
-            7,
-            EXHAUSTED_PRODUCER_EPOCH,
-            Retry,
-        ),
-        (11, 0, EXHAUSTED_PRODUCER_EPOCH, 7, 7, i16::MAX, Fenced),
-        (11, 0, EXHAUSTED_PRODUCER_EPOCH, 7, 7, 5, Fenced),
-        (11, 0, -1, 7, 7, EXHAUSTED_PRODUCER_EPOCH, Fenced),
-    ];
-    for (entry_pid, entry_epoch, last_epoch, prev_pid, pid, epoch, expected) in cases {
-        assert!(
-            init_producer_id_identity_decision(
-                entry_pid,
-                entry_epoch,
-                last_epoch,
-                prev_pid,
-                pid,
-                epoch,
-            ) == expected,
-            "entry=({entry_pid}, {entry_epoch}), last={last_epoch}, \
-             prev={prev_pid}, request=({pid}, {epoch})"
-        );
-    }
-}
-
-#[cfg(test)]
-/// Kafka `isValidProducerId` and `prepareIncrementProducerEpoch`.
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature",
-    name = "init producer id identity bumps retries or fences"
-)]
-fn init_producer_id_identity_bumps_retries_or_fences() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transaction tests idle transaction reaper matches kafka timed out transactions: completion requires the prepared identity and state for {example}"
-)]
-fn bdd_verify_completion_requires_the_prepared_identity_and_state(example: String) {
-    type Example = (i16, i8, TransactionCompletionDecision);
-    let (epoch, state, expected): Example = match example.as_str() {
-        "proceeds" => (3, PREPARE_COMMIT, TransactionCompletionDecision::Proceed),
-        "stale identity" => (
-            4,
-            PREPARE_COMMIT,
-            TransactionCompletionDecision::RejectStaleIdentity,
-        ),
-        "wrong state" => (3, ONGOING, TransactionCompletionDecision::RejectState),
-        _ => panic!("unknown BDD example: {example}"),
+#[given("a transaction in state {state} with timeout {timeout} and start time {start} ms")]
+fn idle_transaction(
+    coordinator: &mut CoordinatorDecisions,
+    state: String,
+    timeout: String,
+    start: i64,
+) {
+    let state = match state.as_str() {
+        "ongoing" => IdleTransactionState::Ongoing,
+        "not-ongoing" => IdleTransactionState::Other,
+        _ => panic!("unknown idle transaction state: {state}"),
     };
-
-    assert2::assert!(
-        transaction_completion_decision(
-            TransactionSnapshot {
-                pid: 7,
-                epoch,
-                state
-            },
-            TransactionIdentity { pid: 7, epoch: 3 },
-            TransactionIdentity { pid: 7, epoch: 4 },
-            PREPARE_COMMIT,
-            COMPLETE_COMMIT,
-        ) == expected
-    );
+    let timeout = if timeout == "external-2pc" {
+        NO_TRANSACTION_TIMEOUT_MS
+    } else {
+        timeout
+            .parse()
+            .expect("transaction timeout is a signed millisecond count")
+    };
+    coordinator.idle = Some((state, timeout, start));
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature",
-    name = "completion requires the prepared identity and state"
-)]
-fn completion_requires_the_prepared_identity_and_state(example: String) { let _ = example; }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transaction tests idle transaction reaper matches kafka timed out transactions: only the intended completion is idempotent"
-)]
-fn bdd_verify_only_the_intended_completion_is_idempotent() {
-    use TransactionCompletionDecision::{AlreadyComplete, RejectState};
-
-    assert!(
-        transaction_completion_decision(
-            TransactionSnapshot {
-                pid: 11,
-                epoch: 0,
-                state: COMPLETE_COMMIT,
-            },
-            TransactionIdentity {
-                pid: 7,
-                epoch: i16::MAX,
-            },
-            TransactionIdentity { pid: 11, epoch: 0 },
-            PREPARE_COMMIT,
-            COMPLETE_COMMIT,
-        ) == AlreadyComplete
-    );
-    assert!(
-        transaction_completion_decision(
-            TransactionSnapshot {
-                pid: 7,
-                epoch: i16::MAX,
-                state: COMPLETE_COMMIT,
-            },
-            TransactionIdentity {
-                pid: 7,
-                epoch: i16::MAX,
-            },
-            TransactionIdentity { pid: 11, epoch: 0 },
-            PREPARE_COMMIT,
-            COMPLETE_COMMIT,
-        ) == RejectState
-    );
+#[when("the transaction timeout reaper runs at {now} ms")]
+fn reap_idle_transaction(coordinator: &mut CoordinatorDecisions, now: i64) {
+    let (state, timeout, start) = coordinator.idle.expect("a transaction was given");
+    coordinator.abort_idle = Some(should_abort_idle_transaction(state, timeout, start, now));
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature",
-    name = "only the intended completion is idempotent"
+#[then("the timeout reaper aborts the transaction: {abort}")]
+fn reaped_transaction(coordinator: &CoordinatorDecisions, abort: bool) {
+    assert!(coordinator.abort_idle == Some(abort));
+}
+
+#[given(
+    "producer {pid} at epoch {epoch} has verified identity {verified}, recovery mode {recovery}, and replacement producer ID {fresh}"
 )]
-fn only_the_intended_completion_is_idempotent() {}
+fn existing_identity(
+    coordinator: &mut CoordinatorDecisions,
+    pid: i64,
+    epoch: i16,
+    verified: bool,
+    recovery: bool,
+    fresh: String,
+) {
+    let fresh = if fresh == "none" {
+        None
+    } else {
+        Some(
+            fresh
+                .parse()
+                .expect("replacement producer ID is an integer"),
+        )
+    };
+    coordinator.allocation = Some((verified, recovery, pid, epoch, fresh));
+}
+
+#[when("the coordinator allocates the next producer identity")]
+fn allocate_identity(coordinator: &mut CoordinatorDecisions) {
+    let (verified, recovery, pid, epoch, fresh) = coordinator
+        .allocation
+        .expect("producer identity allocation facts were given");
+    coordinator.next_identity.set(next_producer_identity(
+        verified, recovery, pid, epoch, fresh,
+    ));
+}
+
+fn identity(text: &str) -> TransactionIdentity {
+    let (pid, epoch) = text
+        .split_once(':')
+        .expect("producer identity uses producer-id:epoch notation");
+    TransactionIdentity {
+        pid: pid.parse().expect("producer ID is an integer"),
+        epoch: epoch.parse().expect("producer epoch is an integer"),
+    }
+}
+
+#[then("the allocated producer identity is {allocated}")]
+fn allocated_identity(coordinator: &CoordinatorDecisions, allocated: String) {
+    let expected = if allocated == "unavailable" {
+        None
+    } else {
+        let value = identity(&allocated);
+        Some((value.pid, value.epoch))
+    };
+    assert!(coordinator.next_identity.get() == Some(expected));
+}
+
+#[given(
+    "a producer entry with ID {pid}, epoch {epoch}, last epoch {last_epoch}, and previous ID {previous_pid}"
+)]
+fn initialization_entry(
+    coordinator: &mut CoordinatorDecisions,
+    pid: i64,
+    epoch: i16,
+    last_epoch: i16,
+    previous_pid: i64,
+) {
+    coordinator.initialization = Some((pid, epoch, last_epoch, previous_pid));
+}
+
+#[when("InitProducerId requests producer ID {pid} and epoch {epoch}")]
+fn initialize_identity(coordinator: &mut CoordinatorDecisions, pid: i64, epoch: i16) {
+    let (entry_pid, entry_epoch, last_epoch, previous_pid) = coordinator
+        .initialization
+        .expect("a producer entry was given");
+    coordinator.initialized = Some(init_producer_id_identity_decision(
+        entry_pid,
+        entry_epoch,
+        last_epoch,
+        previous_pid,
+        pid,
+        epoch,
+    ));
+}
+
+#[then("InitProducerId identity handling is {outcome}")]
+fn initialized_identity(coordinator: &CoordinatorDecisions, outcome: String) {
+    let expected = match outcome.as_str() {
+        "bump-without-expected-identity" => InitProducerIdIdentityDecision::BumpWithoutIdentity,
+        "bump-epoch" => InitProducerIdIdentityDecision::Bump,
+        "retry-current-identity" => InitProducerIdIdentityDecision::Retry,
+        "fence-requester" => InitProducerIdIdentityDecision::Fenced,
+        _ => panic!("unknown InitProducerId identity outcome: {outcome}"),
+    };
+    assert!(coordinator.initialized == Some(expected));
+}
+
+#[given(
+    "a current transaction identity {current} in state {state}, prepared identity {prepared}, and completion identity {completion}"
+)]
+fn prepared_transaction(
+    coordinator: &mut CoordinatorDecisions,
+    current: String,
+    state: String,
+    prepared: String,
+    completion: String,
+) {
+    let current = identity(&current);
+    let state = match state.as_str() {
+        "ongoing" => ONGOING,
+        "prepare-commit" => PREPARE_COMMIT,
+        "complete-commit" => COMPLETE_COMMIT,
+        _ => panic!("unknown transaction completion state: {state}"),
+    };
+    coordinator.completion = Some((
+        TransactionSnapshot {
+            pid: current.pid,
+            epoch: current.epoch,
+            state,
+        },
+        identity(&prepared),
+        identity(&completion),
+    ));
+}
+
+#[when("the coordinator completes the prepared commit")]
+fn complete_commit(coordinator: &mut CoordinatorDecisions) {
+    let (current, prepared, completion) = coordinator
+        .completion
+        .expect("a prepared transaction was given");
+    coordinator.completed = Some(transaction_completion_decision(
+        current,
+        prepared,
+        completion,
+        PREPARE_COMMIT,
+        COMPLETE_COMMIT,
+    ));
+}
+
+#[then("transaction completion is {outcome}")]
+fn completed_transaction(coordinator: &CoordinatorDecisions, outcome: String) {
+    let expected = match outcome.as_str() {
+        "proceed" => TransactionCompletionDecision::Proceed,
+        "already-complete" => TransactionCompletionDecision::AlreadyComplete,
+        "reject-stale-identity" => TransactionCompletionDecision::RejectStaleIdentity,
+        "reject-state" => TransactionCompletionDecision::RejectState,
+        _ => panic!("unknown transaction completion outcome: {outcome}"),
+    };
+    assert!(coordinator.completed == Some(expected));
+}
+
+scenarios!("tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature", fixtures = [coordinator: CoordinatorDecisions]);

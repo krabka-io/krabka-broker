@@ -531,6 +531,7 @@ impl Telemetry {
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use {
         super::{
@@ -542,216 +543,13 @@ mod tests {
             topology::{Node, Nodes},
         },
         assert2::{assert, check},
-        std::{collections::BTreeMap, fs, sync::Arc, time::Duration},
+        rstest::fixture,
+        rstest_bdd::{Slot, datatable::Rows},
+        rstest_bdd_macros::{DataTableRow, given, scenario, scenarios, then, when},
+        std::{collections::BTreeMap, fmt::Write, fs, sync::Arc, time::Duration},
+        tempfile::TempDir,
         tokio::time,
     };
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak contract telemetry tests: a size reads in bytes for {example}")]
-    fn bdd_verify_a_size_reads_in_bytes(example: String) {
-        type Example<'a> = (&'a str, Option<u64>);
-        let (text, bytes): Example<'_> = match example.as_str() {
-            "mebibytes" => ("512.3MiB", Some(537_185_484)),
-            "gibibytes" => ("1.5GiB", Some(1_610_612_736)),
-            "kibibytes" => ("4KiB", Some(4_096)),
-            "kilobytes" => ("12kB", Some(12_000)),
-            "upper kilobytes" => ("1.2KB", Some(1_200)),
-            "megabytes" => ("3.25MB", Some(3_250_000)),
-            "bytes" => ("0B", Some(0)),
-            "bare number" => ("17", Some(17)),
-            "padded" => (" 2GiB ", Some(2_147_483_648)),
-            "no number" => ("MiB", None),
-            "unknown unit" => ("3 parsecs", None),
-            "two points" => ("1.2.3MiB", None),
-            "placeholder" => ("--", None),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(parse_size(text) == bytes);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
-        name = "tests: a size reads in bytes"
-    )]
-    fn a_size_reads_in_bytes(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract telemetry tests: a percentage reads as a number for {example}"
-    )]
-    fn bdd_verify_a_percentage_reads_as_a_number(example: String) {
-        type Example<'a> = (&'a str, Option<f64>);
-        let (text, percent): Example<'_> = match example.as_str() {
-            "plain" => ("12.34%", Some(12.34)),
-            "over one core" => ("250.00%", Some(250.0)),
-            "zero" => ("0.00%", Some(0.0)),
-            "placeholder" => ("--", None),
-            "no sign" => ("12.34", None),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(parse_percent(text) == percent);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
-        name = "tests: a percentage reads as a number"
-    )]
-    fn a_percentage_reads_as_a_number(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract telemetry tests: docker stats reads by container name"
-    )]
-    fn bdd_verify_docker_stats_reads_by_container_name() {
-        let output = concat!(
-            r#"{"BlockIO":"0B / 0B","CPUPerc":"12.34%","Container":"k1","ID":"a","MemPerc":"3.2%","MemUsage":"512MiB / 15.6GiB","Name":"k1","NetIO":"1kB / 2kB","PIDs":"40"}"#,
-            "\n",
-            r#"{"CPUPerc":"--","MemUsage":"-- / --","Name":"k2"}"#,
-            "\n",
-            "not json\n",
-        );
-        let expected = BTreeMap::from([
-            ("k1".to_owned(), Usage {
-                cpu_percent: Some(12.34),
-                memory_bytes: Some(512 << 20),
-            }),
-            ("k2".to_owned(), Usage::default()),
-        ]);
-        check!(parse_stats(output) == expected);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
-        name = "tests: docker stats reads by container name"
-    )]
-    fn docker_stats_reads_by_container_name() {}
-
-    const BODY: &str = "\
-# HELP krabka_broker_active_controller 1 if this broker is the raft (controller) leader.
-# TYPE krabka_broker_active_controller gauge
-krabka_broker_active_controller 1
-krabka_broker_controller_leader_changes_total 3
-krabka_broker_raft_current_state{state=\"candidate\"} 0
-krabka_broker_raft_current_state{state=\"leader\"} 1
-krabka_broker_raft_current_epoch 7
-krabka_broker_raft_high_watermark 1.2e3
-krabka_broker_metadata_last_applied_offset 1199
-krabka_broker_metadata_last_applied_offset_extra 5
-krabka_broker_metadata_last_committed_offset 1200
-krabka_broker_metadata_last_applied_timestamp_ms 1700000000000
-krabka_broker_metadata_last_applied_lag_ms 480
-krabka_broker_metadata_lag_records 1
-krabka_broker_under_replicated_partitions 2
-krabka_broker_under_min_isr_partition_count 0
-krabka_broker_offline_partitions_count 0
-";
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak contract telemetry tests: a body reads as controller progress")]
-    fn bdd_verify_a_body_reads_as_controller_progress() {
-        check!(
-            progress(BODY)
-                == Progress {
-                    active_controller: Some(true),
-                    raft_state: Some("leader".to_owned()),
-                    raft_current_epoch: Some(7),
-                    raft_high_watermark: Some(1200),
-                    metadata_last_applied_offset: Some(1199),
-                    metadata_last_committed_offset: Some(1200),
-                    metadata_last_applied_timestamp_ms: Some(1_700_000_000_000),
-                    metadata_last_applied_lag_ms: Some(480),
-                    metadata_lag_records: Some(1),
-                    controller_leader_changes_total: Some(3),
-                    under_replicated_partitions: Some(2),
-                    under_min_isr_partitions: Some(0),
-                    offline_partitions: Some(0),
-                }
-        );
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
-        name = "tests: a body reads as controller progress"
-    )]
-    fn a_body_reads_as_controller_progress() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract telemetry tests: a body without the series reads as unknown"
-    )]
-    fn bdd_verify_a_body_without_the_series_reads_as_unknown() {
-        check!(progress("# nothing here\n") == Progress::default());
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
-        name = "tests: a body without the series reads as unknown"
-    )]
-    fn a_body_without_the_series_reads_as_unknown() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract telemetry tests: a gauge is its first sample for {example}"
-    )]
-    fn bdd_verify_a_gauge_is_its_first_sample(example: String) {
-        type Example<'a> = (&'a str, Option<i64>);
-        let (body, value): Example<'_> = match example.as_str() {
-            "integer" => ("m 42\n", Some(42)),
-            "negative" => ("m -1\n", Some(-1)),
-            "float" => ("m 2.6\n", Some(3)),
-            "labelled" => ("m{a=\"b\"} 9\n", Some(9)),
-            "prefix only" => ("m_other 9\n", None),
-            "comment" => ("# m 9\n", None),
-            "not a number" => ("m NaN\n", None),
-            "absent" => ("", None),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(gauge(body, "m") == value);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
-        name = "tests: a gauge is its first sample"
-    )]
-    fn a_gauge_is_its_first_sample(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract telemetry tests: the raft state is the label that reads one for {example}"
-    )]
-    fn bdd_verify_the_raft_state_is_the_label_that_reads_one(example: String) {
-        type Example<'a> = (&'a str, Option<&'a str>);
-        let (body, state): Example<'_> = match example.as_str() {
-            "follower" => (
-                "krabka_broker_raft_current_state{state=\"leader\"} 0\nkrabka_broker_raft_current_state{state=\"follower\"} 1\n",
-                Some("follower"),
-            ),
-            "none set" => (
-                "krabka_broker_raft_current_state{state=\"leader\"} 0\n",
-                None,
-            ),
-            "broker only" => ("krabka_broker_active_controller 0\n", None),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(raft_state(body).as_deref() == state);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
-        name = "tests: the raft state is the label that reads one"
-    )]
-    fn the_raft_state_is_the_label_that_reads_one(example: String) { let _ = example; }
 
     struct At {
         tick: u64,
@@ -785,30 +583,259 @@ krabka_broker_offline_partitions_count 0
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract telemetry tests: rows fold into peaks gaps and controller changes"
-    )]
-    fn bdd_verify_rows_fold_into_peaks_gaps_and_controller_changes() {
-        let at = |tick, node, memory, disk, lag, changes, controller| At {
-            tick,
-            node,
-            memory,
-            disk,
-            lag,
-            changes,
-            controller,
+    #[derive(DataTableRow)]
+    struct ObservationRow {
+        tick: u64,
+        node: i32,
+        memory: String,
+        disk: u64,
+        lag: i64,
+        changes: i64,
+        controller: bool,
+        answered: bool,
+    }
+
+    #[derive(Default)]
+    struct TelemetryScenario {
+        text: String,
+        size: Slot<Option<u64>>,
+        percent: Slot<Option<f64>>,
+        gauge: Slot<Option<i64>>,
+        raft_state: Slot<Option<String>>,
+        stats: BTreeMap<String, Usage>,
+        progress: Option<Progress>,
+        rows: Vec<TelemetryRow>,
+        summary: Option<TelemetrySummary>,
+    }
+
+    #[fixture]
+    fn telemetry() -> TelemetryScenario {
+        // Parsed inputs and observations are isolated between telemetry examples.
+        TelemetryScenario {
+            progress: None,
+            ..Default::default()
+        }
+    }
+
+    #[given("Docker memory usage field is \"{text}\"")]
+    fn memory_usage_field(telemetry: &mut TelemetryScenario, text: String) {
+        telemetry.text = text;
+    }
+
+    #[when("the telemetry parser converts the memory field to bytes")]
+    fn parse_memory_field(telemetry: &TelemetryScenario) {
+        telemetry.size.set(parse_size(&telemetry.text));
+    }
+
+    #[then("the parsed memory byte reading is {bytes}")]
+    fn parsed_memory_bytes(telemetry: &TelemetryScenario, bytes: String) {
+        let expected = if bytes == "absent" {
+            None
+        } else {
+            Some(bytes.parse().expect("an expected byte count"))
         };
-        let rows = vec![
-            row(&at(0, 1, Some(100), 10, 0, 4, true), true),
-            row(&at(0, 2, Some(200), 20, 2, 1, false), true),
-            // Node 1 is paused: no scrape, and docker reports no memory.
-            row(&at(1, 1, None, 15, 0, 0, false), false),
-            row(&at(1, 2, Some(150), 30, 5, 2, true), true),
-            // Node 1 restarted: its counter fell from 4 to 1, and the 1 counts.
-            row(&at(2, 1, Some(50), 12, 1, 1, false), true),
-            row(&at(2, 2, Some(180), 25, 0, 2, true), true),
-        ];
+        check!(telemetry.size.get() == Some(expected));
+    }
+
+    #[given("Docker CPU field is \"{text}\"")]
+    fn cpu_percent_field(telemetry: &mut TelemetryScenario, text: String) { telemetry.text = text; }
+
+    #[when("the telemetry parser converts the CPU percentage")]
+    fn parse_cpu_field(telemetry: &TelemetryScenario) {
+        telemetry.percent.set(parse_percent(&telemetry.text));
+    }
+
+    #[then("the parsed CPU percentage is {percent}")]
+    fn parsed_cpu_percent(telemetry: &TelemetryScenario, percent: String) {
+        let expected = if percent == "absent" {
+            None
+        } else {
+            Some(percent.parse::<f64>().expect("an expected percentage"))
+        };
+        check!(telemetry.percent.get() == Some(expected));
+    }
+
+    #[given("Docker stats output is:")]
+    fn docker_stats_output(telemetry: &mut TelemetryScenario, docstring: String) {
+        telemetry.text = docstring.trim_matches('\n').to_owned();
+    }
+
+    #[when("the telemetry parser reads stats by container name")]
+    fn parse_docker_stats(telemetry: &mut TelemetryScenario) {
+        telemetry.stats = parse_stats(&telemetry.text);
+    }
+
+    #[then("k1 has CPU 12.34 percent and 512 MiB while k2 has unavailable readings")]
+    fn named_container_stats(telemetry: &TelemetryScenario) {
+        check!(
+            telemetry.stats
+                == BTreeMap::from([
+                    ("k1".to_owned(), Usage {
+                        cpu_percent: Some(12.34),
+                        memory_bytes: Some(512 << 20)
+                    }),
+                    ("k2".to_owned(), Usage::default())
+                ])
+        );
+    }
+
+    #[given("the broker progress scrape is:")]
+    fn broker_progress_body(telemetry: &mut TelemetryScenario, docstring: String) {
+        telemetry.text = docstring.trim_matches('\n').to_owned();
+    }
+
+    #[given("the scrape contains only a comment and no broker series")]
+    fn absent_broker_series(telemetry: &mut TelemetryScenario) {
+        telemetry.text = "# nothing here\n".into();
+    }
+
+    #[when("the telemetry parser reads controller progress")]
+    fn parse_controller_progress(telemetry: &mut TelemetryScenario) {
+        telemetry.progress = Some(progress(&telemetry.text));
+    }
+
+    #[then("controller progress retains the role epoch offsets lag and partition health")]
+    fn complete_controller_progress(telemetry: &TelemetryScenario) {
+        check!(
+            telemetry.progress
+                == Some(Progress {
+                    active_controller: Some(true),
+                    raft_state: Some("leader".to_owned()),
+                    raft_current_epoch: Some(7),
+                    raft_high_watermark: Some(1200),
+                    metadata_last_applied_offset: Some(1199),
+                    metadata_last_committed_offset: Some(1200),
+                    metadata_last_applied_timestamp_ms: Some(1_700_000_000_000),
+                    metadata_last_applied_lag_ms: Some(480),
+                    metadata_lag_records: Some(1),
+                    controller_leader_changes_total: Some(3),
+                    under_replicated_partitions: Some(2),
+                    under_min_isr_partitions: Some(0),
+                    offline_partitions: Some(0)
+                })
+        );
+    }
+
+    #[then("all controller progress fields are unknown")]
+    fn unknown_controller_progress(telemetry: &TelemetryScenario) {
+        check!(telemetry.progress == Some(Progress::default()));
+    }
+
+    #[given("gauge exposition is \"{body}\"")]
+    fn gauge_exposition(telemetry: &mut TelemetryScenario, body: String) {
+        telemetry.text = format!("{body}\n");
+    }
+
+    #[given("the gauge exposition is empty")]
+    fn empty_gauge_exposition(telemetry: &mut TelemetryScenario) { telemetry.text.clear(); }
+
+    #[when("the telemetry parser reads the first sample of gauge m")]
+    fn parse_gauge_sample(telemetry: &TelemetryScenario) {
+        telemetry.gauge.set(gauge(&telemetry.text, "m"));
+    }
+
+    #[then("the gauge reading is {value}")]
+    fn gauge_reading(telemetry: &TelemetryScenario, value: String) {
+        let expected = if value == "absent" {
+            None
+        } else {
+            Some(value.parse().expect("an expected gauge"))
+        };
+        check!(telemetry.gauge.get() == Some(expected));
+    }
+
+    #[given("raft leader gauge is {leader} and follower gauge is {follower}")]
+    fn raft_state_exposition(telemetry: &mut TelemetryScenario, leader: u8, follower: String) {
+        telemetry.text = format!("krabka_broker_raft_current_state{{state=\"leader\"}} {leader}\n");
+        if follower != "absent" {
+            let follower: u8 = follower.parse().expect("a follower state gauge");
+            writeln!(
+                telemetry.text,
+                "krabka_broker_raft_current_state{{state=\"follower\"}} {follower}"
+            )
+            .expect("write metrics into String");
+        }
+    }
+
+    #[given("the scrape only reports an inactive broker controller gauge")]
+    fn no_raft_state_gauge(telemetry: &mut TelemetryScenario) {
+        telemetry.text = "krabka_broker_active_controller 0\n".into();
+    }
+
+    #[when("the telemetry parser selects the raft state label whose value is one")]
+    fn parse_raft_state(telemetry: &TelemetryScenario) {
+        telemetry.raft_state.set(raft_state(&telemetry.text));
+    }
+
+    #[then("the observed raft state is {state}")]
+    fn parsed_raft_state(telemetry: &TelemetryScenario, state: String) {
+        let expected = if state == "absent" {
+            None
+        } else {
+            Some(state.as_str())
+        };
+        let observed = telemetry
+            .raft_state
+            .get()
+            .expect("the raft state was parsed");
+        check!(observed.as_deref() == expected);
+    }
+
+    #[given("node telemetry observations are:")]
+    fn node_observations(
+        telemetry: &mut TelemetryScenario,
+        #[datatable] rows: Rows<ObservationRow>,
+    ) {
+        telemetry.rows = rows
+            .into_iter()
+            .map(|entry| {
+                row(
+                    &At {
+                        tick: entry.tick,
+                        node: entry.node,
+                        memory: if entry.memory == "absent" {
+                            None
+                        } else {
+                            Some(entry.memory.parse().expect("a memory sample"))
+                        },
+                        disk: entry.disk,
+                        lag: entry.lag,
+                        changes: entry.changes,
+                        controller: entry.controller,
+                    },
+                    entry.answered,
+                )
+            })
+            .collect();
+    }
+
+    #[given("the first metadata sample has no applied record despite a lag reading")]
+    fn no_applied_metadata_yet(telemetry: &mut TelemetryScenario) {
+        let mut first = row(
+            &At {
+                tick: 0,
+                node: 1,
+                memory: None,
+                disk: 0,
+                lag: 9,
+                changes: 0,
+                controller: false,
+            },
+            true,
+        );
+        if let Some(progress) = first.progress.as_mut() {
+            progress.metadata_last_applied_timestamp_ms = Some(-1);
+        }
+        telemetry.rows = vec![first];
+    }
+
+    #[when("the telemetry observations are summarized")]
+    fn summarize_observations(telemetry: &mut TelemetryScenario) {
+        telemetry.summary = Some(summarize(&telemetry.rows));
+    }
+
+    #[then("the summary records peaks gaps counter resets and the controller handoff")]
+    fn summarized_cluster_health(telemetry: &TelemetryScenario) {
         let expected = TelemetrySummary {
             ticks: 3,
             rows: 6,
@@ -839,69 +866,82 @@ krabka_broker_offline_partitions_count 0
                 }),
             ]),
         };
-        let summary = summarize(&rows);
-        check!(summary == expected);
+
+        let summary = telemetry
+            .summary
+            .as_ref()
+            .expect("the observations were summarized");
+        check!(*summary == expected);
         check!(summary.lines().len() == 3);
         check!(summary.lines()[0].contains("6 rows over 3 samples, 1 unanswered"));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
-        name = "tests: rows fold into peaks gaps and controller changes"
-    )]
-    fn rows_fold_into_peaks_gaps_and_controller_changes() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract telemetry tests: lag before the first record is not counted"
-    )]
-    fn bdd_verify_lag_before_the_first_record_is_not_counted() {
-        let mut first = row(
-            &At {
-                tick: 0,
-                node: 1,
-                memory: None,
-                disk: 0,
-                lag: 9,
-                changes: 0,
-                controller: false,
-            },
-            true,
+    #[then("pre-record metadata lag is excluded from the summary")]
+    fn nonexistent_record_has_no_lag(telemetry: &TelemetryScenario) {
+        check!(
+            telemetry
+                .summary
+                .as_ref()
+                .expect("the observations were summarized")
+                .nodes[&1]
+                .max_metadata_lag_ms
+                == None
         );
-        if let Some(progress) = first.progress.as_mut() {
-            progress.metadata_last_applied_timestamp_ms = Some(-1);
-        }
-        check!(summarize(&[first]).nodes[&1].max_metadata_lag_ms == None);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
-        name = "tests: lag before the first record is not counted"
-    )]
-    fn lag_before_the_first_record_is_not_counted() {}
+    #[derive(Default)]
+    struct SamplingScenario {
+        evidence: Option<TempDir>,
+        root: Option<TempDir>,
+        nodes: Option<Arc<Nodes>>,
+        summary: Option<TelemetrySummary>,
+        rows: Vec<serde_json::Value>,
+    }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract telemetry tests: an unanswering node still gets a row for every sample"
-    )]
-    async fn bdd_verify_an_unanswering_node_still_gets_a_row_for_every_sample() {
+    #[fixture]
+    fn sampling() -> SamplingScenario {
+        // Evidence and fake process observations belong to one sampling run.
+        SamplingScenario {
+            evidence: None,
+            ..Default::default()
+        }
+    }
+
+    #[given("node k1 has ten data bytes but its metrics listener refuses connections")]
+    fn unanswering_node(sampling: &mut SamplingScenario) {
         let evidence = tempfile::tempdir().expect("an evidence directory");
-        let root = tempfile::tempdir().expect("a data directory");
+        sampling.root = Some(tempfile::tempdir().expect("a data directory"));
+        let root = sampling.root.as_ref().expect("a data directory exists");
         fs::write(root.path().join("segment"), [0u8; 10]).expect("write a segment");
-        let nodes = Arc::new(Nodes::new(vec![Node {
+        sampling.nodes = Some(Arc::new(Nodes::new(vec![Node {
             id: 1,
             container: "k1".to_owned(),
             bootstrap: "127.0.0.1:9".to_owned(),
-            // The discard port: nothing listens, so the scrape is refused.
             metrics_url: "http://127.0.0.1:9/metrics".to_owned(),
             root: root.path().to_path_buf(),
             launch: Launch::default(),
             tls: None,
-        }]));
-        let telemetry =
-            Telemetry::spawn(nodes, evidence.path(), Duration::from_millis(20), |names| {
+        }])));
+        sampling.evidence = Some(evidence);
+    }
+
+    #[given("the telemetry cluster has no nodes")]
+    fn empty_telemetry_cluster(sampling: &mut SamplingScenario) {
+        sampling.evidence = Some(tempfile::tempdir().expect("an evidence directory"));
+        sampling.nodes = Some(Arc::new(Nodes::new(Vec::new())));
+    }
+
+    #[when("telemetry samples every twenty milliseconds for fifty milliseconds and stops")]
+    async fn sample_unanswering_node(sampling: &mut SamplingScenario) {
+        let telemetry = Telemetry::spawn(
+            Arc::clone(sampling.nodes.as_ref().expect("the node snapshot exists")),
+            sampling
+                .evidence
+                .as_ref()
+                .expect("the evidence directory exists")
+                .path(),
+            Duration::from_millis(20),
+            |names| {
                 Ok(names
                     .iter()
                     .map(|name| {
@@ -909,20 +949,32 @@ krabka_broker_offline_partitions_count 0
                     })
                     .collect::<Vec<_>>()
                     .join("\n"))
-            });
+            },
+        );
         time::sleep(Duration::from_millis(50)).await;
-        let summary = telemetry.stop().await;
-
-        let text =
-            fs::read_to_string(evidence.path().join("telemetry.jsonl")).expect("rows written");
-        let rows: Vec<serde_json::Value> = text
+        sampling.summary = Some(telemetry.stop().await);
+        let text = fs::read_to_string(
+            sampling
+                .evidence
+                .as_ref()
+                .expect("the evidence directory exists")
+                .path()
+                .join("telemetry.jsonl"),
+        )
+        .expect("rows written");
+        sampling.rows = text
             .lines()
             .map(|line| serde_json::from_str(line).expect("a JSON row"))
             .collect();
-        assert!(rows.len() >= 2);
-        check!(u64::try_from(rows.len()) == Ok(summary.rows));
+    }
+
+    #[then("each unanswered sample retains the node process and disk measurements")]
+    fn unanswered_measurements_recorded(sampling: &SamplingScenario) {
+        let summary = sampling.summary.as_ref().expect("telemetry stopped");
+        assert!(sampling.rows.len() >= 2);
+        check!(u64::try_from(sampling.rows.len()) == Ok(summary.rows));
         check!(summary.unanswered == summary.rows);
-        let first = &rows[0];
+        let first = &sampling.rows[0];
         check!(first["node"] == 1);
         check!(first["container"] == "k1");
         check!(first["cpu_percent"] == 5.0);
@@ -932,34 +984,51 @@ krabka_broker_offline_partitions_count 0
         check!(first.get("progress").is_none());
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
+    #[when("telemetry starts with a ten-millisecond interval and immediately stops")]
+    async fn start_empty_sampling(sampling: &mut SamplingScenario) {
+        let telemetry = Telemetry::start(
+            Arc::clone(sampling.nodes.as_ref().expect("the empty cluster exists")),
+            sampling
+                .evidence
+                .as_ref()
+                .expect("the evidence directory exists")
+                .path(),
+            Duration::from_millis(10),
+        );
+        sampling.summary = Some(telemetry.stop().await);
+    }
+
+    #[then("the empty run has an empty summary and still writes its evidence file")]
+    fn empty_sampling_finishes(sampling: &SamplingScenario) {
+        check!(
+            sampling.summary.as_ref().expect("telemetry stopped") == &TelemetrySummary::default()
+        );
+        check!(
+            sampling
+                .evidence
+                .as_ref()
+                .expect("the evidence directory exists")
+                .path()
+                .join("telemetry.jsonl")
+                .exists()
+        );
+    }
+
+    scenarios!("tests/features/migrated/tests/soak_contract/telemetry.feature", fixtures = [telemetry: TelemetryScenario]);
+
+    #[scenario(
+        path = "tests/features/migrated/tests/soak_contract/telemetry_sampling.feature",
         name = "tests: an unanswering node still gets a row for every sample"
     )]
     #[tokio::test]
-    async fn an_unanswering_node_still_gets_a_row_for_every_sample() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract telemetry tests: a cluster of no nodes starts and stops"
-    )]
-    async fn bdd_verify_a_cluster_of_no_nodes_starts_and_stops() {
-        let evidence = tempfile::tempdir().expect("an evidence directory");
-        let telemetry = Telemetry::start(
-            Arc::new(Nodes::new(Vec::new())),
-            evidence.path(),
-            Duration::from_millis(10),
-        );
-        check!(telemetry.stop().await == TelemetrySummary::default());
-        check!(evidence.path().join("telemetry.jsonl").exists());
+    async fn an_unanswering_node_still_gets_a_row_for_every_sample(sampling: SamplingScenario) {
+        drop(sampling);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/telemetry.feature",
+    #[scenario(
+        path = "tests/features/migrated/tests/soak_contract/telemetry_sampling.feature",
         name = "tests: a cluster of no nodes starts and stops"
     )]
     #[tokio::test]
-    async fn a_cluster_of_no_nodes_starts_and_stops() {}
+    async fn a_cluster_of_no_nodes_starts_and_stops(sampling: SamplingScenario) { drop(sampling); }
 }

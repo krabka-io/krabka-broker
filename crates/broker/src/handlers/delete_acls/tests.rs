@@ -202,154 +202,191 @@ fn sorted(mut acls: Vec<AclEntry>) -> Vec<AclEntry> {
     acls
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("handlers delete acls tests: handle deletes exactly what kafka matches")]
-async fn bdd_verify_handle_deletes_exactly_what_kafka_matches() {
-    /// A case name, the filter, and the ACLs it must delete.
-    struct DeleteCase {
-        name: &'static str,
-        filter: DeleteAclsFilter,
-        want_deleted: Vec<AclEntry>,
+#[derive(Default)]
+struct AclDeletionScenario {
+    started: Option<HandlerStartedBroker>,
+    seeded: Vec<AclEntry>,
+    response: Option<DeleteAclsResponse>,
+}
+#[rstest::fixture]
+fn acl_deletion() -> AclDeletionScenario {
+    let started = None;
+    AclDeletionScenario {
+        started,
+        ..Default::default()
     }
-
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, ctx);
-        boot [start_broker(configured_authorizer())];
-        user ["admin"];
+}
+fn topic_read_acl_rows(datatable: Vec<Vec<String>>) -> Vec<AclEntry> {
+    datatable
+        .into_iter()
+        .skip(1)
+        .map(|cells| {
+            topic_acl()
+                .name(&cells[0])
+                .pattern_type(match cells[1].as_str() {
+                    "literal" => PatternType::Literal,
+                    "prefixed" => PatternType::Prefixed,
+                    other => panic!("unknown stored pattern {other}"),
+                })
+                .principal(&cells[2])
+                .permission_type(match cells[3].as_str() {
+                    "allow" => PermissionType::Allow,
+                    "deny" => PermissionType::Deny,
+                    other => panic!("unknown permission {other}"),
+                })
+                .call()
+        })
+        .collect()
+}
+#[rstest_bdd_macros::given("the controller stores these Topic Read ACLs for host wildcard")]
+async fn stored_deletion_acls(acl_deletion: &mut AclDeletionScenario, datatable: Vec<Vec<String>>) {
+    let started = start_broker(configured_authorizer()).await;
+    acl_deletion.seeded = topic_read_acl_rows(datatable);
+    seed_acls(&started.broker, acl_deletion.seeded.clone()).await;
+    acl_deletion.started = Some(started);
+}
+#[rstest_bdd_macros::when(
+    "admin deletes Topic ACLs with pattern {pattern}, name \"{name}\" and principal \"{principal}\""
+)]
+async fn delete_filtered_acls(
+    acl_deletion: &mut AclDeletionScenario,
+    pattern: String,
+    name: String,
+    principal: String,
+) {
+    let pattern = match pattern.as_str() {
+        "any" => PATTERN_TYPE_ANY,
+        "match" => PATTERN_TYPE_MATCH,
+        "literal" => PATTERN_TYPE_LITERAL,
+        "prefixed" => PATTERN_TYPE_PREFIXED,
+        other => panic!("unknown filter pattern {other}"),
     };
-
-    let literal_foo = topic_acl().name("foo").call();
-    let wildcard_deny = topic_acl()
-        .name("*")
-        .principal("User:bob")
-        .permission_type(PermissionType::Deny)
-        .call();
-    let prefixed_fo = topic_acl()
-        .name("fo")
-        .pattern_type(PatternType::Prefixed)
-        .permission_type(PermissionType::Deny)
-        .call();
-    let prefixed_bar = topic_acl()
-        .name("bar")
-        .pattern_type(PatternType::Prefixed)
-        .principal("User:bob")
-        .call();
-    let literal_food = topic_acl().name("food").call();
-    let seeded = vec![
-        literal_foo.clone(),
-        wildcard_deny.clone(),
-        prefixed_fo.clone(),
-        prefixed_bar.clone(),
-        literal_food.clone(),
-    ];
-
-    let cases: Vec<DeleteCase> = vec![
-        DeleteCase {
-            name: "empty name and principal delete nothing",
-            filter: topic_filter(PATTERN_TYPE_ANY, Some(""), Some("")),
-            want_deleted: Vec::new(),
+    let filter = topic_filter(
+        pattern,
+        match name.as_str() {
+            "null" => None,
+            "<empty>" => Some(""),
+            value => Some(value),
         },
-        DeleteCase {
-            name: "empty name deletes nothing",
-            filter: topic_filter(PATTERN_TYPE_ANY, Some(""), None),
-            want_deleted: Vec::new(),
+        match principal.as_str() {
+            "null" => None,
+            "<empty>" => Some(""),
+            value => Some(value),
         },
-        DeleteCase {
-            name: "empty principal deletes nothing",
-            filter: topic_filter(PATTERN_TYPE_ANY, None, Some("")),
-            want_deleted: Vec::new(),
-        },
-        DeleteCase {
-            name: "null name and principal delete every topic ACL",
-            filter: topic_filter(PATTERN_TYPE_ANY, None, None),
-            want_deleted: seeded.clone(),
-        },
-        DeleteCase {
-            name: "ANY with a name compares it exactly",
-            filter: topic_filter(PATTERN_TYPE_ANY, Some("foo"), None),
-            want_deleted: vec![literal_foo.clone()],
-        },
-        DeleteCase {
-            name: "MATCH takes the literal, the wildcard and covering prefixes",
-            filter: topic_filter(PATTERN_TYPE_MATCH, Some("foo"), None),
-            want_deleted: vec![
-                literal_foo.clone(),
-                wildcard_deny.clone(),
-                prefixed_fo.clone(),
-            ],
-        },
-        DeleteCase {
-            name: "MATCH narrows by principal",
-            filter: topic_filter(PATTERN_TYPE_MATCH, Some("foo"), Some("User:alice")),
-            want_deleted: vec![literal_foo.clone(), prefixed_fo.clone()],
-        },
-        DeleteCase {
-            name: "LITERAL with a null name",
-            filter: topic_filter(PATTERN_TYPE_LITERAL, None, None),
-            want_deleted: vec![
-                literal_foo.clone(),
-                wildcard_deny.clone(),
-                literal_food.clone(),
-            ],
-        },
-        DeleteCase {
-            name: "PREFIXED with a name compares it exactly",
-            filter: topic_filter(PATTERN_TYPE_PREFIXED, Some("foo"), None),
-            want_deleted: Vec::new(),
-        },
-    ];
-
-    for DeleteCase {
-        name,
-        filter: f,
-        want_deleted,
-    } in cases
-    {
-        seed_acls(&broker_handle, seeded.clone()).await;
-
-        let mut resp = handle(&broker, request(vec![f]), VERSION, &ctx)
+    );
+    let broker = acl_deletion
+        .started
+        .as_ref()
+        .expect("stored ACL broker")
+        .broker
+        .broker_arc_for_test();
+    krabka_macros::request_test_identity! { bind(principal, peer, ctx); user ["admin"]; };
+    acl_deletion.response = Some(
+        handle(&broker, request(vec![filter]), VERSION, &ctx)
             .await
-            .expect("handle");
-        resp.filter_results[0].matching_acls.sort_by(|a, b| {
-            (&a.resource_name, &a.principal).cmp(&(&b.resource_name, &b.principal))
-        });
-
-        let want_deleted = sorted(want_deleted);
-        let expected = krabka_macros::unthrottled_wire!(DeleteAclsResponse {
-            filter_results: vec![krabka_macros::tagged_wire!(DeleteAclsFilterResult {
-                error_code: codes::NONE,
-                error_message: None,
-                matching_acls: want_deleted
-                    .iter()
-                    .map(super::response::matching_acl_result)
-                    .collect(),
-            })],
-        });
-        check!(resp == expected, "{name}");
-
-        let want_left = sorted(
-            seeded
+            .expect("handle deletion"),
+    );
+}
+#[rstest_bdd_macros::then(
+    "the complete DeleteAcls response lists exactly these ACLs and removes only these entries"
+)]
+async fn deleted_acl_observations(
+    acl_deletion: &mut AclDeletionScenario,
+    datatable: Vec<Vec<String>>,
+) {
+    let deleted = sorted(topic_read_acl_rows(datatable));
+    let expected = DeleteAclsResponse {
+        filter_results: vec![DeleteAclsFilterResult {
+            error_code: codes::NONE,
+            error_message: None,
+            matching_acls: deleted
                 .iter()
-                .filter(|e| !want_deleted.contains(e))
-                .cloned()
+                .map(super::response::matching_acl_result)
                 .collect(),
-        );
-        check!(sorted(all_acls(&broker_handle)) == want_left, "{name}");
-    }
-    broker_handle.shutdown().await;
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let response = acl_deletion.response.as_mut().expect("deletion response");
+    response.filter_results[0]
+        .matching_acls
+        .sort_by(|a, b| (&a.resource_name, &a.principal).cmp(&(&b.resource_name, &b.principal)));
+    check!(*response == expected);
+    let remaining = sorted(
+        acl_deletion
+            .seeded
+            .iter()
+            .filter(|entry| !deleted.contains(entry))
+            .cloned()
+            .collect(),
+    );
+    let started = acl_deletion.started.take().expect("stored ACL broker");
+    check!(sorted(all_acls(&started.broker)) == remaining);
+    started.broker.shutdown().await;
 }
 
-/// The table from issue #771: Kafka's `AclControlManager.deleteAcls` lists and
-/// removes exactly the ACLs `AclBindingFilter.matches` selects. `MATCH` takes
-/// every binding that applies to the named resource, and an empty string is a
-/// value, not a wildcard.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/delete_acls/tests.feature",
-    name = "handle deletes exactly what kafka matches"
+    path = "tests/features/handler_delete_acl_matching.feature",
+    name = "Empty name and principal match nothing"
 )]
 #[tokio::test]
-async fn handle_deletes_exactly_what_kafka_matches() {}
+async fn delete_acl_matching_case_0(acl_deletion: AclDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delete_acl_matching.feature",
+    name = "Empty name matches nothing"
+)]
+#[tokio::test]
+async fn delete_acl_matching_case_1(acl_deletion: AclDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delete_acl_matching.feature",
+    name = "Empty principal matches nothing"
+)]
+#[tokio::test]
+async fn delete_acl_matching_case_2(acl_deletion: AclDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delete_acl_matching.feature",
+    name = "Null name and principal match every Topic ACL"
+)]
+#[tokio::test]
+async fn delete_acl_matching_case_3(acl_deletion: AclDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delete_acl_matching.feature",
+    name = "ANY compares a supplied name exactly"
+)]
+#[tokio::test]
+async fn delete_acl_matching_case_4(acl_deletion: AclDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delete_acl_matching.feature",
+    name = "MATCH includes literal wildcard and covering prefixes"
+)]
+#[tokio::test]
+async fn delete_acl_matching_case_5(acl_deletion: AclDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delete_acl_matching.feature",
+    name = "MATCH still filters by principal"
+)]
+#[tokio::test]
+async fn delete_acl_matching_case_6(acl_deletion: AclDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delete_acl_matching.feature",
+    name = "LITERAL with null name selects all literal ACLs"
+)]
+#[tokio::test]
+async fn delete_acl_matching_case_7(acl_deletion: AclDeletionScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delete_acl_matching.feature",
+    name = "PREFIXED compares the stored prefix exactly"
+)]
+#[tokio::test]
+async fn delete_acl_matching_case_8(acl_deletion: AclDeletionScenario) {}
 
 /// Kafka's `AclControlManager.deleteAcls` matches every filter against the
 /// same ACL set, so both filters list the shared ACL, and it is removed.

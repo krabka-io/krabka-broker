@@ -1,7 +1,6 @@
 use {
-    super::*,
-    crate::{handlers::acl_wire::PATTERN_MATCHING_FIXTURE, test_support::allow_acl},
-    assert2::check,
+    super::*, crate::test_support::allow_acl, assert2::check, rstest_bdd::datatable::Rows,
+    serde_json::Value,
 };
 
 const TOPIC: i8 = 2;
@@ -61,13 +60,6 @@ struct UnknownMessageCase {
     name: &'static str,
     edit: FilterEdit,
     want: Option<&'static str>,
-}
-
-/// A wire pattern type and resource name, with the seeded names the filter must match.
-struct PatternMatchCase {
-    wire_pattern_type: i8,
-    name: Option<&'static str>,
-    want: &'static [&'static str],
 }
 
 fn any_filter() -> AclBindingFilter {
@@ -205,105 +197,83 @@ fn from_wire_refuses_unknown_on_any_axis() {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers acl wire binding filter tests: resource pattern matching follows kafka"
-)]
-fn bdd_verify_resource_pattern_matching_follows_kafka() {
-    let seeded = PATTERN_MATCHING_FIXTURE;
-    let all: &[&str] = &["foo", "*", "f", "fo", "bar", "food"];
-    let cases: [PatternMatchCase; 13] = [
-        PatternMatchCase {
-            wire_pattern_type: WIRE_ANY,
-            name: None,
-            want: all,
-        },
-        PatternMatchCase {
-            wire_pattern_type: WIRE_ANY,
-            name: Some(""),
-            want: &[],
-        },
-        PatternMatchCase {
-            wire_pattern_type: WIRE_ANY,
-            name: Some("foo"),
-            want: &["foo"],
-        },
-        PatternMatchCase {
-            wire_pattern_type: WIRE_ANY,
-            name: Some("*"),
-            want: &["*"],
-        },
-        PatternMatchCase {
-            wire_pattern_type: WIRE_PATTERN_MATCH,
-            name: None,
-            want: all,
-        },
-        // An empty name still applies to the literal wildcard.
-        PatternMatchCase {
-            wire_pattern_type: WIRE_PATTERN_MATCH,
-            name: Some(""),
-            want: &["*"],
-        },
-        PatternMatchCase {
-            wire_pattern_type: WIRE_PATTERN_MATCH,
-            name: Some("foo"),
-            want: &["foo", "*", "f", "fo"],
-        },
-        PatternMatchCase {
-            wire_pattern_type: WIRE_PATTERN_MATCH,
-            name: Some("food"),
-            want: &["*", "f", "fo", "food"],
-        },
-        PatternMatchCase {
-            wire_pattern_type: LITERAL,
-            name: None,
-            want: &["foo", "*", "food"],
-        },
-        PatternMatchCase {
-            wire_pattern_type: LITERAL,
-            name: Some(""),
-            want: &[],
-        },
-        PatternMatchCase {
-            wire_pattern_type: LITERAL,
-            name: Some("foo"),
-            want: &["foo"],
-        },
-        PatternMatchCase {
-            wire_pattern_type: PREFIXED,
-            name: None,
-            want: &["f", "fo", "bar"],
-        },
-        PatternMatchCase {
-            wire_pattern_type: PREFIXED,
-            name: Some("foo"),
-            want: &[],
-        },
-    ];
-    for PatternMatchCase {
-        wire_pattern_type: pattern_type,
-        name,
-        want,
-    } in cases
-    {
-        let filter = AclBindingFilter::from_wire(wire(name, pattern_type)).expect("filter");
-        let got: Vec<&str> = seeded
-            .iter()
-            .filter(|seed| filter.matches(&topic_acl(seed.name, seed.pattern_type)))
-            .map(|seed| seed.name)
-            .collect();
-        check!(got == want, "pattern {pattern_type} name {name:?}");
+struct AclPatternQuery {
+    stored: Vec<AclEntry>,
+    pattern: i8,
+    name: Option<String>,
+    matched: Option<Vec<String>>,
+}
+
+#[derive(rstest_bdd_macros::DataTableRow)]
+struct StoredAclPattern {
+    name: String,
+    pattern: String,
+}
+
+#[rstest::fixture]
+fn acl_pattern_query() -> AclPatternQuery {
+    // Start this scenario with fresh inputs and observations.
+
+    AclPatternQuery {
+        stored: Vec::new(),
+        pattern: WIRE_ANY,
+        name: None,
+        matched: None,
     }
 }
 
-/// The table from issue #770: Kafka's `ResourcePatternFilter.matches` over
-/// six seeded topic patterns.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/acl_wire/binding_filter/tests.feature",
-    name = "resource pattern matching follows kafka"
-)]
-fn resource_pattern_matching_follows_kafka() {}
+#[rstest_bdd_macros::given("these topic ACL resource patterns are stored in order:")]
+fn stored_acl_patterns(
+    acl_pattern_query: &mut AclPatternQuery,
+    #[datatable] rows: Rows<StoredAclPattern>,
+) {
+    acl_pattern_query.stored = rows
+        .into_iter()
+        .map(|row| {
+            let pattern = serde_json::from_value(Value::String(row.pattern))
+                .expect("a metadata ACL pattern type");
+            topic_acl(&row.name, pattern)
+        })
+        .collect();
+}
+
+#[rstest_bdd_macros::given("the ACL query uses pattern {pattern} and resource name {name}")]
+fn acl_resource_query(acl_pattern_query: &mut AclPatternQuery, pattern: String, name: String) {
+    acl_pattern_query.pattern = match pattern.as_str() {
+        "Any" => WIRE_ANY,
+        "Match" => WIRE_PATTERN_MATCH,
+        "Literal" => LITERAL,
+        "Prefixed" => PREFIXED,
+        _ => panic!("unknown ACL pattern filter {pattern}"),
+    };
+    acl_pattern_query.name = serde_json::from_str(&name).expect("nullable JSON resource name");
+}
+
+#[rstest_bdd_macros::when("the broker matches the query against stored ACL resources")]
+fn match_acl_resources(acl_pattern_query: &mut AclPatternQuery) {
+    let filter = AclBindingFilter::from_wire(wire(
+        acl_pattern_query.name.as_deref(),
+        acl_pattern_query.pattern,
+    ))
+    .expect("a valid ACL resource query");
+    acl_pattern_query.matched = Some(
+        acl_pattern_query
+            .stored
+            .iter()
+            .filter(|entry| filter.matches(entry))
+            .map(|entry| entry.resource_name.clone())
+            .collect(),
+    );
+}
+
+#[rstest_bdd_macros::then("the matching resource names are exactly {expected}")]
+fn expected_acl_resources(acl_pattern_query: &AclPatternQuery, expected: String) {
+    let expected: Vec<String> =
+        serde_json::from_str(&expected).expect("an explicit resource-name list");
+    check!(acl_pattern_query.matched.as_ref() == Some(&expected));
+}
+
+rstest_bdd_macros::scenarios!("tests/features/migrated/src/handlers/acl_wire/binding_filter/tests.feature", fixtures = [acl_pattern_query: AclPatternQuery]);
 
 #[test]
 fn entry_matching_takes_only_null_as_any() {

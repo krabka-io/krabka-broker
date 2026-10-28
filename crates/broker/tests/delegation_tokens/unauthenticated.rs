@@ -23,7 +23,10 @@ use {
     },
     assert2::check,
     krabka_broker::{Broker, BrokerConfig, BrokerHandle, SslPrincipalMapper, config::ListenerSpec},
-    krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest,
+    krabka_protocol::owned::{
+        create_delegation_token_request::CreateDelegationTokenRequest,
+        create_delegation_token_response::CreateDelegationTokenResponse,
+    },
     krabka_security::ListenerProtocol,
     std::{fs, net::SocketAddr, sync::Arc},
     tempfile::TempDir,
@@ -116,57 +119,97 @@ async fn tls_connect_without_client_cert(addr: SocketAddr) -> TlsStream<TcpStrea
         .expect("TLS handshake must succeed without a client certificate")
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "delegation tokens unauthenticated: unauthenticated create delegation token is refused"
-)]
-async fn bdd_verify_unauthenticated_create_delegation_token_is_refused() {
-    // The broker installs the rustls crypto provider in `Broker::start`, but
-    // the client side below needs one too, and it builds its config first.
-    // `.ok()` swallows `AlreadySet`.
-    let _ = default_provider().install_default();
+struct AnonymousTokenRequest {
+    broker: Option<StartedBroker>,
+    protocol: Option<ListenerProtocol>,
+    response: Option<CreateDelegationTokenResponse>,
+}
+#[rstest::fixture]
+fn anonymous() -> AnonymousTokenRequest {
+    // Start this scenario with fresh inputs and observations.
 
-    for protocol in [ListenerProtocol::Plaintext, ListenerProtocol::Ssl] {
-        for super_users in [&[][..], &["operator"][..]] {
-            let StartedBroker {
-                handle,
-                log_dir: _log_dir,
-                pem_dir: _pem_dir,
-                addr,
-            } = start_broker(protocol, super_users).await;
-            let req = CreateDelegationTokenRequest {
-                max_lifetime_ms: -1,
-                ..Default::default()
-            };
-            let error_code = if protocol == ListenerProtocol::Ssl {
-                let mut stream = tls_connect_without_client_cert(addr).await;
-                send_create_delegation_token(&mut stream, 1, &req)
-                    .await
-                    .expect("CreateDelegationToken round trip")
-                    .error_code
-            } else {
-                let mut stream = TcpStream::connect(addr).await.expect("TCP connect");
-                send_create_delegation_token(&mut stream, 1, &req)
-                    .await
-                    .expect("CreateDelegationToken round trip")
-                    .error_code
-            };
-            check!(
-                error_code == DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-                "{protocol:?} listener with super_users={super_users:?} must refuse \
-                 CreateDelegationToken from an unauthenticated principal"
-            );
-            handle.shutdown().await;
-        }
+    AnonymousTokenRequest {
+        broker: None,
+        protocol: None,
+        response: None,
     }
 }
-
-/// The token-request refusal holds on both unauthenticated listener shapes,
-/// with and without a (non-ANONYMOUS) super-user configured.
-#[cfg(test)]
+#[rstest_bdd_macros::given(
+    "an unauthenticated {protocol} token listener has configured super user {super_user}"
+)]
+async fn anonymous_token_listener(
+    anonymous: &mut AnonymousTokenRequest,
+    protocol: String,
+    super_user: String,
+) {
+    let _ = default_provider().install_default();
+    let protocol = match protocol.as_str() {
+        "PLAINTEXT" => ListenerProtocol::Plaintext,
+        "SSL" => ListenerProtocol::Ssl,
+        other => panic!("unsupported anonymous token listener {other}"),
+    };
+    let users = if super_user == "none" {
+        Vec::new()
+    } else {
+        vec![super_user.as_str()]
+    };
+    anonymous.broker = Some(start_broker(protocol, &users).await);
+    anonymous.protocol = Some(protocol);
+}
+#[rstest_bdd_macros::when(
+    "a connection with no SASL identity or client certificate creates a token with lifetime -1"
+)]
+async fn anonymous_token_creation(anonymous: &mut AnonymousTokenRequest) {
+    let addr = anonymous
+        .broker
+        .as_ref()
+        .expect("anonymous token broker started")
+        .addr;
+    let request = CreateDelegationTokenRequest {
+        max_lifetime_ms: -1,
+        ..Default::default()
+    };
+    anonymous.response = Some(
+        if anonymous.protocol.expect("listener configured") == ListenerProtocol::Ssl {
+            let mut stream = tls_connect_without_client_cert(addr).await;
+            send_create_delegation_token(&mut stream, 1, &request)
+                .await
+                .expect("CreateDelegationToken")
+        } else {
+            let mut stream = TcpStream::connect(addr).await.expect("TCP connect");
+            send_create_delegation_token(&mut stream, 1, &request)
+                .await
+                .expect("CreateDelegationToken")
+        },
+    );
+}
+#[rstest_bdd_macros::then("the anonymous token request is refused with error 64")]
+fn anonymous_token_refused(anonymous: &AnonymousTokenRequest) {
+    check!(
+        anonymous
+            .response
+            .as_ref()
+            .expect("anonymous mint attempted")
+            .error_code
+            == DELEGATION_TOKEN_REQUEST_NOT_ALLOWED
+    );
+}
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/delegation_tokens/unauthenticated.feature",
     name = "unauthenticated create delegation token is refused"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unauthenticated_create_delegation_token_is_refused() {}
+async fn unauthenticated_create_delegation_token_is_refused(
+    anonymous: AnonymousTokenRequest,
+    protocol: String,
+    super_user: String,
+) {
+    let _ = (protocol, super_user);
+    let StartedBroker {
+        handle,
+        log_dir: _log,
+        pem_dir: _pem,
+        ..
+    } = anonymous.broker.expect("anonymous token broker started");
+    handle.shutdown().await;
+}

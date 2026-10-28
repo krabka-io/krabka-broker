@@ -725,51 +725,52 @@ mod tests {
         assert2::assert!(LogView::last_epoch(&log) == 3);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kraft log tests: logview end offset for epoch follows kafka for {example}"
-    )]
-    fn bdd_verify_logview_end_offset_for_epoch_follows_kafka(example: String) {
-        type Example<'a> = (&'a str, u32, LogOffsetMetadata);
-        let (case, epoch, expected): Example<'_> = match example.as_str() {
-            "epoch older than log" => ("an epoch older than the log", 1, LogOffsetMetadata {
-                offset: 0,
-                epoch: 1,
-            }),
-            "completed prior epoch" => ("a completed prior epoch", 2, LogOffsetMetadata {
-                offset: 1,
-                epoch: 2,
-            }),
-            "between held epochs" => ("an epoch between two the log holds", 3, LogOffsetMetadata {
-                offset: 1,
-                epoch: 2,
-            }),
-            "current epoch" => ("the current epoch", 4, LogOffsetMetadata {
-                offset: 2,
-                epoch: 4,
-            }),
-            "newer than log" => ("an epoch newer than the log", 9, LogOffsetMetadata {
-                offset: 2,
-                epoch: 4,
-            }),
-            _ => panic!("unknown BDD example: {example}"),
-        };
+    use {
+        rstest::fixture,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
 
-        let LogInDir { mut log, dir: _dir } = open_tmp();
-        log.append(&mut batch(0, 2, b"a"), 0).unwrap(); // epoch 2 @ [0,1)
-        log.append(&mut batch(0, 4, b"b"), 0).unwrap(); // epoch 4 @ [1,2)
-        check!(
-            LogView::end_offset_for_epoch(&log, epoch) == expected,
-            "{case}"
-        );
+    struct EpochLog {
+        fixture: Option<LogInDir>,
+        answer: Option<LogOffsetMetadata>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kraft/log.feature",
-        name = "tests: logview end offset for epoch follows kafka"
-    )]
-    fn logview_end_offset_for_epoch_follows_kafka(example: String) { let _ = example; }
+    #[fixture]
+    fn epoch_log() -> EpochLog {
+        // Start this scenario with fresh inputs and observations.
+
+        EpochLog {
+            fixture: None,
+            answer: None,
+        }
+    }
+
+    #[given("a metadata log with epoch 2 at offset 0 and epoch 4 at offset 1")]
+    fn two_epoch_log(epoch_log: &mut EpochLog) {
+        let mut fixture = open_tmp();
+        fixture.log.append(&mut batch(0, 2, b"a"), 0).unwrap();
+        fixture.log.append(&mut batch(0, 4, b"b"), 0).unwrap();
+        epoch_log.fixture = Some(fixture);
+    }
+
+    #[when("the metadata log end offset for epoch {epoch} is queried")]
+    fn query_epoch_end(epoch_log: &mut EpochLog, epoch: u32) {
+        epoch_log.answer = Some(LogView::end_offset_for_epoch(
+            &epoch_log
+                .fixture
+                .as_ref()
+                .expect("a two-epoch metadata log was given")
+                .log,
+            epoch,
+        ));
+    }
+
+    #[then("the metadata log answers epoch {epoch} ending at offset {offset}")]
+    fn epoch_end(epoch_log: &EpochLog, epoch: u32, offset: i64) {
+        check!(epoch_log.answer == Some(LogOffsetMetadata { offset, epoch }));
+    }
+
+    scenarios!("tests/features/migrated/src/kraft/log.feature", fixtures = [epoch_log: EpochLog]);
 
     #[test]
     fn empty_log_last_epoch_is_zero() {

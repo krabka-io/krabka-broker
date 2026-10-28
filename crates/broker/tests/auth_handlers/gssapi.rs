@@ -9,7 +9,7 @@
 use {
     crate::{
         harness::{round_trip, start_broker_stream},
-        inter_broker::run_inter_broker_auth_test,
+        inter_broker::drive_inter_broker_client_then_apiversions,
         support::{
             gssapi::broker_config,
             manifest_dir,
@@ -19,7 +19,7 @@ use {
     },
     assert2::assert,
     bytes::BytesMut,
-    krabka_broker::config::InterBrokerCredentials,
+    krabka_broker::{config::InterBrokerCredentials, network::client::InterBrokerClient},
     krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
     krabka_protocol::{
         Decode, Encode,
@@ -30,16 +30,37 @@ use {
         },
     },
     krabka_security::{SaslMechanism, gssapi},
-    std::env,
+    std::{env, io},
+    tokio::net::TcpStream,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("auth handlers gssapi: gssapi handshake advertised when enabled")]
-async fn bdd_verify_gssapi_handshake_advertised_when_enabled() {
-    let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Gssapi]);
+struct KerberosPeer {
+    directory: Option<tempfile::TempDir>,
+    broker: Option<krabka_broker::BrokerHandle>,
+    stream: Option<TcpStream>,
+    credentials: Option<InterBrokerCredentials>,
+    handshake: Option<SaslHandshakeResponse>,
+    authenticated: Option<io::Result<()>>,
+}
+
+#[rstest::fixture]
+fn kerberos() -> KerberosPeer {
+    // Start this scenario with fresh inputs and observations.
+
+    KerberosPeer {
+        directory: None,
+        broker: None,
+        stream: None,
+        credentials: None,
+        handshake: None,
+        authenticated: None,
+    }
+}
+
+#[rstest_bdd_macros::given("a GSSAPI listener without a running KDC")]
+async fn kerberos_handshake_listener(kerberos: &mut KerberosPeer) {
+    let (directory, mut cfg) = sasl_temp_config(vec![SaslMechanism::Gssapi]);
     cfg.gssapi = Some(krabka_broker::GssapiConfig {
-        // Points at the committed fixture, but the handshake path never reads
-        // it (the acceptor is built lazily on the first SaslAuthenticate).
         keytab_path: manifest_dir().join("tests/fixtures/security/kdc/kafka.keytab"),
         service_name: "kafka".to_owned(),
         principal_to_local_rules: vec![],
@@ -47,126 +68,135 @@ async fn bdd_verify_gssapi_handshake_advertised_when_enabled() {
         kdc: None,
         max_time_skew: gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
     });
+    let peer = start_broker_stream(cfg).await;
+    kerberos.directory = Some(directory);
+    kerberos.broker = Some(peer.broker);
+    kerberos.stream = Some(peer.stream);
+}
 
-    let broker_stream = start_broker_stream(cfg).await;
-    let handle = broker_stream.broker;
-    let mut stream = broker_stream.stream;
-    let mut corr = 0;
-
-    // ApiVersions (pre-auth) so the connection is in a clean state.
-    let av_req = ApiVersionsRequest::default();
-    let mut av_body = BytesMut::new();
-    av_req.encode(&mut av_body, 0).unwrap();
-    let av = round_trip(
-        &mut stream,
+#[rstest_bdd_macros::when("an unauthenticated client discovers APIs and selects GSSAPI")]
+async fn select_kerberos(kerberos: &mut KerberosPeer) {
+    let stream = kerberos.stream.as_mut().expect("peer connection");
+    let mut body = BytesMut::new();
+    ApiVersionsRequest::default().encode(&mut body, 0).unwrap();
+    let response = round_trip(
+        stream,
         SocketExchangeSetup {
-            correlation: WireCorrelationId(corr),
+            correlation: WireCorrelationId(0),
             ..Default::default()
         },
-        &av_body,
+        &body,
     )
     .await
     .unwrap();
-    corr += 1;
-    let mut cur: &[u8] = &av;
-    ApiVersionsResponse::decode(&mut cur, 0).unwrap();
-
-    // SaslHandshake v1, mechanism = "GSSAPI".
-    let sh_req = SaslHandshakeRequest {
+    ApiVersionsResponse::decode(&mut &response[..], 0).unwrap();
+    let mut body = BytesMut::new();
+    SaslHandshakeRequest {
         mechanism: "GSSAPI".to_owned(),
         ..Default::default()
-    };
-    let mut sh_body = BytesMut::new();
-    sh_req.encode(&mut sh_body, 1).unwrap();
-    let sh = round_trip(
-        &mut stream,
+    }
+    .encode(&mut body, 1)
+    .unwrap();
+    let response = round_trip(
+        stream,
         SocketExchangeSetup {
             api_key: WireApiKey(17),
             version: WireApiVersion(1),
-            correlation: WireCorrelationId(corr),
+            correlation: WireCorrelationId(1),
             ..Default::default()
         },
-        &sh_body,
+        &body,
     )
     .await
     .unwrap();
-    let mut cur: &[u8] = &sh;
-    let sh_resp = SaslHandshakeResponse::decode(&mut cur, 1).unwrap();
+    kerberos.handshake = Some(SaslHandshakeResponse::decode(&mut &response[..], 1).unwrap());
+}
 
-    handle.shutdown().await;
-
-    assert!(sh_resp.error_code == 0, "GSSAPI handshake must succeed");
+#[rstest_bdd_macros::then(
+    "GSSAPI selection succeeds and advertises GSSAPI without contacting a KDC"
+)]
+fn kerberos_advertised(kerberos: &KerberosPeer) {
+    let response = kerberos.handshake.as_ref().expect("mechanism selected");
+    assert!(response.error_code == 0);
     assert!(
-        sh_resp.mechanisms.iter().any(|m| m == "GSSAPI"),
-        "GSSAPI must be advertised; got {:?}",
-        sh_resp.mechanisms
+        response
+            .mechanisms
+            .iter()
+            .any(|mechanism| mechanism == "GSSAPI")
     );
 }
 
-/// A broker with GSSAPI enabled advertises GSSAPI in its `SaslHandshake`
-/// response and accepts the handshake with `error_code = 0`.
-///
-/// The connection then stays in GSSAPI negotiation. The GSS context exchange
-/// itself needs a live KDC, and the E2E parity tests in Task 10 cover it.
-/// This case proves two things only. The mechanism is wired through the
-/// handshake advertisement, and the broker does not touch the keytab before
-/// the first `SaslAuthenticate` round.
-#[cfg(test)]
+#[rstest_bdd_macros::given("a live MIT KDC and broker and alice service keytabs")]
+async fn live_kerberos_peer(kerberos: &mut KerberosPeer) {
+    let fixtures = manifest_dir().join("tests/fixtures/security/kdc");
+    let kdc_url = env::var("SSPI_KDC_URL").unwrap_or_else(|_| "tcp://localhost:88".to_owned());
+    let (directory, mut cfg) = sasl_temp_config(vec![SaslMechanism::Gssapi]);
+    cfg.gssapi = Some(broker_config(
+        fixtures.join("kafka.keytab"),
+        kdc_url.clone(),
+    ));
+    kerberos.broker = Some(
+        krabka_broker::Broker::start(cfg)
+            .await
+            .expect("broker must start"),
+    );
+    kerberos.directory = Some(directory);
+    kerberos.credentials = Some(InterBrokerCredentials::Gssapi {
+        keytab_path: fixtures.join("alice.keytab"),
+        client_principal: "alice@CRABKA.TEST".to_owned(),
+        service_name: "kafka".to_owned(),
+        kdc_url,
+    });
+}
+
+#[rstest_bdd_macros::when(
+    "the inter broker client authenticates from alice keytab and requests API versions"
+)]
+async fn kerberos_keytab_authentication(kerberos: &mut KerberosPeer) {
+    let client = InterBrokerClient::new(
+        None,
+        Some(
+            kerberos
+                .credentials
+                .take()
+                .expect("alice keytab credentials"),
+        ),
+    );
+    kerberos.authenticated = Some(
+        drive_inter_broker_client_then_apiversions(
+            &client,
+            kerberos.broker.as_ref().expect("GSSAPI peer").listen_addr(),
+        )
+        .await,
+    );
+}
+
+#[rstest_bdd_macros::then("the keytab authenticated connection serves API versions")]
+fn kerberos_rpc_succeeded(kerberos: &KerberosPeer) {
+    assert!(
+        kerberos
+            .authenticated
+            .as_ref()
+            .expect("authentication attempted")
+            .is_ok()
+    );
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/auth_handlers/gssapi.feature",
     name = "gssapi handshake advertised when enabled"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn gssapi_handshake_advertised_when_enabled() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auth handlers gssapi: gssapi inter broker client authenticates from keytab"
-)]
-async fn bdd_verify_gssapi_inter_broker_client_authenticates_from_keytab() {
-    let fixtures = manifest_dir().join("tests/fixtures/security/kdc");
-    let kdc_url = env::var("SSPI_KDC_URL").unwrap_or_else(|_| "tcp://localhost:88".to_owned());
-
-    let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Gssapi]);
-    cfg.gssapi = Some(broker_config(
-        fixtures.join("kafka.keytab"),
-        kdc_url.clone(),
-    ));
-
-    let result = run_inter_broker_auth_test(cfg, InterBrokerCredentials::Gssapi {
-        keytab_path: fixtures.join("alice.keytab"),
-        client_principal: "alice@CRABKA.TEST".to_owned(),
-        service_name: "kafka".to_owned(),
-        kdc_url,
-    })
-    .await;
-    result.expect("InterBrokerClient GSSAPI auth + ApiVersions round-trip must succeed");
+async fn gssapi_handshake_advertised_when_enabled(kerberos: KerberosPeer) {
+    kerberos.broker.expect("GSSAPI peer").shutdown().await;
 }
 
-/// End-to-end inter-broker GSSAPI initiate against a live KDC.
-///
-/// A Krabka broker accepts on a `SASL_PLAINTEXT`/GSSAPI listener, with the
-/// service key in `kafka.keytab`. `InterBrokerClient` dials it with
-/// `InterBrokerCredentials::Gssapi` and authenticates *from a keytab* as
-/// `alice@CRABKA.TEST`, with no password. The test proves the full outbound
-/// GSSAPI path: AS/TGS from `alice.keytab` → AP-REQ → broker validates →
-/// RFC 4752 auth-only layer negotiation → authenticated stream. A follow-up
-/// `ApiVersions` round-trip confirms the stream.
-///
-/// The test needs the MIT KDC fixture and the exported env, the same as the
-/// provider contract test:
-///
-/// ```text
-/// bazel run //crates/broker/tests/fixtures/security/kdc:image_load
-/// docker compose -f crates/broker/tests/fixtures/security/kdc/docker-compose.yml up -d
-/// KRB5_CONFIG=crates/broker/tests/fixtures/security/kdc/krb5.conf SSPI_KDC_URL=tcp://localhost:88 \
-///   cargo test -p krabka-broker gssapi_inter_broker -- --ignored
-/// ```
 #[ignore = "requires the MIT KDC fixture (docker compose up) + exported KRB5_CONFIG/SSPI_KDC_URL"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/auth_handlers/gssapi.feature",
     name = "gssapi inter broker client authenticates from keytab"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn gssapi_inter_broker_client_authenticates_from_keytab() {}
+async fn gssapi_inter_broker_client_authenticates_from_keytab(kerberos: KerberosPeer) {
+    kerberos.broker.expect("GSSAPI peer").shutdown().await;
+}

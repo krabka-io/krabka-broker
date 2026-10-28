@@ -4,16 +4,20 @@
 
 use {
     crate::{
-        admin_harness::{build_client, create_topic_helper},
-        support::{
-            registered_cluster, start_n_node_client,
-            topics::{creatable_topic, create_topic_request},
-        },
+        admin_harness::{AdminCluster, admin, create_topic_helper},
+        support::topics::{creatable_topic, create_topic_request},
     },
     assert2::assert,
-    krabka_protocol::owned::create_partitions_request::{
-        CreatePartitionsAssignment, CreatePartitionsRequest, CreatePartitionsTopic,
+    krabka_broker::NodeId,
+    krabka_protocol::owned::{
+        create_partitions_request::{
+            CreatePartitionsAssignment, CreatePartitionsRequest, CreatePartitionsTopic,
+        },
+        create_partitions_response::CreatePartitionsResponse,
+        create_topics_response::CreateTopicsResponse,
     },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
 };
 
 fn create_partitions_request(
@@ -34,215 +38,226 @@ fn create_partitions_request(
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "admin handlers admin create partitions: automatic placement takes a fenced broker only as a last resort"
+struct PartitionGrowth {
+    name: String,
+    fenced: Option<NodeId>,
+    created: Option<CreateTopicsResponse>,
+    expanded: Option<CreatePartitionsResponse>,
+}
+
+#[fixture]
+fn growth() -> PartitionGrowth {
+    // Start this scenario with fresh inputs and observations.
+
+    PartitionGrowth {
+        name: String::new(),
+        fenced: None,
+        created: None,
+        expanded: None,
+    }
+}
+
+#[given("three brokers are registered and one non-controller peer is fenced")]
+async fn fenced_peer(admin: &mut AdminCluster, growth: &mut PartitionGrowth) {
+    growth.fenced = Some(admin.fenced_three_brokers().await);
+}
+
+#[given("topic {name} starts with one partition")]
+async fn original_partition(admin: &AdminCluster, growth: &mut PartitionGrowth, name: String) {
+    create_topic_helper(admin.client(), &name, 1).await;
+    growth.name = name;
+}
+
+#[when("the admin creates topic {name} with replication factor {replicas}")]
+async fn placement_topic(
+    admin: &AdminCluster,
+    growth: &mut PartitionGrowth,
+    name: String,
+    replicas: i16,
+) {
+    growth.created = Some(
+        admin
+            .client()
+            .send(create_topic_request(
+                creatable_topic()
+                    .name(name.clone())
+                    .replicas(replicas)
+                    .call(),
+            ))
+            .await
+            .expect("CreateTopics for placement"),
+    );
+    growth.name = name;
+}
+
+#[then("the placement topic creation succeeds and partition 0 exists")]
+async fn placement_created(admin: &AdminCluster, growth: &PartitionGrowth) {
+    let response = growth
+        .created
+        .as_ref()
+        .expect("a placement topic was created");
+    assert!(response.topics[0].error_code == 0);
+    admin
+        .broker()
+        .wait_until_partition_present(&growth.name, 0)
+        .await;
+}
+
+#[when("the admin grows the topic to {count} partitions with automatic placement")]
+async fn automatic_growth(admin: &AdminCluster, growth: &mut PartitionGrowth, count: i32) {
+    growth.expanded = Some(
+        admin
+            .client()
+            .send(create_partitions_request(&growth.name, count, None))
+            .await
+            .expect("create_partitions"),
+    );
+}
+
+#[when(
+    "the admin grows the topic to {count} partitions with {assignments} assignments to broker 1"
 )]
-async fn bdd_verify_automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
-    let mut cluster = registered_cluster(3).await;
-    // Stop a broker that is neither the one the test talks to nor the
-    // controller leader. Its controlled shutdown ends fenced, as Kafka's
-    // `processBrokerHeartbeat` fences a broker that may shut down, and it
-    // never heartbeats again to unfence.
-    let leader = cluster[0].0.controller_leader_id();
-    let stopped_index = if leader == Some(krabka_broker::NodeId(3)) {
-        1
-    } else {
-        2
-    };
-    let (stopped, stopped_cfg, _stopped_dir) = cluster.remove(stopped_index);
-    let fenced = stopped_cfg.node_id;
-    stopped.shutdown().await;
-    let (broker, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
-    broker
-        .wait_for_image(|_| broker.fenced_broker_ids_for_test().contains(&fenced.0))
-        .await;
+async fn explicit_growth(
+    admin: &AdminCluster,
+    growth: &mut PartitionGrowth,
+    count: i32,
+    assignments: usize,
+) {
+    let request = create_partitions_request(
+        &growth.name,
+        count,
+        Some(vec![
+            CreatePartitionsAssignment {
+                broker_ids: vec![1],
+                ..Default::default()
+            };
+            assignments
+        ]),
+    );
+    growth.expanded = Some(
+        admin
+            .client()
+            .send(request)
+            .await
+            .expect("create_partitions (explicit)"),
+    );
+}
 
-    let created = client
-        .send(create_topic_request(
-            creatable_topic()
-                .name(("t-usable-brokers").into())
-                .replicas(2)
-                .call(),
-        ))
-        .await
-        .unwrap();
-    assert!(created.topics[0].error_code == 0);
-    broker
-        .wait_until_partition_present("t-usable-brokers", 0)
-        .await;
+#[then("CreatePartitions succeeds")]
+fn expansion_accepted(growth: &PartitionGrowth) {
+    let response = growth
+        .expanded
+        .as_ref()
+        .expect("partition growth was requested");
+    assert!(
+        response.results[0].error_code == 0,
+        "create_partitions result: {:?}",
+        response.results[0].error_message
+    );
+}
 
-    let expanded = client
-        .send(create_partitions_request("t-usable-brokers", 3, None))
-        .await
-        .unwrap();
-    assert!(expanded.results[0].error_code == 0);
+#[then("all {count} partitions materialize locally")]
+async fn materialized_partitions(admin: &AdminCluster, growth: &PartitionGrowth, count: i32) {
+    for partition in 0..count {
+        admin
+            .broker()
+            .wait_until_partition_present(&growth.name, partition)
+            .await;
+    }
+}
 
+#[then("none of the 3 partitions assigns the fenced broker as a replica or ISR member")]
+async fn fenced_peer_avoided(admin: &AdminCluster, growth: &PartitionGrowth) {
+    let broker = admin.broker();
+    let fenced = growth.fenced.expect("a fenced non-controller peer");
     for partition in 0..3 {
         broker
-            .wait_until_partition_present("t-usable-brokers", partition)
+            .wait_until_partition_present(&growth.name, partition)
             .await;
         let record = broker
-            .partition_record_for_test("t-usable-brokers", partition)
+            .partition_record_for_test(&growth.name, partition)
             .unwrap();
         assert!(!record.replicas.contains(&fenced));
         assert!(!record.isr.contains(&fenced));
     }
+}
 
-    // Kafka's placer counts a fenced broker toward the replication factor and
-    // takes it last, so a replication factor of 3 on the 3 registered brokers
-    // succeeds. The fenced replica stays out of the ISR and never leads.
-    let last_resort = client
-        .send(create_topic_request(
-            creatable_topic()
-                .name(("t-last-resort").into())
-                .replicas(3)
-                .call(),
-        ))
-        .await
-        .unwrap();
-    assert!(last_resort.topics[0].error_code == 0);
-    broker
-        .wait_until_partition_present("t-last-resort", 0)
-        .await;
-    let record = broker
-        .partition_record_for_test("t-last-resort", 0)
+#[then("the fenced replica is last and remains outside the ISR and leadership")]
+fn fenced_peer_last(admin: &AdminCluster, growth: &PartitionGrowth) {
+    let fenced = growth.fenced.expect("a fenced non-controller peer");
+    let record = admin
+        .broker()
+        .partition_record_for_test(&growth.name, 0)
         .unwrap();
     assert!(record.replicas.len() == 3);
     assert!(record.replicas[2] == fenced);
     assert!(record.isr == record.replicas[..2]);
     assert!(record.leader == record.replicas[0]);
-
-    let rejected = client
-        .send(create_topic_request(
-            creatable_topic()
-                .name(("t-too-many-replicas").into())
-                .replicas(4)
-                .call(),
-        ))
-        .await
-        .unwrap();
-    assert!(rejected.topics[0].error_code == 38);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[then("CreateTopics rejects the replication factor with INVALID_REPLICATION_FACTOR")]
+fn impossible_replication(growth: &PartitionGrowth) {
+    assert!(
+        growth
+            .created
+            .as_ref()
+            .expect("a topic creation was attempted")
+            .topics[0]
+            .error_code
+            == 38
+    );
+}
+
+#[then("CreatePartitions rejects the assignment count with INVALID_REPLICA_ASSIGNMENT")]
+fn mismatched_assignments(growth: &PartitionGrowth) {
+    let response = growth
+        .expanded
+        .as_ref()
+        .expect("partition growth was requested");
+    assert!(
+        response.results[0].error_code == 39,
+        "length-mismatch must return INVALID_REPLICA_ASSIGNMENT (39): {:?}",
+        response.results[0].error_message
+    );
+}
+
+#[then("partition 2 has not been created")]
+fn no_extra_partition(admin: &AdminCluster, growth: &PartitionGrowth) {
+    assert!(
+        !admin.broker().partition_exists_for_test(&growth.name, 2),
+        "partition 2 must NOT have been created on an INVALID_REPLICA_ASSIGNMENT path"
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/admin_handlers/admin_create_partitions.feature",
     name = "automatic placement takes a fenced broker only as a last resort"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "admin handlers admin create partitions: create partitions extends topic"
-)]
-async fn bdd_verify_create_partitions_extends_topic() {
-    let (cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
-    let broker = &cluster[0].0;
-
-    create_topic_helper(&client, "t-cp", 1).await;
-
-    let req = create_partitions_request("t-cp", 3, None);
-    let resp = client.send(req).await.expect("create_partitions");
-    assert!(
-        resp.results[0].error_code == 0,
-        "create_partitions result: {:?}",
-        resp.results[0].error_message
-    );
-
-    // Wait for the supervisor reconcile to materialise all three partitions.
-    for p in 0..3 {
-        broker.wait_until_partition_present("t-cp", p).await;
-    }
+async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort(
+    admin: AdminCluster,
+    growth: PartitionGrowth,
+) {
+    admin.shutdown().await;
 }
 
-/// `CreatePartitions`: a request that extends a 1-partition topic to 3
-/// returns `error_code == 0`. All three partitions then materialise in the
-/// broker's local registry within a few seconds.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/admin_handlers/admin_create_partitions.feature",
     name = "create partitions extends topic"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_partitions_extends_topic() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "admin handlers admin create partitions: create partitions honors explicit assignments"
-)]
-async fn bdd_verify_create_partitions_honors_explicit_assignments() {
-    let (cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
-    let broker = &cluster[0].0;
-
-    create_topic_helper(&client, "t-cpa", 1).await;
-
-    // Happy path: 1 existing partition → 2 partitions, explicit assignment
-    // pins broker 0 (the only one available).
-    let req = create_partitions_request(
-        "t-cpa",
-        2,
-        Some(vec![CreatePartitionsAssignment {
-            broker_ids: vec![1],
-            ..Default::default()
-        }]),
-    );
-    let resp = client
-        .send(req)
-        .await
-        .expect("create_partitions (explicit)");
-    assert!(
-        resp.results[0].error_code == 0,
-        "explicit assignment must succeed: {:?}",
-        resp.results[0].error_message
-    );
-
-    // Wait for the new partition to materialise.
-    broker.wait_until_partition_present("t-cpa", 1).await;
-
-    // Invalid path: ask for 1 more partition (total 3) but supply 2
-    // assignments. Must surface INVALID_REPLICA_ASSIGNMENT and NOT add a
-    // partition.
-    let bad = create_partitions_request(
-        "t-cpa",
-        3,
-        Some(vec![
-            CreatePartitionsAssignment {
-                broker_ids: vec![1],
-                ..Default::default()
-            },
-            CreatePartitionsAssignment {
-                broker_ids: vec![1],
-                ..Default::default()
-            },
-        ]),
-    );
-    let bad_resp = client
-        .send(bad)
-        .await
-        .expect("create_partitions (length-mismatch)");
-    assert!(
-        bad_resp.results[0].error_code == 39,
-        "length-mismatch must return INVALID_REPLICA_ASSIGNMENT (39): {:?}",
-        bad_resp.results[0].error_message
-    );
-    assert!(
-        !broker.partition_exists_for_test("t-cpa", 2),
-        "partition 2 must NOT have been created on an INVALID_REPLICA_ASSIGNMENT path",
-    );
+async fn create_partitions_extends_topic(admin: AdminCluster, growth: PartitionGrowth) {
+    admin.shutdown().await;
 }
 
-/// `CreatePartitions`: explicit `assignments` list. The topic's rf is 1 on a
-/// single-broker cluster, and the operator pins the new partition to
-/// broker 0. The handler must accept it (`error_code` == 0) and materialise
-/// the partition. A second call with a wrong-length assignment list must
-/// return `INVALID_REPLICA_ASSIGNMENT` (39).
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/admin_handlers/admin_create_partitions.feature",
     name = "create partitions honors explicit assignments"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_partitions_honors_explicit_assignments() {}
+async fn create_partitions_honors_explicit_assignments(
+    admin: AdminCluster,
+    growth: PartitionGrowth,
+) {
+    admin.shutdown().await;
+}

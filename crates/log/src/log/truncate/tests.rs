@@ -171,73 +171,97 @@ fn truncate_to_removes_future_empty_producer_snapshots() {
     assert2::assert!(snapshot_offsets(dir.path()) == vec![Offset(2)]);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("log truncate tests: producer snapshots follow kafkas lifecycle")]
-fn bdd_verify_producer_snapshots_follow_kafkas_lifecycle() {
-    #[derive(Debug, Clone, Copy)]
-    enum Action {
-        Nothing,
-        Close,
-        TruncateToFirstRoll,
-        TrimThenTruncate,
-        ResetTo,
-    }
-    let cases = [
-        (Action::Nothing, vec![Offset(2), Offset(4)]),
-        (Action::Close, vec![Offset(2), Offset(4), Offset(6)]),
-        (Action::TruncateToFirstRoll, vec![Offset(2)]),
-        (Action::TrimThenTruncate, vec![Offset(4)]),
-        (Action::ResetTo, vec![Offset(10)]),
-    ];
-    for (action, expected) in cases {
-        let dir = tempdir().unwrap();
-        let config = tiny_segments();
-        let mut log = Log::open(dir.path(), config.clone()).unwrap();
-        for sequence in [0, 2, 4] {
-            let mut batch = sample_batch(2);
-            batch.producer_id = 42;
-            batch.base_sequence = sequence;
-            log.append(&mut batch).unwrap();
-        }
-        match action {
-            Action::Nothing | Action::Close => {}
-            Action::TruncateToFirstRoll => log.truncate_to(Offset(2)).unwrap(),
-            Action::TrimThenTruncate => {
-                log.trim_to_offset(Offset(2)).unwrap();
-                log.truncate_to(Offset(4)).unwrap();
-            }
-            Action::ResetTo => log.reset_to(Offset(10)).unwrap(),
-        }
-        let before = log.producer_state_snapshot();
-        if matches!(action, Action::Close) {
-            log.close();
-        } else {
-            drop(log);
-        }
-        let offsets: Vec<Offset> = producer_snapshot::list(dir.path())
-            .unwrap()
-            .into_iter()
-            .map(|snapshot| snapshot.offset)
-            .collect();
-        check!(offsets == expected, "{action:?}");
-        let reopened = Log::open(dir.path(), config).unwrap();
-        check!(reopened.producer_state_snapshot() == before, "{action:?}");
+struct SnapshotLifecycleScenario {
+    directory: tempfile::TempDir,
+    config: Option<LogConfig>,
+    log: Option<Log>,
+    offsets: Option<Vec<Offset>>,
+    before: Option<Vec<ProducerSnapshotEntry>>,
+    reopened: Option<Vec<ProducerSnapshotEntry>>,
+}
+#[rstest::fixture]
+fn snapshot_lifecycle() -> SnapshotLifecycleScenario {
+    let directory = tempdir().expect("producer snapshot lifecycle directory");
+    SnapshotLifecycleScenario {
+        directory,
+        config: None,
+        log: None,
+        offsets: None,
+        before: None,
+        reopened: None,
     }
 }
-
-/// Kafka takes a producer-state snapshot at a roll, on `close`, after
-/// `truncateTo` and after `truncateFullyAndStartAt`, and a truncation drops
-/// every snapshot at or below the log start. Each row starts from three
-/// two-record batches from one idempotent producer, one per segment (rolls at
-/// 2 and 4, log end 6), then
-/// applies an action and lists the snapshot offsets left on disk. A reopen
-/// then restores the same producer state it had.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/log/truncate/tests.feature",
-    name = "producer snapshots follow kafkas lifecycle"
-)]
-fn producer_snapshots_follow_kafkas_lifecycle() {}
+#[rstest_bdd_macros::given("three two-record segments from producer 42 with sequences 0 2 and 4")]
+fn rolling_producer_log(snapshot_lifecycle: &mut SnapshotLifecycleScenario) {
+    let config = tiny_segments();
+    let mut log =
+        Log::open(snapshot_lifecycle.directory.path(), config.clone()).expect("producer log");
+    for sequence in [0, 2, 4] {
+        let mut batch = sample_batch(2);
+        batch.producer_id = 42;
+        batch.base_sequence = sequence;
+        log.append(&mut batch).expect("producer batch");
+    }
+    snapshot_lifecycle.config = Some(config);
+    snapshot_lifecycle.log = Some(log);
+}
+#[rstest_bdd_macros::when("log lifecycle action {action} is applied and the log is reopened")]
+fn producer_log_lifecycle(snapshot_lifecycle: &mut SnapshotLifecycleScenario, action: String) {
+    let mut log = snapshot_lifecycle
+        .log
+        .take()
+        .expect("rolling producer log given");
+    match action.as_str() {
+        "drop" | "close" => {}
+        "truncate-to-2" => log.truncate_to(Offset(2)).expect("truncate to first roll"),
+        "trim-to-2-then-truncate-to-4" => {
+            log.trim_to_offset(Offset(2)).expect("trim producer log");
+            log.truncate_to(Offset(4)).expect("truncate producer log");
+        }
+        "reset-to-10" => log.reset_to(Offset(10)).expect("reset producer log"),
+        _ => panic!("unknown log lifecycle action {action}"),
+    }
+    snapshot_lifecycle.before = Some(log.producer_state_snapshot());
+    if action == "close" {
+        log.close();
+    } else {
+        drop(log);
+    }
+    snapshot_lifecycle.offsets = Some(
+        producer_snapshot::list(snapshot_lifecycle.directory.path())
+            .expect("snapshot files")
+            .into_iter()
+            .map(|snapshot| snapshot.offset)
+            .collect(),
+    );
+    let reopened = Log::open(
+        snapshot_lifecycle.directory.path(),
+        snapshot_lifecycle
+            .config
+            .as_ref()
+            .expect("log configuration given")
+            .clone(),
+    )
+    .expect("reopen producer log");
+    snapshot_lifecycle.reopened = Some(reopened.producer_state_snapshot());
+}
+#[rstest_bdd_macros::then("producer snapshots remain at offsets {offsets}")]
+fn retained_producer_snapshot_offsets(
+    snapshot_lifecycle: &SnapshotLifecycleScenario,
+    offsets: String,
+) {
+    let expected: Vec<Offset> = offsets
+        .split(',')
+        .map(|offset| Offset(offset.parse().expect("snapshot offset")))
+        .collect();
+    check!(snapshot_lifecycle.offsets.as_ref() == Some(&expected));
+}
+#[rstest_bdd_macros::then("reopening restores the complete producer state present before shutdown")]
+fn restored_producer_snapshot_state(snapshot_lifecycle: &SnapshotLifecycleScenario) {
+    check!(snapshot_lifecycle.before.is_some());
+    check!(snapshot_lifecycle.reopened == snapshot_lifecycle.before);
+}
+rstest_bdd_macros::scenarios!("tests/features/producer_snapshot_lifecycle", fixtures = [snapshot_lifecycle: SnapshotLifecycleScenario]);
 
 #[test]
 fn truncate_to_log_end_is_noop() {

@@ -420,10 +420,25 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("handlers list groups tests: filter groups matches kafka filters")]
-    fn bdd_verify_filter_groups_matches_kafka_filters() {
-        let groups = vec![
+    #[derive(Default)]
+    struct GroupListingScenario {
+        groups: Vec<ListedGroup>,
+        request: Option<ListGroupsRequest>,
+        listed: Option<Vec<ListedGroup>>,
+    }
+    #[rstest::fixture]
+    fn group_listing() -> GroupListingScenario {
+        let groups = Vec::new();
+        GroupListingScenario {
+            groups,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "classic consumer share and streams groups span empty rebalancing reconciling stable and not-ready states with one denied group"
+    )]
+    fn heterogeneous_group_listing(group_listing: &mut GroupListingScenario) {
+        group_listing.groups = vec![
             group("classic-a", "", "Empty", "classic"),
             group("classic-b", "consumer", "PreparingRebalance", "classic"),
             group("consumer-a", "consumer", "Reconciling", "consumer"),
@@ -432,58 +447,53 @@ mod tests {
             group("streams-a", "streams", "NotReady", "streams"),
             group("denied", "consumer", "Stable", "consumer"),
         ];
-        let request = |states: &[&str], types: &[&str]| ListGroupsRequest {
-            states_filter: states.iter().map(|s| (*s).to_owned()).collect(),
-            types_filter: types.iter().map(|t| (*t).to_owned()).collect(),
-            ..Default::default()
-        };
-        let ids = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
-        // (request, expected group ids)
-        let rows = [
-            (
-                request(&[], &[]),
-                ids(&[
-                    "classic-a",
-                    "classic-b",
-                    "consumer-a",
-                    "consumer-b",
-                    "share-a",
-                    "streams-a",
-                ]),
-            ),
-            (request(&["empty"], &[]), ids(&["classic-a", "share-a"])),
-            (request(&[" STABLE "], &[]), ids(&["consumer-b"])),
-            (
-                request(&["reconciling", "notready"], &[]),
-                ids(&["consumer-a", "streams-a"]),
-            ),
-            (request(&["Dead"], &[]), ids(&[])),
-            (request(&[], &["Share"]), ids(&["share-a"])),
-            (
-                request(&[], &["CLASSIC", "streams"]),
-                ids(&["classic-a", "classic-b", "streams-a"]),
-            ),
-            (request(&[], &["unknown"]), ids(&[])),
-            (request(&["empty"], &["consumer"]), ids(&[])),
-        ];
-
-        for (req, expected) in rows {
-            let listed = filter_groups(groups.clone(), &req, &|gid| gid != "denied");
-            let expected: Vec<ListedGroup> = groups
-                .iter()
-                .filter(|g| expected.contains(&g.group_id))
-                .cloned()
-                .collect();
-            assert!(listed == expected, "{req:?}");
-        }
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/list_groups.feature",
-        name = "tests: filter groups matches kafka filters"
-    )]
-    fn filter_groups_matches_kafka_filters() {}
+    #[rstest_bdd_macros::given("ListGroups requests states {states} and types {types}")]
+    fn group_listing_filters(
+        group_listing: &mut GroupListingScenario,
+        states: String,
+        types: String,
+    ) {
+        let states_filter = match states.as_str() {
+            "none" => Vec::new(),
+            "STABLE surrounded by spaces" => vec![" STABLE ".into()],
+            _ => states.split(',').map(str::to_owned).collect(),
+        };
+        let types_filter = if types == "none" {
+            Vec::new()
+        } else {
+            types.split(',').map(str::to_owned).collect()
+        };
+        group_listing.request = Some(ListGroupsRequest {
+            states_filter,
+            types_filter,
+            ..Default::default()
+        });
+    }
+    #[rstest_bdd_macros::when("ListGroups filters the groups and applies group authorization")]
+    fn list_matching_groups(group_listing: &mut GroupListingScenario) {
+        group_listing.listed = Some(filter_groups(
+            group_listing.groups.clone(),
+            group_listing.request.as_ref().unwrap(),
+            &|gid| gid != "denied",
+        ));
+    }
+    #[rstest_bdd_macros::then("the complete listed groups in order are {ids}")]
+    fn check_group_listing(group_listing: &GroupListingScenario, ids: String) {
+        let ids: Vec<_> = if ids == "none" {
+            Vec::new()
+        } else {
+            ids.split(',').collect()
+        };
+        let expected: Vec<ListedGroup> = group_listing
+            .groups
+            .iter()
+            .filter(|group| ids.contains(&group.group_id.as_str()))
+            .cloned()
+            .collect();
+        assert!(group_listing.listed.as_ref().unwrap() == &expected);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_list_groups",fixtures=[group_listing:GroupListingScenario]);
 
     #[test]
     fn group_state_as_str_covers_all_classic_states() {

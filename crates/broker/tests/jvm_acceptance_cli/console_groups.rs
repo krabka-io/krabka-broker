@@ -7,198 +7,153 @@
 
 use {
     crate::jvm_acceptance::{
-        KAFKA_IMAGE, KAFKA_IMAGE_TXN, assert_console_values, broker0_advertised,
-        describe_console_group, docker_run_kafka_tool, docker_run_kafka_tool_with_image,
-        nc_check_connectivity, produce_console_checked, start_console_broker, start_host_broker,
+        KAFKA_IMAGE, KAFKA_IMAGE_TXN, broker0_advertised, describe_console_group,
+        docker_run_kafka_tool_with_image, nc_check_connectivity, produce_console_checked,
+        start_console_broker,
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::process::Output,
+    tempfile::TempDir,
 };
 
-// Same multi-thread runtime caveat as `console_producer_round_trip`:
-// the test body makes blocking `Command::output()` calls; a
-// single-threaded runtime would starve the broker's accept loop.
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance cli console groups: console consumer with group round trip"
-)]
-async fn bdd_verify_console_consumer_with_group_round_trip() {
-    const TOPIC: &str = "krabka-broker-grp-itest";
+struct GroupConsumption {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    topic: String,
+    consumed: Option<Output>,
+    described: Option<Output>,
+}
+#[fixture]
+fn consumption() -> GroupConsumption {
+    // Start this scenario with fresh inputs and observations.
 
-    let (broker, _dir) = start_console_broker(TOPIC, 1).await;
-
-    // 2. Produce records via kafka-console-producer over stdin.
-
-    produce_console_checked(KAFKA_IMAGE, TOPIC, b"x\ny\nz\n");
-
-    // 3. Consume WITHOUT --partition. The default `console-consumer`
-    //    group will JoinGroup → SyncGroup → Heartbeat → Fetch through
-    //    our coordinator.
-    let consumer_out = docker_run_kafka_tool(&[
-        "kafka-console-consumer",
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--topic",
-        TOPIC,
-        "--from-beginning",
-        "--group",
-        "krabka-acceptance-group",
-        "--max-messages",
-        "3",
-        "--timeout-ms",
-        "20000",
-    ]);
-    let s = String::from_utf8_lossy(&consumer_out.stdout);
-    assert_console_values(&s, &["x", "y", "z"], "consumer didn't emit");
-
-    broker.shutdown().await;
+    GroupConsumption {
+        broker: None,
+        directory: None,
+        topic: String::new(),
+        consumed: None,
+        described: None,
+    }
 }
 
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_cli/console_groups.feature",
-    name = "console consumer with group round trip"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn console_consumer_with_group_round_trip() {}
-
-// KIP-345 static membership: the JVM consumer with
-// `group.instance.id` set should round-trip through the coordinator
-// (JoinGroup → SyncGroup → Heartbeat → Fetch with the v3+
-// `group_instance_id` wire field populated) and a subsequent
-// `kafka-consumer-groups --describe` must surface the instance id under
-// HOST/CONSUMER-ID columns, confirming the broker persisted it on the
-// member metadata.
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance cli console groups: console consumer with static membership"
-)]
-async fn bdd_verify_console_consumer_with_static_membership() {
-    const TOPIC: &str = "krabka-broker-static-itest";
-    const GROUP: &str = "krabka-static-grp";
-    const INSTANCE: &str = "client-static-1";
-
-    let (broker, _dir) = start_console_broker(TOPIC, 1).await;
-
-    // Produce three records.
-
-    produce_console_checked(KAFKA_IMAGE, TOPIC, b"a\nb\nc\n");
-
-    // Consume with `group.instance.id` set. The JVM consumer sends this
-    // as `group_instance_id` in JoinGroup v5+ / SyncGroup v3+ / Heartbeat
-    // v3+ / OffsetCommit v7+. If the broker rejects the wire field we'll
-    // see a hard failure here.
-    let consumer_out = docker_run_kafka_tool(&[
-        "kafka-console-consumer",
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--topic",
-        TOPIC,
-        "--from-beginning",
-        "--group",
-        GROUP,
-        "--consumer-property",
-        &format!("group.instance.id={INSTANCE}"),
-        "--max-messages",
-        "3",
-        "--timeout-ms",
-        "20000",
-    ]);
-    let s = String::from_utf8_lossy(&consumer_out.stdout);
-    assert_console_values(&s, &["a", "b", "c"], "consumer didn't emit");
-
-    // `kafka-consumer-groups --describe` exercises the broker's
-    // DescribeGroups path. The output should mention the instance id so
-    // operators can correlate static slots back to pods.
-    let desc_out = describe_console_group(GROUP);
-    let s = String::from_utf8_lossy(&desc_out.stdout);
-    assert!(s.contains(TOPIC), "describe missing topic {TOPIC}: {s}");
-
-    broker.shutdown().await;
-}
-
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_cli/console_groups.feature",
-    name = "console consumer with static membership"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn console_consumer_with_static_membership() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance cli console groups: cooperative sticky kafka console consumer"
-)]
-async fn bdd_verify_cooperative_sticky_kafka_console_consumer() {
-    const TOPIC: &str = "coop-jvm";
-
-    let (broker, _dir) = start_host_broker().await;
+#[given("topic {topic} has {partitions} partitions containing console values {values}")]
+async fn populated(
+    consumption: &mut GroupConsumption,
+    topic: String,
+    partitions: i32,
+    values: String,
+) {
+    let (broker, directory) = start_console_broker(&topic, partitions).await;
     nc_check_connectivity();
+    let payload = format!("{}\n", values.replace(',', "\n"));
+    produce_console_checked(KAFKA_IMAGE, &topic, payload.as_bytes());
+    consumption.broker = Some(broker);
+    consumption.directory = Some(directory);
+    consumption.topic = topic;
+}
 
-    // 1. Create the topic.
-    docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--create",
-        "--topic",
-        TOPIC,
-        "--partitions",
-        "3",
-        "--replication-factor",
-        "1",
-        "--bootstrap-server",
-        broker0_advertised(),
+#[when("a default console consumer joins group {group}")]
+fn default_member(consumption: &mut GroupConsumption, group: String) {
+    consume(consumption, &group, KAFKA_IMAGE, 20000, &[]);
+}
+#[when("a static console consumer joins group {group} with instance {instance}")]
+fn static_member(consumption: &mut GroupConsumption, group: String, instance: String) {
+    consume(consumption, &group, KAFKA_IMAGE, 20000, &[
+        "--consumer-property",
+        &format!("group.instance.id={instance}"),
     ]);
-
-    // 2. Produce 3 records via stdin.
-
-    produce_console_checked(KAFKA_IMAGE, TOPIC, b"alpha\nbravo\ncharlie\n");
-
-    // 3. Consume via kafka-console-consumer with CooperativeStickyAssignor.
-    //    Use cp-kafka:7.5.0 (Kafka 3.5) — cooperative-sticky in 2.7 had
-    //    rebalance races that masked broker correctness issues.
-    let consumer_out = docker_run_kafka_tool_with_image(KAFKA_IMAGE_TXN, &[
-        "kafka-console-consumer",
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--topic",
-        TOPIC,
-        "--group",
-        "coop-jvm-group",
+}
+#[when("a cooperative sticky consumer joins group {group}")]
+fn cooperative_member(consumption: &mut GroupConsumption, group: String) {
+    consume(consumption, &group, KAFKA_IMAGE_TXN, 30000, &[
         "--consumer-property",
         "partition.assignment.strategy=org.apache.kafka.clients.consumer.CooperativeStickyAssignor",
+    ]);
+}
+fn consume(
+    consumption: &mut GroupConsumption,
+    group: &str,
+    image: &str,
+    timeout: u32,
+    properties: &[&str],
+) {
+    let timeout = timeout.to_string();
+    let mut args = vec![
+        "kafka-console-consumer",
+        "--bootstrap-server",
+        broker0_advertised(),
+        "--topic",
+        &consumption.topic,
         "--from-beginning",
+        "--group",
+        group,
         "--max-messages",
         "3",
         "--timeout-ms",
-        "30000",
-    ]);
-    let s = String::from_utf8_lossy(&consumer_out.stdout);
-    for needle in ["alpha", "bravo", "charlie"] {
+        &timeout,
+    ];
+    args.extend_from_slice(properties);
+    consumption.consumed = Some(docker_run_kafka_tool_with_image(image, &args));
+}
+#[then("the group consumer emits values {values}")]
+fn values(consumption: &GroupConsumption, values: String) {
+    let output = consumption
+        .consumed
+        .as_ref()
+        .expect("group consumer completed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for expected in values.split(',') {
         assert!(
-            s.contains(needle),
-            "consumer didn't emit {needle}: stdout={s:?} stderr={:?}",
-            String::from_utf8_lossy(&consumer_out.stderr)
+            stdout.contains(expected),
+            "consumer did not emit {expected}: stdout={stdout:?} stderr={:?}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
-
-    broker.shutdown().await;
+}
+#[when("the operator describes group {group}")]
+fn describe(consumption: &mut GroupConsumption, group: String) {
+    consumption.described = Some(describe_console_group(&group));
+}
+#[then("the group report includes its subscribed topic")]
+fn subscribed(consumption: &GroupConsumption) {
+    let output = consumption.described.as_ref().expect("group was described");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&consumption.topic),
+        "describe missing topic {}: {stdout}",
+        consumption.topic
+    );
 }
 
-/// KIP-429 JVM acceptance: drive `kafka-console-consumer` with the JVM
-/// `CooperativeStickyAssignor` against Krabka. The test validates that
-/// Krabka's `JoinGroup` vote rule accepts `cooperative-sticky` and that the
-/// broker forwards the negotiated `protocol_name` correctly, so the JVM
-/// client's `AbstractCoordinator.onJoinComplete` accepts the response.
-///
-/// The test uses `cp-kafka:7.5.0` (= [`KAFKA_IMAGE_TXN`]). The
-/// cooperative-sticky assignor in `cp-kafka:6.1.1` (Kafka 2.7) still lacked
-/// several rebalance race fixes that landed in Kafka 3.x.
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_cli/console_groups.feature",
-    name = "cooperative sticky kafka console consumer"
+    name = "Default assignment consumes all records"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cooperative_sticky_kafka_console_consumer() {}
+async fn console_consumer_with_group_round_trip(consumption: GroupConsumption) {
+    consumption.broker.expect("running broker").shutdown().await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/console_groups.feature",
+    name = "Static membership consumes records and retains the subscription"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn console_consumer_with_static_membership(consumption: GroupConsumption) {
+    consumption.broker.expect("running broker").shutdown().await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/console_groups.feature",
+    name = "Cooperative sticky assignment consumes all records"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cooperative_sticky_kafka_console_consumer(consumption: GroupConsumption) {
+    consumption.broker.expect("running broker").shutdown().await;
+}

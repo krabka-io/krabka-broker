@@ -543,190 +543,197 @@ fn alice_acl(resource_type: ResourceType, name: &str, operation: AclOperation) -
         .call()
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers delete topics tests: rows follow kafkas describe and delete decisions"
-)]
-async fn bdd_verify_rows_follow_kafkas_describe_and_delete_decisions() {
-    const TOPIC: &str = "t";
-    const MISSING: &str = "missing";
-
-    struct ExpectedRow {
-        name: Option<&'static str>,
-        with_id: bool,
-        code: i16,
+#[derive(Default)]
+struct TopicDeletionAuthorization {
+    started: Option<HandlerStartedBroker>,
+    topic_id: WireUuid,
+    response: Option<DeleteTopicsResponse>,
+}
+#[rstest::fixture]
+fn topic_deletion_authorization() -> TopicDeletionAuthorization {
+    let started = None;
+    TopicDeletionAuthorization {
+        started,
+        ..Default::default()
     }
-
-    struct Case {
-        label: &'static str,
-        acls: Vec<AclEntry>,
-        by_id: bool,
-        names: &'static [&'static str],
-        // The name, whether it carries the topic id, and the code of each expected row.
-        expected: &'static [ExpectedRow],
-        deleted: bool,
-    }
-
-    let unknown_id = WireUuid([8; 16]);
-    let topic = |operation| alice_acl(ResourceType::Topic, TOPIC, operation);
-    let cases = [
-        Case {
-            label: "an id row with Delete deletes and carries the id",
-            acls: vec![topic(AclOperation::Delete)],
-            by_id: true,
-            names: &[],
-            expected: &[ExpectedRow {
-                name: Some(TOPIC),
-                with_id: true,
-                code: codes::NONE,
-            }],
-            deleted: true,
-        },
-        Case {
-            label: "an id row with Describe and without Delete",
-            acls: vec![topic(AclOperation::Describe)],
-            by_id: true,
-            names: &[],
-            expected: &[ExpectedRow {
-                name: Some(TOPIC),
-                with_id: true,
-                code: codes::TOPIC_AUTHORIZATION_FAILED,
-            }],
-            deleted: false,
-        },
-        Case {
-            label: "an id row without Describe and without Delete",
-            acls: vec![],
-            by_id: true,
-            names: &[],
-            expected: &[ExpectedRow {
-                name: None,
-                with_id: true,
-                code: codes::TOPIC_AUTHORIZATION_FAILED,
-            }],
-            deleted: false,
-        },
-        Case {
-            label: "a name row with Describe and without Delete for a missing topic",
-            acls: vec![alice_acl(
-                ResourceType::Topic,
-                MISSING,
-                AclOperation::Describe,
-            )],
-            by_id: false,
-            names: &[MISSING],
-            expected: &[ExpectedRow {
-                name: Some(MISSING),
-                with_id: false,
-                code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-            }],
-            deleted: false,
-        },
-        Case {
-            label: "a name row without Describe for a missing topic",
-            acls: vec![],
-            by_id: false,
-            names: &[MISSING],
-            expected: &[ExpectedRow {
-                name: Some(MISSING),
-                with_id: false,
-                code: codes::TOPIC_AUTHORIZATION_FAILED,
-            }],
-            deleted: false,
-        },
-        Case {
-            label: "a name row with Describe and without Delete for an existing topic",
-            acls: vec![topic(AclOperation::Describe)],
-            by_id: false,
-            names: &[TOPIC],
-            expected: &[ExpectedRow {
-                name: Some(TOPIC),
-                with_id: false,
-                code: codes::TOPIC_AUTHORIZATION_FAILED,
-            }],
-            deleted: false,
-        },
-    ];
-
-    handler_fixture_support::check_cases(cases, async |case| {
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, p, peer);
-            boot [start_broker] controller_peer;
-            user ["alice"];
-        };
-        let cluster_create = alice_acl(
-            ResourceType::Cluster,
-            CLUSTER_RESOURCE_NAME,
-            AclOperation::Create,
-        );
-        broker
-            .controller
-            .submit_change(vec![MetadataRecord::V1AccessControlEntry(cluster_create)])
-            .await
-            .expect("seed create acl");
-        let ctx = test_context(&p, &peer);
-        let topic_id = seeded_topic_id(&broker, &ctx, CreateTopicSetup {
-            topic: TOPIC,
+}
+#[rstest_bdd_macros::given("alice may create topics and topic t exists with its captured UUID")]
+async fn topic_deletion_fixture(topic_deletion_authorization: &mut TopicDeletionAuthorization) {
+    let started = start_broker(handler_fixture_support::controller_peer_authorizer()).await;
+    let broker = started.broker.broker_arc_for_test();
+    let create = alice_acl(
+        ResourceType::Cluster,
+        CLUSTER_RESOURCE_NAME,
+        AclOperation::Create,
+    );
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1AccessControlEntry(create)])
+        .await
+        .expect("create ACL");
+    krabka_macros::request_test_identity! { bind(p, peer); user ["alice"]; };
+    topic_deletion_authorization.topic_id =
+        seeded_topic_id(&broker, &test_context(&p, &peer), CreateTopicSetup {
+            topic: "t",
             ..Default::default()
         })
         .await;
-        if !case.acls.is_empty() {
-            acl_fixtures::seed_case_acls(&broker, case.acls).await;
-        }
-
-        let mut rows: Vec<_> = case.names.iter().map(|name| named_state(name)).collect();
-        if case.by_id {
-            rows.push(id_state(topic_id));
-        }
-        rows.push(id_state(unknown_id));
-        let resp = drive(&broker, &request(rows), &test_context(&p, &peer)).await;
-        let still_there = broker.controller.current_image().topic(TOPIC).is_some();
-
-        let responses = case
-            .expected
-            .iter()
-            .map(
-                |ExpectedRow {
-                     name,
-                     with_id,
-                     code,
-                 }| {
-                    let id = if *with_id { topic_id } else { WireUuid::ZERO };
-                    row(*name, id, *code)
-                },
+    topic_deletion_authorization.started = Some(started);
+}
+#[rstest_bdd_macros::given("alice has these exact topic grants for deletion")]
+async fn topic_deletion_grants(
+    topic_deletion_authorization: &mut TopicDeletionAuthorization,
+    datatable: Vec<Vec<String>>,
+) {
+    let entries = datatable
+        .into_iter()
+        .skip(1)
+        .map(|cells| {
+            alice_acl(ResourceType::Topic, &cells[0], match cells[1].as_str() {
+                "Describe" => AclOperation::Describe,
+                "Delete" => AclOperation::Delete,
+                other => panic!("unknown topic operation {other}"),
+            })
+        })
+        .collect::<Vec<_>>();
+    if !entries.is_empty() {
+        let broker = topic_deletion_authorization
+            .started
+            .as_ref()
+            .expect("topic fixture")
+            .broker
+            .broker_arc_for_test();
+        acl_fixtures::seed_case_acls(&broker, entries).await;
+    }
+}
+#[rstest_bdd_macros::when(
+    "alice deletes topic reference {reference} together with unknown UUID 08080808080808080808080808080808"
+)]
+async fn authorized_topic_deletion(
+    topic_deletion_authorization: &mut TopicDeletionAuthorization,
+    reference: String,
+) {
+    let first = if reference == "UUID:t" {
+        id_state(topic_deletion_authorization.topic_id)
+    } else {
+        named_state(&reference)
+    };
+    let rows = vec![first, id_state(WireUuid([8; 16]))];
+    let broker = topic_deletion_authorization
+        .started
+        .as_ref()
+        .expect("topic fixture")
+        .broker
+        .broker_arc_for_test();
+    krabka_macros::request_test_identity! { bind(p, peer); user ["alice"]; };
+    topic_deletion_authorization.response =
+        Some(drive(&broker, &request(rows), &test_context(&p, &peer)).await);
+}
+#[rstest_bdd_macros::then("the complete DeleteTopics rows are these and topic t remains {remains}")]
+async fn topic_deletion_authorization_result(
+    topic_deletion_authorization: &mut TopicDeletionAuthorization,
+    remains: bool,
+    datatable: Vec<Vec<String>>,
+) {
+    let rows = datatable
+        .into_iter()
+        .skip(1)
+        .map(|cells| {
+            let id = match cells[1].as_str() {
+                "t" => topic_deletion_authorization.topic_id,
+                "zero" => WireUuid::ZERO,
+                "08080808080808080808080808080808" => WireUuid([8; 16]),
+                other => panic!("unknown topic UUID reference {other}"),
+            };
+            row(
+                (cells[0] != "null").then_some(cells[0].as_str()),
+                id,
+                cells[2].parse().expect("topic error"),
             )
-            .chain([row(None, unknown_id, codes::UNKNOWN_TOPIC_ID)])
-            .collect();
-        let actual = handler_fixture_support::LabeledCaseOutcome {
-            label: case.label,
-            response: resp,
-            state: still_there,
-        };
-        let expected = handler_fixture_support::LabeledCaseOutcome {
-            label: case.label,
-            response: sorted(krabka_macros::unthrottled_wire!(DeleteTopicsResponse {
-                responses
-            })),
-            state: !case.deleted,
-        };
-        broker_handle.shutdown().await;
-        handler_fixture_support::CaseOutcomes { actual, expected }
-    })
-    .await;
+        })
+        .collect();
+    let expected = sorted(response(rows));
+    assert!(
+        topic_deletion_authorization
+            .response
+            .as_ref()
+            .expect("deletion response")
+            == &expected
+    );
+    let started = topic_deletion_authorization
+        .started
+        .take()
+        .expect("topic fixture");
+    assert!(
+        started
+            .broker
+            .controller_image_for_test()
+            .topic("t")
+            .is_some()
+            == remains
+    );
+    started.broker.shutdown().await;
 }
 
-/// Kafka's `ControllerApis.deleteTopics` checks `Describe` and `Delete`
-/// separately. An id row the principal may not delete carries its id, and
-/// the name only when the principal may describe the topic. A name row the
-/// principal may describe but not delete answers `UNKNOWN_TOPIC_OR_PARTITION`
-/// when the topic does not exist. A deleted topic's row carries its id.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/delete_topics/tests.feature",
-    name = "rows follow kafkas describe and delete decisions"
+    path = "tests/features/handler_delete_topic_authorization.feature",
+    name = "Delete permits UUID deletion and reveals the name"
 )]
 #[tokio::test]
-async fn rows_follow_kafkas_describe_and_delete_decisions() {}
+async fn topic_deletion_authorization_case_0(
+    topic_deletion_authorization: TopicDeletionAuthorization,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delete_topic_authorization.feature",
+    name = "Describe reveals a denied UUID name"
+)]
+#[tokio::test]
+async fn topic_deletion_authorization_case_1(
+    topic_deletion_authorization: TopicDeletionAuthorization,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delete_topic_authorization.feature",
+    name = "Without Describe denied UUID deletion hides the name"
+)]
+#[tokio::test]
+async fn topic_deletion_authorization_case_2(
+    topic_deletion_authorization: TopicDeletionAuthorization,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delete_topic_authorization.feature",
+    name = "Describe reveals that a named topic is missing"
+)]
+#[tokio::test]
+async fn topic_deletion_authorization_case_3(
+    topic_deletion_authorization: TopicDeletionAuthorization,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delete_topic_authorization.feature",
+    name = "Without Describe a missing name is not disclosed"
+)]
+#[tokio::test]
+async fn topic_deletion_authorization_case_4(
+    topic_deletion_authorization: TopicDeletionAuthorization,
+) {
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delete_topic_authorization.feature",
+    name = "Describe without Delete cannot remove an existing named topic"
+)]
+#[tokio::test]
+async fn topic_deletion_authorization_case_5(
+    topic_deletion_authorization: TopicDeletionAuthorization,
+) {
+}
 
 // ── #743: delete.topic.enable ───────────────────────────────────────
 

@@ -22,376 +22,322 @@ use {
         },
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
     krabka_client_consumer::{AutoOffsetReset, Consumer},
-    krabka_client_producer::{EndTransactionError, ProducerError},
+    krabka_client_core::Client,
+    krabka_client_producer::{EndTransactionError, OwnedTransaction, Producer, ProducerError},
+    krabka_protocol::{
+        owned::{
+            init_producer_id_response::InitProducerIdResponse,
+            txn_offset_commit_request::TxnOffsetCommitRequest,
+        },
+        primitives::uuid::Uuid as WireUuid,
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::sync::Arc,
+    tempfile::TempDir,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("transactions txn fencing: fenced producer cannot commit")]
-async fn bdd_verify_fenced_producer_cannot_commit() {
-    let (broker, bootstrap, _dir) = boot_single().await;
-    create_topic(&bootstrap, "tf").await;
-
-    let producer_a = transactional_producer(bootstrap.clone(), "shared-tid").await;
-    let txn_a = producer_a.begin_transaction().await.unwrap();
-    // Acknowledged, not just sent: the commit below must have nothing left to
-    // flush, so it detects the fencing through EndTxn and nothing else.
-    send_ok(&producer_a, rec("tf", "first")).await;
-
-    // Producer B initializes with the same transactional_id — bumps epoch,
-    // fences A.
-    let _producer_b = transactional_producer(bootstrap.clone(), "shared-tid").await;
-
-    // Still-live path: the first commit after the fencing learns of it from
-    // the coordinator's own EndTxn answer.
-    let EndTransactionError {
-        source: retried, ..
-    } = {
-        let EndTransactionError {
-            transaction,
-            source,
-        } = txn_a
-            .commit()
-            .await
-            .expect_err("commit should fail after fencing");
-        assert!(
-            matches!(source, ProducerError::FencedProducer),
-            "expected FencedProducer, got: {source:?}"
-        );
-
-        // Already-fenced path: a retry on the same guard fails on the recorded
-        // fatal state, with no further EndTxn.
-        transaction.commit().await
-    }
-    .expect_err("a retried commit on a fenced producer must still fail");
-    assert!(
-        matches!(retried, ProducerError::FencedProducer),
-        "expected FencedProducer on the retried commit, got: {retried:?}"
-    );
-
-    broker.shutdown().await;
+#[derive(Default)]
+struct FencingScenario {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    bootstrap: String,
+    client: Option<Client>,
+    producer: Option<Arc<Producer>>,
+    replacement: Option<Producer>,
+    transaction: Option<OwnedTransaction>,
+    failures: Vec<ProducerError>,
+    identity: Option<ProducerIdentity>,
+    init_response: Option<InitProducerIdResponse>,
+    consumer: Option<Consumer>,
+    topic_id: Option<WireUuid>,
+    member_id: String,
+    generation: i32,
+    offset_codes: Vec<i16>,
 }
 
-/// Producer B with the same `transactional_id` fences Producer A. Every
-/// `Transaction::commit` producer A attempts from then on must fail with
-/// `ProducerError::FencedProducer`, whether the coordinator has just told it
-/// so or told it earlier.
-///
-/// Kafka's `KafkaProducer.commitTransaction` javadoc names two different
-/// fenced outcomes: `ProducerFencedException`, "another producer with the
-/// same transactional.id is active", and the separate
-/// `InvalidProducerEpochException`, "the producer has attempted to produce
-/// with an old epoch to the partition leader". Only the second comes from a
-/// `Produce` the commit's own flush sends. Producer A's record here is
-/// acknowledged before producer B fences it, so the commit below flushes
-/// nothing and takes the first path: `TransactionManager.beginCommit` calls
-/// `maybeFailWithError`, finds no error recorded yet, and sends `EndTxn`.
-/// `TransactionManager$EndTxnHandler.handleResponse` maps both codes the
-/// coordinator can answer an `EndTxn` with for this case, `PRODUCER_FENCED`
-/// (90) and the legacy `INVALID_PRODUCER_EPOCH` (47), to a fatal
-/// `ProducerFencedException` (`fatalError(Errors.PRODUCER_FENCED.exception())`),
-/// never to the produce-only exception.
-///
-/// A second commit attempt on the same guard finds that fatal error already
-/// recorded. `maybeFailWithError` raises it again immediately, with no
-/// second `EndTxn`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/transactions/txn_fencing.feature",
-    name = "fenced producer cannot commit"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fenced_producer_cannot_commit() {}
-
-/// One `InitProducerId` of the KIP-360 table below, named by the identity it
-/// supplies.
-struct Case {
-    name: &'static str,
-    /// The request identity, as an offset from the live one the coordinator
-    /// just handed out; `None` supplies no identity at all.
-    offset: Option<IdentityOffset>,
-    expected_error_code: i16,
+#[fixture]
+fn fencing_case() -> FencingScenario {
+    // Preserve live producer and member identities between actual protocol operations.
+    FencingScenario::default()
 }
 
-/// How far a request identity sits from the live one: in producer ids and in
-/// epochs.
-#[derive(Clone, Copy)]
-struct IdentityOffset {
-    id: i64,
-    epoch: i16,
-}
+impl FencingScenario {
+    fn client(&self) -> &Client { self.client.as_ref().expect("coordinator client") }
 
-fn shift(id: i64, epoch: i16) -> IdentityOffset { IdentityOffset { id, epoch } }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transactions txn fencing: init producer id fences a stale producer identity"
-)]
-async fn bdd_verify_init_producer_id_fences_a_stale_producer_identity() {
-    let (broker, bootstrap, _dir) = boot_single().await;
-    let client = connect_client(bootstrap.clone(), None).await;
-
-    let case = |name, offset, expected_error_code| Case {
-        name,
-        offset,
-        expected_error_code,
-    };
-
-    let cases = [
-        case("no identity supplied", None, 0),
-        case("the live identity", Some(shift(0, 0)), 0),
-        // Kafka refuses half an identity with INVALID_REQUEST, whatever the
-        // entry holds (`KafkaApis.handleInitProducerIdRequest`).
-        case("no epoch", Some(shift(0, -1)), 42),
-        case("an unreached epoch", Some(shift(0, 1)), 90),
-        case("another producer id", Some(shift(1, 0)), 90),
-        case("another producer id and no epoch", Some(shift(1, -1)), 42),
-    ];
-
-    for (index, case) in cases.into_iter().enumerate() {
-        let Case {
-            name,
-            offset,
-            expected_error_code: expected,
-        } = case;
-        // One transactional id per case: an admitted request bumps the epoch,
-        // which would move the identity the next case starts from.
-        let tid = format!("kip360-tid-{index}");
-        let producer = init_transaction(&client, &tid).await;
-
-        if name == "a stale epoch" {
-            // A fresh entry's `last_producer_epoch` starts at -1, KIP-360's
-            // `NO_PRODUCER_EPOCH` sentinel for "no bump has happened yet" --
-            // the same value one epoch below a freshly allocated epoch 0.
-            // Probing that epoch straight away would land on the sentinel
-            // and read as a retry of a bump that never happened, not as a
-            // stale epoch. A real bump first gives the entry a genuine,
-            // recorded last epoch, so the probe below tests staleness
-            // against that epoch instead of colliding with the sentinel.
-            let bump = client
-                .send(
-                    init_producer_request()
-                        .maybe_transactional_id(Some(tid.clone()))
-                        .producer(producer)
-                        .call(),
-                )
-                .await
-                .unwrap();
-            assert!(bump.error_code == 0, "priming bump for {name}: {bump:?}");
+    async fn shutdown(&mut self) {
+        self.transaction.take();
+        self.replacement.take();
+        self.producer.take();
+        if let Some(consumer) = self.consumer.take() {
+            consumer.close().await.unwrap();
         }
+        if let Some(client) = self.client.take() {
+            client.close();
+        }
+        self.broker.take().expect("broker running").shutdown().await;
+        self.directory.take();
+    }
+}
 
-        let (request_id, request_epoch) = match offset {
-            None => (-1, -1),
-            Some(IdentityOffset {
-                id: id_offset,
-                epoch: epoch_offset,
-            }) => (producer.id.0 + id_offset, producer.epoch.0 + epoch_offset),
-        };
+#[given("a fencing broker with unstable protocol versions {unstable}")]
+async fn fencing_broker(fencing_case: &mut FencingScenario, unstable: bool) {
+    let (broker, bootstrap, directory) = if unstable {
+        boot_single_trunk().await
+    } else {
+        boot_single().await
+    };
+    fencing_case.client = Some(connect_client(bootstrap.clone(), None).await);
+    fencing_case.broker = Some(broker);
+    fencing_case.bootstrap = bootstrap;
+    fencing_case.directory = Some(directory);
+}
 
-        let response = client
+#[given("producer A has acknowledged first in an open shared-tid transaction")]
+async fn acknowledged_transaction(fencing_case: &mut FencingScenario) {
+    create_topic(&fencing_case.bootstrap, "tf").await;
+    fencing_case.producer = Some(Arc::new(
+        transactional_producer(fencing_case.bootstrap.clone(), "shared-tid").await,
+    ));
+    fencing_case.transaction = Some(
+        Arc::clone(fencing_case.producer.as_ref().expect("producer A"))
+            .begin_transaction_owned()
+            .await
+            .unwrap(),
+    );
+    send_ok(
+        fencing_case.producer.as_ref().expect("producer A"),
+        rec("tf", "first"),
+    )
+    .await;
+}
+
+#[when("producer B initializes the same shared-tid transactional identity")]
+async fn replacement_producer(fencing_case: &mut FencingScenario) {
+    fencing_case.replacement =
+        Some(transactional_producer(fencing_case.bootstrap.clone(), "shared-tid").await);
+}
+
+#[when("producer A attempts to commit its acknowledged transaction")]
+async fn fenced_commit(fencing_case: &mut FencingScenario) {
+    let EndTransactionError {
+        transaction,
+        source,
+    } = fencing_case
+        .transaction
+        .take()
+        .expect("open transaction")
+        .commit()
+        .await
+        .expect_err("commit must fail after fencing");
+    fencing_case.transaction = Some(transaction);
+    fencing_case.failures.push(source);
+}
+
+#[then("producer A's latest commit fails with FencedProducer")]
+fn producer_fenced(fencing_case: &FencingScenario) {
+    assert!(matches!(
+        fencing_case.failures.last().expect("commit attempted"),
+        ProducerError::FencedProducer
+    ));
+}
+
+#[given("the coordinator holds a fresh kip360-tid producer identity")]
+async fn initialized_identity(fencing_case: &mut FencingScenario) {
+    fencing_case.identity = Some(init_transaction(fencing_case.client(), "kip360-tid").await);
+}
+
+#[when(
+    "InitProducerId supplies identity mode {mode} with producer ID delta {id_delta} and epoch delta {epoch_delta}"
+)]
+async fn request_identity(
+    fencing_case: &mut FencingScenario,
+    mode: String,
+    id_delta: i64,
+    epoch_delta: i16,
+) {
+    let producer = fencing_case
+        .identity
+        .expect("initialized producer identity");
+    let identity = match mode.as_str() {
+        "absent" => ProducerIdentity::from_wire((-1, -1)),
+        "relative" => {
+            ProducerIdentity::from_wire((producer.id.0 + id_delta, producer.epoch.0 + epoch_delta))
+        }
+        _ => panic!("unknown identity mode {mode}"),
+    };
+    fencing_case.init_response = Some(
+        fencing_case
+            .client()
             .send(
                 init_producer_request()
-                    .maybe_transactional_id(Some(tid.clone()))
-                    .producer(ProducerIdentity::from_wire((request_id, request_epoch)))
+                    .maybe_transactional_id(Some("kip360-tid".to_owned()))
+                    .producer(identity)
                     .call(),
             )
             .await
-            .unwrap();
-
-        assert!(
-            response.error_code == expected,
-            "InitProducerId with {name} ({request_id}, {request_epoch}) against \
-             ({}, {}): {response:?}",
-            producer.id.0,
-            producer.epoch.0
-        );
-        if expected != 0 {
-            assert!(
-                (response.producer_id, response.producer_epoch) == (-1, -1),
-                "a refused InitProducerId returns no identity: {response:?}"
-            );
-        }
-    }
-
-    broker.shutdown().await;
+            .unwrap(),
+    );
 }
 
-/// KIP-360: `InitProducerId` answers a caller that names a producer identity
-/// the coordinator does not hold with `PRODUCER_FENCED` (90), before it
-/// re-initialises anything. A caller that names no identity at all — every
-/// request below v3, and every first initialisation — is admitted, which is
-/// what lets a replacement producer take a transactional id over.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/transactions/txn_fencing.feature",
-    name = "init producer id fences a stale producer identity"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_producer_id_fences_a_stale_producer_identity() {}
+#[then("InitProducerId returns error {error} and withholds an identity on refusal")]
+fn identity_result(fencing_case: &FencingScenario, error: i16) {
+    let response = fencing_case
+        .init_response
+        .as_ref()
+        .expect("InitProducerId answered");
+    assert!(response.error_code == error, "{response:?}");
+    if error != 0 {
+        assert!(
+            (response.producer_id, response.producer_epoch) == (-1, -1),
+            "{response:?}"
+        );
+    }
+}
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transactions txn fencing: txn offset commit fences classic generation and member"
-)]
-async fn bdd_verify_txn_offset_commit_fences_classic_generation_and_member() {
-    use krabka_protocol::owned::txn_offset_commit_request::TxnOffsetCommitRequest;
-
-    let (broker, bootstrap, _dir) = boot_single().await;
-    create_topic(&bootstrap, "fence-in").await;
-
-    // A real classic consumer joins, establishing the group's member id +
-    // generation.
+#[given("a classic consumer has joined fence-g for topic fence-in")]
+async fn classic_membership(fencing_case: &mut FencingScenario) {
+    create_topic(&fencing_case.bootstrap, "fence-in").await;
     let consumer = Consumer::builder()
-        .bootstrap(bootstrap.clone())
+        .bootstrap(fencing_case.bootstrap.clone())
         .group_id("fence-g")
         .auto_offset_reset(AutoOffsetReset::Earliest)
         .subscribe(["fence-in".to_owned()])
         .build()
         .await
         .unwrap();
-    let meta = consumer.group_metadata();
-    // A non-empty member id proves the join completed; the fencing assertions
-    // below hold for whatever generation the group settled on (we send
-    // `generation_id + 1` for the stale case, which always mismatches).
+    let metadata = consumer.group_metadata();
     assert!(
-        !meta.member_id.is_empty(),
-        "consumer should have a member id: {meta:?}"
+        !metadata.member_id.is_empty(),
+        "consumer should have a member id: {metadata:?}"
     );
-
-    let client = connect_client(bootstrap.clone(), None).await;
-    let producer = init_transaction(&client, "fence-tid").await;
-    // The client negotiates v6 (KIP-1319), which names the topic by id only.
-    let topic_id = support::topic_id_for(&client, "fence-in").await;
-
-    let mk = |generation_id: i32, member_id: &str| TxnOffsetCommitRequest {
-        transactional_id: "fence-tid".into(),
-        group_id: "fence-g".into(),
-        producer_id: producer.id.0,
-        producer_epoch: producer.epoch.0,
-        generation_id_or_member_epoch: generation_id,
-        member_id: member_id.into(),
-        topics: vec![txn_offset_topic("fence-in", topic_id, vec![
-            txn_offset_partition(krabka_ids::PartitionIndex(0), krabka_ids::Offset(1)),
-        ])],
-        ..Default::default()
-    };
-
-    // Stale generation → ILLEGAL_GENERATION (22).
-    let stale = client
-        .send(mk(meta.generation_id + 1, &meta.member_id))
-        .await
-        .unwrap();
-    assert!(
-        stale.topics[0].partitions[0].error_code == 22,
-        "stale generation should be ILLEGAL_GENERATION: {stale:?}"
-    );
-
-    // Correct generation but unknown member → UNKNOWN_MEMBER_ID (25).
-    let unknown = client
-        .send(mk(meta.generation_id, "ghost-member"))
-        .await
-        .unwrap();
-    assert!(
-        unknown.topics[0].partitions[0].error_code == 25,
-        "unknown member should be UNKNOWN_MEMBER_ID: {unknown:?}"
-    );
-
-    // Matching metadata → accepted (NONE = 0).
-    let ok = client
-        .send(mk(meta.generation_id, &meta.member_id))
-        .await
-        .unwrap();
-    assert!(
-        ok.topics[0].partitions[0].error_code == 0,
-        "valid metadata should commit: {ok:?}"
-    );
-
-    consumer.close().await.unwrap();
-    broker.shutdown().await;
+    fencing_case.member_id = metadata.member_id.clone();
+    fencing_case.generation = metadata.generation_id;
+    fencing_case.consumer = Some(consumer);
+    fencing_case.identity = Some(init_transaction(fencing_case.client(), "fence-tid").await);
+    fencing_case.topic_id = Some(support::topic_id_for(fencing_case.client(), "fence-in").await);
 }
 
-/// The broker fences a classic-group `TxnOffsetCommit` when it carries a stale
-/// generation (`ILLEGAL_GENERATION`) or an unknown member
-/// (`UNKNOWN_MEMBER_ID`), and accepts it when the metadata matches the live
-/// group. The test uses raw `TxnOffsetCommitRequest` values, which give it
-/// precise control over the metadata.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[given("a next-generation member has joined ng-g for topic ng-in")]
+async fn next_gen_membership(fencing_case: &mut FencingScenario) {
+    create_topic(&fencing_case.bootstrap, "ng-in").await;
+    fencing_case.identity = Some(init_transaction(fencing_case.client(), "ng-tid").await);
+    fencing_case.topic_id = Some(support::topic_id_for(fencing_case.client(), "ng-in").await);
+    let mut heartbeat = joining_consumer("ng-g", uuid::Uuid::new_v4().to_string(), 60_000);
+    heartbeat.subscribed_topic_names = Some(vec!["ng-in".into()]);
+    let response = fencing_case.client().send(heartbeat).await.unwrap();
+    assert!(response.error_code == 0, "heartbeat failed: {response:?}");
+    assert!(
+        response.member_epoch >= 1,
+        "member should have a positive epoch: {response:?}"
+    );
+    fencing_case.member_id = response.member_id.unwrap();
+    fencing_case.generation = response.member_epoch;
+}
+
+#[when(
+    "a transactional offset commit for {protocol} uses generation delta {delta} and member {member}"
+)]
+async fn commit_member_offset(
+    fencing_case: &mut FencingScenario,
+    protocol: String,
+    delta: i32,
+    member: String,
+) {
+    let (topic, group, transactional_id) = match protocol.as_str() {
+        "classic" => ("fence-in", "fence-g", "fence-tid"),
+        "next-generation" => ("ng-in", "ng-g", "ng-tid"),
+        _ => panic!("unknown group protocol {protocol}"),
+    };
+    let member_id = match member.as_str() {
+        "current" => fencing_case.member_id.clone(),
+        "unknown" => "ghost-member".into(),
+        _ => panic!("unknown member selection {member}"),
+    };
+    let producer = fencing_case
+        .identity
+        .expect("initialized producer identity");
+    let response = fencing_case
+        .client()
+        .send(TxnOffsetCommitRequest {
+            transactional_id: transactional_id.into(),
+            group_id: group.into(),
+            producer_id: producer.id.0,
+            producer_epoch: producer.epoch.0,
+            generation_id_or_member_epoch: fencing_case.generation + delta,
+            member_id,
+            topics: vec![txn_offset_topic(
+                topic,
+                fencing_case.topic_id.expect("topic ID"),
+                vec![txn_offset_partition(
+                    krabka_ids::PartitionIndex(0),
+                    krabka_ids::Offset(1),
+                )],
+            )],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    fencing_case
+        .offset_codes
+        .push(response.topics[0].partitions[0].error_code);
+}
+
+#[then("the latest member offset commit returns error {error}")]
+fn member_offset_result(fencing_case: &FencingScenario, error: i16) {
+    assert!(
+        fencing_case.offset_codes.last() == Some(&error),
+        "{:?}",
+        fencing_case.offset_codes
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/transactions/txn_fencing.feature",
+    name = "fenced producer cannot commit"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fenced_producer_cannot_commit(fencing_case: FencingScenario) {
+    fencing_case.shutdown().await;
+    drop(fencing_case);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/transactions/txn_fencing.feature",
+    name = "init producer id fences a stale producer identity"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_producer_id_fences_a_stale_producer_identity(
+    fencing_case: FencingScenario,
+    example: String,
+    mode: String,
+    id_delta: i64,
+    epoch_delta: i16,
+    error: i16,
+) {
+    let _ = (example, mode, id_delta, epoch_delta, error);
+    fencing_case.shutdown().await;
+    drop(fencing_case);
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/transactions/txn_fencing.feature",
     name = "txn offset commit fences classic generation and member"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn txn_offset_commit_fences_classic_generation_and_member() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transactions txn fencing: txn offset commit fences next gen member epoch"
-)]
-async fn bdd_verify_txn_offset_commit_fences_next_gen_member_epoch() {
-    use krabka_protocol::owned::txn_offset_commit_request::TxnOffsetCommitRequest;
-
-    let (broker, bootstrap, _dir) = boot_single_trunk().await;
-    create_topic(&bootstrap, "ng-in").await;
-
-    let client = connect_client(bootstrap.clone(), None).await;
-    let producer = init_transaction(&client, "ng-tid").await;
-    let topic_id = support::topic_id_for(&client, "ng-in").await;
-
-    // Establish a next-gen group member; after the first heartbeat the member
-    // is at epoch 1.
-    let mut hb = joining_consumer("ng-g", uuid::Uuid::new_v4().to_string(), 60_000);
-    hb.subscribed_topic_names = Some(vec!["ng-in".into()]);
-    let hb_resp = client.send(hb).await.unwrap();
-    assert!(hb_resp.error_code == 0, "heartbeat failed: {hb_resp:?}");
-    let member_id = hb_resp.member_id.clone().unwrap();
-    let epoch = hb_resp.member_epoch;
-    assert!(
-        epoch >= 1,
-        "member should have a positive epoch: {hb_resp:?}"
-    );
-
-    let mk = |epoch_val: i32| TxnOffsetCommitRequest {
-        transactional_id: "ng-tid".into(),
-        group_id: "ng-g".into(),
-        producer_id: producer.id.0,
-        producer_epoch: producer.epoch.0,
-        generation_id_or_member_epoch: epoch_val, // carries the member epoch for next-gen groups
-        member_id: member_id.clone(),
-        topics: vec![txn_offset_topic("ng-in", topic_id, vec![
-            txn_offset_partition(krabka_ids::PartitionIndex(0), krabka_ids::Offset(1)),
-        ])],
-        ..Default::default()
-    };
-
-    // An older and a newer epoch → STALE_MEMBER_EPOCH (113).
-    for other_epoch in [epoch - 1, epoch + 1] {
-        let fenced = client.send(mk(other_epoch)).await.unwrap();
-        assert!(
-            fenced.topics[0].partitions[0].error_code == 113,
-            "epoch {other_epoch} against {epoch} should be STALE_MEMBER_EPOCH: {fenced:?}"
-        );
-    }
-
-    // Current epoch + known member → accepted (NONE = 0).
-    let ok = client.send(mk(epoch)).await.unwrap();
-    assert!(
-        ok.topics[0].partitions[0].error_code == 0,
-        "current epoch should commit: {ok:?}"
-    );
-
-    broker.shutdown().await;
+async fn txn_offset_commit_fences_classic_generation_and_member(fencing_case: FencingScenario) {
+    fencing_case.shutdown().await;
+    drop(fencing_case);
 }
 
-/// The broker fences a KIP-848 next-gen "consumer"-protocol `TxnOffsetCommit`
-/// that carries a member epoch other than the member's, and accepts it at the
-/// current epoch. The member epoch travels in the
-/// `generation_id_or_member_epoch` field. At v6, the version the client
-/// negotiates under `unstable.api.versions.enable`, Kafka trunk's `validateTransactionalOffsetCommit` passes the group's
-/// `StaleMemberEpochException` through as `STALE_MEMBER_EPOCH` (KIP-1319).
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/transactions/txn_fencing.feature",
     name = "txn offset commit fences next gen member epoch"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn txn_offset_commit_fences_next_gen_member_epoch() {}
+async fn txn_offset_commit_fences_next_gen_member_epoch(fencing_case: FencingScenario) {
+    fencing_case.shutdown().await;
+    drop(fencing_case);
+}

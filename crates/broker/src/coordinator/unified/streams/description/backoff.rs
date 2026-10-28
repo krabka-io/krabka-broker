@@ -143,24 +143,6 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams description backoff tests: a draw is kafkas twenty percent jitter"
-    )]
-    fn bdd_verify_a_draw_is_kafkas_twenty_percent_jitter() {
-        for _ in 0..1_000 {
-            let Jitter(per_mille) = Jitter::draw();
-            assert!((800..1_200).contains(&per_mille));
-        }
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/description/backoff.feature",
-        name = "tests: a draw is kafkas twenty percent jitter"
-    )]
-    fn a_draw_is_kafkas_twenty_percent_jitter() {}
-
     /// One group's backoff through a run of heartbeats and pushes. Each step
     /// is an operation at a time in seconds, what `arm_if_not_active`
     /// answers, and the window afterwards as (epoch, attempts, end second).
@@ -302,4 +284,39 @@ mod tests {
             assert!(backoff == expected, "{row}");
         }
     }
+    use {
+        rstest_bdd_macros::{given, scenarios, then, when},
+        std::iter,
+    };
+    #[derive(Default)]
+    struct RetryJitter {
+        draws: usize,
+        samples: Vec<u64>,
+    }
+    #[rstest::fixture]
+    fn retry_jitter() -> RetryJitter {
+        // Start this scenario with fresh inputs and observations.
+        RetryJitter::default()
+    }
+    #[given("a Streams description retry requests {draws} independent jitter samples")]
+    fn jitter_sample_size(retry_jitter: &mut RetryJitter, draws: usize) {
+        retry_jitter.draws = draws;
+    }
+    #[when("the retry scheduler draws its randomized backoff multipliers")]
+    fn draw_retry_jitter(retry_jitter: &mut RetryJitter) {
+        retry_jitter.samples = iter::repeat_with(|| {
+            let Jitter(value) = Jitter::draw();
+            value
+        })
+        .take(retry_jitter.draws)
+        .collect();
+    }
+    #[then("all sampled multipliers lie between 800 inclusive and 1200 exclusive per mille")]
+    fn retry_jitter_bounds(retry_jitter: &RetryJitter) {
+        assert!(retry_jitter.samples.len() == retry_jitter.draws);
+        for &sample in &retry_jitter.samples {
+            assert!((800..1200).contains(&sample));
+        }
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/streams/description/backoff.feature",fixtures=[retry_jitter:RetryJitter]);
 }

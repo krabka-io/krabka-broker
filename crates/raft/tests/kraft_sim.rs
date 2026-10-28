@@ -6,14 +6,14 @@ mod sim_harness;
 use {
     krabka_ids::NodeId,
     rstest::fixture,
-    rstest_bdd_macros::{given, scenario, then, when},
+    rstest_bdd_macros::{given, scenarios, then, when},
     sim_harness::{cluster::Sim, sim_log::SimLog},
 };
 
 struct ConsensusScenario {
     sim: Option<Sim<SimLog>>,
     leader: Option<NodeId>,
-    replacement: Option<NodeId>,
+    replacements: Vec<NodeId>,
     target: Option<i64>,
 }
 
@@ -23,10 +23,12 @@ impl ConsensusScenario {
 
 #[fixture]
 fn consensus() -> ConsensusScenario {
+    // Start this scenario with fresh inputs and observations.
+
     ConsensusScenario {
         sim: None,
         leader: None,
-        replacement: None,
+        replacements: Vec::new(),
         target: None,
     }
 }
@@ -47,8 +49,11 @@ fn stabilize(consensus: &mut ConsensusScenario) {
 fn elected_leader(consensus: &mut ConsensusScenario) { stabilize(consensus); }
 
 #[then("all voters agree on one leader epoch")]
-fn agreed_epoch(consensus: &mut ConsensusScenario) {
-    assert2::assert!(consensus.sim().distinct_epochs().len() == 1);
+fn agreed_epoch(consensus: &ConsensusScenario) {
+    let sim = consensus.sim.as_ref().expect("three voters were given");
+    let leader = consensus.leader.expect("the voters stabilized");
+    assert2::assert!(sim.leaders() == vec![leader]);
+    assert2::assert!(sim.distinct_epochs().len() == 1);
 }
 
 #[when("the leader is isolated")]
@@ -56,19 +61,17 @@ fn isolate_leader(consensus: &mut ConsensusScenario) {
     let leader = consensus.leader.expect("a leader was elected");
     consensus.sim().partition(leader);
     consensus.sim().run_until_stable(10_000);
-}
-
-#[then("the majority elects exactly one replacement leader")]
-fn replacement_leader(consensus: &mut ConsensusScenario) {
-    let leader = consensus.leader.expect("a leader was elected");
-    let replacements: Vec<_> = consensus
+    consensus.replacements = consensus
         .sim()
         .leaders()
         .into_iter()
         .filter(|&id| id != leader)
         .collect();
-    assert2::assert!(replacements.len() == 1);
-    consensus.replacement = Some(replacements[0]);
+}
+
+#[then("the majority elects exactly one replacement leader")]
+fn replacement_leader(consensus: &ConsensusScenario) {
+    assert2::assert!(consensus.replacements.len() == 1);
 }
 
 #[when("the partition heals")]
@@ -80,7 +83,10 @@ fn heal_partition(consensus: &mut ConsensusScenario) {
 
 #[then("the replacement remains the only leader")]
 fn replacement_remains(consensus: &mut ConsensusScenario) {
-    let replacement = consensus.replacement.expect("a replacement was elected");
+    let [replacement] = consensus.replacements.as_slice() else {
+        panic!("the majority did not elect exactly one replacement");
+    };
+    let replacement = *replacement;
     assert2::assert!(consensus.sim().leaders() == vec![replacement]);
 }
 
@@ -108,20 +114,4 @@ fn voters_caught_up(consensus: &mut ConsensusScenario) {
     assert2::assert!(consensus.sim().all_voters_fetched_to(watermark));
 }
 
-#[scenario(
-    path = "tests/features/kraft_sim.feature",
-    name = "Three nodes elect exactly one leader"
-)]
-fn three_nodes_elect_exactly_one_leader(consensus: ConsensusScenario) {}
-
-#[scenario(
-    path = "tests/features/kraft_sim.feature",
-    name = "A partitioned leader rejoins as a follower"
-)]
-fn re_elects_single_leader_after_leader_partition(consensus: ConsensusScenario) {}
-
-#[scenario(
-    path = "tests/features/kraft_sim.feature",
-    name = "Committed high watermarks agree across voters"
-)]
-fn committed_high_watermark_agrees_across_voters(consensus: ConsensusScenario) {}
+scenarios!("tests/features/kraft_sim.feature", fixtures = [consensus: ConsensusScenario]);

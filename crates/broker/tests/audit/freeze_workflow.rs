@@ -181,10 +181,16 @@ pub struct Cluster {
     pub(super) alice_key: support::OperatorKey,
     /// Where the audit partition's segment files live, for the offline reader.
     pub(super) log_dir: PathBuf,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
 }
 
 impl Cluster {
+    /// Stop all writers while retaining the on-disk evidence directory for offline readers.
+    pub(super) async fn into_durable_log(self) -> (tempfile::TempDir, PathBuf) {
+        self.broker.shutdown().await;
+        (self.dir, self.log_dir)
+    }
+
     pub(super) async fn workflow_clients(
         &self,
     ) -> (
@@ -229,7 +235,7 @@ pub async fn boot_workflow_cluster() -> Cluster {
         bootstrap,
         alice_key,
         log_dir,
-        _dir: dir,
+        dir,
     }
 }
 

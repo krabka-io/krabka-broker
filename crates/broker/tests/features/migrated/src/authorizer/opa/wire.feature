@@ -1,10 +1,12 @@
-Feature: src authorizer opa wire
+Feature: OPA policy actions use Kafka ACL operation names
 
-  Scenario Outline: tests: operation str maps kafka names
-    Then authorizer opa wire tests: operation str maps kafka names for <example>
+  Scenario Outline: Render Kafka <operation> for a policy
+    Given the OPA authorization action is Kafka operation <operation>
+    When the operation is rendered for an OPA Kafka plugin policy
+    Then the policy operation name is <name>
 
     Examples:
-      | example          |
-      | read             |
-      | write            |
-      | two phase commit |
+      | operation | name |
+      | Read | READ |
+      | Write | WRITE |
+      | TwoPhaseCommit | TWO_PHASE_COMMIT |

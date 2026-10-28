@@ -8,12 +8,9 @@ use {
     crate::{
         NONE,
         harness::initialize_consumption,
-        share_rpc::{
-            acquired_count, fetch_empty, fetch_redelivered, fetch_until_acquired, share_fetch,
-            share_renew,
-        },
+        share_rpc::{acquired_count, fetch_until_acquired, share_fetch, share_renew},
         support::share::{
-            ConsumptionSetup, MemberSession, ShareFetchSetup, ShareRecordCount, ShareSessionEpoch,
+            ConsumptionSetup, MemberSession, ShareRecordCount, ShareSessionEpoch,
             ShareSessionSetup, permitted_topic_fixture,
         },
     },
@@ -24,182 +21,6 @@ use {
     },
     tokio::{sync::OwnedSemaphorePermit, time},
 };
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share consume lock lifetime: lock timeout redelivers")]
-async fn bdd_verify_lock_timeout_redelivers() {
-    let LockFixture {
-        permit: _permit,
-        broker,
-        client,
-        dir: _dir,
-        tid,
-        member,
-    } = Box::pin(lock_fixture(Duration::from_millis(200), None)).await;
-    let session = ShareSessionSetup::joined(&member, tid);
-
-    // Fetch but DO NOT acknowledge.
-    acquire_initial_record(&client, &member, tid).await;
-
-    // Wait until the lock expires and the background sweeper reverts the
-    // record to Available (acquired-batch count drops to 0).
-    broker
-        .wait_until_share_acquired_count("g1", tid, 0, 0)
-        .await;
-
-    // Next fetch (epoch 1) re-acquires the same offset at delivery_count 2.
-    fetch_redelivered(&client, ShareFetchSetup::from(session)).await;
-}
-
-/// The background sweep reverts an acquired-but-unacknowledged lock that
-/// expires, so the next fetch re-delivers at an incremented count.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_consume/lock_lifetime.feature",
-    name = "lock timeout redelivers"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lock_timeout_redelivers() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share consume lock lifetime: delivery limit archives")]
-async fn bdd_verify_delivery_limit_archives() {
-    let LockFixture {
-        permit: _permit,
-        broker,
-        client,
-        dir: _dir,
-        tid,
-        member,
-    } = Box::pin(lock_fixture(Duration::from_millis(150), Some(2))).await;
-    let session = ShareSessionSetup::joined(&member, tid);
-
-    // Delivery 1 (no ack).
-    let row1 = fetch_until_acquired(&client, ShareSessionSetup::opening(&member, tid)).await;
-    assert!(row1.acquired_records[0].delivery_count == 1);
-
-    // Wait until the lock expires and the sweeper reverts the record to Available
-    // (acquired-batch count drops to 0), then re-fetch for delivery 2.
-    broker
-        .wait_until_share_acquired_count("g1", tid, 0, 0)
-        .await;
-
-    // Delivery 2 (no ack).
-    let row2 = share_fetch(&client, ShareFetchSetup::from(session)).await;
-    assert!(
-        acquired_count(&row2) == 1 && row2.acquired_records[0].delivery_count == 2,
-        "second delivery must be count 2, got {:?}",
-        row2.acquired_records
-    );
-
-    // Wait until that lock expires too — the sweeper reverts the record back to
-    // Available (delivery_count=2, which equals max_delivery_attempts). The
-    // archiving (dcc increment) happens during the next acquire call when the
-    // broker detects the poison pill.
-    broker
-        .wait_until_share_acquired_count("g1", tid, 0, 0)
-        .await;
-
-    // Subsequent fetch: the acquire path detects delivery_count >= max_attempts
-    // and archives the record — SPSO advances, nothing is returned.
-    fetch_empty(&client, session.fetch_at(ShareSessionEpoch(2))).await;
-}
-
-/// The broker archives a record that exhausts `max_delivery_attempts` without
-/// an Accept (poison pill). Later fetches acquire nothing and the SPSO advances.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_consume/lock_lifetime.feature",
-    name = "delivery limit archives"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delivery_limit_archives() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share consume lock lifetime: renew extends lock not redelivered")]
-async fn bdd_verify_renew_extends_lock_not_redelivered() {
-    let LockFixture {
-        permit: _permit,
-        broker: _broker,
-        client,
-        dir: _dir,
-        tid,
-        member,
-    } = Box::pin(lock_fixture(Duration::from_millis(500), None)).await;
-    // Acquire offset 0 (lock 500ms, delivery_count 1). Epoch is now 1.
-    let (session, acquire_at) = acquire_initial_session(&client, &member, tid).await;
-
-    // Intentional calibrated timing: renew ~200ms in (before the 500ms lock
-    // expires) to reset the deadline to renew-time + 500ms ≈ T0+700ms. Epoch
-    // is now 2. This sleep proves renew timing; it is NOT a flaky state-guess.
-    time::sleep(Duration::from_millis(200)).await;
-    let renew = share_renew()
-        .client(&client)
-        .session(ShareSessionSetup::joined(&member, tid))
-        .call()
-        .await;
-    assert!(
-        renew.error_code == NONE,
-        "renew must succeed for an acquired offset, got {}",
-        renew.error_code
-    );
-
-    // Intentional calibrated timing: wait until ~600ms after the ORIGINAL
-    // acquire — past the original 500ms deadline (un-renewed lock would have
-    // been swept) but before the renewed ~700ms deadline. The remaining sleep
-    // is computed from the real acquire instant so scheduling jitter doesn't
-    // overshoot the renewed window. This proves the renew suppressed redelivery;
-    // it is NOT a flaky state-guess.
-    let target = acquire_at + Duration::from_millis(600);
-    if let Some(rem) = target.checked_duration_since(Instant::now()) {
-        time::sleep(rem).await;
-    }
-    fetch_empty(&client, session.fetch_at(ShareSessionEpoch(2))).await;
-}
-
-/// F1 (renew): a renew-ack extends the acquisition lock. The broker does NOT
-/// re-acquire a record that it would otherwise re-deliver after the lock expires.
-///
-/// Config: `record_lock_duration = 500ms` (sweeper ticks at 250ms). Acquire
-/// offset 0 with a 500ms lock, then send a renew-ack about 200ms in. The
-/// renew-ack resets the deadline to renew-time + 500ms (≈ T0+700ms). Then check
-/// at about T0+600ms, which is PAST the original 500ms deadline but BEFORE the
-/// renewed 700ms deadline. The sweeper would already have swept and re-delivered
-/// an un-renewed lock. The renew kept the record Acquired, so the fetch acquires
-/// nothing.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_consume/lock_lifetime.feature",
-    name = "renew extends lock not redelivered"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn renew_extends_lock_not_redelivered() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share consume lock lifetime: no renew redelivers after lock expiry")]
-async fn bdd_verify_no_renew_redelivers_after_lock_expiry() {
-    let fixture = Box::pin(lock_fixture(Duration::from_millis(500), None)).await;
-    let (session, _) = acquire_initial_session(&fixture.client, &fixture.member, fixture.tid).await;
-
-    // Intentional calibrated timing: no renew — wait 800ms (well past the 500ms
-    // lock + a sweeper tick) so the record is reverted to Available and
-    // re-delivered. This sleep mirrors the renew test's timing to prove that
-    // WITHOUT a renew the lock IS swept; it is NOT a flaky state-guess.
-    time::sleep(Duration::from_millis(800)).await;
-    fetch_redelivered(&fixture.client, ShareFetchSetup::from(session)).await;
-    drop(fixture);
-}
-
-/// F1 (control): the SAME timing WITHOUT a renew re-acquires the offset after
-/// the lock expires, at `delivery_count` 2. This proves the renew above
-/// suppressed the redelivery, and that slack in the timing did not.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_consume/lock_lifetime.feature",
-    name = "no renew redelivers after lock expiry"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn no_renew_redelivers_after_lock_expiry() {}
 
 /// A joined share-group member and the owners that keep its broker running.
 struct LockFixture {
@@ -240,23 +61,195 @@ async fn lock_fixture(lock_duration: Duration, max_delivery_attempts: Option<i16
     }
 }
 
-async fn acquire_initial_record(
-    client: &krabka_client_core::Client,
-    member: &str,
-    tid: uuid::Uuid,
-) {
-    let row = fetch_until_acquired(client, ShareSessionSetup::opening(member, tid)).await;
-    assert!(acquired_count(&row) == 1, "acquire the single offset");
-    assert!(row.acquired_records[0].delivery_count == 1);
+use {
+    krabka_protocol::owned::share_fetch_response::PartitionData,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+
+#[derive(Default)]
+struct ShareLockLifetime {
+    fixture: Option<LockFixture>,
+    acquired_at: Option<Instant>,
+    response: Option<PartitionData>,
+    renewal_error: Option<i16>,
 }
 
-async fn acquire_initial_session<'a>(
-    client: &krabka_client_core::Client,
-    member: &'a str,
-    tid: uuid::Uuid,
-) -> (ShareSessionSetup<'a>, Instant) {
-    let session = ShareSessionSetup::joined(member, tid);
-    let acquire_at = Instant::now();
-    acquire_initial_record(client, member, tid).await;
-    (session, acquire_at)
+#[fixture]
+fn share_lock_lifetime() -> ShareLockLifetime {
+    // Record the real acquisition instant so renewal checks retain calibrated timing.
+    ShareLockLifetime::default()
+}
+
+#[given(
+    "one share record has a {milliseconds}-millisecond lock and delivery attempt limit {attempts}"
+)]
+async fn share_lock_policy(
+    share_lock_lifetime: &mut ShareLockLifetime,
+    milliseconds: u64,
+    attempts: String,
+) {
+    let attempts = if attempts == "default" {
+        None
+    } else {
+        Some(attempts.parse().unwrap())
+    };
+    share_lock_lifetime.fixture =
+        Some(Box::pin(lock_fixture(Duration::from_millis(milliseconds), attempts)).await);
+}
+
+#[when("the lock-test member acquires its single record without acknowledging")]
+async fn acquire_share_lock(share_lock_lifetime: &mut ShareLockLifetime) {
+    share_lock_lifetime.acquired_at = Some(Instant::now());
+    share_lock_lifetime.response = Some(
+        fetch_until_acquired(
+            &share_lock_lifetime.fixture().client,
+            ShareSessionSetup::opening(
+                &share_lock_lifetime.fixture().member,
+                share_lock_lifetime.fixture().tid,
+            ),
+        )
+        .await,
+    );
+}
+
+#[then("the lock-test fetch acquires one record at delivery count {delivery_count}")]
+fn share_lock_delivery(share_lock_lifetime: &ShareLockLifetime, delivery_count: i16) {
+    let response = share_lock_lifetime
+        .response
+        .as_ref()
+        .expect("lock fetch completed");
+    assert!(
+        acquired_count(response) == 1
+            && response.acquired_records[0].delivery_count == delivery_count,
+        "{:?}",
+        response.acquired_records
+    );
+}
+
+#[when("the background sweeper expires the unacknowledged acquisition")]
+async fn expire_share_lock(share_lock_lifetime: &ShareLockLifetime) {
+    share_lock_lifetime
+        .fixture()
+        .broker
+        .wait_until_share_acquired_count("g1", share_lock_lifetime.fixture().tid, 0, 0)
+        .await;
+}
+
+#[when("the lock-test member fetches at session epoch {epoch}")]
+async fn fetch_share_lock(share_lock_lifetime: &mut ShareLockLifetime, epoch: i32) {
+    share_lock_lifetime.response = Some(
+        share_fetch(
+            &share_lock_lifetime.fixture().client,
+            ShareSessionSetup::joined(
+                &share_lock_lifetime.fixture().member,
+                share_lock_lifetime.fixture().tid,
+            )
+            .fetch_at(ShareSessionEpoch(epoch)),
+        )
+        .await,
+    );
+}
+
+#[then("the lock-test fetch acquires no records")]
+fn archived_or_locked_record(share_lock_lifetime: &ShareLockLifetime) {
+    assert!(
+        acquired_count(
+            share_lock_lifetime
+                .response
+                .as_ref()
+                .expect("lock fetch completed")
+        ) == 0
+    );
+}
+
+#[when("the member renews the acquisition after 200 milliseconds")]
+async fn renew_share_lock(share_lock_lifetime: &mut ShareLockLifetime) {
+    time::sleep(Duration::from_millis(200)).await;
+    let response = share_renew()
+        .client(&share_lock_lifetime.fixture().client)
+        .session(ShareSessionSetup::joined(
+            &share_lock_lifetime.fixture().member,
+            share_lock_lifetime.fixture().tid,
+        ))
+        .call()
+        .await;
+    share_lock_lifetime.renewal_error = Some(response.error_code);
+}
+
+#[then("the acquisition renewal succeeds")]
+fn renewed_share_lock(share_lock_lifetime: &ShareLockLifetime) {
+    assert!(share_lock_lifetime.renewal_error == Some(NONE));
+}
+
+#[when("the clock reaches 600 milliseconds after the original acquisition")]
+async fn original_share_lock_deadline(share_lock_lifetime: &ShareLockLifetime) {
+    let target = share_lock_lifetime
+        .acquired_at
+        .expect("original acquisition instant")
+        + Duration::from_millis(600);
+    if let Some(remaining) = target.checked_duration_since(Instant::now()) {
+        time::sleep(remaining).await;
+    }
+}
+
+#[when("800 milliseconds elapse without a renewal")]
+async fn unrenewed_share_lock_deadline() { time::sleep(Duration::from_millis(800)).await; }
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/lock_lifetime.feature",
+    name = "lock timeout redelivers"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lock_timeout_redelivers(share_lock_lifetime: ShareLockLifetime) {
+    share_lock_lifetime.shutdown().await;
+    drop(share_lock_lifetime);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/lock_lifetime.feature",
+    name = "delivery limit archives"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delivery_limit_archives(share_lock_lifetime: ShareLockLifetime) {
+    share_lock_lifetime.shutdown().await;
+    drop(share_lock_lifetime);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/lock_lifetime.feature",
+    name = "renew extends lock not redelivered"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn renew_extends_lock_not_redelivered(share_lock_lifetime: ShareLockLifetime) {
+    share_lock_lifetime.shutdown().await;
+    drop(share_lock_lifetime);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/lock_lifetime.feature",
+    name = "no renew redelivers after lock expiry"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_renew_redelivers_after_lock_expiry(share_lock_lifetime: ShareLockLifetime) {
+    share_lock_lifetime.shutdown().await;
+    drop(share_lock_lifetime);
+}
+
+impl ShareLockLifetime {
+    fn fixture(&self) -> &LockFixture { self.fixture.as_ref().expect("live scenario fixture") }
+}
+
+impl ShareLockLifetime {
+    async fn shutdown(&mut self) {
+        let LockFixture {
+            broker,
+            client,
+            dir,
+            permit,
+            ..
+        } = self.fixture.take().expect("lock fixture");
+        broker.shutdown().await;
+        drop((client, dir, permit));
+    }
 }

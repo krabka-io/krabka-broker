@@ -33,156 +33,190 @@ use {
     },
     assert2::assert,
     bytes::Bytes,
+    krabka_broker::{BrokerConfig, BrokerHandle},
     krabka_client_consumer::AutoOffsetReset,
     krabka_client_producer::{Acks, Producer},
     std::{
         collections::{HashMap, HashSet},
+        mem,
         time::Duration,
     },
     support::cluster_lock,
+    tempfile::TempDir,
+    tokio::sync::MutexGuard,
 };
 
 mod support;
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("producer leader routing: producer routes to non bootstrap leaders")]
-async fn bdd_verify_producer_routes_to_non_bootstrap_leaders() {
-    let _g = cluster_lock().lock().await;
-    let topic = "producer-routing-rf1";
-    let (cluster, bootstrap, _topic_id, n_partitions) = start_leader_routing_cluster(topic).await;
+type RoutingCluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
+struct Routing {
+    guard: Option<MutexGuard<'static, ()>>,
+    cluster: RoutingCluster,
+    bootstrap: String,
+    topic: String,
+    producer: Option<Producer>,
+    non_bootstrap: Vec<i32>,
+    acknowledgements: Vec<(i32, i32)>,
+    seen: HashSet<String>,
+    seen_partitions: HashMap<i32, String>,
+}
+#[rstest::fixture]
+fn routing() -> Routing {
+    // Start this scenario with fresh inputs and observations.
 
-    // A leader appearing in the controller image precedes the supervisor
-    // materializing that broker's local writer actor. Producing in that gap can
-    // transiently return UNKNOWN_TOPIC_ID (100), so wait for each rf=1 owner to
-    // be ready before exercising the producer's routing behavior.
-    for partition in 0..n_partitions {
+    Routing {
+        guard: None,
+        cluster: Vec::new(),
+        bootstrap: String::new(),
+        topic: String::new(),
+        producer: None,
+        non_bootstrap: Vec::new(),
+        acknowledgements: Vec::new(),
+        seen: HashSet::new(),
+        seen_partitions: HashMap::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "topic {topic} has six single-replica partitions across three brokers including non-bootstrap leaders"
+)]
+async fn distributed_partitions(routing: &mut Routing, topic: String) {
+    routing.guard = Some(cluster_lock().lock().await);
+    let (cluster, bootstrap, _, partitions) = start_leader_routing_cluster(&topic).await;
+    for partition in 0..partitions {
         let leader = cluster[0]
             .0
-            .partition_leader_for_test(topic, partition)
-            .expect("partition has a leader");
-        let leader_handle = &cluster
-            .iter()
-            .find(|(handle, _, _)| handle.node_id() == leader)
-            .expect("leader node is in the cluster")
-            .0;
-        wait_for_local_replica(leader_handle, topic, partition).await;
+            .partition_leader_for_test(&topic, partition)
+            .expect("leader");
+        wait_for_local_replica(
+            &cluster
+                .iter()
+                .find(|(h, _, _)| h.node_id() == leader)
+                .expect("leader broker")
+                .0,
+            &topic,
+            partition,
+        )
+        .await;
     }
-
-    // Discriminating guard: at least one partition must be led by a
-    // non-bootstrap broker, otherwise the test exercises no cross-broker
-    // routing and is vacuous. With 6 partitions on 3 brokers at rf=1 this is
-    // virtually guaranteed, but we verify explicitly.
-    let non_bootstrap_partitions =
-        require_non_bootstrap_partitions(&cluster[0].0, topic, n_partitions);
-
-    // Build ONE idempotent producer bootstrapped at node 1. It must route each
-    // partition's Produce to that partition's leader. For partitions led by
-    // nodes 2 and 3 the bootstrap broker has NO replica (rf=1), so a
-    // bootstrap-only producer's send would fail with UNKNOWN_TOPIC_OR_PARTITION.
-    {
-        let producer = Producer::builder()
-            .bootstrap(bootstrap.clone())
+    routing.non_bootstrap = require_non_bootstrap_partitions(&cluster[0].0, &topic, partitions);
+    routing.cluster = cluster;
+    routing.bootstrap = bootstrap;
+    routing.topic = topic;
+}
+#[rstest_bdd_macros::given(
+    "one idempotent producer bootstraps only at broker 1 with all acknowledgements"
+)]
+async fn bootstrap_producer(routing: &mut Routing) {
+    routing.producer = Some(
+        Producer::builder()
+            .bootstrap(routing.bootstrap.clone())
             .client_id("routing-producer-rf1")
             .enable_idempotence(true)
             .acks(Acks::All)
             .linger(Duration::from_millis(5))
-            // Bound retries so a genuine misroute fails fast instead of retrying
-            // for i32::MAX cycles (the build default), which would hang the test.
             .retries(8)
             .retry_backoff(Duration::from_millis(150))
             .build()
             .await
-            .expect("producer build");
-
-        // Produce one record per partition, pinning the partition explicitly so
-        // every partition (incl. those on non-bootstrap leaders) is exercised.
-        let mut futs = Vec::with_capacity(usize::try_from(n_partitions).unwrap_or(0));
-        let mut expected: HashSet<String> = HashSet::new();
-        for p in 0..n_partitions {
-            let v = format!("p{p}");
-            let rx = producer
-                .enqueue(
-                    producer_record()
-                        .topic((topic).into())
-                        .maybe_partition(Some(p))
-                        .maybe_value(Some(Some(Bytes::from(v.clone()))))
-                        .call(),
-                )
-                .await
-                .expect("enqueue record");
-            futs.push((p, rx));
-            expected.insert(v);
-        }
-        producer.flush().await.expect("flush");
-
-        // Every record must be acked OK — including those for partitions led by
-        // non-bootstrap brokers. A misroute to a non-hosting broker (rf=1) returns
-        // UNKNOWN_TOPIC_OR_PARTITION, which (after the bounded re-route budget)
-        // surfaces as a Server error here.
-        for (p, rx) in futs {
-            let meta = rx
-                .await
-                .unwrap_or_else(|e| panic!("record for partition {p} failed: {e:?}"));
-            assert!(meta.partition == p, "ack partition mismatch: {meta:?}");
-        }
-
-        // Durability check: consume every record back through a native consumer
-        // (which routes per-leader). For partitions on non-bootstrap leaders the
-        // records can only be present if the producer actually stored them there.
-        let mut consumer = routing_consumer(
-            &bootstrap,
-            "routing-consumer-rf1",
-            "routing-producer-grp-rf1",
-            topic,
-            AutoOffsetReset::Earliest,
-        )
-        .await;
-
-        // Track which partition each consumed record came from so we can prove the
-        // non-bootstrap partitions are durably stored on their leaders.
-        let mut seen_partitions: HashMap<i32, String> = HashMap::new();
-        let seen = collect_routing_values(&mut consumer, expected.len(), |partition, value| {
-            seen_partitions.insert(partition, value);
-        })
-        .await;
-        assert!(
-            seen == expected,
-            "consumer must read back every produced record (incl. those on non-bootstrap leaders);\n\
-         missing: {:?}\n\
-         non-bootstrap partitions: {non_bootstrap_partitions:?}",
-            expected.difference(&seen).collect::<Vec<_>>()
-        );
-
-        // Explicit: every non-bootstrap partition's record was stored and read back
-        // from its correct leader. This is the load-bearing assertion — it can only
-        // hold if the producer routed those Produces off the bootstrap connection.
-        for &p in &non_bootstrap_partitions {
-            assert!(
-                seen_partitions.get(&p) == Some(&format!("p{p}")),
-                "partition {p} (led by a non-bootstrap broker) was not durably stored on its leader; \
-             seen_partitions = {seen_partitions:?}"
-            );
-        }
-
-        consumer.close().await.unwrap();
-        producer.close().await
-    }.unwrap();
-    shutdown_cluster(cluster).await;
+            .expect("producer"),
+    );
 }
-
-/// A native `Producer` against a 3-broker rf=1 cluster must store every
-/// partition's record on the partition's leader. This includes partitions whose
-/// leader, and sole replica, is NOT the broker it bootstrapped at.
-///
-/// With rf=1 the bootstrap broker holds no replica for partitions led by other
-/// nodes. A bootstrap-only producer would get `UNKNOWN_TOPIC_OR_PARTITION` for
-/// those partitions and would never store them. The producer MUST route each
-/// Produce to the actual partition leader. The test verifies durability and
-/// consumes every record back, because the consumer already routes per-leader.
-#[cfg(test)]
+#[rstest_bdd_macros::when("that producer enqueues and flushes these partition-pinned records")]
+async fn write_records(routing: &mut Routing, datatable: Vec<Vec<String>>) {
+    let mut receivers = Vec::new();
+    for row in datatable.into_iter().skip(1) {
+        let [partition, value]: [String; 2] = row.try_into().expect("partition and value");
+        let partition: i32 = partition.parse().expect("partition index");
+        let receiver = routing
+            .producer
+            .as_ref()
+            .expect("producer")
+            .enqueue(
+                producer_record()
+                    .topic(routing.topic.clone())
+                    .maybe_partition(Some(partition))
+                    .maybe_value(Some(Some(Bytes::from(value))))
+                    .call(),
+            )
+            .await
+            .expect("enqueue");
+        receivers.push((partition, receiver));
+    }
+    routing
+        .producer
+        .as_ref()
+        .expect("producer")
+        .flush()
+        .await
+        .expect("flush");
+    for (partition, receiver) in receivers {
+        let metadata = receiver
+            .await
+            .unwrap_or_else(|error| panic!("partition {partition} failed: {error:?}"));
+        routing
+            .acknowledgements
+            .push((partition, metadata.partition));
+    }
+}
+#[rstest_bdd_macros::then("all {count} records are acknowledged for their requested partitions")]
+fn acknowledgements(routing: &Routing, count: usize) {
+    assert!(routing.acknowledgements.len() == count);
+    assert!(
+        routing
+            .acknowledgements
+            .iter()
+            .all(|(requested, actual)| requested == actual)
+    );
+}
+#[rstest_bdd_macros::when(
+    "an earliest native consumer reads all six records through partition leaders"
+)]
+async fn read_records(routing: &mut Routing) {
+    let mut consumer = routing_consumer(
+        &routing.bootstrap,
+        "routing-consumer-rf1",
+        "routing-producer-grp-rf1",
+        &routing.topic,
+        AutoOffsetReset::Earliest,
+    )
+    .await;
+    routing.seen = collect_routing_values(&mut consumer, 6, |partition, value| {
+        routing.seen_partitions.insert(partition, value);
+    })
+    .await;
+    consumer.close().await.expect("consumer close");
+}
+#[rstest_bdd_macros::then(
+    "every partition including non-bootstrap partitions contains these exact values"
+)]
+fn durable_values(routing: &Routing, datatable: Vec<Vec<String>>) {
+    let expected: HashMap<i32, String> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [partition, value]: [String; 2] = row.try_into().expect("partition value");
+            (partition.parse().expect("partition"), value)
+        })
+        .collect();
+    assert!(routing.seen == expected.values().cloned().collect::<HashSet<_>>());
+    assert!(routing.seen_partitions == expected);
+    for partition in &routing.non_bootstrap {
+        assert!(routing.seen_partitions.get(partition) == expected.get(partition));
+    }
+}
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/producer_leader_routing.feature",
-    name = "producer routes to non bootstrap leaders"
+    name = "A bootstrap producer stores writes on every partition leader"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn producer_routes_to_non_bootstrap_leaders() {}
+async fn producer_routes_to_non_bootstrap_leaders(routing: Routing) {
+    routing
+        .producer
+        .take()
+        .expect("producer")
+        .close()
+        .await
+        .expect("producer close");
+    shutdown_cluster(mem::take(&mut routing.cluster)).await;
+    drop(routing);
+}

@@ -39,200 +39,6 @@ fn short_retention_partition(log_dir: &Path) -> Arc<Partition> {
     })
 }
 
-// The newest timestamp and the size of an active segment.
-struct ActiveTail {
-    max_timestamp: i64,
-    size: u32,
-}
-
-// One `local_retention_decision` case over a log whose active segment
-// starts at offset 20.
-struct RollCase {
-    label: &'static str,
-    sealed: Vec<SegmentExport>,
-    covered_through: Option<i64>,
-    // The active segment's newest timestamp and size, or `None` when the
-    // high watermark has not passed the log end.
-    active: Option<ActiveTail>,
-    retention: Option<Time>,
-    retention_size: Option<ByteSize>,
-    expected: LocalRetentionDecision,
-}
-
-// Kafka's `UnifiedLog.deletableSegments` on a tiered log walks the active
-// segment last. It never deletes it, because the remote tier never holds
-// it, but when the walk reaches it and the time or size predicate holds
-// for it, Kafka rolls it so the next copy can upload it. `now` is
-// 10 000 ms.
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "remote log manager local retention tests: the walk rolls a breached active segment only where kafka would"
-)]
-fn bdd_verify_the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {
-    let two_sealed = || fixtures::two_exports_with_size(bytes(100));
-    let cases = [
-        RollCase {
-            label: "a lone active segment past the window rolls",
-            sealed: vec![],
-            covered_through: None,
-            active: Some(ActiveTail {
-                max_timestamp: 100,
-                size: 50,
-            }),
-            retention: Some(millis(1_000)),
-            retention_size: None,
-            expected: LocalRetentionDecision {
-                delete_through: None,
-                roll_active: true,
-            },
-        },
-        RollCase {
-            label: "a lone active segment inside the window stays",
-            sealed: vec![],
-            covered_through: None,
-            active: Some(ActiveTail {
-                max_timestamp: 9_500,
-                size: 50,
-            }),
-            retention: Some(millis(1_000)),
-            retention_size: None,
-            expected: LocalRetentionDecision {
-                delete_through: None,
-                roll_active: false,
-            },
-        },
-        RollCase {
-            label: "an empty active segment never rolls",
-            sealed: vec![],
-            covered_through: None,
-            active: Some(ActiveTail {
-                max_timestamp: 100,
-                size: 0,
-            }),
-            retention: Some(millis(1_000)),
-            retention_size: None,
-            expected: LocalRetentionDecision {
-                delete_through: None,
-                roll_active: false,
-            },
-        },
-        RollCase {
-            label: "an active segment above the high watermark never rolls",
-            sealed: vec![],
-            covered_through: None,
-            active: None,
-            retention: Some(millis(1_000)),
-            retention_size: None,
-            expected: LocalRetentionDecision {
-                delete_through: None,
-                roll_active: false,
-            },
-        },
-        timed_active_case(
-            "copied, breached sealed segments go and the active one rolls",
-            two_sealed(),
-            Some(19),
-            LocalRetentionDecision {
-                delete_through: Some(20),
-                roll_active: true,
-            },
-        ),
-        timed_active_case(
-            "a sealed segment the tier does not hold stops the walk",
-            two_sealed(),
-            Some(9),
-            LocalRetentionDecision {
-                delete_through: Some(10),
-                roll_active: false,
-            },
-        ),
-        timed_active_case(
-            "a sealed segment inside the window stops the walk",
-            vec![
-                synth_export().size(bytes(100)).call(),
-                synth_export()
-                    .bounds(Offset(10)..=Offset(19))
-                    .timestamp(9_500)
-                    .size(bytes(100))
-                    .call(),
-            ],
-            Some(19),
-            LocalRetentionDecision {
-                delete_through: Some(10),
-                roll_active: false,
-            },
-        ),
-        RollCase {
-            label: "a size debt that covers the active segment rolls it",
-            sealed: two_sealed(),
-            covered_through: Some(19),
-            active: Some(ActiveTail {
-                max_timestamp: 9_500,
-                size: 50,
-            }),
-            retention: None,
-            retention_size: Some(bytes(0)),
-            expected: LocalRetentionDecision {
-                delete_through: Some(20),
-                roll_active: true,
-            },
-        },
-        RollCase {
-            label: "a size debt short of the active segment keeps it",
-            sealed: two_sealed(),
-            covered_through: Some(19),
-            active: Some(ActiveTail {
-                max_timestamp: 9_500,
-                size: 50,
-            }),
-            retention: None,
-            retention_size: Some(bytes(50)),
-            expected: LocalRetentionDecision {
-                delete_through: Some(20),
-                roll_active: false,
-            },
-        },
-    ];
-    for case in cases {
-        let active_size = case.active.as_ref().map_or(0, |tail| tail.size);
-        let sealed_size: u32 = case
-            .sealed
-            .iter()
-            .map(|ex| u32::try_from(ex.size.bytes_u64()).unwrap())
-            .sum();
-        let local = LocalSegments {
-            delivery_watermark: None,
-            sealed: &case.sealed,
-            active: case.active.as_ref().map(|tail| ActiveSegmentExport {
-                base_offset: Offset(20),
-                max_timestamp: tail.max_timestamp,
-                last_modified_ms: tail.max_timestamp,
-                size: bytes(tail.size),
-            }),
-            size: bytes(sealed_size + active_size),
-        };
-        check!(
-            local_retention_decision(
-                UnstableApiVersions::Disabled,
-                &local,
-                case.covered_through,
-                case.retention,
-                case.retention_size,
-                10_000,
-            ) == case.expected,
-            "{}",
-            case.label
-        );
-    }
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/remote_log_manager/local_retention/tests.feature",
-    name = "the walk rolls a breached active segment only where kafka would"
-)]
-fn the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {}
-
 #[test]
 fn local_retention_target_returns_none_when_no_finished_segments() {
     let exports = fixtures::two_exports();
@@ -970,22 +776,125 @@ async fn the_roll_waits_for_the_high_watermark_and_for_the_walk_to_reach_it(
     );
 }
 
-fn timed_active_case(
-    label: &'static str,
-    sealed: Vec<SegmentExport>,
-    covered_through: Option<i64>,
-    expected: LocalRetentionDecision,
-) -> RollCase {
-    RollCase {
-        label,
-        sealed,
-        covered_through,
-        active: Some(ActiveTail {
-            max_timestamp: 300,
-            size: 50,
-        }),
-        retention: Some(millis(1_000)),
-        retention_size: None,
-        expected,
-    }
+#[derive(serde::Deserialize)]
+struct RetainedLocalSegment {
+    base: i64,
+    last: i64,
+    timestamp: i64,
+    size: u32,
 }
+
+#[derive(serde::Deserialize)]
+struct RetainedActiveTail {
+    timestamp: i64,
+    size: u32,
+}
+
+#[derive(serde::Deserialize)]
+struct LocalRetentionInput {
+    sealed: Vec<RetainedLocalSegment>,
+    active: Option<RetainedActiveTail>,
+    covered_through: Option<i64>,
+    retention_ms: Option<u32>,
+    retention_bytes: Option<u32>,
+}
+
+#[derive(serde::Deserialize)]
+struct ExpectedLocalRetention {
+    delete_through: Option<i64>,
+    roll_active: bool,
+}
+
+#[derive(Default)]
+struct TieredLocalRetention {
+    input: Option<LocalRetentionInput>,
+    sealed: Vec<SegmentExport>,
+    decision: Option<LocalRetentionDecision>,
+}
+
+#[rstest::fixture]
+fn tiered_local_retention() -> TieredLocalRetention {
+    // Every retention walk owns its sealed exports and high-watermark-eligible tail.
+    TieredLocalRetention::default()
+}
+
+#[rstest_bdd_macros::given(
+    "the tiered local log footprint, copied frontier and retention policy are JSON {footprint}"
+)]
+fn supplied_tiered_local_retention(
+    tiered_local_retention: &mut TieredLocalRetention,
+    footprint: String,
+) {
+    let input: LocalRetentionInput =
+        serde_json::from_str(&footprint).expect("explicit segments and retention bounds");
+    tiered_local_retention.sealed = input
+        .sealed
+        .iter()
+        .map(|segment| {
+            synth_export()
+                .bounds(Offset(segment.base)..=Offset(segment.last))
+                .timestamp(segment.timestamp)
+                .size(bytes(segment.size))
+                .call()
+        })
+        .collect();
+    tiered_local_retention.input = Some(input);
+}
+
+#[rstest_bdd_macros::when(
+    "released immediate-topic local retention walks the log at millisecond 10000 with active base offset 20"
+)]
+fn evaluate_tiered_local_retention(tiered_local_retention: &mut TieredLocalRetention) {
+    let input = tiered_local_retention
+        .input
+        .as_ref()
+        .expect("local footprint and policy were given");
+    let active_size = input.active.as_ref().map_or(0, |active| active.size);
+    let sealed_size: u32 = tiered_local_retention
+        .sealed
+        .iter()
+        .map(|segment| {
+            u32::try_from(segment.size.bytes_u64()).expect("fixture segment bytes fit u32")
+        })
+        .sum();
+    let local = LocalSegments {
+        delivery_watermark: None,
+        sealed: &tiered_local_retention.sealed,
+        active: input.active.as_ref().map(|active| ActiveSegmentExport {
+            base_offset: Offset(20),
+            max_timestamp: active.timestamp,
+            last_modified_ms: active.timestamp,
+            size: bytes(active.size),
+        }),
+        size: bytes(sealed_size + active_size),
+    };
+    tiered_local_retention.decision = Some(local_retention_decision(
+        UnstableApiVersions::Disabled,
+        &local,
+        input.covered_through,
+        input.retention_ms.map(millis),
+        input.retention_bytes.map(bytes),
+        10000,
+    ));
+}
+
+#[rstest_bdd_macros::then("the complete local retention decision is JSON {decision}")]
+fn expected_tiered_local_retention(
+    tiered_local_retention: &TieredLocalRetention,
+    decision: String,
+) {
+    let expected: ExpectedLocalRetention = serde_json::from_str(&decision)
+        .expect("independent deletion frontier and active roll decision");
+    check!(
+        tiered_local_retention.decision
+            == Some(LocalRetentionDecision {
+                delete_through: expected.delete_through,
+                roll_active: expected.roll_active
+            })
+    );
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/remote_log_manager/local_retention/tests.feature",
+    fixtures = [tiered_local_retention: TieredLocalRetention]
+);

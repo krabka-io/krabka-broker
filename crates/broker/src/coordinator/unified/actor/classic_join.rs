@@ -951,74 +951,6 @@ mod tests {
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified actor classic join tests: classic join against a consumer group follows kafka"
-    )]
-    async fn bdd_verify_classic_join_against_a_consumer_group_follows_kafka() {
-        use crate::coordinator::unified::{
-            actor::GroupKindTag, config::ConsumerGroupMigrationPolicy as Policy,
-        };
-
-        let rows = [
-            (
-                "empty consumer group",
-                Policy::Disabled,
-                0,
-                (codes::MEMBER_ID_REQUIRED, true, true),
-            ),
-            (
-                "live consumer group, policy disabled",
-                Policy::Disabled,
-                1,
-                (codes::INCONSISTENT_GROUP_PROTOCOL, false, false),
-            ),
-            (
-                "live consumer group, policy bidirectional",
-                Policy::Bidirectional,
-                1,
-                (codes::MEMBER_ID_REQUIRED, false, false),
-            ),
-        ];
-        for (label, policy, members, want) in rows {
-            let (coord, log) = make_coordinator_with_topic_policy("t", 1, policy);
-            let handle = coord.get_or_create_group("g", GroupKindTag::Consumer);
-            for index in 0..members {
-                let joined =
-                    rpc::consumer_heartbeat(&handle, &format!("native-{index}"), 0, Some("t"))
-                        .await;
-                assert!(joined.error_code == codes::NONE, "{label}");
-            }
-
-            let joined = rpc::classic_join(&handle, "", "t").await;
-
-            let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicInspect {
-                reply: tx,
-            })
-            .await;
-            let is_classic = rx.await.is_ok();
-            let got = (
-                joined.error_code,
-                log.has_next_gen_group_metadata_tombstone("g").await,
-                is_classic,
-            );
-            check!(got == want, "{label}");
-        }
-    }
-
-    /// Kafka's `classicGroupJoin` against a consumer group: (label, policy,
-    /// native members) to (join error code, consumer group tombstoned, group
-    /// classic afterwards). An empty consumer group is replaced by a classic
-    /// group; a live one under policy `disabled` refuses the classic member
-    /// with `INCONSISTENT_GROUP_PROTOCOL`.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
-        name = "tests: classic join against a consumer group follows kafka"
-    )]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn classic_join_against_a_consumer_group_follows_kafka() {}
-
     /// Kafka's `classicGroupJoinToConsumerGroup` answer: no leader and no
     /// member list, so the client follows, and the member epoch as the
     /// generation.
@@ -1330,63 +1262,6 @@ mod tests {
         check!(shape[..6] == replace_member_shape(&first.member_id, &second.member_id)[..]);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified actor classic join tests: a static classic rejoin with a member id is checked as kafka does"
-    )]
-    async fn bdd_verify_a_static_classic_rejoin_with_a_member_id_is_checked_as_kafka_does() {
-        let rows = [
-            (
-                "an instance id no member holds",
-                None,
-                "instance-2",
-                codes::UNKNOWN_MEMBER_ID,
-            ),
-            (
-                "an instance id another member holds",
-                Some("other"),
-                "instance-1",
-                codes::FENCED_INSTANCE_ID,
-            ),
-        ];
-        for (label, member_id, instance_id, want) in rows {
-            let (coord, log) = make_coordinator_with_topic_policy("t", 2, Policy::Bidirectional);
-            let handle = coord.get_or_create_group("g", GroupKindTag::Consumer);
-            native_join(&handle, "native", None).await;
-            let joined = join_at(&handle, "", Some("instance-1"), 9).await;
-            assert!(joined.error_code == codes::NONE, "{label}");
-            let batches_before = log.batches().await.len();
-
-            let member_id = member_id.unwrap_or(&joined.member_id);
-            let refused = join_at(&handle, member_id, Some(instance_id), 9).await;
-
-            check!(
-                refused
-                    == JoinResult {
-                        error_code: want,
-                        ..JoinResult::default()
-                    },
-                "{label}"
-            );
-            check!(log.batches().await.len() == batches_before, "{label}");
-            let mut want_members = vec![joined.member_id.clone(), "native".to_owned()];
-            want_members.sort_unstable();
-            check!(member_ids(&handle).await == want_members, "{label}");
-        }
-    }
-
-    /// A static classic member that joins with a member id must be the member
-    /// that holds its instance id: (label, member id, where `None` is the id
-    /// the static member `instance-1` was given, instance id) to Kafka's
-    /// error, which carries only the code, and the group does not change.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
-        name = "tests: a static classic rejoin with a member id is checked as kafka does"
-    )]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_static_classic_rejoin_with_a_member_id_is_checked_as_kafka_does() {}
-
     /// Kafka's `throwIfConsumerGroupIsFull` and
     /// `throwIfClassicProtocolIsNotSupported`, which refuse a classic join to
     /// a consumer group before anything else: (label, max size, protocol
@@ -1587,5 +1462,209 @@ mod tests {
         check!(joined.error_code == codes::NONE);
         check!(classic_resolver.calls() == 1);
         check!(native_resolver.calls() == 1);
+    }
+
+    use {
+        crate::coordinator::unified::GroupCoordinator,
+        rstest_bdd_macros::{given, then, when},
+    };
+    #[derive(Default)]
+    struct HostedClassicJoin {
+        coordinator: Option<Arc<GroupCoordinator>>,
+        log: Option<Arc<InMemoryOffsetsLog>>,
+        handle: Option<Arc<GroupActorHandle>>,
+        setup_codes: Vec<i16>,
+        static_member: Option<String>,
+        batches_before: usize,
+        response: Option<JoinResult>,
+        tombstoned: Option<bool>,
+        classic: Option<bool>,
+        batches_after: Option<usize>,
+        members_after: Option<Vec<String>>,
+    }
+    #[rstest::fixture]
+    fn hosted_classic_join() -> HostedClassicJoin {
+        // Start this scenario with fresh inputs and observations.
+        HostedClassicJoin::default()
+    }
+    #[given(
+        "consumer group g subscribes to topic t with {members} native members and migration policy {policy}"
+    )]
+    async fn consumer_group_before_classic_join(
+        hosted_classic_join: &mut HostedClassicJoin,
+        members: usize,
+        policy: String,
+    ) {
+        let policy = match policy.as_str() {
+            "disabled" => Policy::Disabled,
+            "bidirectional" => Policy::Bidirectional,
+            _ => panic!("unknown migration policy"),
+        };
+        let (coordinator, log) = make_coordinator_with_topic_policy("t", 1, policy);
+        let handle = coordinator.get_or_create_group("g", GroupKindTag::Consumer);
+        for index in 0..members {
+            let joined =
+                rpc::consumer_heartbeat(&handle, &format!("native-{index}"), 0, Some("t")).await;
+            hosted_classic_join.setup_codes.push(joined.error_code);
+        }
+        hosted_classic_join.coordinator = Some(coordinator);
+        hosted_classic_join.log = Some(log);
+        hosted_classic_join.handle = Some(handle);
+    }
+    #[when(
+        "a dynamic classic member joins g without a member id using the range subscription to t"
+    )]
+    async fn dynamic_classic_join(hosted_classic_join: &mut HostedClassicJoin) {
+        let handle = hosted_classic_join
+            .handle
+            .as_ref()
+            .expect("consumer group prepared");
+        hosted_classic_join.response = Some(rpc::classic_join(handle, "", "t").await);
+        let rx = rpc::begin(handle, |reply| GroupActorMessage::ClassicInspect { reply }).await;
+        hosted_classic_join.classic = Some(rx.await.is_ok());
+        hosted_classic_join.tombstoned = Some(
+            hosted_classic_join
+                .log
+                .as_ref()
+                .expect("offsets log")
+                .has_next_gen_group_metadata_tombstone("g")
+                .await,
+        );
+    }
+    #[then(
+        "the classic join returns error {error} with consumer tombstone {tombstone} and classic group {classic}"
+    )]
+    fn classic_join_migration_result(
+        hosted_classic_join: &HostedClassicJoin,
+        error: i16,
+        tombstone: bool,
+        classic: bool,
+    ) {
+        check!(
+            hosted_classic_join
+                .setup_codes
+                .iter()
+                .all(|code| *code == codes::NONE)
+        );
+        check!(
+            hosted_classic_join
+                .response
+                .as_ref()
+                .expect("classic join answered")
+                .error_code
+                == error
+        );
+        check!(hosted_classic_join.tombstoned == Some(tombstone));
+        check!(hosted_classic_join.classic == Some(classic));
+    }
+    #[given(
+        "consumer group g has native member native and a hosted classic member holding instance-1 under bidirectional migration"
+    )]
+    async fn hosted_static_member_before_rejoin(hosted_classic_join: &mut HostedClassicJoin) {
+        let (coordinator, log) = make_coordinator_with_topic_policy("t", 2, Policy::Bidirectional);
+        let handle = coordinator.get_or_create_group("g", GroupKindTag::Consumer);
+        let native = rpc::consumer_heartbeat(&handle, "native", 0, Some("t")).await;
+        let joined = join_at(&handle, "", Some("instance-1"), 9).await;
+        hosted_classic_join.setup_codes = vec![native.error_code, joined.error_code];
+        hosted_classic_join.static_member = Some(joined.member_id);
+        hosted_classic_join.batches_before = log.batches().await.len();
+        hosted_classic_join.coordinator = Some(coordinator);
+        hosted_classic_join.log = Some(log);
+        hosted_classic_join.handle = Some(handle);
+    }
+    #[when(
+        "the static classic member rejoins at version 9 using member identity {identity} and instance id {instance}"
+    )]
+    async fn static_classic_rejoin(
+        hosted_classic_join: &mut HostedClassicJoin,
+        identity: String,
+        instance: String,
+    ) {
+        let handle = hosted_classic_join
+            .handle
+            .as_ref()
+            .expect("static member prepared");
+        let member = match identity.as_str() {
+            "assigned" => hosted_classic_join
+                .static_member
+                .as_deref()
+                .expect("assigned member id"),
+            "other" => "other",
+            _ => panic!("unknown member identity"),
+        };
+        hosted_classic_join.response = Some(join_at(handle, member, Some(&instance), 9).await);
+        hosted_classic_join.batches_after = Some(
+            hosted_classic_join
+                .log
+                .as_ref()
+                .expect("offsets log")
+                .batches()
+                .await
+                .len(),
+        );
+        hosted_classic_join.members_after = Some(member_ids(handle).await);
+    }
+    #[then(
+        "the static rejoin returns only error {error} and leaves the log and both member identities unchanged"
+    )]
+    fn refused_static_classic_rejoin(hosted_classic_join: &HostedClassicJoin, error: i16) {
+        check!(hosted_classic_join.setup_codes == vec![codes::NONE, codes::NONE]);
+        check!(
+            hosted_classic_join.response.as_ref()
+                == Some(&JoinResult {
+                    error_code: error,
+                    ..JoinResult::default()
+                })
+        );
+        check!(hosted_classic_join.batches_after == Some(hosted_classic_join.batches_before));
+        let mut expected = vec![
+            hosted_classic_join
+                .static_member
+                .as_ref()
+                .expect("assigned member id")
+                .clone(),
+            "native".to_owned(),
+        ];
+        expected.sort_unstable();
+        check!(hosted_classic_join.members_after.as_ref() == Some(&expected));
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
+        name = "An empty consumer group becomes classic"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn classic_join_against_a_consumer_group_follows_kafka(
+        hosted_classic_join: HostedClassicJoin,
+    ) {
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
+        name = "A live consumer group refuses classic members when migration is disabled"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn classic_consumer_join_admission_1(hosted_classic_join: HostedClassicJoin) {}
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
+        name = "Bidirectional migration admits a dynamic classic member through member-id allocation"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn classic_consumer_join_admission_2(hosted_classic_join: HostedClassicJoin) {}
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
+        name = "An assigned static member cannot claim an unheld instance"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_static_classic_rejoin_with_a_member_id_is_checked_as_kafka_does(
+        hosted_classic_join: HostedClassicJoin,
+    ) {
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
+        name = "Another member cannot claim the held static instance"
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn another_classic_member_cannot_claim_a_held_instance(
+        hosted_classic_join: HostedClassicJoin,
+    ) {
     }
 }

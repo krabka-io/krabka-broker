@@ -20,18 +20,25 @@ use {
         standalone_broker,
     },
     assert2::{assert, check},
-    krabka_broker::{Broker, codes},
+    krabka_broker::{Broker, BrokerHandle, codes},
     krabka_client_core::Client,
     krabka_protocol::owned::{
         describe_configs_request::DescribeConfigsRequest,
-        describe_configs_response::DescribeConfigsResourceResult,
+        describe_configs_response::{
+            DescribeConfigsResourceResult, DescribeConfigsResponse, DescribeConfigsResult,
+        },
         list_groups_request::ListGroupsRequest,
+        list_groups_response::ListGroupsResponse,
+        offset_delete_response::OffsetDeleteResponse,
     },
     krabka_units::{millis, minutes},
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
     std::{
         sync::Arc,
         time::{Duration, Instant},
     },
+    tempfile::{TempDir, tempdir},
     tokio::time,
 };
 
@@ -85,184 +92,295 @@ async fn client_for(broker: &krabka_broker::BrokerHandle) -> Arc<Client> {
     )
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("offsets retention: describe configs reports the retention knobs")]
-async fn bdd_verify_describe_configs_reports_the_retention_knobs() {
-    let (_dir, broker) = standalone_broker().await;
-    let client = client_for(&broker).await;
-
-    let described = client
-        .send(DescribeConfigsRequest {
-            resources: vec![describe_resource(
-                RESOURCE_TYPE_BROKER,
-                "1".to_owned(),
-                None,
-            )],
-            include_synonyms: false,
-            include_documentation: false,
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeConfigs");
-
-    let result = &described.results[0];
-    check!(result.error_code == codes::NONE);
-    let entry = |name: &str| result.configs.iter().find(|c| c.name == name).cloned();
-    check!(
-        entry(OFFSETS_RETENTION_MINUTES)
-            == Some(
-                expected_config()
-                    .name(OFFSETS_RETENTION_MINUTES)
-                    .value("10080")
-                    .config_source(CONFIG_SOURCE_DEFAULT)
-                    .config_type(CONFIG_TYPE_INT)
-                    .call(),
-            )
-    );
-    check!(
-        entry(OFFSETS_RETENTION_CHECK_INTERVAL_MS)
-            == Some(
-                expected_config()
-                    .name(OFFSETS_RETENTION_CHECK_INTERVAL_MS)
-                    .value("600000")
-                    .config_source(CONFIG_SOURCE_DEFAULT)
-                    .config_type(CONFIG_TYPE_LONG)
-                    .call(),
-            )
-    );
-
-    broker.shutdown().await;
+struct RetentionDescription {
+    directory: Option<TempDir>,
+    broker: Option<BrokerHandle>,
+    client: Option<Arc<Client>>,
+    response: Option<DescribeConfigsResponse>,
 }
 
-/// Both knobs come back on the broker resource, read-only and static, at
-/// Kafka's own defaults.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/offsets_retention.feature",
-    name = "describe configs reports the retention knobs"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_configs_reports_the_retention_knobs() {}
+#[fixture]
+fn retention() -> RetentionDescription {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("offsets retention: describe configs reports a named knob as static")]
-async fn bdd_verify_describe_configs_reports_a_named_knob_as_static() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let mut config = heartbeat_config(dir.path());
-    // The same number Kafka defaults to, named explicitly.
+    RetentionDescription {
+        directory: None,
+        broker: None,
+        client: None,
+        response: None,
+    }
+}
+
+#[given("a broker has no explicit offset retention settings")]
+async fn default_retention(retention: &mut RetentionDescription) {
+    let (directory, broker) = standalone_broker().await;
+    retention.client = Some(client_for(&broker).await);
+    retention.broker = Some(broker);
+    retention.directory = Some(directory);
+}
+
+#[given("a broker explicitly sets offset retention to Kafka's default 10080 minutes")]
+async fn explicit_retention(retention: &mut RetentionDescription) {
+    let directory = tempdir().unwrap();
+    let mut config = heartbeat_config(directory.path());
     config.offsets_retention_override = Some(minutes(10_080));
     let broker = Broker::start(config).await.unwrap();
-    let client = client_for(&broker).await;
-
-    let target_keys = vec![
-        OFFSETS_RETENTION_MINUTES.to_owned(),
-        OFFSETS_RETENTION_CHECK_INTERVAL_MS.to_owned(),
-    ];
-    let res = describe_resource(RESOURCE_TYPE_BROKER, "1".to_owned(), Some(target_keys));
-    let req = DescribeConfigsRequest {
-        resources: vec![res],
-        ..Default::default()
-    };
-    let described = client.send(req).await.expect("DescribeConfigs");
-
-    let result = &described.results[0];
-    check!(result.error_code == codes::NONE);
-    check!(
-        result.configs
-            == vec![
-                expected_config()
-                    .name(OFFSETS_RETENTION_CHECK_INTERVAL_MS)
-                    .value("600000")
-                    .config_source(CONFIG_SOURCE_DEFAULT)
-                    .config_type(CONFIG_TYPE_LONG)
-                    .call(),
-                expected_config()
-                    .name(OFFSETS_RETENTION_MINUTES)
-                    .value("10080")
-                    .config_source(CONFIG_SOURCE_STATIC_BROKER)
-                    .config_type(CONFIG_TYPE_INT)
-                    .call(),
-            ]
-    );
-
-    broker.shutdown().await;
+    retention.client = Some(client_for(&broker).await);
+    retention.broker = Some(broker);
+    retention.directory = Some(directory);
 }
 
-/// A knob the broker's configuration names reports `STATIC_BROKER_CONFIG`,
-/// even at Kafka's own default value.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/offsets_retention.feature",
-    name = "describe configs reports a named knob as static"
+async fn request_retention(retention: &mut RetentionDescription, keys: Option<Vec<String>>) {
+    let client = retention
+        .client
+        .as_ref()
+        .expect("a configured broker was started");
+    retention.response = Some(
+        client
+            .send(DescribeConfigsRequest {
+                resources: vec![describe_resource(
+                    RESOURCE_TYPE_BROKER,
+                    "1".to_owned(),
+                    keys,
+                )],
+                include_synonyms: false,
+                include_documentation: false,
+                ..Default::default()
+            })
+            .await
+            .expect("DescribeConfigs"),
+    );
+}
+
+#[when("all broker configurations are described without synonyms or documentation")]
+async fn describe_defaults(retention: &mut RetentionDescription) {
+    request_retention(retention, None).await;
+}
+
+#[when("only the two retention configuration keys are described")]
+async fn describe_keys(retention: &mut RetentionDescription) {
+    request_retention(
+        retention,
+        Some(vec![
+            OFFSETS_RETENTION_MINUTES.into(),
+            OFFSETS_RETENTION_CHECK_INTERVAL_MS.into(),
+        ]),
+    )
+    .await;
+}
+
+fn expected_retention(rows: Vec<Vec<String>>) -> Vec<DescribeConfigsResourceResult> {
+    rows.into_iter()
+        .skip(1)
+        .map(|row| {
+            let [name, value, source, kind]: [String; 4] =
+                row.try_into().expect("name, value, source and type");
+            let source = match source.as_str() {
+                "default" => CONFIG_SOURCE_DEFAULT,
+                "static broker" => CONFIG_SOURCE_STATIC_BROKER,
+                _ => panic!("unknown configuration source: {source}"),
+            };
+            let kind = match kind.as_str() {
+                "INT" => CONFIG_TYPE_INT,
+                "LONG" => CONFIG_TYPE_LONG,
+                _ => panic!("unknown retention configuration type: {kind}"),
+            };
+            expected_config()
+                .name(&name)
+                .value(&value)
+                .config_source(source)
+                .config_type(kind)
+                .call()
+        })
+        .collect()
+}
+
+impl RetentionDescription {
+    fn successful_result(&self) -> &DescribeConfigsResult {
+        let result = &self
+            .response
+            .as_ref()
+            .expect("DescribeConfigs completed")
+            .results[0];
+        check!(result.error_code == codes::NONE);
+        result
+    }
+}
+
+#[then("the read-only retention entries include")]
+fn default_entries(retention: &RetentionDescription, datatable: Vec<Vec<String>>) {
+    let result = retention.successful_result();
+    for expected in expected_retention(datatable) {
+        let entry = result
+            .configs
+            .iter()
+            .find(|entry| entry.name == expected.name);
+        check!(entry == Some(&expected));
+    }
+}
+
+#[then("the read-only retention entries are exactly")]
+fn exact_entries(retention: &RetentionDescription, datatable: Vec<Vec<String>>) {
+    let result = retention.successful_result();
+    check!(result.configs == expected_retention(datatable));
+}
+
+struct DeadGroupSweep {
+    directory: Option<TempDir>,
+    broker: Option<BrokerHandle>,
+    client: Option<Arc<Client>>,
+    initial: Option<ListGroupsResponse>,
+    deleted: Option<OffsetDeleteResponse>,
+    final_listing: Option<ListGroupsResponse>,
+}
+
+#[fixture]
+fn sweep() -> DeadGroupSweep {
+    // Start this scenario with fresh inputs and observations.
+
+    DeadGroupSweep {
+        directory: None,
+        broker: None,
+        client: None,
+        initial: None,
+        deleted: None,
+        final_listing: None,
+    }
+}
+
+#[given(
+    "memberless group leaked-by-ci has offset five on orders and the broker sweeps every 25 milliseconds"
 )]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_configs_reports_a_named_knob_as_static() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("offsets retention: the broker sweep reaps a dead group on its own")]
-async fn bdd_verify_the_broker_sweep_reaps_a_dead_group_on_its_own() {
-    const GROUP: &str = "leaked-by-ci";
-    const TOPIC: &str = "orders";
-
-    let dir = tempfile::TempDir::new().unwrap();
-    let mut config = heartbeat_config(dir.path());
+async fn group_with_offset(sweep: &mut DeadGroupSweep) {
+    let directory = tempdir().unwrap();
+    let mut config = heartbeat_config(directory.path());
     config.offsets_retention_check_interval_override = Some(millis(25));
     let broker = Broker::start(config).await.unwrap();
     broker.wait_until_group_coordinator_ready().await;
     let client = client_for(&broker).await;
-
-    // `OffsetDelete` resolves each partition against the metadata image, so
-    // the topic has to exist for the delete to reach the log.
-    let topic_id = create_topic_for_commits(&client, TOPIC).await;
-    commit_partition_zero(&client, GROUP, (TOPIC, topic_id), 5).await;
-
-    let listed = |client: Arc<Client>| async move {
-        client
-            .send(ListGroupsRequest::default())
-            .await
-            .expect("ListGroups")
-            .groups
-            .iter()
-            .any(|group| group.group_id == GROUP)
-    };
-    assert!(listed(Arc::clone(&client)).await, "the group starts listed");
-
-    // Take the group's last offset away, the way `kafka-consumer-groups
-    // --delete-offsets` does. What is left is a memberless group holding
-    // nothing.
-    let deleted = client
-        .send(offset_delete_request(GROUP.to_owned(), vec![
-            offset_delete_topic(TOPIC.to_owned(), vec![offset_delete_partition(0)]),
-        ]))
-        .await
-        .expect("OffsetDelete");
-    assert!(deleted.error_code == codes::NONE);
-    assert!(deleted.topics[0].partitions[0].error_code == codes::NONE);
-
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while listed(Arc::clone(&client)).await {
-        assert!(
-            Instant::now() < deadline,
-            "the sweep never reaped the dead group"
-        );
-        time::sleep(Duration::from_millis(25)).await;
-    }
-
-    broker.shutdown().await;
+    let topic_id = create_topic_for_commits(&client, "orders").await;
+    commit_partition_zero(&client, "leaked-by-ci", ("orders", topic_id), 5).await;
+    sweep.client = Some(client);
+    sweep.broker = Some(broker);
+    sweep.directory = Some(directory);
 }
 
-/// A group with no members and no committed offsets is dead, and the broker's
-/// own sweep drops it from `ListGroups` without an operator running
-/// `DeleteGroups`.
-///
-/// This is the shape a CI job or an ad-hoc `kafka-console-consumer` leaves
-/// behind once its offsets are gone. Verified against `apache/kafka:4.3.1`:
-/// a group left memberless by `kafka-consumer-groups --delete-offsets`
-/// disappears from `--list` after one `offsets.retention.check.interval.ms`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[when("the memberless groups are listed")]
+async fn initial_groups(sweep: &mut DeadGroupSweep) {
+    sweep.initial = Some(
+        sweep
+            .client
+            .as_ref()
+            .expect("a group was created")
+            .send(ListGroupsRequest::default())
+            .await
+            .expect("ListGroups"),
+    );
+}
+
+#[then("leaked-by-ci appears in the successful group listing")]
+fn initially_listed(sweep: &DeadGroupSweep) {
+    let response = sweep.initial.as_ref().expect("ListGroups completed");
+    assert!(response.error_code == codes::NONE);
+    assert!(
+        response
+            .groups
+            .iter()
+            .any(|group| group.group_id == "leaked-by-ci"),
+        "the group starts listed"
+    );
+}
+
+#[when("the group's last committed offset is deleted")]
+async fn delete_last_offset(sweep: &mut DeadGroupSweep) {
+    sweep.deleted = Some(
+        sweep
+            .client
+            .as_ref()
+            .expect("a group was created")
+            .send(offset_delete_request("leaked-by-ci", vec![
+                offset_delete_topic("orders", vec![offset_delete_partition(0)]),
+            ]))
+            .await
+            .expect("OffsetDelete"),
+    );
+}
+
+#[then("the last offset deletion succeeds")]
+fn deleted_last_offset(sweep: &DeadGroupSweep) {
+    let response = sweep.deleted.as_ref().expect("OffsetDelete completed");
+    assert!(response.error_code == codes::NONE);
+    assert!(response.topics[0].partitions[0].error_code == codes::NONE);
+}
+
+#[when("the broker's own sweeper is observed for up to ten seconds")]
+async fn await_sweeper(sweep: &mut DeadGroupSweep) {
+    let client = sweep.client.as_ref().expect("a group was created");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    sweep.final_listing = Some(loop {
+        let response = client
+            .send(ListGroupsRequest::default())
+            .await
+            .expect("ListGroups");
+        if !response
+            .groups
+            .iter()
+            .any(|group| group.group_id == "leaked-by-ci")
+            || Instant::now() >= deadline
+        {
+            break response;
+        }
+        time::sleep(Duration::from_millis(25)).await;
+    });
+}
+
+#[then("the dead group disappears without a DeleteGroups request")]
+fn reaped_group(sweep: &DeadGroupSweep) {
+    let response = sweep
+        .final_listing
+        .as_ref()
+        .expect("the sweeper was observed");
+    assert!(response.error_code == codes::NONE);
+    assert!(
+        !response
+            .groups
+            .iter()
+            .any(|group| group.group_id == "leaked-by-ci"),
+        "the sweep never reaped the dead group"
+    );
+}
+
+async fn stop_retention(retention: RetentionDescription) {
+    retention
+        .broker
+        .expect("a configured broker was started")
+        .shutdown()
+        .await;
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/offsets_retention.feature",
-    name = "the broker sweep reaps a dead group on its own"
+    name = "Default retention knobs retain Kafka values sources and scalar types"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {}
+async fn describe_configs_reports_the_retention_knobs(retention: RetentionDescription) {
+    stop_retention(retention).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/offsets_retention.feature",
+    name = "An explicitly configured default still reports its static broker source"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_configs_reports_a_named_knob_as_static(retention: RetentionDescription) {
+    stop_retention(retention).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/offsets_retention.feature",
+    name = "The background sweeper removes a memberless group after its final offset is deleted"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_broker_sweep_reaps_a_dead_group_on_its_own(sweep: DeadGroupSweep) {
+    sweep.broker.expect("a broker was started").shutdown().await;
+}

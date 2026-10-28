@@ -550,164 +550,112 @@ mod tests {
         },
     };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers produce append tests: an acks all wait ends with kafkas completion code"
-    )]
-    async fn bdd_verify_an_acks_all_wait_ends_with_kafkas_completion_code() {
-        struct Case {
-            name: &'static str,
-            /// The frontier the high watermark has to reach. The log is
-            /// empty, so the high watermark is 0: target 0 is reached, target
-            /// 1 never is.
-            target: i64,
-            isr: &'static [u64],
-            /// What the current image holds for the admitted partition when
-            /// the wait ends: its effective minimum, or the code of a
-            /// partition that is gone or replaced.
-            current_min_isr: Result<usize, i16>,
-            error_code: i16,
+    struct ProduceAckScenario {
+        dir: tempfile::TempDir,
+        partition: Option<Arc<crate::partition::Partition>>,
+        target: i64,
+        current_minimum: Result<usize, i16>,
+        row: Option<PartitionProduceResponse>,
+        admitted_topic: Option<uuid::Uuid>,
+        queried_topics: Vec<Option<uuid::Uuid>>,
+    }
+    #[rstest::fixture]
+    fn produce_ack() -> ProduceAckScenario {
+        let dir = tempfile::tempdir().expect("partition directory");
+        ProduceAckScenario {
+            dir,
+            partition: None,
+            target: 0,
+            current_minimum: Ok(2),
+            row: None,
+            admitted_topic: None,
+            queried_topics: Vec::new(),
         }
-        let cases = [
-            Case {
-                name: "reached with a full ISR",
-                target: 0,
-                isr: &[1, 2, 3],
-                current_min_isr: Ok(2),
-                error_code: codes::NONE,
+    }
+    #[rstest_bdd_macros::given(
+        "an empty orders partition with ISR {isr} and durability target {target}"
+    )]
+    async fn ack_partition(produce_ack: &mut ProduceAckScenario, isr: String, target: i64) {
+        let path = partition_dir(produce_ack.dir.path(), "orders", 0);
+        fs::create_dir_all(&path).expect("partition path");
+        let partition = spawn_standalone_partition()
+            .log_dir(produce_ack.dir.path())
+            .log(krabka_log::Log::open(&path, krabka_log::LogConfig::default()).expect("log"))
+            .call();
+        let isr = isr
+            .split(',')
+            .map(|node| NodeId(node.parse().expect("ISR node")))
+            .collect::<Vec<_>>();
+        partition
+            .install_isr(&isr, &[NodeId(1), NodeId(2), NodeId(3)], NodeId(1))
+            .await;
+        produce_ack.partition = Some(partition);
+        produce_ack.target = target;
+    }
+    #[rstest_bdd_macros::given("the completion metadata lookup returns {minimum}")]
+    fn ack_completion_metadata(produce_ack: &mut ProduceAckScenario, minimum: String) {
+        produce_ack.current_minimum = match minimum.as_str() {
+            "deleted" => Err(codes::UNKNOWN_TOPIC_OR_PARTITION),
+            "recreated" => Err(codes::NOT_LEADER_OR_FOLLOWER),
+            value => Ok(value.parse().expect("minimum ISR")),
+        };
+    }
+    #[rstest_bdd_macros::when("acks all completes at its deadline")]
+    async fn finish_produce_ack(produce_ack: &mut ProduceAckScenario) {
+        let partition = produce_ack.partition.as_ref().expect("partition");
+        let transition = partition.lock_produce_transition().await;
+        produce_ack.admitted_topic = transition.topic_id;
+        let pending = PendingAck::new(
+            PartitionProduceResponse {
+                index: 0,
+                base_offset: 0,
+                ..Default::default()
             },
-            Case {
-                name: "reached with the ISR at the minimum",
-                target: 0,
-                isr: &[1, 2],
-                current_min_isr: Ok(2),
-                error_code: codes::NONE,
-            },
-            Case {
-                name: "reached after the ISR shrank below the minimum",
-                target: 0,
-                isr: &[1],
-                current_min_isr: Ok(2),
-                error_code: codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
-            },
-            Case {
-                name: "reached after the minimum rose above the ISR",
-                target: 0,
-                isr: &[1, 2],
-                current_min_isr: Ok(3),
-                error_code: codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
-            },
-            Case {
-                name: "reached after the minimum fell to the ISR",
-                target: 0,
-                isr: &[1],
-                current_min_isr: Ok(1),
-                error_code: codes::NONE,
-            },
-            Case {
-                name: "reached after the topic was recreated",
-                target: 0,
-                isr: &[1, 2, 3],
-                current_min_isr: Err(codes::NOT_LEADER_OR_FOLLOWER),
-                error_code: codes::NOT_LEADER_OR_FOLLOWER,
-            },
-            Case {
-                name: "reached after the topic was deleted",
-                target: 0,
-                isr: &[1, 2, 3],
-                current_min_isr: Err(codes::UNKNOWN_TOPIC_OR_PARTITION),
-                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-            },
-            Case {
-                name: "expired",
-                target: 1,
-                isr: &[1, 2, 3],
-                current_min_isr: Ok(2),
-                error_code: codes::REQUEST_TIMED_OUT,
-            },
-            Case {
-                name: "expired after the topic was deleted",
-                target: 1,
-                isr: &[1, 2, 3],
-                current_min_isr: Err(codes::UNKNOWN_TOPIC_OR_PARTITION),
-                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-            },
-        ];
-        for case in cases {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let part_dir = partition_dir(dir.path(), "orders", 0);
-            fs::create_dir_all(&part_dir).expect("partition dir");
-            let partition = spawn_standalone_partition()
-                .log_dir(dir.path())
-                .log(
-                    krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default())
-                        .expect("log"),
-                )
-                .call();
-            let isr: Vec<NodeId> = case.isr.iter().copied().map(NodeId).collect();
-            partition
-                .install_isr(&isr, &[NodeId(1), NodeId(2), NodeId(3)], NodeId(1))
-                .await;
-            let (admitted_topic_id, pending) = {
-                let transition = partition.lock_produce_transition().await;
-                (
-                    transition.topic_id,
-                    PendingAck::new(
-                        PartitionProduceResponse {
-                            index: 0,
-                            base_offset: 0,
-                            ..Default::default()
-                        },
-                        Arc::clone(&partition),
-                        Offset(case.target),
-                        None,
-                        transition,
-                    ),
-                )
-            };
-            let mut asked_for = None;
-            let row = pending
+            Arc::clone(partition),
+            Offset(produce_ack.target),
+            None,
+            transition,
+        );
+        produce_ack.row = Some(
+            pending
                 .finish(
                     Instant::now(),
                     |_, topic_id| {
-                        asked_for = Some(topic_id);
-                        case.current_min_isr
+                        produce_ack.queried_topics.push(topic_id);
+                        produce_ack.current_minimum
                     },
                     future::pending(),
                 )
-                .await;
-            assert!(
-                (row, asked_for)
-                    == (
-                        PartitionProduceResponse {
-                            index: 0,
-                            error_code: case.error_code,
-                            base_offset: 0,
-                            log_start_offset: 0,
-                            ..Default::default()
-                        },
-                        Some(admitted_topic_id)
-                    ),
-                "{}",
-                case.name
-            );
-        }
+                .await,
+        );
     }
-
-    /// Kafka's `acks=all` completion: `DelayedProduce` leaves an expired wait
-    /// at `REQUEST_TIMED_OUT`, and `Partition.checkEnoughReplicasReachOffset`
-    /// answers `NOT_ENOUGH_REPLICAS_AFTER_APPEND` when the high watermark
-    /// arrived but the ISR is below the effective `min.insync.replicas`. It
-    /// reads that minimum at completion, so a change during the wait applies.
-    /// A partition that is gone or was replaced by a recreated topic answers
-    /// the code `ReplicaManager.getPartitionOrError` gives it, reached or not.
-    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "the full Produce row has error {error} and queries the admitted topic identity once"
+    )]
+    fn completed_produce_ack(produce_ack: &ProduceAckScenario, error: i16) {
+        let expected = PartitionProduceResponse {
+            index: 0,
+            error_code: error,
+            base_offset: 0,
+            log_start_offset: 0,
+            ..Default::default()
+        };
+        assert!(produce_ack.row.as_ref().expect("completed wait") == &expected);
+        assert!(produce_ack.queried_topics.as_slice() == [produce_ack.admitted_topic]);
+    }
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/produce/append.feature",
-        name = "tests: an acks all wait ends with kafkas completion code"
+        path = "tests/features/handler_produce_ack_completion.feature",
+        name = "Durability and current metadata decide acknowledgement"
     )]
     #[tokio::test]
-    async fn an_acks_all_wait_ends_with_kafkas_completion_code() {}
+    async fn an_acks_all_wait_ends_with_kafkas_completion_code(
+        produce_ack: ProduceAckScenario,
+        isr: String,
+        target: i64,
+        minimum: String,
+        error: i16,
+    ) {
+    }
 
     #[tokio::test]
     async fn leadership_change_finishes_old_acks_before_publishing_the_new_target() {

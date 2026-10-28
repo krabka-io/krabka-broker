@@ -10,7 +10,6 @@ use {
     crate::{
         principals::{APPROVERS, USERS, principal},
         support::{self, OperatorKeysSetup, client::connect_owned, listeners},
-        topics::create_topic,
     },
     assert2::assert,
     krabka_broker::{
@@ -55,30 +54,6 @@ impl Cluster {
             .find(|key| key.principal == want)
             .expect("a minted operator key")
     }
-}
-
-pub struct ClusterClients<const N: usize> {
-    pub(super) cluster: Cluster,
-    pub(super) clients: [Client; N],
-}
-
-/// Connect the requested principals in order before creating their shared topic.
-pub async fn client_fixture<const N: usize>(
-    cluster: Cluster,
-    users: [&str; N],
-    topic: &str,
-    replication_factor: i16,
-) -> ClusterClients<N> {
-    let mut clients = Vec::with_capacity(N);
-    for user in users {
-        clients.push(cluster.client(user).await);
-    }
-    create_topic(&clients[0], topic, replication_factor).await;
-    let clients = clients
-        .try_into()
-        .ok()
-        .expect("one client per requested principal");
-    ClusterClients { cluster, clients }
 }
 
 /// Mint one operator key per approver under `dir`.

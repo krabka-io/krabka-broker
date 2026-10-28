@@ -18,6 +18,8 @@
 use {
     assert2::{assert, check},
     krabka_broker::{config::BrokerConfig, file_config::FileConfig},
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
     serde_json::Value as Json,
     toml::Value as Toml,
 };
@@ -46,168 +48,6 @@ fn enable_disabled_settings(text: &str) -> String {
 fn parse(relative: &str, text: &str) -> FileConfig {
     toml::from_str(text).unwrap_or_else(|error| panic!("{relative} does not parse: {error}"))
 }
-
-// `OpaAuthorizer::new` captures the current tokio runtime handle, so the apply
-// step runs inside one, as it does in the binary.
-#[cfg(test)]
-#[rstest_bdd_macros::then("example broker toml: examples parse and apply as written")]
-async fn bdd_verify_examples_parse_and_apply_as_written() {
-    for relative in EXAMPLES {
-        let file = parse(relative, &read_example(relative));
-        let mut config = BrokerConfig::default();
-        file.apply_to(&mut config)
-            .unwrap_or_else(|error| panic!("{relative} does not apply: {error}"));
-        check!(
-            !config.listeners.is_empty(),
-            "{relative} should configure at least one listener"
-        );
-    }
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/example_broker_toml.feature",
-    name = "examples parse and apply as written"
-)]
-#[tokio::test]
-async fn examples_parse_and_apply_as_written() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "example broker toml: examples with a tls inter broker listener name its server"
-)]
-async fn bdd_verify_examples_with_a_tls_inter_broker_listener_name_its_server() {
-    let default_name = BrokerConfig::default().inter_broker_server_name;
-    for relative in EXAMPLES {
-        let file = parse(relative, &read_example(relative));
-        let mut config = BrokerConfig::default();
-        file.apply_to(&mut config)
-            .unwrap_or_else(|error| panic!("{relative} does not apply: {error}"));
-        if config.inter_broker_listener_protocol().requires_tls() {
-            check!(
-                config.inter_broker_server_name != default_name,
-                "{relative} dials peers over TLS but leaves inter_broker_server_name at {default_name:?}"
-            );
-        }
-    }
-}
-
-/// A follower verifies the leader's certificate against
-/// `inter_broker_server_name`. Over a TLS inter-broker listener, the default
-/// `localhost` matches no peer certificate, and replication never starts.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/example_broker_toml.feature",
-    name = "examples with a tls inter broker listener name its server"
-)]
-#[tokio::test]
-async fn examples_with_a_tls_inter_broker_listener_name_its_server() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "example broker toml: examples parse with every disabled setting enabled"
-)]
-fn bdd_verify_examples_parse_with_every_disabled_setting_enabled() {
-    for relative in EXAMPLES {
-        let text = read_example(relative);
-        let enabled = enable_disabled_settings(&text);
-        assert!(
-            enabled != text,
-            "{relative} should carry at least one disabled setting"
-        );
-        let file = parse(relative, &enabled);
-        check!(
-            !file.operator_keys.is_empty(),
-            "{relative} should show an [[operator_keys]] entry"
-        );
-    }
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/example_broker_toml.feature",
-    name = "examples parse with every disabled setting enabled"
-)]
-fn examples_parse_with_every_disabled_setting_enabled() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("example broker toml: single node example covers the local surface")]
-fn bdd_verify_single_node_example_covers_the_local_surface() {
-    let file = parse(EXAMPLES[0], &read_example(EXAMPLES[0]));
-    check!(file.broker_id == Some(1));
-    check!(file.controller_quorum_voters.is_empty());
-    check!(file.listeners.len() == 2);
-    check!(file.listeners[1].tls_config.is_some());
-    check!(file.listeners[1].sasl_config.is_some());
-    check!(
-        file.remote_storage
-            .as_ref()
-            .and_then(|storage| storage.storage_dir.as_deref())
-            == Some("/var/lib/krabka/tiered")
-    );
-    check!(file.audit.is_some());
-    check!(file.freeze.is_some());
-    check!(file.break_glass.is_some());
-    check!(file.delegation_token.is_some());
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/example_broker_toml.feature",
-    name = "single node example covers the local surface"
-)]
-fn single_node_example_covers_the_local_surface() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("example broker toml: three node example covers the cluster surface")]
-fn bdd_verify_three_node_example_covers_the_cluster_surface() {
-    let file = parse(EXAMPLES[1], &read_example(EXAMPLES[1]));
-    check!(file.controller_quorum_voters.len() == 3);
-    check!(file.bootstrap_servers.len() == 3);
-    check!(file.tls_config.is_some());
-    check!(file.stretch.is_some());
-    check!(
-        file.inter_broker_principal_node_ids
-            .as_ref()
-            .is_some_and(|bindings| bindings.len() == 3)
-    );
-    check!(
-        file.remote_storage
-            .as_ref()
-            .is_some_and(|storage| storage.s3.is_some())
-    );
-    check!(
-        file.authorization
-            .as_ref()
-            .is_some_and(|authorization| authorization.opa.is_some())
-    );
-    check!(file.schema_registry.is_some());
-    let runtime = file.runtime.as_ref().expect("[runtime] present");
-    check!(runtime.diskless_wal_flush_interval.is_some());
-    check!(runtime.diskless_wal_local_replica_count.is_some());
-
-    let enabled = parse(
-        EXAMPLES[1],
-        &enable_disabled_settings(&read_example(EXAMPLES[1])),
-    );
-    check!(enabled.oauthbearer.is_some());
-    check!(enabled.gssapi.is_some());
-    check!(enabled.inter_broker_credentials.is_some());
-    check!(enabled.operator_keys.len() == 2);
-    check!(
-        enabled
-            .remote_storage
-            .as_ref()
-            .is_some_and(|storage| storage.worm.is_some())
-    );
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/example_broker_toml.feature",
-    name = "three node example covers the cluster surface"
-)]
-fn three_node_example_covers_the_cluster_surface() {}
 
 use repository::checked_in_schema;
 
@@ -301,22 +141,260 @@ fn check_table_keys(root: &Json, node: &Json, table: &toml::Table, path: &str) {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("example broker toml: every example key is in the schema")]
-fn bdd_verify_every_example_key_is_in_the_schema() {
-    let schema = checked_in_schema();
-    for relative in EXAMPLES {
-        let enabled = enable_disabled_settings(&read_example(relative));
-        let table: toml::Table = toml::from_str(&enabled)
-            .unwrap_or_else(|error| panic!("{relative} does not parse as TOML: {error}"));
-        assert!(!table.is_empty(), "{relative} sets no keys");
-        check_table_keys(&schema, &schema, &table, relative);
+struct ExampleDocument {
+    relative: &'static str,
+    text: String,
+    enabled: String,
+    file: Option<FileConfig>,
+    enabled_file: Option<FileConfig>,
+    applied: Option<BrokerConfig>,
+    table: Option<toml::Table>,
+}
+
+#[derive(Default)]
+struct OperatorExamples {
+    documents: Vec<ExampleDocument>,
+    schema: Option<Json>,
+}
+
+#[fixture]
+fn examples() -> OperatorExamples {
+    // Start this scenario with fresh inputs and observations.
+
+    OperatorExamples {
+        documents: Vec::new(),
+        schema: None,
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+fn load_examples(examples: &mut OperatorExamples, paths: &[&'static str]) {
+    examples.schema = Some(checked_in_schema());
+    examples.documents = paths
+        .iter()
+        .map(|&relative| ExampleDocument {
+            relative,
+            text: read_example(relative),
+            enabled: String::new(),
+            file: None,
+            enabled_file: None,
+            applied: None,
+            table: None,
+        })
+        .collect();
+}
+
+#[given("the checked-in single-node and three-node broker examples")]
+fn documented_examples(examples: &mut OperatorExamples) { load_examples(examples, &EXAMPLES); }
+
+#[given("the checked-in single-node broker example")]
+fn single_node_example(examples: &mut OperatorExamples) { load_examples(examples, &EXAMPLES[..1]); }
+
+#[given("the checked-in three-node broker example")]
+fn three_node_example(examples: &mut OperatorExamples) { load_examples(examples, &EXAMPLES[1..]); }
+
+#[when("the examples are parsed as FileConfig")]
+fn parse_examples(examples: &mut OperatorExamples) {
+    for document in &mut examples.documents {
+        document.file = Some(parse(document.relative, &document.text));
+    }
+}
+
+#[when("the example configuration is applied to broker defaults")]
+fn apply_examples(examples: &mut OperatorExamples) {
+    for document in &mut examples.documents {
+        let mut config = BrokerConfig::default();
+        document
+            .file
+            .take()
+            .expect("a parsed example")
+            .apply_to(&mut config)
+            .unwrap_or_else(|error| panic!("{} does not apply: {error}", document.relative));
+        document.applied = Some(config);
+    }
+}
+
+#[when("every disabled setting is enabled and parsed as FileConfig")]
+fn enable_examples(examples: &mut OperatorExamples) {
+    for document in &mut examples.documents {
+        document.enabled = enable_disabled_settings(&document.text);
+        document.enabled_file = Some(parse(document.relative, &document.enabled));
+    }
+}
+
+#[when("every disabled setting is enabled and parsed as TOML")]
+fn enable_toml(examples: &mut OperatorExamples) {
+    for document in &mut examples.documents {
+        document.enabled = enable_disabled_settings(&document.text);
+        document.table = Some(toml::from_str(&document.enabled).unwrap_or_else(|error| {
+            panic!("{} does not parse as TOML: {error}", document.relative)
+        }));
+    }
+}
+
+#[then("every example configures at least one listener")]
+fn configured_listeners(examples: &OperatorExamples) {
+    for document in &examples.documents {
+        check!(
+            !document
+                .applied
+                .as_ref()
+                .expect("an applied example")
+                .listeners
+                .is_empty(),
+            "{} should configure at least one listener",
+            document.relative
+        );
+    }
+}
+
+#[then("every TLS inter-broker listener has a non-default peer server name")]
+fn peer_server_names(examples: &OperatorExamples) {
+    let default_name = BrokerConfig::default().inter_broker_server_name;
+    for document in &examples.documents {
+        let config = document.applied.as_ref().expect("an applied example");
+        if config.inter_broker_listener_protocol().requires_tls() {
+            check!(
+                config.inter_broker_server_name != default_name,
+                "{} dials peers over TLS but leaves inter_broker_server_name at {default_name:?}",
+                document.relative
+            );
+        }
+    }
+}
+
+#[then("each example contains disabled settings and demonstrates operator keys")]
+fn operator_keys(examples: &OperatorExamples) {
+    for document in &examples.documents {
+        assert!(
+            document.enabled != document.text,
+            "{} should carry at least one disabled setting",
+            document.relative
+        );
+        check!(
+            !document
+                .enabled_file
+                .as_ref()
+                .expect("a parsed enabled example")
+                .operator_keys
+                .is_empty(),
+            "{} should show an [[operator_keys]] entry",
+            document.relative
+        );
+    }
+}
+
+#[then("the single-node example covers local listeners and recovery features")]
+fn local_surface(examples: &OperatorExamples) {
+    let file = examples.documents[0]
+        .file
+        .as_ref()
+        .expect("a parsed single-node example");
+    check!(file.broker_id == Some(1));
+    check!(file.controller_quorum_voters.is_empty());
+    check!(file.listeners.len() == 2);
+    check!(file.listeners[1].tls_config.is_some());
+    check!(file.listeners[1].sasl_config.is_some());
+    check!(
+        file.remote_storage
+            .as_ref()
+            .and_then(|storage| storage.storage_dir.as_deref())
+            == Some("/var/lib/krabka/tiered")
+    );
+    check!(file.audit.is_some());
+    check!(file.freeze.is_some());
+    check!(file.break_glass.is_some());
+    check!(file.delegation_token.is_some());
+}
+
+#[then("the three-node example covers quorum security and remote storage")]
+fn cluster_surface(examples: &OperatorExamples) {
+    let document = &examples.documents[0];
+    let file = document.file.as_ref().expect("a parsed three-node example");
+    check!(file.controller_quorum_voters.len() == 3);
+    check!(file.bootstrap_servers.len() == 3);
+    check!(file.tls_config.is_some());
+    check!(file.stretch.is_some());
+    check!(
+        file.inter_broker_principal_node_ids
+            .as_ref()
+            .is_some_and(|bindings| bindings.len() == 3)
+    );
+    check!(
+        file.remote_storage
+            .as_ref()
+            .is_some_and(|storage| storage.s3.is_some())
+    );
+    check!(
+        file.authorization
+            .as_ref()
+            .is_some_and(|authorization| authorization.opa.is_some())
+    );
+    check!(file.schema_registry.is_some());
+    let runtime = file.runtime.as_ref().expect("[runtime] present");
+    check!(runtime.diskless_wal_flush_interval.is_some());
+    check!(runtime.diskless_wal_local_replica_count.is_some());
+    let enabled = document
+        .enabled_file
+        .as_ref()
+        .expect("an enabled three-node example");
+    check!(enabled.oauthbearer.is_some());
+    check!(enabled.gssapi.is_some());
+    check!(enabled.inter_broker_credentials.is_some());
+    check!(enabled.operator_keys.len() == 2);
+    check!(
+        enabled
+            .remote_storage
+            .as_ref()
+            .is_some_and(|storage| storage.worm.is_some())
+    );
+}
+
+#[then("all enabled example keys are known by the configuration schema")]
+fn documented_keys(examples: &OperatorExamples) {
+    let schema = examples
+        .schema
+        .as_ref()
+        .expect("the checked-in configuration schema");
+    for document in &examples.documents {
+        let table = document.table.as_ref().expect("a TOML example");
+        assert!(!table.is_empty(), "{} sets no keys", document.relative);
+        check_table_keys(schema, schema, table, document.relative);
+    }
+}
+#[scenario(
+    path = "tests/features/migrated/tests/example_broker_toml.feature",
+    name = "examples with a tls inter broker listener name its server"
+)]
+#[tokio::test]
+async fn examples_with_a_tls_inter_broker_listener_name_its_server(examples: OperatorExamples) {}
+
+#[scenario(
+    path = "tests/features/migrated/tests/example_broker_toml.feature",
+    name = "examples parse and apply as written"
+)]
+#[tokio::test]
+async fn examples_parse_and_apply_as_written(examples: OperatorExamples) {}
+
+#[scenario(
+    path = "tests/features/migrated/tests/example_broker_toml.feature",
+    name = "examples parse with every disabled setting enabled"
+)]
+fn examples_parse_with_every_disabled_setting_enabled(examples: OperatorExamples) {}
+
+#[scenario(
+    path = "tests/features/migrated/tests/example_broker_toml.feature",
+    name = "single node example covers the local surface"
+)]
+fn single_node_example_covers_the_local_surface(examples: OperatorExamples) {}
+
+#[scenario(
+    path = "tests/features/migrated/tests/example_broker_toml.feature",
+    name = "three node example covers the cluster surface"
+)]
+fn three_node_example_covers_the_cluster_surface(examples: OperatorExamples) {}
+
+#[scenario(
     path = "tests/features/migrated/tests/example_broker_toml.feature",
     name = "every example key is in the schema"
 )]
-fn every_example_key_is_in_the_schema() {}
+fn every_example_key_is_in_the_schema(examples: OperatorExamples) {}

@@ -1,4 +1,13 @@
-Feature: tests inline blocking
+Feature: Broker execution on a current-thread runtime
+  Platforms without native threads must perform disk work inline. The ordinary
+  executor is a control that proves the runtime's thread counter sees its pool.
 
-  Scenario: a node with its blocking work inline starts no thread
-    Then inline blocking: a node with its blocking work inline starts no thread
+  Scenario Outline: The blocking executor determines whether background threads are started
+    Given blocking work uses <mode>
+    When a current-thread broker creates produces and fetches records
+    Then the broker serves three records and starts <threads> extra threads
+
+    Examples:
+      | mode               | threads |
+      | the runtime thread | no      |
+      | the blocking pool  | some    |

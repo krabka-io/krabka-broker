@@ -9,10 +9,9 @@
 use {
     crate::{
         dat_fixtures::{
-            ACTIVATION_DELAY_MS, IMMEDIATE, Mode, SCHEDULED, Visible, batch_at, now_ms,
+            ACTIVATION_DELAY_MS, DeliveryScenario, Visible, batch_at, delivery, now_ms,
         },
-        dat_wire::{fetch_values, produce, ready_topic, visible, wait_until_visible},
-        support,
+        dat_wire::{fetch_values, produce, wait_until_visible},
     },
     assert2::check,
     krabka_protocol::primitives::uuid::Uuid,
@@ -41,129 +40,97 @@ const LONG_POLL_MS: i32 = 20_000;
 /// declared clock bound, so the two outcomes are seconds apart.
 const LONG_POLL_WOKE_MS: u128 = 10_000;
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "deliver at time dat activation: a record stamped in the future waits for its delivery time"
-)]
-async fn bdd_verify_a_record_stamped_in_the_future_waits_for_its_delivery_time() {
-    struct Case {
-        mode: Mode,
-        /// What a read taken before the record's delivery time serves.
-        before_delivery: Visible,
-        /// Whether the record first reached a consumer at or after its delivery
-        /// time. Only a scheduled topic holds it that long.
-        held_until_delivery: bool,
-    }
-
-    let p = support::start().await;
-    let cases = [
-        Case {
-            mode: SCHEDULED,
-            before_delivery: Visible::of(0, &[]),
-            held_until_delivery: true,
-        },
-        Case {
-            mode: IMMEDIATE,
-            before_delivery: Visible::of(1, &["due-soon"]),
-            held_until_delivery: false,
-        },
-    ];
-
-    for case in cases {
-        let topic = format!("deliver-at-time-wait-{}", case.mode.value);
-        let topic_id = ready_topic(&p.broker, &p.client, &topic, case.mode).await;
-
-        let deliver_at_ms = produce_due_soon(&p.client, &topic, topic_id).await;
-
-        let seen = visible(&p.client, &topic, topic_id).await;
-        let read_at_ms = now_ms();
-        check!(
-            read_at_ms < deliver_at_ms,
-            "{topic}: the read finished {} ms after the delivery time, so it proves nothing",
-            read_at_ms - deliver_at_ms
-        );
-        check!(
-            seen == case.before_delivery,
-            "{topic}: before the delivery time"
-        );
-
-        let delivered = Visible::of(1, &["due-soon"]);
-        let served_at_ms = wait_until_visible(&p.client, &topic, topic_id, &delivered).await;
-        check!(
-            (served_at_ms >= deliver_at_ms) == case.held_until_delivery,
-            "{topic}: first served at {served_at_ms}, delivery time {deliver_at_ms}"
-        );
-    }
-
-    p.broker.shutdown().await;
+#[rstest_bdd_macros::when("the producer appends due-soon stamped 2000 milliseconds in the future")]
+async fn append_due_soon(delivery: &mut DeliveryScenario) {
+    delivery.due_at = Some(
+        produce_due_soon(
+            delivery.client.as_ref().expect("delivery client connected"),
+            &delivery.topic,
+            delivery.topic_id.expect("delivery topic created"),
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then("the visibility read completed before the delivery timestamp")]
+fn pending_read_is_timely(delivery: &DeliveryScenario) {
+    let read_at_ms = delivery.read_at.expect("visibility read measured");
+    let deliver_at_ms = delivery.due_at.expect("due-soon appended");
+    check!(
+        read_at_ms < deliver_at_ms,
+        "read finished {} ms after delivery, proving nothing",
+        read_at_ms - deliver_at_ms
+    );
+}
+#[rstest_bdd_macros::when("the consumer waits until due-soon is visible at LATEST 1")]
+async fn await_due_soon(delivery: &mut DeliveryScenario) {
+    delivery.served_at = Some(
+        wait_until_visible(
+            delivery.client.as_ref().expect("delivery client connected"),
+            &delivery.topic,
+            delivery.topic_id.expect("delivery topic created"),
+            &Visible::of(1, &["due-soon"]),
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then("first visibility is at or after the delivery timestamp {held}")]
+fn due_soon_first_visibility(delivery: &DeliveryScenario, held: bool) {
+    let served_at_ms = delivery.served_at.expect("visibility arrival measured");
+    let deliver_at_ms = delivery.due_at.expect("due-soon appended");
+    check!(
+        (served_at_ms >= deliver_at_ms) == held,
+        "first served at {served_at_ms}, delivery time {deliver_at_ms}"
+    );
+}
+#[rstest_bdd_macros::when("the consumer starts a 20000 millisecond long poll for the record")]
+async fn long_poll_due_soon(delivery: &mut DeliveryScenario) {
+    let started = Instant::now();
+    delivery.values = Some(
+        fetch_values(
+            delivery.client.as_ref().expect("delivery client connected"),
+            &delivery.topic,
+            delivery.topic_id.expect("delivery topic created"),
+            LONG_POLL_MS,
+        )
+        .await,
+    );
+    delivery.elapsed = Some(started.elapsed());
+    delivery.served_at = Some(now_ms());
+}
+#[rstest_bdd_macros::then("the long poll serves only due-soon within 10000 milliseconds")]
+fn due_soon_long_poll_awakened(delivery: &DeliveryScenario) {
+    check!(delivery.values.as_ref().expect("long poll completed") == &vec!["due-soon".to_owned()]);
+    check!(delivery.elapsed.expect("long poll measured").as_millis() < LONG_POLL_WOKE_MS);
 }
 
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/deliver_at_time/dat_activation.feature",
     name = "a record stamped in the future waits for its delivery time"
 )]
 #[tokio::test]
-async fn a_record_stamped_in_the_future_waits_for_its_delivery_time() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "deliver at time dat activation: a parked long poll wakes when the record comes due"
-)]
-async fn bdd_verify_a_parked_long_poll_wakes_when_the_record_comes_due() {
-    struct Case {
-        mode: Mode,
-        /// Whether the poll returned at or after the record's delivery time.
-        returns_after_delivery: bool,
-    }
-
-    let p = support::start().await;
-    let cases = [
-        Case {
-            mode: SCHEDULED,
-            returns_after_delivery: true,
-        },
-        Case {
-            mode: IMMEDIATE,
-            returns_after_delivery: false,
-        },
-    ];
-
-    for case in cases {
-        let topic = format!("deliver-at-time-longpoll-{}", case.mode.value);
-        let id = ready_topic(&p.broker, &p.client, &topic, case.mode).await;
-        let deliver_at_ms = produce_due_soon(&p.client, &topic, id).await;
-        let topic_id = id;
-
-        // The record is already in the log, so nothing appends and no watermark
-        // this consumer reads moves while it waits. On a scheduled topic the
-        // only thing that can end the wait early is the delivery advance.
-        let started = Instant::now();
-        let served = fetch_values(&p.client, &topic, topic_id, LONG_POLL_MS).await;
-        let elapsed = started.elapsed();
-        let returned_at_ms = now_ms();
-
-        check!(
-            served == vec!["due-soon".to_owned()],
-            "{topic}: the long poll served {served:?}"
-        );
-        check!(
-            elapsed.as_millis() < LONG_POLL_WOKE_MS,
-            "{topic}: the long poll took {elapsed:?}, so it expired rather than woke"
-        );
-        check!(
-            (returned_at_ms >= deliver_at_ms) == case.returns_after_delivery,
-            "{topic}: returned at {returned_at_ms}, delivery time {deliver_at_ms}"
-        );
-    }
-
-    p.broker.shutdown().await;
+async fn a_record_stamped_in_the_future_waits_for_its_delivery_time(
+    delivery: DeliveryScenario,
+    mode: String,
+    topic: String,
+    held: bool,
+    latest: i64,
+    values: String,
+) {
+    let _ = (mode, topic, held, latest, values);
+    delivery.shutdown().await;
 }
 
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/deliver_at_time/dat_activation.feature",
     name = "a parked long poll wakes when the record comes due"
 )]
 #[tokio::test]
-async fn a_parked_long_poll_wakes_when_the_record_comes_due() {}
+async fn a_parked_long_poll_wakes_when_the_record_comes_due(
+    delivery: DeliveryScenario,
+    mode: String,
+    topic: String,
+    held: bool,
+) {
+    let _ = (mode, topic, held);
+    delivery.shutdown().await;
+}

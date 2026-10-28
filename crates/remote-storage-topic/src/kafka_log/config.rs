@@ -203,16 +203,246 @@ mod tests {
         std::time::Duration,
     };
 
-    fn configured(configure: impl FnOnce(&mut KafkaMetadataLogConfig)) -> KafkaMetadataLogConfig {
-        let mut cfg = KafkaMetadataLogConfig::new("127.0.0.1:9092");
-        configure(&mut cfg);
-        cfg
+    #[derive(Default)]
+    struct MetadataConfigScenario {
+        bootstrap: String,
+        config: Option<KafkaMetadataLogConfig>,
+        validation: Option<Result<(), String>>,
+        capacity: usize,
+        built_capacity: Option<Result<MetadataEventQueueCapacity, String>>,
+    }
+    #[rstest::fixture]
+    fn metadata_config() -> MetadataConfigScenario {
+        let bootstrap = String::new();
+        MetadataConfigScenario {
+            bootstrap,
+            ..MetadataConfigScenario::default()
+        }
+    }
+    #[rstest_bdd_macros::given("metadata bootstrap address {address}")]
+    fn metadata_bootstrap_address(metadata_config: &mut MetadataConfigScenario, address: String) {
+        metadata_config.bootstrap = address;
+    }
+    #[rstest_bdd_macros::when("metadata log defaults are constructed and validated")]
+    fn construct_metadata_defaults(metadata_config: &mut MetadataConfigScenario) {
+        let config = KafkaMetadataLogConfig::new(&metadata_config.bootstrap);
+        metadata_config.validation = Some(config.validate());
+        metadata_config.config = Some(config);
+    }
+    #[rstest_bdd_macros::given("a default metadata client targeting {address}")]
+    fn default_metadata_client(metadata_config: &mut MetadataConfigScenario, address: String) {
+        metadata_config.config = Some(KafkaMetadataLogConfig::new(address));
+    }
+    fn metadata_policy_time(text: &str) -> Time {
+        if text == "infinite" {
+            return Time::from_secs_f64(f64::INFINITY);
+        }
+        if let Some(micros) = text.strip_suffix("us") {
+            return Time::from_micros(micros.parse().expect("microsecond fixture"));
+        }
+        if let Some(millis) = text.strip_suffix("ms") {
+            return Time::from_millis(millis.parse().expect("millisecond fixture"));
+        }
+        match text {
+            "0" => Time::ZERO,
+            _ => panic!("unknown time fixture {text}"),
+        }
+    }
+    #[rstest_bdd_macros::given("metadata transport field {field} equals {value}")]
+    fn metadata_transport_value(
+        metadata_config: &mut MetadataConfigScenario,
+        field: String,
+        value: String,
+    ) {
+        let config = metadata_config
+            .config
+            .as_mut()
+            .expect("metadata client given");
+        match field.as_str() {
+            "topic_create_timeout" => config.topic_create_timeout = metadata_policy_time(&value),
+            "fetch_max_wait" => config.fetch_max_wait = metadata_policy_time(&value),
+            "fetch_retry_backoff" => config.fetch_retry_backoff = metadata_policy_time(&value),
+            "fetch_max_bytes" => {
+                config.fetch_max_bytes = ByteSize::from_bytes_f64(if value == "infinite" {
+                    f64::INFINITY
+                } else {
+                    value
+                        .trim_end_matches('B')
+                        .parse()
+                        .expect("byte size fixture")
+                });
+            }
+            _ => panic!("unknown metadata transport field {field}"),
+        }
+    }
+    #[rstest_bdd_macros::given("metadata event delivery capacity {capacity}")]
+    fn metadata_delivery_capacity(metadata_config: &mut MetadataConfigScenario, capacity: usize) {
+        metadata_config
+            .config
+            .as_mut()
+            .expect("metadata client given")
+            .event_queue_capacity =
+            MetadataEventQueueCapacity::new(capacity).expect("positive delivery queue capacity");
+    }
+    #[rstest_bdd_macros::when("metadata client configuration is validated")]
+    fn validate_metadata_client(metadata_config: &mut MetadataConfigScenario) {
+        metadata_config.validation = Some(
+            metadata_config
+                .config
+                .as_ref()
+                .expect("metadata client given")
+                .validate(),
+        );
+    }
+    #[rstest_bdd_macros::then("metadata transport validation refuses field {field}")]
+    fn refused_metadata_transport(metadata_config: &MetadataConfigScenario, field: String) {
+        let error = metadata_config
+            .validation
+            .as_ref()
+            .expect("metadata client validated")
+            .as_ref()
+            .expect_err("invalid transport policy rejected");
+        assert2::assert!(error.contains(&field), "field={field}, error={error}");
+    }
+    #[rstest_bdd_macros::then("custom metadata transport settings remain valid and unchanged")]
+    fn custom_metadata_transport(metadata_config: &MetadataConfigScenario) {
+        assert!(
+            metadata_config
+                .validation
+                .as_ref()
+                .expect("metadata client validated")
+                .is_ok()
+        );
+        let config = metadata_config
+            .config
+            .as_ref()
+            .expect("metadata client given");
+        check!(
+            (
+                config.topic_create_timeout,
+                config.fetch_max_wait,
+                config.fetch_max_bytes,
+                config.fetch_retry_backoff,
+                config.event_queue_capacity.capacity()
+            ) == (secs(45), millis(750), mebibytes(2), millis(300), 2048)
+        );
+    }
+    #[rstest_bdd_macros::given("metadata min ISR selection {minimum}")]
+    fn metadata_min_isr(metadata_config: &mut MetadataConfigScenario, minimum: String) {
+        metadata_config
+            .config
+            .as_mut()
+            .expect("metadata client given")
+            .min_isr =
+            (minimum != "cluster-default").then(|| minimum.parse().expect("minimum ISR"));
+    }
+    #[rstest_bdd_macros::then("the min ISR policy is {decision}")]
+    fn metadata_min_isr_decision(metadata_config: &MetadataConfigScenario, decision: String) {
+        let valid = match decision.as_str() {
+            "accepted" => true,
+            "rejected" => false,
+            _ => panic!("unknown policy decision {decision}"),
+        };
+        let result = metadata_config
+            .validation
+            .as_ref()
+            .expect("metadata client validated");
+        assert2::assert!(result.is_ok() == valid, "{result:?}");
+        if let Err(error) = result {
+            assert2::assert!(error.contains("min_isr"), "{error}");
+        }
+    }
+    #[rstest_bdd_macros::given("metadata queue capacity input {capacity}")]
+    fn metadata_queue_input(metadata_config: &mut MetadataConfigScenario, capacity: usize) {
+        metadata_config.capacity = capacity;
+    }
+    #[rstest_bdd_macros::when("the metadata event queue capacity is constructed")]
+    fn construct_metadata_queue_capacity(metadata_config: &mut MetadataConfigScenario) {
+        metadata_config.built_capacity =
+            Some(MetadataEventQueueCapacity::new(metadata_config.capacity));
+    }
+    #[rstest_bdd_macros::then("the metadata event queue capacity is {decision}")]
+    fn constructed_metadata_queue_capacity(
+        metadata_config: &MetadataConfigScenario,
+        decision: String,
+    ) {
+        let result = metadata_config
+            .built_capacity
+            .as_ref()
+            .expect("queue capacity constructed");
+        match decision.as_str() {
+            "rejected" => {
+                assert!(result.is_err());
+            }
+            "one" => {
+                check!(result.as_ref().expect("positive capacity").capacity() == 1);
+            }
+            _ => panic!("unknown queue capacity result {decision}"),
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "metadata client resource policy has dispatch capacity 7 and frame size 32768 bytes"
+    )]
+    fn metadata_resource_policy(metadata_config: &mut MetadataConfigScenario) {
+        let config = metadata_config
+            .config
+            .as_mut()
+            .expect("metadata client given");
+        config.dispatch_queue_capacity =
+            ConnectionDispatchQueueCapacity::new(7).expect("positive dispatch queue");
+        config.frame_max =
+            ClientFrameMax::try_from(krabka_units::kibibytes(32)).expect("positive frame limit");
+    }
+    #[rstest_bdd_macros::then("the metadata client retains its dispatch and frame limits")]
+    fn carried_metadata_resource_policy(metadata_config: &MetadataConfigScenario) {
+        let config = metadata_config
+            .config
+            .as_ref()
+            .expect("metadata client given");
+        check!(config.dispatch_queue_capacity.get() == 7);
+        check!(config.frame_max.size() == krabka_units::kibibytes(32));
+    }
+    #[rstest_bdd_macros::given(
+        "metadata client SASL_PLAINTEXT credentials {username} and {password}"
+    )]
+    fn metadata_security_policy(
+        metadata_config: &mut MetadataConfigScenario,
+        username: String,
+        password: String,
+    ) {
+        use {krabka_client_core::security::SaslCredentials, krabka_security::ListenerProtocol};
+        let config = metadata_config
+            .config
+            .as_mut()
+            .expect("metadata client given");
+        config.num_partitions = 1;
+        config.replication = 1;
+        config.client_id = "x".into();
+        config.security = Some(ClientSecurity {
+            protocol: ListenerProtocol::SaslPlaintext,
+            tls: None,
+            sasl: Some(SaslCredentials::Plain { username, password }),
+            sasl_host: None,
+        });
+    }
+    #[rstest_bdd_macros::then("the metadata client retains its security configuration")]
+    fn carried_metadata_security_policy(metadata_config: &MetadataConfigScenario) {
+        assert!(
+            metadata_config
+                .config
+                .as_ref()
+                .expect("metadata client given")
+                .security
+                .is_some()
+        );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("kafka log config tests: config defaults match kafka")]
-    fn bdd_verify_config_defaults_match_kafka() {
-        let cfg = KafkaMetadataLogConfig::new("127.0.0.1:9092");
+    #[rstest_bdd_macros::then("metadata client defaults match Kafka's topic and transport policy")]
+    fn metadata_kafka_defaults(metadata_config: &MetadataConfigScenario) {
+        let cfg = metadata_config
+            .config
+            .as_ref()
+            .expect("configuration constructed");
         check!(cfg.topic == METADATA_TOPIC);
         check!(cfg.num_partitions == 50);
         check!(cfg.replication == 3);
@@ -226,243 +456,24 @@ mod tests {
         check!(cfg.fetch_max_bytes == mebibytes(1));
         check!(cfg.fetch_retry_backoff == millis(200));
         check!(cfg.event_queue_capacity.capacity() == 1024);
-        cfg.validate().unwrap();
+        assert!(
+            metadata_config
+                .validation
+                .as_ref()
+                .expect("configuration validated")
+                .is_ok()
+        );
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/config.feature",
-        name = "tests: config defaults match kafka"
-    )]
-    fn config_defaults_match_kafka() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("kafka log config tests: config accepts custom transport policy")]
-    fn bdd_verify_config_accepts_custom_transport_policy() {
-        let cfg = KafkaMetadataLogConfig {
-            topic_create_timeout: secs(45),
-            fetch_max_wait: millis(750),
-            fetch_max_bytes: mebibytes(2),
-            fetch_retry_backoff: millis(300),
-            event_queue_capacity: MetadataEventQueueCapacity::new(2048).unwrap(),
-            ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
-        };
-
-        cfg.validate().unwrap();
-        check!(cfg.topic_create_timeout == secs(45));
-        check!(cfg.fetch_max_wait == millis(750));
-        check!(cfg.fetch_max_bytes == mebibytes(2));
-        check!(cfg.fetch_retry_backoff == millis(300));
-        check!(cfg.event_queue_capacity.capacity() == 2048);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/config.feature",
-        name = "tests: config accepts custom transport policy"
-    )]
-    fn config_accepts_custom_transport_policy() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log config tests: config rejects invalid transport policy for {example}"
-    )]
-    fn bdd_verify_config_rejects_invalid_transport_policy(example: String) {
-        type Example<'a> = (&'a str, KafkaMetadataLogConfig);
-        let (field, cfg): Example<'_> = match example.as_str() {
-            "create timeout zero" => (
-                "topic_create_timeout",
-                configured(|cfg| cfg.topic_create_timeout = Time::ZERO),
-            ),
-            "create timeout submillisecond" => (
-                "topic_create_timeout",
-                configured(|cfg| cfg.topic_create_timeout = Time::from_micros(500)),
-            ),
-            "create timeout infinite" => (
-                "topic_create_timeout",
-                configured(|cfg| cfg.topic_create_timeout = Time::from_secs_f64(f64::INFINITY)),
-            ),
-            "create timeout too large" => (
-                "topic_create_timeout",
-                configured(|cfg| {
-                    cfg.topic_create_timeout = Time::from_millis(i64::from(i32::MAX) + 1);
-                }),
-            ),
-            "fetch wait zero" => (
-                "fetch_max_wait",
-                configured(|cfg| cfg.fetch_max_wait = Time::ZERO),
-            ),
-            "fetch wait submillisecond" => (
-                "fetch_max_wait",
-                configured(|cfg| cfg.fetch_max_wait = Time::from_micros(500)),
-            ),
-            "fetch wait infinite" => (
-                "fetch_max_wait",
-                configured(|cfg| cfg.fetch_max_wait = Time::from_secs_f64(f64::INFINITY)),
-            ),
-            "fetch wait too large" => (
-                "fetch_max_wait",
-                configured(|cfg| cfg.fetch_max_wait = Time::from_millis(i64::from(i32::MAX) + 1)),
-            ),
-            "fetch bytes zero" => (
-                "fetch_max_bytes",
-                configured(|cfg| cfg.fetch_max_bytes = ByteSize::ZERO),
-            ),
-            "fetch bytes fractional" => (
-                "fetch_max_bytes",
-                configured(|cfg| cfg.fetch_max_bytes = ByteSize::from_bytes_f64(0.5)),
-            ),
-            "fetch bytes infinite" => (
-                "fetch_max_bytes",
-                configured(|cfg| cfg.fetch_max_bytes = ByteSize::from_bytes_f64(f64::INFINITY)),
-            ),
-            "fetch bytes too large" => (
-                "fetch_max_bytes",
-                configured(|cfg| {
-                    cfg.fetch_max_bytes = ByteSize::from_bytes_i64(i64::from(i32::MAX) + 1);
-                }),
-            ),
-            "retry backoff zero" => (
-                "fetch_retry_backoff",
-                configured(|cfg| cfg.fetch_retry_backoff = Time::ZERO),
-            ),
-            "retry backoff infinite" => (
-                "fetch_retry_backoff",
-                configured(|cfg| cfg.fetch_retry_backoff = Time::from_secs_f64(f64::INFINITY)),
-            ),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let error = cfg.validate().expect_err("invalid policy must fail");
-        assert2::assert!(error.contains(field), "field={field}, error={error}");
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/config.feature",
-        name = "tests: config rejects invalid transport policy"
-    )]
-    fn config_rejects_invalid_transport_policy(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("kafka log config tests: min isr must be at least one for {example}")]
-    fn bdd_verify_min_isr_must_be_at_least_one(example: String) {
-        type Example = (Option<i32>, bool);
-        let (min_isr, valid): Example = match example.as_str() {
-            "one" => (Some(1), true),
-            "two" => (Some(2), true),
-            "zero" => (Some(0), false),
-            "negative" => (Some(-1), false),
-            "unset uses cluster default" => (None, true),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let cfg = KafkaMetadataLogConfig {
-            min_isr,
-            ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
-        };
-        let result = cfg.validate();
-        assert2::assert!(result.is_ok() == valid, "min_isr={min_isr:?}: {result:?}");
-        if let Err(error) = result {
-            assert2::assert!(error.contains("min_isr"), "{error}");
-        }
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/config.feature",
-        name = "tests: min isr must be at least one"
-    )]
-    fn min_isr_must_be_at_least_one(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("kafka log config tests: metadata event queue capacity rejects zero")]
-    fn bdd_verify_metadata_event_queue_capacity_rejects_zero() {
-        assert!(MetadataEventQueueCapacity::new(0).is_err());
-        check!(MetadataEventQueueCapacity::new(1).unwrap().capacity() == 1);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/config.feature",
-        name = "tests: metadata event queue capacity rejects zero"
-    )]
-    fn metadata_event_queue_capacity_rejects_zero() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log config tests: client tunables convert to their kafka wire images"
-    )]
-    fn bdd_verify_client_tunables_convert_to_their_kafka_wire_images() {
-        let cfg = KafkaMetadataLogConfig::new("127.0.0.1:9092");
+    #[rstest_bdd_macros::then("metadata transport quantities retain their exact Kafka wire images")]
+    fn metadata_wire_defaults(metadata_config: &MetadataConfigScenario) {
+        let cfg = metadata_config
+            .config
+            .as_ref()
+            .expect("configuration constructed");
         check!(cfg.topic_create_timeout.millis_i32() == 30_000);
         check!(cfg.fetch_max_wait.millis_i32() == 500);
         check!(cfg.fetch_max_bytes.bytes_i32() == 1 << 20);
         check!(cfg.fetch_retry_backoff.to_std() == Duration::from_millis(200));
     }
-
-    /// The metadata client's tunables are quantities, but they reach Kafka as
-    /// raw `int32` milliseconds and bytes. This test pins the wire images. A
-    /// wrong scale here is invisible in the types. It would show up only as a
-    /// metadata consumer that spins, when `max_wait` is too short, or that
-    /// truncates batches.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/config.feature",
-        name = "tests: client tunables convert to their kafka wire images"
-    )]
-    fn client_tunables_convert_to_their_kafka_wire_images() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("kafka log config tests: config carries client resource policy")]
-    fn bdd_verify_config_carries_client_resource_policy() {
-        let cfg = KafkaMetadataLogConfig {
-            dispatch_queue_capacity: ConnectionDispatchQueueCapacity::new(7).unwrap(),
-            frame_max: ClientFrameMax::try_from(krabka_units::kibibytes(32)).unwrap(),
-            ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
-        };
-        check!(cfg.dispatch_queue_capacity.get() == 7);
-        check!(cfg.frame_max.size() == krabka_units::kibibytes(32));
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/config.feature",
-        name = "tests: config carries client resource policy"
-    )]
-    fn config_carries_client_resource_policy() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("kafka log config tests: config carries security")]
-    fn bdd_verify_config_carries_security() {
-        use {
-            krabka_client_core::security::{ClientSecurity, SaslCredentials},
-            krabka_security::ListenerProtocol,
-        };
-        let cfg = KafkaMetadataLogConfig {
-            bootstrap: "127.0.0.1:9092".into(),
-            topic: METADATA_TOPIC.into(),
-            num_partitions: 1,
-            replication: 1,
-            client_id: "x".into(),
-            security: Some(ClientSecurity {
-                protocol: ListenerProtocol::SaslPlaintext,
-                tls: None,
-                sasl: Some(SaslCredentials::Plain {
-                    username: "u".into(),
-                    password: "p".into(),
-                }),
-                sasl_host: None,
-            }),
-            ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
-        };
-        assert!(cfg.security.is_some());
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/config.feature",
-        name = "tests: config carries security"
-    )]
-    fn config_carries_security() {}
+    rstest_bdd_macros::scenarios!("tests/features/metadata_client_policy", fixtures = [metadata_config: MetadataConfigScenario]);
 }

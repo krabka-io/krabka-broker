@@ -23,41 +23,6 @@ use {
     tokio::time,
 };
 
-/// One row of the background-recovery table.
-struct BackgroundCase {
-    /// What the row is about. First, so a failure names it.
-    label: &'static str,
-    /// The `break_glass.background_unclean_recovery` setting under test.
-    mode: BackgroundUncleanRecovery,
-    /// Whether the recovery runs and elects a survivor at all.
-    recovers: bool,
-    /// Whether the broker counts the election as a bypass of a rule that
-    /// nobody on this path could have satisfied.
-    counts_bypass: bool,
-}
-
-/// The three answers the design gives to a recovery with no caller.
-const BACKGROUND: [BackgroundCase; 3] = [
-    BackgroundCase {
-        label: "off keeps today's behaviour",
-        mode: BackgroundUncleanRecovery::Off,
-        recovers: true,
-        counts_bypass: false,
-    },
-    BackgroundCase {
-        label: "audit-only recovers and accounts for it",
-        mode: BackgroundUncleanRecovery::AuditOnly,
-        recovers: true,
-        counts_bypass: true,
-    },
-    BackgroundCase {
-        label: "require leaves the partition offline",
-        mode: BackgroundUncleanRecovery::Require,
-        recovers: false,
-        counts_bypass: false,
-    },
-];
-
 /// The topic the background cases take offline.
 const RECOVERED: &str = "recovered";
 
@@ -83,14 +48,109 @@ async fn take_offline(controller: &BrokerHandle, victim: NodeId) {
         .expect("take the partition offline");
 }
 
-/// Assert what `case` says the broker does with a recovery nobody approved.
-async fn check_background_outcome(
-    controller: &BrokerHandle,
-    case: &BackgroundCase,
-    victim: NodeId,
-) {
-    let label = case.label;
-    if case.recovers {
+use {
+    assert2::assert,
+    krabka_broker::BrokerConfig,
+    krabka_client_core::Client,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+};
+
+#[derive(Default)]
+struct BackgroundRecovery {
+    cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
+    client: Option<Client>,
+    controller: Option<NodeId>,
+    victim: Option<NodeId>,
+    stopped_directory: Option<TempDir>,
+}
+
+#[fixture]
+fn recovery() -> BackgroundRecovery {
+    // Start this scenario with fresh inputs and observations.
+
+    BackgroundRecovery {
+        cluster: Vec::new(),
+        client: None,
+        controller: None,
+        victim: None,
+        stopped_directory: None,
+    }
+}
+
+#[given("a three-node broker cluster with background unclean recovery mode {mode}")]
+async fn recovery_cluster(recovery: &mut BackgroundRecovery, mode: String) {
+    let mode = match mode.as_str() {
+        "off" => BackgroundUncleanRecovery::Off,
+        "audit-only" => BackgroundUncleanRecovery::AuditOnly,
+        "require" => BackgroundUncleanRecovery::Require,
+        _ => panic!("unknown configured recovery mode {mode}"),
+    };
+    let cluster = start_gated_cluster(3, mode).await;
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let leader = cluster[0].0.wait_until_controller_leader().await.unwrap();
+    let victim = cluster
+        .iter()
+        .find(|(_, config, _)| config.node_id != leader)
+        .expect("a non-controller")
+        .1
+        .node_id;
+    recovery.client = Some(
+        plain_client(
+            &cluster[index_of(&cluster, leader)]
+                .1
+                .listen_addr
+                .to_string(),
+        )
+        .await,
+    );
+    recovery.cluster = cluster;
+    recovery.controller = Some(leader);
+    recovery.victim = Some(victim);
+}
+
+#[given("RF3 topic recovered opts into strategy {strategy}")]
+async fn recoverable_topic(recovery: &BackgroundRecovery, strategy: String) {
+    create_topic(recovery.client.as_ref().unwrap(), RECOVERED, 3).await;
+    for (handle, _, _) in &recovery.cluster {
+        handle.wait_until_partition_present(RECOVERED, 0).await;
+    }
+    recovery.cluster[index_of(&recovery.cluster, recovery.controller.unwrap())]
+        .0
+        .submit_metadata_record_for_test(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: RECOVERED.to_owned(),
+            overrides: iter::once(("unclean.recovery.strategy".to_owned(), strategy)).collect(),
+        }))
+        .await
+        .expect("set recovery strategy");
+}
+
+#[when(
+    "a non-controller broker dies and the partition names only that dead broker as leader and ISR"
+)]
+async fn take_partition_offline(recovery: &mut BackgroundRecovery) {
+    let victim = recovery.victim.unwrap();
+    let index = index_of(&recovery.cluster, victim);
+    let (dead, _config, directory) = recovery.cluster.remove(index);
+    dead.shutdown().await;
+    recovery.stopped_directory = Some(directory);
+    let controller = &recovery.cluster[index_of(&recovery.cluster, recovery.controller.unwrap())].0;
+    controller
+        .wait_for_image(|image| {
+            image
+                .partition(RECOVERED, 0)
+                .is_some_and(|record| !record.isr.contains(&victim))
+        })
+        .await;
+    take_offline(controller, victim).await;
+}
+
+#[then("a live recovery leader is elected {recovers} with offline observation window {window} ms")]
+async fn elected(recovery: &BackgroundRecovery, recovers: bool, window: u64) {
+    let controller = &recovery.cluster[index_of(&recovery.cluster, recovery.controller.unwrap())].0;
+    let victim = recovery.victim.unwrap();
+    if recovers {
         controller
             .wait_for_image(|image| {
                 image
@@ -99,121 +159,43 @@ async fn check_background_outcome(
             })
             .await;
     } else {
-        // A negative outcome, so there is no event to await. The partition has
-        // to still be leaderless after the recovery manager has had every
-        // chance to elect, which a bounded wait is the only way to state.
-        time::sleep(Duration::from_secs(5)).await;
-        check!(
-            controller
-                .partition_record_for_test(RECOVERED, 0)
-                .map(|record| record.leader)
-                == Some(victim),
-            "case {label}: the partition stays leaderless and visibly offline"
-        );
+        time::sleep(Duration::from_millis(window)).await;
     }
+    let leader = controller
+        .partition_record_for_test(RECOVERED, 0)
+        .map(|record| record.leader);
+    assert!(leader.is_some());
+    check!((leader != Some(victim)) == recovers);
+}
 
-    if case.counts_bypass {
+#[then("the unclean recovery bypass counter records an event {counted}")]
+async fn bypass_counter(recovery: &BackgroundRecovery, counted: bool) {
+    let controller = &recovery.cluster[index_of(&recovery.cluster, recovery.controller.unwrap())].0;
+    if counted {
         controller
-            .wait_for_metrics("a counted unclean-recovery bypass", |_| {
+            .wait_for_metrics("counted recovery bypass", |_| {
                 bypassed(controller, GatedAction::UncleanRecovery) >= 1
             })
             .await;
+        check!(bypassed(controller, GatedAction::UncleanRecovery) >= 1);
     } else {
-        check!(
-            bypassed(controller, GatedAction::UncleanRecovery) == 0,
-            "case {label}: nothing was recorded as bypassed"
-        );
+        check!(bypassed(controller, GatedAction::UncleanRecovery) == 0);
     }
 }
 
-/// Drive one background-recovery row on its own three-node cluster.
-async fn background_recovery_case(case: &BackgroundCase) {
-    let mut cluster = start_gated_cluster(3, case.mode).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-
-    let leader = cluster[0].0.wait_until_controller_leader().await.unwrap();
-    let victim_index = (0..cluster.len())
-        .find(|index| cluster[*index].1.node_id != leader)
-        .expect("a non-controller node");
-    let victim = cluster[victim_index].1.node_id;
-
-    let client = plain_client(
-        &cluster[index_of(&cluster, leader)]
-            .1
-            .listen_addr
-            .to_string(),
-    )
-    .await;
-    create_topic(&client, RECOVERED, 3).await;
-    for (handle, _, _) in &cluster {
-        handle.wait_until_partition_present(RECOVERED, 0).await;
-    }
-    // Only a topic that opted into an offset-aware strategy reaches the
-    // recovery manager. Without one the failover path elects directly and never
-    // consults the background rule at all.
-    cluster[index_of(&cluster, leader)]
-        .0
-        .submit_metadata_record_for_test(MetadataRecord::V1TopicConfig(TopicConfigRecord {
-            topic: RECOVERED.to_owned(),
-            overrides: iter::once((
-                "unclean.recovery.strategy".to_owned(),
-                "Aggressive".to_owned(),
-            ))
-            .collect(),
-        }))
-        .await
-        .expect("set unclean.recovery.strategy");
-
-    let (dead, _config, _dir) = cluster.remove(victim_index);
-    dead.shutdown().await;
-    let controller = &cluster[index_of(&cluster, leader)].0;
-    // The ISR shrink is the controller's own signal that liveness has marked
-    // the broker dead, which is what the failover sweep reads.
-    controller
-        .wait_for_image(|image| {
-            image
-                .partition(RECOVERED, 0)
-                .is_some_and(|record| !record.isr.contains(&victim))
-        })
-        .await;
-
-    take_offline(controller, victim).await;
-    check_background_outcome(controller, case, victim).await;
-
-    shutdown_cluster(cluster).await;
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "break glass background recovery: background unclean recovery follows its configured rule"
-)]
-async fn bdd_verify_background_unclean_recovery_follows_its_configured_rule() {
-    for case in &BACKGROUND {
-        background_recovery_case(case).await;
-    }
-}
-
-/// The background unclean-recovery path under each of the three settings it
-/// takes.
-///
-/// This path runs from leader election and from a broker heartbeat, with no
-/// request, no connection, and no principal, so a two-person rule cannot exist
-/// on it. The design says that plainly rather than leaving a silent gap, and
-/// this case is what keeps the statement true: `off` is today's behaviour,
-/// `audit-only` recovers and counts the bypass so an operator can prove after
-/// the fact that a data-losing election happened with nobody's approval, and
-/// `require` fails closed and leaves the partition visibly offline. A setting
-/// that quietly collapsed into another would turn the documented three-way
-/// choice into a lie, and `break_glass_bypassed` is the series an operator is
-/// told to alert on.
-///
-/// The rows run one cluster at a time rather than three at once: each needs
-/// three brokers and a broker death, and the sequence keeps the peak cost of
-/// the case to one cluster.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/break_glass/background_recovery.feature",
     name = "background unclean recovery follows its configured rule"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn background_unclean_recovery_follows_its_configured_rule() {}
+async fn background_unclean_recovery_follows_its_configured_rule(
+    recovery: BackgroundRecovery,
+    mode: String,
+    recovers: bool,
+    counted: bool,
+    window: u64,
+) {
+    let _ = (mode, recovers, counted, window);
+    drop(recovery.client);
+    shutdown_cluster(recovery.cluster).await;
+}

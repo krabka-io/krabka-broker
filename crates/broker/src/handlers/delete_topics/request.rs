@@ -213,7 +213,6 @@ mod tests {
         assert2::assert,
         krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord},
         krabka_protocol::owned::delete_topics_request::DeleteTopicState,
-        std::iter,
     };
 
     const ORDERS_ID: WireUuid = WireUuid([7; 16]);
@@ -242,16 +241,6 @@ mod tests {
         invalid_topic_result(name.map(str::to_owned), topic_id, message)
     }
 
-    /// One scenario: the request rows, the topics denied `Delete`, and the
-    /// valid rows and invalid rows that Kafka's validation leaves.
-    struct Case {
-        label: &'static str,
-        request: DeleteTopicsRequest,
-        denied: &'static [&'static str],
-        topics: Vec<TopicNameRequest>,
-        invalid: Vec<DeletableTopicResult>,
-    }
-
     fn v6(rows: Vec<DeleteTopicState>) -> DeleteTopicsRequest {
         DeleteTopicsRequest {
             topics: rows,
@@ -259,168 +248,145 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers delete topics request tests: rows follow kafkas delete topics validation"
-    )]
-    fn bdd_verify_rows_follow_kafkas_delete_topics_validation() {
-        let cases = [
-            Case {
-                label: "a name and an id each name one topic",
-                request: v6(vec![
-                    state(Some("orders"), WireUuid::ZERO),
-                    state(None, OTHER_ID),
-                ]),
-                denied: &[],
-                topics: vec![
-                    (Some("orders".into()), false, WireUuid::ZERO),
-                    (None, true, OTHER_ID),
-                ],
-                invalid: Vec::new(),
-            },
-            Case {
-                label: "no name and the zero id",
-                request: v6(vec![state(None, WireUuid::ZERO)]),
-                denied: &[],
-                topics: Vec::new(),
-                invalid: vec![invalid(None, WireUuid::ZERO, NO_NAME_OR_ID)],
-            },
-            Case {
-                label: "a name and a non-zero id",
-                request: v6(vec![state(Some("orders"), ORDERS_ID)]),
-                denied: &[],
-                topics: Vec::new(),
-                invalid: vec![invalid(Some("orders"), ORDERS_ID, NAME_AND_ID)],
-            },
-            Case {
-                label: "an empty name and a non-zero id",
-                request: v6(vec![state(Some(""), ORDERS_ID)]),
-                denied: &[],
-                topics: Vec::new(),
-                invalid: vec![invalid(Some(""), ORDERS_ID, NAME_AND_ID)],
-            },
-            Case {
-                label: "an empty name and the zero id is a name",
-                request: v6(vec![state(Some(""), WireUuid::ZERO)]),
-                denied: &[],
-                topics: vec![(Some(String::new()), false, WireUuid::ZERO)],
-                invalid: Vec::new(),
-            },
-            Case {
-                label: "a duplicate name answers once and deletes nothing",
-                request: v6(iter::repeat_with(|| state(Some("orders"), WireUuid::ZERO))
-                    .take(3)
-                    .collect()),
-                denied: &[],
-                topics: Vec::new(),
-                invalid: vec![invalid(Some("orders"), WireUuid::ZERO, DUPLICATE_NAME)],
-            },
-            Case {
-                label: "a duplicate name in the v0-5 list",
-                request: DeleteTopicsRequest {
-                    topic_names: vec!["orders".into(), "other".into(), "orders".into()],
-                    ..Default::default()
-                },
-                denied: &[],
-                topics: vec![(Some("other".into()), false, WireUuid::ZERO)],
-                invalid: vec![invalid(Some("orders"), WireUuid::ZERO, DUPLICATE_NAME)],
-            },
-            Case {
-                label: "interleaved duplicates answer once each in first-row order",
-                request: v6(vec![
-                    state(Some("b"), WireUuid::ZERO),
-                    state(None, OTHER_ID),
-                    state(Some("a"), WireUuid::ZERO),
-                    state(None, ORDERS_ID),
-                    state(Some("b"), WireUuid::ZERO),
-                    state(None, OTHER_ID),
-                    state(Some("a"), WireUuid::ZERO),
-                    state(Some("c"), WireUuid::ZERO),
-                    state(None, ORDERS_ID),
-                    state(Some("b"), WireUuid::ZERO),
-                ]),
-                denied: &[],
-                topics: vec![(Some("c".into()), false, WireUuid::ZERO)],
-                invalid: vec![
-                    invalid(Some("b"), WireUuid::ZERO, DUPLICATE_NAME),
-                    invalid(Some("a"), WireUuid::ZERO, DUPLICATE_NAME),
-                    invalid(None, OTHER_ID, DUPLICATE_ID),
-                    invalid(None, ORDERS_ID, DUPLICATE_ID),
-                ],
-            },
-            Case {
-                label: "a duplicate id answers once with no name",
-                request: v6(vec![state(None, ORDERS_ID), state(None, ORDERS_ID)]),
-                denied: &[],
-                topics: Vec::new(),
-                invalid: vec![invalid(None, ORDERS_ID, DUPLICATE_ID)],
-            },
-            Case {
-                label: "a name whose id another row carries",
-                request: v6(vec![
-                    state(None, ORDERS_ID),
-                    state(Some("orders"), WireUuid::ZERO),
-                ]),
-                denied: &[],
-                topics: Vec::new(),
-                invalid: vec![invalid(Some("orders"), ORDERS_ID, NAME_OF_SUPPLIED_ID)],
-            },
-            Case {
-                label: "a name whose id two rows carry",
-                request: v6(vec![
-                    state(None, ORDERS_ID),
-                    state(Some("orders"), WireUuid::ZERO),
-                    state(None, ORDERS_ID),
-                ]),
-                denied: &[],
-                topics: Vec::new(),
-                invalid: vec![
-                    invalid(None, ORDERS_ID, DUPLICATE_ID),
-                    invalid(Some("orders"), ORDERS_ID, NAME_OF_SUPPLIED_ID),
-                ],
-            },
-            Case {
-                label: "a denied name whose id another row carries keeps both rows",
-                request: v6(vec![
-                    state(None, ORDERS_ID),
-                    state(Some("orders"), WireUuid::ZERO),
-                ]),
-                denied: &["orders"],
-                topics: vec![
-                    (Some("orders".into()), true, ORDERS_ID),
-                    (Some("orders".into()), false, WireUuid::ZERO),
-                ],
-                invalid: Vec::new(),
-            },
-        ];
-
-        let image = image();
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for case in cases {
-            let mut validated = resolve_topic_names(&case.request, &image);
-            let allowed: HashSet<String> = ["orders", "other", "a", "b", "c"]
-                .into_iter()
-                .filter(|name| !case.denied.contains(name))
-                .map(str::to_owned)
-                .collect();
-            let access = TopicAccess::Topics {
-                describable: allowed.clone(),
-                deletable: allowed,
-            };
-            validated.reject_names_of_supplied_ids(&image, &access);
-            actual.push((case.label, validated.topics, validated.invalid));
-            expected.push((case.label, case.topics, case.invalid));
-        }
-        assert!(actual == expected);
+    #[derive(Default)]
+    struct DeleteTopicValidationScenario {
+        request: Option<DeleteTopicsRequest>,
+        image: Option<MetadataImage>,
+        denied: HashSet<String>,
+        validated: Option<ValidatedTopics>,
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/delete_topics/request.feature",
-        name = "tests: rows follow kafkas delete topics validation"
+    #[rstest::fixture]
+    fn delete_topic_validation() -> DeleteTopicValidationScenario {
+        let request = None;
+        DeleteTopicValidationScenario {
+            request,
+            ..Default::default()
+        }
+    }
+    fn requested_delete_uuid(text: &str) -> WireUuid {
+        match text {
+            "zero" => WireUuid::ZERO,
+            "orders" => ORDERS_ID,
+            "other" => OTHER_ID,
+            _ => panic!("unknown delete topic UUID: {text}"),
+        }
+    }
+    fn requested_delete_name(text: &str) -> Option<&str> {
+        match text {
+            "null" => None,
+            "empty" => Some(""),
+            _ => Some(text),
+        }
+    }
+    #[rstest_bdd_macros::given("DeleteTopics uses {format} rows {rows} and denies names {denied}")]
+    fn delete_topic_validation_input(
+        delete_topic_validation: &mut DeleteTopicValidationScenario,
+        format: String,
+        rows: String,
+        denied: String,
+    ) {
+        delete_topic_validation.image = Some(image());
+        delete_topic_validation.denied = if denied == "none" {
+            HashSet::new()
+        } else {
+            denied.split(',').map(str::to_owned).collect()
+        };
+        delete_topic_validation.request = Some(match format.as_str() {
+            "legacy" => DeleteTopicsRequest {
+                topic_names: rows.split(',').map(str::to_owned).collect(),
+                ..Default::default()
+            },
+            "UUID" => v6(rows
+                .split(';')
+                .map(|row| {
+                    let (name, id) = row.split_once('/').unwrap();
+                    state(requested_delete_name(name), requested_delete_uuid(id))
+                })
+                .collect()),
+            _ => panic!("unknown deletion request format: {format}"),
+        });
+    }
+    #[rstest_bdd_macros::when(
+        "deletion resolves topic identities and rejects names also supplied by authorized UUID"
     )]
-    fn rows_follow_kafkas_delete_topics_validation() {}
+    fn validate_delete_topic_rows(delete_topic_validation: &mut DeleteTopicValidationScenario) {
+        let image = delete_topic_validation.image.as_ref().unwrap();
+        let mut validated =
+            resolve_topic_names(delete_topic_validation.request.as_ref().unwrap(), image);
+        let allowed: HashSet<String> = ["orders", "other", "a", "b", "c"]
+            .into_iter()
+            .filter(|name| !delete_topic_validation.denied.contains(*name))
+            .map(str::to_owned)
+            .collect();
+        let access = TopicAccess::Topics {
+            describable: allowed.clone(),
+            deletable: allowed,
+        };
+        validated.reject_names_of_supplied_ids(image, &access);
+        delete_topic_validation.validated = Some(validated);
+    }
+    #[rstest_bdd_macros::then("the ordered deletable topic identities are {topics}")]
+    fn check_valid_delete_topic_rows(
+        delete_topic_validation: &DeleteTopicValidationScenario,
+        topics: String,
+    ) {
+        let expected: Vec<TopicNameRequest> = if topics == "none" {
+            Vec::new()
+        } else {
+            topics
+                .split(';')
+                .map(|row| {
+                    let columns: Vec<_> = row.split('/').collect();
+                    let [name, mode, id] = columns.as_slice() else {
+                        panic!("name lookup mode UUID required")
+                    };
+                    (
+                        requested_delete_name(name).map(str::to_owned),
+                        match *mode {
+                            "id" => true,
+                            "name" => false,
+                            _ => panic!("unknown topic lookup mode"),
+                        },
+                        requested_delete_uuid(id),
+                    )
+                })
+                .collect()
+        };
+        assert!(delete_topic_validation.validated.as_ref().unwrap().topics == expected);
+    }
+    #[rstest_bdd_macros::then("the ordered invalid deletion rows are {rows}")]
+    fn check_invalid_delete_topic_rows(
+        delete_topic_validation: &DeleteTopicValidationScenario,
+        rows: String,
+    ) {
+        let expected: Vec<_> = if rows == "none" {
+            Vec::new()
+        } else {
+            rows.split(';')
+                .map(|row| {
+                    let columns: Vec<_> = row.split('/').collect();
+                    let [name, id, reason] = columns.as_slice() else {
+                        panic!("name UUID refusal required")
+                    };
+                    let message = match *reason {
+                        "no-name-or-id" => NO_NAME_OR_ID,
+                        "name-and-id" => NAME_AND_ID,
+                        "duplicate-name" => DUPLICATE_NAME,
+                        "duplicate-id" => DUPLICATE_ID,
+                        "name-of-id" => NAME_OF_SUPPLIED_ID,
+                        _ => panic!("unknown delete topic refusal"),
+                    };
+                    invalid(
+                        requested_delete_name(name),
+                        requested_delete_uuid(id),
+                        message,
+                    )
+                })
+                .collect()
+        };
+        assert!(delete_topic_validation.validated.as_ref().unwrap().invalid == expected);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_delete_topic_validation",fixtures=[delete_topic_validation:DeleteTopicValidationScenario]);
 
     /// A request of many distinct names and ids, each sent twice, answers one
     /// `INVALID_REQUEST` row per name and per id, in first-row order, and

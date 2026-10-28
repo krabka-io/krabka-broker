@@ -415,5 +415,6 @@ inject_repo(crate, "aws-lc")
         "krabka-sdk-conformance": "crates/sdk-conformance",
         "krabka-traceql": "crates/traceql",
         "krabka-traces": "crates/traces",
+        "rstest-bdd-macros": "crates/rstest-bdd-macros",
     }.items()
 ]

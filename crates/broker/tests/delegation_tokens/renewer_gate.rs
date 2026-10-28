@@ -1,141 +1,43 @@
-//! The owner-or-renewer gate on Renew and Expire, over the wire.
-//!
-//! Kafka trunk's `DelegationTokenControlManager.allowedToRenew` lets only the
-//! token's owner or a listed renewer renew or expire it, and answers
-//! `DELEGATION_TOKEN_OWNER_MISMATCH` (63) to anyone else, super users
-//! included. A super user that mints a token for another owner and
-//! must manage it afterwards lists itself as a renewer.
-
-use {
-    crate::{
-        DELEGATION_TOKEN_OWNER_MISMATCH,
-        cluster::{start_admin_alice, wait_for_token, wait_for_token_gone},
-        rpc::{
-            send_create_delegation_token, send_expire_delegation_token, send_renew_delegation_token,
-        },
-        wire::admin_plain,
-    },
-    assert2::{assert, check},
-    krabka_protocol::owned::{
-        create_delegation_token_request::{CreatableRenewers, CreateDelegationTokenRequest},
-        expire_delegation_token_request::ExpireDelegationTokenRequest,
-        renew_delegation_token_request::RenewDelegationTokenRequest,
-    },
-};
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "delegation tokens renewer gate: super user renews and expires only as a listed renewer"
-)]
-async fn bdd_verify_super_user_renews_and_expires_only_as_a_listed_renewer() {
-    let (handle, _dir, addr) = start_admin_alice().await;
-
-    let result: Result<(), String> = async {
-        let mut admin = admin_plain(addr).await?;
-
-        let mut hmacs = Vec::new();
-        for (correlation_id, renewers) in [
-            (100, vec![]),
-            (101, vec![CreatableRenewers {
-                principal_type: "User".to_owned(),
-                principal_name: "admin".to_owned(),
-                ..Default::default()
-            }]),
-        ] {
-            let create_resp = send_create_delegation_token(
-                &mut admin,
-                correlation_id,
-                &CreateDelegationTokenRequest {
-                    owner_principal_type: Some("User".to_owned()),
-                    owner_principal_name: Some("alice".to_owned()),
-                    max_lifetime_ms: -1,
-                    renewers,
-                    ..Default::default()
-                },
-            )
-            .await
-            .map_err(|e| format!("CreateDelegationToken(admin for alice): {e}"))?;
-            if create_resp.error_code != 0 {
-                return Err(format!(
-                    "Create for another owner must succeed for a super user; got code={}",
-                    create_resp.error_code,
-                ));
-            }
-            let token = wait_for_token(&handle, &create_resp.token_id).await;
-            assert!(token.owner.name == "alice");
-            hmacs.push((
-                create_resp.token_id.clone(),
-                create_resp.hmac.clone(),
-                create_resp,
-            ));
-        }
-        let (unlisted_id, unlisted_hmac, unlisted) = hmacs.remove(0);
-        let (listed_id, listed_hmac, listed) = hmacs.remove(0);
-
-        // Not a renewer: both refused with 63, and the token is untouched.
-        let renew_resp =
-            send_renew_delegation_token(&mut admin, 200, &RenewDelegationTokenRequest {
-                hmac: unlisted_hmac.clone(),
-                renew_period_ms: -1,
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| format!("RenewDelegationToken(admin, not a renewer): {e}"))?;
-        check!(renew_resp.error_code == DELEGATION_TOKEN_OWNER_MISMATCH);
-        let expire_resp =
-            send_expire_delegation_token(&mut admin, 201, &ExpireDelegationTokenRequest {
-                hmac: unlisted_hmac,
-                expiry_time_period_ms: -1,
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| format!("ExpireDelegationToken(admin, not a renewer): {e}"))?;
-        check!(expire_resp.error_code == DELEGATION_TOKEN_OWNER_MISMATCH);
-        let untouched = wait_for_token(&handle, &unlisted_id).await;
-        check!(untouched.expiry_timestamp_ms == unlisted.expiry_timestamp_ms);
-
-        // A listed renewer: Renew succeeds within the max timestamp, and
-        // Expire with a negative period deletes the token.
-        let renew_resp =
-            send_renew_delegation_token(&mut admin, 300, &RenewDelegationTokenRequest {
-                hmac: listed_hmac.clone(),
-                renew_period_ms: -1,
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| format!("RenewDelegationToken(admin, renewer): {e}"))?;
-        check!(renew_resp.error_code == 0);
-        check!(renew_resp.expiry_timestamp_ms >= listed.expiry_timestamp_ms);
-        check!(renew_resp.expiry_timestamp_ms <= listed.max_timestamp_ms);
-        let expire_resp =
-            send_expire_delegation_token(&mut admin, 301, &ExpireDelegationTokenRequest {
-                hmac: listed_hmac,
-                expiry_time_period_ms: -1,
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| format!("ExpireDelegationToken(admin, renewer): {e}"))?;
-        check!(expire_resp.error_code == 0);
-
-        drop(admin);
-        wait_for_token_gone(&handle, &listed_id).await;
-        Ok(())
-    }
+//! Delegation-token behavior is exercised through actual typed protocol steps.
+use crate::cluster::{TokenWorkflow, tokens, wait_for_token};
+#[rstest_bdd_macros::then("renewal is refused with owner mismatch error 63")]
+fn unlisted_token_renewal(tokens: &TokenWorkflow) {
+    assert2::check!(
+        tokens
+            .renewed
+            .as_ref()
+            .expect("renewal attempted")
+            .error_code
+            == crate::DELEGATION_TOKEN_OWNER_MISMATCH
+    );
+}
+#[rstest_bdd_macros::then("expiry is refused with owner mismatch error 63")]
+fn unlisted_token_expiry(tokens: &TokenWorkflow) {
+    assert2::check!(
+        tokens
+            .expired
+            .as_ref()
+            .expect("expiry attempted")
+            .error_code
+            == crate::DELEGATION_TOKEN_OWNER_MISMATCH
+    );
+}
+#[rstest_bdd_macros::then("token {alias} retains its original expiry timestamp")]
+async fn unauthorized_token_unchanged(tokens: &TokenWorkflow, alias: String) {
+    let original = tokens.tokens.get(&alias).expect("named token minted");
+    let token = wait_for_token(
+        tokens.broker.as_ref().expect("delegation broker started"),
+        &original.token_id,
+    )
     .await;
-
-    handle.shutdown().await;
-    if let Err(msg) = result {
-        panic!("renewer gate test failed: {msg}");
-    }
+    assert2::check!(token.expiry_timestamp_ms == original.expiry_timestamp_ms);
 }
 
-/// Super user `admin` mints two tokens owned by `alice`: one without
-/// renewers and one that lists `admin`. On the first, Renew and Expire from
-/// `admin` answer 63 and change nothing; on the second, both succeed.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/delegation_tokens/renewer_gate.feature",
     name = "super user renews and expires only as a listed renewer"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn super_user_renews_and_expires_only_as_a_listed_renewer() {}
+async fn super_user_renews_and_expires_only_as_a_listed_renewer(tokens: TokenWorkflow) {
+    tokens.shutdown().await;
+}

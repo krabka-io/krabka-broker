@@ -58,61 +58,92 @@ fn kafka_errors(run: &CliRun) -> BTreeSet<String> {
         .collect()
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance sasl acl security disabled: acl list is refused as apache kafka refuses it with no authorizer"
-)]
-async fn bdd_verify_acl_list_is_refused_as_apache_kafka_refuses_it_with_no_authorizer() {
-    // No `KAFKA_AUTHORIZER_CLASS_NAME`: this oracle is the unsecured broker
-    // the case is about, which is also the image's own default.
-    let comparison = OracleComparison::start("acls-disabled").await;
-    let [oracle_side, krabka_side] = comparison.sides();
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+struct DisabledAuthorization {
+    comparison: Option<OracleComparison>,
+    listings: Vec<(String, CliRun)>,
+}
+#[fixture]
+fn disabled() -> DisabledAuthorization {
+    // Start this scenario with fresh inputs and observations.
 
-    let mut refusals: Vec<BTreeSet<String>> = Vec::new();
+    DisabledAuthorization {
+        comparison: None,
+        listings: Vec::new(),
+    }
+}
+#[given("krabka and an Apache Kafka reference both have no configured authorizer")]
+async fn unsecured(disabled: &mut DisabledAuthorization) {
+    disabled.comparison = Some(OracleComparison::start("acls-disabled").await);
+}
+#[when("the operator lists ACLs on both unsecured brokers")]
+fn list(disabled: &mut DisabledAuthorization) {
+    let comparison = disabled
+        .comparison
+        .as_ref()
+        .expect("reference brokers started");
+    let [oracle_side, krabka_side] = comparison.sides();
     for side in [&oracle_side, &krabka_side] {
         let listed = side.run("kafka-acls", &[
             "--bootstrap-server",
             side.bootstrap(),
             "--list",
         ]);
+        disabled.listings.push((side.label().to_owned(), listed));
+    }
+}
+#[then("both commands reject ACL administration without printing any bindings")]
+fn refused(disabled: &DisabledAuthorization) {
+    assert!(disabled.listings.len() == 2);
+    for (label, listed) in &disabled.listings {
         assert!(
             !listed.succeeded(),
-            "{}: --list must be refused when no authorizer is configured:\n{}",
-            side.label(),
-            listed.text(),
+            "{label}: --list must be refused when no authorizer is configured:\n{}",
+            listed.text()
         );
         assert!(
             parse_acls(&listed.stdout).is_empty(),
-            "{}: a refused --list must print no bindings:\n{}",
-            side.label(),
-            listed.stdout,
+            "{label}: a refused --list must print no bindings:\n{}",
+            listed.stdout
         );
-        let errors = kafka_errors(&listed);
+    }
+}
+#[then("the security disabled exception class and message match Apache Kafka")]
+fn matching_errors(disabled: &DisabledAuthorization) {
+    assert!(disabled.listings.len() == 2);
+    let mut refusals = Vec::new();
+    for (label, listed) in &disabled.listings {
+        let errors = kafka_errors(listed);
         assert!(
             errors
                 .iter()
                 .any(|error| error == &format!("{ERRORS_PACKAGE}{SECURITY_DISABLED}")),
-            "{}: the refusal must name {SECURITY_DISABLED}, got {errors:?}\n{}",
-            side.label(),
-            listed.text(),
+            "{label}: the refusal must name {SECURITY_DISABLED}, got {errors:?}\n{}",
+            listed.text()
         );
         refusals.push(errors);
     }
     assert!(
         refusals[0] == refusals[1],
-        "krabka and Apache Kafka refuse --list differently: {refusals:?}",
+        "krabka and Apache Kafka refuse --list differently: {refusals:?}"
     );
-
-    comparison.broker.shutdown().await;
 }
-
-/// `kafka-acls --list` reports the same refusal against krabka with no
-/// authorizer as against Apache Kafka with none.
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_security_disabled.feature",
-    name = "acl list is refused as apache kafka refuses it with no authorizer"
+    name = "An ACL listing distinguishes disabled authorization from an empty policy"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acl_list_is_refused_as_apache_kafka_refuses_it_with_no_authorizer() {}
+async fn acl_list_is_refused_as_apache_kafka_refuses_it_with_no_authorizer(
+    disabled: DisabledAuthorization,
+) {
+    disabled
+        .comparison
+        .expect("reference brokers started")
+        .broker
+        .shutdown()
+        .await;
+}

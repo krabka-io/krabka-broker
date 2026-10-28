@@ -196,66 +196,6 @@ fn accepted(resource: String) -> AlterConfigsResourceResponse {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("listener tls reconfig: a renewed keystore is served without restart")]
-async fn bdd_verify_a_renewed_keystore_is_served_without_restart() {
-    let broker = TlsBroker::start().await;
-    assert!(broker.serves(&broker.served).await);
-
-    let renewed = Identity::new("localhost", &["localhost"]);
-    let location = broker.keystore("dynamic.pem", &renewed);
-    let set = broker
-        .alter(
-            vec![(KEYSTORE_LOCATION, ConfigOperation::Set, Some(&location))],
-            ConfigMutation::Apply,
-        )
-        .await;
-    assert!(set == accepted(broker.resource()));
-    assert!(broker.eventually_serves(&renewed).await);
-    assert!(!broker.serves(&broker.served).await);
-
-    // Kafka reloads a keystore whose path did not change when the key is
-    // altered again; the new contents are served.
-    let rotated = Identity::new("localhost", &["localhost"]);
-    let later = SystemTime::now() + Duration::from_secs(5);
-    rotated.write_keystore(Path::new(&location));
-    File::options()
-        .write(true)
-        .open(&location)
-        .unwrap()
-        .set_modified(later)
-        .unwrap();
-    let again = broker
-        .alter(
-            vec![(KEYSTORE_LOCATION, ConfigOperation::Set, Some(&location))],
-            ConfigMutation::Apply,
-        )
-        .await;
-    assert!(again == accepted(broker.resource()));
-    assert!(broker.eventually_serves(&rotated).await);
-
-    let deleted = broker
-        .alter(
-            vec![(KEYSTORE_LOCATION, ConfigOperation::Delete, None)],
-            ConfigMutation::Apply,
-        )
-        .await;
-    assert!(deleted == accepted(broker.resource()));
-    assert!(broker.eventually_serves(&broker.served).await);
-}
-
-/// A renewed keystore with the same DN and SANs is served to the next
-/// handshake; the same path with new contents is read again on the next
-/// alter of it; deleting the key returns the listener to its static
-/// certificate.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/listener_tls_reconfig.feature",
-    name = "a renewed keystore is served without restart"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_renewed_keystore_is_served_without_restart() {}
-
 /// The refusal of a listener SSL change whose `SslFactory` failure is
 /// `cause`, as Kafka's `ConfigAdminManager` answers it.
 fn refusal(resource: String, cause: &str) -> AlterConfigsResourceResponse {
@@ -270,94 +210,244 @@ fn refusal(resource: String, cause: &str) -> AlterConfigsResourceResponse {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "listener tls reconfig: an incompatible keystore is refused and validate only applies nothing"
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::collections::BTreeMap,
+};
+struct KeystoreUpdate {
+    broker: Option<TlsBroker>,
+    identities: BTreeMap<String, Identity>,
+    paths: BTreeMap<String, String>,
+    response: Option<AlterConfigsResourceResponse>,
+    refusals: Vec<AlterConfigsResourceResponse>,
+}
+#[fixture]
+fn keystores() -> KeystoreUpdate {
+    // Start this scenario with fresh inputs and observations.
+
+    KeystoreUpdate {
+        broker: None,
+        identities: BTreeMap::new(),
+        paths: BTreeMap::new(),
+        response: None,
+        refusals: Vec::new(),
+    }
+}
+#[given(
+    "a running SSL listener serves CN localhost with SAN localhost from its static certificate"
 )]
-async fn bdd_verify_an_incompatible_keystore_is_refused_and_validate_only_applies_nothing() {
+async fn static_identity(keystores: &mut KeystoreUpdate) {
     let broker = TlsBroker::start().await;
-    let elsewhere = broker.keystore("elsewhere.pem", &Identity::new("elsewhere", &["localhost"]));
-    let narrower = broker.keystore(
-        "narrower.pem",
-        &Identity::new("localhost", &["other.example"]),
-    );
-    let missing = broker
+    assert!(broker.serves(&broker.served).await);
+    keystores.broker = Some(broker);
+}
+#[given("candidate PEM keystores have these certificate identities")]
+fn candidates(keystores: &mut KeystoreUpdate, datatable: Vec<Vec<String>>) {
+    let broker = keystores
+        .broker
+        .as_ref()
+        .expect("static TLS broker running");
+    for row in datatable.into_iter().skip(1) {
+        let [name, common_name, san]: [String; 3] = row.try_into().expect("file CN and SAN");
+        let identity = Identity::new(&common_name, &[&san]);
+        let path = broker.keystore(&name, &identity);
+        keystores.paths.insert(name.clone(), path);
+        keystores.identities.insert(name, identity);
+    }
+}
+#[given("candidate keystore file {name} does not exist")]
+fn absent(keystores: &mut KeystoreUpdate, name: String) {
+    let path = keystores
+        .broker
+        .as_ref()
+        .expect("static TLS broker running")
         .dir
         .path()
-        .join("missing.pem")
+        .join(&name)
         .to_string_lossy()
         .into_owned();
-    let config_exception = "org.apache.kafka.common.config.ConfigException";
-    let invalid_configuration = "org.apache.kafka.common.errors.InvalidConfigurationException";
-    let cases = [
-        (
-            vec![(KEYSTORE_LOCATION, elsewhere.as_str())],
-            format!(
-                "{config_exception}: Keystore DistinguishedName does not match:  \
-                 existing={{alias=kafka, DN=CN=localhost}}, new={{alias=kafka, DN=CN=elsewhere}}"
-            ),
-        ),
-        (
-            vec![(KEYSTORE_LOCATION, narrower.as_str())],
-            format!(
-                "{config_exception}: Keystore SubjectAltNames do not match:  \
-                 existing={{alias=kafka, SAN=[[2, localhost]]}}, new={{alias=kafka, SAN=[[2, \
-                 other.example]]}}"
-            ),
-        ),
-        (
-            vec![
-                ("listener.name.ssl.ssl.keystore.type", "JKS"),
-                (KEYSTORE_LOCATION, elsewhere.as_str()),
-            ],
-            format!(
-                "{invalid_configuration}: krabka loads PEM key stores only, but the key store \
-                 type is JKS."
-            ),
-        ),
-        (
-            vec![(KEYSTORE_LOCATION, missing.as_str())],
-            format!(
-                "{invalid_configuration}: Failed to load PEM SSL keystore {missing}: No such file \
-                 or directory (os error 2)"
-            ),
-        ),
-    ];
-    for mutation in [ConfigMutation::Validate, ConfigMutation::Apply] {
-        for (keys, cause) in &cases {
-            let row = broker
+    keystores.paths.insert(name, path);
+}
+impl KeystoreUpdate {
+    async fn change_listener_keystore(&mut self, name: &str, mutation: ConfigMutation) {
+        let broker = self.broker.as_ref().expect("static TLS broker running");
+        let path = self.paths.get(name).expect("candidate path configured");
+        self.response = Some(
+            broker
                 .alter(
-                    keys.iter()
-                        .map(|(key, value)| (*key, ConfigOperation::Set, Some(*value)))
-                        .collect(),
+                    vec![(KEYSTORE_LOCATION, ConfigOperation::Set, Some(path))],
                     mutation,
                 )
-                .await;
-            assert!(row == refusal(broker.resource(), cause), "{keys:?}");
+                .await,
+        );
+    }
+}
+#[when("the operator applies PEM keystore {name} to the live SSL listener")]
+async fn apply(keystores: &mut KeystoreUpdate, name: String) {
+    keystores
+        .change_listener_keystore(&name, ConfigMutation::Apply)
+        .await;
+}
+#[when("the operator validates PEM keystore {name} without applying it")]
+async fn validate(keystores: &mut KeystoreUpdate, name: String) {
+    keystores
+        .change_listener_keystore(&name, ConfigMutation::Validate)
+        .await;
+}
+#[then("the complete dynamic configuration response accepts the broker resource")]
+fn accepted_update(keystores: &KeystoreUpdate) {
+    let broker = keystores
+        .broker
+        .as_ref()
+        .expect("static TLS broker running");
+    assert!(
+        *keystores
+            .response
+            .as_ref()
+            .expect("configuration update completed")
+            == accepted(broker.resource())
+    );
+}
+#[then("new handshakes serve keystore {name}")]
+async fn served(keystores: &KeystoreUpdate, name: String) {
+    assert!(
+        keystores
+            .broker
+            .as_ref()
+            .expect("TLS broker running")
+            .eventually_serves(
+                keystores
+                    .identities
+                    .get(&name)
+                    .expect("candidate identity configured")
+            )
+            .await
+    );
+}
+#[then("new handshakes no longer accept the original static certificate")]
+async fn static_replaced(keystores: &KeystoreUpdate) {
+    let broker = keystores.broker.as_ref().expect("TLS broker running");
+    assert!(!broker.serves(&broker.served).await);
+}
+#[when(
+    "PEM keystore {name} is rewritten with a fresh CN localhost SAN localhost identity and a modification time five seconds later"
+)]
+fn rewrite(keystores: &mut KeystoreUpdate, name: String) {
+    let identity = Identity::new("localhost", &["localhost"]);
+    let path = keystores.paths.get(&name).expect("existing keystore path");
+    identity.write_keystore(Path::new(path));
+    File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(SystemTime::now() + Duration::from_secs(5))
+        .unwrap();
+    keystores.identities.insert(name, identity);
+}
+#[when("the operator deletes the dynamic SSL keystore location")]
+async fn delete(keystores: &mut KeystoreUpdate) {
+    let broker = keystores.broker.as_ref().expect("TLS broker running");
+    keystores.response = Some(
+        broker
+            .alter(
+                vec![(KEYSTORE_LOCATION, ConfigOperation::Delete, None)],
+                ConfigMutation::Apply,
+            )
+            .await,
+    );
+}
+#[then("new handshakes again serve the original static certificate")]
+async fn restored(keystores: &KeystoreUpdate) {
+    let broker = keystores.broker.as_ref().expect("TLS broker running");
+    assert!(broker.eventually_serves(&broker.served).await);
+}
+#[when("the operator validates every update then applies every update in this order")]
+async fn invalid_updates(keystores: &mut KeystoreUpdate, datatable: Vec<Vec<String>>) {
+    let updates: Vec<[String; 2]> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| row.try_into().expect("keystore file and optional type"))
+        .collect();
+    let broker = keystores.broker.as_ref().expect("TLS broker running");
+    for mutation in [ConfigMutation::Validate, ConfigMutation::Apply] {
+        for [name, store_type] in &updates {
+            let path = keystores
+                .paths
+                .get(name)
+                .expect("candidate path configured");
+            let mut settings = Vec::new();
+            if store_type != "inherit" {
+                settings.push((
+                    "listener.name.ssl.ssl.keystore.type",
+                    ConfigOperation::Set,
+                    Some(store_type.as_str()),
+                ));
+            }
+            settings.push((KEYSTORE_LOCATION, ConfigOperation::Set, Some(path.as_str())));
+            keystores
+                .refusals
+                .push(broker.alter(settings, mutation).await);
         }
     }
-
-    let renewed = Identity::new("localhost", &["localhost"]);
-    let location = broker.keystore("renewed.pem", &renewed);
-    let validated = broker
-        .alter(
-            vec![(KEYSTORE_LOCATION, ConfigOperation::Set, Some(&location))],
-            ConfigMutation::Validate,
-        )
-        .await;
-    assert!(validated == accepted(broker.resource()));
-    assert!(broker.serves(&broker.served).await);
-    assert!(!broker.serves(&renewed).await);
 }
-
-/// A keystore that changes the DN, drops a SAN, is not PEM or does not load
-/// is refused with `INVALID_REQUEST`, `validate_only` or not, and the
-/// listener keeps serving its certificate. A valid one under `validate_only`
-/// is accepted and not applied.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[then("both validation and application return these complete invalid request causes in order")]
+fn refused(keystores: &KeystoreUpdate, datatable: Vec<Vec<String>>) {
+    let causes: Vec<String> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let mut cause = row.into_iter().next().expect("expected refusal cause");
+            for (name, path) in &keystores.paths {
+                cause = cause.replace(&format!("{{{name}}}"), path);
+            }
+            cause
+        })
+        .collect();
+    assert!(keystores.refusals.len() == causes.len() * 2);
+    let broker = keystores.broker.as_ref().expect("TLS broker running");
+    for (response, cause) in keystores.refusals.iter().zip(causes.iter().cycle()) {
+        assert!(*response == refusal(broker.resource(), cause));
+    }
+}
+#[then("validation keeps serving the static identity and does not serve candidate {name}")]
+async fn validation_unchanged(keystores: &KeystoreUpdate, name: String) {
+    let broker = keystores.broker.as_ref().expect("TLS broker running");
+    assert!(broker.serves(&broker.served).await);
+    assert!(
+        !broker
+            .serves(
+                keystores
+                    .identities
+                    .get(&name)
+                    .expect("candidate identity configured")
+            )
+            .await
+    );
+}
+async fn shutdown(keystores: KeystoreUpdate) {
+    keystores
+        .broker
+        .expect("TLS broker started")
+        .handle
+        .shutdown()
+        .await;
+}
+#[scenario(
     path = "tests/features/migrated/tests/listener_tls_reconfig.feature",
-    name = "an incompatible keystore is refused and validate only applies nothing"
+    name = "A live listener reloads renewed rewritten and deleted dynamic PEM keystores"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_incompatible_keystore_is_refused_and_validate_only_applies_nothing() {}
+async fn a_renewed_keystore_is_served_without_restart(keystores: KeystoreUpdate) {
+    shutdown(keystores).await;
+}
+#[scenario(
+    path = "tests/features/migrated/tests/listener_tls_reconfig.feature",
+    name = "Incompatible keystores are refused and valid validation leaves the listener unchanged"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_incompatible_keystore_is_refused_and_validate_only_applies_nothing(
+    keystores: KeystoreUpdate,
+) {
+    shutdown(keystores).await;
+}

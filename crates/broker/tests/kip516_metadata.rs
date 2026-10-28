@@ -11,6 +11,9 @@ use {
         topics::{creatable_topic, create_topic_request, metadata_topic},
     },
     assert2::assert,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    support::InProcess,
 };
 mod support;
 
@@ -47,71 +50,113 @@ async fn topic_rows(
         .topics
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("kip516 metadata: metadata unknown topic id returns unknown topic id")]
-async fn bdd_verify_metadata_unknown_topic_id_returns_unknown_topic_id() {
-    let p = support::start().await;
-    let bogus = WireUuid(uuid::Uuid::from_u128(0xfeed_face).into_bytes());
-
-    let rows = topic_rows(&p.client, &[TopicRef {
-        name: None,
-        topic_id: bogus,
-    }])
-    .await;
-
-    assert!(
-        rows == vec![MetadataResponseTopic {
-            error_code: UNKNOWN_TOPIC_ID,
-            name: None,
-            topic_id: bogus,
-            ..Default::default()
-        }]
-    );
+struct MetadataById {
+    broker: Option<InProcess>,
+    requested_id: WireUuid,
+    actual: Vec<MetadataResponseTopic>,
+    named_topic: Vec<MetadataResponseTopic>,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip516_metadata.feature",
-    name = "metadata unknown topic id returns unknown topic id"
-)]
-#[tokio::test]
-async fn metadata_unknown_topic_id_returns_unknown_topic_id() {}
+#[fixture]
+fn metadata() -> MetadataById {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip516 metadata: metadata name and id of different topics describes the id"
-)]
-async fn bdd_verify_metadata_name_and_id_of_different_topics_describes_the_id() {
-    let p = support::start().await;
-    for n in ["m_a", "m_b"] {
-        p.client
+    MetadataById {
+        broker: None,
+        requested_id: WireUuid::ZERO,
+        actual: Vec::new(),
+        named_topic: Vec::new(),
+    }
+}
+
+#[given("a broker with an unassigned nonzero metadata topic id")]
+async fn unassigned_id(metadata: &mut MetadataById) {
+    metadata.broker = Some(support::start().await);
+    metadata.requested_id = WireUuid(uuid::Uuid::from_u128(0xfeed_face).into_bytes());
+}
+
+#[given("topics m_a and m_b have distinct identities")]
+async fn distinct_topics(metadata: &mut MetadataById) {
+    let broker = support::start().await;
+    for name in ["m_a", "m_b"] {
+        broker
+            .client
             .send(create_topic_request(
-                creatable_topic().name((n).into()).call(),
+                creatable_topic().name(name.into()).call(),
             ))
             .await
             .expect("create topic");
     }
-    let by_name = topic_rows(&p.client, &[TopicRef {
+    metadata.named_topic = topic_rows(&broker.client, &[TopicRef {
         name: Some("m_b"),
         topic_id: WireUuid::ZERO,
     }])
     .await;
-    let id_b = by_name[0].topic_id;
-
-    // The row names "m_a" but carries m_b's id. Kafka uses the id.
-    let by_id = topic_rows(&p.client, &[TopicRef {
-        name: Some("m_a"),
-        topic_id: id_b,
-    }])
-    .await;
-
-    assert!(by_id == by_name);
+    metadata.requested_id = metadata.named_topic[0].topic_id;
+    metadata.broker = Some(broker);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip516_metadata.feature",
-    name = "metadata name and id of different topics describes the id"
+#[when("metadata is requested by the unassigned id alone")]
+async fn request_unknown_id(metadata: &mut MetadataById) {
+    let broker = metadata.broker.as_ref().expect("a broker was started");
+    metadata.actual = topic_rows(&broker.client, &[TopicRef {
+        name: None,
+        topic_id: metadata.requested_id,
+    }])
+    .await;
+}
+
+#[when("metadata names m_a but supplies the identity of m_b")]
+async fn request_conflicting_name(metadata: &mut MetadataById) {
+    let broker = metadata.broker.as_ref().expect("a broker was started");
+    metadata.actual = topic_rows(&broker.client, &[TopicRef {
+        name: Some("m_a"),
+        topic_id: metadata.requested_id,
+    }])
+    .await;
+}
+
+#[then("metadata returns UNKNOWN_TOPIC_ID with the requested identity and no name")]
+fn unknown_topic(metadata: &MetadataById) {
+    assert!(
+        metadata.actual
+            == vec![MetadataResponseTopic {
+                error_code: UNKNOWN_TOPIC_ID,
+                name: None,
+                topic_id: metadata.requested_id,
+                ..Default::default()
+            }]
+    );
+}
+
+#[then("the metadata describes m_b exactly as a request by its name does")]
+fn identity_wins(metadata: &MetadataById) {
+    assert!(metadata.actual == metadata.named_topic);
+}
+
+async fn stop_metadata_broker(metadata: MetadataById) {
+    metadata
+        .broker
+        .expect("a broker was started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip516_topic_identity.feature",
+    name = "An unknown id is echoed in a nameless metadata error"
 )]
 #[tokio::test]
-async fn metadata_name_and_id_of_different_topics_describes_the_id() {}
+async fn metadata_unknown_topic_id_returns_unknown_topic_id(metadata: MetadataById) {
+    stop_metadata_broker(metadata).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip516_topic_identity.feature",
+    name = "Topic identity takes precedence over a conflicting name"
+)]
+#[tokio::test]
+async fn metadata_name_and_id_of_different_topics_describes_the_id(metadata: MetadataById) {
+    stop_metadata_broker(metadata).await;
+}

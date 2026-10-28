@@ -25,13 +25,19 @@ use {
     },
     assert2::assert,
     krabka_broker::{Broker, BrokerConfig, BrokerHandle, api_catalog::UnstableApiVersions},
+    krabka_client_core::Client,
     krabka_client_producer::Producer,
     krabka_protocol::owned::{
         describe_transactions_request::DescribeTransactionsRequest,
         init_producer_id_request::{self, InitProducerIdRequest},
+        init_producer_id_response::InitProducerIdResponse,
         update_features_request::UpdateFeaturesRequest,
+        update_features_response::UpdateFeaturesResponse,
     },
-    std::time::{Duration, Instant},
+    std::{
+        mem,
+        time::{Duration, Instant},
+    },
     tempfile::TempDir,
     tokio::time,
 };
@@ -97,7 +103,6 @@ async fn initialized_producer(
 
 // Kafka error codes (see crates/broker/src/codes.rs).
 const NONE: i16 = 0;
-const TRANSACTIONAL_ID_AUTHORIZATION_FAILED: i16 = 53;
 
 #[derive(Clone, Copy)]
 enum TwoPhaseCommitSupport {
@@ -134,228 +139,254 @@ async fn client(bootstrap: &str) -> krabka_client_core::Client {
     connect_client(bootstrap, None).await
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("transactions 2pc: enable 2pc rejected when cluster disabled")]
-async fn bdd_verify_enable_2pc_rejected_when_cluster_disabled() {
-    let Booted {
-        broker,
-        bootstrap,
-        dir: _dir,
-    } = boot(TwoPhaseCommitSupport::Disabled).await;
-    let client = client(&bootstrap).await;
-
-    let resp = client
-        .send(two_phase_init().call())
-        .await
-        .expect("InitProducerId");
-
-    assert!(
-        resp.error_code == TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
-        "expected 53 (TRANSACTIONAL_ID_AUTHORIZATION_FAILED), got {}",
-        resp.error_code
-    );
-    broker.shutdown().await;
+#[derive(Default)]
+struct TwoPhaseScenario {
+    booted: Option<Booted>,
+    client: Option<Client>,
+    producer: Option<Producer>,
+    tid: String,
+    initialized: Option<InitProducerIdResponse>,
+    timeout_ms: Option<i32>,
+    finalized: rstest_bdd::Slot<Option<i16>>,
+    feature_update: Option<UpdateFeaturesResponse>,
 }
 
-/// The broker rejects `enable2Pc=true` against a cluster with 2PC disabled,
-/// with `TRANSACTIONAL_ID_AUTHORIZATION_FAILED`. It does so before any
-/// coordinator lookup, so the result does not depend on a bootstrapped
-/// `__transaction_state`, and a client cannot probe the cluster flag with an
-/// `UNSUPPORTED_*` code.
-#[cfg(test)]
+#[rstest::fixture]
+fn two_phase_scenario() -> TwoPhaseScenario {
+    // Every feature flag and transaction belongs to a fresh coordinator.
+    TwoPhaseScenario::default()
+}
+
+impl TwoPhaseScenario {
+    fn booted(&self) -> &Booted { self.booted.as_ref().expect("two-phase broker") }
+
+    fn client(&self) -> &Client { self.client.as_ref().expect("two-phase client") }
+
+    async fn shutdown(&mut self) {
+        if let Some(producer) = self.producer.take() {
+            let _ = producer.close().await;
+        }
+        let Self { booted, client, .. } = mem::take(self);
+        client.expect("two-phase client").close();
+        let Booted { broker, dir, .. } = booted.expect("two-phase broker");
+        broker.shutdown().await;
+        drop(dir);
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "transaction.two.phase.commit.enable is {enabled} and unstable API versions are enabled"
+)]
+async fn two_phase_support(two_phase_scenario: &mut TwoPhaseScenario, enabled: bool) {
+    let support = if enabled {
+        TwoPhaseCommitSupport::Enabled
+    } else {
+        TwoPhaseCommitSupport::Disabled
+    };
+    two_phase_scenario.booted = Some(boot(support).await);
+    two_phase_scenario.client = Some(client(&two_phase_scenario.booted().bootstrap).await);
+}
+
+#[rstest_bdd_macros::given(
+    "transactional producer {tid} is initialized without an ongoing transaction"
+)]
+async fn initialize_two_phase_producer(two_phase_scenario: &mut TwoPhaseScenario, tid: String) {
+    two_phase_scenario.tid = tid;
+    two_phase_scenario.producer = Some(
+        initialized_producer()
+            .broker(&two_phase_scenario.booted().broker)
+            .bootstrap(&two_phase_scenario.booted().bootstrap)
+            .transactional_id(&two_phase_scenario.tid)
+            .call()
+            .await,
+    );
+}
+
+#[rstest_bdd_macros::when("InitProducerId v6 enables 2PC for {tid} with keepPreparedTxn {keep}")]
+async fn request_two_phase_identity(
+    two_phase_scenario: &mut TwoPhaseScenario,
+    tid: String,
+    keep: bool,
+) {
+    two_phase_scenario.tid = tid;
+    two_phase_scenario.initialized = Some(
+        two_phase_scenario
+            .client()
+            .send(
+                two_phase_init()
+                    .transactional_id(&two_phase_scenario.tid)
+                    .recovery(if keep {
+                        PreparedTransactionRecovery::Keep
+                    } else {
+                        PreparedTransactionRecovery::Disabled
+                    })
+                    .call(),
+            )
+            .await
+            .expect("InitProducerId"),
+    );
+}
+
+#[rstest_bdd_macros::then("InitProducerId returns error code {code}")]
+fn two_phase_init_code(two_phase_scenario: &TwoPhaseScenario, code: i16) {
+    assert!(
+        two_phase_scenario
+            .initialized
+            .as_ref()
+            .expect("identity requested")
+            .error_code
+            == code
+    );
+}
+
+#[rstest_bdd_macros::then("the response reports no ongoing producer id or epoch, both -1")]
+fn no_prepared_two_phase_transaction(two_phase_scenario: &TwoPhaseScenario) {
+    let response = two_phase_scenario
+        .initialized
+        .as_ref()
+        .expect("identity requested");
+    assert!(response.ongoing_txn_producer_id == -1);
+    assert!(response.ongoing_txn_producer_epoch == -1);
+}
+
+#[rstest_bdd_macros::then("the assigned producer id is nonnegative")]
+fn valid_two_phase_identity(two_phase_scenario: &TwoPhaseScenario) {
+    assert!(
+        two_phase_scenario
+            .initialized
+            .as_ref()
+            .expect("identity requested")
+            .producer_id
+            >= 0
+    );
+}
+
+#[rstest_bdd_macros::when(
+    "DescribeTransactions reads the persisted timeout for that transactional id"
+)]
+async fn describe_two_phase_timeout(two_phase_scenario: &mut TwoPhaseScenario) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    two_phase_scenario.timeout_ms = Some(loop {
+        let response = two_phase_scenario
+            .client()
+            .send(DescribeTransactionsRequest {
+                transactional_ids: vec![two_phase_scenario.tid.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("DescribeTransactions");
+        let row = &response.transaction_states[0];
+        if row.error_code == NONE {
+            break row.transaction_timeout_ms;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "DescribeTransactions never returned the tid: {row:?}"
+        );
+        time::sleep(Duration::from_millis(100)).await;
+    });
+}
+
+#[rstest_bdd_macros::then("the persisted timeout is the no-timeout sentinel 2147483647")]
+fn infinite_two_phase_timeout(two_phase_scenario: &TwoPhaseScenario) {
+    assert!(two_phase_scenario.timeout_ms == Some(i32::MAX));
+}
+
+#[rstest_bdd_macros::when("ApiVersions reads the finalized transaction.version")]
+async fn describe_two_phase_feature(two_phase_scenario: &TwoPhaseScenario) {
+    let response = two_phase_scenario
+        .client()
+        .send(api_versions_request_for("krabka-test", "0.0.0"))
+        .await
+        .expect("ApiVersions");
+    two_phase_scenario.finalized.set(
+        response
+            .finalized_features
+            .iter()
+            .find(|feature| feature.name == "transaction.version")
+            .map(|feature| feature.max_version_level),
+    );
+}
+
+#[rstest_bdd_macros::then("the finalized transaction.version is 2")]
+fn two_phase_feature_version(two_phase_scenario: &TwoPhaseScenario) {
+    assert!(
+        two_phase_scenario
+            .finalized
+            .get()
+            .expect("ApiVersions read")
+            == Some(2)
+    );
+}
+
+#[rstest_bdd_macros::when("UpdateFeatures tries to upgrade transaction.version to 3")]
+async fn upgrade_two_phase_feature(two_phase_scenario: &mut TwoPhaseScenario) {
+    two_phase_scenario.feature_update = Some(
+        two_phase_scenario
+            .client()
+            .send(UpdateFeaturesRequest {
+                feature_updates: vec![feature_update("transaction.version", 3, 1)],
+                ..Default::default()
+            })
+            .await
+            .expect("UpdateFeatures"),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the full UpdateFeatures response is INVALID_UPDATE_VERSION 95 without feature rows and with message"
+)]
+fn rejected_two_phase_feature(two_phase_scenario: &TwoPhaseScenario, docstring: String) {
+    assert!(
+        two_phase_scenario.feature_update.as_ref()
+            == Some(&UpdateFeaturesResponse {
+                error_code: 95,
+                error_message: Some(docstring.trim().into()),
+                ..Default::default()
+            })
+    );
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/transactions_2pc.feature",
     name = "enable 2pc rejected when cluster disabled"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn enable_2pc_rejected_when_cluster_disabled() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transactions 2pc: keep prepared txn without ongoing transaction is a noop"
-)]
-async fn bdd_verify_keep_prepared_txn_without_ongoing_transaction_is_a_noop() {
-    let Booted {
-        broker,
-        bootstrap,
-        dir: _dir,
-    } = boot(TwoPhaseCommitSupport::Enabled).await;
-    let _ = {
-        let producer = initialized_producer()
-            .broker(&broker)
-            .bootstrap(&bootstrap)
-            .call()
-            .await;
-        let client = client(&bootstrap).await;
-
-        let resp = client
-            .send(
-                two_phase_init()
-                    .transactional_id("tid-keep")
-                    .recovery(PreparedTransactionRecovery::Keep)
-                    .call(),
-            )
-            .await
-            .expect("InitProducerId");
-
-        assert!(
-            resp.error_code == NONE,
-            "keepPreparedTxn without an ongoing transaction failed: {}",
-            resp.error_code
-        );
-        assert!(resp.ongoing_txn_producer_id == -1);
-        assert!(resp.ongoing_txn_producer_epoch == -1);
-        producer.close().await
-    };
-    broker.shutdown().await;
+async fn enable_2pc_rejected_when_cluster_disabled(mut two_phase_scenario: TwoPhaseScenario) {
+    two_phase_scenario.shutdown().await;
+    drop(two_phase_scenario);
 }
 
-/// `keepPreparedTxn=true` with no ongoing transaction succeeds and reports the
-/// no-ongoing sentinels. A recovery client can therefore treat completion as a
-/// no-op without a separate describe round trip.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/transactions_2pc.feature",
     name = "keep prepared txn without ongoing transaction is a noop"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("transactions 2pc: enable 2pc persists no timeout sentinel")]
-async fn bdd_verify_enable_2pc_persists_no_timeout_sentinel() {
-    let Booted {
-        broker,
-        bootstrap,
-        dir: _dir,
-    } = boot(TwoPhaseCommitSupport::Enabled).await;
-    let _ = {
-        let producer = initialized_producer()
-            .broker(&broker)
-            .bootstrap(&bootstrap)
-            .transactional_id("tid-2pc-ok")
-            .call()
-            .await;
-
-        // Re-init the SAME tid with enable2Pc → flips it to a no-timeout 2PC txn.
-        let client = client(&bootstrap).await;
-        let resp = client
-            .send(two_phase_init().transactional_id("tid-2pc-ok").call())
-            .await
-            .expect("InitProducerId(enable2Pc)");
-        assert!(
-            resp.error_code == NONE,
-            "enable2Pc init should succeed once the cluster enables 2PC, got {}",
-            resp.error_code
-        );
-        assert!(resp.producer_id >= 0);
-
-        // The persisted transaction timeout must be the 2PC no-timeout sentinel.
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let timeout_ms = loop {
-            let r = client
-                .send(DescribeTransactionsRequest {
-                    transactional_ids: vec!["tid-2pc-ok".into()],
-                    ..Default::default()
-                })
-                .await
-                .expect("DescribeTransactions");
-            let row = &r.transaction_states[0];
-            if row.error_code == NONE {
-                break row.transaction_timeout_ms;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "DescribeTransactions never returned the tid: {row:?}"
-            );
-            // intentional: transaction-coordinator state (persisted txn timeout) is
-            // read via a DescribeTransactions RPC and is not in the metadata image
-            // nor exposed as a metric — bounded RPC-response poll, no awaiter exists.
-            time::sleep(Duration::from_millis(100)).await;
-        };
-        assert!(
-            timeout_ms == i32::MAX,
-            "2PC transaction must persist the no-timeout sentinel i32::MAX, got {timeout_ms}"
-        );
-
-        producer.close().await
-    };
-    broker.shutdown().await;
+async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop(
+    mut two_phase_scenario: TwoPhaseScenario,
+) {
+    two_phase_scenario.shutdown().await;
+    drop(two_phase_scenario);
 }
 
-/// With 2PC enabled, an `enable2Pc` `InitProducerId` succeeds, and the broker
-/// persists the transaction with the no-timeout sentinel `i32::MAX`. That is
-/// how the coordinator marks a transaction that the timeout reaper must skip.
-///
-/// The test bootstraps the coordinator with a normal transactional producer,
-/// which creates `__transaction_state` and the tid's entry. It then
-/// re-initializes the same tid with `enable2Pc=true`, and reads the persisted
-/// timeout back through `DescribeTransactions`.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/transactions_2pc.feature",
     name = "enable 2pc persists no timeout sentinel"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn enable_2pc_persists_no_timeout_sentinel() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transactions 2pc: two phase commit needs no transaction version 3 and 3 is refused"
-)]
-async fn bdd_verify_two_phase_commit_needs_no_transaction_version_3_and_3_is_refused() {
-    use krabka_protocol::owned::update_features_response::UpdateFeaturesResponse;
-
-    let Booted {
-        broker,
-        bootstrap,
-        dir: _dir,
-    } = boot(TwoPhaseCommitSupport::Enabled).await;
-    let client = client(&bootstrap).await;
-
-    let api_versions = client
-        .send(api_versions_request_for("krabka-test", "0.0.0"))
-        .await
-        .expect("ApiVersions");
-    let finalized = api_versions
-        .finalized_features
-        .iter()
-        .find(|feature| feature.name == "transaction.version")
-        .map(|feature| feature.max_version_level);
-    assert!(finalized == Some(2), "{api_versions:?}");
-
-    let response = client
-        .send(UpdateFeaturesRequest {
-            feature_updates: vec![feature_update("transaction.version", 3, 1)],
-            ..Default::default()
-        })
-        .await
-        .expect("UpdateFeatures");
-    assert!(
-        response
-            == UpdateFeaturesResponse {
-                error_code: 95,
-                error_message: Some(
-                    "The update failed for all features since the following feature had an \
-                     error: Invalid update version 3 for feature transaction.version. Local \
-                     controller 1 only supports versions 0-2"
-                        .into(),
-                ),
-                ..Default::default()
-            },
-        "{response:?}"
-    );
-    broker.shutdown().await;
+async fn enable_2pc_persists_no_timeout_sentinel(mut two_phase_scenario: TwoPhaseScenario) {
+    two_phase_scenario.shutdown().await;
+    drop(two_phase_scenario);
 }
 
-/// krabka-io/krabka-broker#784: KIP-939 runs at the bootstrapped
-/// `transaction.version` 2, and an upgrade to 3 fails as it does on Kafka
-/// 4.3.1, whose `TransactionVersion` stops at `TV_2`: `INVALID_UPDATE_VERSION`
-/// (95) with `QuorumFeatures.reasonNotSupported`'s message and no rows.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/transactions_2pc.feature",
     name = "two phase commit needs no transaction version 3 and 3 is refused"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn two_phase_commit_needs_no_transaction_version_3_and_3_is_refused() {}
+async fn two_phase_commit_needs_no_transaction_version_3_and_3_is_refused(
+    mut two_phase_scenario: TwoPhaseScenario,
+) {
+    two_phase_scenario.shutdown().await;
+    drop(two_phase_scenario);
+}

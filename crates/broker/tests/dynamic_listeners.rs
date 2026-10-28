@@ -190,29 +190,6 @@ impl ListenerBroker {
         kafka_wire::alter_one_resource(self.admin, &request, CLIENT_ID).await
     }
 
-    /// Set `listeners` and `listener.security.protocol.map` to the static
-    /// values plus listener `name` of `protocol` on `addr`, with `extra`
-    /// configs beside them, and return a connection the new listener serves.
-    async fn open_listener(
-        &self,
-        name: &str,
-        protocol: &str,
-        addr: SocketAddr,
-        extra: Vec<(&str, ConfigOperation, Option<&str>)>,
-    ) -> TcpStream {
-        let listeners = format!("{},{name}://{addr}", self.static_listeners);
-        let protocols = format!("{},{name}:{protocol}", self.static_protocols);
-        let mut configs = vec![
-            (LISTENERS, ConfigOperation::Set, Some(listeners.as_str())),
-            (PROTOCOL_MAP, ConfigOperation::Set, Some(protocols.as_str())),
-        ];
-        configs.extend(extra);
-        assert!(self.alter(configs).await == accepted(self.resource()));
-        eventually_served(addr)
-            .await
-            .expect("the added listener serves ApiVersions")
-    }
-
     /// Delete the dynamic `listeners` and `listener.security.protocol.map`.
     async fn delete_listeners(&self) -> AlterConfigsResourceResponse {
         self.alter(vec![
@@ -223,183 +200,272 @@ impl ListenerBroker {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("dynamic listeners: an added listener serves until it is removed")]
-async fn bdd_verify_an_added_listener_serves_until_it_is_removed() {
-    let dir = TempDir::new().expect("tempdir");
-    let broker = ListenerBroker::start(dir.path()).await;
-    let extra = free_addr().await;
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
 
-    let mut held = broker
-        .open_listener("EXTRA", "PLAINTEXT", extra, Vec::new())
-        .await;
-
-    let removed = broker.delete_listeners().await;
-    assert!(removed == accepted(broker.resource()));
-    assert!(closed_by_peer(&mut held).await);
-    assert!(eventually_refused(extra).await);
-    // The static listener keeps serving.
-    assert!(connect_served(broker.admin).await.is_some());
+#[derive(Default)]
+struct ListenerChange {
+    broker: Option<ListenerBroker>,
+    directory: Option<TempDir>,
+    restarted: Option<BrokerHandle>,
+    added_address: Option<SocketAddr>,
+    held: Option<TcpStream>,
+    alteration: Option<AlterConfigsResourceResponse>,
+    handshake: Option<SaslHandshakeResponse>,
+    remaining_names: String,
 }
 
-/// A listener the dynamic `listeners` adds serves the next connection; when
-/// the config drops it again, its open connection closes and its port
-/// refuses a new one.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/dynamic_listeners.feature",
-    name = "an added listener serves until it is removed"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_added_listener_serves_until_it_is_removed() {}
+#[fixture]
+fn listeners() -> ListenerChange {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("dynamic listeners: an added sasl listener offers its own mechanisms")]
-async fn bdd_verify_an_added_sasl_listener_offers_its_own_mechanisms() {
+    ListenerChange {
+        broker: None,
+        directory: None,
+        restarted: None,
+        added_address: None,
+        held: None,
+        alteration: None,
+        handshake: None,
+        remaining_names: String::new(),
+    }
+}
+
+#[given("a running combined broker with its static PLAINTEXT listener")]
+async fn static_broker(listeners: &mut ListenerChange) {
     let dir = TempDir::new().expect("tempdir");
-    let broker = ListenerBroker::start(dir.path()).await;
-    let sasl = free_addr().await;
+    listeners.broker = Some(ListenerBroker::start(dir.path()).await);
+    listeners.directory = Some(dir);
+}
 
-    // ApiVersions is served before authentication.
-    let mut stream = broker
-        .open_listener("SASL", "SASL_PLAINTEXT", sasl, vec![(
-            "listener.name.sasl.sasl.enabled.mechanisms",
+#[when(
+    "listener {name} using {protocol} and mechanisms {mechanisms} is added on a free loopback port"
+)]
+async fn add(listeners: &mut ListenerChange, name: String, protocol: String, mechanisms: String) {
+    let broker = listeners.broker.as_ref().unwrap();
+    let address = free_addr().await;
+    let configured_listeners = format!("{},{name}://{address}", broker.static_listeners);
+    let configured_protocols = format!("{},{name}:{protocol}", broker.static_protocols);
+    let mechanism_key = format!(
+        "listener.name.{}.sasl.enabled.mechanisms",
+        name.to_lowercase()
+    );
+    let mut configs = vec![
+        (
+            LISTENERS,
             ConfigOperation::Set,
-            Some("SCRAM-SHA-256"),
-        )])
-        .await;
+            Some(configured_listeners.as_str()),
+        ),
+        (
+            PROTOCOL_MAP,
+            ConfigOperation::Set,
+            Some(configured_protocols.as_str()),
+        ),
+    ];
+    if mechanisms != "none" {
+        configs.push((
+            mechanism_key.as_str(),
+            ConfigOperation::Set,
+            Some(mechanisms.as_str()),
+        ));
+    }
+    listeners.alteration = Some(broker.alter(configs).await);
+    listeners.added_address = Some(address);
+}
 
-    let handshake: SaslHandshakeResponse = kafka_wire::exchange()
-        .stream(&mut stream)
-        .request(&SaslHandshakeRequest {
-            mechanism: "SCRAM-SHA-256".to_owned(),
-            ..Default::default()
-        })
-        .api_key(17)
-        .version(1)
-        .client_id(CLIENT_ID)
-        .call()
-        .await
-        .expect("SaslHandshake round trip");
+#[then("the alter returns the complete successful broker resource response")]
+fn accepted_change(listeners: &ListenerChange) {
     assert!(
-        handshake
-            == SaslHandshakeResponse {
-                error_code: codes::NONE,
-                mechanisms: vec!["SCRAM-SHA-256".to_owned()],
+        listeners.alteration.as_ref().unwrap()
+            == &accepted(listeners.broker.as_ref().unwrap().resource())
+    );
+}
+
+#[then("a fresh connection to the added listener serves ApiVersions")]
+async fn serves(listeners: &mut ListenerChange) {
+    listeners.held = eventually_served(listeners.added_address.unwrap()).await;
+    assert!(
+        listeners.held.is_some(),
+        "added listener never served ApiVersions"
+    );
+}
+
+#[when("the dynamic listeners and protocol map are deleted")]
+async fn remove(listeners: &mut ListenerChange) {
+    listeners.alteration = Some(listeners.broker.as_ref().unwrap().delete_listeners().await);
+}
+
+#[then("the held connection closes and the added port refuses new connections")]
+async fn removed(listeners: &mut ListenerChange) {
+    assert!(closed_by_peer(listeners.held.as_mut().unwrap()).await);
+    assert!(eventually_refused(listeners.added_address.unwrap()).await);
+}
+
+#[then("the original static listener still serves ApiVersions")]
+async fn static_serves(listeners: &ListenerChange) {
+    assert!(
+        connect_served(listeners.broker.as_ref().unwrap().admin)
+            .await
+            .is_some()
+    );
+}
+
+#[when("the held connection requests SASL mechanism {mechanism}")]
+async fn sasl(listeners: &mut ListenerChange, mechanism: String) {
+    listeners.handshake = Some(
+        kafka_wire::exchange()
+            .stream(listeners.held.as_mut().unwrap())
+            .request(&SaslHandshakeRequest {
+                mechanism,
+                ..Default::default()
+            })
+            .api_key(17)
+            .version(1)
+            .client_id(CLIENT_ID)
+            .call()
+            .await
+            .expect("SaslHandshake"),
+    );
+}
+
+#[then("the SASL response has error {error} and exactly mechanism {mechanism}")]
+fn sasl_response(listeners: &ListenerChange, error: i16, mechanism: String) {
+    assert!(
+        listeners.handshake.as_ref().unwrap()
+            == &SaslHandshakeResponse {
+                error_code: error,
+                mechanisms: vec![mechanism],
                 ..Default::default()
             }
     );
 }
 
-/// A SASL listener the dynamic `listeners` adds offers the mechanisms of its
-/// own `listener.name.<listener>.sasl.enabled.mechanisms`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/dynamic_listeners.feature",
-    name = "an added sasl listener offers its own mechanisms"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_added_sasl_listener_offers_its_own_mechanisms() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("dynamic listeners: a stored listener opens after a restart")]
-async fn bdd_verify_a_stored_listener_opens_after_a_restart() {
-    let dir = TempDir::new().expect("tempdir");
-    let broker = ListenerBroker::start(dir.path()).await;
-    let extra = free_addr().await;
-    drop(
-        broker
-            .open_listener("EXTRA", "PLAINTEXT", extra, Vec::new())
-            .await,
-    );
-    broker.handle.shutdown().await;
-    assert!(eventually_refused(extra).await);
-
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.bootstrap_mode = BootstrapMode::Rejoin;
-    let restarted = Broker::start(config).await.expect("broker restart");
-    assert!(eventually_served(extra).await.is_some());
-    restarted.shutdown().await;
+#[when("the broker is shut down while its dynamic listener remains configured")]
+async fn shutdown(listeners: &mut ListenerChange) {
+    drop(listeners.held.take());
+    listeners.broker.take().unwrap().handle.shutdown().await;
 }
 
-/// A dynamic `listeners` stored before a restart opens its listener when the
-/// broker starts again.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/dynamic_listeners.feature",
-    name = "a stored listener opens after a restart"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_stored_listener_opens_after_a_restart() {}
+#[then("the added port refuses new connections")]
+async fn not_listening(listeners: &ListenerChange) {
+    assert!(eventually_refused(listeners.added_address.unwrap()).await);
+}
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("dynamic listeners: a listener change kafka refuses is refused")]
-async fn bdd_verify_a_listener_change_kafka_refuses_is_refused() {
-    let dir = TempDir::new().expect("tempdir");
-    let broker = ListenerBroker::start(dir.path()).await;
+#[when("the broker rejoins using the same data directory")]
+async fn restart(listeners: &mut ListenerChange) {
+    let mut config =
+        BrokerConfig::for_tests(listeners.directory.as_ref().unwrap().path().to_path_buf());
+    config.bootstrap_mode = BootstrapMode::Rejoin;
+    listeners.restarted = Some(Broker::start(config).await.expect("broker restart"));
+}
+
+#[when("the advertised PLAINTEXT listener is removed from the static listener list")]
+async fn drop_advertised(listeners: &mut ListenerChange) {
+    let broker = listeners.broker.as_ref().unwrap();
     let kept: Vec<&str> = broker
         .static_listeners
         .split(',')
         .filter(|entry| !entry.starts_with("PLAINTEXT://"))
         .collect();
     let without_plaintext = kept.join(",");
-    let kept_names: Vec<&str> = kept
+    listeners.remaining_names = kept
         .iter()
         .filter_map(|entry| entry.split_once("://").map(|(name, _)| name))
-        .collect();
-    let plaintext_as_ssl = broker
-        .static_protocols
-        .replace("PLAINTEXT:PLAINTEXT", "PLAINTEXT:SSL");
-    let cases = [
-        (
-            vec![(
+        .collect::<Vec<_>>()
+        .join(",");
+    listeners.alteration = Some(
+        broker
+            .alter(vec![(
                 LISTENERS,
                 ConfigOperation::Set,
-                Some(without_plaintext.as_str()),
-            )],
-            format!(
-                "requirement failed: advertised.listeners listener names must be equal to or a \
-                 subset of the ones defined in listeners. Found PLAINTEXT. The valid options \
-                 based on the current configuration are {}",
-                kept_names.join(",")
-            ),
-        ),
-        (
-            vec![(
-                PROTOCOL_MAP,
-                ConfigOperation::Set,
-                Some(plaintext_as_ssl.as_str()),
-            )],
-            "Invalid value org.apache.kafka.common.config.ConfigException: Security protocol \
-             cannot be updated for existing listener ListenerName(PLAINTEXT) for configuration \
-             Invalid dynamic configuration"
-                .to_owned(),
-        ),
-    ];
-    for (configs, message) in cases {
-        let refused = broker.alter(configs).await;
-        assert!(
-            refused
-                == AlterConfigsResourceResponse {
-                    error_code: codes::INVALID_REQUEST,
-                    error_message: Some(message),
-                    ..accepted(broker.resource())
-                }
-        );
-    }
+                Some(&without_plaintext),
+            )])
+            .await,
+    );
+}
+
+#[when("the existing listener {name} protocol is changed from {from} to {to}")]
+async fn protocol_change(listeners: &mut ListenerChange, name: String, from: String, to: String) {
+    let broker = listeners.broker.as_ref().unwrap();
+    let map = broker
+        .static_protocols
+        .replace(&format!("{name}:{from}"), &format!("{name}:{to}"));
+    listeners.alteration = Some(
+        broker
+            .alter(vec![(PROTOCOL_MAP, ConfigOperation::Set, Some(&map))])
+            .await,
+    );
+}
+
+#[then("the complete broker resource response has error {error} and message")]
+fn refused(listeners: &ListenerChange, error: i16, docstring: String) {
+    let expected = docstring.trim().replace(
+        "{remaining-static-listener-names}",
+        &listeners.remaining_names,
+    );
+    assert!(
+        listeners.alteration.as_ref().unwrap()
+            == &AlterConfigsResourceResponse {
+                error_code: error,
+                error_message: Some(expected),
+                ..accepted(listeners.broker.as_ref().unwrap().resource())
+            }
+    );
+}
+
+#[then("both described listener settings retain their original static values")]
+async fn unchanged(listeners: &ListenerChange) {
+    let broker = listeners.broker.as_ref().unwrap();
     assert!(broker.describe(LISTENERS).await == broker.static_listeners);
     assert!(broker.describe(PROTOCOL_MAP).await == broker.static_protocols);
 }
 
-/// The broker an alter is addressed to refuses a listener change that Kafka
-/// 4.3.1 refuses, with Kafka's message, and applies none of it: one that
-/// drops an advertised listener (`KafkaConfig.validateValues`) and one that
-/// changes the protocol of a listener it keeps
-/// (`DynamicListenerConfig.validateReconfiguration`).
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+impl ListenerChange {
+    async fn shutdown(mut self) {
+        drop(self.held.take());
+        if let Some(broker) = self.broker.take() {
+            broker.handle.shutdown().await;
+        }
+        if let Some(broker) = self.restarted.take() {
+            broker.shutdown().await;
+        }
+    }
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/dynamic_listeners.feature",
+    name = "an added listener serves until it is removed"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_added_listener_serves_until_it_is_removed(listeners: ListenerChange) {
+    listeners.shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/dynamic_listeners.feature",
+    name = "an added sasl listener offers its own mechanisms"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_added_sasl_listener_offers_its_own_mechanisms(listeners: ListenerChange) {
+    listeners.shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/dynamic_listeners.feature",
+    name = "a stored listener opens after a restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stored_listener_opens_after_a_restart(listeners: ListenerChange) {
+    listeners.shutdown().await;
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/dynamic_listeners.feature",
     name = "a listener change kafka refuses is refused"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_listener_change_kafka_refuses_is_refused() {}
+async fn a_listener_change_kafka_refuses_is_refused(listeners: ListenerChange) {
+    listeners.shutdown().await;
+}

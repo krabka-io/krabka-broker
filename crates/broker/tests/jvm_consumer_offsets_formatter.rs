@@ -140,12 +140,6 @@ const DRAIN_TIMEOUT_MS: &str = "15000";
 /// How long a run that does have a message count may take to reach it.
 const CONSUME_TIMEOUT_MS: &str = "60000";
 
-/// The lower bound on how many records a KIP-848 group leaves behind: the group
-/// epoch (key 3), the member metadata (key 5) and the current assignment
-/// (key 8). krabka writes more, and the assertion stays true if it writes
-/// fewer of some other kind.
-const NEXT_GEN_RECORDS: usize = 3;
-
 // --------------------------------------------------------------- decoded rows
 
 /// One row of `OffsetsMessageFormatter` output, in the fields that say what a
@@ -581,38 +575,6 @@ fn assert_records_read(out: &Output) {
 
 // ------------------------------------------------------------------- the rules
 
-/// What the decoded offsets row for `group` has to be.
-fn expected_offset_row(group: &str, committed: i64) -> OffsetRow {
-    OffsetRow {
-        // `OffsetCommitKey`, the key version krabka writes for every commit.
-        key_type: 1,
-        group: group.to_owned(),
-        topic: TOPIC.to_owned(),
-        partition: 0,
-        // The version that carries the topic id. Kafka 4.3's
-        // `GroupCoordinatorRecordHelpers.offsetCommitValueVersion` writes it
-        // for every commit except a KIP-211 per-commit expiry, which gets
-        // version 1 and which no modern consumer asks for.
-        value_version: 4,
-        offset: committed,
-        // The JVM consumer commits no metadata.
-        metadata: String::new(),
-    }
-}
-
-/// The member krabka registered for the classic consumer.
-fn expected_member() -> MemberRow {
-    MemberRow {
-        // A dynamic member. The consumer sets no `group.instance.id`.
-        group_instance_id: None,
-        client_id: CLIENT_ID.to_owned(),
-        session_timeout: SESSION_TIMEOUT_MS,
-        rebalance_timeout: REBALANCE_TIMEOUT_MS,
-        subscription_is_empty: false,
-        assignment_is_empty: false,
-    }
-}
-
 /// The member id and host, which are minted rather than configured.
 ///
 /// Kafka builds a dynamic member id as `<client.id>-<uuid>`, and the broker
@@ -639,59 +601,96 @@ fn rows_for(rows: &[OffsetRow], group: &str) -> Vec<OffsetRow> {
 
 // --------------------------------------------------------------------- the suite
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm consumer offsets formatter: kafka formatters decode krabka consumer offsets"
-)]
-async fn bdd_verify_kafka_formatters_decode_krabka_consumer_offsets() {
-    let cluster = Cluster::start().await;
-    cluster.produce();
+struct FormattedOffsets {
+    cluster: Option<Cluster>,
+    classic_commit: Option<i64>,
+    next_commit: Option<i64>,
+    metadata: Vec<GroupMetadata>,
+    offsets: Vec<OffsetRow>,
+    processed: usize,
+}
+#[rstest::fixture]
+fn formatter() -> FormattedOffsets {
+    // Start this scenario with fresh inputs and observations.
 
-    // The classic group first: it is the only one that writes a key version 2
-    // record, and the KIP-848 group that follows puts the later key versions in
-    // front of the formatters.
+    FormattedOffsets {
+        cluster: None,
+        classic_commit: None,
+        next_commit: None,
+        metadata: Vec::new(),
+        offsets: Vec::new(),
+        processed: 0,
+    }
+}
+#[rstest_bdd_macros::given(
+    "topic krabka-offsets-formatter contains record-0 through record-4 for classic and KIP-848 consumers"
+)]
+async fn formatter_records(formatter: &mut FormattedOffsets) {
+    formatter.cluster = Some(Cluster::start().await);
+    formatter.cluster.as_ref().expect("cluster").produce();
+}
+#[rstest_bdd_macros::when(
+    "classic group krabka-offsets-formatter-classic and KIP-848 group krabka-offsets-formatter-next-gen consume and close"
+)]
+fn groups_commit(formatter: &mut FormattedOffsets) {
+    let cluster = formatter.cluster.as_ref().expect("cluster");
     cluster.consume_as_classic_group();
     cluster.consume_as_next_gen_group();
-
-    let classic_committed = cluster.committed_offset(CLASSIC_GROUP);
-    let next_gen_committed = cluster.committed_offset(NEXT_GEN_GROUP);
-    assert!(
-        classic_committed == RECORDS && next_gen_committed == RECORDS,
-        "the premise is that both groups read the whole topic and committed \
-         {RECORDS}: classic={classic_committed} next-gen={next_gen_committed}",
-    );
-
-    // The group-metadata run first, so its row count is a lower bound on the
-    // key version 2 records the offsets run then skips.
-    let OffsetsRead {
-        decoded: raw_metadata,
-        ..
-    } = cluster.read_offsets_topic(GROUP_METADATA_FORMATTER);
-    let decoded_metadata: Vec<GroupMetadata> =
-        raw_metadata.iter().map(group_metadata_row).collect();
-    let OffsetsRead {
-        decoded: offsets_json,
-        processed: offsets_processed,
-    } = cluster.read_offsets_topic(OFFSETS_FORMATTER);
-    let offsets: Vec<OffsetRow> = offsets_json.iter().map(offset_row).collect();
-
-    // 1. Both groups' committed offsets decode to what krabka says it holds.
-    for (group, committed) in [
-        (CLASSIC_GROUP, classic_committed),
-        (NEXT_GEN_GROUP, next_gen_committed),
-    ] {
-        let group_rows = rows_for(&offsets, group);
-        let last = group_rows
-            .last()
-            .unwrap_or_else(|| panic!("no offsets row for {group} in {offsets:?}"));
-        assert!(
-            *last == expected_offset_row(group, committed),
-            "Kafka's formatter read a different commit for {group} than krabka holds",
-        );
+    formatter.classic_commit = Some(cluster.committed_offset(CLASSIC_GROUP));
+    formatter.next_commit = Some(cluster.committed_offset(NEXT_GEN_GROUP));
+}
+#[rstest_bdd_macros::then("both groups commit position {offset}")]
+fn committed_positions(formatter: &FormattedOffsets, offset: i64) {
+    assert!(formatter.classic_commit == Some(offset));
+    assert!(formatter.next_commit == Some(offset));
+}
+#[rstest_bdd_macros::when(
+    "Kafka 4.3.1 group-metadata and offsets formatters decode the complete consumer-offsets log"
+)]
+fn format_internal_log(formatter: &mut FormattedOffsets) {
+    let cluster = formatter.cluster.as_ref().expect("cluster");
+    let metadata = cluster.read_offsets_topic(GROUP_METADATA_FORMATTER);
+    formatter.metadata = metadata.decoded.iter().map(group_metadata_row).collect();
+    let offsets = cluster.read_offsets_topic(OFFSETS_FORMATTER);
+    formatter.offsets = offsets.decoded.iter().map(offset_row).collect();
+    formatter.processed = offsets.processed;
+}
+#[rstest_bdd_macros::then("the latest decoded offset rows contain exactly these commit fields")]
+fn decoded_commits(formatter: &FormattedOffsets, datatable: Vec<Vec<String>>) {
+    for row in datatable.into_iter().skip(1) {
+        let [key, group, topic, partition, version, offset, metadata]: [String; 7] =
+            row.try_into().expect("offset fields");
+        let rows = rows_for(&formatter.offsets, &group);
+        let expected = OffsetRow {
+            key_type: key.parse().expect("key"),
+            group,
+            topic,
+            partition: partition.parse().expect("partition"),
+            value_version: version.parse().expect("value version"),
+            offset: offset.parse().expect("offset"),
+            metadata,
+        };
+        assert!(*rows.last().expect("decoded commit row") == expected);
     }
-
-    // 2. The classic group's rebalances decode to the group krabka served.
-    let classic_metadata: Vec<&GroupMetadata> = decoded_metadata
+}
+#[rstest_bdd_macros::then(
+    "classic key 2 value 3 metadata has consumer protocol range, its dynamic member as leader, and these member fields"
+)]
+fn decoded_classic_metadata(formatter: &FormattedOffsets, datatable: Vec<Vec<String>>) {
+    let rows: Vec<Vec<String>> = datatable.into_iter().skip(1).collect();
+    let [row]: [Vec<String>; 1] = rows.try_into().expect("one member");
+    let [client, session, rebalance]: [String; 3] =
+        row.try_into().expect("client session rebalance");
+    let expected_member = MemberRow {
+        group_instance_id: None,
+        client_id: client,
+        session_timeout: session.parse().expect("session timeout"),
+        rebalance_timeout: rebalance.parse().expect("rebalance timeout"),
+        subscription_is_empty: false,
+        assignment_is_empty: false,
+    };
+    let classic_metadata: Vec<&GroupMetadata> = formatter
+        .metadata
         .iter()
         .filter(|metadata| metadata.row.group == CLASSIC_GROUP)
         .collect();
@@ -715,7 +714,7 @@ async fn bdd_verify_kafka_formatters_decode_krabka_consumer_offsets() {
                 protocol: Some(PROTOCOL_NAME.to_owned()),
                 generation: with_members.generation,
                 leader: Some(identities[0].member_id.clone()),
-                members: vec![expected_member()],
+                members: vec![expected_member],
             },
         "Kafka's formatter read a different group than krabka served",
     );
@@ -734,31 +733,25 @@ async fn bdd_verify_kafka_formatters_decode_krabka_consumer_offsets() {
             && last_classic.generation > with_members.generation,
         "the rebalance that empties the group did not raise the generation: {classic_metadata:?}",
     );
-
-    // 3. The KIP-848 group writes no key version 2 record at all: its state
-    //    lives under the later key versions.
+}
+#[rstest_bdd_macros::then(
+    "KIP-848 has no classic metadata and offsets decoding skips at least {minimum} additional KIP-848 records"
+)]
+fn later_schemas_skipped(formatter: &FormattedOffsets, minimum: usize) {
     assert!(
-        !decoded_metadata
+        !formatter
+            .metadata
             .iter()
-            .any(|metadata| metadata.row.group == NEXT_GEN_GROUP),
-        "a KIP-848 group must not appear as classic group metadata: {decoded_metadata:?}",
+            .any(|metadata| metadata.row.group == NEXT_GEN_GROUP)
     );
-
-    // 4. The offsets run read the whole topic, and what it did not print is at
-    //    least the key version 2 records the previous run printed plus the
-    //    KIP-848 records. Both runs exited zero, so the formatter skipped every
-    //    one of them instead of dying on it.
-    let skipped = offsets_processed - offsets.len();
+    let skipped = formatter.processed - formatter.offsets.len();
     assert!(
-        skipped >= decoded_metadata.len() + NEXT_GEN_RECORDS,
-        "the offsets run read {offsets_processed} records and printed {}, so it skipped \
-         {skipped}; the topic holds at least {} group-metadata and {NEXT_GEN_RECORDS} KIP-848 \
-         records",
-        offsets.len(),
-        decoded_metadata.len(),
+        skipped >= formatter.metadata.len() + minimum,
+        "processed={} decoded={} classic={} minimum={minimum}",
+        formatter.processed,
+        formatter.offsets.len(),
+        formatter.metadata.len()
     );
-
-    cluster.shutdown().await;
 }
 
 /// One broker, two groups, and Kafka's two formatters over what they left in
@@ -770,4 +763,7 @@ async fn bdd_verify_kafka_formatters_decode_krabka_consumer_offsets() {
     name = "kafka formatters decode krabka consumer offsets"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn kafka_formatters_decode_krabka_consumer_offsets() {}
+async fn kafka_formatters_decode_krabka_consumer_offsets(formatter: FormattedOffsets) {
+    formatter.cluster.take().expect("cluster").shutdown().await;
+    drop(formatter);
+}

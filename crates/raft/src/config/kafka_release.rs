@@ -148,70 +148,95 @@ pub const fn kafka_4_3_1_max(api_key: i16) -> Option<i16> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::check,
+        rstest::fixture,
+        rstest_bdd::Slot,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "config kafka release tests: the table is ascending and inside the vendored ranges"
-    )]
-    fn bdd_verify_the_table_is_ascending_and_inside_the_vendored_ranges() {
+    struct ReleaseCatalogue {
+        keys: Vec<i16>,
+        key: Option<i16>,
+        rows: Option<Vec<ReleasedApi>>,
+        maximum: Slot<Option<i16>>,
+        row: Slot<Option<ReleasedApi>>,
+    }
+
+    #[fixture]
+    fn release() -> ReleaseCatalogue {
+        // Start this scenario with fresh inputs and observations.
+
+        ReleaseCatalogue {
+            keys: Vec::new(),
+            key: None,
+            rows: None,
+            maximum: Slot::default(),
+            row: Slot::default(),
+        }
+    }
+
+    #[given("every API key published in the Kafka 4.3.1 catalogue")]
+    fn published_apis(release: &mut ReleaseCatalogue) {
+        release.keys = KAFKA_4_3_1_APIS.iter().map(|row| row.api_key).collect();
+    }
+
+    #[when("every published API is resolved through the release lookup")]
+    fn resolve_catalogue(release: &mut ReleaseCatalogue) {
+        release.rows = Some(
+            release
+                .keys
+                .iter()
+                .map(|&key| kafka_4_3_1_api(key).expect("every published key must resolve"))
+                .collect(),
+        );
+    }
+
+    #[then("the release exposes 89 unique ascending API keys with nonempty version ranges")]
+    fn valid_catalogue(release: &ReleaseCatalogue) {
+        let rows = release.rows.as_ref().expect("the catalogue was resolved");
         check!(
-            KAFKA_4_3_1_APIS
-                .windows(2)
+            rows.windows(2)
                 .all(|pair| pair[0].api_key < pair[1].api_key)
         );
-        check!(KAFKA_4_3_1_APIS.len() == 89);
-        for row in KAFKA_4_3_1_APIS {
+        check!(rows.len() == 89);
+        for row in rows {
             check!(row.min_version <= row.max_version, "{row:?}");
         }
     }
 
-    #[cfg(test)]
-    /// Strictly ascending, so a key is listed once, and every row names
-    /// versions `krabka-protocol` decodes: 4.3.1 is never ahead of trunk.
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/config/kafka_release.feature",
-        name = "tests: the table is ascending and inside the vendored ranges"
-    )]
-    fn the_table_is_ascending_and_inside_the_vendored_ranges() {}
+    #[given("an API key {key} requested from the Kafka 4.3.1 catalogue")]
+    fn requested_api(release: &mut ReleaseCatalogue, key: i16) { release.key = Some(key); }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("config kafka release tests: lookups follow the table for {example}")]
-    fn bdd_verify_lookups_follow_the_table(example: String) {
-        type Example = (i16, Option<i16>);
-        let (api_key, want): Example = match example.as_str() {
-            "offset fetch" => (18, Some(4)),
-            "sasl handshake" => (22, Some(5)),
-            "txn offset commit" => (28, Some(5)),
-            "api key 88" => (88, Some(0)),
-            "api key 89" => (89, Some(0)),
-            "api key 92" => (92, Some(0)),
-            "first unknown" => (93, None),
-            "later unknown" => (94, None),
-            "private key unknown" => (1020, None),
-            _ => panic!("unknown BDD example: {example}"),
+    #[when("the released maximum API version is looked up")]
+    fn maximum_version(release: &mut ReleaseCatalogue) {
+        release
+            .maximum
+            .set(kafka_4_3_1_max(release.key.expect("an API key was given")));
+    }
+
+    #[then("the released maximum API version is {version}")]
+    fn released_maximum(release: &ReleaseCatalogue, version: String) {
+        let expected = if version == "unavailable" {
+            None
+        } else {
+            Some(version.parse().expect("an API version is an integer"))
         };
-
-        check!(kafka_4_3_1_max(api_key) == want, "api_key {api_key}");
+        check!(release.maximum.get() == Some(expected));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/config/kafka_release.feature",
-        name = "tests: lookups follow the table"
-    )]
-    fn lookups_follow_the_table(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("config kafka release tests: api table includes produce")]
-    fn bdd_verify_api_table_includes_produce() {
-        check!(kafka_4_3_1_api(1) == Some(api(1, 4, 18)));
+    #[when("the released API version range is looked up")]
+    fn api_range(release: &mut ReleaseCatalogue) {
+        release
+            .row
+            .set(kafka_4_3_1_api(release.key.expect("an API key was given")));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/config/kafka_release.feature",
-        name = "tests: api table includes produce"
-    )]
-    fn api_table_includes_produce() {}
+    #[then("the released Fetch API spans versions 4 through 18")]
+    fn fetch_versions(release: &ReleaseCatalogue) {
+        check!(release.row.get() == Some(Some(api(1, 4, 18))));
+    }
+
+    scenarios!("tests/features/migrated/src/config/kafka_release.feature", fixtures = [release: ReleaseCatalogue]);
 }

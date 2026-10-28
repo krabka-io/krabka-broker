@@ -49,29 +49,8 @@ const ORACLE_PLAINTEXT_BOOTSTRAP: &str = "localhost:9092";
 /// Where each invocation's client configuration is placed on either side.
 const CLIENT_PROPS: &str = "/tmp/client.properties";
 
-/// A user neither broker knows.
-const MALLORY: &str = "mallory";
-
-/// A password that is not `alice`'s.
-const WRONG_PASS: &str = "not-alice-secret";
-
-/// The prefix `TopicCommand` puts in front of the error that stopped it.
+/// The prefix `TopicCommand` prints before its authentication refusal.
 const TOPIC_COMMAND_ERROR: &str = "Error while executing topic command : ";
-
-/// Kafka's `PlainServerCallbackHandler` refusal.
-const PLAIN_REFUSAL: &str = "Authentication failed: Invalid username or password";
-
-/// Kafka's `ScramSaslServer` refusal for SCRAM-SHA-256.
-const SCRAM_SHA_256_REFUSAL: &str = "Authentication failed during authentication due to invalid credentials with SASL mechanism \
-     SCRAM-SHA-256";
-
-/// Kafka's `ScramSaslServer` refusal for SCRAM-SHA-512.
-const SCRAM_SHA_512_REFUSAL: &str = "Authentication failed during authentication due to invalid credentials with SASL mechanism \
-     SCRAM-SHA-512";
-
-/// The RFC 7628 error status `OAuthBearerSaslServer` fails a rejected token
-/// with.
-const OAUTHBEARER_REFUSAL: &str = r#"{"status":"invalid_token"}"#;
 
 /// The `KAFKA_*` overrides that add the SASL listener to the oracle. They
 /// follow the oracle's own defaults, and Docker keeps the last value given for
@@ -93,68 +72,18 @@ const ORACLE_SASL_ENV: &[&str] = &[
      oauthbearer.OAuthBearerLoginModule required;",
 ];
 
-#[derive(Clone, Copy, Debug)]
-enum PasswordMechanism {
-    Plain,
-    ScramSha256,
-    ScramSha512,
-}
-
-impl PasswordMechanism {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Plain => "PLAIN",
-            Self::ScramSha256 => "SCRAM-SHA-256",
-            Self::ScramSha512 => "SCRAM-SHA-512",
-        }
-    }
-}
-
-/// What the client logs in with.
-#[derive(Clone, Copy, Debug)]
-enum Credential {
-    Password {
-        mechanism: PasswordMechanism,
-        user: &'static str,
-        password: &'static str,
-    },
-    /// An unsecured (`alg:none`) JWS minted by the client's default
-    /// `OAuthBearerUnsecuredLoginCallbackHandler`, carrying `principal` in
-    /// `claim`.
-    UnsecuredJws {
-        claim: &'static str,
-        principal: &'static str,
-    },
-}
-
-impl Credential {
-    fn client_properties(self) -> String {
-        match self {
-            Self::Password {
-                mechanism,
-                user,
-                password,
-            } => {
-                let jaas = match mechanism {
-                    PasswordMechanism::Plain => plain_jaas(user, password),
-                    PasswordMechanism::ScramSha256 | PasswordMechanism::ScramSha512 => {
-                        scram_jaas(user, password)
-                    }
-                };
-                format!(
-                    "security.protocol=SASL_PLAINTEXT\nsasl.mechanism={}\nsasl.jaas.config={jaas}\n",
-                    mechanism.name(),
-                )
-            }
-            Self::UnsecuredJws { claim, principal } => format!(
-                "security.protocol=SASL_PLAINTEXT\n\
-                 sasl.mechanism=OAUTHBEARER\n\
-                 sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.\
-                 OAuthBearerLoginModule required unsecuredLoginPrincipalClaimName=\"{claim}\" \
-                 unsecuredLoginStringClaim_{claim}=\"{principal}\";\n",
-            ),
-        }
-    }
+fn credential_properties(mechanism: &str, user: &str, password: &str, claim: &str) -> String {
+    let jaas = match mechanism {
+        "PLAIN" => plain_jaas(user, password),
+        "SCRAM-SHA-256" | "SCRAM-SHA-512" => scram_jaas(user, password),
+        "OAUTHBEARER" => format!(
+            "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required unsecuredLoginPrincipalClaimName=\"{claim}\" unsecuredLoginStringClaim_{claim}=\"{user}\";"
+        ),
+        _ => panic!("unsupported SASL mechanism {mechanism}"),
+    };
+    format!(
+        "security.protocol=SASL_PLAINTEXT\nsasl.mechanism={mechanism}\nsasl.jaas.config={jaas}\n"
+    )
 }
 
 /// What `kafka-topics.sh --list` came back with.
@@ -179,93 +108,6 @@ impl Outcome {
             .map_or_else(|| text.clone(), str::to_owned);
         Self::Refused(refusal)
     }
-
-    fn refused(text: &str) -> Self { Self::Refused(text.to_owned()) }
-}
-
-struct Case {
-    label: &'static str,
-    credential: Credential,
-    expected: Outcome,
-}
-
-fn password(mechanism: PasswordMechanism, user: &'static str, pass: &'static str) -> Credential {
-    Credential::Password {
-        mechanism,
-        user,
-        password: pass,
-    }
-}
-
-fn positive_cases() -> Vec<Case> {
-    vec![
-        Case {
-            label: "PLAIN, alice",
-            credential: password(PasswordMechanism::Plain, ALICE, ALICE_PASS),
-            expected: Outcome::Listed,
-        },
-        Case {
-            label: "SCRAM-SHA-256, alice",
-            credential: password(PasswordMechanism::ScramSha256, ALICE, ALICE_PASS),
-            expected: Outcome::Listed,
-        },
-        Case {
-            label: "SCRAM-SHA-512, alice",
-            credential: password(PasswordMechanism::ScramSha512, ALICE, ALICE_PASS),
-            expected: Outcome::Listed,
-        },
-        Case {
-            label: "OAUTHBEARER, sub=alice",
-            credential: Credential::UnsecuredJws {
-                claim: "sub",
-                principal: ALICE,
-            },
-            expected: Outcome::Listed,
-        },
-    ]
-}
-
-fn negative_cases() -> Vec<Case> {
-    vec![
-        Case {
-            label: "PLAIN, wrong password",
-            credential: password(PasswordMechanism::Plain, ALICE, WRONG_PASS),
-            expected: Outcome::refused(PLAIN_REFUSAL),
-        },
-        Case {
-            label: "PLAIN, unknown user",
-            credential: password(PasswordMechanism::Plain, MALLORY, ALICE_PASS),
-            expected: Outcome::refused(PLAIN_REFUSAL),
-        },
-        Case {
-            label: "SCRAM-SHA-256, wrong password",
-            credential: password(PasswordMechanism::ScramSha256, ALICE, WRONG_PASS),
-            expected: Outcome::refused(SCRAM_SHA_256_REFUSAL),
-        },
-        Case {
-            label: "SCRAM-SHA-256, unknown user",
-            credential: password(PasswordMechanism::ScramSha256, MALLORY, ALICE_PASS),
-            expected: Outcome::refused(SCRAM_SHA_256_REFUSAL),
-        },
-        Case {
-            label: "SCRAM-SHA-512, wrong password",
-            credential: password(PasswordMechanism::ScramSha512, ALICE, WRONG_PASS),
-            expected: Outcome::refused(SCRAM_SHA_512_REFUSAL),
-        },
-        Case {
-            label: "SCRAM-SHA-512, unknown user",
-            credential: password(PasswordMechanism::ScramSha512, MALLORY, ALICE_PASS),
-            expected: Outcome::refused(SCRAM_SHA_512_REFUSAL),
-        },
-        Case {
-            label: "OAUTHBEARER, principal in upn and no sub",
-            credential: Credential::UnsecuredJws {
-                claim: "upn",
-                principal: ALICE,
-            },
-            expected: Outcome::refused(OAUTHBEARER_REFUSAL),
-        },
-    ]
 }
 
 /// A stock 4.3.1 broker and krabka, both with `alice` provisioned for every
@@ -278,8 +120,8 @@ struct SaslPair {
 }
 
 impl SaslPair {
-    async fn start(label: &'static str) -> Self {
-        let oracle = task::spawn_blocking(move || Oracle::start_with_env(label, ORACLE_SASL_ENV))
+    async fn start(label: String) -> Self {
+        let oracle = task::spawn_blocking(move || Oracle::start_with_env(&label, ORACLE_SASL_ENV))
             .await
             .expect("oracle boot");
         let (broker, dir) = start_host_broker_with(|config| {
@@ -356,7 +198,7 @@ impl SaslPair {
         }
     }
 
-    fn list_topics(side: &Side<'_>, credential: Credential) -> Outcome {
+    fn list_topics(side: &Side<'_>, properties: &str) -> Outcome {
         let run = side.run_with_files(
             "kafka-topics",
             &[
@@ -366,70 +208,84 @@ impl SaslPair {
                 "--command-config",
                 CLIENT_PROPS,
             ],
-            &[ToolFile::new(CLIENT_PROPS, &credential.client_properties())],
+            &[ToolFile::new(CLIENT_PROPS, properties)],
             None,
         );
         Outcome::of(&run)
     }
 
-    // The oracle runs first in every case, so a row Kafka disagrees with is
-    // reported against the oracle before krabka is judged by it. Every case
-    // runs before the comparison, so one failure does not hide the rest.
-    fn check_cases(&self, cases: &[Case]) {
-        let mut observed = Vec::new();
-        let mut expected = Vec::new();
-        for case in cases {
-            for side in self.sides() {
-                let outcome = Self::list_topics(&side, case.credential);
-                eprintln!(
-                    "KRABKA[test] case={:?} side={} outcome={outcome:?}",
-                    case.label,
-                    side.label(),
-                );
-                observed.push((case.label, side.label(), outcome));
-                expected.push((case.label, side.label(), case.expected.clone()));
-            }
-        }
-        assert!(observed == expected);
-    }
-
     async fn shutdown(self) { self.broker.shutdown().await; }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance sasl kafka 4 3 1 client: kafka 4 3 1 client authenticates with every mechanism"
-)]
-async fn bdd_verify_kafka_4_3_1_client_authenticates_with_every_mechanism() {
-    let pair = SaslPair::start("sasl-accept").await;
-    pair.check_cases(&positive_cases());
-    pair.shutdown().await;
+struct SaslLogins {
+    pair: Option<SaslPair>,
+    observed: Vec<Outcome>,
 }
+#[rstest::fixture]
+fn logins() -> SaslLogins {
+    // Start this scenario with fresh inputs and observations.
 
+    SaslLogins {
+        pair: None,
+        observed: Vec::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "Kafka and Krabka pair {name} enable PLAIN, both SCRAM digests and OAUTHBEARER with alice password alice-secret and principal claim sub"
+)]
+async fn sasl_pair(logins: &mut SaslLogins, name: String) {
+    logins.pair = Some(SaslPair::start(name).await);
+}
+#[rstest_bdd_macros::when(
+    "the Kafka 4.3.1 topics client lists topics on both brokers with these credentials"
+)]
+fn authenticate(logins: &mut SaslLogins, datatable: Vec<Vec<String>>) {
+    let pair = logins.pair.as_ref().expect("SASL pair");
+    for row in datatable.into_iter().skip(1) {
+        let [mechanism, user, password, claim]: [String; 4] =
+            row.try_into().expect("mechanism user password claim");
+        let properties = credential_properties(&mechanism, &user, &password, &claim);
+        for side in pair.sides() {
+            logins
+                .observed
+                .push(SaslPair::list_topics(&side, &properties));
+        }
+    }
+}
+#[rstest_bdd_macros::then("both brokers return these authentication outcomes in credential order")]
+fn authentication_outcomes(logins: &SaslLogins, datatable: Vec<Vec<String>>) {
+    let expected: Vec<Outcome> = datatable
+        .into_iter()
+        .skip(1)
+        .flat_map(|row| {
+            let [outcome, message]: [String; 2] = row.try_into().expect("outcome message");
+            let expected = match outcome.as_str() {
+                "listed" => Outcome::Listed,
+                "refused" => Outcome::Refused(message),
+                _ => panic!("listed or refused"),
+            };
+            [expected.clone(), expected]
+        })
+        .collect();
+    assert!(logins.observed == expected);
+}
 #[ignore = "requires Docker"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_sasl/kafka_4_3_1_client.feature",
     name = "kafka 4 3 1 client authenticates with every mechanism"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kafka_4_3_1_client_authenticates_with_every_mechanism() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance sasl kafka 4 3 1 client: kafka 4 3 1 client reports kafkas refusal for bad credentials"
-)]
-async fn bdd_verify_kafka_4_3_1_client_reports_kafkas_refusal_for_bad_credentials() {
-    let pair = SaslPair::start("sasl-refuse").await;
-    pair.check_cases(&negative_cases());
-    pair.shutdown().await;
+async fn kafka_4_3_1_client_authenticates_with_every_mechanism(logins: SaslLogins) {
+    logins.pair.take().expect("pair").shutdown().await;
+    drop(logins);
 }
-
 #[ignore = "requires Docker"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_sasl/kafka_4_3_1_client.feature",
     name = "kafka 4 3 1 client reports kafkas refusal for bad credentials"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kafka_4_3_1_client_reports_kafkas_refusal_for_bad_credentials() {}
+async fn kafka_4_3_1_client_reports_kafkas_refusal_for_bad_credentials(logins: SaslLogins) {
+    logins.pair.take().expect("pair").shutdown().await;
+    drop(logins);
+}

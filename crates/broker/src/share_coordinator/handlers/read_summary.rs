@@ -111,14 +111,11 @@ mod tests {
             PartitionResult, ReadShareGroupStateSummaryRequest, ReadShareGroupStateSummaryResponse,
             read_summaries,
         },
-        crate::{
-            codes,
-            share_coordinator::handlers::test_support::{
-                EmptyStateRequests, StateReply, StoredStateRow, check_stored_rows, state_response,
-            },
+        crate::share_coordinator::handlers::test_support::{
+            StateFixture, StateReply, group_name_literal, initialized_state, retain_leadership,
+            state_response,
         },
         krabka_protocol::{
-            UnknownTaggedFields,
             owned::read_share_group_state_summary_request::{PartitionData, ReadStateSummaryData},
             primitives::uuid::Uuid as ProtoUuid,
         },
@@ -142,104 +139,187 @@ mod tests {
         state_response(WIRE_TOPIC, partitions)
     }
 
-    fn error_row(partition: i32, code: i16, message: &str) -> PartitionResult {
-        ReadShareGroupStateSummaryResponse::error_row(partition, code, Some(message))
+    #[derive(Default)]
+    struct SummaryStory {
+        state: Option<StateFixture>,
+        directory: Option<tempfile::TempDir>,
+        observed: Option<ReadShareGroupStateSummaryResponse>,
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "share coordinator handlers read summary tests: read summary answers as kafka"
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct SummaryStoryRequest {
+        partition: i32,
+    }
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct SummaryStoryExpected {
+        partition: i32,
+        code: i16,
+        message: String,
+        state_epoch: i32,
+        start_offset: i64,
+        leader_epoch: i32,
+        delivery_complete_count: i32,
+    }
+    #[rstest::fixture]
+    fn summary_story() -> SummaryStory {
+        // Each RPC observes independently seeded persisted state and local leadership.
+        SummaryStory::default()
+    }
+    #[rstest_bdd_macros::given(
+        "ReadShareGroupStateSummary reads topic 29292929-2929-2929-2929-292929292929 with 2 partitions and share-group partition 0 at state epoch 17 leader epoch 3 start 101 acknowledged batch 101..105 count 3 completed 9"
     )]
-    async fn bdd_verify_read_summary_answers_as_kafka() {
-        let stored = PartitionResult {
-            partition: 0,
-            error_code: codes::NONE,
-            error_message: None,
-            state_epoch: 17,
-            leader_epoch: 3,
-            start_offset: 101,
-            delivery_complete_count: 9,
-            unknown_tagged_fields: UnknownTaggedFields(vec![]),
-        };
-        let missing = PartitionResult {
-            partition: 1,
-            error_code: codes::NONE,
-            error_message: None,
-            state_epoch: 0,
-            leader_epoch: 0,
-            start_offset: -1,
-            delivery_complete_count: -1,
-            unknown_tagged_fields: UnknownTaggedFields(vec![]),
-        };
-        let empty = ReadShareGroupStateSummaryResponse::default();
-        // Each row owns its request and independently expected response.
-        let rows = [
-            StoredStateRow {
-                led: true,
-                request: request("share-group", &[0]),
-                expected: response(vec![stored]),
-            },
-            StoredStateRow {
-                led: true,
-                request: request("share-group", &[1]),
-                expected: response(vec![missing]),
-            },
-            StoredStateRow {
-                led: false,
-                request: request("share-group", &[0]),
-                expected: response(vec![error_row(
-                    0,
-                    codes::NOT_COORDINATOR,
-                    "Unable to read share group state summary: This is not the correct coordinator.",
-                )]),
-            },
-            StoredStateRow {
-                led: true,
-                request: request("share-group", &[-1]),
-                expected: response(vec![error_row(
-                    -1,
-                    codes::INVALID_REQUEST,
-                    "The partition id cannot be a negative number.",
-                )]),
-            },
-            StoredStateRow {
-                led: true,
-                request: request("share-group", &[2]),
-                expected: response(vec![error_row(
-                    2,
-                    codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    "This server does not host this topic-partition.",
-                )]),
-            },
-        ];
-        let empty_requests = EmptyStateRequests {
-            group: request("", &[0]),
-            partitions: request("share-group", &[]),
-            topics: ReadShareGroupStateSummaryRequest {
-                group_id: "share-group".into(),
-                ..Default::default()
-            },
-        };
-
-        check_stored_rows(
-            rows.into_iter().chain(empty_requests.into_rows(empty)),
-            TOPIC,
-            2,
-            0,
-            read_summaries,
+    async fn seed_summary_story(summary_story: &mut SummaryStory) {
+        summary_story.directory = Some(tempfile::TempDir::new().expect("state logs"));
+        summary_story.state = Some(
+            initialized_state()
+                .log_dir(summary_story.directory.as_ref().expect("state logs").path())
+                .topic(TOPIC)
+                .partitions(2)
+                .partition(0)
+                .stored_data(true)
+                .call()
+                .await,
+        );
+    }
+    #[rstest_bdd_macros::given("the ReadShareGroupStateSummary coordinator leadership is {led}")]
+    async fn leadership_summary_story(summary_story: &SummaryStory, led: bool) {
+        retain_leadership(
+            &summary_story
+                .state
+                .as_ref()
+                .expect("seeded state")
+                .coordinator,
+            led,
         )
         .await;
     }
+    #[rstest_bdd_macros::when(
+        "ReadShareGroupStateSummary requests group {group} and these partitions"
+    )]
+    async fn request_summary_story(
+        summary_story: &mut SummaryStory,
+        group: String,
+        #[datatable] datatable: rstest_bdd::datatable::Rows<SummaryStoryRequest>,
+    ) {
+        let group = group_name_literal(group);
+        let requested: Vec<_> = datatable.into_iter().map(|row| row.partition).collect();
+        summary_story.observed = Some(
+            read_summaries(
+                &summary_story
+                    .state
+                    .as_ref()
+                    .expect("seeded state")
+                    .coordinator,
+                &summary_story.state.as_ref().expect("seeded state").image,
+                request(&group, &requested),
+            )
+            .await,
+        );
+    }
+    #[rstest_bdd_macros::when(
+        "ReadShareGroupStateSummary requests group {group} with no topic rows"
+    )]
+    async fn empty_topics_summary_story(summary_story: &mut SummaryStory, group: String) {
+        let group = group_name_literal(group);
+        summary_story.observed = Some(
+            read_summaries(
+                &summary_story
+                    .state
+                    .as_ref()
+                    .expect("seeded state")
+                    .coordinator,
+                &summary_story.state.as_ref().expect("seeded state").image,
+                ReadShareGroupStateSummaryRequest {
+                    group_id: group.into(),
+                    ..Default::default()
+                },
+            )
+            .await,
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "the complete ReadShareGroupStateSummary response has these rows and default tags"
+    )]
+    fn response_summary_story(
+        summary_story: &SummaryStory,
+        #[datatable] datatable: rstest_bdd::datatable::Rows<SummaryStoryExpected>,
+    ) {
+        let expected: Vec<_> = datatable
+            .into_iter()
+            .map(|row| {
+                let message = (row.message != "null").then_some(row.message);
+                let mut expected = ReadShareGroupStateSummaryResponse::error_row(
+                    row.partition,
+                    row.code,
+                    message.as_deref(),
+                );
+                expected.state_epoch = row.state_epoch;
+                expected.start_offset = row.start_offset;
+                expected.leader_epoch = row.leader_epoch;
+                expected.delivery_complete_count = row.delivery_complete_count;
+                expected
+            })
+            .collect();
+        let expected = if expected.is_empty() {
+            ReadShareGroupStateSummaryResponse::default()
+        } else {
+            response(expected)
+        };
+        assert2::check!(summary_story.observed.as_ref().expect("read RPC completed") == &expected);
+    }
 
-    /// The whole `ReadShareGroupStateSummaryResponse` for each request shape,
-    /// over topic T with two partitions and state for partition 0 only, as
-    /// Kafka's `ShareCoordinatorService.readStateSummary` and
-    /// `ShareCoordinatorShard.readStateSummary` answer.
-    #[cfg(test)]
     #[rstest_bdd_macros::scenario(
         path = "tests/features/migrated/src/share_coordinator/handlers/read_summary.feature",
-        name = "tests: read summary answers as kafka"
+        name = "Persisted state is returned"
     )]
     #[tokio::test]
-    async fn read_summary_answers_as_kafka() {}
+    async fn read_summary_answers_as_kafka(summary_story: SummaryStory) { drop(summary_story); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/read_summary.feature",
+        name = "An uninitialized key has the Kafka empty summary"
+    )]
+    #[tokio::test]
+    async fn read_summary_answers_as_kafka_1(summary_story: SummaryStory) { drop(summary_story); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/read_summary.feature",
+        name = "A resigned coordinator refuses reads"
+    )]
+    #[tokio::test]
+    async fn read_summary_answers_as_kafka_2(summary_story: SummaryStory) { drop(summary_story); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/read_summary.feature",
+        name = "A negative partition is refused"
+    )]
+    #[tokio::test]
+    async fn read_summary_answers_as_kafka_3(summary_story: SummaryStory) { drop(summary_story); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/read_summary.feature",
+        name = "An out of range partition is unknown"
+    )]
+    #[tokio::test]
+    async fn read_summary_answers_as_kafka_4(summary_story: SummaryStory) { drop(summary_story); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/read_summary.feature",
+        name = "An empty group returns no rows"
+    )]
+    #[tokio::test]
+    async fn read_summary_answers_as_kafka_5(summary_story: SummaryStory) { drop(summary_story); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/read_summary.feature",
+        name = "An empty partition list returns no rows"
+    )]
+    #[tokio::test]
+    async fn read_summary_answers_as_kafka_6(summary_story: SummaryStory) { drop(summary_story); }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/read_summary.feature",
+        name = "An empty topic list returns no rows"
+    )]
+    #[tokio::test]
+    async fn read_summary_answers_as_kafka_7(summary_story: SummaryStory) { drop(summary_story); }
 }

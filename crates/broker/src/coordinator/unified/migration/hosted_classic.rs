@@ -396,158 +396,10 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified migration hosted classic tests: classic sync follows kafka"
-    )]
-    fn bdd_verify_classic_sync_follows_kafka() {
-        struct SyncRow {
-            label: &'static str,
-            members: Vec<MemberState>,
-            request: SyncGroupRequest,
-            want: SyncResult,
-        }
-
-        let assigned_v1 =
-            consumer_assignment_blob(&[(TOPIC, vec![0])].into(), &image(), 1).unwrap();
-        let behind = |mut m: MemberState, state| {
-            m.member_epoch = TARGET_EPOCH - 1;
-            m.assignment_state = state;
-            m
-        };
-        let static_member = |mut m: MemberState| {
-            m.instance_id = Some("instance-1".into());
-            m
-        };
-        let rows: Vec<SyncRow> = vec![
-            SyncRow {
-                label: "a member at the target epoch",
-                members: vec![member("m", true)],
-                request: sync_request("m", TARGET_EPOCH),
-                want: SyncResult {
-                    error_code: codes::NONE,
-                    assignment: assigned_v1.clone(),
-                    protocol_type: Some("consumer".into()),
-                    protocol_name: Some("range".into()),
-                },
-            },
-            SyncRow {
-                label: "a request without protocol type and name",
-                members: vec![member("m", true)],
-                request: SyncGroupRequest {
-                    protocol_type: None,
-                    protocol_name: None,
-                    ..sync_request("m", TARGET_EPOCH)
-                },
-                want: SyncResult {
-                    error_code: codes::NONE,
-                    assignment: assigned_v1.clone(),
-                    protocol_type: None,
-                    protocol_name: None,
-                },
-            },
-            SyncRow {
-                label: "a member revoking partitions after the target moved",
-                members: vec![behind(
-                    member("m", true),
-                    MemberAssignmentState::UnrevokedPartitions,
-                )],
-                request: sync_request("m", TARGET_EPOCH - 1),
-                want: SyncResult {
-                    error_code: codes::NONE,
-                    assignment: assigned_v1,
-                    protocol_type: Some("consumer".into()),
-                    protocol_name: Some("range".into()),
-                },
-            },
-            SyncRow {
-                label: "an absent member",
-                members: vec![member("m", true)],
-                request: sync_request("nobody", TARGET_EPOCH),
-                want: refused(codes::UNKNOWN_MEMBER_ID),
-            },
-            SyncRow {
-                label: "a member of the consumer protocol",
-                members: vec![member("m", false)],
-                request: sync_request("m", TARGET_EPOCH),
-                want: refused(codes::UNKNOWN_MEMBER_ID),
-            },
-            SyncRow {
-                label: "an unknown instance id",
-                members: vec![member("m", true)],
-                request: SyncGroupRequest {
-                    group_instance_id: Some("instance-1".into()),
-                    ..sync_request("m", TARGET_EPOCH)
-                },
-                want: refused(codes::UNKNOWN_MEMBER_ID),
-            },
-            SyncRow {
-                label: "an instance id another member holds",
-                members: vec![static_member(member("m", true))],
-                request: SyncGroupRequest {
-                    group_instance_id: Some("instance-1".into()),
-                    ..sync_request("other", TARGET_EPOCH)
-                },
-                want: refused(codes::FENCED_INSTANCE_ID),
-            },
-            SyncRow {
-                label: "a generation that is not the member epoch",
-                members: vec![member("m", true)],
-                request: sync_request("m", TARGET_EPOCH + 1),
-                want: refused(codes::ILLEGAL_GENERATION),
-            },
-            SyncRow {
-                label: "another protocol type",
-                members: vec![member("m", true)],
-                request: SyncGroupRequest {
-                    protocol_type: Some("connect".into()),
-                    ..sync_request("m", TARGET_EPOCH)
-                },
-                want: refused(codes::INCONSISTENT_GROUP_PROTOCOL),
-            },
-            SyncRow {
-                label: "a protocol other than the member's first",
-                members: vec![member("m", true)],
-                request: SyncGroupRequest {
-                    protocol_name: Some("roundrobin".into()),
-                    ..sync_request("m", TARGET_EPOCH)
-                },
-                want: refused(codes::INCONSISTENT_GROUP_PROTOCOL),
-            },
-            SyncRow {
-                label: "a stable member that the target moved past",
-                members: vec![behind(member("m", true), MemberAssignmentState::Stable)],
-                request: sync_request("m", TARGET_EPOCH - 1),
-                want: refused(codes::REBALANCE_IN_PROGRESS),
-            },
-        ];
-        for SyncRow {
-            label,
-            members,
-            request,
-            want,
-        } in rows
-        {
-            let state = group(members);
-
-            check!(
-                serve_classic_sync(&state, &request, &image()) == want,
-                "{label}"
-            );
-        }
-    }
-
     /// Kafka's `classicGroupSyncToConsumerGroup`: (label, the group's
     /// members, the request) to the whole answer. A served sync returns the
     /// partitions the member is ASSIGNED, not its target, at the version of
     /// its first protocol, and echoes the request's protocol type and name.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/migration/hosted_classic.feature",
-        name = "tests: classic sync follows kafka"
-    )]
-    fn classic_sync_follows_kafka() {}
-
     /// Kafka's `checkAssignmentVersion`: the assignment is written at the
     /// version of the member's first protocol, a version above the highest
     /// the schema knows as the highest, and a negative version is an error.
@@ -583,85 +435,11 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified migration hosted classic tests: classic heartbeat asks for a rejoin as kafka does"
-    )]
-    fn bdd_verify_classic_heartbeat_asks_for_a_rejoin_as_kafka_does() {
-        let rows = [
-            (
-                "reconciled",
-                TARGET_EPOCH,
-                MemberAssignmentState::Stable,
-                false,
-                codes::NONE,
-            ),
-            (
-                "the target moved past the member",
-                TARGET_EPOCH - 1,
-                MemberAssignmentState::Stable,
-                false,
-                codes::REBALANCE_IN_PROGRESS,
-            ),
-            (
-                "partitions to revoke",
-                TARGET_EPOCH,
-                MemberAssignmentState::UnrevokedPartitions,
-                false,
-                codes::REBALANCE_IN_PROGRESS,
-            ),
-            (
-                "waiting on a partition another member holds",
-                TARGET_EPOCH,
-                MemberAssignmentState::UnreleasedPartitions,
-                true,
-                codes::NONE,
-            ),
-            (
-                "the partition it waited on is free",
-                TARGET_EPOCH,
-                MemberAssignmentState::UnreleasedPartitions,
-                false,
-                codes::REBALANCE_IN_PROGRESS,
-            ),
-        ];
-        for (label, epoch, assignment_state, held_elsewhere, want) in rows {
-            let mut m = member("m", true);
-            m.member_epoch = epoch;
-            m.assignment_state = assignment_state;
-            let mut other = member("other", false);
-            other.assigned_partitions = if held_elsewhere {
-                [(TOPIC, vec![1])].into()
-            } else {
-                HashMap::new()
-            };
-            let mut state = group(vec![m, other]);
-            let request = HeartbeatRequest {
-                group_id: "g".into(),
-                member_id: "m".into(),
-                generation_id: epoch,
-                ..HeartbeatRequest::default()
-            };
-
-            check!(
-                serve_classic_heartbeat(&mut state, &request) == want,
-                "{label}"
-            );
-        }
-    }
-
     /// Kafka's `classicGroupHeartbeatToConsumerGroup`: (label, the member's
     /// epoch and state, whether another member still holds the partition the
     /// member waits for) to the answer. The member rejoins when the target
     /// moved past it, when it revokes, and when the partition it waits for
     /// is free.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/migration/hosted_classic.feature",
-        name = "tests: classic heartbeat asks for a rejoin as kafka does"
-    )]
-    fn classic_heartbeat_asks_for_a_rejoin_as_kafka_does() {}
-
     #[test]
     fn classic_heartbeat_waits_for_large_reordered_assignments_and_refreshes_sessions() {
         for partition_count in [1_000, 2_000, 4_000, 8_000] {
@@ -735,66 +513,8 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified migration hosted classic tests: classic heartbeat refuses what kafka refuses"
-    )]
-    fn bdd_verify_classic_heartbeat_refuses_what_kafka_refuses() {
-        let mut static_m = member("m", true);
-        static_m.instance_id = Some("instance-1".into());
-        let request = |member_id: &str, instance: Option<&str>, generation_id| HeartbeatRequest {
-            group_id: "g".into(),
-            member_id: member_id.into(),
-            generation_id,
-            group_instance_id: instance.map(Into::into),
-            ..HeartbeatRequest::default()
-        };
-        let rows = [
-            (
-                "an absent member",
-                request("nobody", None, TARGET_EPOCH),
-                codes::UNKNOWN_MEMBER_ID,
-            ),
-            (
-                "a member of the consumer protocol",
-                request("native", None, TARGET_EPOCH),
-                codes::UNKNOWN_MEMBER_ID,
-            ),
-            (
-                "an unknown instance id",
-                request("m", Some("instance-2"), TARGET_EPOCH),
-                codes::UNKNOWN_MEMBER_ID,
-            ),
-            (
-                "an instance id another member holds",
-                request("other", Some("instance-1"), TARGET_EPOCH),
-                codes::FENCED_INSTANCE_ID,
-            ),
-            (
-                "a generation that is not the member epoch",
-                request("m", Some("instance-1"), 0),
-                codes::ILLEGAL_GENERATION,
-            ),
-        ];
-        for (label, request, want) in rows {
-            let mut state = group(vec![static_m.clone(), member("native", false)]);
-
-            check!(
-                serve_classic_heartbeat(&mut state, &request) == want,
-                "{label}"
-            );
-        }
-    }
-
     /// The member checks of the classic `Heartbeat` are the sync's: (label,
     /// request) to the error.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/migration/hosted_classic.feature",
-        name = "tests: classic heartbeat refuses what kafka refuses"
-    )]
-    fn classic_heartbeat_refuses_what_kafka_refuses() {}
-
     /// Kafka's `supportsClassicProtocols`: (label, protocol type, protocols)
     /// to whether a group whose classic members both support `range`, and one
     /// of them `roundrobin`, accepts them.
@@ -830,4 +550,235 @@ mod tests {
             );
         }
     }
+    use {
+        rstest_bdd_macros::{given, scenarios, then, when},
+        serde::Deserialize,
+        serde_json::{Value, json},
+    };
+    #[derive(Default)]
+    struct HostedClassic {
+        state: Option<ConsumerState>,
+        request: Option<SyncGroupRequest>,
+        sync: Option<SyncResult>,
+        heartbeat: Option<i16>,
+        member_epoch: Option<i32>,
+    }
+    #[rstest::fixture]
+    fn hosted_classic() -> HostedClassic {
+        // Start this scenario with fresh inputs and observations.
+        HostedClassic::default()
+    }
+
+    #[when("the consumer coordinator serves the hosted classic SyncGroup request")]
+    fn hosted_sync(hosted_classic: &mut HostedClassic) {
+        hosted_classic.sync = Some(serve_classic_sync(
+            hosted_classic
+                .state
+                .as_ref()
+                .expect("consumer group prepared"),
+            hosted_classic
+                .request
+                .as_ref()
+                .expect("sync request prepared"),
+            &image(),
+        ));
+    }
+    #[given(
+        "hosted classic member m is at epoch {epoch} assignment state {assignment} with its waiting partition held elsewhere {held}"
+    )]
+    fn hosted_reconciliation_state(
+        hosted_classic: &mut HostedClassic,
+        epoch: i32,
+        assignment: String,
+        held: bool,
+    ) {
+        let mut classic = member("m", true);
+        classic.member_epoch = epoch;
+        classic.assignment_state = match assignment.as_str() {
+            "stable" => MemberAssignmentState::Stable,
+            "unrevoked" => MemberAssignmentState::UnrevokedPartitions,
+            "unreleased" => MemberAssignmentState::UnreleasedPartitions,
+            _ => panic!("unknown assignment state"),
+        };
+        let mut other = member("other", false);
+        other.assigned_partitions = if held {
+            [(TOPIC, vec![1])].into()
+        } else {
+            HashMap::new()
+        };
+        hosted_classic.state = Some(group(vec![classic, other]));
+        hosted_classic.member_epoch = Some(epoch);
+    }
+    #[given(
+        "consumer group g hosts classic member m at static instance instance-1 and native member native"
+    )]
+    fn static_hosted_members(hosted_classic: &mut HostedClassic) {
+        let mut classic = member("m", true);
+        classic.instance_id = Some("instance-1".into());
+        hosted_classic.state = Some(group(vec![classic, member("native", false)]));
+    }
+    #[when("classic member {member_id} instance {instance} heartbeats at generation {generation}")]
+    fn hosted_classic_heartbeat(
+        hosted_classic: &mut HostedClassic,
+        member_id: String,
+        instance: String,
+        generation: String,
+    ) {
+        let generation = match generation.as_str() {
+            "member" => hosted_classic.member_epoch.expect("member epoch"),
+            "target" => TARGET_EPOCH,
+            "zero" => 0,
+            _ => panic!("unknown heartbeat generation"),
+        };
+        let request = HeartbeatRequest {
+            group_id: "g".into(),
+            member_id,
+            generation_id: generation,
+            group_instance_id: if instance == "absent" {
+                None
+            } else {
+                Some(instance)
+            },
+            ..HeartbeatRequest::default()
+        };
+        hosted_classic.heartbeat = Some(serve_classic_heartbeat(
+            hosted_classic
+                .state
+                .as_mut()
+                .expect("consumer group prepared"),
+            &request,
+        ));
+    }
+    #[then("the hosted classic heartbeat returns Kafka error code {code}")]
+    fn hosted_heartbeat_result(hosted_classic: &HostedClassic, code: i16) {
+        check!(hosted_classic.heartbeat == Some(code));
+    }
+    use crate::coordinator::unified::test_support::wire_bytes;
+
+    #[derive(Deserialize)]
+    struct HostedProtocolInput {
+        name: String,
+        metadata: String,
+    }
+    #[derive(Deserialize)]
+    struct HostedFacadeInput {
+        session_ms: u64,
+        protocols: Vec<HostedProtocolInput>,
+    }
+    #[derive(Deserialize)]
+    struct HostedMemberInput {
+        member: String,
+        instance: Option<String>,
+        rack: Option<String>,
+        client: String,
+        host: String,
+        subscriptions: Vec<String>,
+        regex: Option<String>,
+        assignor: Option<String>,
+        rebalance_ms: u64,
+        epoch: i32,
+        previous_epoch: i32,
+        state: String,
+        assigned: HashMap<String, Vec<i32>>,
+        revoking: HashMap<String, Vec<i32>>,
+        assignment_epochs: HashMap<String, HashMap<i32, i32>>,
+        classic: Option<HostedFacadeInput>,
+    }
+    #[derive(Deserialize)]
+    struct HostedSyncRequest {
+        member: String,
+        instance: Option<String>,
+        generation: i32,
+        protocol_type: Option<String>,
+        protocol_name: Option<String>,
+    }
+    fn assigned_topic_ranks(topics: HashMap<String, Vec<i32>>) -> HashMap<Uuid, Vec<i32>> {
+        topics
+            .into_iter()
+            .map(|(topic, partitions)| {
+                (
+                    Uuid([topic.parse::<u8>().expect("topic rank"); 16]),
+                    partitions,
+                )
+            })
+            .collect()
+    }
+    #[given(
+        "consumer group g at target epoch 5 has topic t with two partitions and these complete members"
+    )]
+    fn hosted_member_data(hosted_classic: &mut HostedClassic, docstring: String) {
+        let members = serde_json::from_str::<Vec<HostedMemberInput>>(&docstring)
+            .expect("complete consumer group members")
+            .into_iter()
+            .map(|input| MemberState {
+                member_id: input.member,
+                instance_id: input.instance,
+                rack_id: input.rack,
+                client_id: input.client,
+                client_host: input.host,
+                subscribed_topic_names: input.subscriptions.into_iter().collect(),
+                subscribed_topic_regex: input.regex,
+                server_assignor: input.assignor,
+                rebalance_timeout: Duration::from_millis(input.rebalance_ms),
+                member_epoch: input.epoch,
+                previous_member_epoch: input.previous_epoch,
+                assignment_state: match input.state.as_str() {
+                    "Stable" => MemberAssignmentState::Stable,
+                    "UnrevokedPartitions" => MemberAssignmentState::UnrevokedPartitions,
+                    "UnreleasedPartitions" => MemberAssignmentState::UnreleasedPartitions,
+                    _ => panic!("unknown consumer member state"),
+                },
+                assigned_partitions: assigned_topic_ranks(input.assigned),
+                partitions_pending_revocation: assigned_topic_ranks(input.revoking),
+                assignment_epochs: input
+                    .assignment_epochs
+                    .into_iter()
+                    .map(|(topic, epochs)| {
+                        (Uuid([topic.parse::<u8>().expect("topic rank"); 16]), epochs)
+                    })
+                    .collect(),
+                last_seen: Instant::now(),
+                classic: input.classic.map(|classic| ClassicMemberFacade {
+                    session_timeout: Duration::from_millis(classic.session_ms),
+                    supported_protocols: classic
+                        .protocols
+                        .into_iter()
+                        .map(|protocol| {
+                            (
+                                protocol.name,
+                                Bytes::from(wire_bytes(&[&protocol.metadata])),
+                            )
+                        })
+                        .collect(),
+                }),
+            })
+            .collect();
+        hosted_classic.state = Some(group(members));
+    }
+    #[given("the hosted classic SyncGroup request has these fields")]
+    fn hosted_sync_request_data(hosted_classic: &mut HostedClassic, docstring: String) {
+        let input = serde_json::from_str::<HostedSyncRequest>(&docstring)
+            .expect("complete SyncGroup request identity");
+        hosted_classic.request = Some(SyncGroupRequest {
+            group_id: "g".into(),
+            member_id: input.member,
+            group_instance_id: input.instance,
+            generation_id: input.generation,
+            protocol_type: input.protocol_type,
+            protocol_name: input.protocol_name,
+            ..Default::default()
+        });
+    }
+    #[then("the complete hosted classic SyncGroup response is")]
+    fn hosted_sync_expected_data(hosted_classic: &HostedClassic, docstring: String) {
+        let expected = serde_json::from_str::<Value>(&docstring)
+            .expect("complete expected SyncGroup response");
+        let response = hosted_classic.sync.as_ref().expect("SyncGroup completed");
+        let assignment = hex::encode(&response.assignment);
+        check!(
+            json!({"error":response.error_code,"assignment":assignment,"protocol_type":response.protocol_type,"protocol_name":response.protocol_name})
+                == expected
+        );
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/migration/hosted_classic.feature",fixtures=[hosted_classic:HostedClassic]);
 }

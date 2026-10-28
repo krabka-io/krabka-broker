@@ -158,74 +158,106 @@ fn partition_lines(describe: &str) -> Vec<String> {
         .collect()
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance cli elr columns: kafka topics describe renders the same elr columns as apache kafka"
-)]
-async fn bdd_verify_kafka_topics_describe_renders_the_same_elr_columns_as_apache_kafka() {
-    let container = format!("krabka-elr-columns-{}", process::id());
-    let _ = Command::new("docker")
-        .args(["rm", "-f", &container])
-        .output();
+use {
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+};
 
-    let (broker, _dir) = start_host_broker().await;
+struct EligibleLeaderReport {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    container: String,
+    jvm_create: Option<Output>,
+    jvm_describe: Option<Output>,
+    krabka_create: Option<Output>,
+    jvm_lines: Vec<String>,
+    krabka_lines: Vec<String>,
+}
+
+#[fixture]
+fn elr() -> EligibleLeaderReport {
+    // Start this scenario with fresh inputs and observations.
+
+    EligibleLeaderReport {
+        broker: None,
+        directory: None,
+        container: format!("krabka-elr-columns-{}", process::id()),
+        jvm_create: None,
+        jvm_describe: None,
+        krabka_create: None,
+        jvm_lines: Vec::new(),
+        krabka_lines: Vec::new(),
+    }
+}
+
+#[given("a single node broker and an Apache Kafka reference use the same ELR capable tool version")]
+async fn reference(elr: &mut EligibleLeaderReport) {
+    let _ = Command::new("docker")
+        .args(["rm", "-f", &elr.container])
+        .output();
+    let (broker, directory) = start_host_broker().await;
     nc_check_connectivity();
-    start_jvm_broker(&container).await;
+    start_jvm_broker(&elr.container).await;
+    elr.broker = Some(broker);
+    elr.directory = Some(directory);
+}
 
-    let jvm_create = kafka_topics_in_container(&container, &create_args());
-    assert!(
-        jvm_create.status.success(),
-        "create on the JVM broker: {}",
-        String::from_utf8_lossy(&jvm_create.stderr)
-    );
-    let jvm_describe = kafka_topics_in_container(&container, &describe_args());
-    assert!(
-        jvm_describe.status.success(),
-        "describe on the JVM broker: {}",
-        String::from_utf8_lossy(&jvm_describe.stderr)
-    );
-    let jvm_lines = partition_lines(&String::from_utf8_lossy(&jvm_describe.stdout));
+#[when("the operator creates and describes an identical two partition topic on both brokers")]
+async fn describe_both(elr: &mut EligibleLeaderReport) {
+    elr.jvm_create = Some(kafka_topics_in_container(&elr.container, &create_args()));
+    let describe = kafka_topics_in_container(&elr.container, &describe_args());
+    elr.jvm_lines = partition_lines(&String::from_utf8_lossy(&describe.stdout));
+    elr.jvm_describe = Some(describe);
+    elr.krabka_create = Some(kafka_topics_against_krabka(&create_args()));
+    elr.krabka_lines = describe_krabka_once_led().await;
+}
 
-    let krabka_create = kafka_topics_against_krabka(&create_args());
+#[then("successful partition reports match Apache Kafka including eligible leader replica columns")]
+fn matching_reports(elr: &EligibleLeaderReport) {
+    for (action, output) in [
+        ("create on Apache Kafka", &elr.jvm_create),
+        ("describe Apache Kafka", &elr.jvm_describe),
+        ("create on krabka", &elr.krabka_create),
+    ] {
+        let output = output
+            .as_ref()
+            .expect("the operator obtained the command result");
+        assert!(
+            output.status.success(),
+            "{action}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     assert!(
-        krabka_create.status.success(),
-        "create on krabka: {}",
-        String::from_utf8_lossy(&krabka_create.stderr)
-    );
-    let krabka_lines = describe_krabka_once_led().await;
-
-    let _ = Command::new("docker")
-        .args(["rm", "-f", &container])
-        .output();
-
-    assert!(
-        !jvm_lines.is_empty(),
+        !elr.jvm_lines.is_empty(),
         "the JVM broker rendered no partition lines"
     );
     assert!(
-        jvm_lines.iter().all(|line| line.contains("\tElr: ")),
-        "the JVM reference does not carry the ELR columns: {jvm_lines:?}"
+        elr.jvm_lines.iter().all(|line| line.contains("\tElr: ")),
+        "the JVM reference does not carry the ELR columns: {:?}",
+        elr.jvm_lines
     );
     assert!(
-        krabka_lines == jvm_lines,
-        "krabka rendered {krabka_lines:?}, Apache Kafka rendered {jvm_lines:?}"
+        elr.krabka_lines == elr.jvm_lines,
+        "krabka rendered {:?}, Apache Kafka rendered {:?}",
+        elr.krabka_lines,
+        elr.jvm_lines
     );
-
-    broker.shutdown().await;
 }
 
-/// `kafka-topics --describe` must render the same partition line against
-/// krabka as it does against Apache Kafka, ELR columns included.
-///
-/// A healthy partition has no eligible-leader replicas, so both brokers send
-/// empty lists and the tool prints `Elr:` and `LastKnownElr:` with nothing
-/// after them. A null on either field would print `N/A` on the krabka side
-/// only, and this comparison would fail.
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_cli/elr_columns.feature",
-    name = "kafka topics describe renders the same elr columns as apache kafka"
+    name = "Healthy partition ELR columns agree with Apache Kafka"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kafka_topics_describe_renders_the_same_elr_columns_as_apache_kafka() {}
+async fn kafka_topics_describe_renders_the_same_elr_columns_as_apache_kafka(
+    elr: EligibleLeaderReport,
+) {
+    let _ = Command::new("docker")
+        .args(["rm", "-f", &elr.container])
+        .output();
+    elr.broker.expect("running broker").shutdown().await;
+}

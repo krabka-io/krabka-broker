@@ -56,28 +56,56 @@ fn the_canonical_bytes_match_the_documented_layout() {
     );
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "freeze signing tests canonical bytes: a literal freeze takes the kafka pattern type byte"
-)]
-fn bdd_verify_a_literal_freeze_takes_the_kafka_pattern_type_byte() {
-    let literal = freeze_signing_bytes(CLUSTER_ID, &record());
-    let prefixed = freeze_signing_bytes(CLUSTER_ID, &TopicFreezeRecord {
-        pattern_type: PatternType::Prefixed,
-        ..record()
-    });
-    let pattern_byte = FREEZE_DOMAIN.len() + 4 + CLUSTER_ID.len();
-
-    check!(literal[pattern_byte] == 3);
-    check!(prefixed[pattern_byte] == 4);
+#[derive(Default)]
+struct FreezePatternPayload {
+    record: Option<TopicFreezeRecord>,
+    bytes: Option<Vec<u8>>,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/freeze/signing/tests/canonical_bytes.feature",
-    name = "a literal freeze takes the kafka pattern type byte"
-)]
-fn a_literal_freeze_takes_the_kafka_pattern_type_byte() {}
+#[rstest::fixture]
+fn freeze_payload() -> FreezePatternPayload {
+    // Each pattern is encoded from its own otherwise-identical freeze record.
+    FreezePatternPayload::default()
+}
+
+#[rstest_bdd_macros::given("a signed freeze record uses pattern type {pattern}")]
+fn freeze_payload_pattern(freeze_payload: &mut FreezePatternPayload, pattern: String) {
+    let pattern_type = match pattern.as_str() {
+        "Literal" => PatternType::Literal,
+        "Prefixed" => PatternType::Prefixed,
+        other => panic!("unknown Kafka pattern type {other}"),
+    };
+    freeze_payload.record = Some(TopicFreezeRecord {
+        pattern_type,
+        ..record()
+    });
+}
+
+#[rstest_bdd_macros::when("the canonical freeze signing payload is encoded")]
+fn encode_freeze_payload(freeze_payload: &mut FreezePatternPayload) {
+    freeze_payload.bytes = Some(freeze_signing_bytes(
+        CLUSTER_ID,
+        freeze_payload
+            .record
+            .as_ref()
+            .expect("a freeze record was given"),
+    ));
+}
+
+#[rstest_bdd_macros::then("the signed payload's pattern-type byte is {expected}")]
+fn signed_freeze_pattern(freeze_payload: &FreezePatternPayload, expected: u8) {
+    let pattern_byte = FREEZE_DOMAIN.len() + 4 + CLUSTER_ID.len();
+    let encoded = freeze_payload
+        .bytes
+        .as_ref()
+        .expect("the signing payload was encoded");
+    check!(encoded[pattern_byte] == expected);
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/freeze/signing/tests/canonical_bytes.feature",
+    fixtures = [freeze_payload: FreezePatternPayload]
+);
 
 /// A length prefix is what keeps two different records from building one
 /// byte string.

@@ -8,22 +8,41 @@
 
 use {
     crate::jvm_acceptance::{
-        ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, add_console_acl,
+        ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, ClientPropsFile, KAFKA_IMAGE_TXN, add_console_acl,
         create_console_topic, denied_console_consumer, nc_check_connectivity, plain_jaas,
         produce_console, start_plain_acl_topic_with_ops,
         start_sasl_plaintext_broker_with_super_user, write_client_props, write_plain_props,
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
+    std::process::Output,
+    tempfile::TempDir,
 };
+const TOPIC: &str = "foo";
+const BOB: &str = "bob";
+const BOB_PASS: &str = "bob-secret";
+struct DeniedIdentity {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    client: Option<ClientPropsFile>,
+    result: Option<Output>,
+}
+#[rstest::fixture]
+fn denied() -> DeniedIdentity {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm acceptance sasl acl denied: jvm unauthorized produce fails")]
-async fn bdd_verify_jvm_unauthorized_produce_fails() {
-    const TOPIC: &str = "foo";
-    const BOB: &str = "bob";
-    const BOB_PASS: &str = "bob-secret";
-
-    let (broker, _dir) = start_sasl_plaintext_broker_with_super_user(ADMIN, &[
+    DeniedIdentity {
+        broker: None,
+        directory: None,
+        client: None,
+        result: None,
+    }
+}
+#[rstest_bdd_macros::given(
+    "bob authenticates successfully but only alice has topic Read and Write grants"
+)]
+async fn missing_topic_grant(denied: &mut DeniedIdentity) {
+    let (broker, directory) = start_sasl_plaintext_broker_with_super_user(ADMIN, &[
         (ADMIN, ADMIN_PASS),
         (ALICE, ALICE_PASS),
         (BOB, BOB_PASS),
@@ -59,92 +78,74 @@ async fn bdd_verify_jvm_unauthorized_produce_fails() {
          acks=1\n",
         plain_jaas(BOB, BOB_PASS),
     ));
-    let bob_mount = bob_props.mount_str();
-
-    let payload = b"unauth-msg\n";
-    let bob_out = produce_console(KAFKA_IMAGE_TXN, &[&bob_mount], TOPIC, false, payload);
-    let stderr = String::from_utf8_lossy(&bob_out.stderr);
-    let stdout = String::from_utf8_lossy(&bob_out.stdout);
-    eprintln!(
-        "KRABKA[test] bob producer status={} stderr={stderr} stdout={stdout}",
-        bob_out.status,
-    );
-    assert!(
-        stderr.contains("TopicAuthorizationException"),
-        "bob producer should log TopicAuthorizationException; stderr={stderr} stdout={stdout}",
-    );
-
-    broker.shutdown().await;
+    denied.broker = Some(broker);
+    denied.directory = Some(directory);
+    denied.client = Some(bob_props);
 }
-
-/// JVM acceptance: produce by an unauthorized principal must fail.
-///
-/// Admin (PLAIN super-user) provisions alice with Read+Write on topic `foo`.
-/// Read implies Describe, so these are the same effective ACLs as
-/// `jvm_authorized_produce_consume`. Bob has valid PLAIN credentials but
-/// no ACLs at all. Bob's `kafka-console-producer` must be denied.
-///
-/// Assertion strategy: `kafka-console-producer` is a fire-and-forget shell
-/// wrapper around the Java client. In cp-kafka 7.5.0 it logs
-/// `TopicAuthorizationException` on every Metadata-denied response, but
-/// the wrapper itself exits 0. It retries silently and never turns the
-/// broker-side AUTH failure into a non-zero exit code. So the contract this
-/// test asserts is stderr-shaped, not exit-code-shaped: stderr must contain
-/// `TopicAuthorizationException`.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_denied.feature",
-    name = "jvm unauthorized produce fails"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn jvm_unauthorized_produce_fails() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance sasl acl denied: jvm unauthorized consumer fails group check"
-)]
-async fn bdd_verify_jvm_unauthorized_consumer_fails_group_check() {
-    const TOPIC: &str = "foo";
-    const GROUP: &str = "cg-other";
-
-    let (broker, _dir, _admin_props) =
+#[rstest_bdd_macros::given("alice can read foo but has no permission on consumer group cg other")]
+async fn missing_group_grant(denied: &mut DeniedIdentity) {
+    let (broker, directory, _admin) =
         start_plain_acl_topic_with_ops(TOPIC, ALICE, ALICE_PASS, &["Read"]).await;
-
-    // ---- Alice consumer using --group cg-other. Expect group-denied stderr.
-    let alice_props = write_plain_props(ALICE, ALICE_PASS);
-    let alice_mount = alice_props.mount_str();
-
-    let out = denied_console_consumer(&alice_mount, TOPIC, GROUP, "spawn alice consumer");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    eprintln!(
-        "KRABKA[test] alice consumer group-denied status={} stderr={stderr} stdout={stdout}",
-        out.status,
-    );
+    denied.broker = Some(broker);
+    denied.directory = Some(directory);
+    denied.client = Some(write_plain_props(ALICE, ALICE_PASS));
+}
+#[rstest_bdd_macros::when("bob's ordinary producer submits an unauthorized record to foo")]
+fn produce(denied: &mut DeniedIdentity) {
+    let mount = denied
+        .client
+        .as_ref()
+        .expect("bob identity configured")
+        .mount_str();
+    denied.result = Some(produce_console(
+        KAFKA_IMAGE_TXN,
+        &[&mount],
+        TOPIC,
+        false,
+        b"unauth-msg\n",
+    ));
+}
+#[rstest_bdd_macros::when("alice's consumer joins cg other to read foo")]
+fn consume(denied: &mut DeniedIdentity) {
+    let mount = denied
+        .client
+        .as_ref()
+        .expect("alice identity configured")
+        .mount_str();
+    denied.result = Some(denied_console_consumer(
+        &mount,
+        TOPIC,
+        "cg-other",
+        "spawn alice consumer",
+    ));
+}
+#[rstest_bdd_macros::then("the stock client logs {exception}")]
+fn exception(denied: &DeniedIdentity, exception: String) {
+    let output = denied.result.as_ref().expect("stock client completed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stderr.contains("GroupAuthorizationException"),
-        "consumer should log GroupAuthorizationException; stderr={stderr} stdout={stdout}",
+        stderr.contains(&exception),
+        "client should log {exception}; stderr={stderr} stdout={stdout}"
     );
-
-    broker.shutdown().await;
 }
 
-/// JVM acceptance: consumer denied on the group-resource path.
-///
-/// Alice has Read on topic `foo`, which implies Describe, but she has no
-/// ACL on group `cg-other`. `kafka-console-consumer --group cg-other` must
-/// fail with `GroupAuthorizationException`. The broker denies her at
-/// `JoinGroup`/`OffsetFetch`, before any Fetch happens.
-///
-/// Assertion strategy: stderr-shaped. This test asserts on stderr content
-/// for symmetry with `jvm_unauthorized_produce_fails` and to keep the
-/// contract stable across cp-kafka versions.
 #[ignore = "requires Docker"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_denied.feature",
-    name = "jvm unauthorized consumer fails group check"
+    name = "Valid credentials do not grant topic writes"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn jvm_unauthorized_consumer_fails_group_check() {}
+async fn jvm_unauthorized_produce_fails(denied: DeniedIdentity) {
+    denied.broker.expect("ACL broker started").shutdown().await;
+}
+
+#[ignore = "requires Docker"]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_denied.feature",
+    name = "Topic read permission does not grant consumer group access"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jvm_unauthorized_consumer_fails_group_check(denied: DeniedIdentity) {
+    denied.broker.expect("ACL broker started").shutdown().await;
+}

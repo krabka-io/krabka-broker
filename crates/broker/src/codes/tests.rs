@@ -42,10 +42,39 @@ fn the_error_table_records_the_image_the_build_pins() {
     );
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("codes tests: every kafka range constant appears in the kafka table")]
-fn bdd_verify_every_kafka_range_constant_appears_in_the_kafka_table() {
-    for wire in KAFKA_RANGE_CODES {
+#[derive(Default)]
+struct ErrorNamespaces {
+    release_ceiling: Option<i16>,
+    trunk_ceiling: Option<i16>,
+    released: Option<Vec<NamedCode>>,
+    private: Option<Vec<NamedCode>>,
+}
+
+#[rstest::fixture]
+fn errors() -> ErrorNamespaces {
+    // Keep errors inputs and observations fresh for each scenario.
+    ErrorNamespaces::default()
+}
+
+#[rstest_bdd_macros::given("the published Kafka release and trunk error namespaces")]
+fn kafka_error_namespaces(errors: &mut ErrorNamespaces) {
+    errors.release_ceiling = KAFKA_ERROR_TABLE.iter().map(|error| error.code).max();
+    errors.trunk_ceiling = KAFKA_TRUNK_ERROR_TABLE.iter().map(|error| error.code).max();
+}
+
+#[rstest_bdd_macros::when("the broker's released and private wire error codes are enumerated")]
+fn broker_error_codes(errors: &mut ErrorNamespaces) {
+    errors.released = Some(KAFKA_RANGE_CODES.to_vec());
+    errors.private = Some(KRABKA_PRIVATE_CODES.to_vec());
+}
+
+#[rstest_bdd_macros::then("every released error keeps Kafka's name and numeric wire code")]
+fn released_error_codes(errors: &ErrorNamespaces) {
+    for wire in errors
+        .released
+        .as_ref()
+        .expect("broker errors were enumerated")
+    {
         let NamedCode { name, code } = wire;
         let kafka = KAFKA_ERROR_TABLE
             .iter()
@@ -54,12 +83,22 @@ fn bdd_verify_every_kafka_range_constant_appears_in_the_kafka_table() {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/codes/tests.feature",
-    name = "every kafka range constant appears in the kafka table"
-)]
-fn every_kafka_range_constant_appears_in_the_kafka_table() {}
+#[rstest_bdd_macros::then("every private error is at least 1000 and above both Kafka namespaces")]
+fn private_error_codes(errors: &ErrorNamespaces) {
+    let highest_kafka = errors
+        .release_ceiling
+        .expect("the extracted Kafka table is not empty");
+    let highest_trunk = errors.trunk_ceiling.expect("the trunk table is not empty");
+    for NamedCode { name, code } in errors
+        .private
+        .as_ref()
+        .expect("broker errors were enumerated")
+    {
+        assert!(*code >= 1000, "{name}");
+        assert!(*code > highest_kafka, "{name}");
+        assert!(*code > highest_trunk, "{name}");
+    }
+}
 
 /// The codes Kafka trunk adds after the 4.3.1 table ends, as
 /// `org.apache.kafka.common.protocol.Errors` assigns them at trunk
@@ -125,33 +164,6 @@ fn no_two_error_code_constants_collide() {
         }
     }
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("codes tests: krabka private codes sit above the whole kafka table")]
-fn bdd_verify_krabka_private_codes_sit_above_the_whole_kafka_table() {
-    let highest_kafka = KAFKA_ERROR_TABLE
-        .iter()
-        .map(|kafka| kafka.code)
-        .max()
-        .expect("the extracted Kafka table is not empty");
-    let highest_trunk = KAFKA_TRUNK_ERROR_TABLE
-        .iter()
-        .map(|trunk| trunk.code)
-        .max()
-        .expect("the trunk table is not empty");
-    for NamedCode { name, code } in KRABKA_PRIVATE_CODES {
-        assert!(*code >= 1000, "{name}");
-        assert!(*code > highest_kafka, "{name}");
-        assert!(*code > highest_trunk, "{name}");
-    }
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/codes/tests.feature",
-    name = "krabka private codes sit above the whole kafka table"
-)]
-fn krabka_private_codes_sit_above_the_whole_kafka_table() {}
 
 #[yare::parameterized(
     unsupported_api = {
@@ -236,3 +248,5 @@ fn replica_not_available_is_not_the_controller_moved_code() {
     assert!(stale_controller_epoch == Some(11));
     assert!(REPLICA_NOT_AVAILABLE == 9);
 }
+
+rstest_bdd_macros::scenarios!("tests/features/migrated/src/codes/tests.feature", fixtures = [errors: ErrorNamespaces]);

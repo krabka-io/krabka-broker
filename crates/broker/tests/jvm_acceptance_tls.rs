@@ -29,3 +29,6 @@ mod sasl_ssl_stack;
 #[path = "jvm_acceptance_tls/ssl_handshake.rs"]
 mod ssl_handshake;
 mod support;
+
+#[path = "jvm_acceptance_tls/authenticated_peers.rs"]
+mod authenticated_peers;

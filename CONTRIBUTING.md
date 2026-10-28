@@ -25,11 +25,22 @@ cargo test --workspace --doc
 Behavior scenarios use `rstest-bdd`: keep the specification in the crate's
 `tests/features/` directory and implement Given, When, and Then steps with
 `rstest-bdd-macros`. Use fresh `rstest` fixtures for state shared between steps
-and keep assertions in Then steps. A standalone acceptance check can retain
-its setup and assertions in a Then helper bound by `#[scenario]`. Use
-`Examples` for named variants and data tables for structured expectations.
-`scenarios!` binds every scenario in a feature directory to the ordinary test
-harness, including nextest.
+and keep assertions in Then steps. Each scenario must describe real
+preconditions where needed, the operation under test, and its observable
+outcome. Given steps construct those preconditions; When steps perform the
+operation; Then steps compare the observed result against the specification.
+Wrapping an existing test body in a Then step does not make it a BDD specification.
+
+Group scenarios by capability and reuse domain-specific steps. Use `Examples`
+to show actual inputs and expected outcomes, rather than opaque case names
+that select hidden Rust test bodies. Use data tables for structured
+expectations. Keep typed fixtures local to the scenario and avoid mutable
+global state or assertion steps that also drive the behavior under test.
+Use `rstest_bdd_macros::scenarios!` to bind cohesive synchronous features with
+shared fixtures to the ordinary test harness, including nextest. Individual
+`#[scenario]` bindings are appropriate when async steps, Tokio runtime settings,
+platform conditions, or awaited cleanup need a custom test function. In
+rstest-bdd 0.6, the bulk macro's runtime option does not support async steps.
 
 Add feature files and the crate's `Cargo.toml` to Bazel `compile_data`. The
 macros read these files at compile time; Bazel supplies the manifest directory.

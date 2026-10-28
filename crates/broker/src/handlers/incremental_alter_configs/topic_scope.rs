@@ -173,7 +173,7 @@ mod tests {
                 },
                 test_support::check_config_result,
             },
-            throttle::{LEADER_THROTTLED_REPLICAS_KEY, ThrottledReplicas},
+            throttle::ThrottledReplicas,
         },
     };
 
@@ -530,116 +530,78 @@ mod tests {
         check!(record == expected);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers incremental alter configs topic scope tests: topic operations follow kafkas merge rules"
-    )]
-    fn bdd_verify_topic_operations_follow_kafkas_merge_rules() {
-        let op = |key: &str, operation: i8, value: &str| AlterableConfig {
-            name: key.into(),
-            config_operation: operation,
-            value: Some(value.into()),
+    #[derive(Default)]
+    struct TopicConfigurationMerge {
+        image: Option<krabka_metadata::MetadataImage>,
+        name: String,
+        result: Option<Result<MetadataRecord, (i16, String)>>,
+    }
+    #[rstest::fixture]
+    fn topic_merge() -> TopicConfigurationMerge {
+        let image = None;
+        TopicConfigurationMerge {
+            image,
             ..Default::default()
-        };
-        let leader = LEADER_THROTTLED_REPLICAS_KEY;
-        let record = |pairs: &[StoredOverride<'_>]| {
-            Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                topic: "orders".into(),
-                overrides: overrides_map(pairs),
-            }))
-        };
-        let cases = [
-            (
-                "orders",
-                vec![],
-                vec![make_del_cfg("not.a.topic.config")],
-                record(&[]),
-            ),
-            (
-                "orders",
-                vec![],
-                vec![op(config_keys::CLEANUP_POLICY, OP_APPEND, "compact")],
-                record(&[StoredOverride::new(
-                    config_keys::CLEANUP_POLICY,
-                    "delete,compact",
-                )]),
-            ),
-            (
-                "orders",
-                vec![StoredOverride::new(
-                    config_keys::CLEANUP_POLICY,
-                    "compact,delete",
-                )],
-                vec![op(config_keys::CLEANUP_POLICY, 3, "delete")],
-                record(&[StoredOverride::new(config_keys::CLEANUP_POLICY, "compact")]),
-            ),
-            (
-                "orders",
-                vec![StoredOverride::new(leader, "0:1")],
-                vec![op(leader, OP_APPEND, "1:2")],
-                record(&[StoredOverride::new(leader, "0:1,1:2")]),
-            ),
-            (
-                "orders",
-                vec![StoredOverride::new(leader, "0:1")],
-                vec![op(leader, OP_APPEND, "0:1")],
-                record(&[StoredOverride::new(leader, "0:1")]),
-            ),
-            (
-                "orders",
-                vec![],
-                vec![op(config_keys::RETENTION_MS, OP_APPEND, "1")],
-                Err((
-                    codes::INVALID_CONFIG,
-                    "Can't APPEND to key retention.ms because its type is not LIST.".to_owned(),
-                )),
-            ),
-            (
-                "",
-                vec![],
-                vec![make_set_cfg(config_keys::RETENTION_MS, "1000")],
-                Err((
-                    codes::INVALID_REQUEST,
-                    "Default topic resources are not allowed.".to_owned(),
-                )),
-            ),
-            (
-                "a/b",
-                vec![],
-                vec![make_set_cfg(config_keys::RETENTION_MS, "1000")],
-                Err((
-                    codes::INVALID_TOPIC_EXCEPTION,
-                    "Topic name is invalid: 'a/b' contains one or more characters other than \
-                     ASCII alphanumerics, '.', '_' and '-'"
-                        .to_owned(),
-                )),
-            ),
-            (
-                "missing",
-                vec![],
-                vec![make_set_cfg(config_keys::RETENTION_MS, "1000")],
-                Err((
-                    codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    "The topic 'missing' does not exist.".to_owned(),
-                )),
-            ),
-        ];
-        for (name, stored, ops, want) in cases {
-            let image = image_with_topic_config("orders", &stored);
-            check!(
-                topic_config_record(&make_topic_resource(name, ops.clone()), &image) == want,
-                "{name:?} {stored:?} {ops:?}"
-            );
         }
     }
-
-    /// Kafka's `ConfigurationControlManager` merge and
-    /// `ControllerConfigurationValidator` order for a `TOPIC` resource. Each
-    /// row is the stored overrides, the operations, and the whole outcome.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/incremental_alter_configs/topic_scope.feature",
-        name = "tests: topic operations follow kafkas merge rules"
+    #[rstest_bdd_macros::given(
+        "topic orders exists with these stored overrides and the requested topic is \"{name}\""
     )]
-    fn topic_operations_follow_kafkas_merge_rules() {}
+    fn existing_topic_overrides(
+        topic_merge: &mut TopicConfigurationMerge,
+        name: String,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let pairs = datatable.into_iter().skip(1).collect::<Vec<_>>();
+        let overrides = pairs
+            .iter()
+            .map(|cells| StoredOverride::new(&cells[0], &cells[1]))
+            .collect::<Vec<_>>();
+        topic_merge.image = Some(image_with_topic_config("orders", &overrides));
+        topic_merge.name = if name == "<empty>" {
+            String::new()
+        } else {
+            name
+        };
+    }
+    #[rstest_bdd_macros::when(
+        "topic configuration merges operation {operation} on {key} with value \"{value}\""
+    )]
+    fn incremental_topic_operation(
+        topic_merge: &mut TopicConfigurationMerge,
+        operation: i8,
+        key: String,
+        value: String,
+    ) {
+        let config = AlterableConfig {
+            name: key,
+            config_operation: operation,
+            value: (value != "null").then_some(value),
+            ..Default::default()
+        };
+        topic_merge.result = Some(topic_config_record(
+            &make_topic_resource(&topic_merge.name, vec![config]),
+            topic_merge.image.as_ref().expect("existing topic"),
+        ));
+    }
+    #[rstest_bdd_macros::then("the whole topic config record contains exactly these overrides")]
+    fn merged_topic_overrides(topic_merge: &TopicConfigurationMerge, datatable: Vec<Vec<String>>) {
+        let overrides = datatable
+            .into_iter()
+            .skip(1)
+            .map(|cells| (cells[0].clone(), cells[1].clone()))
+            .collect();
+        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "orders".into(),
+            overrides,
+        });
+        check!(topic_merge.result.as_ref().expect("merge result") == &Ok(expected));
+    }
+    #[rstest_bdd_macros::then(
+        "the topic configuration merge refuses with code {code} and message \"{message}\""
+    )]
+    fn refused_topic_merge(topic_merge: &TopicConfigurationMerge, code: i16, message: String) {
+        check!(topic_merge.result.as_ref().expect("merge result") == &Err((code, message)));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_incremental_topic_merge.feature", fixtures = [topic_merge: TopicConfigurationMerge]);
 }

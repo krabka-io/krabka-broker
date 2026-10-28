@@ -47,19 +47,6 @@ pub async fn share_fetch(
 #[derive(Clone, Copy)]
 pub struct AcquiredRecordCount(pub i64);
 
-pub async fn fetch_count(
-    client: &Client,
-    setup: ShareFetchSetup<'_>,
-    expected: AcquiredRecordCount,
-) -> share_fetch_response::PartitionData {
-    let row = share_fetch(client, setup).await;
-    assert!(
-        acquired_count(&row) == expected.0,
-        "unexpected acquisition: {row:?}"
-    );
-    row
-}
-
 pub async fn acquire_count(
     client: &Client,
     session: ShareSessionSetup<'_>,
@@ -80,21 +67,6 @@ pub async fn acquire_three_and_acknowledge<'a>(
     acquire_count(client, setup.session, AcquiredRecordCount(3)).await;
     acknowledge_success(client, setup).await;
     setup.session
-}
-
-pub async fn fetch_empty(
-    client: &Client,
-    setup: ShareFetchSetup<'_>,
-) -> share_fetch_response::PartitionData {
-    fetch_count(client, setup, AcquiredRecordCount(0)).await
-}
-
-pub async fn fetch_redelivered(client: &Client, setup: ShareFetchSetup<'_>) {
-    let row = fetch_count(client, setup, AcquiredRecordCount(1)).await;
-    assert!(
-        row.acquired_records[0].delivery_count == 2,
-        "unexpected redelivery: {row:?}"
-    );
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]

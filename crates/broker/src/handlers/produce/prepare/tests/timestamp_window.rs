@@ -181,51 +181,51 @@ fn the_unbounded_policy_admits_every_timestamp() {
     check!(prepare(&ancient, unbounded, Some(CompressionType::Zstd)) == Ok(()));
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers produce prepare tests timestamp window: a stock topic carries kafkas one hour future window"
-)]
-fn bdd_verify_a_stock_topic_carries_kafkas_one_hour_future_window() {
-    let now = now_ms();
-    let stock = policy(&[]);
-    let cases = [
-        (
-            "a record from the distant past is admitted",
-            [1_000, 2_000],
-            Ok(()),
-        ),
-        (
-            "a record at the future bound is admitted",
-            [now, now + WINDOW_MS],
-            Ok(()),
-        ),
-        (
-            "a record past the future bound is refused",
-            [now, now + WINDOW_MS + 60_000],
-            Err(codes::INVALID_TIMESTAMP),
-        ),
-    ];
-    for (label, [first, second], want) in cases {
-        let produced = batch(first, second, CompressionType::None);
-        check!(prepare(&produced, stock, None) == want, "verbatim: {label}");
-        check!(
-            prepare(&produced, stock, Some(CompressionType::Zstd)) == want,
-            "owned: {label}"
-        );
+#[derive(Default)]
+struct StockTimestampScenario {
+    produced: Option<RecordBatch>,
+    results: Vec<Result<(), i16>>,
+}
+#[rstest::fixture]
+fn stock_timestamp() -> StockTimestampScenario {
+    let produced = None;
+    StockTimestampScenario {
+        produced,
+        ..Default::default()
     }
 }
-
-/// Kafka 4.3.1 defaults `message.timestamp.after.max.ms` to one hour and
-/// `message.timestamp.before.max.ms` to `Long.MAX_VALUE`, so a topic that
-/// configured nothing refuses a record stamped more than an hour ahead of the
-/// broker's clock and accepts one from any point in the past. A topic that did
-/// not opt into KFC-1 has to behave exactly that way.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/produce/prepare/tests/timestamp_window.feature",
-    name = "a stock topic carries kafkas one hour future window"
+#[rstest_bdd_macros::given("an unconfigured topic receives timestamps {timestamps}")]
+fn stock_timestamp_batch(stock_timestamp: &mut StockTimestampScenario, timestamps: String) {
+    let now = now_ms();
+    let (first, second) = match timestamps.as_str() {
+        "1000 and 2000 milliseconds since the epoch" => (1000, 2000),
+        "now and exactly one hour ahead" => (now, now + WINDOW_MS),
+        "now and one hour plus one minute ahead" => (now, now + WINDOW_MS + 60_000),
+        _ => panic!("unknown timestamp pair: {timestamps}"),
+    };
+    stock_timestamp.produced = Some(batch(first, second, CompressionType::None));
+}
+#[rstest_bdd_macros::when(
+    "the batch is prepared through both verbatim and owned compression paths"
 )]
-fn a_stock_topic_carries_kafkas_one_hour_future_window() {}
+fn prepare_stock_timestamp(stock_timestamp: &mut StockTimestampScenario) {
+    let stock = policy(&[]);
+    let produced = stock_timestamp.produced.as_ref().unwrap();
+    stock_timestamp.results = vec![
+        prepare(produced, stock, None),
+        prepare(produced, stock, Some(CompressionType::Zstd)),
+    ];
+}
+#[rstest_bdd_macros::then("both preparation paths return timestamp error {code}")]
+fn check_stock_timestamp(stock_timestamp: &StockTimestampScenario, code: i16) {
+    let expected = if code == codes::NONE {
+        Ok(())
+    } else {
+        Err(code)
+    };
+    check!(stock_timestamp.results == vec![expected, expected]);
+}
+rstest_bdd_macros::scenarios!("tests/features/handler_stock_timestamp_window",fixtures=[stock_timestamp:StockTimestampScenario]);
 
 /// KFC-1: a scheduled topic's timestamps are delivery times, and the default
 /// `delivery.max.delay.ms` is seven days. Kafka's one-hour future window would

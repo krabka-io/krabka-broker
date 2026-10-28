@@ -116,18 +116,16 @@ impl Sim {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::{assert, check},
+        rstest::fixture,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
 
-    /// Step the bus and the timers one microstep at a time until a leader
-    /// appears, with a bounded number of steps.
-    ///
-    /// This is how the UI's "step" button works.
     fn step_until<F: Fn(&Sim) -> bool>(sim: &mut Sim, max: usize, done: F) {
         for _ in 0..max {
-            if done(sim) {
-                return;
-            }
-            if !sim.step_once() {
+            if done(sim) || !sim.step_once() {
                 return;
             }
         }
@@ -141,131 +139,166 @@ mod tests {
             .map_or(0, |node| node.log_len)
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("sim playground tests: interactive bootstrap elects one leader")]
-    fn bdd_verify_interactive_bootstrap_elects_one_leader() {
-        let mut sim = Sim::new(&[NodeId(1), NodeId(2), NodeId(3)]);
-        // Fresh cluster: no leader, election timers armed, bus empty.
-        assert2::assert!((sim.leaders().is_empty(), sim.snapshot().nodes.len()) == (true, 3));
+    #[derive(Default)]
+    struct Playground {
+        sim: Option<Sim>,
+        initial: Option<SimSnapshot>,
+        old_leader: Option<NodeId>,
+        queued_before: usize,
+        steps_before: usize,
+        dropped: Option<bool>,
+        reordered: Option<usize>,
+        duplicated: Option<bool>,
+        appended: Option<bool>,
+        log_before: usize,
+        log_after: usize,
+    }
 
-        step_until(&mut sim, 10_000, |s| !s.leaders().is_empty());
-        sim.run_until_stable(10_000);
-        assert2::assert!(sim.leaders().len() == 1);
+    impl Playground {
+        fn sim(&mut self) -> &mut Sim { self.sim.as_mut().expect("a playground cluster was given") }
 
+        fn observed(&self) -> &Sim { self.sim.as_ref().expect("a playground cluster was given") }
+    }
+
+    #[fixture]
+    fn playground() -> Playground {
+        // Start this scenario with fresh inputs and observations.
+
+        Playground {
+            sim: None,
+            ..Playground::default()
+        }
+    }
+
+    #[given("a fresh three-voter playground cluster")]
+    fn fresh_cluster(playground: &mut Playground) {
+        let sim = Sim::new(&[NodeId(1), NodeId(2), NodeId(3)]);
+        playground.initial = Some(sim.snapshot());
+        playground.sim = Some(sim);
+    }
+
+    #[when("the operator steps the playground through an election")]
+    fn elect_leader(playground: &mut Playground) {
+        step_until(playground.sim(), 10_000, |sim| !sim.leaders().is_empty());
+        playground.sim().run_until_stable(10_000);
+    }
+
+    #[given("the playground has elected a leader")]
+    fn elected_cluster(playground: &mut Playground) {
+        fresh_cluster(playground);
+        elect_leader(playground);
+        playground.old_leader = Some(playground.observed().leaders()[0]);
+    }
+
+    #[then("the fresh cluster had three voters and no leader")]
+    fn initial_cluster(playground: &Playground) {
+        let initial = playground
+            .initial
+            .as_ref()
+            .expect("initial state was captured");
+        assert!((initial.leaders.is_empty(), initial.nodes.len()) == (true, 3));
+    }
+
+    #[then("the playground reports one leader and an advancing event timeline")]
+    fn stable_snapshot(playground: &Playground) {
+        let sim = playground.observed();
+        assert!(sim.leaders().len() == 1);
         let snap = sim.snapshot();
         check!((snap.leaders.len(), snap.clock_ms > 0, snap.step_count > 0) == (1, true, true));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/sim/playground.feature",
-        name = "tests: interactive bootstrap elects one leader"
-    )]
-    fn interactive_bootstrap_elects_one_leader() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "sim playground tests: interactive partition then heal keeps one leader"
-    )]
-    fn bdd_verify_interactive_partition_then_heal_keeps_one_leader() {
-        let mut sim = Sim::new(&[NodeId(1), NodeId(2), NodeId(3)]);
-        step_until(&mut sim, 10_000, |s| !s.leaders().is_empty());
-        sim.run_until_stable(10_000);
-        let old = sim.leaders()[0];
-
-        sim.partition(old);
-        step_until(&mut sim, 10_000, |s| s.leaders().iter().any(|&l| l != old));
-        sim.run_until_stable(10_000);
-
-        sim.heal(old);
-        sim.run_until_stable(10_000);
-        assert2::assert!(sim.leaders().len() == 1);
+    #[when("the operator isolates the playground leader and heals the partition")]
+    fn partition_then_heal(playground: &mut Playground) {
+        let old = playground.old_leader.expect("the playground had a leader");
+        playground.sim().partition(old);
+        step_until(playground.sim(), 10_000, |sim| {
+            sim.leaders().iter().any(|&leader| leader != old)
+        });
+        playground.sim().run_until_stable(10_000);
+        playground.sim().heal(old);
+        playground.sim().run_until_stable(10_000);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/sim/playground.feature",
-        name = "tests: interactive partition then heal keeps one leader"
-    )]
-    fn interactive_partition_then_heal_keeps_one_leader() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("sim playground tests: drop next removes a message and records it")]
-    fn bdd_verify_drop_next_removes_a_message_and_records_it() {
-        let mut sim = Sim::new(&[NodeId(1), NodeId(2), NodeId(3)]);
-        // Fire the first timer so there is election traffic on the bus.
-        while sim.in_flight().is_empty() && sim.step_once() {}
-        let before = sim.in_flight().len();
-        assert2::assert!(before > 0);
-
-        let steps_before = sim.steps().len();
-        check!(sim.drop_next());
-        check!(sim.in_flight().len() == before - 1);
-        // The drop is recorded on the timeline.
-        check!(sim.steps().len() == steps_before + 1);
-        let last = sim.steps().last().unwrap();
-        assert2::assert!(matches!(last.action, TraceAction::Drop { .. }));
+    #[then("the healed playground has exactly one leader")]
+    fn healed_leader(playground: &Playground) {
+        assert!(playground.observed().leaders().len() == 1);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/sim/playground.feature",
-        name = "tests: drop next removes a message and records it"
-    )]
-    fn drop_next_removes_a_message_and_records_it() {}
+    #[given("election traffic is queued in the playground")]
+    fn queued_election(playground: &mut Playground) {
+        fresh_cluster(playground);
+        while playground.observed().in_flight().is_empty() && playground.sim().step_once() {}
+        playground.queued_before = playground.observed().in_flight().len();
+        playground.steps_before = playground.observed().steps().len();
+    }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("sim playground tests: accessors and bus faults report consistently")]
-    fn bdd_verify_accessors_and_bus_faults_report_consistently() {
-        let mut sim = Sim::new(&[NodeId(1), NodeId(2), NodeId(3)]);
-        assert2::assert!(
-            (sim.voter_ids(), sim.clock_ms()) == (vec![NodeId(1), NodeId(2), NodeId(3)], 0)
-        );
+    #[when("the operator drops the next playground message")]
+    fn drop_message(playground: &mut Playground) {
+        playground.dropped = Some(playground.sim().drop_next());
+    }
 
-        // Pump until there is election traffic, then exercise the bus-replay faults.
-        while sim.in_flight().is_empty() && sim.step_once() {}
-        assert2::assert!(!sim.in_flight().is_empty());
-        assert2::assert!(sim.reorder() >= 1);
+    #[then("one queued message is removed and one drop event is recorded")]
+    fn recorded_drop(playground: &Playground) {
+        let sim = playground.observed();
+        assert!(playground.queued_before > 0);
+        check!(playground.dropped == Some(true));
+        check!(sim.in_flight().len() == playground.queued_before - 1);
+        check!(sim.steps().len() == playground.steps_before + 1);
+        let last = sim.steps().last().expect("drop action was recorded");
+        assert!(matches!(last.action, TraceAction::Drop { .. }));
+    }
 
-        // The logical clock advances as timers fire.
-        sim.run_until_stable(10_000);
-        assert2::assert!(sim.clock_ms() > 0);
-
-        // duplicate_next is a no-op-safe replay when the bus has a message.
-        while sim.in_flight().is_empty() && sim.step_once() {}
-        if !sim.in_flight().is_empty() {
-            assert2::assert!(sim.duplicate_next());
+    #[when("the operator reorders election traffic and duplicates the next available message")]
+    fn replay_faults(playground: &mut Playground) {
+        playground.reordered = Some(playground.sim().reorder());
+        playground.sim().run_until_stable(10_000);
+        while playground.observed().in_flight().is_empty() && playground.sim().step_once() {}
+        if !playground.observed().in_flight().is_empty() {
+            playground.duplicated = Some(playground.sim().duplicate_next());
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/sim/playground.feature",
-        name = "tests: accessors and bus faults report consistently"
-    )]
-    fn accessors_and_bus_faults_report_consistently() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("sim playground tests: append targets the current leader")]
-    fn bdd_verify_append_targets_the_current_leader() {
-        let mut sim = Sim::new(&[NodeId(1), NodeId(2), NodeId(3)]);
-        // No leader yet -> append is a no-op.
-        assert2::assert!(!sim.append(2));
-
-        step_until(&mut sim, 10_000, |s| !s.leaders().is_empty());
-        sim.run_until_stable(10_000);
-        let leader = sim.leaders()[0];
-        let before = log_len(&sim, leader);
-
-        assert2::assert!(sim.append(2));
-        let after = log_len(&sim, leader);
-        assert2::assert!(after == before + 2);
+    #[then("playground accessors and replay faults report the same event history")]
+    fn consistent_faults(playground: &Playground) {
+        let sim = playground.observed();
+        let initial = playground
+            .initial
+            .as_ref()
+            .expect("initial state was captured");
+        assert!(sim.voter_ids() == vec![NodeId(1), NodeId(2), NodeId(3)]);
+        assert!(initial.clock_ms == 0);
+        assert!(playground.queued_before > 0);
+        assert!(playground.reordered.is_some_and(|count| count >= 1));
+        assert!(sim.clock_ms() > 0);
+        if let Some(duplicated) = playground.duplicated {
+            assert!(duplicated);
+        }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/sim/playground.feature",
-        name = "tests: append targets the current leader"
-    )]
-    fn append_targets_the_current_leader() {}
+    #[when("the operator appends two records without a playground leader")]
+    fn append_without_leader(playground: &mut Playground) {
+        playground.appended = Some(playground.sim().append(2));
+    }
+
+    #[then("the playground refuses the append without a leader")]
+    fn append_refused(playground: &Playground) {
+        assert!(playground.appended == Some(false));
+    }
+
+    #[when("the operator elects a leader and appends two records")]
+    fn append_to_leader(playground: &mut Playground) {
+        elect_leader(playground);
+        let leader = playground.observed().leaders()[0];
+        playground.log_before = log_len(playground.observed(), leader);
+        playground.appended = Some(playground.sim().append(2));
+        playground.log_after = log_len(playground.observed(), leader);
+    }
+
+    #[then("the elected playground leader gains exactly two records")]
+    fn appended_records(playground: &Playground) {
+        assert!(playground.appended == Some(true));
+        assert!(playground.log_after == playground.log_before + 2);
+    }
+
+    scenarios!("tests/features/migrated/src/sim/playground.feature", fixtures = [playground: Playground]);
 }

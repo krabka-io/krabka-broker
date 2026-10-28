@@ -1,98 +1,123 @@
-//! `kafka-topics --delete` against a cluster whose two-person rule has no
-//! approved proposal for the delete.
-//!
-//! The create and the list on either side of the refusal are the control: the
-//! same binary against the same broker still creates a topic and still lists
-//! the one the gate saved.
-
+//! Stock topic administration exposes break-glass refusals without deleting the topic.
 use {
     crate::{
-        host_broker::{gate_on, start_jvm_broker},
-        jvm_tool::run_tool,
-        vocabulary::{
-            ACTION_DELETE_TOPIC, DOOMED_TOPIC, POLICY_VIOLATION_EXCEPTION, no_proposal_refusal,
-        },
+        host_broker::{JvmBroker, gate_on, start_jvm_broker},
+        jvm_tool::{ToolRun, run_tool},
     },
     assert2::check,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
 };
+struct ProtectedDeletion {
+    broker: Option<JvmBroker>,
+    topic: String,
+    created: Option<ToolRun>,
+    deleted: Option<ToolRun>,
+    listed: Option<ToolRun>,
+}
+#[fixture]
+fn deletion() -> ProtectedDeletion {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance freeze break glass delete: kafka topics delete carries the brokers break glass refusal"
+    ProtectedDeletion {
+        broker: None,
+        topic: String::new(),
+        created: None,
+        deleted: None,
+        listed: None,
+    }
+}
+#[given(
+    "a healthy broker requires two person approval for privileged topic deletion with no approved proposals"
 )]
-async fn bdd_verify_kafka_topics_delete_carries_the_brokers_break_glass_refusal() {
-    let broker = start_jvm_broker(gate_on).await;
-    let bootstrap = broker.container.as_str();
-
-    let created = run_tool(None, None, &[
+async fn gate(deletion: &mut ProtectedDeletion) {
+    deletion.broker = Some(start_jvm_broker(gate_on).await);
+}
+#[when("the stock topic tool creates topic {topic}")]
+fn create(deletion: &mut ProtectedDeletion, topic: String) {
+    let bootstrap = &deletion
+        .broker
+        .as_ref()
+        .expect("gated broker started")
+        .container;
+    deletion.created = Some(run_tool(None, None, &[
         "kafka-topics",
         "--bootstrap-server",
         bootstrap,
         "--create",
         "--topic",
-        DOOMED_TOPIC,
+        &topic,
         "--partitions",
         "1",
         "--replication-factor",
         "1",
-    ]);
+    ]));
+    deletion.topic = topic;
+}
+#[then("ordinary topic creation remains successful")]
+fn created(deletion: &ProtectedDeletion) {
     check!(
-        created.succeeded(),
-        "creating a topic is not gated, got {created:?}"
+        deletion
+            .created
+            .as_ref()
+            .expect("topic creation completed")
+            .succeeded(),
+        "topic creation must not be gated"
     );
-
-    let deleted = run_tool(None, None, &[
+}
+#[when("the same stock tool requests deletion of that topic")]
+fn delete(deletion: &mut ProtectedDeletion) {
+    let bootstrap = &deletion
+        .broker
+        .as_ref()
+        .expect("gated broker started")
+        .container;
+    deletion.deleted = Some(run_tool(None, None, &[
         "kafka-topics",
         "--bootstrap-server",
         bootstrap,
         "--delete",
         "--topic",
-        DOOMED_TOPIC,
-    ]);
-    let refusal = no_proposal_refusal(ACTION_DELETE_TOPIC, DOOMED_TOPIC);
-    check!(
-        !deleted.succeeded(),
-        "a gated delete with no approval must exit non-zero"
-    );
-    check!(
-        deleted.says(POLICY_VIOLATION_EXCEPTION),
-        "the delete must name the policy violation, got {deleted:?}"
-    );
-    check!(
-        deleted.says(&refusal),
-        "the delete must print {refusal:?}, got {deleted:?}"
-    );
-
-    let listed = run_tool(None, None, &[
+        &deletion.topic,
+    ]));
+}
+#[then("the deletion exits nonzero and prints these policy observations")]
+fn refused(deletion: &ProtectedDeletion, datatable: Vec<Vec<String>>) {
+    let output = deletion.deleted.as_ref().expect("topic deletion completed");
+    check!(!output.succeeded(), "unapproved delete must exit nonzero");
+    for row in datatable.into_iter().skip(1) {
+        let text = row.into_iter().next().expect("policy observation");
+        check!(output.says(&text), "delete missing{text:?}: {output:?}");
+    }
+}
+#[when("the operator lists topics after the rejected deletion")]
+fn list(deletion: &mut ProtectedDeletion) {
+    deletion.listed = Some(run_tool(None, None, &[
         "kafka-topics",
         "--bootstrap-server",
-        bootstrap,
+        &deletion
+            .broker
+            .as_ref()
+            .expect("gated broker started")
+            .container,
         "--list",
-    ]);
-    check!(listed.succeeded(), "listing is not gated, got {listed:?}");
+    ]));
+}
+#[then("topic {topic} remains visible in a successful listing")]
+fn retained(deletion: &ProtectedDeletion, topic: String) {
+    let output = deletion.listed.as_ref().expect("topics listed");
+    check!(output.succeeded(), "listing must not be gated");
     check!(
-        listed.says(DOOMED_TOPIC),
-        "the refusal must have left the topic in place, got {listed:?}"
+        output.says(&topic),
+        "rejected delete must leave topic in place: {output:?}"
     );
 }
-
-/// `kafka-topics --delete` with no break-glass proposal fails, and carries the
-/// broker's own refusal.
-///
-/// The tool holds every right Kafka asks for and the cluster is healthy, so
-/// nothing in the Kafka protocol explains the failure except the message. That
-/// makes the message the feature, and a response that dropped `error_message`
-/// would still carry the right code while telling the operator nothing.
-///
-/// The create and the list around the delete are the control. The same binary,
-/// against the same broker, must still create a topic and still list it
-/// afterwards -- so a refusal here is the gate, and the topic really did
-/// survive it.
 #[ignore = "requires docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_freeze/break_glass_delete.feature",
-    name = "kafka topics delete carries the brokers break glass refusal"
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_break_glass_tools.feature",
+    name = "An unapproved stock topic deletion reports the gate and preserves the topic"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn kafka_topics_delete_carries_the_brokers_break_glass_refusal() {}
+async fn kafka_topics_delete_carries_the_brokers_break_glass_refusal(deletion: ProtectedDeletion) {
+    drop(deletion);
+}

@@ -274,157 +274,140 @@ mod tests {
         }
     }
 
-    /// A follower's progress, by node id.
-    struct FollowerRow {
+    #[derive(serde::Deserialize)]
+    struct ReportedIsrFollower {
         node: u64,
-        stats: FollowerStats,
+        leo: i64,
+        last_fetch_ms_ago: Option<u64>,
+        last_caught_up_ms_ago: Option<u64>,
+        broker_epoch: Option<i64>,
     }
 
-    /// Followers' progress rows, in the order given.
-    fn follower_rows<const N: usize>(rows: [(u64, FollowerStats); N]) -> Vec<FollowerRow> {
-        rows.into_iter()
-            .map(|(node, stats)| FollowerRow { node, stats })
-            .collect()
+    #[derive(serde::Deserialize)]
+    struct InstalledIsrMembers {
+        isr: Vec<u64>,
+        replicas: Vec<u64>,
+        followers: Vec<ReportedIsrFollower>,
     }
 
-    /// A scan row.
-    struct ScanCase<'a> {
-        label: &'a str,
-        /// The installed ISR.
-        isr: &'a [u64],
-        /// The replica set.
-        replicas: &'a [u64],
-        /// The followers' progress.
-        followers: Vec<FollowerRow>,
-        /// The proposal the scan must make.
-        expected: Option<Proposal>,
+    #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+    struct ProposedIsrChange {
+        prev_isr: Vec<u64>,
+        new_isr: Vec<u64>,
+        leader_epoch: i32,
+        partition_epoch: i32,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "isr maintenance proposal tests: a scan proposes the isr kafkas rules select"
+    #[derive(Default)]
+    struct LeaderIsrScan {
+        policy: Option<LeaderPolicy>,
+        record: Option<PartitionRecord>,
+        now: Option<Instant>,
+        leader_leo: Option<Offset>,
+        epoch_start: Option<Offset>,
+        state: Option<ReplicaState>,
+        proposal: rstest_bdd::Slot<Option<ProposedIsrChange>>,
+    }
+
+    #[rstest::fixture]
+    fn leader_isr_scan() -> LeaderIsrScan {
+        // A fresh scan observes one installed ISR and one follower-progress snapshot.
+        LeaderIsrScan::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "brokers 1, 2 and 3 are unfenced at broker epoch 5 with ISR minimum 1 and lag limit 1000 milliseconds"
     )]
-    fn bdd_verify_a_scan_proposes_the_isr_kafkas_rules_select() {
-        let now = Instant::now() + Duration::from_secs(60);
-        let follower_pair = |candidate| {
-            follower_rows([(2, follower(now, 100, Some(10), Some(10))), (3, candidate)])
-        };
-        let cases: [ScanCase<'_>; 10] = [
-            ScanCase {
-                label: "every follower caught up recently",
-                isr: &[1, 2, 3],
-                replicas: &[1, 2, 3],
-                followers: follower_rows([
-                    (2, follower(now, 90, Some(10), Some(500))),
-                    (3, follower(now, 80, Some(10), Some(1_000))),
-                ]),
-                expected: None,
-            },
-            ScanCase {
-                label: "a follower fetching but not caught up for too long leaves",
-                isr: &[1, 2, 3],
-                replicas: &[1, 2, 3],
-                followers: follower_rows([
-                    (2, follower(now, 90, Some(10), Some(10))),
-                    (3, follower(now, 80, Some(10), Some(1_001))),
-                ]),
-                expected: Some(proposal(&[1, 2, 3], &[1, 2])),
-            },
-            ScanCase {
-                label: "an idle follower at the leader's log end stays",
-                isr: &[1, 2],
-                replicas: &[1, 2],
-                followers: follower_rows([(2, follower(now, 100, Some(30_000), Some(30_000)))]),
-                expected: None,
-            },
-            ScanCase {
-                label: "a follower that never fetched from this leader leaves after the bound",
-                isr: &[1, 2],
-                replicas: &[1, 2],
-                followers: follower_rows([(2, follower(now, 100, None, Some(1_001)))]),
-                expected: Some(proposal(&[1, 2], &[1])),
-            },
-            ScanCase {
-                label: "an out-of-sync follower at the high watermark joins",
-                isr: &[1, 2],
-                replicas: &[1, 2, 3],
-                followers: follower_pair(follower(now, 90, Some(30_000), Some(30_000))),
-                expected: Some(proposal(&[1, 2], &[1, 2, 3])),
-            },
-            ScanCase {
-                label: "an out-of-sync follower one short of the high watermark stays out",
-                isr: &[1, 2],
-                replicas: &[1, 2, 3],
-                followers: follower_pair(follower(now, 89, Some(10), Some(10))),
-                expected: None,
-            },
-            ScanCase {
-                label: "a follower past the high watermark that has not fetched from this leader stays out",
-                isr: &[1, 2],
-                replicas: &[1, 2, 3],
-                followers: follower_pair(follower(now, 100, None, Some(10))),
-                expected: None,
-            },
-            ScanCase {
-                label: "an out-of-sync replica with no progress stays out",
-                isr: &[1, 2],
-                replicas: &[1, 2, 3],
-                followers: follower_rows([(2, follower(now, 100, Some(10), Some(10)))]),
-                expected: None,
-            },
-            ScanCase {
-                label: "a follower whose fetch carried a stale broker epoch stays out",
-                isr: &[1, 2],
-                replicas: &[1, 2, 3],
-                followers: follower_rows([
-                    (2, follower(now, 100, Some(10), Some(10))),
-                    (3, FollowerStats {
-                        broker_epoch: Some(4),
-                        ..follower(now, 100, Some(10), Some(10))
-                    }),
-                ]),
-                expected: None,
-            },
-            ScanCase {
-                label: "the leader's own lag and a duplicate assignment change nothing",
-                isr: &[1, 1, 2, 2],
-                replicas: &[1, 1, 2],
-                followers: follower_rows([
-                    (1, follower(now, 0, Some(30_000), Some(30_000))),
-                    (2, follower(now, 100, Some(10), Some(10))),
-                ]),
-                expected: None,
-            },
-        ];
-        for ScanCase {
-            label,
-            isr,
-            replicas,
-            followers,
-            expected,
-        } in cases
-        {
-            let record = record(isr, replicas);
-            let mut st = installed(&record, now, policy());
-            for FollowerRow { node, stats } in followers {
-                st.per_follower.insert(NodeId(node), stats);
-            }
-            assert2::check!(
-                proposal_at(&st, &record, LEADER_LEO, EPOCH_START, now) == expected,
-                "{label}"
+    fn supplied_isr_scan_policy(leader_isr_scan: &mut LeaderIsrScan) {
+        leader_isr_scan.policy = Some(policy());
+    }
+
+    #[rstest_bdd_macros::given(
+        "leader 1 has leader epoch 7, partition epoch 3, log end 100, high watermark 90 and epoch start 80"
+    )]
+    fn supplied_isr_leader_progress(leader_isr_scan: &mut LeaderIsrScan) {
+        leader_isr_scan.record = Some(record(&[], &[]));
+        leader_isr_scan.now = Some(Instant::now() + Duration::from_secs(60));
+        leader_isr_scan.leader_leo = Some(LEADER_LEO);
+        leader_isr_scan.epoch_start = EPOCH_START;
+    }
+
+    #[rstest_bdd_macros::given(
+        "the installed ISR, assigned replicas and follower observations are JSON {members}"
+    )]
+    fn supplied_isr_scan_members(leader_isr_scan: &mut LeaderIsrScan, members: String) {
+        let members: InstalledIsrMembers = serde_json::from_str(&members)
+            .expect("explicit membership and elapsed follower observations");
+        let record = leader_isr_scan
+            .record
+            .as_mut()
+            .expect("leader metadata was given");
+        record.isr = nodes(&members.isr);
+        record.replicas = nodes(&members.replicas);
+        let now = leader_isr_scan.now.expect("scan clock was given");
+        let mut state = installed(
+            record,
+            now,
+            leader_isr_scan
+                .policy
+                .take()
+                .expect("broker eligibility and lag policy were given"),
+        );
+        for observation in members.followers {
+            let mut stats = follower(
+                now,
+                observation.leo,
+                observation.last_fetch_ms_ago,
+                observation.last_caught_up_ms_ago,
             );
+            stats.broker_epoch = observation.broker_epoch;
+            state.per_follower.insert(NodeId(observation.node), stats);
         }
+        leader_isr_scan.state = Some(state);
     }
 
-    /// One scan with a 1 s `replica.lag.time.max.ms`. In-sync followers follow
-    /// Kafka's `Partition.getOutOfSyncReplicas`, out-of-sync ones
-    /// `Partition.needsExpandIsr`.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/isr_maintenance/proposal.feature",
-        name = "tests: a scan proposes the isr kafkas rules select"
-    )]
-    fn a_scan_proposes_the_isr_kafkas_rules_select() {}
+    #[rstest_bdd_macros::when("the leader scans for Kafka ISR expansion or shrink")]
+    fn compute_leader_isr_proposal(leader_isr_scan: &mut LeaderIsrScan) {
+        let proposed = proposal_at(
+            leader_isr_scan
+                .state
+                .as_ref()
+                .expect("ISR and follower progress were installed"),
+            leader_isr_scan
+                .record
+                .as_ref()
+                .expect("partition metadata was given"),
+            leader_isr_scan
+                .leader_leo
+                .expect("leader log end was given"),
+            Some(
+                leader_isr_scan
+                    .epoch_start
+                    .expect("leader epoch start was given"),
+            ),
+            leader_isr_scan.now.expect("scan clock was given"),
+        );
+        leader_isr_scan
+            .proposal
+            .set(proposed.map(|proposal| ProposedIsrChange {
+                prev_isr: proposal.prev_isr.into_iter().map(|node| node.0).collect(),
+                new_isr: proposal.new_isr.into_iter().map(|node| node.0).collect(),
+                leader_epoch: proposal.leader_epoch.0,
+                partition_epoch: proposal.partition_epoch,
+            }));
+    }
+
+    #[rstest_bdd_macros::then("the complete ISR proposal is JSON {proposal}")]
+    fn expected_leader_isr_proposal(leader_isr_scan: &LeaderIsrScan, proposal: String) {
+        let expected: Option<ProposedIsrChange> =
+            serde_json::from_str(&proposal).expect("independent ISR proposal or no-change null");
+        assert2::check!(leader_isr_scan.proposal.get() == Some(expected));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/isr_maintenance/proposal.feature",
+        fixtures = [leader_isr_scan: LeaderIsrScan]
+    );
 
     #[test]
     fn a_shrunk_follower_needs_a_new_fetch_before_rejoining() {

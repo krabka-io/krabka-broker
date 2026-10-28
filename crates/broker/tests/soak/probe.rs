@@ -299,55 +299,19 @@ pub fn resident_bytes(pid: u32) -> Option<u64> {
     parse_vm_rss_bytes(&status)
 }
 
+#[cfg(test)]
 mod tests {
     use {
         super::*,
         assert2::check,
+        rstest::fixture,
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
         std::{fs, process},
+        tempfile::TempDir,
     };
 
-    /// Equal to within a hair.
-    ///
-    /// Every value compared in this module is a small integer an `f64`
-    /// represents exactly, so the tolerance hides no real difference -- it is
-    /// how the comparison is written without a Clippy suppression.
     fn near(a: f64, b: f64) -> bool { (a - b).abs() < 1.0e-9 }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak probe tests: vm rss is read in kibibytes")]
-    fn bdd_verify_vm_rss_is_read_in_kibibytes() {
-        let status =
-            "Name:\tkrabka-broker\nVmPeak:\t 900000 kB\nVmRSS:\t  262144 kB\nThreads:\t8\n";
-        check!(parse_vm_rss_bytes(status) == Some(262_144 * 1024));
-    }
-
-    /// The kernel writes kibibytes; reading them as bytes would understate
-    /// every resident-set sample by a factor of 1024 and make the ceiling
-    /// meaningless.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak/probe.feature",
-        name = "tests: vm rss is read in kibibytes"
-    )]
-    fn vm_rss_is_read_in_kibibytes() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak probe tests: a status without vm rss has no resident set")]
-    fn bdd_verify_a_status_without_vm_rss_has_no_resident_set() {
-        check!(parse_vm_rss_bytes("Name:\tkrabka-broker\n") == None);
-        check!(parse_vm_rss_bytes("VmRSS:\t  262144 pages\n") == None);
-        check!(parse_vm_rss_bytes("") == None);
-    }
-
-    /// A body with no `VmRSS` -- a process that exited mid-read -- is absent,
-    /// not zero. Zero would look like a broker using no memory at all and
-    /// would drag a mean down rather than fail.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak/probe.feature",
-        name = "tests: a status without vm rss has no resident set"
-    )]
-    fn a_status_without_vm_rss_has_no_resident_set() {}
 
     const EXPOSITION: &str = "\
 # HELP krabka_broker_active_connections Open connections.
@@ -363,293 +327,433 @@ krabka_broker_log_compactions_total{topic=\"a\",partition=\"1\"} 5
 krabka_broker_log_compactions_total_seconds 999
 ";
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak probe tests: series are the sample lines alone")]
-    fn bdd_verify_series_are_the_sample_lines_alone() {
-        check!(count_series(EXPOSITION) == 5);
-        check!(count_series("") == 0);
-        check!(count_series("# HELP only metadata here\n") == 0);
+    #[derive(DataTableRow)]
+    struct FileRow {
+        path: String,
+        bytes: usize,
+    }
+    #[derive(DataTableRow)]
+    struct EntryRow {
+        entry: String,
+    }
+    #[derive(DataTableRow)]
+    struct MembershipRow {
+        entry: String,
+        matches: bool,
+    }
+    #[derive(DataTableRow)]
+    struct UsageRow {
+        name: String,
+        bytes: u64,
+        files: u64,
+    }
+    #[derive(DataTableRow)]
+    struct TimedUsageRow {
+        seconds: u64,
+        entry: String,
+        bytes: u64,
+        files: u64,
+    }
+    #[derive(DataTableRow)]
+    struct GrowthRow {
+        entry: String,
+        bytes: i128,
+        files: i128,
     }
 
-    /// Cardinality is sample lines. Counting `# HELP`/`# TYPE` would inflate
-    /// every reading by roughly the number of families, which is most of the
-    /// body.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak/probe.feature",
-        name = "tests: series are the sample lines alone"
-    )]
-    fn series_are_the_sample_lines_alone() {}
+    #[derive(Default)]
+    struct ProbeScenario {
+        statuses: Vec<String>,
+        rss: Vec<Option<u64>>,
+        exposition: String,
+        cardinalities: Vec<usize>,
+        sums: BTreeMap<String, f64>,
+        segment_names: Vec<String>,
+        offsets: Vec<Option<u64>>,
+        directory: Option<TempDir>,
+        total: Option<DirectoryUsage>,
+        missing: Option<DirectoryUsage>,
+        breakdown: BTreeMap<String, DirectoryUsage>,
+        entries: Vec<String>,
+        topic: String,
+        membership: BTreeMap<String, bool>,
+        exclusions: BTreeMap<String, DirectoryUsage>,
+        samples: Vec<(time::Duration, BTreeMap<String, DirectoryUsage>)>,
+        growth: Vec<Growth>,
+        largest: Vec<Growth>,
+        empty_growth: Vec<Growth>,
+        grouped_segments: BTreeMap<String, BTreeSet<u64>>,
+        converted: Vec<f64>,
+        unsigned_samples: Vec<u64>,
+        count_sample: usize,
+        process: Option<u32>,
+        descriptors: Option<usize>,
+        resident: Option<u64>,
+    }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak probe tests: a metric sums over its label sets")]
-    fn bdd_verify_a_metric_sums_over_its_label_sets() {
+    #[fixture]
+    fn probe() -> ProbeScenario {
+        // Every resource probe sees its own inputs and captured observations.
+        ProbeScenario {
+            directory: None,
+            ..Default::default()
+        }
+    }
+
+    #[given("the kernel status reports VmRSS 262144 kB")]
+    fn kernel_rss_status(probe: &mut ProbeScenario) {
+        probe.statuses = vec![
+            "Name:\tkrabka-broker\nVmPeak:\t 900000 kB\nVmRSS:\t  262144 kB\nThreads:\t8\n".into(),
+        ];
+    }
+
+    #[given("kernel statuses omit VmRSS use unsupported pages or are empty")]
+    fn unreadable_statuses(probe: &mut ProbeScenario) {
+        probe.statuses = vec![
+            "Name:\tkrabka-broker\n".into(),
+            "VmRSS:\t  262144 pages\n".into(),
+            String::new(),
+        ];
+    }
+
+    #[when("the resource probe parses the resident-set statuses")]
+    fn parse_resident_sets(probe: &mut ProbeScenario) {
+        probe.rss = probe
+            .statuses
+            .iter()
+            .map(|status| parse_vm_rss_bytes(status))
+            .collect();
+    }
+
+    #[then("the resident set is 268435456 bytes")]
+    fn resident_bytes_scaled(probe: &ProbeScenario) {
+        check!(probe.rss == [Some(262_144 * 1024)]);
+    }
+
+    #[then("all three statuses report no resident-set reading")]
+    fn unavailable_rss(probe: &ProbeScenario) {
+        check!(probe.rss == [None, None, None]);
+    }
+
+    #[given(
+        "a scrape contains five samples including labelled compactions and a prefix-neighbor metric"
+    )]
+    fn labelled_scrape(probe: &mut ProbeScenario) { probe.exposition = EXPOSITION.into(); }
+
+    #[when("the probe counts samples in the scrape an empty body and metadata alone")]
+    fn count_sample_lines(probe: &mut ProbeScenario) {
+        probe.cardinalities = vec![
+            count_series(&probe.exposition),
+            count_series(""),
+            count_series("# HELP only metadata here\n"),
+        ];
+    }
+
+    #[then("their metric cardinalities are five zero and zero")]
+    fn cardinalities_exclude_metadata(probe: &ProbeScenario) {
+        check!(probe.cardinalities == [5, 0, 0]);
+    }
+
+    #[when("the probe sums compactions cleaner runs and compaction seconds")]
+    fn sum_labelled_families(probe: &mut ProbeScenario) {
+        for metric in [
+            "krabka_broker_log_compactions_total",
+            "krabka_broker_log_cleaner_runs_total",
+            "krabka_broker_log_compactions_total_seconds",
+        ] {
+            probe
+                .sums
+                .insert(metric.to_owned(), sum_metric(&probe.exposition, metric));
+        }
+    }
+
+    #[then("compactions sum to 12 cleaner runs to 41 and the distinct seconds metric to 999")]
+    fn distinct_family_sums(probe: &ProbeScenario) {
         check!(near(
-            sum_metric(EXPOSITION, "krabka_broker_log_compactions_total"),
+            probe.sums["krabka_broker_log_compactions_total"],
             12.0
         ));
         check!(near(
-            sum_metric(EXPOSITION, "krabka_broker_log_cleaner_runs_total"),
+            probe.sums["krabka_broker_log_cleaner_runs_total"],
             41.0
         ));
         check!(near(
-            sum_metric(EXPOSITION, "krabka_broker_log_compactions_total_seconds"),
+            probe.sums["krabka_broker_log_compactions_total_seconds"],
             999.0
         ));
     }
 
-    /// A labelled family sums across its members, and a family that merely
-    /// shares a prefix is a different metric.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak/probe.feature",
-        name = "tests: a metric sums over its label sets"
-    )]
-    fn a_metric_sums_over_its_label_sets() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak probe tests: an absent metric is zero")]
-    fn bdd_verify_an_absent_metric_is_zero() {
-        check!(near(
-            sum_metric(EXPOSITION, "krabka_broker_log_cleaner_failures_total"),
-            0.0
-        ));
+    #[when("the probe reads the absent cleaner-failures metric")]
+    fn absent_family_sum(probe: &mut ProbeScenario) {
+        probe.sums.insert(
+            "absent".into(),
+            sum_metric(
+                &probe.exposition,
+                "krabka_broker_log_cleaner_failures_total",
+            ),
+        );
     }
 
-    /// A counter nobody has touched is not exposed at all, and reads as zero
-    /// rather than as an error -- which is what the cycle-count delta needs on
-    /// its first sample.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak/probe.feature",
-        name = "tests: an absent metric is zero"
-    )]
-    fn an_absent_metric_is_zero() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak probe tests: segment names yield their base offset")]
-    fn bdd_verify_segment_names_yield_their_base_offset() {
-        check!(segment_base_offset("00000000000000000000.log") == Some(0));
-        check!(segment_base_offset("00000000000000004096.log") == Some(4096));
-        check!(segment_base_offset("00000000000000004096.index") == None);
-        check!(segment_base_offset("leader-epoch-checkpoint") == None);
+    #[then("the absent metric has value zero")]
+    fn absent_family_is_zero(probe: &ProbeScenario) {
+        check!(near(probe.sums["absent"], 0.0));
     }
 
-    /// Segment names are the zero-padded base offset; the index files beside
-    /// them share the stem and are not segments.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak/probe.feature",
-        name = "tests: segment names yield their base offset"
-    )]
-    fn segment_names_yield_their_base_offset() {}
+    #[given("segment filenames start at zero and 4096 beside an index and epoch checkpoint")]
+    fn mixed_segment_names(probe: &mut ProbeScenario) {
+        probe.segment_names = [
+            "00000000000000000000.log",
+            "00000000000000004096.log",
+            "00000000000000004096.index",
+            "leader-epoch-checkpoint",
+        ]
+        .map(ToOwned::to_owned)
+        .to_vec();
+    }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak probe tests: directory usage sums the tree per top level entry"
-    )]
-    fn bdd_verify_directory_usage_sums_the_tree_per_top_level_entry() {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        fs::write(dir.path().join("a"), vec![0u8; 100]).expect("write a");
-        fs::create_dir_all(dir.path().join("nested/deeper")).expect("mkdir");
-        fs::write(dir.path().join("nested/b"), vec![0u8; 250]).expect("write b");
-        fs::write(dir.path().join("nested/deeper/c"), vec![0u8; 50]).expect("write c");
-        let usage = |bytes, files| DirectoryUsage { bytes, files };
-        check!(directory_usage(dir.path()) == usage(400, 3));
-        check!(directory_usage(&dir.path().join("missing")) == DirectoryUsage::default());
+    #[when("the probe decodes segment base offsets")]
+    fn decode_segment_offsets(probe: &mut ProbeScenario) {
+        probe.offsets = probe
+            .segment_names
+            .iter()
+            .map(|name| segment_base_offset(name))
+            .collect();
+    }
+
+    #[then("only log files yield base offsets zero and 4096")]
+    fn only_segments_have_offsets(probe: &ProbeScenario) {
+        check!(probe.offsets == [Some(0), Some(4096), None, None]);
+    }
+
+    #[given("the log-directory tree contains regular files:")]
+    fn directory_files(probe: &mut ProbeScenario, #[datatable] files: Rows<FileRow>) {
+        let directory = TempDir::new().expect("tempdir");
+        for file in files {
+            let path = directory.path().join(file.path);
+            fs::create_dir_all(path.parent().expect("a fixture file has a parent")).expect("mkdir");
+            fs::write(path, vec![0u8; file.bytes]).expect("write fixture file");
+        }
+        probe.directory = Some(directory);
+    }
+
+    #[when("the probe reads total missing and top-level directory usage")]
+    fn read_directory_usage(probe: &mut ProbeScenario) {
+        let path = probe
+            .directory
+            .as_ref()
+            .expect("the log-directory tree was created")
+            .path();
+        probe.total = Some(directory_usage(path));
+        probe.missing = Some(directory_usage(&path.join("missing")));
+        probe.breakdown = top_level_usage(path);
+    }
+
+    #[then("usage is 400 bytes in three files with a 100-byte file and 300-byte nested subtree")]
+    fn nested_usage_totals(probe: &ProbeScenario) {
         check!(
-            top_level_usage(dir.path())
+            probe.total
+                == Some(DirectoryUsage {
+                    bytes: 400,
+                    files: 3
+                })
+        );
+        check!(probe.missing == Some(DirectoryUsage::default()));
+        check!(
+            probe.breakdown
                 == BTreeMap::from([
-                    ("a".to_owned(), usage(100, 1)),
-                    ("nested".to_owned(), usage(300, 2)),
+                    ("a".to_owned(), DirectoryUsage {
+                        bytes: 100,
+                        files: 1
+                    }),
+                    ("nested".to_owned(), DirectoryUsage {
+                        bytes: 300,
+                        files: 2
+                    })
                 ])
         );
     }
 
-    /// The walk sums regular files at every depth and ignores a directory it
-    /// cannot read, and the top-level rows are one per entry.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak/probe.feature",
-        name = "tests: directory usage sums the tree per top level entry"
-    )]
-    fn directory_usage_sums_the_tree_per_top_level_entry() {}
+    #[given("topic {topic} has these candidate partition directories:")]
+    fn partition_candidates(
+        probe: &mut ProbeScenario,
+        topic: String,
+        #[datatable] entries: Rows<EntryRow>,
+    ) {
+        probe.topic = topic;
+        probe.entries = entries.into_iter().map(|row| row.entry).collect();
+    }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak probe tests: a partition directory is the topic a dash and an index"
-    )]
-    fn bdd_verify_a_partition_directory_is_the_topic_a_dash_and_an_index() {
-        for (entry, topic, want) in [
-            ("soak-verify-0", "soak-verify", true),
-            ("soak-verify-12", "soak-verify", true),
-            ("soak-verify", "soak-verify", false),
-            ("soak-verify-", "soak-verify", false),
-            ("soak-verify-x", "soak-verify", false),
-            ("soak-verify-extra-0", "soak-verify", false),
-            ("soak-retention-0", "soak-verify", false),
-            ("__cluster_metadata-0", "soak-verify", false),
-        ] {
-            check!(is_partition_of(entry, topic) == want, "{entry} of {topic}");
+    #[when("the probe identifies exact topic partition directories")]
+    fn classify_partition_directories(probe: &mut ProbeScenario) {
+        probe.membership = probe
+            .entries
+            .iter()
+            .map(|entry| (entry.clone(), is_partition_of(entry, &probe.topic)))
+            .collect();
+    }
+
+    #[then("partition-directory membership is:")]
+    fn partition_membership(probe: &ProbeScenario, #[datatable] rows: Rows<MembershipRow>) {
+        let rows: Vec<_> = rows.into_iter().collect();
+        check!(rows.len() == probe.membership.len());
+        for row in rows {
+            check!(
+                probe.membership[&row.entry] == row.matches,
+                "{} of {}",
+                row.entry,
+                probe.topic
+            );
         }
     }
 
-    /// Only `<topic>-<digits>` is a partition of the topic: not a topic that
-    /// shares its prefix, and not the topic name alone.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak/probe.feature",
-        name = "tests: a partition directory is the topic a dash and an index"
-    )]
-    fn a_partition_directory_is_the_topic_a_dash_and_an_index() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak probe tests: usage without a topic leaves its partitions out")]
-    fn bdd_verify_usage_without_a_topic_leaves_its_partitions_out() {
-        let usage = |bytes, files| DirectoryUsage { bytes, files };
-        let breakdown = BTreeMap::from([
-            ("soak-verify-0".to_owned(), usage(1_000, 3)),
-            ("soak-retention-0".to_owned(), usage(200, 4)),
-            ("__cluster_metadata-0".to_owned(), usage(30, 5)),
-            ("meta.properties".to_owned(), usage(4, 1)),
-        ]);
-        check!(usage_without(&breakdown, "soak-verify") == usage(234, 10));
-        check!(usage_without(&breakdown, "absent") == usage(1_234, 13));
+    #[given("top-level log-directory usage is:")]
+    fn usage_breakdown(probe: &mut ProbeScenario, #[datatable] rows: Rows<UsageRow>) {
+        probe.breakdown = rows
+            .into_iter()
+            .map(|row| {
+                (row.name, DirectoryUsage {
+                    bytes: row.bytes,
+                    files: row.files,
+                })
+            })
+            .collect();
     }
 
-    /// The excluded topic's partitions drop out of the sum, and everything
-    /// else stays in it.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak/probe.feature",
-        name = "tests: usage without a topic leaves its partitions out"
-    )]
-    fn usage_without_a_topic_leaves_its_partitions_out() {}
+    #[when("the probe excludes soak-verify partitions and separately excludes an absent topic")]
+    fn exclude_topic_usage(probe: &mut ProbeScenario) {
+        for topic in ["soak-verify", "absent"] {
+            probe
+                .exclusions
+                .insert(topic.into(), usage_without(&probe.breakdown, topic));
+        }
+    }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak probe tests: second half growth names what grew most")]
-    fn bdd_verify_second_half_growth_names_what_grew_most() {
-        use std::time::Duration;
-        let usage = |bytes, files| DirectoryUsage { bytes, files };
-        let at = |secs, rows: &[(&str, DirectoryUsage)]| {
-            (
-                Duration::from_secs(secs),
-                rows.iter()
-                    .map(|(name, usage)| ((*name).to_owned(), *usage))
-                    .collect::<BTreeMap<_, _>>(),
-            )
-        };
-        let samples = vec![
-            at(0, &[("meta", usage(0, 1)), ("offsets", usage(0, 3))]),
-            // Before the midpoint of 0..100: not the baseline.
-            at(40, &[("meta", usage(900, 1)), ("offsets", usage(900, 3))]),
-            at(50, &[
-                ("meta", usage(1_000, 7)),
-                ("offsets", usage(500, 3)),
-                ("gone", usage(80, 1)),
-                ("flat", usage(10, 1)),
-            ]),
-            at(100, &[
-                ("meta", usage(1_200, 9)),
-                ("offsets", usage(2_500, 3)),
-                ("new", usage(300, 2)),
-                ("flat", usage(10, 1)),
-            ]),
-        ];
-        let growth = |entry: &str, bytes, files| Growth {
-            entry: entry.to_owned(),
-            bytes,
-            files,
-        };
+    #[then(
+        "excluded usage is 234 bytes in ten files and absent-topic usage is 1234 bytes in thirteen"
+    )]
+    fn topic_exclusion_totals(probe: &ProbeScenario) {
         check!(
-            second_half_growth(&samples, 10)
-                == vec![
-                    growth("offsets", 2_000, 0),
-                    growth("new", 300, 2),
-                    growth("meta", 200, 2),
-                    growth("gone", -80, -1),
-                ]
+            probe.exclusions["soak-verify"]
+                == DirectoryUsage {
+                    bytes: 234,
+                    files: 10
+                }
         );
-        check!(second_half_growth(&samples, 1) == vec![growth("offsets", 2_000, 0)]);
-        check!(second_half_growth(&[], 3).is_empty());
+        check!(
+            probe.exclusions["absent"]
+                == DirectoryUsage {
+                    bytes: 1_234,
+                    files: 13
+                }
+        );
     }
 
-    /// The growth is measured from the first sample at or past the midpoint
-    /// to the last, largest byte gain first, and an entry that appears or
-    /// disappears counts as zero at the other end.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak/probe.feature",
-        name = "tests: second half growth names what grew most"
-    )]
-    fn second_half_growth_names_what_grew_most() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak probe tests: segments are grouped by partition")]
-    fn bdd_verify_segments_are_grouped_by_partition() {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        for (partition, names) in [
-            ("t-0", vec![
-                "00000000000000000000.log",
-                "00000000000000000512.log",
-            ]),
-            ("t-1", vec!["00000000000000000000.log"]),
-            ("__meta", vec!["leader-epoch-checkpoint"]),
-        ] {
-            let path = dir.path().join(partition);
-            fs::create_dir(&path).expect("mkdir");
-            for name in names {
-                fs::write(path.join(name), b"x").expect("write");
-            }
+    #[given("directory usage was sampled at these elapsed seconds:")]
+    fn timed_directory_usage(probe: &mut ProbeScenario, #[datatable] rows: Rows<TimedUsageRow>) {
+        let mut samples: BTreeMap<u64, BTreeMap<String, DirectoryUsage>> = BTreeMap::new();
+        for row in rows {
+            samples
+                .entry(row.seconds)
+                .or_default()
+                .insert(row.entry, DirectoryUsage {
+                    bytes: row.bytes,
+                    files: row.files,
+                });
         }
-        let found = segments(dir.path());
-        check!(found.keys().collect::<Vec<_>>() == vec!["t-0", "t-1"]);
-        check!(found["t-0"] == BTreeSet::from([0, 512]));
-        check!(found["t-1"] == BTreeSet::from([0]));
+        probe.samples = samples
+            .into_iter()
+            .map(|(seconds, usage)| (time::Duration::from_secs(seconds), usage))
+            .collect();
     }
 
-    /// Segments are grouped by partition directory, and a directory holding no
-    /// segment does not appear.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak/probe.feature",
-        name = "tests: segments are grouped by partition"
+    #[when(
+        "the probe ranks second-half growth with limits ten and one and checks an empty history"
     )]
-    fn segments_are_grouped_by_partition() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak probe tests: an implausible sample saturates above every ceiling"
-    )]
-    fn bdd_verify_an_implausible_sample_saturates_above_every_ceiling() {
-        check!(near(sampled(1_024), 1_024.0));
-        check!(near(sampled(u64::MAX), f64::from(u32::MAX)));
-        check!(near(sampled_count(7), 7.0));
+    fn rank_directory_growth(probe: &mut ProbeScenario) {
+        probe.growth = second_half_growth(&probe.samples, 10);
+        probe.largest = second_half_growth(&probe.samples, 1);
+        probe.empty_growth = second_half_growth(&[], 3);
     }
 
-    /// A sample beyond `u32` saturates rather than wrapping, which lands it
-    /// above every ceiling in the suite instead of below one.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak/probe.feature",
-        name = "tests: an implausible sample saturates above every ceiling"
-    )]
-    fn an_implausible_sample_saturates_above_every_ceiling() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak probe tests: a live process reports both readings")]
-    fn bdd_verify_a_live_process_reports_both_readings() {
-        let me = process::id();
-        check!(open_descriptors(me).is_some_and(|n| n > 0));
-        check!(resident_bytes(me).is_some_and(|n| n > 0));
+    #[then("the ranked directory growth is:")]
+    fn ranked_directory_growth(probe: &ProbeScenario, #[datatable] rows: Rows<GrowthRow>) {
+        let expected: Vec<_> = rows
+            .into_iter()
+            .map(|row| Growth {
+                entry: row.entry,
+                bytes: row.bytes,
+                files: row.files,
+            })
+            .collect();
+        check!(probe.growth == expected);
+        check!(
+            probe.largest
+                == vec![Growth {
+                    entry: "offsets".to_owned(),
+                    bytes: 2_000,
+                    files: 0
+                }]
+        );
+        check!(probe.empty_growth.is_empty());
     }
 
-    /// This process's own descriptors and resident set are readable, which is
-    /// the mechanism the container samples use.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak/probe.feature",
-        name = "tests: a live process reports both readings"
-    )]
-    fn a_live_process_reports_both_readings() {}
+    #[when("the probe groups segment files by partition")]
+    fn group_partition_segments(probe: &mut ProbeScenario) {
+        probe.grouped_segments = segments(
+            probe
+                .directory
+                .as_ref()
+                .expect("the segment tree was created")
+                .path(),
+        );
+    }
+
+    #[then("only t-0 and t-1 contain segments with bases zero-512 and zero respectively")]
+    fn grouped_log_segments(probe: &ProbeScenario) {
+        check!(probe.grouped_segments.keys().collect::<Vec<_>>() == vec!["t-0", "t-1"]);
+        check!(probe.grouped_segments["t-0"] == BTreeSet::from([0, 512]));
+        check!(probe.grouped_segments["t-1"] == BTreeSet::from([0]));
+    }
+
+    #[given("sample readings include 1024 the maximum u64 and a count of seven")]
+    fn sample_conversion_inputs(probe: &mut ProbeScenario) {
+        probe.unsigned_samples = vec![1_024, u64::MAX];
+        probe.count_sample = 7;
+    }
+
+    #[when("the probe converts the readings to trend-analysis numbers")]
+    fn convert_sample_readings(probe: &mut ProbeScenario) {
+        probe.converted = probe
+            .unsigned_samples
+            .iter()
+            .copied()
+            .map(sampled)
+            .collect();
+        probe.converted.push(sampled_count(probe.count_sample));
+    }
+
+    #[then("the readings are 1024 the maximum u32 and seven without wrapping")]
+    fn implausible_sample_saturates(probe: &ProbeScenario) {
+        check!(near(probe.converted[0], 1_024.0));
+        check!(near(probe.converted[1], f64::from(u32::MAX)));
+        check!(near(probe.converted[2], 7.0));
+    }
+
+    #[given("the resource probe targets this live process")]
+    fn live_process_target(probe: &mut ProbeScenario) { probe.process = Some(process::id()); }
+
+    #[when("the probe reads live descriptors and resident memory")]
+    fn read_process_resources(probe: &mut ProbeScenario) {
+        let process = probe.process.expect("a live process was selected");
+        probe.descriptors = open_descriptors(process);
+        probe.resident = resident_bytes(process);
+    }
+
+    #[then("the process reports positive descriptor and resident-memory readings")]
+    fn live_process_readings(probe: &ProbeScenario) {
+        check!(probe.descriptors.is_some_and(|descriptors| descriptors > 0));
+        check!(probe.resident.is_some_and(|resident| resident > 0));
+    }
+
+    scenarios!("tests/features/migrated/tests/soak/probe.feature", fixtures = [probe: ProbeScenario]);
 }

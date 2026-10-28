@@ -8,13 +8,18 @@ use {
         topics::{creatable_topic, create_topic_request},
     },
     assert2::{assert, check},
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    support::InProcess,
 };
 mod support;
 
 use {
     krabka_protocol::{
         owned::{
-            offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
+            offset_commit_request::{
+                OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
+            },
             offset_commit_response::{
                 OffsetCommitResponse, OffsetCommitResponsePartition, OffsetCommitResponseTopic,
             },
@@ -33,104 +38,167 @@ const UNKNOWN_TOPIC_ID: i16 = 100;
 
 use crate::support::start_ready_group as start;
 
-#[derive(Clone, Copy)]
-enum FetchTopicShape {
-    Listed,
-    All,
+struct OffsetIdentity {
+    broker: Option<InProcess>,
+    group: String,
+    topic: String,
+    topic_id: WireUuid,
+    committed: i64,
+    unresolved: Vec<WireUuid>,
+    fetched: Option<OffsetFetchResponse>,
+    refused_fetches: Vec<(WireUuid, OffsetFetchResponse)>,
+    partial_commits: Vec<(WireUuid, OffsetCommitResponse)>,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip516 offsets: offset commit and fetch by topic id round trip for {example}"
-)]
-async fn bdd_verify_offset_commit_and_fetch_by_topic_id_round_trip(example: String) {
-    type Example<'a> = (&'a str, &'a str, i64, FetchTopicShape);
-    let (group_id, topic_name, committed_offset, shape): Example<'_> = match example.as_str() {
-        "listed topic" => ("g1", "o_topic", 42, FetchTopicShape::Listed),
-        "fetch all" => ("g3", "fa_topic", 7, FetchTopicShape::All),
-        _ => panic!("unknown BDD example: {example}"),
-    };
+#[fixture]
+fn offsets() -> OffsetIdentity {
+    // Start this scenario with fresh inputs and observations.
 
-    let p = start().await;
-    p.client
+    OffsetIdentity {
+        broker: None,
+        group: String::new(),
+        topic: String::new(),
+        topic_id: WireUuid::ZERO,
+        committed: 0,
+        unresolved: Vec::new(),
+        fetched: None,
+        refused_fetches: Vec::new(),
+        partial_commits: Vec::new(),
+    }
+}
+
+#[given("topic {topic} exists for group {group}")]
+async fn topic_exists(offsets: &mut OffsetIdentity, topic: String, group: String) {
+    let broker = start().await;
+    broker
+        .client
         .send(create_topic_request(
-            creatable_topic().name(topic_name.into()).call(),
+            creatable_topic().name(topic.clone()).call(),
         ))
         .await
         .expect("create topic");
-    let id = topic_id_for(&p.client, topic_name).await;
+    offsets.topic_id = topic_id_for(&broker.client, &topic).await;
+    offsets.broker = Some(broker);
+    offsets.topic = topic;
+    offsets.group = group;
+}
 
-    // Commit by topic_id (v10: name empty, id set). Empty member_id
-    // skips the membership check.
-    p.client
+#[given("a ready group coordinator and zero and unassigned offset topic ids")]
+async fn unknown_fetch_ids(offsets: &mut OffsetIdentity) {
+    offsets.broker = Some(start().await);
+    offsets.group = "g2".into();
+    offsets.unresolved = support::topics::unresolved_topic_ids(0xabad_1dea)
+        .into_iter()
+        .map(|(_, id)| id)
+        .collect();
+}
+
+#[given("one known topic beside zero and unassigned offset commit topic ids")]
+async fn mixed_commit_ids(offsets: &mut OffsetIdentity) {
+    topic_exists(offsets, "oc_known".into(), "gc".into()).await;
+    offsets.unresolved = support::topics::unresolved_topic_ids(0x0bad_0bad)
+        .into_iter()
+        .map(|(_, id)| id)
+        .collect();
+}
+
+fn commit_row(topic_id: WireUuid, committed_offset: i64) -> OffsetCommitRequestTopic {
+    offset_commit_topic(String::new(), topic_id, vec![
+        OffsetCommitRequestPartition {
+            partition_index: 0,
+            committed_offset,
+            ..Default::default()
+        },
+    ])
+}
+
+#[when("offset {offset} is committed using the topic id")]
+async fn commit_by_id(offsets: &mut OffsetIdentity, offset: i64) {
+    let broker = offsets.broker.as_ref().expect("a coordinator exists");
+    broker
+        .client
         .send(OffsetCommitRequest {
-            group_id: group_id.into(),
-            topics: vec![offset_commit_topic(String::new(), id, vec![
-                OffsetCommitRequestPartition {
-                    partition_index: 0,
-                    committed_offset,
-                    ..Default::default()
-                },
-            ])],
+            group_id: offsets.group.clone(),
+            topics: vec![commit_row(offsets.topic_id, offset)],
             ..Default::default()
         })
         .await
         .expect("offset commit");
-
-    let topics = match shape {
-        FetchTopicShape::Listed => Some(vec![offset_fetch_topic(String::new(), id, vec![0])]),
-        FetchTopicShape::All => None,
-    };
-    let resp = p
-        .client
-        .send(offset_fetch_request(offset_fetch_group(group_id, topics)))
-        .await
-        .expect("offset fetch");
-
-    let grp = resp
-        .groups
-        .iter()
-        .find(|g| g.group_id == group_id)
-        .expect("requested group");
-    let t = grp
-        .topics
-        .iter()
-        .find(|t| t.topic_id == id)
-        .expect("topic by id");
-    let part = t.partitions.first().expect("partition 0");
-    check!(part.committed_offset == committed_offset);
-    check!(part.error_code == 0);
-    check!(t.topic_id == id); // id echoed
+    offsets.committed = offset;
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip516 offsets: offset fetch unresolved topic id returns unknown topic id"
-)]
-async fn bdd_verify_offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {
-    /// Kafka's `UNKNOWN_TOPIC_ID` error code.
-    const UNKNOWN_TOPIC_ID: i16 = 100;
-
-    let p = start().await;
-    let cases = support::topics::unresolved_topic_ids(0xabad_1dea);
-    let mut actual = Vec::with_capacity(cases.len());
-    let mut expected = Vec::with_capacity(cases.len());
-    for (label, topic_id) in cases {
-        let resp = p
+#[when("committed offsets are fetched for {selection}")]
+async fn fetch_committed(offsets: &mut OffsetIdentity, selection: String) {
+    let topics = match selection.as_str() {
+        "the listed topic" => Some(vec![offset_fetch_topic(
+            String::new(),
+            offsets.topic_id,
+            vec![0],
+        )]),
+        "all topics" => None,
+        _ => panic!("unknown topic selection: {selection}"),
+    };
+    let broker = offsets.broker.as_ref().expect("a coordinator exists");
+    offsets.fetched = Some(
+        broker
             .client
             .send(offset_fetch_request(offset_fetch_group(
-                "g2",
+                &offsets.group,
+                topics,
+            )))
+            .await
+            .expect("offset fetch"),
+    );
+}
+
+#[then("partition zero returns the committed offset with the same topic identity")]
+fn committed_identity(offsets: &OffsetIdentity) {
+    let response = offsets
+        .fetched
+        .as_ref()
+        .expect("committed offsets were fetched");
+    let group = response
+        .groups
+        .iter()
+        .find(|group| group.group_id == offsets.group)
+        .expect("requested group");
+    let topic = group
+        .topics
+        .iter()
+        .find(|topic| topic.topic_id == offsets.topic_id)
+        .expect("topic by id");
+    let partition = topic.partitions.first().expect("partition 0");
+    check!(partition.committed_offset == offsets.committed);
+    check!(partition.error_code == 0);
+    check!(topic.topic_id == offsets.topic_id);
+}
+
+#[when("committed offsets are requested for each unresolved topic id")]
+async fn fetch_unknown(offsets: &mut OffsetIdentity) {
+    let broker = offsets.broker.as_ref().expect("a coordinator exists");
+    for &topic_id in &offsets.unresolved {
+        let response = broker
+            .client
+            .send(offset_fetch_request(offset_fetch_group(
+                &offsets.group,
                 Some(vec![offset_fetch_topic(String::new(), topic_id, vec![0])]),
             )))
             .await
             .expect("offset fetch");
-        actual.push((label, resp));
-        expected.push((label, OffsetFetchResponse {
+        offsets.refused_fetches.push((topic_id, response));
+    }
+}
+
+#[then("each unresolved fetch echoes its topic id with UNKNOWN_TOPIC_ID and offset minus one")]
+fn refused_fetches(offsets: &OffsetIdentity) {
+    assert!(offsets.refused_fetches.len() == offsets.unresolved.len());
+    for (topic_id, response) in &offsets.refused_fetches {
+        let expected = OffsetFetchResponse {
             groups: vec![OffsetFetchResponseGroup {
-                group_id: "g2".into(),
+                group_id: offsets.group.clone(),
                 topics: vec![OffsetFetchResponseTopics {
                     name: String::new(),
-                    topic_id,
+                    topic_id: *topic_id,
                     partitions: vec![OffsetFetchResponsePartitions {
                         partition_index: 0,
                         committed_offset: -1,
@@ -144,41 +212,30 @@ async fn bdd_verify_offset_fetch_unresolved_topic_id_returns_unknown_topic_id() 
                 ..Default::default()
             }],
             ..Default::default()
-        }));
+        };
+        assert!(*response == expected);
     }
-    assert!(actual == expected);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip516 offsets: offset commit unresolved topic id returns unknown topic id"
-)]
-async fn bdd_verify_offset_commit_unresolved_topic_id_returns_unknown_topic_id() {
-    let p = start().await;
-    p.client
-        .send(create_topic_request(
-            creatable_topic().name(("oc_known").into()).call(),
-        ))
-        .await
-        .expect("create topic");
-    let known = topic_id_for(&p.client, "oc_known").await;
-
-    let cases = [
-        (
-            "non-zero id",
-            WireUuid(uuid::Uuid::from_u128(0x0bad_0bad).into_bytes()),
-        ),
-        ("zero id", WireUuid::ZERO),
-    ];
-    let row = |topic_id, committed_offset| {
-        offset_commit_topic(String::new(), topic_id, vec![
-            OffsetCommitRequestPartition {
-                partition_index: 0,
-                committed_offset,
+#[when("offsets five and nine are committed for the known and each unresolved topic id")]
+async fn commit_mixed(offsets: &mut OffsetIdentity) {
+    let broker = offsets.broker.as_ref().expect("a coordinator exists");
+    for &unresolved in &offsets.unresolved {
+        let response = broker
+            .client
+            .send(OffsetCommitRequest {
+                group_id: offsets.group.clone(),
+                topics: vec![commit_row(offsets.topic_id, 5), commit_row(unresolved, 9)],
                 ..Default::default()
-            },
-        ])
-    };
+            })
+            .await
+            .expect("offset commit");
+        offsets.partial_commits.push((unresolved, response));
+    }
+}
+
+#[then("each commit refuses the unknown id before acknowledging the known topic")]
+fn partial_commit_answers(offsets: &OffsetIdentity) {
     let answer = |topic_id, error_code| OffsetCommitResponseTopic {
         name: String::new(),
         topic_id,
@@ -189,56 +246,58 @@ async fn bdd_verify_offset_commit_unresolved_topic_id_returns_unknown_topic_id()
         }],
         ..Default::default()
     };
-    let mut actual = Vec::with_capacity(cases.len());
-    let mut expected = Vec::with_capacity(cases.len());
-    for (label, unresolved) in cases {
-        let resp = p
-            .client
-            .send(OffsetCommitRequest {
-                group_id: "gc".into(),
-                topics: vec![row(known, 5), row(unresolved, 9)],
-                ..Default::default()
-            })
-            .await
-            .expect("offset commit");
-        actual.push((label, resp));
-        expected.push((label, OffsetCommitResponse {
-            topics: vec![answer(unresolved, UNKNOWN_TOPIC_ID), answer(known, 0)],
+    assert!(offsets.partial_commits.len() == offsets.unresolved.len());
+    for (unresolved, response) in &offsets.partial_commits {
+        let expected = OffsetCommitResponse {
+            topics: vec![
+                answer(*unresolved, UNKNOWN_TOPIC_ID),
+                answer(offsets.topic_id, 0),
+            ],
             ..Default::default()
-        }));
+        };
+        assert!(*response == expected);
     }
-    assert!(actual == expected);
 }
 
-// BDD scenario entry points; acceptance steps are defined above.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip516_offsets.feature",
-    name = "offset commit and fetch by topic id round trip"
-)]
-#[tokio::test]
-async fn offset_commit_and_fetch_by_topic_id_round_trip(example: String) { let _ = example; }
+async fn stop_offset_broker(offsets: OffsetIdentity) {
+    offsets
+        .broker
+        .expect("a broker was started")
+        .broker
+        .shutdown()
+        .await;
+}
 
-/// `OffsetFetch` v10 with a `topic_id` that does not resolve answers
-/// `UNKNOWN_TOPIC_ID` with offset -1 and the id echoed. The zero id is such an
-/// id.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip516_offsets.feature",
-    name = "offset fetch unresolved topic id returns unknown topic id"
+#[scenario(
+    path = "tests/features/migrated/tests/kip516_topic_identity.feature",
+    name = "An offset committed by identity can be fetched without the topic name"
 )]
 #[tokio::test]
-async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {}
+async fn offset_commit_and_fetch_by_topic_id_round_trip(
+    offsets: OffsetIdentity,
+    topic: String,
+    group: String,
+    offset: i64,
+    selection: String,
+) {
+    let _ = (topic, group, offset, selection);
+    stop_offset_broker(offsets).await;
+}
 
-/// `OffsetCommit` v10 with a known `topic_id` and a `topic_id` that does not
-/// resolve. The known topic commits and answers 0. The other row commits
-/// nothing and answers `UNKNOWN_TOPIC_ID` with its id echoed. The zero id is
-/// such an id. Kafka's `OffsetCommitResponse.Builder` puts the refused row
-/// ahead of the committed row.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip516_offsets.feature",
-    name = "offset commit unresolved topic id returns unknown topic id"
+#[scenario(
+    path = "tests/features/migrated/tests/kip516_topic_identity.feature",
+    name = "Offset fetch echoes unresolved topic identities in its errors"
 )]
 #[tokio::test]
-async fn offset_commit_unresolved_topic_id_returns_unknown_topic_id() {}
+async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id(offsets: OffsetIdentity) {
+    stop_offset_broker(offsets).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip516_topic_identity.feature",
+    name = "One unknown topic does not prevent a known topic offset commit"
+)]
+#[tokio::test]
+async fn offset_commit_unresolved_topic_id_returns_unknown_topic_id(offsets: OffsetIdentity) {
+    stop_offset_broker(offsets).await;
+}

@@ -19,7 +19,7 @@ use {
     krabka_metadata::MetadataRecord,
     std::{
         fs,
-        process::Command,
+        process::{Command, Output},
         time::{Duration, Instant},
     },
     tempfile::TempDir,
@@ -145,12 +145,27 @@ public class Kip320Probe {
 }
 "#;
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm kip320 divergence wire conformance: kip320 wire conformance offset for leader epoch"
+const TOPIC: &str = "krabka-kip320-wire";
+#[derive(Default)]
+struct JvmWireEpochs {
+    started: Option<StartedBroker>,
+    bootstrap: String,
+    container: String,
+    client_port: u16,
+    epoch0_end: Option<i64>,
+    rust_answer: Option<(i16, i64)>,
+    java_output: Option<Output>,
+}
+#[rstest::fixture]
+fn jvm_wire_epochs() -> JvmWireEpochs {
+    // Each wire exchange starts its own broker and owns its backing directory.
+    JvmWireEpochs::default()
+}
+#[rstest_bdd_macros::given(
+    "a single Krabka topic krabka-kip320-wire with epoch-zero records {records}"
 )]
-async fn bdd_verify_kip320_wire_conformance_offset_for_leader_epoch() {
-    const TOPIC: &str = "krabka-kip320-wire";
+async fn first_wire_epoch(jvm_wire_epochs: &mut JvmWireEpochs, records: String) {
+    let records: Vec<String> = serde_json::from_str(&records).expect("epoch zero payloads");
     let container = support::unique_container_name("krabka-kip320-wire-helper");
     // Allocated rather than fixed at 10692/10693: two runs of this suite would
     // otherwise race for the same bind, and the loser reports `Address already
@@ -160,8 +175,7 @@ async fn bdd_verify_kip320_wire_conformance_offset_for_leader_epoch() {
     let bootstrap = format!("host.docker.internal:{client_port}");
 
     docker_rm(&container);
-    let StartedBroker { broker, dir: _dir } =
-        start_host_broker_on(client_port, controller_port).await;
+    let StartedBroker { broker, dir } = start_host_broker_on(client_port, controller_port).await;
 
     // 1. Create topic (1 partition, RF=1).
     let out = docker_run_kafka_tool_with_image(KAFKA_IMAGE, &[
@@ -180,11 +194,7 @@ async fn bdd_verify_kip320_wire_conformance_offset_for_leader_epoch() {
     assert2::assert!(out.status.success(), "create topic failed");
 
     // 2. Produce a first batch at the current (epoch 0) leadership.
-    produce_lines_via_jvm(
-        bootstrap.as_str(),
-        TOPIC,
-        &(0..5).map(|i| format!("e0-{i}")).collect::<Vec<_>>(),
-    );
+    produce_lines_via_jvm(bootstrap.as_str(), TOPIC, &records);
 
     // The offset boundary of epoch 0 is the broker's current log end offset.
     let epoch0_end = broker
@@ -192,6 +202,21 @@ async fn bdd_verify_kip320_wire_conformance_offset_for_leader_epoch() {
         .expect("partition hosted");
     eprintln!("KRABKA[kip320] epoch-0 boundary (LEO) = {epoch0_end}");
 
+    jvm_wire_epochs.started = Some(StartedBroker { broker, dir });
+    jvm_wire_epochs.bootstrap = bootstrap;
+    jvm_wire_epochs.container = container;
+    jvm_wire_epochs.client_port = client_port;
+    jvm_wire_epochs.epoch0_end = Some(epoch0_end);
+}
+#[rstest_bdd_macros::when("leadership advances one epoch and records {records} are produced")]
+async fn next_wire_epoch(jvm_wire_epochs: &mut JvmWireEpochs, records: String) {
+    let records: Vec<String> = serde_json::from_str(&records).expect("new epoch payloads");
+    let broker = &jvm_wire_epochs
+        .started
+        .as_ref()
+        .expect("broker started")
+        .broker;
+    let bootstrap = &jvm_wire_epochs.bootstrap;
     // 3. Bump the partition's leader epoch to simulate a leadership change,
     //    then produce a second batch at the new epoch. Now an
     //    OffsetForLeaderEpoch(epoch=0) MUST return `epoch0_end`.
@@ -216,41 +241,42 @@ async fn bdd_verify_kip320_wire_conformance_offset_for_leader_epoch() {
         );
         task::yield_now().await;
     }
-    produce_lines_via_jvm(
-        bootstrap.as_str(),
-        TOPIC,
-        &(0..5).map(|i| format!("e1-{i}")).collect::<Vec<_>>(),
+    produce_lines_via_jvm(bootstrap.as_str(), TOPIC, &records);
+}
+#[rstest_bdd_macros::when(
+    "the Rust client queries partition 0 epoch 0 without current-epoch fencing"
+)]
+async fn rust_epoch_boundary(jvm_wire_epochs: &mut JvmWireEpochs) {
+    let client = krabka_client_core::Client::builder()
+        .bootstrap(format!("127.0.0.1:{}", jvm_wire_epochs.client_port))
+        .build()
+        .await
+        .expect("rust probe client");
+    let answer = client
+        .offset_for_leader_epoch(TOPIC, 0, -1, 0)
+        .await
+        .expect("offset_for_leader_epoch");
+    jvm_wire_epochs.rust_answer = Some((answer.error_code, answer.end_offset));
+}
+#[rstest_bdd_macros::then(
+    "the Rust epoch answer has Kafka code {code} and the recorded epoch-zero end offset"
+)]
+fn expected_rust_epoch(jvm_wire_epochs: &JvmWireEpochs, code: i16) {
+    assert2::assert!(
+        jvm_wire_epochs.rust_answer.expect("Rust query executed")
+            == (
+                code,
+                jvm_wire_epochs.epoch0_end.expect("epoch zero boundary")
+            )
     );
-
-    // 4. Cross-check the broker's own OffsetForLeaderEpoch over the wire via
-    //    the Rust client helper (Task 2). This is the byte-exact source of
-    //    truth the JVM helper is validated against.
-    {
-        let client = krabka_client_core::Client::builder()
-            .bootstrap(format!("127.0.0.1:{client_port}"))
-            .build()
-            .await
-            .expect("rust probe client");
-        // current_leader_epoch = -1 (no fencing); ask for the end offset of
-        // epoch 0.
-        let answer = client
-            .offset_for_leader_epoch(TOPIC, 0, -1, 0)
-            .await
-            .expect("offset_for_leader_epoch");
-        eprintln!("KRABKA[kip320] OffsetForLeaderEpoch(epoch=0) => {answer:?}");
-        assert2::assert!(
-            answer.error_code == 0,
-            "OffsetForLeaderEpoch returned error {}",
-            answer.error_code
-        );
-        assert2::assert!(
-            answer.end_offset == epoch0_end,
-            "OffsetForLeaderEpoch(epoch=0).end_offset {} != epoch-0 boundary {}",
-            answer.end_offset,
-            epoch0_end,
-        );
-    }
-
+}
+#[rstest_bdd_macros::when(
+    "the official JVM consumer validates positions and drains both Fetch v12 epochs"
+)]
+fn java_epoch_boundary(jvm_wire_epochs: &mut JvmWireEpochs) {
+    let container = &jvm_wire_epochs.container;
+    let bootstrap = &jvm_wire_epochs.bootstrap;
+    let epoch0_end = jvm_wire_epochs.epoch0_end.expect("epoch zero boundary");
     // 5. Compile + run the Java helper inside the cp-kafka container. It drives
     //    the official Apache Kafka consumer, which validates positions via
     //    OffsetForLeaderEpoch and decodes Fetch v12+ tagged diverging_epoch /
@@ -278,7 +304,7 @@ async fn bdd_verify_kip320_wire_conformance_offset_for_leader_epoch() {
             "run",
             "--rm",
             "--name",
-            &container,
+            container,
             "--add-host=host.docker.internal:host-gateway",
             "-v",
             &format!("{}:/helper", helper_dir.path().display()),
@@ -291,42 +317,45 @@ async fn bdd_verify_kip320_wire_conformance_offset_for_leader_epoch() {
         ])
         .output()
         .expect("spawn java helper");
-    let stdout = String::from_utf8_lossy(&helper_out.stdout);
-    let stderr = String::from_utf8_lossy(&helper_out.stderr);
+
+    jvm_wire_epochs.java_output = Some(helper_out);
+}
+#[rstest_bdd_macros::then("the Java consumer reports {marker} without {failure}")]
+fn expected_java_epoch(jvm_wire_epochs: &JvmWireEpochs, marker: String, failure: String) {
+    let output = jvm_wire_epochs
+        .java_output
+        .as_ref()
+        .expect("JVM consumer executed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     eprintln!(
         "KRABKA[kip320] java helper status={} stdout={stdout} stderr={stderr}",
-        helper_out.status
-    );
-
-    // The JVM consumer must NOT have hit a deserialization / truncation fault
-    // decoding Krabka's OffsetForLeaderEpoch + diverging_epoch bytes.
-    assert2::assert!(
-        !stderr.contains("RecordDeserializationException")
-            && !stdout.contains("RecordDeserializationException"),
-        "JVM consumer hit a deserialization error decoding Krabka Fetch v12+: {stderr}"
+        output.status
     );
     assert2::assert!(
-        stdout.contains("KIP320PROBE OK"),
-        "JVM OffsetForLeaderEpoch / Fetch v12 conformance probe did not pass: stdout={stdout} stderr={stderr}"
+        !stderr.contains(&failure) && !stdout.contains(&failure),
+        "JVM consumer decoding failure: {stderr}"
     );
-
-    docker_rm(&container);
+    assert2::assert!(
+        stdout.contains(&marker),
+        "JVM conformance probe: stdout={stdout} stderr={stderr}"
+    );
+}
+#[rstest_bdd_macros::then("the wire conformance broker and Java container are shut down")]
+async fn finish_wire_epochs(jvm_wire_epochs: &mut JvmWireEpochs) {
+    docker_rm(&jvm_wire_epochs.container);
+    let StartedBroker {
+        broker,
+        dir: _directory_guard,
+    } = jvm_wire_epochs.started.take().expect("broker started");
     broker.shutdown().await;
 }
-
-/// Step 1 of Task 11: a JVM client and a Krabka broker exchange
-/// `OffsetForLeaderEpoch` + Fetch v12+. The test produces across two epochs on
-/// the Krabka leader, then runs the official Java consumer. That consumer
-/// issues `OffsetForLeaderEpoch` during position validation and decodes the
-/// tagged `diverging_epoch` / `current_leader` Fetch fields. The test asserts
-/// that the consumer drains both epochs without a deserialization or
-/// truncation fault, and that the old epoch's boundary matches the broker's
-/// view.
 #[ignore = "requires Docker; Linux-bound (host.docker.internal bridge)"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/jvm_kip320_divergence/wire_conformance.feature",
-    name = "kip320 wire conformance offset for leader epoch"
+    name = "Official JVM Fetch and epoch validation agree with the Rust epoch boundary"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kip320_wire_conformance_offset_for_leader_epoch() {}
+async fn kip320_wire_conformance_offset_for_leader_epoch(jvm_wire_epochs: JvmWireEpochs) {
+    let _ = jvm_wire_epochs;
+}

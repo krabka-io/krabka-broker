@@ -16,7 +16,7 @@ use {
     assert2::assert,
     bytes::Bytes,
     krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel},
-    krabka_client_producer::Producer,
+    krabka_client_producer::ProducerError,
     krabka_protocol::{
         owned::{
             add_partitions_to_txn_request::{
@@ -35,6 +35,7 @@ use {
     },
     std::{
         fmt,
+        future::Future,
         time::{Duration, Instant},
     },
     tokio::time,
@@ -569,7 +570,10 @@ pub async fn read_committed_at_least(
 }
 
 /// Close the producer before its read-back consumer, surfacing either error.
-pub async fn close_transaction_clients(producer: Producer, consumer: Consumer) {
-    producer.close().await.unwrap();
+pub async fn close_transaction_clients(
+    producer_close: impl Future<Output = Result<(), ProducerError>>,
+    consumer: Consumer,
+) {
+    producer_close.await.unwrap();
     consumer.close().await.unwrap();
 }

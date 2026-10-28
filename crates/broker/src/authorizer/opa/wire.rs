@@ -161,31 +161,41 @@ fn resource_type_str(t: ResourceType) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, serde_json::Value};
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "authorizer opa wire tests: operation str maps kafka names for {example}"
-    )]
-    fn bdd_verify_operation_str_maps_kafka_names(example: String) {
-        type Example<'a> = (AclOperation, &'a str);
-        let (op, want): Example<'_> = match example.as_str() {
-            "read" => (AclOperation::Read, "READ"),
-            "write" => (AclOperation::Write, "WRITE"),
-            "two phase commit" => (AclOperation::TwoPhaseCommit, "TWO_PHASE_COMMIT"),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        assert2::assert!(operation_str(op) == want, "{op:?}");
+    #[derive(Default)]
+    struct PolicyOperation {
+        operation: Option<AclOperation>,
+        rendered: Option<&'static str>,
     }
 
-    /// The OPA input's `operation` string must be the Kafka enum name,
-    /// including KIP-939's `TWO_PHASE_COMMIT`. This pins the mapping, so the
-    /// test catches a regression or a blanket mutation of `operation_str`.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/authorizer/opa/wire.feature",
-        name = "tests: operation str maps kafka names"
-    )]
-    fn operation_str_maps_kafka_names(example: String) { let _ = example; }
+    #[rstest::fixture]
+    fn policy_operation() -> PolicyOperation {
+        // Each operation is rendered independently into the policy vocabulary.
+        PolicyOperation::default()
+    }
+
+    #[rstest_bdd_macros::given("the OPA authorization action is Kafka operation {operation}")]
+    fn supplied_policy_operation(policy_operation: &mut PolicyOperation, operation: String) {
+        policy_operation.operation = Some(
+            serde_json::from_value(Value::String(operation)).expect("named Kafka ACL operation"),
+        );
+    }
+
+    #[rstest_bdd_macros::when("the operation is rendered for an OPA Kafka plugin policy")]
+    fn render_policy_operation(policy_operation: &mut PolicyOperation) {
+        policy_operation.rendered = Some(operation_str(
+            policy_operation.operation.expect("operation was supplied"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the policy operation name is {expected}")]
+    fn expected_policy_operation(policy_operation: &PolicyOperation, expected: String) {
+        assert2::assert!(policy_operation.rendered == Some(expected.as_str()));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/authorizer/opa/wire.feature",
+        fixtures = [policy_operation: PolicyOperation]
+    );
 }

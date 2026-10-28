@@ -156,11 +156,34 @@ async fn bootstrap_opens_the_local_partitions_of_an_existing_offsets_topic() {
     check!(image.topics().filter(|t| t.name == OFFSETS_TOPIC).count() == 1);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "coordinator bootstrap topic bootstrap tests: internal topics are created with kafkas topic configs"
-)]
-async fn bdd_verify_internal_topics_are_created_with_kafkas_topic_configs() {
+/// Kafka creates each coordinator topic with an explicit config map:
+/// `GroupCoordinatorService.groupMetadataTopicConfigs`,
+/// `TransactionCoordinator.transactionStateTopicConfigs` and
+/// `ShareCoordinatorService.shareGroupStateTopicConfigs`. The values below are
+/// Kafka's defaults for `offsets.topic.segment.bytes`,
+/// `transaction.state.log.segment.bytes`, `transaction.state.log.min.isr`,
+/// `share.coordinator.state.topic.segment.bytes` and
+/// `share.coordinator.state.topic.min.isr`.
+use {
+    crate::broker::BrokerHandle,
+    krabka_protocol::owned::create_topics_response::CreateTopicsResponse,
+    rstest_bdd_macros::{given, then, when},
+    tempfile::TempDir,
+};
+#[derive(Default)]
+struct CoordinatorTopicCreation {
+    directory: Option<TempDir>,
+    handle: Option<BrokerHandle>,
+    response: Option<CreateTopicsResponse>,
+}
+#[rstest::fixture]
+fn topic_creation() -> CoordinatorTopicCreation {
+    // Start this scenario with fresh inputs and observations.
+
+    CoordinatorTopicCreation::default()
+}
+#[given("a running broker configures transaction and Share state minimum ISR to Kafka default two")]
+async fn coordinator_topic_broker(topic_creation: &mut CoordinatorTopicCreation) {
     let dir = tempdir().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
     tolerate_starved_heartbeats(&mut config);
@@ -169,6 +192,15 @@ async fn bdd_verify_internal_topics_are_created_with_kafkas_topic_configs() {
     config.share_coordinator.state_topic_min_isr = 2;
     let handle = Broker::start(config).await.expect("start broker");
     handle.wait_until_broker_alive(handle.node_id()).await;
+
+    topic_creation.directory = Some(dir);
+    topic_creation.handle = Some(handle);
+}
+#[when(
+    "the broker creates offsets transaction state and Share state topics through CreateTopics version 7"
+)]
+async fn create_coordinator_topics(topic_creation: &mut CoordinatorTopicCreation) {
+    let handle = topic_creation.handle.as_ref().expect("broker running");
     let broker = handle.broker_arc_for_test();
     let request = CreateTopicsRequest {
         topics: [OFFSETS_TOPIC, TXN_TOPIC, SHARE_TOPIC]
@@ -185,6 +217,18 @@ async fn bdd_verify_internal_topics_are_created_with_kafkas_topic_configs() {
     let response = create_topics::handle(&broker, request, 7, &ctx)
         .await
         .expect("the controller answers CreateTopics");
+
+    topic_creation.response = Some(response);
+}
+#[then(
+    "all coordinator topics are created and each complete configuration map equals Kafka defaults"
+)]
+fn kafka_coordinator_topic_configs(topic_creation: &CoordinatorTopicCreation) {
+    let handle = topic_creation.handle.as_ref().expect("broker running");
+    let response = topic_creation
+        .response
+        .as_ref()
+        .expect("CreateTopics answered");
     for row in &response.topics {
         assert!(row.error_code == codes::NONE, "create: {row:?}");
     }
@@ -217,21 +261,16 @@ async fn bdd_verify_internal_topics_are_created_with_kafkas_topic_configs() {
             .collect();
         check!(image.topic_config(topic) == Some(&expected), "{topic}");
     }
-    handle.shutdown().await;
 }
-
-/// Kafka creates each coordinator topic with an explicit config map:
-/// `GroupCoordinatorService.groupMetadataTopicConfigs`,
-/// `TransactionCoordinator.transactionStateTopicConfigs` and
-/// `ShareCoordinatorService.shareGroupStateTopicConfigs`. The values below are
-/// Kafka's defaults for `offsets.topic.segment.bytes`,
-/// `transaction.state.log.segment.bytes`, `transaction.state.log.min.isr`,
-/// `share.coordinator.state.topic.segment.bytes` and
-/// `share.coordinator.state.topic.min.isr`.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/src/coordinator/bootstrap/topic_bootstrap_tests.feature",
-    name = "internal topics are created with kafkas topic configs"
+    name = "Coordinator internal topics use Kafka configuration maps"
 )]
 #[tokio::test]
-async fn internal_topics_are_created_with_kafkas_topic_configs() {}
+async fn internal_topics_are_created_with_kafkas_topic_configs(
+    topic_creation: CoordinatorTopicCreation,
+) {
+    if let Some(handle) = topic_creation.handle {
+        handle.shutdown().await;
+    }
+}

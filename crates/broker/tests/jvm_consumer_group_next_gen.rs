@@ -7,7 +7,7 @@ mod support;
 
 use {
     assert2::assert,
-    std::{collections::BTreeSet, process::Command},
+    std::{collections::BTreeSet, fmt::Write as _, process::Command},
     support::jvm_docker_run as docker_run,
     tokio::{task, task::JoinHandle},
 };
@@ -100,294 +100,271 @@ fn parse_partitions(stdout: &str) -> BTreeSet<i32> {
     set
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm consumer group next gen: jvm kip848 single consumer round trip")]
-async fn bdd_verify_jvm_kip848_single_consumer_round_trip() {
-    let bootstrap = bootstrap_addr();
-    let StartedBroker {
-        broker: _broker,
-        dir: _dir,
-    } = start_host_broker().await;
-    create_topic("kip848-rt", 1);
-    let produced = docker_run(KAFKA_IMAGE_CLASSIC, &[
-        "bash",
-        "-c",
-        &format!(
-            "printf 'a\\nb\\nc\\n' | kafka-console-producer --bootstrap-server {bootstrap} --topic kip848-rt --producer-property max.block.ms=10000"
-        ),
-    ]);
-    assert!(produced.status.success(), "producer failed: {produced:?}");
-
-    let consumed = docker_run(KAFKA_IMAGE_NEXT_GEN, &[
-        "bash",
-        "-c",
-        &format!(
-            "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {bootstrap} --topic kip848-rt --group g-rt --consumer-property group.protocol=consumer --from-beginning --timeout-ms 10000 --max-messages 3"
-        ),
-    ]);
-    let stdout = String::from_utf8_lossy(&consumed.stdout);
-    assert!(
-        stdout.contains('a') && stdout.contains('b') && stdout.contains('c'),
-        "expected a/b/c, got {stdout}"
-    );
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::process::Output,
+};
+struct GroupProtocol {
+    broker: Option<StartedBroker>,
+    topic: String,
+    produced: Option<Output>,
+    consumed: Option<Output>,
+    described: Option<Output>,
+    assigned: Option<String>,
+    keyed_payload: String,
 }
+#[fixture]
+fn protocol() -> GroupProtocol {
+    // Start this scenario with fresh inputs and observations.
 
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
-    name = "jvm kip848 single consumer round trip"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_kip848_single_consumer_round_trip() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm consumer group next gen: jvm kip848 describe group")]
-async fn bdd_verify_jvm_kip848_describe_group() {
-    let bootstrap = bootstrap_addr();
-    let StartedBroker {
-        broker: _broker,
-        dir: _dir,
-    } = start_host_broker().await;
-    create_topic("kip848-d", 1);
-    docker_run(KAFKA_IMAGE_CLASSIC, &[
-        "bash",
-        "-c",
-        &format!(
-            "printf '1\\n2\\n' | kafka-console-producer --bootstrap-server {bootstrap} --topic kip848-d"
-        ),
-    ]);
-    let _ = docker_run(KAFKA_IMAGE_NEXT_GEN, &[
-        "bash",
-        "-c",
-        &format!(
-            "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {bootstrap} --topic kip848-d --group g-d --consumer-property group.protocol=consumer --from-beginning --timeout-ms 10000 --max-messages 2"
-        ),
-    ]);
-    let described = docker_run(KAFKA_IMAGE_NEXT_GEN, &[
-        "bash",
-        "-c",
-        &format!(
-            "/opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server {bootstrap} --describe --group g-d"
-        ),
-    ]);
-    let stdout = String::from_utf8_lossy(&described.stdout);
-    assert!(
-        stdout.contains("g-d"),
-        "expected group g-d in describe output, got {stdout}"
-    );
+    GroupProtocol {
+        broker: None,
+        topic: String::new(),
+        produced: None,
+        consumed: None,
+        described: None,
+        assigned: None,
+        keyed_payload: String::new(),
+    }
 }
-
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
-    name = "jvm kip848 describe group"
+#[given(
+    "a broker with bidirectional group migration hosts topic {topic} with {partitions} partitions"
 )]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_kip848_describe_group() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm consumer group next gen: jvm kip848 delete group")]
-async fn bdd_verify_jvm_kip848_delete_group() {
-    let bootstrap = bootstrap_addr();
-    let StartedBroker {
-        broker: _broker,
-        dir: _dir,
-    } = start_host_broker().await;
-    create_topic("kip848-del", 1);
-    docker_run(KAFKA_IMAGE_CLASSIC, &[
-        "bash",
-        "-c",
-        &format!(
-            "printf 'x\\n' | kafka-console-producer --bootstrap-server {bootstrap} --topic kip848-del"
-        ),
-    ]);
-    let _ = docker_run(KAFKA_IMAGE_NEXT_GEN, &[
-        "bash",
-        "-c",
-        &format!(
-            "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {bootstrap} --topic kip848-del --group g-del --consumer-property group.protocol=consumer --from-beginning --timeout-ms 10000 --max-messages 1"
-        ),
-    ]);
-    let deleted = docker_run(KAFKA_IMAGE_NEXT_GEN, &[
-        "bash",
-        "-c",
-        &format!(
-            "/opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server {bootstrap} --delete --group g-del"
-        ),
-    ]);
-    assert!(deleted.status.success(), "delete failed: {deleted:?}");
+async fn group_topic(protocol: &mut GroupProtocol, topic: String, partitions: i32) {
+    protocol.broker = Some(start_host_broker().await);
+    create_topic(&topic, partitions);
+    protocol.topic = topic;
 }
-
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
-    name = "jvm kip848 delete group"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_kip848_delete_group() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm consumer group next gen: jvm kip848 coexists with classic")]
-async fn bdd_verify_jvm_kip848_coexists_with_classic() {
-    let bootstrap = bootstrap_addr();
-    let StartedBroker {
-        broker: _broker,
-        dir: _dir,
-    } = start_host_broker().await;
-    create_topic("kip848-coex", 1);
-    docker_run(KAFKA_IMAGE_CLASSIC, &[
-        "bash",
-        "-c",
-        &format!(
-            "printf 'p\\nq\\n' | kafka-console-producer --bootstrap-server {bootstrap} --topic kip848-coex"
-        ),
-    ]);
-    let classic = docker_run(KAFKA_IMAGE_CLASSIC, &[
-        "bash",
-        "-c",
-        &format!(
-            "kafka-console-consumer --bootstrap-server {bootstrap} --topic kip848-coex --group g-classic --from-beginning --timeout-ms 10000 --max-messages 2"
-        ),
-    ]);
-    let cs = String::from_utf8_lossy(&classic.stdout);
-    assert!(cs.contains('p') && cs.contains('q'));
-
-    let next_gen = docker_run(KAFKA_IMAGE_NEXT_GEN, &[
-        "bash",
-        "-c",
-        &format!(
-            "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {bootstrap} --topic kip848-coex --group g-next --consumer-property group.protocol=consumer --from-beginning --timeout-ms 10000 --max-messages 2"
-        ),
-    ]);
-    let ns = String::from_utf8_lossy(&next_gen.stdout);
-    assert!(ns.contains('p') && ns.contains('q'));
+#[given("a deterministic keyed migration batch contains")]
+fn keyed_batch(protocol: &mut GroupProtocol, datatable: Vec<Vec<String>>) {
+    protocol.keyed_payload.clear();
+    for row in datatable.into_iter().skip(1) {
+        let [key, value]: [String; 2] = row.try_into().expect("key and value");
+        writeln!(protocol.keyed_payload, "{key}:{value}").expect("format keyed input");
+    }
 }
-
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
-    name = "jvm kip848 coexists with classic"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_kip848_coexists_with_classic() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm consumer group next gen: jvm kip848 classic and consumer in one group migrate"
-)]
-async fn bdd_verify_jvm_kip848_classic_and_consumer_in_one_group_migrate() {
+fn publish(protocol: &mut GroupProtocol, values: &str, max_block: Option<u32>) {
     let bootstrap = bootstrap_addr();
-    let StartedBroker { broker, dir: _dir } = start_host_broker().await;
-    create_topic("mig", 4);
-    let group = "g-migrate";
-    let all: BTreeSet<i32> = (0..4).collect();
-
-    // Produce one deterministic batch of 8 records (2 per partition). Kafka's
-    // default partitioner is murmur2(key) % numPartitions, so keyed records land
-    // on a fixed partition: "0"->0, "4"->1, "5"->2, "1"->3.
-    let produce = |label: &str| {
-        let out = docker_run(KAFKA_IMAGE_CLASSIC, &[
-            "bash",
-            "-c",
-            &format!(
-                "printf '0:a\\n4:b\\n5:c\\n1:d\\n0:e\\n4:f\\n5:g\\n1:h\\n' | \
-                     kafka-console-producer --bootstrap-server {bootstrap} --topic mig \
-                     --property parse.key=true --property key.separator=: \
-                     --producer-property max.block.ms=15000"
-            ),
-        ]);
-        assert!(out.status.success(), "{label} producer failed: {out:?}");
+    let topic = &protocol.topic;
+    let payload = values.replace(',', "\\n");
+    let extra = max_block.map_or_else(String::new, |timeout| {
+        format!(" --producer-property max.block.ms={timeout}")
+    });
+    protocol.produced = Some(docker_run(KAFKA_IMAGE_CLASSIC, &[
+        "bash",
+        "-c",
+        &format!(
+            "printf '{payload}\\n' | kafka-console-producer --bootstrap-server {bootstrap} --topic {topic}{extra}"
+        ),
+    ]));
+}
+#[when("the classic producer publishes values {values}")]
+fn produce(protocol: &mut GroupProtocol, values: String) { publish(protocol, &values, None); }
+#[when("the classic producer publishes a b and c with a ten second metadata block limit")]
+fn bounded_produce(protocol: &mut GroupProtocol) { publish(protocol, "a,b,c", Some(10_000)); }
+#[when("the deterministic keyed migration batch is produced")]
+fn produce_keyed(protocol: &mut GroupProtocol) {
+    let bootstrap = bootstrap_addr();
+    let topic = &protocol.topic;
+    let payload = &protocol.keyed_payload;
+    protocol.produced = Some(docker_run(KAFKA_IMAGE_CLASSIC, &[
+        "bash",
+        "-c",
+        &format!(
+            "printf '{payload}' | kafka-console-producer --bootstrap-server {bootstrap} --topic {topic} --property parse.key=true --property key.separator=: --producer-property max.block.ms=15000"
+        ),
+    ]));
+}
+#[then("the classic producer completes successfully")]
+fn produced(protocol: &GroupProtocol) {
+    let output = protocol
+        .produced
+        .as_ref()
+        .expect("classic producer completed");
+    assert!(output.status.success(), "producer failed: {output:?}");
+}
+fn consumer_command(
+    protocol: &GroupProtocol,
+    group: &str,
+    kind: &str,
+    count: usize,
+    partition_output: bool,
+) -> (&'static str, String) {
+    let bootstrap = bootstrap_addr();
+    let topic = &protocol.topic;
+    let (image, consumer, properties) = match kind {
+        "classic" => (KAFKA_IMAGE_CLASSIC, "kafka-console-consumer", ""),
+        "consumer" => (
+            KAFKA_IMAGE_NEXT_GEN,
+            "/opt/kafka/bin/kafka-console-consumer.sh",
+            " --consumer-property group.protocol=consumer",
+        ),
+        _ => panic!("unknown group protocol {kind}"),
     };
-
-    // Phase 1 — classic consumer drains batch 1 from all four partitions.
-    produce("batch1");
-    let classic_out = spawn_consumer(
-        KAFKA_IMAGE_CLASSIC,
+    let (timeout, printing) = if partition_output {
+        (25_000, " --property print.partition=true")
+    } else {
+        (10_000, "")
+    };
+    (
+        image,
         format!(
-            "kafka-console-consumer --bootstrap-server {bootstrap} --topic mig --group {group} \
-             --from-beginning --property print.partition=true --timeout-ms 25000 --max-messages 8"
+            "{consumer} --bootstrap-server {bootstrap} --topic {topic} --group {group}{properties} --from-beginning{printing} --timeout-ms {timeout} --max-messages {count}"
         ),
     )
-    .await
-    .unwrap();
-    eprintln!("KRABKA[test] classic stdout:\n{classic_out}");
-    let cp = parse_partitions(&classic_out);
-    assert!(
-        cp == all,
-        "classic consumer must cover all partitions: {cp:?}\nstdout: {classic_out}"
+}
+#[when("a {kind} protocol console consumer in group {group} reads {count} records")]
+fn consume(protocol: &mut GroupProtocol, kind: String, group: String, count: usize) {
+    let (image, script) = consumer_command(protocol, &group, &kind, count, false);
+    protocol.consumed = Some(docker_run(image, &["bash", "-c", &script]));
+}
+#[then("the console consumer emits values {values}")]
+fn consumed(protocol: &GroupProtocol, values: String) {
+    let output = protocol
+        .consumed
+        .as_ref()
+        .expect("console consumer completed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for value in values.split(',') {
+        assert!(
+            stdout.contains(value),
+            "expected {value} in consumer output: {stdout}"
+        );
+    }
+}
+#[when(
+    "a sole {kind} protocol member drains eight records from group g migrate and prints assignments"
+)]
+async fn assigned_consume(protocol: &mut GroupProtocol, kind: String) {
+    let (image, script) = consumer_command(protocol, "g-migrate", &kind, 8, true);
+    protocol.assigned = Some(
+        spawn_consumer(image, script)
+            .await
+            .expect("consumer task completed"),
     );
-
-    // Phase 2 — a next-gen consumer joins the SAME group (in-place migration to
-    // the consumer protocol) and drains batch 2 from the classic-committed
-    // offsets, across all four partitions.
-    produce("batch2");
-    let nextgen_out = spawn_consumer(
-        KAFKA_IMAGE_NEXT_GEN,
-        format!(
-            "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {bootstrap} --topic mig \
-             --group {group} --consumer-property group.protocol=consumer --from-beginning \
-             --property print.partition=true --timeout-ms 25000 --max-messages 8"
-        ),
-    )
-    .await
-    .unwrap();
-    eprintln!("KRABKA[test] nextgen stdout:\n{nextgen_out}");
-    let np = parse_partitions(&nextgen_out);
+}
+#[then("the member covers every partition zero through three")]
+fn all_partitions(protocol: &GroupProtocol) {
+    let stdout = protocol
+        .assigned
+        .as_ref()
+        .expect("assignment consumer completed");
+    let partitions = parse_partitions(stdout);
+    let expected: BTreeSet<i32> = (0..4).collect();
     assert!(
-        np == all,
-        "next-gen consumer must cover all partitions after the migration: {np:?}\nstdout: {nextgen_out}"
+        partitions == expected,
+        "consumer must cover all partitions: {partitions:?}\nstdout:{stdout}"
     );
-
-    // The migrated group must describe coherently to the JVM admin tooling.
-    let describe = docker_run(KAFKA_IMAGE_NEXT_GEN, &[
+}
+#[when("the stock consumer group tool describes group {group}")]
+fn describe(protocol: &mut GroupProtocol, group: String) {
+    let bootstrap = bootstrap_addr();
+    protocol.described = Some(docker_run(KAFKA_IMAGE_NEXT_GEN, &[
         "bash",
         "-c",
         &format!(
             "/opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server {bootstrap} --describe --group {group}"
         ),
-    ]);
+    ]));
+}
+#[then("the description contains group {group}")]
+fn group_visible(protocol: &GroupProtocol, group: String) {
+    let stdout =
+        String::from_utf8_lossy(&protocol.described.as_ref().expect("group described").stdout);
     assert!(
-        String::from_utf8_lossy(&describe.stdout).contains("mig"),
-        "describe mentions topic mig: {}",
-        String::from_utf8_lossy(&describe.stdout),
+        stdout.contains(&group),
+        "expected group {group} in describe output: {stdout}"
     );
-
-    drop(broker);
+}
+#[then("the migrated group description includes its subscribed topic")]
+fn topic_visible(protocol: &GroupProtocol) {
+    let stdout = String::from_utf8_lossy(
+        &protocol
+            .described
+            .as_ref()
+            .expect("migrated group described")
+            .stdout,
+    );
+    assert!(
+        stdout.contains(&protocol.topic),
+        "describe missing topic {}: {stdout}",
+        protocol.topic
+    );
+}
+#[when("the stock consumer group tool deletes group g del")]
+fn delete(protocol: &mut GroupProtocol) {
+    let bootstrap = bootstrap_addr();
+    protocol.described = Some(docker_run(KAFKA_IMAGE_NEXT_GEN, &[
+        "bash",
+        "-c",
+        &format!(
+            "/opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server {bootstrap} --delete --group g-del"
+        ),
+    ]));
+}
+#[then("the consumer group deletion succeeds")]
+fn deleted(protocol: &GroupProtocol) {
+    let output = protocol
+        .described
+        .as_ref()
+        .expect("group deletion completed");
+    assert!(output.status.success(), "delete failed: {output:?}");
 }
 
-/// Migration interop within a *single* consumer group, deterministically.
-///
-/// Phase 1: a classic (cp-kafka 7.4.0) consumer forms group `g-migrate` and
-/// drains batch 1. That proves the classic protocol serves the group. Phase
-/// 2: a next-gen (apache/kafka 4.0.0, `group.protocol=consumer`) consumer joins
-/// the SAME group and drains a freshly-produced batch 2. Krabka's unified
-/// coordinator runs the default `Bidirectional` policy with the consumer
-/// rebalance protocol enabled, from `NextGenConfig::default`, because
-/// `start_host_broker` does not override it. The consumer protocol therefore
-/// serves the group in place, and the next-gen member reads batch 2 from the
-/// offsets that the classic member committed. Both protocols work against the
-/// same group, with offset continuity across the migration.
-///
-/// Each phase runs a SOLE member that owns all partitions, so the assignment is
-/// fixed and there is no concurrency or rebalance race. An earlier concurrent
-/// design flaked on CI, because the lone classic member drained every record
-/// and committed offsets before the next-gen member joined, which starved it.
-/// The in-process suite in `coordinator::unified` covers the live, concurrent
-/// mixed-membership split deterministically: upgrade, downgrade, round-trip,
-/// gap-free assignment, static membership, and committed-offset survival.
+impl GroupProtocol {
+    async fn shutdown(mut self) {
+        let StartedBroker { broker, dir } =
+            self.broker.take().expect("group protocol broker started");
+        broker.shutdown().await;
+        drop(dir);
+        drop(self);
+    }
+}
+
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
-    name = "jvm kip848 classic and consumer in one group migrate"
+    name = "A consumer protocol member reads stock producer records"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {}
+async fn jvm_kip848_single_consumer_round_trip(protocol: GroupProtocol) {
+    protocol.shutdown().await;
+}
 
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
+    name = "A consumer protocol group can be described by stock tooling"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kip848_describe_group(protocol: GroupProtocol) { protocol.shutdown().await; }
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
+    name = "An inactive consumer protocol group can be deleted"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kip848_delete_group(protocol: GroupProtocol) { protocol.shutdown().await; }
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
+    name = "Classic and consumer protocol groups independently consume the same topic"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kip848_coexists_with_classic(protocol: GroupProtocol) { protocol.shutdown().await; }
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_consumer_group_next_gen.feature",
+    name = "A group migrates in place from classic to the consumer protocol"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kip848_classic_and_consumer_in_one_group_migrate(protocol: GroupProtocol) {
+    protocol.shutdown().await;
+}
 // A `SubscribedTopicRegex` that does not compile is answered
 // `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, but
 // there is no JVM-lane case for it: no stock JVM client sends an invalid

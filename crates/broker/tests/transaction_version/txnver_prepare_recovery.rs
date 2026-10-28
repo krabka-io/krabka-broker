@@ -43,7 +43,6 @@ use {
 };
 
 const CONCURRENT_TRANSACTIONS: i16 = 51;
-const PRODUCER_FENCED: i16 = 90;
 
 /// The time a retried request may take to see a transaction complete.
 const SETTLE: Duration = Duration::from_secs(20);
@@ -258,252 +257,342 @@ fn completed(producer: Identity, epoch_bump: i16) -> EndTxnResponse {
     }
 }
 
-struct CutCase {
-    name: &'static str,
-    topic: &'static str,
-    outcome: TransactionOutcome,
-    downgrade_to: Option<i16>,
-    epoch_bump: i16,
-    /// What a `read_committed` consumer reads through the record that the
-    /// test writes after the transaction completes.
-    visible: &'static [&'static str],
+use {
+    krabka_client_core::ClientError,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tokio::task::JoinHandle,
+};
+
+#[derive(Default)]
+struct PreparedTransaction {
+    directory: Option<TempDir>,
+    started: Option<Started>,
+    producer: Option<Identity>,
+    transactional_id: String,
+    outcome: Option<TransactionOutcome>,
+    pending: Option<JoinHandle<Result<EndTxnResponse, ClientError>>>,
+    lost: Option<Result<EndTxnResponse, ClientError>>,
+    responses: Vec<EndTxnResponse>,
+    initialized: Option<InitProducerIdResponse>,
+    seen: Option<Vec<String>>,
 }
 
-/// What a cut `EndTxn` leaves behind: the producer, the answer to its retry,
-/// and the records a `read_committed` consumer reads.
-struct CutOutcome {
-    producer: Identity,
-    retried: EndTxnResponse,
-    seen: Vec<String>,
+#[fixture]
+fn prepared_transaction() -> PreparedTransaction {
+    // A real EndTxn task and durable state span marker failure or broker restart.
+    PreparedTransaction::default()
 }
 
-/// Stop the broker while `EndTxn` waits between its `Prepare*` append and its
-/// markers, start it again, and retry `EndTxn`.
-async fn end_txn_cut_by_shutdown(case: &CutCase) -> CutOutcome {
+#[given(
+    "transaction {transactional_id} contains a,b,c at feature level {level} with marker fanout {fanout}"
+)]
+async fn prepare_marker_fixture(
+    prepared_transaction: &mut PreparedTransaction,
+    transactional_id: String,
+    level: i16,
+    fanout: String,
+) {
+    let mode = match fanout.as_str() {
+        "held" => MarkerFanoutMode::Hold,
+        "failing" => MarkerFanoutMode::Fail,
+        _ => panic!("unknown marker fanout mode {fanout}"),
+    };
     let directory = TempDir::new().expect("tempdir");
-    let FanoutTransaction {
-        started: first,
-        producer,
-    } = fanout_transaction(
+    let FanoutTransaction { started, producer } = fanout_transaction(
         directory.path(),
-        case.name,
-        case.topic,
-        case.downgrade_to,
-        MarkerFanoutMode::Hold,
+        &transactional_id,
+        &transactional_id,
+        (level != 2).then_some(level),
+        mode,
     )
     .await;
-    let cut_client = admin_client(&first.bootstrap).await;
-    let request = end_txn_request(case.name, producer, case.outcome);
-    let cut = tokio::spawn(async move { cut_client.send(request).await });
-    first
+    prepared_transaction.directory = Some(directory);
+    prepared_transaction.started = Some(started);
+    prepared_transaction.producer = Some(producer);
+    prepared_transaction.transactional_id = transactional_id;
+}
+
+fn transaction_outcome(outcome: &str) -> TransactionOutcome {
+    match outcome {
+        "commit" => TransactionOutcome::Commit,
+        "abort" => TransactionOutcome::Abort,
+        _ => panic!("unknown transaction outcome {outcome}"),
+    }
+}
+
+#[when("the producer requests {outcome} and EndTxn reaches held marker fanout")]
+async fn hold_prepared_end(prepared_transaction: &mut PreparedTransaction, outcome: String) {
+    let outcome = transaction_outcome(&outcome);
+    let started = prepared_transaction
+        .started
+        .as_ref()
+        .expect("transaction broker");
+    let client = admin_client(&started.bootstrap).await;
+    let request = end_txn_request(
+        &prepared_transaction.transactional_id,
+        prepared_transaction.producer.expect("producer identity"),
+        outcome,
+    );
+    prepared_transaction.pending = Some(tokio::spawn(async move { client.send(request).await }));
+    started
         .broker
         .wait_for_transaction_marker_fanouts_for_test(1)
         .await;
-    first.broker.shutdown().await;
-    let cut_answer = cut.await.expect("cut EndTxn task");
-    assert!(
-        cut_answer.is_err(),
-        "{}: a shutdown must cut the held EndTxn without an answer: {cut_answer:?}",
-        case.name
+    prepared_transaction.outcome = Some(outcome);
+}
+
+#[when("the broker shuts down while its EndTxn waits for markers")]
+async fn cut_prepared_end(prepared_transaction: &mut PreparedTransaction) {
+    prepared_transaction
+        .started
+        .take()
+        .expect("transaction broker")
+        .broker
+        .shutdown()
+        .await;
+    prepared_transaction.lost = Some(
+        prepared_transaction
+            .pending
+            .take()
+            .expect("held EndTxn task")
+            .await
+            .expect("cut EndTxn task"),
     );
-
-    let second = start(directory.path(), Some(BootstrapMode::Rejoin)).await;
-    let retried = end_txn_until_answered(&second.client, case.name, producer, case.outcome).await;
-    produce(&second.client, case.topic, None, &["z"]).await;
-    let seen = read_committed_through(&second.bootstrap, case.topic, "z").await;
-    second.broker.shutdown().await;
-    CutOutcome {
-        producer,
-        retried,
-        seen,
-    }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transaction version txnver prepare recovery: end txn cut between prepare and complete completes after restart"
-)]
-async fn bdd_verify_end_txn_cut_between_prepare_and_complete_completes_after_restart() {
-    let cases = [
-        CutCase {
-            name: "cut-commit",
-            topic: "cut-commit",
-            outcome: TransactionOutcome::Commit,
-            downgrade_to: None,
-            epoch_bump: 1,
-            visible: &["a", "b", "c", "z"],
-        },
-        CutCase {
-            name: "cut-abort",
-            topic: "cut-abort",
-            outcome: TransactionOutcome::Abort,
-            downgrade_to: None,
-            epoch_bump: 1,
-            visible: &["z"],
-        },
-        CutCase {
-            name: "cut-commit-tv1",
-            topic: "cut-commit-tv1",
-            outcome: TransactionOutcome::Commit,
-            downgrade_to: Some(1),
-            epoch_bump: 1,
-            visible: &["a", "b", "c", "z"],
-        },
-    ];
-    for case in &cases {
-        let CutOutcome {
-            producer,
-            retried,
-            seen,
-        } = end_txn_cut_by_shutdown(case).await;
-        assert!(
-            retried == completed(producer, case.epoch_bump),
-            "{}: retried EndTxn",
-            case.name
-        );
-        assert!(seen == case.visible, "{}: read_committed", case.name);
-    }
+#[then("the held EndTxn connection closes without a response")]
+fn prepared_end_lost(prepared_transaction: &PreparedTransaction) {
+    let answer = prepared_transaction
+        .lost
+        .as_ref()
+        .expect("cut EndTxn observed");
+    assert!(answer.is_err(), "shutdown must cut held EndTxn: {answer:?}");
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[when("the prepared transaction broker restarts from its durable directory")]
+async fn restart_prepared_transaction(prepared_transaction: &mut PreparedTransaction) {
+    prepared_transaction.started = Some(
+        start(
+            prepared_transaction
+                .directory
+                .as_ref()
+                .expect("durable directory")
+                .path(),
+            Some(BootstrapMode::Rejoin),
+        )
+        .await,
+    );
+}
+
+#[when("the producer retries the prepared transaction's EndTxn")]
+async fn retry_prepared_end(prepared_transaction: &mut PreparedTransaction) {
+    let started = prepared_transaction
+        .started
+        .as_ref()
+        .expect("transaction broker");
+    prepared_transaction.responses.push(
+        end_txn_until_answered(
+            &started.client,
+            &prepared_transaction.transactional_id,
+            prepared_transaction.producer.expect("producer identity"),
+            prepared_transaction.outcome.expect("requested outcome"),
+        )
+        .await,
+    );
+}
+
+#[then("the latest prepared EndTxn succeeds with the next producer epoch")]
+fn prepared_end_completed(prepared_transaction: &PreparedTransaction) {
+    assert!(
+        prepared_transaction
+            .responses
+            .last()
+            .expect("EndTxn answered")
+            == &completed(prepared_transaction.producer.expect("producer identity"), 1)
+    );
+}
+
+#[when("a committed reader reads the prepared transaction followed by a plain z")]
+async fn read_prepared_transaction(prepared_transaction: &mut PreparedTransaction) {
+    let started = prepared_transaction
+        .started
+        .as_ref()
+        .expect("transaction broker");
+    produce(
+        &started.client,
+        &prepared_transaction.transactional_id,
+        None,
+        &["z"],
+    )
+    .await;
+    prepared_transaction.seen = Some(
+        read_committed_through(
+            &started.bootstrap,
+            &prepared_transaction.transactional_id,
+            "z",
+        )
+        .await,
+    );
+}
+
+#[then("the prepared transaction's committed values are {values}")]
+fn prepared_transaction_values(prepared_transaction: &PreparedTransaction, values: String) {
+    let expected: Vec<String> = values.split(',').map(str::to_owned).collect();
+    assert!(
+        prepared_transaction
+            .seen
+            .as_ref()
+            .expect("committed reader finished")
+            == &expected
+    );
+}
+
+#[when("InitProducerId probes the prepared transaction using {identity}")]
+async fn initialize_during_prepare(
+    prepared_transaction: &mut PreparedTransaction,
+    identity: String,
+) {
+    let producer = prepared_transaction.producer.expect("producer identity");
+    let identity = match identity.as_str() {
+        "no identity" => Identity {
+            producer_id: -1,
+            epoch: -1,
+        },
+        "the transaction identity" => producer,
+        "another producer ID" => Identity {
+            producer_id: producer.producer_id + 1_000,
+            epoch: 0,
+        },
+        _ => panic!("unknown identity selection {identity}"),
+    };
+    prepared_transaction.initialized = Some(
+        init_producer_id(
+            &prepared_transaction
+                .started
+                .as_ref()
+                .expect("transaction broker")
+                .client,
+            &prepared_transaction.transactional_id,
+            identity,
+        )
+        .await,
+    );
+}
+
+#[then("the prepared InitProducerId returns error {error_code} and no identity")]
+fn prepared_initialization(prepared_transaction: &PreparedTransaction, error_code: i16) {
+    assert!(
+        prepared_transaction
+            .initialized
+            .as_ref()
+            .expect("InitProducerId answered")
+            == &InitProducerIdResponse {
+                error_code,
+                producer_id: -1,
+                producer_epoch: -1,
+                ..Default::default()
+            }
+    );
+}
+
+#[when("marker fanout is reopened")]
+fn open_prepared_fanout(prepared_transaction: &PreparedTransaction) {
+    prepared_transaction
+        .started
+        .as_ref()
+        .expect("transaction broker")
+        .broker
+        .set_transaction_marker_fanout_for_test(MarkerFanoutMode::Open);
+}
+
+#[when("the held EndTxn finishes after marker fanout resumes")]
+async fn finish_held_prepared_end(prepared_transaction: &mut PreparedTransaction) {
+    prepared_transaction.responses.push(
+        prepared_transaction
+            .pending
+            .take()
+            .expect("held EndTxn task")
+            .await
+            .expect("EndTxn task")
+            .expect("EndTxn answer"),
+    );
+}
+
+#[when("the producer commits while marker fanout fails")]
+async fn fail_prepared_fanout(prepared_transaction: &mut PreparedTransaction) {
+    prepared_transaction.outcome = Some(TransactionOutcome::Commit);
+    prepared_transaction.responses.push(
+        prepared_transaction
+            .started
+            .as_ref()
+            .expect("transaction broker")
+            .client
+            .send(end_txn_request(
+                &prepared_transaction.transactional_id,
+                prepared_transaction.producer.expect("producer identity"),
+                TransactionOutcome::Commit,
+            ))
+            .await
+            .expect("EndTxn"),
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/transaction_version/txnver_prepare_recovery.feature",
     name = "end txn cut between prepare and complete completes after restart"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn end_txn_cut_between_prepare_and_complete_completes_after_restart() {}
-
-async fn assert_visible_suffix_and_shutdown(started: Started, topic: &str, expected: &[&str]) {
-    produce(&started.client, topic, None, &["z"]).await;
-    let seen = read_committed_through(&started.bootstrap, topic, "z").await;
-    assert!(seen == expected);
-    started.broker.shutdown().await;
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transaction version txnver prepare recovery: init producer id during prepare commit is concurrent transactions"
-)]
-async fn bdd_verify_init_producer_id_during_prepare_commit_is_concurrent_transactions() {
-    let transactional_id = "init-during-prepare";
-    let topic = "init-during-prepare";
-    let directory = TempDir::new().expect("tempdir");
-    let FanoutTransaction { started, producer } = fanout_transaction(
-        directory.path(),
-        transactional_id,
-        topic,
-        None,
-        MarkerFanoutMode::Hold,
-    )
-    .await;
-    let end_client = admin_client(&started.bootstrap).await;
-    let request = end_txn_request(transactional_id, producer, TransactionOutcome::Commit);
-    let end = tokio::spawn(async move { end_client.send(request).await });
-    started
+async fn end_txn_cut_between_prepare_and_complete_completes_after_restart(
+    prepared_transaction: PreparedTransaction,
+    transactional_id: String,
+    level: i16,
+    outcome: String,
+    values: String,
+) {
+    let _ = (transactional_id, level, outcome, values);
+    prepared_transaction
+        .started
+        .take()
+        .expect("transaction broker")
         .broker
-        .wait_for_transaction_marker_fanouts_for_test(1)
+        .shutdown()
         .await;
-
-    // Kafka `prepareInitProducerIdTransit`: a producer ID that is not the
-    // entry's is fenced, and any other request waits for the transition.
-    let cases = [
-        (
-            "no identity",
-            Identity {
-                producer_id: -1,
-                epoch: -1,
-            },
-            CONCURRENT_TRANSACTIONS,
-        ),
-        (
-            "the transaction's identity",
-            producer,
-            CONCURRENT_TRANSACTIONS,
-        ),
-        (
-            "another producer ID",
-            Identity {
-                producer_id: producer.producer_id + 1_000,
-                epoch: 0,
-            },
-            PRODUCER_FENCED,
-        ),
-    ];
-    for (name, identity, error_code) in cases {
-        let response = init_producer_id(&started.client, transactional_id, identity).await;
-        let expected = InitProducerIdResponse {
-            error_code,
-            producer_id: -1,
-            producer_epoch: -1,
-            ..Default::default()
-        };
-        assert!(response == expected, "InitProducerId with {name}");
-    }
-
-    started
-        .broker
-        .set_transaction_marker_fanout_for_test(MarkerFanoutMode::Open);
-    let answer = end.await.expect("EndTxn task").expect("EndTxn answer");
-    assert!(answer == completed(producer, 1));
-    assert_visible_suffix_and_shutdown(started, topic, &["a", "b", "c", "z"]).await;
+    drop(prepared_transaction);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/transaction_version/txnver_prepare_recovery.feature",
     name = "init producer id during prepare commit is concurrent transactions"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn init_producer_id_during_prepare_commit_is_concurrent_transactions() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transaction version txnver prepare recovery: end txn with a failed marker fanout answers none and completes later"
-)]
-async fn bdd_verify_end_txn_with_a_failed_marker_fanout_answers_none_and_completes_later() {
-    let transactional_id = "failed-fanout";
-    let topic = "failed-fanout";
-    let directory = TempDir::new().expect("tempdir");
-    let FanoutTransaction { started, producer } = fanout_transaction(
-        directory.path(),
-        transactional_id,
-        topic,
-        None,
-        MarkerFanoutMode::Fail,
-    )
-    .await;
-    let answer = started
-        .client
-        .send(end_txn_request(
-            transactional_id,
-            producer,
-            TransactionOutcome::Commit,
-        ))
-        .await
-        .expect("EndTxn");
-    assert!(
-        answer == completed(producer, 1),
-        "EndTxn after a durable PrepareCommit"
-    );
-
-    started
+async fn init_producer_id_during_prepare_commit_is_concurrent_transactions(
+    prepared_transaction: PreparedTransaction,
+) {
+    prepared_transaction
+        .started
+        .take()
+        .expect("transaction broker")
         .broker
-        .set_transaction_marker_fanout_for_test(MarkerFanoutMode::Open);
-    let retried = end_txn_until_answered(
-        &started.client,
-        transactional_id,
-        producer,
-        TransactionOutcome::Commit,
-    )
-    .await;
-    assert!(retried == completed(producer, 1), "retried EndTxn");
-    assert_visible_suffix_and_shutdown(started, topic, &["a", "b", "c", "z"]).await;
+        .shutdown()
+        .await;
+    drop(prepared_transaction);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/transaction_version/txnver_prepare_recovery.feature",
     name = "end txn with a failed marker fanout answers none and completes later"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn end_txn_with_a_failed_marker_fanout_answers_none_and_completes_later() {}
+async fn end_txn_with_a_failed_marker_fanout_answers_none_and_completes_later(
+    prepared_transaction: PreparedTransaction,
+) {
+    prepared_transaction
+        .started
+        .take()
+        .expect("transaction broker")
+        .broker
+        .shutdown()
+        .await;
+    drop(prepared_transaction);
+}

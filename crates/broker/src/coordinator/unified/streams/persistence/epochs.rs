@@ -215,167 +215,16 @@ mod tests {
     };
 
     /// The bytes that follow the head of a `StreamsGroupMetadataValue`.
-    struct TrailerRow {
-        row: &'static str,
-        value: StreamsGroupMetadataValue,
-        trailer: &'static [u8],
-    }
-
     /// A last-assignment configuration parameter, as text.
-    struct ConfigText {
-        key: &'static str,
-        value: &'static str,
-    }
-
     /// A value and Kafka's bytes for it.
-    struct GoldenRow {
-        case: &'static str,
-        value: StreamsGroupTargetAssignmentMetadataValue,
-        bytes: &'static [u8],
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams persistence epochs tests: group metadata bytes match kafka schema"
-    )]
-    fn bdd_verify_group_metadata_bytes_match_kafka_schema() {
-        const HEAD: &[u8] = b"\x00\x00\x00\x00\x00\x07\x01\x02\x03\x04\x05\x06\x07\x08";
-        let value = |validated, configs: Option<&[ConfigText]>| StreamsGroupMetadataValue {
-            description: DescriptionEpochs::default(),
-            epoch: 7,
-            metadata_hash: 0x0102_0304_0506_0708,
-            validated_topology_epoch: validated,
-            last_assignment_configs: configs.map(|configs| {
-                configs
-                    .iter()
-                    .map(|config| LastAssignmentConfig {
-                        key: config.key.into(),
-                        value: config.value.into(),
-                    })
-                    .collect()
-            }),
-        };
-        let rows: [TrailerRow; 4] = [
-            TrailerRow {
-                row: "both tagged fields at their defaults",
-                value: value(-1, None),
-                trailer: b"\x00",
-            },
-            TrailerRow {
-                row: "Kafka's bump record: a validated epoch and num.standby.replicas",
-                value: value(
-                    0,
-                    Some(&[ConfigText {
-                        key: "num.standby.replicas",
-                        value: "0",
-                    }]),
-                ),
-                trailer:
-                    b"\x02\x00\x04\x00\x00\x00\x00\x01\x19\x02\x15num.standby.replicas\x020\x00",
-            },
-            TrailerRow {
-                row: "an empty configuration list is not null",
-                value: value(-1, Some(&[])),
-                trailer: b"\x01\x01\x01\x01",
-            },
-            TrailerRow {
-                row: "two configurations",
-                value: value(
-                    3,
-                    Some(&[
-                        ConfigText {
-                            key: "a",
-                            value: "1",
-                        },
-                        ConfigText {
-                            key: "b",
-                            value: "22",
-                        },
-                    ]),
-                ),
-                trailer: b"\x02\x00\x04\x00\x00\x00\x03\x01\x0c\x03\x02a\x021\x00\x02b\x0322\x00",
-            },
-        ];
-        check_metadata_trailers(HEAD, rows);
-    }
-
     /// Kafka 4.3.1's generated writer puts a tagged field only when it is not
     /// its default, in tag order. Each row is the whole value: version, epoch,
     /// hash, then the trailer.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/epochs.feature",
-        name = "tests: group metadata bytes match kafka schema"
-    )]
-    fn group_metadata_bytes_match_kafka_schema() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams persistence epochs tests: group metadata trunk tags match kafka trunk"
-    )]
-    fn bdd_verify_group_metadata_trunk_tags_match_kafka_trunk() {
-        const HEAD: &[u8] = b"\x00\x00\x00\x00\x00\x07\x01\x02\x03\x04\x05\x06\x07\x08";
-        let value = |stored, failed| StreamsGroupMetadataValue {
-            epoch: 7,
-            metadata_hash: 0x0102_0304_0506_0708,
-            validated_topology_epoch: 4,
-            last_assignment_configs: None,
-            description: DescriptionEpochs { stored, failed },
-        };
-        let rows: [TrailerRow; 4] = [
-            TrailerRow {
-                row: "4.3.1: no description epoch",
-                value: value(-1, -1),
-                trailer: b"\x01\x00\x04\x00\x00\x00\x04",
-            },
-            TrailerRow {
-                row: "trunk: a stored description",
-                value: value(4, -1),
-                trailer: b"\x02\x00\x04\x00\x00\x00\x04\x02\x04\x00\x00\x00\x04",
-            },
-            TrailerRow {
-                row: "trunk: an uncertain store and a failed epoch",
-                value: value(-2, 3),
-                trailer:
-                    b"\x03\x00\x04\x00\x00\x00\x04\x02\x04\xff\xff\xff\xfe\x03\x04\x00\x00\x00\x03",
-            },
-            TrailerRow {
-                row: "trunk: a failed epoch alone",
-                value: value(-1, 0),
-                trailer: b"\x02\x00\x04\x00\x00\x00\x04\x03\x04\x00\x00\x00\x00",
-            },
-        ];
-        check_metadata_trailers(HEAD, rows);
-    }
-
     /// Kafka trunk's KIP-1331 tags 2 and 3 follow the 4.3.1 tags, each only
     /// when it is not -1. A value that holds neither, which is what the
     /// broker writes unless the topology description plugin is configured,
     /// is byte for byte the 4.3.1 record; a record with them decodes whole
     /// whatever the broker writes.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/epochs.feature",
-        name = "tests: group metadata trunk tags match kafka trunk"
-    )]
-    fn group_metadata_trunk_tags_match_kafka_trunk() {}
-
-    fn check_metadata_trailers(head: &[u8], rows: impl IntoIterator<Item = TrailerRow>) {
-        for TrailerRow {
-            row,
-            value,
-            trailer,
-        } in rows
-        {
-            let bytes = value.encode();
-            assert!(bytes[..] == [head, trailer].concat()[..], "{row}");
-            assert!(
-                StreamsGroupMetadataValue::decode(&bytes).unwrap() == value,
-                "{row}"
-            );
-        }
-    }
-
     #[test]
     fn group_metadata_round_trip() {
         let kb = encode_group_metadata_key("g1").unwrap();
@@ -404,48 +253,9 @@ mod tests {
         assert!(StreamsGroupMetadataValue::decode(&v.encode()).unwrap() == v);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams persistence epochs tests: target assignment metadata bytes match kafka schema"
-    )]
-    fn bdd_verify_target_assignment_metadata_bytes_match_kafka_schema() {
-        let rows: [GoldenRow; 2] = [
-            GoldenRow {
-                case: "the time is unknown",
-                value: StreamsGroupTargetAssignmentMetadataValue {
-                    assignment_epoch: 12,
-                    assignment_timestamp_ms: 0,
-                },
-                bytes: b"\x00\x00\x00\x00\x00\x0c\x00",
-            },
-            GoldenRow {
-                case: "an assignment that finished at 2026-10-07T00:00:00Z",
-                value: StreamsGroupTargetAssignmentMetadataValue {
-                    assignment_epoch: 12,
-                    assignment_timestamp_ms: 1_791_331_200_000,
-                },
-                bytes: b"\x00\x00\x00\x00\x00\x0c\x01\x00\x08\x00\x00\x01\xa1\x13\xa8\xec\x00",
-            },
-        ];
-        for GoldenRow { case, value, bytes } in rows {
-            assert!(&value.encode()[..] == bytes, "{case}");
-            assert!(
-                StreamsGroupTargetAssignmentMetadataValue::decode(bytes).unwrap() == value,
-                "{case}"
-            );
-        }
-    }
-
     /// i16 version | i32 `AssignmentEpoch` | tagged-field trailer, which holds
     /// `AssignmentTimestamp` as tag 0 with an eight-byte payload unless it is
     /// the default 0.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/epochs.feature",
-        name = "tests: target assignment metadata bytes match kafka schema"
-    )]
-    fn target_assignment_metadata_bytes_match_kafka_schema() {}
-
     #[test]
     fn target_assignment_metadata_round_trip() {
         let kb = encode_target_assignment_metadata_key("g1").unwrap();
@@ -477,4 +287,110 @@ mod tests {
         .encode();
         assert!(StreamsGroupMetadataValue::decode(&g[..g.len() - 1]).is_err());
     }
+    use {
+        crate::coordinator::unified::test_support::wire_bytes,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
+    #[derive(Debug, PartialEq)]
+    enum StreamsEpochRecord {
+        Group(StreamsGroupMetadataValue),
+        Target(StreamsGroupTargetAssignmentMetadataValue),
+    }
+    #[derive(Default)]
+    struct StreamsEpochCodec {
+        value: Option<StreamsEpochRecord>,
+        encoded: Option<Bytes>,
+        decoded: Option<StreamsEpochRecord>,
+        golden: Vec<u8>,
+    }
+    #[rstest::fixture]
+    fn streams_epochs() -> StreamsEpochCodec {
+        // Start this scenario with fresh inputs and observations.
+        StreamsEpochCodec::default()
+    }
+    #[given(
+        "Streams group epoch 7 has validated topology {validated} configs {configs} stored description {stored} and failed description {failed}"
+    )]
+    fn streams_epoch_fields(
+        streams_epochs: &mut StreamsEpochCodec,
+        validated: i32,
+        configs: String,
+        stored: i32,
+        failed: i32,
+    ) {
+        let configs = match configs.as_str() {
+            "null" => None,
+            "empty" => Some(vec![]),
+            _ => Some(
+                configs
+                    .split(',')
+                    .map(|entry| {
+                        let (key, value) = entry
+                            .split_once('=')
+                            .expect("assignment configuration key=value");
+                        LastAssignmentConfig {
+                            key: key.into(),
+                            value: value.into(),
+                        }
+                    })
+                    .collect(),
+            ),
+        };
+        streams_epochs.value = Some(StreamsEpochRecord::Group(StreamsGroupMetadataValue {
+            epoch: 7,
+            metadata_hash: 0x0102_0304_0506_0708,
+            validated_topology_epoch: validated,
+            last_assignment_configs: configs,
+            description: DescriptionEpochs { stored, failed },
+        }));
+    }
+    #[given("Streams assignment epoch 12 completed at timestamp {timestamp}")]
+    fn streams_target_epoch(streams_epochs: &mut StreamsEpochCodec, timestamp: i64) {
+        streams_epochs.value = Some(StreamsEpochRecord::Target(
+            StreamsGroupTargetAssignmentMetadataValue {
+                assignment_epoch: 12,
+                assignment_timestamp_ms: timestamp,
+            },
+        ));
+    }
+    #[given("Kafka represents that Streams epoch record with bytes {hex}")]
+    fn streams_epoch_golden(streams_epochs: &mut StreamsEpochCodec, hex: String) {
+        streams_epochs.golden = wire_bytes(&[&hex]);
+    }
+    #[when("the coordinator writes the Streams epoch record and reads Kafka bytes")]
+    fn streams_epoch_codec(streams_epochs: &mut StreamsEpochCodec) {
+        let (encoded, decoded) = match streams_epochs
+            .value
+            .as_ref()
+            .expect("epoch record prepared")
+        {
+            StreamsEpochRecord::Group(value) => (
+                value.encode(),
+                StreamsEpochRecord::Group(
+                    StreamsGroupMetadataValue::decode(&streams_epochs.golden)
+                        .expect("Kafka group epoch"),
+                ),
+            ),
+            StreamsEpochRecord::Target(value) => (
+                value.encode(),
+                StreamsEpochRecord::Target(
+                    StreamsGroupTargetAssignmentMetadataValue::decode(&streams_epochs.golden)
+                        .expect("Kafka assignment epoch"),
+                ),
+            ),
+        };
+        streams_epochs.encoded = Some(encoded);
+        streams_epochs.decoded = Some(decoded);
+    }
+    #[then(
+        "the Streams epoch bytes match Kafka and all optional tags preserve their original values"
+    )]
+    fn streams_epoch_layout(streams_epochs: &StreamsEpochCodec) {
+        assert!(
+            &streams_epochs.encoded.as_ref().expect("epoch written")[..]
+                == &streams_epochs.golden[..]
+        );
+        assert!(streams_epochs.decoded == streams_epochs.value);
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/streams/persistence/epochs.feature",fixtures=[streams_epochs:StreamsEpochCodec]);
 }

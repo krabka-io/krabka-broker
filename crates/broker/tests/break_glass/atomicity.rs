@@ -67,40 +67,92 @@ fn is_consume_of(record: &MetadataRecord, id: WireUuid) -> bool {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "break glass atomicity: the consume and the transition land in one raft append"
-)]
-async fn bdd_verify_the_consume_and_the_transition_land_in_one_raft_append() {
+use {
+    crate::cluster::Cluster,
+    krabka_client_core::Client,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::sync::Arc,
+};
+
+#[derive(Default)]
+struct AtomicTransition {
+    cluster: Option<Cluster>,
+    alice: Option<Client>,
+    id: Option<WireUuid>,
+    image: Option<Arc<MetadataImage>>,
+    from: i64,
+    held: Option<BreakGlassProposalRecord>,
+    transition: Option<MetadataRecord>,
+    result: Option<i16>,
+    batches: Vec<Vec<MetadataRecord>>,
+}
+
+#[fixture]
+fn atomic() -> AtomicTransition {
+    // Start this scenario with fresh inputs and observations.
+
+    AtomicTransition {
+        cluster: None,
+        alice: None,
+        id: None,
+        image: None,
+        from: 0,
+        held: None,
+        transition: None,
+        result: None,
+        batches: Vec::new(),
+    }
+}
+
+#[given("alice has bob and carol's approvals to unregister broker one")]
+async fn approved_unregistration(atomic: &mut AtomicTransition) {
     let cluster = boot().await;
     let alice = cluster.client(ALICE).await;
     let id = approved_proposal(&cluster, ACTION_UNREGISTER_BROKER, &BROKER_ID.to_string()).await;
-
-    // Snapshot the log position and the image before the transition runs.
     let image = cluster.broker.controller_image_for_test();
-    let from = i64::try_from(
+    atomic.from = i64::try_from(
         cluster
             .broker
             .controller_quorum_state_for_test()
             .last_applied_index,
     )
-    .expect("a log offset inside i64");
+    .expect("log offset inside i64");
     let held = image
         .break_glass_proposal(uuid::Uuid::from_bytes(id.0))
-        .expect("the approved proposal is in the image")
+        .expect("approved proposal in image")
         .clone();
     check!(held.consumed_at_ms == 0);
-    let broker_epoch = image
-        .broker_epoch(NodeId(1))
-        .expect("broker 1 is registered before the unregistration");
+    let broker_epoch = image.broker_epoch(NodeId(1)).expect("broker1 registered");
+    atomic.transition = Some(MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord {
+        node_id: NodeId(1),
+        broker_epoch,
+    }));
+    atomic.held = Some(held);
+    atomic.image = Some(image);
+    atomic.id = Some(id);
+    atomic.alice = Some(alice);
+    atomic.cluster = Some(cluster);
+}
 
-    check!(unregister(&alice, BROKER_ID).await == codes::NONE);
-    cluster
-        .broker
-        .wait_for_image(|img| img.broker(NodeId(1)).is_none())
+#[when("alice unregisters broker one and reads the newly committed controller batches")]
+async fn unregister_and_read(atomic: &mut AtomicTransition) {
+    atomic.result = Some(unregister(atomic.alice.as_ref().unwrap(), BROKER_ID).await);
+    let broker = &atomic.cluster.as_ref().unwrap().broker;
+    broker
+        .wait_for_image(|image| image.broker(NodeId(1)).is_none())
         .await;
+    atomic.batches = metadata_batches(broker, atomic.from, atomic.image.as_ref().unwrap()).await;
+}
 
-    let batches = metadata_batches(&cluster.broker, from, &image).await;
+#[then(
+    "unregistration succeeds and exactly one append contains consume first, only partition changes, and unregistration last"
+)]
+fn one_append(atomic: &AtomicTransition) {
+    check!(atomic.result == Some(codes::NONE));
+    let batches = &atomic.batches;
+    let held = atomic.held.as_ref().unwrap().clone();
+    let id = atomic.id.unwrap();
     let carrying: Vec<&Vec<MetadataRecord>> = batches
         .iter()
         .filter(|batch| batch.iter().any(is_unregister))
@@ -120,10 +172,7 @@ async fn bdd_verify_the_consume_and_the_transition_land_in_one_raft_append() {
         consumed_at_ms,
         ..held
     });
-    let transition = MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord {
-        node_id: NodeId(1),
-        broker_epoch,
-    });
+    let transition = atomic.transition.as_ref().unwrap().clone();
     // Kafka's `handleBrokerUnregistered` takes the broker out of every ISR in
     // the same record list, ahead of the `UnregisterBrokerRecord`, so the
     // partition changes sit between the consume and the transition.
@@ -152,24 +201,14 @@ async fn bdd_verify_the_consume_and_the_transition_land_in_one_raft_append() {
             == 1,
         "the approval is spent in one append and no other"
     );
-
-    cluster.broker.shutdown().await;
 }
 
-/// The consumed approval and the transition it authorizes commit together, in
-/// one raft append.
-///
-/// This is the reason a proposal lives in the metadata log at all rather than
-/// in an internal topic or a separate service. Two appends would let a crash
-/// between them either spend one approval twice or lose it. Nothing in the type
-/// system enforces the rule — each gated handler prepends the consumed record
-/// to its own — so a handler that called `submit_change` twice would keep every
-/// other assertion in this file green and quietly break the guarantee. The case
-/// reads the committed log back and asserts on the batch itself.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/break_glass/atomicity.feature",
     name = "the consume and the transition land in one raft append"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_consume_and_the_transition_land_in_one_raft_append() {}
+async fn the_consume_and_the_transition_land_in_one_raft_append(atomic: AtomicTransition) {
+    drop(atomic.alice);
+    atomic.cluster.unwrap().broker.shutdown().await;
+}

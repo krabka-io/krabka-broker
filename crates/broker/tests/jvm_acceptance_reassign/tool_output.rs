@@ -235,199 +235,277 @@ fn exception_class(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::check,
+        rstest::fixture,
+        rstest_bdd::Slot,
+        rstest_bdd_macros::{given, scenarios, then, when},
+        serde_json::Value,
+    };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance reassign tool output tests: each of the three election outcomes is read off its own line"
-    )]
-    fn bdd_verify_each_of_the_three_election_outcomes_is_read_off_its_own_line() {
-        let text = concat!(
-            "Successfully completed leader election (PREFERRED) for partitions orders-0\n",
-            "Valid replica already elected for partitions orders-1, orders-eu-2\n",
-            "Error completing leader election (PREFERRED) for partition: orders-3: ",
-            "org.apache.kafka.common.errors.PreferredLeaderNotAvailableException: ",
-            "The preferred leader was not available.\n",
-        );
-        check!(
-            parse_election(text)
-                == BTreeMap::from([
-                    (TopicPartition::new("orders", 0), ElectionOutcome::Elected),
-                    (
-                        TopicPartition::new("orders", 1),
-                        ElectionOutcome::AlreadyElected
+    struct ElectionListing {
+        stdout: String,
+        outcomes: BTreeMap<TopicPartition, ElectionOutcome>,
+    }
+
+    #[fixture]
+    fn election() -> ElectionListing {
+        // Start this scenario with fresh inputs and observations.
+
+        ElectionListing {
+            stdout: String::new(),
+            outcomes: BTreeMap::new(),
+        }
+    }
+
+    #[given("the leader election tool printed")]
+    fn election_stdout(election: &mut ElectionListing, docstring: String) {
+        election.stdout = docstring;
+    }
+
+    #[when("partition election outcomes are read")]
+    fn read_elections(election: &mut ElectionListing) {
+        election.outcomes = parse_election(&election.stdout);
+    }
+
+    #[then("the partition election outcomes are exactly")]
+    fn election_outcomes(election: &ElectionListing, datatable: Vec<Vec<String>>) {
+        let expected = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [topic, partition, result]: [String; 3] =
+                    row.try_into().expect("topic, partition and outcome");
+                let outcome = match result.as_str() {
+                    "elected" => ElectionOutcome::Elected,
+                    "already elected" => ElectionOutcome::AlreadyElected,
+                    class => ElectionOutcome::Failed(class.into()),
+                };
+                (
+                    TopicPartition::new(&topic, partition.parse().expect("partition index")),
+                    outcome,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        check!(election.outcomes == expected);
+    }
+
+    struct PartitionLabel {
+        text: String,
+        parsed: Slot<Option<TopicPartition>>,
+    }
+
+    #[fixture]
+    fn label() -> PartitionLabel {
+        // Start this scenario with fresh inputs and observations.
+
+        PartitionLabel {
+            text: String::new(),
+            parsed: Slot::new(),
+        }
+    }
+
+    #[given("a tool partition label {text}")]
+    fn partition_label(label: &mut PartitionLabel, text: String) { label.text = text; }
+
+    #[when("the topic name and partition index are read from the label")]
+    fn read_partition_label(label: &mut PartitionLabel) {
+        label.parsed.set(TopicPartition::parse(&label.text));
+    }
+
+    #[then("the topic-partition label resolves to {result}")]
+    fn partition_label_result(label: &PartitionLabel, result: String) {
+        let expected = if result == "invalid" {
+            None
+        } else {
+            let (topic, partition) = result
+                .split_once(" / ")
+                .expect("expected topic / partition");
+            Some(TopicPartition::new(
+                topic,
+                partition.parse().expect("partition index"),
+            ))
+        };
+        check!(label.parsed.get() == Some(expected));
+    }
+
+    struct CancellationListing {
+        stdout: String,
+        partitions: Vec<TopicPartition>,
+    }
+
+    #[fixture]
+    fn cancellation() -> CancellationListing {
+        // Start this scenario with fresh inputs and observations.
+
+        CancellationListing {
+            stdout: String::new(),
+            partitions: Vec::new(),
+        }
+    }
+
+    #[given("the reassignment cancellation tool printed")]
+    fn cancellation_stdout(cancellation: &mut CancellationListing, docstring: String) {
+        cancellation.stdout = docstring;
+    }
+
+    #[when("cancelled partitions are read")]
+    fn read_cancellations(cancellation: &mut CancellationListing) {
+        cancellation.partitions = parse_cancelled(&cancellation.stdout);
+    }
+
+    #[then("the cancelled partitions are {partitions}")]
+    fn cancelled_partitions(cancellation: &CancellationListing, partitions: String) {
+        let expected = if partitions == "none" {
+            Vec::new()
+        } else {
+            partitions
+                .split(',')
+                .map(|partition| {
+                    let (topic, index) = partition.trim().split_once(':').expect("topic:partition");
+                    TopicPartition::new(topic, index.parse().expect("partition index"))
+                })
+                .collect()
+        };
+        check!(cancellation.partitions == expected);
+    }
+
+    struct PlanDocuments {
+        stdout: String,
+        generated: Slot<Option<(Vec<Assignment>, Vec<Assignment>)>>,
+        assignment_documents: Vec<String>,
+        parsed_assignments: Vec<Option<Vec<Assignment>>>,
+        input_assignments: Vec<Assignment>,
+        election_json: String,
+        topics_json: String,
+    }
+
+    #[fixture]
+    fn plans() -> PlanDocuments {
+        // Start this scenario with fresh inputs and observations.
+
+        PlanDocuments {
+            stdout: String::new(),
+            generated: Slot::new(),
+            assignment_documents: Vec::new(),
+            parsed_assignments: Vec::new(),
+            input_assignments: Vec::new(),
+            election_json: String::new(),
+            topics_json: String::new(),
+        }
+    }
+
+    fn assignments_from_rows(rows: Vec<Vec<String>>) -> Vec<Assignment> {
+        rows.into_iter()
+            .map(|row| {
+                let [topic, partition, replicas]: [String; 3] =
+                    row.try_into().expect("topic, partition, replicas");
+                Assignment {
+                    partition: TopicPartition::new(
+                        &topic,
+                        partition.parse().expect("partition index"),
                     ),
-                    (
-                        TopicPartition::new("orders-eu", 2),
-                        ElectionOutcome::AlreadyElected
-                    ),
-                    (
-                        TopicPartition::new("orders", 3),
-                        ElectionOutcome::Failed(
-                            "org.apache.kafka.common.errors.PreferredLeaderNotAvailableException"
-                                .to_owned()
-                        )
-                    ),
-                ])
-        );
+                    replicas: replicas
+                        .split(',')
+                        .map(|id| id.trim().parse().expect("replica id"))
+                        .collect(),
+                }
+            })
+            .collect()
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
-        name = "tests: each of the three election outcomes is read off its own line"
-    )]
-    fn each_of_the_three_election_outcomes_is_read_off_its_own_line() {}
+    #[given("the reassignment generation tool printed")]
+    fn generation_stdout(plans: &mut PlanDocuments, docstring: String) { plans.stdout = docstring; }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance reassign tool output tests: a hyphenated topic keeps its hyphens"
-    )]
-    fn bdd_verify_a_hyphenated_topic_keeps_its_hyphens() {
-        check!(
-            TopicPartition::parse("orders-eu-west-12")
-                == Some(TopicPartition::new("orders-eu-west", 12))
-        );
-        check!(TopicPartition::parse("orders") == None);
-        check!(TopicPartition::parse("orders-x") == None);
+    #[when("the current and proposed assignments are read")]
+    fn read_generated(plans: &mut PlanDocuments) {
+        plans.generated.set(parse_generate(&plans.stdout));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
-        name = "tests: a hyphenated topic keeps its hyphens"
-    )]
-    fn a_hyphenated_topic_keeps_its_hyphens() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance reassign tool output tests: a cancel reports the partitions it cancelled"
-    )]
-    fn bdd_verify_a_cancel_reports_the_partitions_it_cancelled() {
-        check!(
-            parse_cancelled(
-                "Successfully cancelled partition reassignments for: orders-0,orders-1\n"
-            ) == vec![
-                TopicPartition::new("orders", 0),
-                TopicPartition::new("orders", 1),
-            ]
-        );
-        check!(
-            parse_cancelled("None of the specified partition reassignments exist.\n").is_empty()
-        );
+    impl PlanDocuments {
+        fn generated_pair(&self) -> &Option<(Vec<Assignment>, Vec<Assignment>)> {
+            self.generated.get().expect("the generated plans were read")
+        }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
-        name = "tests: a cancel reports the partitions it cancelled"
-    )]
-    fn a_cancel_reports_the_partitions_it_cancelled() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance reassign tool output tests: a one partition cancel is read out of the singular sentence"
-    )]
-    fn bdd_verify_a_one_partition_cancel_is_read_out_of_the_singular_sentence() {
-        check!(
-            parse_cancelled(
-                "Successfully cancelled partition reassignment for: orders-0\n\
-                 None of the specified partition moves are active.\n"
-            ) == vec![TopicPartition::new("orders", 0)]
-        );
+    #[then("the current assignment is exactly")]
+    fn current_assignment(plans: &PlanDocuments, datatable: Vec<Vec<String>>) {
+        let expected = assignments_from_rows(datatable.into_iter().skip(1).collect());
+        let generated = plans.generated_pair();
+        let (current, _) = generated.as_ref().expect("both generated plans were found");
+        check!(*current == expected);
     }
 
-    /// The tool agrees the noun with the count, and a one-partition cancel --
-    /// which is what the container case drives -- prints the singular.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
-        name = "tests: a one partition cancel is read out of the singular sentence"
-    )]
-    fn a_one_partition_cancel_is_read_out_of_the_singular_sentence() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance reassign tool output tests: generate yields the current assignment and the proposed one"
-    )]
-    fn bdd_verify_generate_yields_the_current_assignment_and_the_proposed_one() {
-        let stdout = concat!(
-            "Current partition replica assignment\n",
-            r#"{"version":1,"partitions":[{"topic":"orders","partition":0,"replicas":[1,2],"#,
-            r#""log_dirs":["any","any"]}]}"#,
-            "\n\n",
-            "Proposed partition reassignment configuration\n",
-            r#"{"version":1,"partitions":[{"topic":"orders","partition":0,"replicas":[2,3],"#,
-            r#""log_dirs":["any","any"]}]}"#,
-            "\n",
-        );
-        let current = vec![Assignment {
-            partition: TopicPartition::new("orders", 0),
-            replicas: vec![1, 2],
-        }];
-        let proposed = vec![Assignment {
-            partition: TopicPartition::new("orders", 0),
-            replicas: vec![2, 3],
-        }];
-        check!(parse_generate(stdout) == Some((current, proposed)));
-        check!(parse_generate("nothing was generated") == None);
+    #[then("the proposed assignment is exactly")]
+    fn proposed_assignment(plans: &PlanDocuments, datatable: Vec<Vec<String>>) {
+        let expected = assignments_from_rows(datatable.into_iter().skip(1).collect());
+        let generated = plans.generated_pair();
+        let (_, proposed) = generated.as_ref().expect("both generated plans were found");
+        check!(*proposed == expected);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
-        name = "tests: generate yields the current assignment and the proposed one"
-    )]
-    fn generate_yields_the_current_assignment_and_the_proposed_one() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance reassign tool output tests: the partitions of a generated plan sort the same however they were printed"
-    )]
-    fn bdd_verify_the_partitions_of_a_generated_plan_sort_the_same_however_they_were_printed() {
-        let one = r#"{"version":1,"partitions":[{"topic":"t","partition":1,"replicas":[2]},
-             {"topic":"t","partition":0,"replicas":[1]}]}"#;
-        let other = r#"{"version":1,"partitions":[{"topic":"t","partition":0,"replicas":[1]},
-             {"topic":"t","partition":1,"replicas":[2]}]}"#;
-        check!(parse_assignments(one) == parse_assignments(other));
-        check!(parse_assignments(one).is_some());
+    #[then("no generated assignment is reported")]
+    fn no_generated_assignment(plans: &PlanDocuments) {
+        check!(plans.generated.get() == Some(None));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
-        name = "tests: the partitions of a generated plan sort the same however they were printed"
-    )]
-    fn the_partitions_of_a_generated_plan_sort_the_same_however_they_were_printed() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "jvm acceptance reassign tool output tests: every document the tools read round trips through its own parser"
-    )]
-    fn bdd_verify_every_document_the_tools_read_round_trips_through_its_own_parser() {
-        let assignments = vec![
-            Assignment {
-                partition: TopicPartition::new("orders", 0),
-                replicas: vec![1, 2],
-            },
-            Assignment {
-                partition: TopicPartition::new("orders", 1),
-                replicas: vec![2, 3],
-            },
-        ];
-        check!(parse_assignments(&reassignment_json(&assignments)) == Some(assignments.clone()));
-
-        let elected = election_json(&[TopicPartition::new("orders", 0)]);
-        check!(elected == r#"{"partitions":[{"partition":0,"topic":"orders"}]}"#);
-        check!(
-            topics_to_move_json(&["orders"]) == r#"{"topics":[{"topic":"orders"}],"version":1}"#
-        );
+    #[given("the same assignment document is printed in opposite partition orders")]
+    fn opposite_order(plans: &mut PlanDocuments, docstring: String) {
+        let mut reversed: Value = serde_json::from_str(&docstring).expect("assignment JSON");
+        reversed
+            .get_mut("partitions")
+            .and_then(Value::as_array_mut)
+            .expect("assignment partitions")
+            .reverse();
+        plans.assignment_documents = vec![docstring, reversed.to_string()];
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature",
-        name = "tests: every document the tools read round trips through its own parser"
-    )]
-    fn every_document_the_tools_read_round_trips_through_its_own_parser() {}
+    #[when("each assignment document is read")]
+    fn read_assignment_documents(plans: &mut PlanDocuments) {
+        plans.parsed_assignments = plans
+            .assignment_documents
+            .iter()
+            .map(|document| parse_assignments(document))
+            .collect();
+    }
+
+    #[then("every document yields the same sorted assignments")]
+    fn sorted_assignments(plans: &PlanDocuments, datatable: Vec<Vec<String>>) {
+        let expected = assignments_from_rows(datatable.into_iter().skip(1).collect());
+        check!(!plans.parsed_assignments.is_empty());
+        for actual in &plans.parsed_assignments {
+            check!(actual.as_ref() == Some(&expected));
+        }
+    }
+
+    #[given("the requested partition assignments are")]
+    fn requested_assignments(plans: &mut PlanDocuments, datatable: Vec<Vec<String>>) {
+        plans.input_assignments = assignments_from_rows(datatable.into_iter().skip(1).collect());
+    }
+
+    #[when("reassignment election and topic-move input documents are generated")]
+    fn generate_documents(plans: &mut PlanDocuments) {
+        plans.assignment_documents = vec![reassignment_json(&plans.input_assignments)];
+        read_assignment_documents(plans);
+        plans.election_json = election_json(&[TopicPartition::new("orders", 0)]);
+        plans.topics_json = topics_to_move_json(&["orders"]);
+    }
+
+    #[then("the reassignment document preserves every requested replica")]
+    fn assignment_round_trip(plans: &PlanDocuments) {
+        check!(plans.parsed_assignments == vec![Some(plans.input_assignments.clone())]);
+    }
+
+    #[then("the election input JSON is")]
+    fn election_document(plans: &PlanDocuments, docstring: String) {
+        check!(plans.election_json == docstring.trim());
+    }
+
+    #[then("the topic-move input JSON is")]
+    fn topic_document(plans: &PlanDocuments, docstring: String) {
+        check!(plans.topics_json == docstring.trim());
+    }
+
+    scenarios!("tests/features/migrated/tests/jvm_acceptance_reassign/tool_output.feature", fixtures = [election: ElectionListing, label: PartitionLabel, cancellation: CancellationListing, plans: PlanDocuments]);
 }

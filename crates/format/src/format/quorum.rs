@@ -187,24 +187,120 @@ mod tests {
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "format quorum tests: parses initial controller spec with a kafka directory id"
-    )]
-    fn bdd_verify_parses_initial_controller_spec_with_a_kafka_directory_id() {
-        let v =
-            parse_initial_controller("3@host:9093:AAAAAAAAAAAAAAAAAAAAAw", "CONTROLLER").unwrap();
-        assert2::assert!(v.directory_id == Uuid::from_u128(3));
+    struct QuorumFormatScenario {
+        arguments: Vec<String>,
+        controller: String,
+        parsed_controller: Option<Result<Voter, String>>,
+        dynamic: Option<Result<bool, String>>,
+        voters: Option<Result<VoterSet, String>>,
+    }
+    #[rstest::fixture]
+    fn quorum_format() -> QuorumFormatScenario {
+        let arguments = ["krabka-format", "--log-dir", "/data", "--node-id", "3"]
+            .map(str::to_owned)
+            .to_vec();
+        QuorumFormatScenario {
+            arguments,
+            controller: String::new(),
+            parsed_controller: None,
+            dynamic: None,
+            voters: None,
+        }
+    }
+    #[rstest_bdd_macros::given("initial controller specification {specification}")]
+    fn initial_controller_spec(quorum_format: &mut QuorumFormatScenario, specification: String) {
+        quorum_format.controller = specification;
+    }
+    #[rstest_bdd_macros::when("the initial controller specification is parsed")]
+    fn parse_quorum_controller(quorum_format: &mut QuorumFormatScenario) {
+        quorum_format.parsed_controller = Some(parse_initial_controller(
+            &quorum_format.controller,
+            "CONTROLLER",
+        ));
+    }
+    #[rstest_bdd_macros::then("the controller directory ID is UUID 3")]
+    fn controller_directory_id(quorum_format: &QuorumFormatScenario) {
+        let voter = quorum_format
+            .parsed_controller
+            .as_ref()
+            .expect("controller parsed")
+            .as_ref()
+            .expect("Kafka directory ID accepted");
+        assert2::assert!(voter.directory_id == Uuid::from_u128(3));
     }
 
-    /// The directory id takes Kafka's base64 form too, which is what
-    /// `kafka-storage format --initial-controllers` takes.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/format/quorum.feature",
-        name = "tests: parses initial controller spec with a kafka directory id"
+    #[rstest_bdd_macros::given("a dynamic formatter with requested kraft.version {level}")]
+    fn quorum_feature_level(quorum_format: &mut QuorumFormatScenario, level: i16) {
+        quorum_format.arguments.extend([
+            "--no-initial-controllers".into(),
+            "--feature".into(),
+            format!("kraft.version={level}"),
+        ]);
+    }
+    #[rstest_bdd_macros::when("the formatter resolves dynamic quorum mode")]
+    fn resolve_dynamic_mode(quorum_format: &mut QuorumFormatScenario) {
+        use clap::Parser as _;
+        let cli = Cli::try_parse_from(&quorum_format.arguments).expect("formatter command line");
+        quorum_format.dynamic = Some(is_dynamic_format(&cli.args));
+    }
+    #[rstest_bdd_macros::then(
+        "the quorum mode error is No feature:kraft.version with feature level {level}"
     )]
-    fn parses_initial_controller_spec_with_a_kafka_directory_id() {}
+    fn undefined_kraft_level(quorum_format: &QuorumFormatScenario, level: i16) {
+        assert2::assert!(
+            quorum_format.dynamic
+                == Some(Err(format!(
+                    "No feature:kraft.version with feature level {level}"
+                )))
+        );
+    }
+
+    #[rstest_bdd_macros::given("formatter quorum mode {mode}")]
+    fn named_quorum_mode(quorum_format: &mut QuorumFormatScenario, mode: String) {
+        match mode.as_str() {
+            "standalone" => quorum_format.arguments.extend([
+                "--standalone".into(),
+                "--controller-listener".into(),
+                "host:9093".into(),
+            ]),
+            "explicit" => quorum_format.arguments.extend([
+                "--initial-controllers".into(),
+                "3@host:9093:00000000-0000-0000-0000-000000000003".into(),
+            ]),
+            _ => panic!("unknown formatter quorum mode {mode}"),
+        }
+    }
+    #[rstest_bdd_macros::given("formatter controller listener name {listener}")]
+    fn quorum_listener(quorum_format: &mut QuorumFormatScenario, listener: String) {
+        if listener != "omitted" {
+            quorum_format
+                .arguments
+                .extend(["--controller-listener-name".into(), listener]);
+        }
+    }
+    #[rstest_bdd_macros::when("the formatter builds the initial voters")]
+    fn build_named_voters(quorum_format: &mut QuorumFormatScenario) {
+        use clap::Parser as _;
+        let cli = Cli::try_parse_from(&quorum_format.arguments).expect("formatter command line");
+        quorum_format.voters = Some(build_initial_voters(
+            &cli.args,
+            DirectoryId(Uuid::from_u128(3)),
+        ));
+    }
+    #[rstest_bdd_macros::then("the sole voter endpoint listener is {listener}")]
+    fn named_voter_endpoint(quorum_format: &QuorumFormatScenario, listener: String) {
+        let named: Vec<String> = quorum_format
+            .voters
+            .as_ref()
+            .expect("voters built")
+            .as_ref()
+            .expect("valid quorum")
+            .iter()
+            .flat_map(|voter| voter.endpoints.iter().map(|endpoint| endpoint.name.clone()))
+            .collect();
+        assert2::assert!(named == vec![listener]);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/quorum_format", fixtures = [quorum_format: QuorumFormatScenario]);
 
     #[test]
     fn rejects_initial_controller_without_at() {
@@ -215,137 +311,6 @@ mod tests {
     fn rejects_initial_controller_bad_uuid() {
         assert2::assert!(parse_initial_controller("3@host:9093:not-a-uuid", "CONTROLLER").is_err());
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "format quorum tests: a kraft version level out of range is kafkas no feature error for {example}"
-    )]
-    fn bdd_verify_a_kraft_version_level_out_of_range_is_kafkas_no_feature_error(example: String) {
-        type Example<'a> = (&'a str,);
-        let (level,): Example<'_> = match example.as_str() {
-            "below range" => ("-1",),
-            "unsupported in range" => ("2",),
-            "above range" => ("9",),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        use clap::Parser as _;
-
-        let cli = Cli::try_parse_from([
-            "krabka-format",
-            "--log-dir",
-            "/data",
-            "--node-id",
-            "1",
-            "--no-initial-controllers",
-            "--feature",
-            &format!("kraft.version={level}"),
-        ])
-        .expect("parse");
-        assert2::assert!(
-            is_dynamic_format(&cli.args)
-                == Err(format!(
-                    "No feature:kraft.version with feature level {level}"
-                ))
-        );
-    }
-
-    /// A `kraft.version` level the feature does not define gets Kafka's
-    /// `Feature.fromFeatureLevel` text.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/format/quorum.feature",
-        name = "tests: a kraft version level out of range is kafkas no feature error"
-    )]
-    fn a_kraft_version_level_out_of_range_is_kafkas_no_feature_error(example: String) {
-        let _ = example;
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "format quorum tests: the voter endpoints carry the controller listener name for {example}"
-    )]
-    fn bdd_verify_the_voter_endpoints_carry_the_controller_listener_name(example: String) {
-        type Example<'a> = (&'a str,);
-        let (scenario,): Example<'_> = match example.as_str() {
-            "default listener name" => ("default",),
-            "explicit uppercase listener name" => ("uppercase",),
-            "normalized lowercase listener name" => ("normalized",),
-            "explicit quorum default name" => ("explicit-default",),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        /// The quorum flags, the listener name flag, and the endpoint name
-        /// written.
-        struct Case<'a> {
-            what: &'a str,
-            quorum: &'a [&'a str],
-            name: &'a [&'a str],
-            written: &'a str,
-        }
-        use clap::Parser as _;
-
-        let directory = DirectoryId(Uuid::from_u128(3));
-        let controllers = "3@host:9093:00000000-0000-0000-0000-000000000003";
-        let cases = [
-            Case {
-                what: "default",
-                quorum: &["--standalone", "--controller-listener", "host:9093"],
-                name: &[],
-                written: "CONTROLLER",
-            },
-            Case {
-                what: "uppercase",
-                quorum: &["--standalone", "--controller-listener", "host:9093"],
-                name: &["--controller-listener-name", "CONTROLLER_PLAINTEXT"],
-                written: "CONTROLLER_PLAINTEXT",
-            },
-            Case {
-                what: "normalized",
-                quorum: &["--initial-controllers", controllers],
-                name: &["--controller-listener-name", "controller_plaintext"],
-                written: "CONTROLLER_PLAINTEXT",
-            },
-            Case {
-                what: "explicit-default",
-                quorum: &["--initial-controllers", controllers],
-                name: &[],
-                written: "CONTROLLER",
-            },
-        ];
-        let Case {
-            quorum,
-            name,
-            written,
-            ..
-        } = cases
-            .iter()
-            .find(|case| case.what == scenario)
-            .expect("named yare case exists");
-        let cli = Cli::try_parse_from(
-            ["krabka-format", "--log-dir", "/data", "--node-id", "3"]
-                .into_iter()
-                .chain(quorum.iter().copied())
-                .chain(name.iter().copied()),
-        )
-        .expect("parse");
-        let named: Vec<String> = build_initial_voters(&cli.args, directory)
-            .expect("voters")
-            .iter()
-            .flat_map(|voter| voter.endpoints.iter().map(|endpoint| endpoint.name.clone()))
-            .collect();
-        assert2::assert!(named == vec![(*written).to_owned()]);
-    }
-
-    #[cfg(test)]
-    /// The voter endpoints carry the controller listener name, as
-    /// `kafka-storage format` takes it from `controller.listener.names`, in
-    /// Kafka's upper-case form. Without the flag the name is `CONTROLLER`.
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/format/quorum.feature",
-        name = "tests: the voter endpoints carry the controller listener name"
-    )]
-    fn the_voter_endpoints_carry_the_controller_listener_name(example: String) { let _ = example; }
 
     #[yare::parameterized(
         invalid_id = { "notanum@host:9093:00000000-0000-0000-0000-000000000003" },

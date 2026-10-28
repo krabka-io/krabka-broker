@@ -11,213 +11,317 @@ use {
         boot, connect, create_topic, describe, heartbeat, join_share_group, rejoin, total_assigned,
     },
     assert2::{assert, check},
+    krabka_broker::BrokerHandle,
+    krabka_client_core::Client,
+    krabka_protocol::owned::{
+        share_group_describe_response::ShareGroupDescribeResponse,
+        share_group_heartbeat_response::ShareGroupHeartbeatResponse,
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
     std::time::Duration,
+    tempfile::TempDir,
     tokio::time,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("share groups share group membership: single member join assignment")]
-async fn bdd_verify_single_member_join_assignment() {
-    let (_b, bootstrap, _d) = boot().await;
+#[derive(Default)]
+struct ShareMembership {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    client: Option<Arc<Client>>,
+    topic: String,
+    requested_ids: Vec<String>,
+    member_ids: Vec<String>,
+    joins: Vec<ShareGroupHeartbeatResponse>,
+    heartbeat: Option<ShareGroupHeartbeatResponse>,
+    described: Option<ShareGroupDescribeResponse>,
+}
+
+#[fixture]
+fn share_membership() -> ShareMembership {
+    // Keep actual join identities and generations for subsequent membership operations.
+    ShareMembership::default()
+}
+
+#[given("a share coordinator with topic {topic} containing {partitions} partitions")]
+async fn membership_topic(share_membership: &mut ShareMembership, topic: String, partitions: i32) {
+    let (broker, bootstrap, directory) = boot().await;
     let client = connect(&bootstrap).await;
-    create_topic(&client, "t1", 4).await;
+    create_topic(&client, &topic, partitions).await;
+    share_membership.broker = Some(broker);
+    share_membership.directory = Some(directory);
+    share_membership.client = Some(client);
+    share_membership.topic = topic;
+}
 
-    let member_id = uuid::Uuid::new_v4().to_string();
-    let mut req = heartbeat("g1", &member_id, 0);
-    req.subscribed_topic_names = Some(vec!["t1".into()]);
-    let resp = client.send(req).await.unwrap();
+#[given("a share member has completed joining g1 for the topic")]
+async fn joined_share_member(share_membership: &mut ShareMembership) {
+    let member = join_share_group(
+        share_membership
+            .client
+            .as_ref()
+            .expect("share coordinator client"),
+        "g1",
+        &uuid::Uuid::new_v4().to_string(),
+        &share_membership.topic,
+    )
+    .await;
+    share_membership.member_ids.push(member);
+}
 
-    check!(resp.error_code == 0, "join failed: {:?}", resp.error_code);
-    check!(resp.member_id.as_deref() == Some(member_id.as_str()));
-    check!(
-        resp.member_epoch == 2,
-        "first join advances the new group from epoch 1 to 2, got {}",
-        resp.member_epoch
-    );
-    check!(resp.assignment.is_some() && total_assigned(&resp) == 0);
+#[when("a new member joins share group g1 at epoch zero")]
+async fn join_share_member(share_membership: &mut ShareMembership) {
+    let member = uuid::Uuid::new_v4().to_string();
+    let mut request = heartbeat("g1", &member, 0);
+    request.subscribed_topic_names = Some(vec![share_membership.topic.clone()]);
+    let response = share_membership
+        .client
+        .as_ref()
+        .expect("share coordinator client")
+        .send(request)
+        .await
+        .unwrap();
+    share_membership
+        .member_ids
+        .push(response.member_id.clone().expect("join member ID"));
+    share_membership.requested_ids.push(member);
+    share_membership.joins.push(response);
+}
 
-    let assigned = time::timeout(Duration::from_secs(30), async {
-        let mut epoch = resp.member_epoch;
-        loop {
-            let resp = client
-                .send(heartbeat("g1", &member_id, epoch))
-                .await
-                .unwrap();
-            assert!(resp.error_code == 0, "heartbeat failed: {resp:?}");
-            epoch = resp.member_epoch;
-            if resp.assignment.is_some() {
-                return resp;
+#[then(
+    "the first share join succeeds at epoch 2 with the requested identity and an empty assignment"
+)]
+fn initial_share_assignment(share_membership: &ShareMembership) {
+    let response = share_membership.joins.first().expect("first join answered");
+    check!(response.error_code == 0, "join failed: {response:?}");
+    check!(response.member_id.as_deref() == Some(share_membership.requested_ids[0].as_str()));
+    check!(response.member_epoch == 2);
+    check!(response.assignment.is_some() && total_assigned(response) == 0);
+}
+
+#[when("the first member heartbeats until initialized share partitions are assigned")]
+async fn initialized_share_assignment(share_membership: &mut ShareMembership) {
+    let client = share_membership
+        .client
+        .as_ref()
+        .expect("share coordinator client");
+    let member = &share_membership.member_ids[0];
+    let mut epoch = share_membership.joins[0].member_epoch;
+    share_membership.heartbeat = Some(
+        time::timeout(Duration::from_secs(30), async {
+            loop {
+                let response = client.send(heartbeat("g1", member, epoch)).await.unwrap();
+                assert!(response.error_code == 0, "heartbeat failed: {response:?}");
+                epoch = response.member_epoch;
+                if response.assignment.is_some() {
+                    return response;
+                }
+                time::sleep(Duration::from_millis(100)).await;
             }
-            time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .expect("the initialized partitions are assigned");
-    check!(assigned.member_epoch == 3);
-    check!(
-        total_assigned(&assigned) == 4,
-        "single member must own all 4 partitions"
+        })
+        .await
+        .expect("initialized partitions assigned"),
     );
 }
 
-/// A single member joins and advances to epoch 1 with an empty assignment,
-/// because Kafka assigns only partitions whose share state is initialized.
-/// The join initializes them, and a later heartbeat receives every partition
-/// of the subscribed topic at a bumped epoch.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[then("the single share member owns all four partitions at epoch 3")]
+fn full_share_assignment(share_membership: &ShareMembership) {
+    let response = share_membership
+        .heartbeat
+        .as_ref()
+        .expect("assignment heartbeat answered");
+    check!(response.member_epoch == 3);
+    check!(
+        total_assigned(response) == 4,
+        "single member must own all four partitions"
+    );
+}
+
+#[then("both share joins succeeded with distinct member identities")]
+fn distinct_share_members(share_membership: &ShareMembership) {
+    assert!(share_membership.joins.len() == 2);
+    for response in &share_membership.joins {
+        assert!(response.error_code == 0, "join failed: {response:?}");
+    }
+    assert!(share_membership.member_ids[0] != share_membership.member_ids[1]);
+}
+
+#[when("the first member heartbeats at its returned epoch with the same subscription")]
+async fn rebalance_share_member(share_membership: &mut ShareMembership) {
+    let mut request = heartbeat(
+        "g1",
+        &share_membership.member_ids[0],
+        share_membership.joins[0].member_epoch,
+    );
+    request.subscribed_topic_names = Some(vec![share_membership.topic.clone()]);
+    share_membership.heartbeat = Some(
+        share_membership
+            .client
+            .as_ref()
+            .expect("share coordinator client")
+            .send(request)
+            .await
+            .unwrap(),
+    );
+}
+
+#[when("the joined share member leaves at epoch minus one")]
+async fn leave_share_member(share_membership: &mut ShareMembership) {
+    share_membership.heartbeat = Some(
+        share_membership
+            .client
+            .as_ref()
+            .expect("share coordinator client")
+            .send(heartbeat("g1", &share_membership.member_ids[0], -1))
+            .await
+            .unwrap(),
+    );
+}
+
+#[then("the share membership heartbeat succeeds")]
+fn successful_share_heartbeat(share_membership: &ShareMembership) {
+    let response = share_membership
+        .heartbeat
+        .as_ref()
+        .expect("heartbeat answered");
+    assert!(response.error_code == 0, "{response:?}");
+}
+
+#[when("an administrator describes share group g1")]
+async fn describe_share_members(share_membership: &mut ShareMembership) {
+    share_membership.described = Some(
+        describe(
+            share_membership
+                .client
+                .as_ref()
+                .expect("share coordinator client"),
+            "g1",
+        )
+        .await,
+    );
+}
+
+#[then("the described share group contains {members} members and has a positive group epoch")]
+fn described_share_members(share_membership: &ShareMembership, members: usize) {
+    let response = share_membership
+        .described
+        .as_ref()
+        .expect("share group described");
+    assert!(response.groups.len() == 1, "expected exactly one group row");
+    let group = &response.groups[0];
+    check!(group.error_code == 0, "describe error: {group:?}");
+    check!(group.members.len() == members);
+    check!(group.group_epoch >= 1);
+}
+
+#[then("the retained share group contains no members")]
+fn empty_share_membership(share_membership: &ShareMembership) {
+    let response = share_membership
+        .described
+        .as_ref()
+        .expect("share group described");
+    assert!(response.groups.len() == 1, "group row retained after leave");
+    assert!(response.groups[0].error_code == 0);
+    assert!(response.groups[0].members.is_empty());
+}
+
+#[when("the share coordinator restarts on its durable data directory")]
+async fn recover_share_membership(share_membership: &mut ShareMembership) {
+    share_membership
+        .broker
+        .take()
+        .expect("first broker")
+        .shutdown()
+        .await;
+    let (broker, client) = rejoin(
+        share_membership
+            .directory
+            .as_ref()
+            .expect("durable directory")
+            .path()
+            .to_path_buf(),
+    )
+    .await;
+    share_membership.broker = Some(broker);
+    share_membership.client = Some(client);
+}
+
+#[then("the recovered share group contains the original member identity and a positive epoch")]
+fn recovered_share_membership(share_membership: &ShareMembership) {
+    let response = share_membership
+        .described
+        .as_ref()
+        .expect("recovered group described");
+    assert!(response.groups.len() == 1);
+    let group = &response.groups[0];
+    check!(group.error_code == 0);
+    check!(group.group_epoch >= 1);
+    check!(
+        group
+            .members
+            .iter()
+            .any(|member| member.member_id == share_membership.member_ids[0])
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/share_groups/share_group_membership.feature",
     name = "single member join assignment"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn single_member_join_assignment() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share groups share group membership: two members then describe")]
-async fn bdd_verify_two_members_then_describe() {
-    let (_b, bootstrap, _d) = boot().await;
-    let client = connect(&bootstrap).await;
-    create_topic(&client, "t2", 4).await;
-
-    let mut m1 = heartbeat("g1", &uuid::Uuid::new_v4().to_string(), 0);
-    m1.subscribed_topic_names = Some(vec!["t2".into()]);
-    let r1 = client.send(m1).await.unwrap();
-    assert!(r1.error_code == 0, "m1 join failed: {:?}", r1.error_code);
-    let mid1 = r1.member_id.clone().unwrap();
-
-    let mut m2 = heartbeat("g1", &uuid::Uuid::new_v4().to_string(), 0);
-    m2.subscribed_topic_names = Some(vec!["t2".into()]);
-    let r2 = client.send(m2).await.unwrap();
-    assert!(r2.error_code == 0, "m2 join failed: {:?}", r2.error_code);
-    let mid2 = r2.member_id.clone().unwrap();
-    assert!(mid1 != mid2, "members must have distinct ids");
-
-    // m1 re-heartbeats at its returned epoch so it learns the rebalanced
-    // assignment after m2 bumped the group epoch.
-    let mut m1b = heartbeat("g1", &mid1, r1.member_epoch);
-    m1b.subscribed_topic_names = Some(vec!["t2".into()]);
-    let r1b = client.send(m1b).await.unwrap();
-    assert!(r1b.error_code == 0, "m1 re-hb failed: {:?}", r1b.error_code);
-
-    let desc = describe(&client, "g1").await;
-    assert!(desc.groups.len() == 1, "expected exactly one group row");
-    let g = &desc.groups[0];
-    check!(g.error_code == 0, "describe error: {:?}", g.error_code);
-    check!(
-        g.members.len() == 2,
-        "describe must show both members, got {}",
-        g.members.len()
-    );
-    check!(
-        g.group_epoch >= 1,
-        "group epoch must have advanced, got {}",
-        g.group_epoch
-    );
+async fn single_member_join_assignment(share_membership: ShareMembership) {
+    share_membership
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_membership);
 }
 
-/// Two members join the same group. After both converge, `ShareGroupDescribe`
-/// reports one group with both members and a non-trivial group epoch.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/share_groups/share_group_membership.feature",
     name = "two members then describe"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn two_members_then_describe() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share groups share group membership: member leave epoch minus one")]
-async fn bdd_verify_member_leave_epoch_minus_one() {
-    let (_b, bootstrap, _d) = boot().await;
-    let client = connect(&bootstrap).await;
-    create_topic(&client, "t3", 2).await;
-
-    let mid = join_share_group(&client, "g1", &uuid::Uuid::new_v4().to_string(), "t3").await;
-
-    let leave = heartbeat("g1", &mid, -1);
-    let lr = client.send(leave).await.unwrap();
-    assert!(lr.error_code == 0, "leave failed: {:?}", lr.error_code);
-
-    let desc = describe(&client, "g1").await;
-    assert!(
-        desc.groups.len() == 1,
-        "group row still present after leave"
-    );
-    let g = &desc.groups[0];
-    // The empty group is retained (the actor stays alive with 0 members).
-    assert!(
-        g.error_code == 0,
-        "retained empty group describe error: {:?}",
-        g.error_code
-    );
-    assert!(
-        g.members.is_empty(),
-        "no members must remain after leave, got {}",
-        g.members.len()
-    );
+async fn two_members_then_describe(share_membership: ShareMembership) {
+    share_membership
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_membership);
 }
 
-/// A member leaves by sending `member_epoch == -1`. The leave succeeds, and
-/// the broker keeps the group but reports it with zero members, in state
-/// "Empty".
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/share_groups/share_group_membership.feature",
     name = "member leave epoch minus one"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn member_leave_epoch_minus_one() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share groups share group membership: state survives restart")]
-async fn bdd_verify_state_survives_restart() {
-    let (member_id, dir) = {
-        let (broker, bootstrap, dir) = boot().await;
-        let client = connect(&bootstrap).await;
-        create_topic(&client, "t4", 2).await;
-
-        let member_id =
-            join_share_group(&client, "g1", &uuid::Uuid::new_v4().to_string(), "t4").await;
-
-        // flush_pending inside the share actor awaits offsets_log.append before
-        // returning the heartbeat response, so the join record is durable on
-        // disk by the time the client receives the response above.
-        broker.shutdown().await;
-        (member_id, dir)
-    };
-    let log_dir = dir.path().to_path_buf();
-
-    {
-        let (_broker, client) = rejoin(log_dir).await;
-
-        let desc = describe(&client, "g1").await;
-        assert!(desc.groups.len() == 1, "group row after restart");
-        let g = &desc.groups[0];
-        check!(
-            g.error_code == 0,
-            "recovered group describe error: {:?}",
-            g.error_code
-        );
-        check!(
-            g.group_epoch >= 1,
-            "recovered group epoch must be >= 1, got {}",
-            g.group_epoch
-        );
-        check!(
-            g.members.iter().any(|m| m.member_id == member_id),
-            "recovered group must contain the original member {member_id}, members: {:?}",
-            g.members.iter().map(|m| &m.member_id).collect::<Vec<_>>()
-        );
-    }
+async fn member_leave_epoch_minus_one(share_membership: ShareMembership) {
+    share_membership
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_membership);
 }
 
-/// Share-group state persists to `__consumer_offsets`. After a broker restart,
-/// a Rejoin on the same data dir, replay reconstructs the group and the member,
-/// and `ShareGroupDescribe` reports them.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/share_groups/share_group_membership.feature",
     name = "state survives restart"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn state_survives_restart() {}
+async fn state_survives_restart(share_membership: ShareMembership) {
+    share_membership
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_membership);
+}
+
+use std::sync::Arc;

@@ -11,11 +11,11 @@
 use {
     crate::{
         host_broker::{JvmBroker, start_jvm_broker},
-        jvm_acceptance::break_glass::{approve, propose},
+        jvm_acceptance::break_glass::{Approvals, approve, propose},
         support,
         vocabulary::{APPROVER_ONE, APPROVER_TWO, PROPOSER, WIRE_UNCLEAN_ELECT_LEADERS},
     },
-    assert2::{assert, check},
+    assert2::assert,
     krabka_client_admin::{AdminClient, CreateTopicSpec},
     krabka_client_core::{Client, security::ClientSecurity},
     krabka_protocol::krabka::freeze::SetTopicFreezeRequest,
@@ -84,7 +84,7 @@ pub async fn freeze(client: &Client, scope: &str, pattern_type: i8, reason: &str
 /// lets a proposal on a topic cover every partition of it for the actions that
 /// name a partition, and an unclean election is one of those, so this also
 /// checks that widening on the way through.
-pub async fn approved_unclean_election(bootstrap: &str, target: &str) {
+pub async fn approved_unclean_election(bootstrap: &str, target: &str) -> [Approvals; 2] {
     let proposal_id = propose(
         bootstrap,
         PROPOSER,
@@ -93,22 +93,9 @@ pub async fn approved_unclean_election(bootstrap: &str, target: &str) {
         "the whole ISR is gone and the site has to come back",
     )
     .await;
-
     let first = approve(bootstrap, APPROVER_ONE, proposal_id).await;
-    check!(
-        first.held == 1,
-        "one approval is one distinct principal, not {first:?}"
-    );
-    check!(
-        first.held < first.required,
-        "one person must not be enough: {first:?}"
-    );
-
     let second = approve(bootstrap, APPROVER_TWO, proposal_id).await;
-    check!(
-        second.held == second.required,
-        "two distinct principals must satisfy the rule: {second:?}"
-    );
+    [first, second]
 }
 
 /// Plaintext fixture with all topics installed before the first control-plane mutation.

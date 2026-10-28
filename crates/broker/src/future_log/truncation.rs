@@ -169,11 +169,6 @@ mod tests {
         tempfile::tempdir,
     };
 
-    const NO_ANSWER: EpochEnd = EpochEnd {
-        epoch: LeaderEpoch(-1),
-        end: Offset(-1),
-    };
-
     /// An epoch and the offset it starts at.
     #[derive(Clone, Copy)]
     struct EpochStart {
@@ -183,7 +178,7 @@ mod tests {
 
     /// A checkpoint, and the directory that holds its file.
     struct CheckpointInDir {
-        dir: tempfile::TempDir,
+        _directory_guard: tempfile::TempDir,
         checkpoint: LeaderEpochCheckpoint,
     }
 
@@ -197,91 +192,115 @@ mod tests {
                 .append(LeaderEpoch(epoch), Offset(start))
                 .unwrap();
         }
-        CheckpointInDir { dir, checkpoint }
+        CheckpointInDir {
+            _directory_guard: dir,
+            checkpoint,
+        }
     }
 
-    #[cfg(test)]
+    #[derive(Default)]
+    struct FutureEpochExchange {
+        future: Option<CheckpointInDir>,
+        current: Option<EpochEnd>,
+        future_end: Option<Offset>,
+        initial_truncation: Option<Offset>,
+        selected: Option<TruncationState>,
+    }
+
+    #[rstest::fixture]
+    fn future_epoch_exchange() -> FutureEpochExchange {
+        // Each migration exchange owns its checkpoint and truncation observation.
+        FutureEpochExchange::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "the future log has epoch {first_epoch} starting at {first_start} and epoch {last_epoch} starting at {last_start}"
+    )]
+    fn supplied_future_epoch_checkpoint(
+        future_epoch_exchange: &mut FutureEpochExchange,
+        first_epoch: i32,
+        first_start: i64,
+        last_epoch: i32,
+        last_start: i64,
+    ) {
+        future_epoch_exchange.future = Some(checkpoint(&[
+            EpochStart {
+                epoch: first_epoch,
+                start: first_start,
+            },
+            EpochStart {
+                epoch: last_epoch,
+                start: last_start,
+            },
+        ]));
+    }
+
+    #[rstest_bdd_macros::given(
+        "the future log ends at {end} and the initial truncation offset is {initial}"
+    )]
+    fn supplied_future_epoch_offsets(
+        future_epoch_exchange: &mut FutureEpochExchange,
+        end: i64,
+        initial: i64,
+    ) {
+        future_epoch_exchange.future_end = Some(Offset(end));
+        future_epoch_exchange.initial_truncation = Some(Offset(initial));
+    }
+
+    #[rstest_bdd_macros::given("the current log reports epoch {epoch} ending at {end}")]
+    fn supplied_current_epoch_end(
+        future_epoch_exchange: &mut FutureEpochExchange,
+        epoch: i32,
+        end: i64,
+    ) {
+        future_epoch_exchange.current = Some(EpochEnd {
+            epoch: LeaderEpoch(epoch),
+            end: Offset(end),
+        });
+    }
+
+    #[rstest_bdd_macros::when("the migration chooses its next future-log truncation state")]
+    fn choose_future_epoch_truncation(future_epoch_exchange: &mut FutureEpochExchange) {
+        future_epoch_exchange.selected = Some(offset_truncation_state(
+            future_epoch_exchange
+                .current
+                .expect("current epoch answer was given"),
+            &future_epoch_exchange
+                .future
+                .as_ref()
+                .expect("future checkpoint was given")
+                .checkpoint,
+            future_epoch_exchange
+                .future_end
+                .expect("future log end was given"),
+            future_epoch_exchange
+                .initial_truncation
+                .expect("initial truncation offset was given"),
+        ));
+    }
+
     #[rstest_bdd_macros::then(
-        "future log truncation tests: the truncation state follows kafkas getoffsettruncationstate"
+        "the future-log truncation offset is {offset} and reconciliation completed is {completed}"
     )]
-    fn bdd_verify_the_truncation_state_follows_kafkas_getoffsettruncationstate() {
-        struct Case {
-            label: &'static str,
-            current: EpochEnd,
-            offset: Offset,
-            completed: bool,
-        }
-
-        let CheckpointInDir {
-            dir: _dir,
-            checkpoint: future,
-        } = checkpoint(&[EpochStart { epoch: 1, start: 0 }, EpochStart {
-            epoch: 3,
-            start: 10,
-        }]);
-        let epoch_end = |epoch, end| EpochEnd { epoch, end };
-        let cases = [
-            Case {
-                label: "the current log cannot place the epoch",
-                current: NO_ANSWER,
-                offset: Offset(10),
-                completed: false,
-            },
-            Case {
-                label: "the epochs agree: the lower end wins",
-                current: epoch_end(LeaderEpoch(3), Offset(12)),
-                offset: Offset(12),
-                completed: true,
-            },
-            Case {
-                label: "the epochs agree and the future log ends first",
-                current: epoch_end(LeaderEpoch(3), Offset(40)),
-                offset: Offset(15),
-                completed: true,
-            },
-            Case {
-                label: "the future log does not know epoch 2: cut to the end of epoch 1",
-                current: epoch_end(LeaderEpoch(2), Offset(12)),
-                offset: Offset(10),
-                completed: false,
-            },
-            Case {
-                label: "the current log ends epoch 1 below the future log's end for it",
-                current: epoch_end(LeaderEpoch(1), Offset(4)),
-                offset: Offset(4),
-                completed: true,
-            },
-            Case {
-                label: "the current log names an epoch below every epoch of the future log",
-                current: epoch_end(LeaderEpoch(0), Offset(6)),
-                offset: Offset(0),
-                completed: true,
-            },
-        ];
-        for Case {
-            label,
-            current,
-            offset,
-            completed,
-        } in cases
-        {
-            let state = offset_truncation_state(current, &future, Offset(15), Offset(10));
-            assert!(state == TruncationState { offset, completed }, "{label}");
-        }
+    fn expected_future_epoch_truncation(
+        future_epoch_exchange: &FutureEpochExchange,
+        offset: i64,
+        completed: bool,
+    ) {
+        assert!(
+            future_epoch_exchange.selected
+                == Some(TruncationState {
+                    offset: Offset(offset),
+                    completed
+                })
+        );
     }
 
-    /// One row per case of `getOffsetTruncationState`: the current log's
-    /// answer, the future log's epochs (epoch 1 from 0, epoch 3 from 10) and
-    /// end (15), and the truncation it makes.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/future_log/truncation.feature",
-        name = "tests: the truncation state follows kafkas getoffsettruncationstate"
-    )]
-    fn the_truncation_state_follows_kafkas_getoffsettruncationstate() {}
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/future_log/truncation.feature",
+        fixtures = [future_epoch_exchange: FutureEpochExchange]
+    );
 
-    /// A log at `<dir>/<name>` with `batches` one-record batches, each stamped
-    /// with the epoch it is paired with.
     fn log_with_epochs(dir: &Path, name: &str, batches: &[LeaderEpoch]) -> Mutex<Log> {
         let path = log_dir::partition_dir(dir, name, 0);
         fs::create_dir_all(&path).unwrap();

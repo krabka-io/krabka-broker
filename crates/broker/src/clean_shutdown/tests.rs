@@ -66,26 +66,66 @@ fn a_proof_is_spent_by_the_start_that_reads_it() {
 /// on-disk format: a change to it is a change to the 1.x contract.
 const GOLDEN: &str = r#"{"version":0,"brokerEpoch":42}"#;
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("clean shutdown tests: the proof holds kafkas bytes")]
-fn bdd_verify_the_proof_holds_kafkas_bytes() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    write(dir.path(), 42);
-
-    let on_disk = fs::read_to_string(dir.path().join(".kafka_cleanshutdown"))
-        .expect("the proof is at Kafka's file name");
-    assert!(
-        (FILE_NAME, encode(42).unwrap(), on_disk)
-            == (".kafka_cleanshutdown", GOLDEN.to_owned(), GOLDEN.to_owned())
-    );
+#[derive(Default)]
+struct CleanShutdownScenario {
+    directory: Option<tempfile::TempDir>,
+    epoch: i64,
+    document: String,
+    written: Option<(&'static str, String, String)>,
+    decoded: Option<Result<i64, ProofError>>,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/clean_shutdown/tests.feature",
-    name = "the proof holds kafkas bytes"
-)]
-fn the_proof_holds_kafkas_bytes() {}
+#[rstest::fixture]
+fn shutdown_proof() -> CleanShutdownScenario {
+    // Keep shutdown proof inputs and observations fresh for each scenario.
+    CleanShutdownScenario::default()
+}
+
+#[rstest_bdd_macros::given("a broker at epoch {epoch} has a fresh log directory")]
+fn shutdown_log_directory(shutdown_proof: &mut CleanShutdownScenario, epoch: i64) {
+    shutdown_proof.directory = Some(tempfile::tempdir().expect("temp dir"));
+    shutdown_proof.epoch = epoch;
+}
+
+#[rstest_bdd_macros::given("the supplied clean-shutdown document is:")]
+fn shutdown_document(shutdown_proof: &mut CleanShutdownScenario, docstring: String) {
+    shutdown_proof.document = docstring.trim().to_owned();
+}
+
+#[rstest_bdd_macros::when("the graceful shutdown writes and encodes its restart proof")]
+fn write_shutdown_proof(shutdown_proof: &mut CleanShutdownScenario) {
+    let directory = shutdown_proof
+        .directory
+        .as_ref()
+        .expect("a log directory was given");
+    write(directory.path(), shutdown_proof.epoch);
+    let on_disk = fs::read_to_string(directory.path().join(".kafka_cleanshutdown"))
+        .expect("the proof is at Kafka's file name");
+    shutdown_proof.written = Some((FILE_NAME, encode(shutdown_proof.epoch).unwrap(), on_disk));
+}
+
+#[rstest_bdd_macros::when("the broker decodes that clean-shutdown document")]
+fn decode_shutdown_proof(shutdown_proof: &mut CleanShutdownScenario) {
+    shutdown_proof.decoded = Some(decode(&shutdown_proof.document));
+}
+
+#[rstest_bdd_macros::then("both the encoder and .kafka_cleanshutdown contain exactly:")]
+fn kafka_shutdown_bytes(shutdown_proof: &CleanShutdownScenario, docstring: String) {
+    let expected_json = docstring.trim().to_owned();
+    let expected = (".kafka_cleanshutdown", expected_json.clone(), expected_json);
+    assert!(shutdown_proof.written.as_ref() == Some(&expected));
+}
+
+#[rstest_bdd_macros::then("the clean-shutdown document is rejected as malformed")]
+fn malformed_shutdown_document(shutdown_proof: &CleanShutdownScenario) {
+    assert!(let Some(Err(ProofError::Malformed(_))) = &shutdown_proof.decoded,
+        "decode({:?})", shutdown_proof.document);
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/clean_shutdown/tests.feature",
+    fixtures = [shutdown_proof: CleanShutdownScenario]
+);
 
 /// Every document the reader meets, and what it makes of it. Kafka's reader
 /// ignores unknown fields, so krabka's does too.
@@ -110,37 +150,6 @@ fn decode_reads_only_version_zero_documents(text: &str, want: Result<i64, ProofE
 fn the_format_version_is_zero() {
     assert!(FORMAT_VERSION == 0);
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "clean shutdown tests: decode refuses documents that are not kafkas for {example}"
-)]
-fn bdd_verify_decode_refuses_documents_that_are_not_kafkas(example: String) {
-    type Example<'a> = (&'a str,);
-    let (text,): Example<'_> = match example.as_str() {
-        "bare epoch" => ("42",),
-        "missing version" => (r#"{"brokerEpoch":42}"#,),
-        "missing epoch" => (r#"{"version":0}"#,),
-        "null epoch" => (r#"{"version":0,"brokerEpoch":null}"#,),
-        "junk" => ("not-an-epoch",),
-        "empty" => ("",),
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    assert2::assert!(
-        let Err(ProofError::Malformed(_)) = decode(text),
-        "decode({text:?})"
-    );
-}
-
-/// Text that is not the document is malformed: the 0.x layout (a bare
-/// decimal epoch), a document with no version, one with no epoch, and junk.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/clean_shutdown/tests.feature",
-    name = "decode refuses documents that are not kafkas"
-)]
-fn decode_refuses_documents_that_are_not_kafkas(example: String) { let _ = example; }
 
 /// A file that is not a proof -- of an unknown version, in the 0.x layout,
 /// or junk -- makes the restart unclean, and does not stay behind for a later

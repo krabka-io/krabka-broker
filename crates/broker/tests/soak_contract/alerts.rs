@@ -603,6 +603,7 @@ async fn get_json(http: &reqwest::Client, url: &str) -> Result<serde_json::Value
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use {
         super::{
@@ -611,184 +612,14 @@ mod tests {
             published_port, query_ranges, span, url_port,
         },
         assert2::{assert, check},
+        rstest::fixture,
+        rstest_bdd::{Slot, datatable::Rows},
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
         serde_json::json,
         std::collections::BTreeMap,
     };
 
     const STEP: i64 = 5_000;
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract alerts tests: a target port comes from the metrics url for {example}"
-    )]
-    fn bdd_verify_a_target_port_comes_from_the_metrics_url(example: String) {
-        type Example<'a> = (&'a str, Result<u16, ()>);
-        let (url, port): Example<'_> = match example.as_str() {
-            "loopback" => ("http://127.0.0.1:40123/metrics", Ok(40123)),
-            "no path" => ("http://host.docker.internal:9404", Ok(9404)),
-            "no port" => ("http://127.0.0.1/metrics", Err(())),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(url_port(url).map_err(|_| ()) == port);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
-        name = "tests: a target port comes from the metrics url"
-    )]
-    fn a_target_port_comes_from_the_metrics_url(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract alerts tests: the config scrapes every node as the job the rules name"
-    )]
-    fn bdd_verify_the_config_scrapes_every_node_as_the_job_the_rules_name() {
-        check!(
-            prometheus_config(&[(1, 40001), (2, 40002)])
-                == "global:
-  scrape_interval: 5s
-  scrape_timeout: 4s
-  evaluation_interval: 5s
-rule_files:
-  - /etc/prometheus/soak/alert-rules.yaml
-scrape_configs:
-  - job_name: krabka-broker
-    static_configs:
-      - targets: [\"host.docker.internal:40001\"]
-        labels:
-          node: \"1\"
-      - targets: [\"host.docker.internal:40002\"]
-        labels:
-          node: \"2\"
-"
-        );
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
-        name = "tests: the config scrapes every node as the job the rules name"
-    )]
-    fn the_config_scrapes_every_node_as_the_job_the_rules_name() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract alerts tests: the api port is the published one for {example}"
-    )]
-    fn bdd_verify_the_api_port_is_the_published_one(example: String) {
-        type Example<'a> = (&'a str, Result<u16, ()>);
-        let (output, port): Example<'_> = match example.as_str() {
-            "ipv4" => ("127.0.0.1:32768\n", Ok(32768)),
-            "both families" => ("0.0.0.0:32769\n[::]:32769\n", Ok(32769)),
-            "empty" => ("", Err(())),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(published_port(output).map_err(|_| ()) == port);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
-        name = "tests: the api port is the published one"
-    )]
-    fn the_api_port_is_the_published_one(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak contract alerts tests: ready is a 200 for {example}")]
-    fn bdd_verify_ready_is_a_200(example: String) {
-        type Example<'a> = (&'a str, bool);
-        let (response, ready): Example<'_> = match example.as_str() {
-            "ready" => ("HTTP/1.0 200 OK\r\n\r\nPrometheus Server is Ready.\n", true),
-            "starting" => ("HTTP/1.0 503 Service Unavailable\r\n\r\n", false),
-            "closed by proxy" => ("", false),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(is_ok_response(response) == ready);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
-        name = "tests: ready is a 200"
-    )]
-    fn ready_is_a_200(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract alerts tests: milliseconds go out as seconds for {example}"
-    )]
-    fn bdd_verify_milliseconds_go_out_as_seconds(example: String) {
-        type Example<'a> = (i64, &'a str);
-        let (ms, seconds): Example<'_> = match example.as_str() {
-            "whole" => (1_700_000_000_000, "1700000000.000"),
-            "millis" => (1_700_000_000_042, "1700000000.042"),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(api_seconds(ms) == seconds);
-        check!(api_millis(seconds) == Some(ms));
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
-        name = "tests: milliseconds go out as seconds"
-    )]
-    fn milliseconds_go_out_as_seconds(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract alerts tests: seconds come back as milliseconds for {example}"
-    )]
-    fn bdd_verify_seconds_come_back_as_milliseconds(example: String) {
-        type Example<'a> = (&'a str, Option<i64>);
-        let (seconds, ms): Example<'_> = match example.as_str() {
-            "integer" => ("1700000000", Some(1_700_000_000_000)),
-            "one digit" => ("1700000000.5", Some(1_700_000_000_500)),
-            "past millis" => ("1700000000.12345", Some(1_700_000_000_123)),
-            "exponent" => ("1.7e9", None),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(api_millis(seconds) == ms);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
-        name = "tests: seconds come back as milliseconds"
-    )]
-    fn seconds_come_back_as_milliseconds(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract alerts tests: a long run is queried in ranges prometheus accepts for {example}"
-    )]
-    fn bdd_verify_a_long_run_is_queried_in_ranges_prometheus_accepts(example: String) {
-        type Example = (i64, i64, Vec<(i64, i64)>);
-        let (start, end, ranges): Example = match example.as_str() {
-            "one range" => (0, 10 * STEP, vec![(0, 10 * STEP)]),
-            "a single point" => (0, 0, vec![(0, 0)]),
-            "split at the point limit" => (0, 15_000 * STEP, vec![
-                (0, 9_999 * STEP),
-                (10_000 * STEP, 15_000 * STEP),
-            ]),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(query_ranges(start, end, STEP) == ranges);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
-        name = "tests: a long run is queried in ranges prometheus accepts"
-    )]
-    fn a_long_run_is_queried_in_ranges_prometheus_accepts(example: String) { let _ = example; }
 
     fn matrix(series: &[(&str, &str, &[i64])]) -> serde_json::Value {
         let result: Vec<serde_json::Value> = series
@@ -832,127 +663,281 @@ scrape_configs:
         }
     }
 
-    fn folded(series: &[(&str, &str, &[i64])], end_s: i64) -> Vec<AlertSeries> {
-        let mut samples = Samples::new();
-        assert!(let Ok(()) = add_matrix(&mut samples, matrix(series)));
-        fold(samples, 0, end_s * 1000, STEP)
+    #[derive(DataTableRow)]
+    struct MatrixRow {
+        alert: String,
+        state: String,
+        seconds: String,
+    }
+    #[derive(DataTableRow)]
+    struct IntervalRow {
+        state: String,
+        from: i64,
+        to: String,
+    }
+    #[derive(DataTableRow)]
+    struct RangeRow {
+        start: i64,
+        end: i64,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract alerts tests: alerts fold into intervals per state for {example}"
-    )]
-    fn bdd_verify_alerts_fold_into_intervals_per_state(example: String) {
-        type Example<'a> = (&'a [(&'a str, &'a str, &'a [i64])], i64, Vec<Interval>);
-        let (series, end_s, intervals): Example<'_> = match example.as_str() {
-            "pending then firing then resolved" => (
-                &[
-                    ("KrabkaBrokerDown", "pending", &[100, 105, 110]),
-                    ("KrabkaBrokerDown", "firing", &[115, 120]),
-                ],
-                200,
-                vec![
-                    interval(AlertState::Pending, 100, Some(115)),
-                    interval(AlertState::Firing, 115, Some(125)),
-                ],
-            ),
-            "still firing at the last step" => (
-                &[("KrabkaBrokerDown", "firing", &[190, 195, 200])],
-                202,
-                vec![interval(AlertState::Firing, 190, None)],
-            ),
-            "a gap is two intervals" => (
-                &[("KrabkaBrokerDown", "pending", &[10, 15, 40])],
-                200,
-                vec![
-                    interval(AlertState::Pending, 10, Some(20)),
-                    interval(AlertState::Pending, 40, Some(45)),
-                ],
-            ),
-            _ => panic!("unknown BDD example: {example}"),
-        };
+    #[derive(Default)]
+    struct AlertsScenario {
+        text: String,
+        port: Option<Result<u16, ()>>,
+        ready: Option<bool>,
+        millis: i64,
+        seconds: Option<String>,
+        parsed_millis: Slot<Option<i64>>,
+        range_end: i64,
+        ranges: Vec<(i64, i64)>,
+        config: Option<String>,
+        ports: Vec<(i32, u16)>,
+        matrices: Vec<serde_json::Value>,
+        matrix_results: Vec<Result<(), String>>,
+        folded: Vec<AlertSeries>,
+        end_seconds: i64,
+        rules_response: Option<serde_json::Value>,
+        rules: Option<Result<Vec<LoadedRule>, String>>,
+        history: Option<AlertHistory>,
+        report: Vec<String>,
+    }
 
+    #[fixture]
+    fn alerts() -> AlertsScenario {
+        // One alert-query example owns its response and rendered evidence.
+        AlertsScenario {
+            port: None,
+            ..Default::default()
+        }
+    }
+
+    #[given("the metrics URL is {url}")]
+    fn metrics_url(alerts: &mut AlertsScenario, url: String) { alerts.text = url; }
+
+    #[when("the observer extracts the metrics URL port")]
+    fn extract_metrics_port(alerts: &mut AlertsScenario) {
+        alerts.port = Some(url_port(&alerts.text).map_err(|_| ()));
+    }
+
+    #[then("the observer reads port {port}")]
+    fn observed_port(alerts: &AlertsScenario, port: u16) {
+        check!(alerts.port == Some(Ok(port)));
+    }
+
+    #[then("the observer reports that no port can be read")]
+    fn unreadable_port(alerts: &AlertsScenario) {
+        check!(alerts.port == Some(Err(())));
+    }
+
+    #[given("Docker port output is:")]
+    fn docker_port_output(alerts: &mut AlertsScenario, docstring: String) {
+        alerts.text = format!("{}\n", docstring.trim_matches('\n'));
+    }
+
+    #[given("Docker port output is empty")]
+    fn empty_docker_port_output(alerts: &mut AlertsScenario) { alerts.text.clear(); }
+
+    #[when("the observer reads Docker's published API port")]
+    fn extract_published_port(alerts: &mut AlertsScenario) {
+        alerts.port = Some(published_port(&alerts.text).map_err(|_| ()));
+    }
+
+    #[given("Prometheus readiness replies with HTTP status {status}")]
+    fn readiness_response(alerts: &mut AlertsScenario, status: u16) {
+        alerts.text = match status {
+            200 => "HTTP/1.0 200 OK\r\n\r\nPrometheus Server is Ready.\n".into(),
+            503 => "HTTP/1.0 503 Service Unavailable\r\n\r\n".into(),
+            _ => panic!("an expected readiness response status"),
+        };
+    }
+
+    #[given("a proxy closes the readiness connection without a response")]
+    fn closed_readiness_connection(alerts: &mut AlertsScenario) { alerts.text.clear(); }
+
+    #[when("the observer judges Prometheus readiness")]
+    fn judge_prometheus_readiness(alerts: &mut AlertsScenario) {
+        alerts.ready = Some(is_ok_response(&alerts.text));
+    }
+
+    #[then("Prometheus readiness is {ready}")]
+    fn prometheus_ready(alerts: &AlertsScenario, ready: bool) {
+        check!(alerts.ready == Some(ready));
+    }
+
+    #[given("an alert timestamp is {millis} Unix milliseconds")]
+    fn unix_timestamp(alerts: &mut AlertsScenario, millis: i64) { alerts.millis = millis; }
+
+    #[when("the observer encodes the timestamp as API seconds and decodes it back")]
+    fn encode_api_timestamp(alerts: &mut AlertsScenario) {
+        let seconds = api_seconds(alerts.millis);
+        alerts.parsed_millis.set(api_millis(&seconds));
+        alerts.seconds = Some(seconds);
+    }
+
+    #[then("the API timestamp is {seconds} seconds and its millisecond round trip is exact")]
+    fn exact_timestamp_round_trip(alerts: &AlertsScenario, seconds: String) {
+        check!(alerts.seconds.as_deref() == Some(seconds.as_str()));
+        check!(alerts.parsed_millis.get() == Some(Some(alerts.millis)));
+    }
+
+    #[given("the API returns timestamp {seconds} in seconds")]
+    fn api_timestamp(alerts: &mut AlertsScenario, seconds: String) { alerts.text = seconds; }
+
+    #[when("the observer decodes API seconds as Unix milliseconds")]
+    fn decode_api_timestamp(alerts: &AlertsScenario) {
+        alerts.parsed_millis.set(api_millis(&alerts.text));
+    }
+
+    #[then("the decoded millisecond timestamp is {millis}")]
+    fn decoded_millisecond_timestamp(alerts: &AlertsScenario, millis: String) {
+        let expected = if millis == "absent" {
+            None
+        } else {
+            Some(millis.parse().expect("an expected millisecond timestamp"))
+        };
+        check!(alerts.parsed_millis.get() == Some(expected));
+    }
+
+    #[given("the alert query covers zero through {end} milliseconds at five-second steps")]
+    fn query_time_bounds(alerts: &mut AlertsScenario, end: i64) { alerts.range_end = end; }
+
+    #[when("the observer splits the query at Prometheus's point limit")]
+    fn split_query_ranges(alerts: &mut AlertsScenario) {
+        alerts.ranges = query_ranges(0, alerts.range_end, STEP);
+    }
+
+    #[then("the complete query ranges are:")]
+    fn bounded_query_ranges(alerts: &AlertsScenario, #[datatable] rows: Rows<RangeRow>) {
+        let expected: Vec<_> = rows.into_iter().map(|row| (row.start, row.end)).collect();
+        check!(alerts.ranges == expected);
+    }
+
+    #[given("broker nodes one and two expose metrics on ports 40001 and 40002")]
+    fn scrape_port_inputs(alerts: &mut AlertsScenario) {
+        alerts.ports = vec![(1, 40001), (2, 40002)];
+    }
+
+    #[when("the observer renders the Prometheus scrape configuration")]
+    fn render_scrape_config(alerts: &mut AlertsScenario) {
+        alerts.config = Some(prometheus_config(&alerts.ports));
+    }
+
+    #[then("the canonical Prometheus configuration is:")]
+    fn canonical_scrape_config(alerts: &AlertsScenario, docstring: String) {
         check!(
-            folded(series, end_s)
+            alerts
+                .config
+                .as_ref()
+                .expect("the scrape configuration was rendered")
+                == &format!("{}\n", docstring.trim_matches('\n'))
+        );
+    }
+
+    #[given("Prometheus returns these alert samples:")]
+    fn alert_matrix_inputs(alerts: &mut AlertsScenario, #[datatable] rows: Rows<MatrixRow>) {
+        alerts.matrices = rows
+            .into_iter()
+            .map(|row| {
+                let seconds: Vec<i64> = row
+                    .seconds
+                    .split(',')
+                    .map(|value| value.parse().expect("an alert sample time"))
+                    .collect();
+                matrix(&[(&row.alert, &row.state, &seconds)])
+            })
+            .collect();
+    }
+
+    #[given("the alert history ends at second {seconds}")]
+    fn alert_history_end(alerts: &mut AlertsScenario, seconds: i64) {
+        alerts.end_seconds = seconds;
+    }
+
+    #[when("the observer folds all returned matrices into alert intervals")]
+    fn fold_alert_samples(alerts: &mut AlertsScenario) {
+        let mut samples = Samples::new();
+        for body in &alerts.matrices {
+            alerts
+                .matrix_results
+                .push(add_matrix(&mut samples, body.clone()));
+        }
+        alerts.folded = fold(samples, 0, alerts.end_seconds * 1000, STEP);
+    }
+
+    #[then("KrabkaBrokerDown retains its critical labels and these intervals:")]
+    fn folded_alert_intervals(alerts: &AlertsScenario, #[datatable] rows: Rows<IntervalRow>) {
+        for result in &alerts.matrix_results {
+            assert!(let Ok(()) = result);
+        }
+        let intervals: Vec<_> = rows
+            .into_iter()
+            .map(|row| {
+                interval(
+                    match row.state.as_str() {
+                        "pending" => AlertState::Pending,
+                        "firing" => AlertState::Firing,
+                        _ => panic!("a valid alert state"),
+                    },
+                    row.from,
+                    if row.to == "open" {
+                        None
+                    } else {
+                        Some(row.to.parse().expect("an interval end"))
+                    },
+                )
+            })
+            .collect();
+        check!(
+            alerts.folded
                 == vec![AlertSeries {
                     alertname: "KrabkaBrokerDown".to_owned(),
                     severity: Some("critical".to_owned()),
                     labels: labels(),
-                    intervals,
+                    intervals
                 }]
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
-        name = "tests: alerts fold into intervals per state"
-    )]
-    fn alerts_fold_into_intervals_per_state(example: String) { let _ = example; }
+    #[given("the alert API response is:")]
+    fn bad_matrix_response(alerts: &mut AlertsScenario, docstring: String) {
+        alerts.matrices = vec![serde_json::from_str(&docstring).expect("a JSON API response")];
+    }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract alerts tests: ranges of one series join into one interval"
-    )]
-    fn bdd_verify_ranges_of_one_series_join_into_one_interval() {
+    #[when("the observer parses the response as an alert matrix")]
+    fn parse_matrix_response(alerts: &mut AlertsScenario) {
         let mut samples = Samples::new();
-        assert!(
-            let Ok(()) = add_matrix(&mut samples, matrix(&[("KrabkaBrokerDown", "firing", &[100, 105])]))
-        );
-        assert!(
-            let Ok(()) = add_matrix(&mut samples, matrix(&[("KrabkaBrokerDown", "firing", &[110])]))
-        );
-        let alerts = fold(samples, 0, 200_000, STEP);
-        check!(alerts.len() == 1);
-        check!(alerts[0].intervals == vec![interval(AlertState::Firing, 100, Some(115))]);
+        alerts.matrix_results = alerts
+            .matrices
+            .iter()
+            .map(|body| add_matrix(&mut samples, body.clone()))
+            .collect();
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
-        name = "tests: ranges of one series join into one interval"
-    )]
-    fn ranges_of_one_series_join_into_one_interval() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak contract alerts tests: a bad answer is an error for {example}")]
-    fn bdd_verify_a_bad_answer_is_an_error(example: String) {
-        type Example = (serde_json::Value,);
-        let (body,): Example = match example.as_str() {
-            "an error" => (
-                json ! ({ "status" : "error" , "errorType" : "bad_data" , "error" : "exceeded maximum resolution" }),
-            ),
-            "a vector" => (
-                json ! ({ "status" : "success" , "data" : { "resultType" : "vector" , "result" : [] } }),
-            ),
-            "not an answer" => (json ! ({ "nothing" : true }),),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(add_matrix(&mut Samples::new(), body).is_err());
+    #[then("the alert matrix response is refused as an error")]
+    fn bad_matrix_rejected(alerts: &AlertsScenario) {
+        check!(alerts.matrix_results.len() == 1);
+        check!(alerts.matrix_results[0].is_err());
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
-        name = "tests: a bad answer is an error"
-    )]
-    fn a_bad_answer_is_an_error(example: String) { let _ = example; }
+    #[given("the loaded-rules API response is:")]
+    fn loaded_rules_response(alerts: &mut AlertsScenario, docstring: String) {
+        alerts.rules_response =
+            Some(serde_json::from_str(&docstring).expect("a JSON rules response"));
+    }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract alerts tests: only alerting rules are recorded with their health"
-    )]
-    fn bdd_verify_only_alerting_rules_are_recorded_with_their_health() {
-        let body = json!({"status": "success", "data": {"groups": [{
-            "name": "krabka-broker-cluster",
-            "file": "/etc/prometheus/soak/alert-rules.yaml",
-            "rules": [
-                {"name": "KrabkaBrokerDown", "type": "alerting", "health": "ok", "lastError": ""},
-                {"name": "KrabkaBad", "type": "alerting", "health": "err", "lastError": "many-to-many matching not allowed"},
-                {"name": "krabka:rate", "type": "recording", "health": "ok"},
-            ],
-        }]}});
+    #[when("the observer reads the health of loaded alerting rules")]
+    fn parse_loaded_alert_rules(alerts: &mut AlertsScenario) {
+        alerts.rules = Some(loaded_rules(
+            alerts
+                .rules_response
+                .take()
+                .expect("a rules response was supplied"),
+        ));
+    }
+
+    #[then("only BrokerDown and Bad alert rules retain their health and last error")]
+    fn alert_rule_health(alerts: &AlertsScenario) {
         let rule = |alert: &str, health: &str, last_error: Option<&str>| LoadedRule {
             group: "krabka-broker-cluster".to_owned(),
             alert: alert.to_owned(),
@@ -960,30 +945,22 @@ scrape_configs:
             last_error: last_error.map(str::to_owned),
         };
         check!(
-            loaded_rules(body)
-                == Ok(vec![
+            alerts.rules.as_ref().expect("the rules response was read")
+                == &Ok(vec![
                     rule("KrabkaBrokerDown", "ok", None),
                     rule(
                         "KrabkaBad",
                         "err",
                         Some("many-to-many matching not allowed")
-                    ),
+                    )
                 ])
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
-        name = "tests: only alerting rules are recorded with their health"
+    #[given(
+        "two alert rules include one unhealthy rule and BrokerDown fires twice while MetadataLag only stays pending"
     )]
-    fn only_alerting_rules_are_recorded_with_their_health() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract alerts tests: the lines name unhealthy rules and alerts that fired"
-    )]
-    fn bdd_verify_the_lines_name_unhealthy_rules_and_alerts_that_fired() {
+    fn report_history_inputs(alerts: &mut AlertsScenario) {
         let history = AlertHistory {
             start_ms: 0,
             end_ms: 7_200_000,
@@ -1021,46 +998,36 @@ scrape_configs:
                 },
             ],
         };
-        check!(
-            history.lines()
-                == vec![
-                    "alert rules: 2 loaded, 1 not ok".to_owned(),
-                    "rule KrabkaBad (group g) health err: boom".to_owned(),
-                    "KrabkaBrokerDown instance=host.docker.internal:40002 node=2 \
-                     severity=critical: first fired at +3m00s, still firing at the end \
-                     (+2h00m00s), firing 1h02m00s in 2 interval(s)"
-                        .to_owned(),
-                ]
-        );
+
+        alerts.history = Some(history);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
-        name = "tests: the lines name unhealthy rules and alerts that fired"
-    )]
-    fn the_lines_name_unhealthy_rules_and_alerts_that_fired() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract alerts tests: a span reads in hours minutes and seconds for {example}"
-    )]
-    fn bdd_verify_a_span_reads_in_hours_minutes_and_seconds(example: String) {
-        type Example<'a> = (i64, &'a str);
-        let (ms, text): Example<'_> = match example.as_str() {
-            "seconds" => (42_000, "42s"),
-            "minutes" => (125_000, "2m05s"),
-            "hours" => (72 * 3_600_000 + 61_000, "72h01m01s"),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(span(ms) == text);
+    #[when("the observer renders the final alert history report")]
+    fn render_alert_history(alerts: &mut AlertsScenario) {
+        alerts.report = alerts
+            .history
+            .as_ref()
+            .expect("an alert history was supplied")
+            .lines();
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/alerts.feature",
-        name = "tests: a span reads in hours minutes and seconds"
-    )]
-    fn a_span_reads_in_hours_minutes_and_seconds(example: String) { let _ = example; }
+    #[then("the complete alert history report is:")]
+    fn complete_alert_history_report(alerts: &AlertsScenario, docstring: String) {
+        let expected: Vec<_> = docstring
+            .trim_matches('\n')
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        check!(alerts.report == expected);
+    }
+
+    #[when("the observer renders the duration in hours minutes and seconds")]
+    fn render_duration(alerts: &mut AlertsScenario) { alerts.seconds = Some(span(alerts.millis)); }
+
+    #[then("the displayed duration is {text}")]
+    fn human_duration(alerts: &AlertsScenario, text: String) {
+        check!(alerts.seconds.as_deref() == Some(text.as_str()));
+    }
+
+    scenarios!("tests/features/migrated/tests/soak_contract/alerts.feature", fixtures = [alerts: AlertsScenario]);
 }

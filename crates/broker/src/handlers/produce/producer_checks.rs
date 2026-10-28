@@ -596,92 +596,75 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers produce producer checks tests: a coordinator answer maps to the kafka produce row"
-    )]
-    fn bdd_verify_a_coordinator_answer_maps_to_the_kafka_produce_row() {
-        let not_verified = |underlying: &str| {
-            Some(format!(
-                "Unable to verify the partition has been added to the transaction. Underlying error: {underlying}"
-            ))
-        };
-        let not_added = Some("Partition was not added to the transaction".to_owned());
-        let cases = [
-            (codes::NONE, 11, RowError {
-                code: codes::NONE,
-                message: None,
-            }),
-            (codes::PRODUCER_FENCED, 11, RowError {
-                code: codes::INVALID_PRODUCER_EPOCH,
-                message: None,
-            }),
-            (codes::INVALID_PRODUCER_EPOCH, 12, RowError {
-                code: codes::INVALID_PRODUCER_EPOCH,
-                message: None,
-            }),
-            (codes::TRANSACTION_ABORTABLE, 10, RowError {
-                code: codes::INVALID_TXN_STATE,
-                message: not_added.clone(),
-            }),
-            (codes::TRANSACTION_ABORTABLE, 11, RowError {
-                code: codes::TRANSACTION_ABORTABLE,
-                message: None,
-            }),
-            (codes::INVALID_TXN_STATE, 12, RowError {
-                code: codes::INVALID_TXN_STATE,
-                message: not_added.clone(),
-            }),
-            (codes::CLUSTER_AUTHORIZATION_FAILED, 11, RowError {
-                code: codes::INVALID_TXN_STATE,
-                message: not_added,
-            }),
-            (codes::NETWORK_EXCEPTION, 12, RowError {
-                code: codes::NOT_ENOUGH_REPLICAS,
-                message: not_verified("NETWORK_EXCEPTION"),
-            }),
-            (codes::NOT_COORDINATOR, 11, RowError {
-                code: codes::NOT_ENOUGH_REPLICAS,
-                message: not_verified("NOT_COORDINATOR"),
-            }),
-            (codes::COORDINATOR_NOT_AVAILABLE, 11, RowError {
-                code: codes::NOT_ENOUGH_REPLICAS,
-                message: not_verified("COORDINATOR_NOT_AVAILABLE"),
-            }),
-            (codes::COORDINATOR_LOAD_IN_PROGRESS, 11, RowError {
-                code: codes::NOT_ENOUGH_REPLICAS,
-                message: not_verified("COORDINATOR_LOAD_IN_PROGRESS"),
-            }),
-            (codes::CONCURRENT_TRANSACTIONS, 11, RowError {
-                code: codes::NOT_ENOUGH_REPLICAS,
-                message: not_verified("CONCURRENT_TRANSACTIONS"),
-            }),
-            (codes::CONCURRENT_TRANSACTIONS, 12, RowError {
-                code: codes::CONCURRENT_TRANSACTIONS,
-                message: None,
-            }),
-            (codes::INVALID_PRODUCER_ID_MAPPING, 12, RowError {
-                code: codes::INVALID_PRODUCER_ID_MAPPING,
-                message: None,
-            }),
-        ];
-        for (answer, version, want) in cases {
-            check!(
-                super::produce_verification_code(answer, version) == want,
-                "{answer} at v{version}"
-            );
+    #[derive(Default)]
+    struct CoordinatorProduceRow {
+        answer: i16,
+        version: i16,
+        row: Option<RowError>,
+    }
+    #[rstest::fixture]
+    fn coordinator_produce() -> CoordinatorProduceRow {
+        let row = None;
+        CoordinatorProduceRow {
+            row,
+            ..Default::default()
         }
     }
-
-    /// The produce row that Kafka's `AddPartitionsToTxnManager` and
-    /// `ReplicaManager.postVerificationCallback` build from a coordinator
-    /// answer.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/produce/producer_checks.feature",
-        name = "tests: a coordinator answer maps to the kafka produce row"
+    fn transaction_error_code(name: &str) -> i16 {
+        match name {
+            "NONE" => codes::NONE,
+            "PRODUCER_FENCED" => codes::PRODUCER_FENCED,
+            "INVALID_PRODUCER_EPOCH" => codes::INVALID_PRODUCER_EPOCH,
+            "TRANSACTION_ABORTABLE" => codes::TRANSACTION_ABORTABLE,
+            "INVALID_TXN_STATE" => codes::INVALID_TXN_STATE,
+            "CLUSTER_AUTHORIZATION_FAILED" => codes::CLUSTER_AUTHORIZATION_FAILED,
+            "NETWORK_EXCEPTION" => codes::NETWORK_EXCEPTION,
+            "NOT_COORDINATOR" => codes::NOT_COORDINATOR,
+            "COORDINATOR_NOT_AVAILABLE" => codes::COORDINATOR_NOT_AVAILABLE,
+            "COORDINATOR_LOAD_IN_PROGRESS" => codes::COORDINATOR_LOAD_IN_PROGRESS,
+            "CONCURRENT_TRANSACTIONS" => codes::CONCURRENT_TRANSACTIONS,
+            "INVALID_PRODUCER_ID_MAPPING" => codes::INVALID_PRODUCER_ID_MAPPING,
+            "NOT_ENOUGH_REPLICAS" => codes::NOT_ENOUGH_REPLICAS,
+            other => panic!("unknown transaction error {other}"),
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "a transaction coordinator answer {answer} for Produce version {version}"
     )]
-    fn a_coordinator_answer_maps_to_the_kafka_produce_row() {}
+    fn coordinator_answer(
+        coordinator_produce: &mut CoordinatorProduceRow,
+        answer: String,
+        version: i16,
+    ) {
+        coordinator_produce.answer = transaction_error_code(&answer);
+        coordinator_produce.version = version;
+    }
+    #[rstest_bdd_macros::when("the coordinator answer becomes a Produce partition error")]
+    fn translate_coordinator_answer(coordinator_produce: &mut CoordinatorProduceRow) {
+        coordinator_produce.row = Some(super::produce_verification_code(
+            coordinator_produce.answer,
+            coordinator_produce.version,
+        ));
+    }
+    #[rstest_bdd_macros::then("the Produce row has code {code} and message \"{message}\"")]
+    fn translated_produce_error(
+        coordinator_produce: &CoordinatorProduceRow,
+        code: String,
+        message: String,
+    ) {
+        let expected = RowError {
+            code: transaction_error_code(&code),
+            message: (message != "null").then_some(message),
+        };
+        check!(
+            coordinator_produce
+                .row
+                .as_ref()
+                .expect("translated partition error")
+                == &expected
+        );
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_produce_transaction_errors.feature", fixtures = [coordinator_produce: CoordinatorProduceRow]);
 
     /// An idempotent retry, `Decision::Duplicate`, under `acks=all` waits
     /// again for the HW to reach the duplicate's *last offset + 1* before it

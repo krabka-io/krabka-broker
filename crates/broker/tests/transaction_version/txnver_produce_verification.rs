@@ -21,9 +21,7 @@ use {
                 initialize_transactional, partition_error, partitions_request, retry_coordinator,
                 transaction_topic,
             },
-            transactions::{
-                ProducerEpoch, ProducerEpochOffset, ProducerIdentity, end_transaction_request,
-            },
+            transactions::{ProducerEpoch, ProducerIdentity, end_transaction_request},
             wire::At,
         },
         txnver_harness::{admin_client, boot_single, create_topic},
@@ -44,15 +42,10 @@ use {
 const NOT_COORDINATOR: i16 = 16;
 const COORDINATOR_NOT_AVAILABLE: i16 = 15;
 const CONCURRENT_TRANSACTIONS: i16 = 51;
-const INVALID_PRODUCER_EPOCH: i16 = 47;
-const INVALID_TXN_STATE: i16 = 48;
-const TRANSACTION_ABORTABLE: i16 = 120;
-const TRANSACTIONAL_ID_AUTHORIZATION_FAILED: i16 = 53;
 
 /// One transactional producer.
 #[derive(Clone, Copy, Debug)]
 struct Producer {
-    transactional_id: &'static str,
     id: ProducerId,
     epoch: ProducerEpoch,
 }
@@ -73,49 +66,10 @@ enum Setup {
 #[derive(Clone, Copy, Debug)]
 struct ProduceVersion(i16);
 
-#[derive(Clone, Copy, Default)]
-enum TransactionIdPresence {
-    #[default]
-    Included,
-    Omitted,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum AppendOutcome {
-    Appended,
-    Refused,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RefusalStage {
-    TransactionCheck,
-    Log,
-}
-
-/// The batch a case sends; ordinary probes name only their differences.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct Probe {
-    #[default(ProduceVersion(11))]
-    version: ProduceVersion,
-    transaction_id: TransactionIdPresence,
-    transaction: BatchTransaction,
-    epoch_offset: ProducerEpochOffset,
-    base_sequence: ProducerSequence,
-}
-
-#[derive(Clone, Copy)]
-struct Case {
-    name: &'static str,
+struct PartitionSetup {
+    name: String,
     setup: Setup,
-    probe: Probe,
-    expected_code: i16,
-    expected_message: Option<&'static str>,
-    append: AppendOutcome,
-    /// The log itself refused the batch, after the transaction check passed.
-    /// Kafka answers that refusal with the partition's real log start offset
-    /// (`ReplicaManager.processFailedRecord`), and a refusal before the
-    /// append with -1.
-    refusal: RefusalStage,
+    initializations: usize,
 }
 
 async fn produce_at(
@@ -172,7 +126,7 @@ where
     .await
 }
 
-async fn init(client: &Client, transactional_id: &'static str) -> Producer {
+async fn init(client: &Client, transactional_id: &str) -> Producer {
     let _ = client
         .send(coordinator_lookup_request(transactional_id, 1, vec![
             transactional_id.into(),
@@ -191,20 +145,19 @@ async fn init(client: &Client, transactional_id: &'static str) -> Producer {
     )
     .await;
     Producer {
-        transactional_id,
         id: ProducerId(response.producer_id),
         epoch: ProducerEpoch(response.producer_epoch),
     }
 }
 
-async fn add_partition(client: &Client, producer: Producer, topic: &str) {
+async fn add_partition(client: &Client, transactional_id: &str, producer: Producer, topic: &str) {
     let added = transaction_topic(topic, vec![0]);
     let code = until_ready(
         || async {
             let response = client
                 .send(
                     partitions_request()
-                        .transactional_id(producer.transactional_id)
+                        .transactional_id(transactional_id)
                         .producer(ProducerIdentity::from_wire((
                             producer.id.0,
                             producer.epoch.0,
@@ -222,25 +175,21 @@ async fn add_partition(client: &Client, producer: Producer, topic: &str) {
     assert!(code == 0, "AddPartitionsToTxn: {code}");
 }
 
-async fn set_up(client: &Client, case: &Case) -> Producer {
-    create_topic(client, case.name, TopicPartitionCount(1)).await;
-    let first = init(client, case.name).await;
-    let producer = if case.probe.epoch_offset.0 < 0 {
-        // A second InitProducerId bumps the epoch, so a batch can carry an
-        // epoch below the producer's one.
-        init(client, case.name).await
-    } else {
-        first
-    };
+async fn set_up(client: &Client, case: &PartitionSetup) -> Producer {
+    create_topic(client, &case.name, TopicPartitionCount(1)).await;
+    let mut producer = init(client, &case.name).await;
+    for _ in 0..case.initializations {
+        producer = init(client, &case.name).await;
+    }
     if matches!(case.setup, Setup::Added | Setup::Open | Setup::Committed) {
-        add_partition(client, producer, case.name).await;
+        add_partition(client, &case.name, producer, &case.name).await;
     }
     if matches!(case.setup, Setup::Open | Setup::Committed) {
         let row = produce_at(
             client,
             ProduceVersion(11),
-            case.name,
-            Some(case.name),
+            &case.name,
+            Some(case.name.as_str()),
             transaction_probe_batch()
                 .producer(ProducerIdentity {
                     id: producer.id,
@@ -257,7 +206,7 @@ async fn set_up(client: &Client, case: &Case) -> Producer {
         let end = client
             .send(
                 end_transaction_request()
-                    .transactional_id(case.name)
+                    .transactional_id(&case.name)
                     .producer(ProducerIdentity::from_wire((
                         producer.id.0,
                         producer.epoch.0,
@@ -271,170 +220,271 @@ async fn set_up(client: &Client, case: &Case) -> Producer {
     producer
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transaction version txnver produce verification: a transactional produce needs a verified transaction"
-)]
-async fn bdd_verify_a_transactional_produce_needs_a_verified_transaction() {
-    let cases = [
-        Case {
-            name: "v10-partition-not-added",
-            setup: Setup::Nothing,
-            probe: Probe {
-                version: ProduceVersion(10),
-                ..Default::default()
-            },
-            expected_code: INVALID_TXN_STATE,
-            expected_message: Some("Partition was not added to the transaction"),
-            append: AppendOutcome::Refused,
-            refusal: RefusalStage::TransactionCheck,
-        },
-        Case {
-            name: "v11-partition-not-added",
-            setup: Setup::Nothing,
-            probe: Probe::default(),
-            expected_code: TRANSACTION_ABORTABLE,
-            expected_message: None,
-            append: AppendOutcome::Refused,
-            refusal: RefusalStage::TransactionCheck,
-        },
-        Case {
-            name: "v11-partition-added",
-            setup: Setup::Added,
-            probe: Probe::default(),
-            expected_code: 0,
-            expected_message: None,
-            append: AppendOutcome::Appended,
-            refusal: RefusalStage::TransactionCheck,
-        },
-        Case {
-            name: "v12-partition-not-added",
-            setup: Setup::Nothing,
-            probe: Probe {
-                version: ProduceVersion(12),
-                ..Default::default()
-            },
-            expected_code: 0,
-            expected_message: None,
-            append: AppendOutcome::Appended,
-            refusal: RefusalStage::TransactionCheck,
-        },
-        // This is the #694 hijack path: a transactional batch with no
-        // request-level transactional_id must be refused by the
-        // TransactionalId Write gate itself, before it can reach
-        // verify_transactional_produce and resolve *some* transaction from
-        // the batch's producer id.
-        Case {
-            name: "v11-no-transactional-id",
-            setup: Setup::Added,
-            probe: Probe {
-                transaction_id: TransactionIdPresence::Omitted,
-                ..Probe::default()
-            },
-            expected_code: TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
-            expected_message: None,
-            append: AppendOutcome::Refused,
-            refusal: RefusalStage::TransactionCheck,
-        },
-        Case {
-            name: "open-transaction-stale-epoch",
-            setup: Setup::Open,
-            probe: Probe {
-                epoch_offset: ProducerEpochOffset(-1),
-                ..Probe {
-                    base_sequence: ProducerSequence(1),
-                    ..Default::default()
-                }
-            },
-            expected_code: INVALID_PRODUCER_EPOCH,
-            expected_message: None,
-            append: AppendOutcome::Refused,
-            refusal: RefusalStage::TransactionCheck,
-        },
-        Case {
-            name: "open-transaction-non-transactional-batch",
-            setup: Setup::Open,
-            probe: Probe {
-                transaction: BatchTransaction::Ordinary,
-                base_sequence: ProducerSequence(1),
-                ..Default::default()
-            },
-            expected_code: INVALID_TXN_STATE,
-            expected_message: None,
-            append: AppendOutcome::Refused,
-            refusal: RefusalStage::Log,
-        },
-        // The broker runs at transaction version 2, so the commit marker
-        // bumped the producer epoch. A replay at the old epoch is stale.
-        Case {
-            name: "committed-replay-of-the-last-batch",
-            setup: Setup::Committed,
-            probe: Probe::default(),
-            expected_code: INVALID_PRODUCER_EPOCH,
-            expected_message: None,
-            append: AppendOutcome::Refused,
-            refusal: RefusalStage::TransactionCheck,
-        },
-    ];
+use {
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd::datatable::Rows,
+    rstest_bdd_macros::{DataTableRow, given, scenario, then, when},
+    tempfile::TempDir,
+};
 
-    let (broker, bootstrap, _dir) = boot_single().await;
+#[derive(Default)]
+struct TransactionalProduce {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    client: Option<Client>,
+    case: Option<PartitionSetup>,
+    producer: Option<Producer>,
+    before: Option<i64>,
+    after: Option<i64>,
+    response: Option<PartitionProduceResponse>,
+}
+
+#[fixture]
+fn transactional_produce() -> TransactionalProduce {
+    // Preserve the live transaction and pre-append boundary independently of its response.
+    TransactionalProduce::default()
+}
+
+#[given(
+    "transactional producer {identity} has partition state {state} after {initializations} additional initializations"
+)]
+async fn transaction_partition_state(
+    transactional_produce: &mut TransactionalProduce,
+    identity: String,
+    state: String,
+    initializations: usize,
+) {
+    let setup = match state.as_str() {
+        "unregistered" => Setup::Nothing,
+        "registered" => Setup::Added,
+        "open" => Setup::Open,
+        "committed" => Setup::Committed,
+        _ => panic!("unknown partition state {state}"),
+    };
+    let case = PartitionSetup {
+        name: identity,
+        setup,
+        initializations,
+    };
+    let (broker, bootstrap, directory) = boot_single().await;
     let client = admin_client(&bootstrap).await;
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for case in cases {
-        let producer = set_up(&client, &case).await;
-        let before = log_end(&client, case.name).await;
-        let row = produce_at(
-            &client,
-            case.probe.version,
-            case.name,
-            matches!(case.probe.transaction_id, TransactionIdPresence::Included)
-                .then_some(case.name),
+    transactional_produce.producer = Some(set_up(&client, &case).await);
+    transactional_produce.before = Some(log_end(&client, &case.name).await);
+    transactional_produce.broker = Some(broker);
+    transactional_produce.directory = Some(directory);
+    transactional_produce.client = Some(client);
+    transactional_produce.case = Some(case);
+}
+
+#[when(
+    "Produce version {version} sends a batch with transaction ID {included}, transactional flag {transactional}, epoch delta {epoch_delta}, and sequence {sequence}"
+)]
+async fn probe_transactional_produce(
+    transactional_produce: &mut TransactionalProduce,
+    version: i16,
+    included: bool,
+    transactional: bool,
+    epoch_delta: i16,
+    sequence: i32,
+) {
+    let case = transactional_produce
+        .case
+        .as_ref()
+        .expect("partition state prepared");
+    let producer = transactional_produce
+        .producer
+        .expect("initialized producer");
+    let client = transactional_produce
+        .client
+        .as_ref()
+        .expect("producer client");
+    transactional_produce.response = Some(
+        produce_at(
+            client,
+            ProduceVersion(version),
+            &case.name,
+            included.then_some(case.name.as_str()),
             transaction_probe_batch()
                 .producer(ProducerIdentity {
                     id: producer.id,
-                    epoch: ProducerEpoch(producer.epoch.0 + case.probe.epoch_offset.0),
+                    epoch: ProducerEpoch(producer.epoch.0 + epoch_delta),
                 })
-                .sequence(case.probe.base_sequence)
-                .transaction(case.probe.transaction)
+                .sequence(ProducerSequence(sequence))
+                .transaction(if transactional {
+                    BatchTransaction::Transactional
+                } else {
+                    BatchTransaction::Ordinary
+                })
                 .call(),
         )
-        .await;
-        let after = log_end(&client, case.name).await;
-        actual.push((case.name, row, after - before));
-        expected.push((
-            case.name,
-            PartitionProduceResponse {
-                index: 0,
-                error_code: case.expected_code,
-                base_offset: if case.append == AppendOutcome::Appended {
-                    before
-                } else {
-                    -1
-                },
-                log_append_time_ms: -1,
-                log_start_offset: if case.append == AppendOutcome::Appended
-                    || case.refusal == RefusalStage::Log
-                {
-                    0
-                } else {
-                    -1
-                },
-                error_message: case.expected_message.map(str::to_owned),
-                ..Default::default()
-            },
-            i64::from(case.append == AppendOutcome::Appended),
-        ));
-    }
-    broker.shutdown().await;
-
-    assert!(actual == expected);
+        .await,
+    );
+    transactional_produce.after = Some(log_end(client, &case.name).await);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[derive(DataTableRow)]
+struct ProduceExpectation {
+    error: i16,
+    base_offset: String,
+    log_start: i64,
+    log_append_time: i64,
+    message: String,
+    append_delta: i64,
+}
+
+#[then("the complete Produce response and log delta match")]
+fn verified_produce_result(
+    transactional_produce: &TransactionalProduce,
+    #[datatable] rows: Rows<ProduceExpectation>,
+) {
+    let before = transactional_produce.before.expect("pre-append boundary");
+    let rows: Vec<_> = rows.into_iter().collect();
+    assert!(rows.len() == 1);
+    let row = &rows[0];
+    let expected = PartitionProduceResponse {
+        index: 0,
+        error_code: row.error,
+        base_offset: if row.base_offset == "previous_log_end" {
+            before
+        } else {
+            row.base_offset.parse().expect("base offset")
+        },
+        log_append_time_ms: row.log_append_time,
+        log_start_offset: row.log_start,
+        error_message: (row.message != "absent").then(|| row.message.clone()),
+        ..Default::default()
+    };
+    assert!(
+        transactional_produce
+            .response
+            .as_ref()
+            .expect("Produce answered")
+            == &expected
+    );
+    assert!(
+        transactional_produce.after.expect("post-append boundary") - before == row.append_delta
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/transaction_version/txnver_produce_verification.feature",
     name = "a transactional produce needs a verified transaction"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_transactional_produce_needs_a_verified_transaction() {}
+async fn a_transactional_produce_needs_a_verified_transaction(
+    transactional_produce: TransactionalProduce,
+) {
+    transactional_produce
+        .broker
+        .take()
+        .expect("broker")
+        .shutdown()
+        .await;
+    drop(transactional_produce);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_produce_verification.feature",
+    name = "v11 verifies unregistered partitions without appending"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verified_produce_boundary_1(transactional_produce: TransactionalProduce) {
+    transactional_produce
+        .broker
+        .take()
+        .expect("broker")
+        .shutdown()
+        .await;
+    drop(transactional_produce);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_produce_verification.feature",
+    name = "v11 accepts a registered partition"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verified_produce_boundary_2(transactional_produce: TransactionalProduce) {
+    transactional_produce
+        .broker
+        .take()
+        .expect("broker")
+        .shutdown()
+        .await;
+    drop(transactional_produce);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_produce_verification.feature",
+    name = "v12 automatically adds an unregistered partition"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verified_produce_boundary_3(transactional_produce: TransactionalProduce) {
+    transactional_produce
+        .broker
+        .take()
+        .expect("broker")
+        .shutdown()
+        .await;
+    drop(transactional_produce);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_produce_verification.feature",
+    name = "a missing request transaction ID is unauthorized"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verified_produce_boundary_4(transactional_produce: TransactionalProduce) {
+    transactional_produce
+        .broker
+        .take()
+        .expect("broker")
+        .shutdown()
+        .await;
+    drop(transactional_produce);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_produce_verification.feature",
+    name = "an open transaction rejects a stale producer epoch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verified_produce_boundary_5(transactional_produce: TransactionalProduce) {
+    transactional_produce
+        .broker
+        .take()
+        .expect("broker")
+        .shutdown()
+        .await;
+    drop(transactional_produce);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_produce_verification.feature",
+    name = "an open transaction rejects an ordinary batch at the log"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verified_produce_boundary_6(transactional_produce: TransactionalProduce) {
+    transactional_produce
+        .broker
+        .take()
+        .expect("broker")
+        .shutdown()
+        .await;
+    drop(transactional_produce);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/transaction_version/txnver_produce_verification.feature",
+    name = "a committed transaction rejects replay at the old epoch"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verified_produce_boundary_7(transactional_produce: TransactionalProduce) {
+    transactional_produce
+        .broker
+        .take()
+        .expect("broker")
+        .shutdown()
+        .await;
+    drop(transactional_produce);
+}

@@ -50,7 +50,7 @@ use {
     crate::{
         cluster::offline_for_partition,
         jvm_acceptance::{
-            break_glass::{approve, propose},
+            break_glass::{Approvals, approve, propose},
             broker0_advertised, plain_client_properties,
             start_three_broker_sasl_plaintext_jvm_cluster, wait_three_brokers_registered,
         },
@@ -62,6 +62,7 @@ use {
         BootstrapMode, Broker, BrokerConfig, BrokerHandle, authorizer::SimpleAclAuthorizer,
     },
     std::sync::Arc,
+    tempfile::TempDir,
 };
 
 /// The super-user the tools authenticate as.
@@ -85,35 +86,9 @@ const TOPIC: &str = "krabka-cancel-gate-itest";
 /// nothing.
 const WIRE_CANCEL_REASSIGNMENT: i8 = 5;
 
-/// The refusal `kafka-reassign-partitions --cancel` prints for a gated cancel.
-///
-/// Unlike `kafka-topics` and `kafka-leader-election`, which print a
-/// `Throwable.toString()` and so name
-/// `org.apache.kafka.common.errors.PolicyViolationException`,
-/// `ReassignPartitionsCommand` prints `<topic-partition>: <getMessage()>` for
-/// each partition it could not cancel. There is no class name in its output to
-/// assert on, so what proves the round trip here is the broker's own refusal
-/// text arriving intact. That the code behind it is `POLICY_VIOLATION` (44) is
-/// pinned in process, by `alter_partition_reassignments::cancel_approval` and
-/// `::plan`.
-const CANCEL_REFUSAL: &str = "break-glass refused cancel_reassignment";
-
 /// Where the tool's files are placed inside its container.
 const PLAN_JSON: &str = "/tmp/krabka-cancel-plan.json";
 const CLIENT_PROPS: &str = "/client.properties";
-
-/// The refusal the gate words when no proposal covers the request.
-///
-/// Rebuilt here rather than imported, because it is the sentence an operator
-/// reads: a broker that still answered 44 while dropping this text would leave
-/// the on-call with a policy violation and no next step, and the code alone
-/// cannot see that.
-fn no_proposal_refusal(partition: i32) -> String {
-    format!(
-        "break-glass refused cancel_reassignment on {TOPIC}-{partition}: \
-         no approved proposal covers the request"
-    )
-}
 
 /// One `kafka-reassign-partitions` invocation as the super-user.
 fn reassign(side: &Side<'_>, props: &str, args: &[&str], plan: &str) -> CliRun {
@@ -203,8 +178,8 @@ async fn restart(configs: [BrokerConfig; 3]) -> [BrokerHandle; 3] {
 /// The target is the bare topic name: KFC-9 lets a proposal on a topic cover
 /// every partition of it for the actions that name one, and a cancel is one of
 /// those, so this also checks that widening on the way through.
-async fn approve_a_cancel(bootstrap: &str) {
-    let proposal_id = propose(
+async fn approve_a_cancel(bootstrap: &str) -> [Approvals; 2] {
+    let proposal = propose(
         bootstrap,
         PROPOSER,
         WIRE_CANCEL_REASSIGNMENT,
@@ -212,25 +187,38 @@ async fn approve_a_cancel(bootstrap: &str) {
         "the move is making the incident worse",
     )
     .await;
-
-    let first = approve(bootstrap, APPROVER_ONE, proposal_id).await;
-    check!(
-        first.held == 1 && first.held < first.required,
-        "one approval is one distinct principal and must not be enough: {first:?}",
-    );
-    let second = approve(bootstrap, APPROVER_TWO, proposal_id).await;
-    check!(
-        second.held == second.required,
-        "two distinct principals must satisfy the rule: {second:?}",
-    );
+    [
+        approve(bootstrap, APPROVER_ONE, proposal).await,
+        approve(bootstrap, APPROVER_TWO, proposal).await,
+    ]
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance reassign cancel gate: reassign partitions cancel reports the break glass gate to the jvm tool"
+struct CancelPermission {
+    handles: [Option<BrokerHandle>; 3],
+    configs: Option<[BrokerConfig; 3]>,
+    dirs: Option<[TempDir; 3]>,
+    plan: String,
+    output: Option<CliRun>,
+    approvals: Option<[Approvals; 2]>,
+}
+#[rstest::fixture]
+fn cancel() -> CancelPermission {
+    // Start this scenario with fresh inputs and observations.
+
+    CancelPermission {
+        handles: [None, None, None],
+        configs: None,
+        dirs: None,
+        plan: String::new(),
+        output: None,
+        approvals: None,
+    }
+}
+#[rstest_bdd_macros::given(
+    "a SASL cluster with admin and operators alice, bob, carol has an offline-target reassignment for krabka-cancel-gate-itest-0"
 )]
-async fn bdd_verify_reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool() {
-    let (h1, h2, h3, cfg1, cfg2, cfg3, _d1, _d2, _d3) = Box::pin(
+async fn pending_move(cancel: &mut CancelPermission) {
+    let (h1, h2, h3, cfg1, cfg2, cfg3, d1, d2, d3) = Box::pin(
         start_three_broker_sasl_plaintext_jvm_cluster()
             .admin(ADMIN.0)
             .admin_pass(ADMIN.1)
@@ -258,51 +246,77 @@ async fn bdd_verify_reassign_partitions_cancel_reports_the_break_glass_gate_to_t
     // in-flight reassignment instead of racing replica catch-up.
     let OfflineReassignment { handles, plan } =
         offline_reassignment([h1, h2, h3], &side, &props, "partition record").await;
-    let ungated = reassign(&side, &props, &["--cancel", "--preserve-throttles"], &plan);
-    check!(
-        ungated.succeeded(),
-        "with no approver set a cancel is not gated at all:\n{}",
-        ungated.text(),
-    );
-    check!(
-        parse_cancelled(&ungated.stdout) == vec![TopicPartition::new(TOPIC, 0)],
-        "the ungated cancel must name the partition it cancelled:\n{}",
-        ungated.stdout,
-    );
-
-    // ── the same cluster, with the two-person rule turned on ───────────────
+    cancel.handles = handles;
+    cancel.plan = plan;
+    cancel.configs = Some([cfg1, cfg2, cfg3]);
+    cancel.dirs = Some([d1, d2, d3]);
+}
+#[rstest_bdd_macros::when("the administrator cancels the reassignment while preserving throttles")]
+fn cancel_move(cancel: &mut CancelPermission) {
+    let props = plain_client_properties(ADMIN.0, ADMIN.1);
+    let side = Side::Krabka {
+        bootstrap: broker0_advertised(),
+    };
+    cancel.output = Some(reassign(
+        &side,
+        &props,
+        &["--cancel", "--preserve-throttles"],
+        &cancel.plan,
+    ));
+}
+#[rstest_bdd_macros::then(
+    "the cancellation succeeds and reports partition krabka-cancel-gate-itest-0"
+)]
+fn allowed(cancel: &CancelPermission) {
+    let output = cancel.output.as_ref().expect("cancel attempted");
+    check!(output.succeeded(), "{}", output.text());
+    check!(parse_cancelled(&output.stdout) == vec![TopicPartition::new(TOPIC, 0)]);
+}
+#[rstest_bdd_macros::when(
+    "the same cluster restarts on its existing logs with unsigned two-person approvals and starts another offline-target reassignment"
+)]
+async fn enable_approvals(cancel: &mut CancelPermission) {
     let approvers: Vec<String> = [PROPOSER, APPROVER_ONE, APPROVER_TWO]
         .iter()
         .map(|(user, _)| format!("User:{user}"))
         .collect();
-    let gated = [cfg1, cfg2, cfg3].map(|mut config| {
-        // An empty approver set turns the whole workflow off, so naming the
-        // set is what puts the cancel behind an approval. `signed_actions` is
-        // emptied explicitly rather than left to the file default, which names
-        // three actions this suite has no key material to sign for.
-        config.break_glass.approvers = approvers.clone();
-        config.break_glass.signed_actions = Vec::new();
-        // The cluster runs a `SimpleAclAuthorizer` whose only super user is
-        // the admin the tools authenticate as, and the break-glass RPCs are
-        // cluster operations. Without this the operators are refused at the
-        // authorizer with `CLUSTER_AUTHORIZATION_FAILED` and never reach the
-        // two-person rule, which is the thing under test.
-        for (user, _) in [PROPOSER, APPROVER_ONE, APPROVER_TWO] {
-            config.super_users.insert(user.to_owned());
-        }
-        // The authorizer is built from the super-user set, so it has to be
-        // rebuilt after widening it; the one the cluster helper constructed
-        // captured the old set.
-        config.authorizer = Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
-        config
-    });
-    for handle in handles.into_iter().flatten() {
+    let gated = cancel
+        .configs
+        .take()
+        .expect("original configurations")
+        .map(|mut config| {
+            // An empty approver set turns the whole workflow off, so naming the
+            // set is what puts the cancel behind an approval. `signed_actions` is
+            // emptied explicitly rather than left to the file default, which names
+            // three actions this suite has no key material to sign for.
+            config.break_glass.approvers = approvers.clone();
+            config.break_glass.signed_actions = Vec::new();
+            // The cluster runs a `SimpleAclAuthorizer` whose only super user is
+            // the admin the tools authenticate as, and the break-glass RPCs are
+            // cluster operations. Without this the operators are refused at the
+            // authorizer with `CLUSTER_AUTHORIZATION_FAILED` and never reach the
+            // two-person rule, which is the thing under test.
+            for (user, _) in [PROPOSER, APPROVER_ONE, APPROVER_TWO] {
+                config.super_users.insert(user.to_owned());
+            }
+            // The authorizer is built from the super-user set, so it has to be
+            // rebuilt after widening it; the one the cluster helper constructed
+            // captured the old set.
+            config.authorizer = Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
+            config
+        });
+    for handle in cancel.handles.iter_mut().filter_map(Option::take) {
         handle.shutdown().await;
     }
     let [h1, h2, h3] = restart(gated).await;
     wait_three_brokers_registered(&h1, &h2, &h3, 3).await;
 
     // ── 2. the gate on, with no proposal ───────────────────────────────────
+    let props = plain_client_properties(ADMIN.0, ADMIN.1);
+    let advertised = broker0_advertised().to_owned();
+    let side = Side::Krabka {
+        bootstrap: &advertised,
+    };
     let OfflineReassignment { handles, plan } = offline_reassignment(
         [h1, h2, h3],
         &side,
@@ -310,64 +324,53 @@ async fn bdd_verify_reassign_partitions_cancel_reports_the_break_glass_gate_to_t
         "partition record after restart",
     )
     .await;
-    let h1 = handles[0].as_ref().expect("bootstrap broker stays live");
-    let refused = reassign(&side, &props, &["--cancel", "--preserve-throttles"], &plan);
-    check!(
-        !refused.succeeded(),
-        "a gated cancel with no approval must exit non-zero:\n{}",
-        refused.text(),
-    );
-    check!(
-        refused.text().contains(CANCEL_REFUSAL) && refused.text().contains(&format!("{TOPIC}-0")),
-        "the refusal must reach the tool naming the gate and the partition:\n{}",
-        refused.text(),
-    );
-    check!(
-        refused.text().contains(&no_proposal_refusal(0)),
-        "the refusal must carry the broker's own sentence, {:?}:\n{}",
-        no_proposal_refusal(0),
-        refused.text(),
-    );
-    let record = h1
-        .partition_record_for_test(TOPIC, 0)
-        .expect("partition record after the refusal");
-    check!(
-        !record.adding_replicas.is_empty(),
-        "the refusal must have left the reassignment running: {record:?}",
-    );
-
-    // ── 3. the gate on, with an approved proposal ──────────────────────────
-    // The krabka-private clients run on the host and dial the same
-    // `host.docker.internal` name the JVM tools bootstrap against, which CI
-    // maps to loopback in `/etc/hosts`, so both halves address one broker.
-    approve_a_cancel(side.bootstrap()).await;
-    let approved = reassign(&side, &props, &["--cancel", "--preserve-throttles"], &plan);
-    check!(
-        approved.succeeded(),
-        "an approved cancel must succeed:\n{}",
-        approved.text(),
-    );
-    check!(
-        parse_cancelled(&approved.stdout) == vec![TopicPartition::new(TOPIC, 0)],
-        "the approved cancel must name the partition it cancelled:\n{}",
-        approved.stdout,
-    );
-
-    for handle in handles.into_iter().flatten() {
-        handle.shutdown().await;
-    }
+    cancel.handles = handles;
+    cancel.plan = plan;
 }
-
-/// The gate off, then on and unapproved, then on and approved -- the same
-/// `--cancel` each time.
+#[rstest_bdd_macros::then(
+    "cancellation is refused with this exact policy sentence and the reassignment remains in flight"
+)]
+fn refused(cancel: &CancelPermission, docstring: String) {
+    let output = cancel.output.as_ref().expect("cancel attempted");
+    check!(!output.succeeded(), "{}", output.text());
+    check!(
+        output.text().contains(docstring.trim()),
+        "{}",
+        output.text()
+    );
+    let record = cancel.handles[0]
+        .as_ref()
+        .expect("bootstrap broker")
+        .partition_record_for_test(TOPIC, 0)
+        .expect("partition");
+    check!(!record.adding_replicas.is_empty());
+}
+#[rstest_bdd_macros::when(
+    "alice proposes cancel_reassignment and distinct operators bob and carol approve it"
+)]
+async fn authorize_cancel(cancel: &mut CancelPermission) {
+    cancel.approvals = Some(approve_a_cancel(broker0_advertised()).await);
+}
+#[rstest_bdd_macros::then("one approval is insufficient and the second reaches the required count")]
+fn two_people(cancel: &CancelPermission) {
+    let [first, second] = cancel.approvals.as_ref().expect("approvals sent");
+    check!(first.held == 1 && first.held < first.required);
+    check!(second.held == second.required);
+}
 #[ignore = "requires Docker"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_reassign/cancel_gate.feature",
     name = "reassign partitions cancel reports the break glass gate to the jvm tool"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool() {}
+async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool(
+    cancel: CancelPermission,
+) {
+    for handle in cancel.handles.iter_mut().filter_map(Option::take) {
+        handle.shutdown().await;
+    }
+    drop(cancel);
+}
 
 /// The brokers still live while one target is offline, and the plan whose
 /// reassignment is in flight.

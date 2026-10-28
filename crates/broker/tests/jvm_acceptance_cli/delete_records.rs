@@ -6,105 +6,101 @@ use {
         jvm_acceptance::{
             KAFKA_IMAGE, KAFKA_IMAGE_TXN, broker0_advertised, create_console_topic,
             docker_run_kafka_tool_with_image, docker_run_kafka_tool_with_mount,
-            nc_check_connectivity, start_host_broker, start_host_broker_in,
-            wait_jvm_partition_leader, write_temp_file,
+            nc_check_connectivity, start_host_broker_in, wait_jvm_partition_leader,
+            write_temp_file,
         },
         support::{ContainerInput, jvm_docker_command, jvm_parse_offset},
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
     std::{io::Write as _, process::Stdio},
+    tempfile::TempDir,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm acceptance cli delete records: kafka delete records trims log")]
-async fn bdd_verify_kafka_delete_records_trims_log() {
-    const TOPIC: &str = "krabka-delete-recs-itest";
+struct LogTrim {
+    directory: TempDir,
+    broker: Option<BrokerHandle>,
+    topic: String,
+    output: Option<String>,
+}
 
-    let (_broker, _dir) = start_host_broker().await;
+#[fixture]
+fn trim() -> LogTrim {
+    // Start this scenario with fresh inputs and observations.
+
+    LogTrim {
+        directory: tempfile::tempdir().expect("log directory"),
+        broker: None,
+        topic: String::new(),
+        output: None,
+    }
+}
+
+#[given("a single partition topic {topic} contains twenty acknowledged console records")]
+async fn populated(trim: &mut LogTrim, topic: String) {
+    let broker = start_host_broker_in(trim.directory.path()).await;
     nc_check_connectivity();
+    create_topic(&topic);
+    wait_jvm_partition_leader(&broker, &topic, 0, 1).await;
+    produce_lines(&topic, 20);
+    trim.topic = topic;
+    trim.broker = Some(broker);
+}
 
-    create_topic(TOPIC);
-    produce_lines(TOPIC, 20);
+#[when("the operator deletes records before offset {offset}")]
+fn delete_prefix(trim: &mut LogTrim, offset: i64) {
+    trim.output = Some(delete_records_to(&trim.topic, offset));
+}
 
-    let out = delete_records_to(TOPIC, 10);
+#[then("the tool reports the low watermark at ten")]
+fn reported(trim: &LogTrim) {
+    let out = trim.output.as_ref().expect("delete-records completed");
     assert!(
         out.contains("low_watermark") || out.contains("10"),
         "delete-records output missing low_watermark: {out}"
     );
 }
 
-/// `kafka-delete-records --offset-json-file <(...)`: produce 20
-/// records, trim to offset 10, expect success + `low_watermark`.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_cli/delete_records.feature",
-    name = "kafka delete records trims log"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kafka_delete_records_trims_log() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance cli delete records: kafka delete records trim survives a broker restart"
-)]
-async fn bdd_verify_kafka_delete_records_trim_survives_a_broker_restart() {
-    const TOPIC: &str = "krabka-delete-recs-restart-itest";
-    /// Inside the first (and only) segment, which 20 records do not fill.
-    const TRIM_TO: i64 = 7;
-
-    // The directory outlives both brokers, so the second boot reopens the log
-    // the first one trimmed.
-    let dir = tempfile::tempdir().expect("tempdir");
-
-    let broker = start_host_broker_in(dir.path()).await;
-    nc_check_connectivity();
-
-    create_topic(TOPIC);
-    wait_jvm_partition_leader(&broker, TOPIC, 0, 1).await;
-    produce_lines(TOPIC, 20);
-    delete_records_to(TOPIC, TRIM_TO);
-
+#[then("the earliest readable offset is {offset}")]
+fn earliest(trim: &LogTrim, offset: i64) {
     assert!(
-        jvm_earliest_offset(TOPIC) == TRIM_TO,
-        "earliest offset before the restart"
+        jvm_earliest_offset(&trim.topic) == offset,
+        "earliest offset after trimming or reopening the log"
     );
-
-    // The JVM broker binds fixed ports, and so does this one: the first broker
-    // has to be all the way down before the second can take the listener.
-    broker.shutdown().await;
-
-    let broker = start_host_broker_in(dir.path()).await;
-    wait_jvm_partition_leader(&broker, TOPIC, 0, 1).await;
-    broker
-        .wait_until_local_partition_leader(TOPIC, 0, krabka_broker::NodeId(1))
-        .await;
-
-    assert!(
-        jvm_earliest_offset(TOPIC) == TRIM_TO,
-        "earliest offset after the restart"
-    );
-
-    broker.shutdown().await;
 }
 
-/// A trim that lands inside the active segment stays in force across a broker
-/// restart, as the JVM tools see it.
-///
-/// The offsets before a `DeleteRecords` are not on disk anywhere once the
-/// segment they live in is still open for append: nothing rolls, nothing is
-/// deleted, and only the recorded log start offset says they are gone. This
-/// case boots the second broker on the first one's log directory and asks
-/// `kafka-get-offsets --time -2` again, which is the request a JVM consumer
-/// makes when it resets to `earliest`.
+#[when("the broker restarts on its existing log directory")]
+async fn restart(trim: &mut LogTrim) {
+    trim.broker.take().expect("running broker").shutdown().await;
+    let broker = start_host_broker_in(trim.directory.path()).await;
+    wait_jvm_partition_leader(&broker, &trim.topic, 0, 1).await;
+    broker
+        .wait_until_local_partition_leader(&trim.topic, 0, krabka_broker::NodeId(1))
+        .await;
+    trim.broker = Some(broker);
+}
+
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_cli/delete_records.feature",
-    name = "kafka delete records trim survives a broker restart"
+    name = "An operator trims a populated log through the stock command"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kafka_delete_records_trim_survives_a_broker_restart() {}
+async fn kafka_delete_records_trims_log(trim: LogTrim) {
+    trim.broker.expect("running broker").shutdown().await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/delete_records.feature",
+    name = "A trim inside the active segment survives a restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_delete_records_trim_survives_a_broker_restart(trim: LogTrim) {
+    trim.broker.expect("running broker").shutdown().await;
+}
 
 /// One partition at replication factor one, which is all a single node hosts.
 fn create_topic(topic: &str) { create_console_topic(KAFKA_IMAGE, &[], topic, 1, 1); }

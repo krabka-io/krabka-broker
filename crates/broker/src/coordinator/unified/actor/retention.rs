@@ -641,81 +641,103 @@ mod tests {
         check!(group.committed_offsets.keys().cloned().collect::<Vec<_>>() == keys(&["a"]));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified actor retention tests: group tombstones follow kafka"
-    )]
-    fn bdd_verify_group_tombstones_follow_kafka() {
-        let tombstone = |key: Bytes| (Some(key), None::<Bytes>);
-        let ng = |key: NextGenKey| tombstone(encode_next_gen_key(&key).unwrap());
-        let gid = || "g".to_owned();
-        let expired = tombstone(OffsetCommitValue::encode_key("g", "t", 0).unwrap());
-        let rows = [
-            ("no group tombstone", None, vec![expired.clone()]),
-            (
-                "classic group",
-                Some(classic(ClassicGroupState::Empty, None, &[])),
-                vec![
-                    expired.clone(),
-                    tombstone(encode_key(&Key::GroupMetadata { group_id: gid() }).unwrap()),
-                ],
-            ),
-            ("consumer group", Some(consumer(&[])), vec![
-                expired.clone(),
-                ng(NextGenKey::TargetAssignmentMetadata { group_id: gid() }),
-                ng(NextGenKey::PartitionMetadata { group_id: gid() }),
-                ng(NextGenKey::GroupMetadata { group_id: gid() }),
-            ]),
-            (
-                "consumer group with resolved regular expressions",
-                Some({
-                    let mut group = ConsumerState::new("g");
-                    for regex in ["b.*", "a.*"] {
-                        group.set_resolved_regex(regex.into(), ResolvedRegularExpression {
-                            topics: BTreeSet::new(),
-                            version: 1,
-                            timestamp_ms: 2,
-                        });
-                    }
-                    GroupKind::Consumer(group)
-                }),
-                vec![
-                    expired,
-                    ng(NextGenKey::TargetAssignmentMetadata { group_id: gid() }),
-                    ng(NextGenKey::RegularExpression {
-                        group_id: gid(),
-                        regex: "a.*".into(),
-                    }),
-                    ng(NextGenKey::RegularExpression {
-                        group_id: gid(),
-                        regex: "b.*".into(),
-                    }),
-                    ng(NextGenKey::PartitionMetadata { group_id: gid() }),
-                    ng(NextGenKey::GroupMetadata { group_id: gid() }),
-                ],
-            ),
-        ];
-        for (name, kind, expected) in rows {
-            let batch = tombstone_batch("g", &keys(&["t"]), kind.as_ref(), NOW_MS).unwrap();
-
-            let records: Vec<_> = batch
-                .records
-                .into_iter()
-                .map(|record| (record.key, record.value))
-                .collect();
-            check!(records == expected, "{name}");
-        }
-    }
-
     /// The group's own tombstones follow Kafka 4.3.1: k2 for a classic group,
     /// and for a consumer group with no members the k6 tombstone, a k16
     /// tombstone for each regular expression resolution the group still
     /// holds, and the k4 and k3 tombstones of
     /// `ConsumerGroup.createGroupTombstoneRecords`, in that order.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/actor/retention.feature",
-        name = "tests: group tombstones follow kafka"
-    )]
-    fn group_tombstones_follow_kafka() {}
+    use {
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    };
+    #[derive(Default)]
+    struct RetentionRecords {
+        kind: Option<GroupKind>,
+        batch: Option<RecordBatch>,
+    }
+    #[derive(DataTableRow)]
+    struct DeletedKey {
+        family: String,
+        identifier: String,
+    }
+    #[rstest::fixture]
+    fn retention_records() -> RetentionRecords {
+        // Start this scenario with fresh inputs and observations.
+        RetentionRecords::default()
+    }
+    #[given("the expired t partition 0 offset belongs to group g of kind {kind}")]
+    fn retained_group_kind(retention_records: &mut RetentionRecords, kind: String) {
+        retention_records.kind = match kind.as_str() {
+            "absent" => None,
+            "classic" => Some(classic(ClassicGroupState::Empty, None, &[])),
+            "consumer" => Some(consumer(&[])),
+            "consumer-with-regex" => {
+                let mut state = ConsumerState::new("g");
+                for regex in ["b.*", "a.*"] {
+                    state.set_resolved_regex(regex.into(), ResolvedRegularExpression {
+                        topics: BTreeSet::new(),
+                        version: 1,
+                        timestamp_ms: 2,
+                    });
+                }
+                Some(GroupKind::Consumer(state))
+            }
+            _ => panic!("unknown retained group kind"),
+        };
+    }
+    #[when("the retention sweep builds the expired offset and empty group tombstone batch")]
+    fn retention_tombstones(retention_records: &mut RetentionRecords) {
+        retention_records.batch = Some(
+            tombstone_batch("g", &keys(&["t"]), retention_records.kind.as_ref(), NOW_MS)
+                .expect("tombstone batch"),
+        );
+    }
+    #[then("the retention tombstones have these exact Kafka keys in order and every value is null")]
+    fn retention_key_order(
+        retention_records: &RetentionRecords,
+        #[datatable] rows: Rows<DeletedKey>,
+    ) {
+        let expected = rows
+            .into_iter()
+            .map(|row| {
+                let key = match row.family.as_str() {
+                    "offset" => OffsetCommitValue::encode_key("g", "t", 0).expect("offset key"),
+                    "classic-group" => encode_key(&Key::GroupMetadata {
+                        group_id: "g".into(),
+                    })
+                    .expect("classic group key"),
+                    "target-epoch" => encode_next_gen_key(&NextGenKey::TargetAssignmentMetadata {
+                        group_id: "g".into(),
+                    })
+                    .expect("target epoch key"),
+                    "regex" => encode_next_gen_key(&NextGenKey::RegularExpression {
+                        group_id: "g".into(),
+                        regex: row.identifier,
+                    })
+                    .expect("regex key"),
+                    "partition-metadata" => encode_next_gen_key(&NextGenKey::PartitionMetadata {
+                        group_id: "g".into(),
+                    })
+                    .expect("partition metadata key"),
+                    "consumer-group" => encode_next_gen_key(&NextGenKey::GroupMetadata {
+                        group_id: "g".into(),
+                    })
+                    .expect("consumer group key"),
+                    _ => panic!("unknown tombstone key family"),
+                };
+                (Some(key), None::<Bytes>)
+            })
+            .collect::<Vec<_>>();
+        let batch = retention_records
+            .batch
+            .as_ref()
+            .expect("retention batch built");
+        let actual = batch
+            .records
+            .iter()
+            .map(|record| (record.key.clone(), record.value.clone()))
+            .collect::<Vec<_>>();
+        check!(actual == expected);
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/actor/retention.feature",fixtures=[retention_records:RetentionRecords]);
 }

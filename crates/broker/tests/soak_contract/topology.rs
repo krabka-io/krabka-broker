@@ -326,6 +326,7 @@ async fn bounded<T>(future: impl Future<Output = T>) -> Result<T, String> {
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use {
         super::{
@@ -334,6 +335,8 @@ mod tests {
         },
         assert2::check,
         krabka_bench_driver::soak::contract::Target,
+        rstest::fixture,
+        rstest_bdd_macros::{given, scenarios, then, when},
         std::collections::BTreeSet,
     };
 
@@ -363,226 +366,191 @@ mod tests {
     }
 
     const NODES: [i32; 3] = [1, 2, 3];
+    type TopicPartition = (String, i32);
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract topology tests: a target resolves against the cluster as it is for {example}"
-    )]
-    fn bdd_verify_a_target_resolves_against_the_cluster_as_it_is(example: String) {
-        type Example = (Target, Roles, Result<i32, ()>);
-        let (target, roles, expected): Example = match example.as_str() {
-            "controller" => (
-                Target::Controller,
-                Roles {
-                    controller: Some(3),
-                    leader: Some(1),
-                },
-                Ok(3),
-            ),
-            "leader" => (
-                Target::Leader,
-                Roles {
-                    controller: Some(3),
-                    leader: Some(1),
-                },
-                Ok(1),
-            ),
-            "follower" => (
-                Target::Follower,
-                Roles {
-                    controller: Some(3),
-                    leader: Some(1),
-                },
-                Ok(2),
-            ),
-            "follower when one node is both" => (
-                Target::Follower,
-                Roles {
-                    controller: Some(1),
-                    leader: Some(1),
-                },
-                Ok(2),
-            ),
-            "broker" => (Target::Broker(2), Roles::default(), Ok(3)),
-            "broker out of range" => (Target::Broker(3), Roles::default(), Err(())),
-            "no controller" => (Target::Controller, Roles::default(), Err(())),
-            "unresolved any" => (Target::Any, Roles::default(), Err(())),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(resolve_target(target, &NODES, roles).map_err(|_| ()) == expected);
+    #[derive(Default)]
+    struct TopologyScenario {
+        roles: Roles,
+        target: Option<Target>,
+        resolved: Option<Result<i32, ()>>,
+        node: i32,
+        role: Option<&'static str>,
+        states: Vec<PartitionState>,
+        node_one_led: BTreeSet<TopicPartition>,
+        node_three_led: BTreeSet<TopicPartition>,
+        previously_led: BTreeSet<TopicPartition>,
+        failover_complete: Option<bool>,
+        topics: Vec<(String, i32)>,
+        complete_isr: Option<bool>,
+        controllers: Vec<Option<i32>>,
+        scrapes: Vec<Vec<(i32, String)>>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/topology.feature",
-        name = "tests: a target resolves against the cluster as it is"
-    )]
-    fn a_target_resolves_against_the_cluster_as_it_is(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract topology tests: a target records the one role it held for {example}"
-    )]
-    fn bdd_verify_a_target_records_the_one_role_it_held(example: String) {
-        type Example<'a> = (i32, Roles, &'a str);
-        let (node, roles, role): Example<'_> = match example.as_str() {
-            "controller wins over leader" => (
-                1,
-                Roles {
-                    controller: Some(1),
-                    leader: Some(1),
-                },
-                "controller",
-            ),
-            "leader" => (
-                2,
-                Roles {
-                    controller: Some(1),
-                    leader: Some(2),
-                },
-                "leader",
-            ),
-            "follower" => (
-                3,
-                Roles {
-                    controller: Some(1),
-                    leader: Some(2),
-                },
-                "follower",
-            ),
-            "unknown" => (
-                3,
-                Roles {
-                    controller: None,
-                    leader: Some(2),
-                },
-                "broker",
-            ),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(role_of(node, roles) == role);
+    #[fixture]
+    fn topology() -> TopologyScenario {
+        // Each fault decision sees one independent cluster snapshot.
+        TopologyScenario {
+            target: None,
+            ..Default::default()
+        }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/topology.feature",
-        name = "tests: a target records the one role it held"
-    )]
-    fn a_target_records_the_one_role_it_held(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract topology tests: a node leads the partitions it is leader of that can move"
-    )]
-    fn bdd_verify_a_node_leads_the_partitions_it_is_leader_of_that_can_move() {
-        let led: BTreeSet<_> = [("a".to_owned(), 0), ("b".to_owned(), 0)].into();
-        check!(led_by(&cluster(), 1) == led);
-        check!(led_by(&cluster(), 3).is_empty());
+    fn optional_node(value: &str) -> Option<i32> {
+        if value == "none" {
+            None
+        } else {
+            Some(value.parse().expect("a node id"))
+        }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/topology.feature",
-        name = "tests: a node leads the partitions it is leader of that can move"
-    )]
-    fn a_node_leads_the_partitions_it_is_leader_of_that_can_move() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract topology tests: failover needs a live leader elsewhere for every partition for {example}"
-    )]
-    fn bdd_verify_failover_needs_a_live_leader_elsewhere_for_every_partition(example: String) {
-        type Example<'a> = (&'a [(i32, i32)], bool);
-        let (leaders, expected): Example<'_> = match example.as_str() {
-            "still led by target" => (&[(0, 1), (1, 2)], false),
-            "moved" => (&[(0, 2), (1, 3)], true),
-            "leaderless" => (&[(0, -1), (1, 3)], false),
-            _ => panic!("unknown BDD example: {example}"),
+    #[given("three nodes have controller {controller} and first-partition leader {leader}")]
+    fn role_snapshot(topology: &mut TopologyScenario, controller: String, leader: String) {
+        topology.roles = Roles {
+            controller: optional_node(&controller),
+            leader: optional_node(&leader),
         };
+    }
 
-        let states: Vec<_> = leaders
-            .iter()
-            .map(|(partition, leader)| state("a", *partition, *leader, &[2, 3]))
+    #[given("the fault targets {target}")]
+    fn fault_target(topology: &mut TopologyScenario, target: String) {
+        topology.target = Some(match target.as_str() {
+            "controller" => Target::Controller,
+            "leader" => Target::Leader,
+            "follower" => Target::Follower,
+            "any" => Target::Any,
+            other => Target::Broker(
+                other
+                    .strip_prefix("broker-index-")
+                    .expect("a fault target role or broker index")
+                    .parse()
+                    .expect("a broker index"),
+            ),
+        });
+    }
+
+    #[when("the executor resolves the fault target against the three nodes")]
+    fn resolve_fault_target(topology: &mut TopologyScenario) {
+        topology.resolved = Some(
+            resolve_target(
+                topology.target.expect("a fault target was supplied"),
+                &NODES,
+                topology.roles,
+            )
+            .map_err(|_| ()),
+        );
+    }
+
+    #[then("the selected fault node is {node}")]
+    fn resolved_fault_node(topology: &TopologyScenario, node: i32) {
+        check!(topology.resolved == Some(Ok(node)));
+    }
+
+    #[then("the fault target cannot be resolved")]
+    fn unresolved_fault_node(topology: &TopologyScenario) {
+        check!(topology.resolved == Some(Err(())));
+    }
+
+    #[given("faulted node {node} needs its role recorded")]
+    fn faulted_node(topology: &mut TopologyScenario, node: i32) { topology.node = node; }
+
+    #[when("the executor records the faulted node's current role")]
+    fn record_fault_role(topology: &mut TopologyScenario) {
+        topology.role = Some(role_of(topology.node, topology.roles));
+    }
+
+    #[then("the recorded fault role is {role}")]
+    fn recorded_role(topology: &TopologyScenario, role: String) {
+        check!(topology.role == Some(role.as_str()));
+    }
+
+    #[given(
+        "replicated a partitions have full ISR while b-0 lacks replica two and audit is single-replica"
+    )]
+    fn partition_snapshot(topology: &mut TopologyScenario) { topology.states = cluster(); }
+
+    #[when("the executor lists movable partitions led by nodes one and three")]
+    fn list_led_partitions(topology: &mut TopologyScenario) {
+        topology.node_one_led = led_by(&topology.states, 1);
+        topology.node_three_led = led_by(&topology.states, 3);
+    }
+
+    #[then("node one leads a-0 and b-0 while node three leads nothing movable")]
+    fn movable_partition_leaders(topology: &TopologyScenario) {
+        check!(topology.node_one_led == [("a".to_owned(), 0), ("b".to_owned(), 0)].into());
+        check!(topology.node_three_led.is_empty());
+    }
+
+    #[given("node one previously led a-0 and a-1 which now have leaders {first} and {second}")]
+    fn failover_snapshot(topology: &mut TopologyScenario, first: i32, second: i32) {
+        topology.states = vec![
+            state("a", 0, first, &[2, 3]),
+            state("a", 1, second, &[2, 3]),
+        ];
+        topology.previously_led = [("a".to_owned(), 0), ("a".to_owned(), 1)].into();
+    }
+
+    #[when("the executor checks that node one's former partitions have failed over")]
+    fn check_fault_failover(topology: &mut TopologyScenario) {
+        topology.failover_complete =
+            Some(not_failed_over(&topology.states, &topology.previously_led, 1).is_empty());
+    }
+
+    #[then("failover is complete for every previously led partition: {complete}")]
+    fn fault_failover_complete(topology: &TopologyScenario, complete: bool) {
+        check!(topology.failover_complete == Some(complete));
+    }
+
+    #[given("node one previously led no partitions")]
+    fn no_led_partitions(topology: &mut TopologyScenario) { topology.previously_led.clear(); }
+
+    #[given("the expected topic partition counts are {topics}")]
+    fn expected_topic_counts(topology: &mut TopologyScenario, topics: String) {
+        topology.topics = topics
+            .split(',')
+            .map(|entry| {
+                let (topic, count) = entry.split_once(':').expect("topic:partition-count");
+                (topic.to_owned(), count.parse().expect("a partition count"))
+            })
             .collect();
-        let led: BTreeSet<_> = [("a".to_owned(), 0), ("a".to_owned(), 1)].into();
-        check!(not_failed_over(&states, &led, 1).is_empty() == expected);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/topology.feature",
-        name = "tests: failover needs a live leader elsewhere for every partition"
-    )]
-    fn failover_needs_a_live_leader_elsewhere_for_every_partition(example: String) {
-        let _ = example;
+    #[when("the executor checks every expected topic partition for full ISR")]
+    fn check_complete_isr(topology: &mut TopologyScenario) {
+        topology.complete_isr = Some(isr_complete(&topology.states, &topology.topics));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak contract topology tests: nothing led has nothing to fail over")]
-    fn bdd_verify_nothing_led_has_nothing_to_fail_over() {
-        check!(not_failed_over(&cluster(), &BTreeSet::new(), 1).is_empty());
+    #[then("every expected partition satisfies full ISR: {complete}")]
+    fn complete_replica_sets(topology: &TopologyScenario, complete: bool) {
+        check!(topology.complete_isr == Some(complete));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/topology.feature",
-        name = "tests: nothing led has nothing to fail over"
-    )]
-    fn nothing_led_has_nothing_to_fail_over() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract topology tests: the isr is complete only when every partition holds every replica for {example}"
-    )]
-    fn bdd_verify_the_isr_is_complete_only_when_every_partition_holds_every_replica(
-        example: String,
-    ) {
-        type Example<'a> = (&'a [(&'a str, i32)], bool);
-        let (topics, expected): Example<'_> = match example.as_str() {
-            "complete" => (&[("a", 2)], true),
-            "shrunk" => (&[("a", 2), ("b", 1)], false),
-            "missing partition" => (&[("a", 3)], false),
-            "unknown topic" => (&[("c", 1)], false),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let topics: Vec<_> = topics
-            .iter()
-            .map(|(name, n)| ((*name).to_owned(), *n))
-            .collect();
-        check!(isr_complete(&cluster(), &topics) == expected);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/topology.feature",
-        name = "tests: the isr is complete only when every partition holds every replica"
-    )]
-    fn the_isr_is_complete_only_when_every_partition_holds_every_replica(example: String) {
-        let _ = example;
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract topology tests: the controller is the node whose gauge reads one"
-    )]
-    fn bdd_verify_the_controller_is_the_node_whose_gauge_reads_one() {
+    #[given("controller scrapes include node two active all-inactive and empty snapshots")]
+    fn controller_scrape_inputs(topology: &mut TopologyScenario) {
         let body = |value: u8| {
             format!(
                 "# TYPE krabka_broker_active_controller gauge\nkrabka_broker_active_controller {value}\n"
             )
         };
-        check!(active_controller(&[(1, body(0)), (2, body(1)), (3, body(0))]) == Some(2));
-        check!(active_controller(&[(1, body(0))]) == None);
-        check!(active_controller(&[]) == None);
+        topology.scrapes = vec![
+            vec![(1, body(0)), (2, body(1)), (3, body(0))],
+            vec![(1, body(0))],
+            vec![],
+        ];
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/topology.feature",
-        name = "tests: the controller is the node whose gauge reads one"
-    )]
-    fn the_controller_is_the_node_whose_gauge_reads_one() {}
+    #[when("the executor resolves the controller from each scrape snapshot")]
+    fn find_active_controllers(topology: &mut TopologyScenario) {
+        topology.controllers = topology
+            .scrapes
+            .iter()
+            .map(|snapshot| active_controller(snapshot))
+            .collect();
+    }
+
+    #[then("the active controller is node two only in the first snapshot")]
+    fn active_controller_observed(topology: &TopologyScenario) {
+        check!(topology.controllers == [Some(2), None, None]);
+    }
+
+    scenarios!("tests/features/migrated/tests/soak_contract/topology.feature", fixtures = [topology: TopologyScenario]);
 }

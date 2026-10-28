@@ -7,23 +7,40 @@
 
 use {
     crate::{
-        cluster::{admin_cluster, admin_text_cluster, election_partition},
+        cluster::{OfflineReplicaCommand, RegisteredCluster, admin_cluster, election_partition},
         jvm_acceptance::{
-            KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
-            wait_jvm_isr_contains, wait_jvm_partition_any_leader, wait_jvm_partition_leader,
+            ClientPropsFile, KAFKA_IMAGE_TXN, broker0_advertised,
+            docker_run_kafka_tool_with_image_and_mount, wait_jvm_isr_contains,
+            wait_jvm_partition_any_leader, wait_jvm_partition_leader,
         },
         oracle::OracleComparison,
     },
     assert2::assert,
-    std::{collections::BTreeMap, slice},
+    std::{collections::BTreeMap, process::Output, slice},
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance reassign preferred election: jvm kafka leader election preferred"
+struct PreferredElection {
+    cluster: Option<RegisteredCluster>,
+    props: Option<ClientPropsFile>,
+    topic: String,
+    output: Option<Output>,
+}
+#[rstest::fixture]
+fn election() -> PreferredElection {
+    // Start this scenario with fresh inputs and observations.
+
+    PreferredElection {
+        cluster: None,
+        props: None,
+        topic: String::new(),
+        output: None,
+    }
+}
+#[rstest_bdd_macros::given(
+    "topic {topic} has preferred replica 1 alive in ISR while metadata names replica 2 as leader"
 )]
-async fn bdd_verify_jvm_kafka_leader_election_preferred() {
-    const TOPIC: &str = "krabka-elect-preferred-itest";
+async fn displaced_preferred(election: &mut PreferredElection, topic: String) {
+    let topic = topic.as_str();
 
     let (cluster, admin_props) = Box::pin(admin_cluster()).await;
     let admin_mount = admin_props.mount_str();
@@ -34,7 +51,7 @@ async fn bdd_verify_jvm_kafka_leader_election_preferred() {
         "--create",
         "--if-not-exists",
         "--topic",
-        TOPIC,
+        topic,
         "--replica-assignment",
         "1:2",
         "--bootstrap-server",
@@ -44,10 +61,10 @@ async fn bdd_verify_jvm_kafka_leader_election_preferred() {
     ]);
 
     // Wait for broker 1 to see the partition in the committed metadata image.
-    cluster.h1.wait_until_partition_present(TOPIC, 0).await;
+    cluster.h1.wait_until_partition_present(topic, 0).await;
 
     // Record the initial leader (should be broker 1 as preferred replica).
-    let initial_leader = wait_jvm_partition_any_leader(&cluster.h1, TOPIC, 0).await;
+    let initial_leader = wait_jvm_partition_any_leader(&cluster.h1, topic, 0).await;
     eprintln!("KRABKA[test] initial partition leader: {initial_leader}");
 
     // For the preferred election to do anything interesting we need broker 1
@@ -82,7 +99,7 @@ async fn bdd_verify_jvm_kafka_leader_election_preferred() {
         .h1
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(
             election_partition(
-                TOPIC,
+                topic,
                 krabka_broker::NodeId(2),
                 vec![krabka_broker::NodeId(1), krabka_broker::NodeId(2)],
                 vec![krabka_broker::NodeId(2), krabka_broker::NodeId(1)],
@@ -93,8 +110,8 @@ async fn bdd_verify_jvm_kafka_leader_election_preferred() {
 
     // Wait for the injected state to propagate to broker 2's metadata image:
     // leader=2, ISR contains both 1 and 2.
-    wait_jvm_partition_leader(&cluster.h2, TOPIC, 0, 2).await;
-    wait_jvm_isr_contains(&cluster.h2, TOPIC, 0, 1).await;
+    wait_jvm_partition_leader(&cluster.h2, topic, 0, 2).await;
+    wait_jvm_isr_contains(&cluster.h2, topic, 0, 1).await;
 
     // A PREFERRED election refuses with PREFERRED_LEADER_NOT_AVAILABLE until
     // broker 1 is electable, and neither wait above implies that: the leader
@@ -112,10 +129,17 @@ async fn bdd_verify_jvm_kafka_leader_election_preferred() {
          everywhere — running preferred election"
     );
 
-    // Run kafka-leader-election via the 7.5 JVM image.
-    // kafka-leader-election is NOT present in cp-kafka:6.1.1 (Kafka 2.7).
-    // cp-kafka:7.5.0 (Kafka 3.5) ships it. The tool sends `ElectLeaders`
-    // (api_key 43) which the Rust broker now handles via T4/T5.
+    election.topic = topic.to_owned();
+    election.cluster = Some(cluster);
+    election.props = Some(admin_props);
+}
+#[rstest_bdd_macros::when("the SASL JVM tool requests preferred election of partition 0")]
+fn elect_preferred(election: &mut PreferredElection) {
+    let admin_mount = election
+        .props
+        .as_ref()
+        .expect("admin properties")
+        .mount_str();
     let out = jvm_docker_command()
         .image(KAFKA_IMAGE_TXN)
         .mounts(&[&admin_mount])
@@ -124,7 +148,7 @@ async fn bdd_verify_jvm_kafka_leader_election_preferred() {
             "--election-type",
             "preferred",
             "--topic",
-            TOPIC,
+            &election.topic,
             "--partition",
             "0",
             "--bootstrap-server",
@@ -142,18 +166,26 @@ async fn bdd_verify_jvm_kafka_leader_election_preferred() {
         "KRABKA[test] kafka-leader-election status={} stdout={election_stdout} stderr={election_stderr}",
         out.status
     );
+    election.output = Some(out);
+}
+#[rstest_bdd_macros::then(
+    "the JVM command succeeds and broker 2 observes preferred replica 1 leading"
+)]
+async fn preferred_leads(election: &PreferredElection) {
+    let output = election.output.as_ref().expect("election requested");
     assert!(
-        out.status.success(),
-        "kafka-leader-election failed: stdout={election_stdout} stderr={election_stderr}",
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
-
-    // Poll until broker 1 is the leader again on broker 2's view.
-    wait_jvm_partition_leader(&cluster.h2, TOPIC, 0, 1).await;
-    eprintln!("KRABKA[test] preferred election confirmed: broker 1 is leader again");
-
-    cluster.h1.shutdown().await;
-    cluster.h2.shutdown().await;
-    cluster.h3.shutdown().await;
+    wait_jvm_partition_leader(
+        &election.cluster.as_ref().expect("cluster").h2,
+        &election.topic,
+        0,
+        1,
+    )
+    .await;
 }
 
 // ── the two partition selectors, and the two per-partition codes ────────────
@@ -174,7 +206,7 @@ async fn bdd_verify_jvm_kafka_leader_election_preferred() {
 // the difference.
 
 use crate::{
-    oracle::{Side, ToolFile},
+    oracle::{CliRun, Side, ToolFile},
     support::jvm_docker_command,
     tool_output::{ElectionOutcome, TopicPartition, election_json, parse_election},
 };
@@ -190,26 +222,37 @@ const SELECTOR_PARTITIONS: i32 = 3;
 /// container the tool runs in.
 const ELECTION_JSON: &str = "/tmp/krabka-election.json";
 
-/// Every partition of [`SELECTOR_TOPIC`].
-fn selector_partitions() -> Vec<TopicPartition> {
-    (0..SELECTOR_PARTITIONS)
-        .map(|index| TopicPartition::new(SELECTOR_TOPIC, index))
-        .collect()
+struct SelectorElection {
+    comparison: Option<OracleComparison>,
+    partitions: Vec<TopicPartition>,
+    by_file: Vec<BTreeMap<TopicPartition, ElectionOutcome>>,
+    by_all: Vec<BTreeMap<TopicPartition, ElectionOutcome>>,
 }
+#[rstest::fixture]
+fn selectors() -> SelectorElection {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance reassign preferred election: election selectors report election not needed as apache kafka does"
+    SelectorElection {
+        comparison: None,
+        partitions: Vec::new(),
+        by_file: Vec::new(),
+        by_all: Vec::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "Kafka and Krabka expose the healthy single-replica election partitions"
 )]
-async fn bdd_verify_election_selectors_report_election_not_needed_as_apache_kafka_does() {
-    // Kafka first: the claim that a healthy partition answers 84 rather than
-    // succeeding is a claim about Kafka, and this is where a wrong one fails.
-    let comparison = OracleComparison::start("elect-selectors").await;
-    let [oracle_side, krabka_side] = comparison.sides();
-
-    let document = election_json(&selector_partitions());
-    let mut answers = Vec::new();
-    for side in [&oracle_side, &krabka_side] {
+async fn healthy_partitions(selectors: &mut SelectorElection, datatable: Vec<Vec<String>>) {
+    selectors.comparison = Some(OracleComparison::start("elect-selectors").await);
+    selectors.partitions = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [topic, partition]: [String; 2] = row.try_into().expect("topic partition");
+            TopicPartition::new(&topic, partition.parse().expect("partition"))
+        })
+        .collect();
+    for side in selectors.comparison.as_ref().expect("comparison").sides() {
         side.run("kafka-topics", &[
             "--bootstrap-server",
             side.bootstrap(),
@@ -223,9 +266,14 @@ async fn bdd_verify_election_selectors_report_election_not_needed_as_apache_kafk
             "1",
         ])
         .expect_success();
-
-        // The document selector first. It names exactly this topic's
-        // partitions, so its answer is this topic's answer and nothing else's.
+    }
+}
+#[rstest_bdd_macros::when(
+    "both JVM clients elect by JSON partition list and by all-topic-partitions"
+)]
+fn election_selectors(selectors: &mut SelectorElection) {
+    let document = election_json(&selectors.partitions);
+    for side in selectors.comparison.as_ref().expect("comparison").sides() {
         let by_file = side.run_with_files(
             "kafka-leader-election",
             &[
@@ -239,22 +287,7 @@ async fn bdd_verify_election_selectors_report_election_not_needed_as_apache_kafk
             &[ToolFile::new(ELECTION_JSON, &document)],
             None,
         );
-        let outcomes = parse_election(&by_file.text());
-        let expected: BTreeMap<_, _> = selector_partitions()
-            .into_iter()
-            .map(|partition| (partition, ElectionOutcome::AlreadyElected))
-            .collect();
-        assert!(
-            outcomes == expected,
-            "{}: --path-to-json-file must report 84 for every partition, got {outcomes:?}\n{}",
-            side.label(),
-            by_file.text(),
-        );
-
-        // And the whole-cluster selector. Its answer covers the internal
-        // topics too, so it is narrowed to this topic's partitions before it
-        // is compared -- the coordinator topics differ between the two sides
-        // and say nothing about the selector.
+        selectors.by_file.push(parse_election(&by_file.text()));
         let by_all = side.run("kafka-leader-election", &[
             "--bootstrap-server",
             side.bootstrap(),
@@ -262,31 +295,45 @@ async fn bdd_verify_election_selectors_report_election_not_needed_as_apache_kafk
             "preferred",
             "--all-topic-partitions",
         ]);
-        let mine: BTreeMap<_, _> = parse_election(&by_all.text())
-            .into_iter()
-            .filter(|(partition, _)| partition.topic == SELECTOR_TOPIC)
-            .collect();
-        answers.push(mine);
+        selectors.by_all.push(
+            parse_election(&by_all.text())
+                .into_iter()
+                .filter(|(partition, _)| partition.topic == SELECTOR_TOPIC)
+                .collect(),
+        );
     }
-    assert!(
-        answers[0] == answers[1],
-        "--all-topic-partitions: krabka and Apache Kafka disagreed: {answers:?}",
-    );
-
-    comparison.broker.shutdown().await;
+}
+#[rstest_bdd_macros::then(
+    "each JSON-selected partition reports AlreadyElected and all-topic-partitions agrees between brokers"
+)]
+fn no_election_needed(selectors: &SelectorElection) {
+    let expected: BTreeMap<_, _> = selectors
+        .partitions
+        .iter()
+        .cloned()
+        .map(|partition| (partition, ElectionOutcome::AlreadyElected))
+        .collect();
+    assert!(selectors.by_file.len() == 2);
+    for result in &selectors.by_file {
+        assert!(*result == expected);
+    }
+    assert!(selectors.by_all.len() == 2);
+    assert!(selectors.by_all[0] == selectors.by_all[1]);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance reassign preferred election: a preferred replica outside the isr reports code 80"
+#[rstest::fixture]
+fn unavailable() -> OfflineReplicaCommand {
+    // Each scenario owns a fresh replica topology and its pending command output.
+    OfflineReplicaCommand::default()
+}
+#[rstest_bdd_macros::given(
+    "topic {topic} is led by replica 1 with its preferred replica offline and outside ISR"
 )]
-async fn bdd_verify_a_preferred_replica_outside_the_isr_reports_code_80() {
-    const TOPIC: &str = "krabka-elect-unavailable-itest";
-
-    let (brokers, props, advertised) = Box::pin(admin_text_cluster()).await;
-    let side = Side::Krabka {
-        bootstrap: &advertised,
-    };
+async fn preferred_offline(unavailable: &mut OfflineReplicaCommand, topic: String) {
+    let brokers = unavailable.start(topic).await;
+    let side = unavailable.side();
+    let topic = unavailable.topic.as_str();
+    let props = &unavailable.props;
     let props_file = ToolFile::new("/client.properties", &props);
 
     side.run_with_files(
@@ -297,7 +344,7 @@ async fn bdd_verify_a_preferred_replica_outside_the_isr_reports_code_80() {
             "--create",
             "--if-not-exists",
             "--topic",
-            TOPIC,
+            topic,
             "--partitions",
             "1",
             "--replication-factor",
@@ -309,7 +356,7 @@ async fn bdd_verify_a_preferred_replica_outside_the_isr_reports_code_80() {
         None,
     )
     .expect_success();
-    brokers.h1.wait_until_partition_present(TOPIC, 0).await;
+    brokers.h1.wait_until_partition_present(topic, 0).await;
 
     // Keep a registered non-controller broker offline so the injected
     // preferred replica cannot race back into the ISR before the JVM command.
@@ -327,7 +374,7 @@ async fn bdd_verify_a_preferred_replica_outside_the_isr_reports_code_80() {
 
     h1.submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(
         election_partition(
-            TOPIC,
+            topic,
             krabka_broker::NodeId(1),
             vec![krabka_broker::NodeId(preferred), krabka_broker::NodeId(1)],
             vec![krabka_broker::NodeId(1)],
@@ -336,16 +383,27 @@ async fn bdd_verify_a_preferred_replica_outside_the_isr_reports_code_80() {
     .await
     .expect("inject a partition whose preferred replica is outside the ISR");
     h1.wait_for_image(|image| {
-        image.partition(TOPIC, 0).is_some_and(|record| {
+        image.partition(topic, 0).is_some_and(|record| {
             record.leader == krabka_broker::NodeId(1)
                 && record.replicas.first() == Some(&krabka_broker::NodeId(preferred))
                 && record.isr == [krabka_broker::NodeId(1)]
         })
     })
     .await;
-    wait_jvm_partition_leader(h1, TOPIC, 0, 1).await;
+    wait_jvm_partition_leader(h1, topic, 0, 1).await;
 
-    let document = election_json(&[TopicPartition::new(TOPIC, 0)]);
+    unavailable.handles = handles;
+    unavailable.dirs = Some([brokers.d1, brokers.d2, brokers.d3]);
+}
+#[rstest_bdd_macros::when(
+    "the JVM elects the unavailable preferred replica through the JSON selector"
+)]
+fn elect_unavailable(unavailable: &mut OfflineReplicaCommand) {
+    let props = &unavailable.props;
+    let side = Side::Krabka {
+        bootstrap: &unavailable.advertised,
+    };
+    let document = election_json(&[TopicPartition::new(&unavailable.topic, 0)]);
     let run = side.run_with_files(
         "kafka-leader-election",
         &[
@@ -364,23 +422,20 @@ async fn bdd_verify_a_preferred_replica_outside_the_isr_reports_code_80() {
         ],
         None,
     );
-    let outcomes = parse_election(&run.text());
+    unavailable.output = Some(run);
+}
+#[rstest_bdd_macros::then("the tool reports exception {exception} for the partition")]
+fn unavailable_error(unavailable: &OfflineReplicaCommand, exception: String) {
+    let output = unavailable.output.as_ref().expect("election requested");
     assert!(
-        outcomes
+        parse_election(&output.text())
             == BTreeMap::from([(
-                TopicPartition::new(TOPIC, 0),
-                ElectionOutcome::Failed(
-                    "org.apache.kafka.common.errors.PreferredLeaderNotAvailableException"
-                        .to_owned(),
-                ),
+                TopicPartition::new(&unavailable.topic, 0),
+                ElectionOutcome::Failed(exception)
             )]),
-        "the election must report code 80 as Kafka's own exception, got {outcomes:?}\n{}",
-        run.text(),
+        "{}",
+        output.text()
     );
-
-    for handle in handles.into_iter().flatten() {
-        handle.shutdown().await;
-    }
 }
 
 // BDD scenario entry points; acceptance steps are defined above.
@@ -411,7 +466,13 @@ async fn bdd_verify_a_preferred_replica_outside_the_isr_reports_code_80() {
     name = "jvm kafka leader election preferred"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_kafka_leader_election_preferred() {}
+async fn jvm_kafka_leader_election_preferred(election: PreferredElection) {
+    let cluster = election.cluster.take().expect("cluster");
+    cluster.h1.shutdown().await;
+    cluster.h2.shutdown().await;
+    cluster.h3.shutdown().await;
+    drop(election);
+}
 
 /// `--all-topic-partitions` and `--path-to-json-file` over a cluster where
 /// every partition already sits on its preferred leader, compared with Apache
@@ -429,7 +490,18 @@ async fn jvm_kafka_leader_election_preferred() {}
     name = "election selectors report election not needed as apache kafka does"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn election_selectors_report_election_not_needed_as_apache_kafka_does() {}
+async fn election_selectors_report_election_not_needed_as_apache_kafka_does(
+    selectors: SelectorElection,
+) {
+    selectors
+        .comparison
+        .take()
+        .expect("comparison")
+        .broker
+        .shutdown()
+        .await;
+    drop(selectors);
+}
 
 /// A partition whose preferred replica is out of the ISR reports
 /// `PREFERRED_LEADER_NOT_AVAILABLE` (80), and the tool builds Kafka's own
@@ -455,4 +527,6 @@ async fn election_selectors_report_election_not_needed_as_apache_kafka_does() {}
     name = "a preferred replica outside the isr reports code 80"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_preferred_replica_outside_the_isr_reports_code_80() {}
+async fn a_preferred_replica_outside_the_isr_reports_code_80(unavailable: OfflineReplicaCommand) {
+    unavailable.shutdown().await;
+}

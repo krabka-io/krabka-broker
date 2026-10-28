@@ -29,44 +29,6 @@ const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([5; 16]);
 
 type WriteOutcome = Result<(), ShareStateError>;
 
-/// What a write leaves behind: its answer and the stored summary.
-#[derive(Clone, Copy)]
-struct WriteResult {
-    outcome: WriteOutcome,
-    summary: Option<ShareStateSummary>,
-}
-
-/// A write of one partition.
-#[derive(Clone, Copy)]
-struct WriteRequest {
-    partition: i32,
-    state_epoch: i32,
-    leader_epoch: i32,
-    start_offset: i64,
-    delivery_complete_count: i32,
-    /// Drop the state partition log before the write.
-    drop_log: bool,
-}
-
-/// One write row: the request, and what Kafka 4.3.1 and Kafka trunk leave
-/// behind.
-struct WriteRow {
-    request: WriteRequest,
-    kafka_4_3_1: WriteResult,
-    trunk: WriteResult,
-}
-
-impl WriteRow {
-    /// A row that both rule sets answer alike.
-    fn same(request: WriteRequest, result: WriteResult) -> Self {
-        Self {
-            request,
-            kafka_4_3_1: result,
-            trunk: result,
-        }
-    }
-}
-
 /// The state epoch and start offset that a read returns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ReadSummary {
@@ -261,150 +223,6 @@ async fn a_group_id_over_32767_bytes_is_not_initialized() {
     check!(coord.read_summary(&too_long, TOPIC, 0).await == Ok(None));
 }
 
-/// What a second initialize leaves behind, for one Kafka release: its
-/// answer, the snapshots logged, and the stored summary.
-#[derive(Clone, Copy)]
-struct InitializeResult {
-    outcome: WriteOutcome,
-    snapshots: usize,
-    summary: Option<ShareStateSummary>,
-}
-
-/// A second initialize request.
-struct InitializeRequest {
-    state_epoch: i32,
-    start_offset: i64,
-}
-
-struct InitializeRow {
-    name: &'static str,
-    request: InitializeRequest,
-    kafka_4_3_1: InitializeResult,
-    trunk_rules: InitializeResult,
-}
-
-fn initialized(
-    outcome: WriteOutcome,
-    snapshots: usize,
-    summary: Option<ShareStateSummary>,
-) -> InitializeResult {
-    InitializeResult {
-        outcome,
-        snapshots,
-        summary,
-    }
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "share coordinator coordinator state machine tests: initialize follows the rules of each kafka release"
-)]
-async fn bdd_verify_initialize_follows_the_rules_of_each_kafka_release() {
-    let fenced = || refused(codes::FENCED_STATE_EPOCH, message::FENCED_STATE_EPOCH);
-    let negative = || refused(codes::INVALID_REQUEST, message::NEGATIVE_STATE_EPOCH);
-    let first = Some((5, 0, Offset(100), 0));
-    let rows: Vec<InitializeRow> = vec![
-        InitializeRow {
-            name: "a repeat of the stored epoch and start offset",
-            request: InitializeRequest {
-                state_epoch: 5,
-                start_offset: 100,
-            },
-            kafka_4_3_1: initialized(Ok(()), 2, first),
-            trunk_rules: initialized(Ok(()), 1, first),
-        },
-        InitializeRow {
-            name: "a state epoch of -1",
-            request: InitializeRequest {
-                state_epoch: -1,
-                start_offset: 100,
-            },
-            kafka_4_3_1: initialized(Ok(()), 2, Some((-1, 0, Offset(100), 0))),
-            trunk_rules: initialized(Err(negative()), 1, first),
-        },
-        InitializeRow {
-            name: "a lower state epoch",
-            request: InitializeRequest {
-                state_epoch: 4,
-                start_offset: 100,
-            },
-            kafka_4_3_1: initialized(Err(fenced()), 1, first),
-            trunk_rules: initialized(Err(fenced()), 1, first),
-        },
-        InitializeRow {
-            name: "a higher state epoch and a new start offset",
-            request: InitializeRequest {
-                state_epoch: 6,
-                start_offset: 50,
-            },
-            kafka_4_3_1: initialized(Ok(()), 2, Some((6, 0, Offset(50), 0))),
-            trunk_rules: initialized(Ok(()), 2, Some((6, 0, Offset(50), 0))),
-        },
-    ];
-    for trunk in [false, true] {
-        for InitializeRow {
-            name,
-            request:
-                InitializeRequest {
-                    state_epoch,
-                    start_offset: start,
-                },
-            kafka_4_3_1,
-            trunk_rules,
-        } in &rows
-        {
-            let InitializeResult {
-                outcome: expected,
-                snapshots,
-                summary,
-            } = if trunk { *trunk_rules } else { *kafka_4_3_1 };
-            let dir = tempdir().unwrap();
-            let ConfiguredCoordinator {
-                coord,
-                registry: _reg,
-                clock: _clock,
-            } = configured_coordinator(dir.path(), rules(trunk));
-            lead_all(&coord).await;
-            let image = image_with_topic(TOPIC, 1);
-            coord
-                .initialize(&image, "g", TOPIC, 0, 5, Offset(100))
-                .await
-                .unwrap();
-
-            let second = coord
-                .initialize(&image, "g", TOPIC, 0, *state_epoch, Offset(*start))
-                .await;
-
-            let state_partition = coord.state_partition_for("g", &TOPIC, 0).unwrap();
-            let logged = logged_records(&coord, state_partition)
-                .into_iter()
-                .filter(|record| matches!(record.logged, Logged::Snapshot(_)))
-                .count();
-            check!(second == expected, "{name}, trunk {trunk}");
-            check!(logged == snapshots, "{name}, trunk {trunk}");
-            check!(
-                coord.read_summary("g", TOPIC, 0).await == Ok(summary),
-                "{name}, trunk {trunk}"
-            );
-        }
-    }
-}
-
-/// `InitializeShareGroupState` as Kafka's `ShareCoordinatorShard.initializeState`
-/// answers a second request on a key that state epoch 5 and start offset 100
-/// initialized. Kafka 4.3.1 skips the fence for a state epoch of `-1` and
-/// always writes a new snapshot; trunk refuses a negative state epoch and
-/// takes a repeat of the stored epoch and start offset as a no-op. The rows
-/// are the request's `(state epoch, start offset)`, then the result under
-/// Kafka 4.3.1 and under trunk.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests.feature",
-    name = "initialize follows the rules of each kafka release"
-)]
-#[tokio::test]
-async fn initialize_follows_the_rules_of_each_kafka_release() {}
-
 /// A coordinator with stored state, and the image it runs over.
 struct Seeded {
     coord: ShareCoordinator,
@@ -440,331 +258,6 @@ async fn seeded(dir: &Path, trunk: bool) -> Seeded {
     assert!(coord.read_summary("g", TOPIC, 0).await == Ok(Some((2, 3, Offset(10), 4))));
     Seeded { coord, image }
 }
-
-fn write_rows() -> Vec<WriteRow> {
-    let unchanged = Some((2, 3, Offset(10), 4));
-    let mut rows = vec![
-        // The same start offset with a lower count: 4.3.1 stores the count as
-        // sent, trunk keeps the greater one.
-        WriteRow {
-            request: WriteRequest {
-                partition: 0,
-                state_epoch: 2,
-                leader_epoch: 3,
-                start_offset: 10,
-                delivery_complete_count: 2,
-                drop_log: false,
-            },
-            kafka_4_3_1: WriteResult {
-                outcome: Ok(()),
-                summary: Some((2, 3, Offset(10), 2)),
-            },
-            trunk: WriteResult {
-                outcome: Ok(()),
-                summary: unchanged,
-            },
-        },
-        // A lower start offset: 4.3.1 lowers the stored one and stores the
-        // count as sent, trunk never lets the start offset go back.
-        WriteRow {
-            request: WriteRequest {
-                partition: 0,
-                state_epoch: 2,
-                leader_epoch: 3,
-                start_offset: 5,
-                delivery_complete_count: 9,
-                drop_log: false,
-            },
-            kafka_4_3_1: WriteResult {
-                outcome: Ok(()),
-                summary: Some((2, 3, Offset(5), 9)),
-            },
-            trunk: WriteResult {
-                outcome: Ok(()),
-                summary: unchanged,
-            },
-        },
-        WriteRow::same(
-            WriteRequest {
-                partition: 0,
-                state_epoch: 2,
-                leader_epoch: 3,
-                start_offset: 20,
-                delivery_complete_count: 1,
-                drop_log: false,
-            },
-            WriteResult {
-                outcome: Ok(()),
-                summary: Some((2, 3, Offset(20), 1)),
-            },
-        ),
-        WriteRow::same(
-            WriteRequest {
-                partition: 0,
-                state_epoch: 7,
-                leader_epoch: 3,
-                start_offset: 10,
-                delivery_complete_count: 4,
-                drop_log: false,
-            },
-            WriteResult {
-                outcome: Ok(()),
-                summary: unchanged,
-            },
-        ),
-        WriteRow::same(
-            WriteRequest {
-                partition: 0,
-                state_epoch: 2,
-                leader_epoch: 9,
-                start_offset: 10,
-                delivery_complete_count: 4,
-                drop_log: false,
-            },
-            WriteResult {
-                outcome: Ok(()),
-                summary: unchanged,
-            },
-        ),
-        // A version 0 write has no count: `-1`.
-        WriteRow {
-            request: WriteRequest {
-                partition: 0,
-                state_epoch: 2,
-                leader_epoch: 3,
-                start_offset: 10,
-                delivery_complete_count: -1,
-                drop_log: false,
-            },
-            kafka_4_3_1: WriteResult {
-                outcome: Ok(()),
-                summary: Some((2, 3, Offset(10), -1)),
-            },
-            trunk: WriteResult {
-                outcome: Ok(()),
-                summary: unchanged,
-            },
-        },
-    ];
-    rows.extend(refused_write_rows());
-    rows
-}
-
-fn refused_write_rows() -> Vec<WriteRow> {
-    let unchanged = Some((2, 3, Offset(10), 4));
-    let negative_leader_epoch = || {
-        Err(refused(
-            codes::INVALID_REQUEST,
-            message::NEGATIVE_LEADER_EPOCH,
-        ))
-    };
-    let negative_state_epoch = || {
-        Err(refused(
-            codes::INVALID_REQUEST,
-            message::NEGATIVE_STATE_EPOCH,
-        ))
-    };
-    vec![
-        WriteRow::same(
-            WriteRequest {
-                partition: 0,
-                state_epoch: 1,
-                leader_epoch: 3,
-                start_offset: 10,
-                delivery_complete_count: 4,
-                drop_log: false,
-            },
-            WriteResult {
-                outcome: Err(refused(
-                    codes::FENCED_STATE_EPOCH,
-                    message::FENCED_STATE_EPOCH,
-                )),
-                summary: unchanged,
-            },
-        ),
-        WriteRow::same(
-            WriteRequest {
-                partition: 0,
-                state_epoch: 2,
-                leader_epoch: 2,
-                start_offset: 10,
-                delivery_complete_count: 4,
-                drop_log: false,
-            },
-            WriteResult {
-                outcome: Err(refused(
-                    codes::FENCED_LEADER_EPOCH,
-                    message::FENCED_LEADER_EPOCH,
-                )),
-                summary: unchanged,
-            },
-        ),
-        WriteRow::same(
-            WriteRequest {
-                partition: 1,
-                state_epoch: 0,
-                leader_epoch: 0,
-                start_offset: 0,
-                delivery_complete_count: 0,
-                drop_log: false,
-            },
-            WriteResult {
-                outcome: Err(refused(
-                    codes::INVALID_REQUEST,
-                    message::WRITE_UNINITIALIZED_SHARE_PARTITION,
-                )),
-                summary: None,
-            },
-        ),
-        WriteRow::same(
-            WriteRequest {
-                partition: -1,
-                state_epoch: 2,
-                leader_epoch: 3,
-                start_offset: 10,
-                delivery_complete_count: 4,
-                drop_log: false,
-            },
-            WriteResult {
-                outcome: Err(refused(
-                    codes::INVALID_REQUEST,
-                    message::NEGATIVE_PARTITION_ID,
-                )),
-                summary: None,
-            },
-        ),
-        // `-1` is "not supplied" in 4.3.1, and skips the fence. Trunk refuses
-        // a negative epoch.
-        WriteRow {
-            request: WriteRequest {
-                partition: 0,
-                state_epoch: 2,
-                leader_epoch: -1,
-                start_offset: 10,
-                delivery_complete_count: 4,
-                drop_log: false,
-            },
-            kafka_4_3_1: WriteResult {
-                outcome: Ok(()),
-                summary: unchanged,
-            },
-            trunk: WriteResult {
-                outcome: negative_leader_epoch(),
-                summary: unchanged,
-            },
-        },
-        WriteRow {
-            request: WriteRequest {
-                partition: 0,
-                state_epoch: -1,
-                leader_epoch: 3,
-                start_offset: 10,
-                delivery_complete_count: 4,
-                drop_log: false,
-            },
-            kafka_4_3_1: WriteResult {
-                outcome: Ok(()),
-                summary: unchanged,
-            },
-            trunk: WriteResult {
-                outcome: negative_state_epoch(),
-                summary: unchanged,
-            },
-        },
-        WriteRow::same(
-            WriteRequest {
-                partition: 2,
-                state_epoch: 2,
-                leader_epoch: 3,
-                start_offset: 10,
-                delivery_complete_count: 4,
-                drop_log: false,
-            },
-            WriteResult {
-                outcome: Err(refused(
-                    codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    message::UNKNOWN_TOPIC_OR_PARTITION,
-                )),
-                summary: Some((2, 0, Offset(10), 0)),
-            },
-        ),
-        WriteRow::same(
-            WriteRequest {
-                partition: 0,
-                state_epoch: 2,
-                leader_epoch: 3,
-                start_offset: 30,
-                delivery_complete_count: 0,
-                drop_log: true,
-            },
-            WriteResult {
-                outcome: Err(ShareStateError::Operation {
-                    code: codes::COORDINATOR_NOT_AVAILABLE,
-                    message: message::UNKNOWN_TOPIC_OR_PARTITION,
-                }),
-                summary: unchanged,
-            },
-        ),
-    ]
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "share coordinator coordinator state machine tests: write matches kafka checks and record rules"
-)]
-async fn bdd_verify_write_matches_kafka_checks_and_record_rules() {
-    for trunk in [false, true] {
-        for (index, row) in write_rows().into_iter().enumerate() {
-            let WriteRequest {
-                partition,
-                state_epoch,
-                leader_epoch,
-                start_offset,
-                delivery_complete_count,
-                drop_log,
-            } = row.request;
-            let WriteResult {
-                outcome: expected,
-                summary,
-            } = if trunk { row.trunk } else { row.kafka_4_3_1 };
-            let dir = tempdir().unwrap();
-            let Seeded { coord, image } = seeded(dir.path(), trunk).await;
-            if drop_log {
-                let state_partition = coord.state_partition_for("g", &TOPIC, partition).unwrap();
-                coord.partitions.remove(SHARE_STATE_TOPIC, state_partition);
-            }
-            let result = coord
-                .write(
-                    &image,
-                    "g",
-                    TOPIC,
-                    partition,
-                    share_write(
-                        (state_epoch, leader_epoch),
-                        (start_offset, delivery_complete_count),
-                        vec![batch(Offset(start_offset)..=Offset(start_offset + 9))],
-                    ),
-                )
-                .await;
-            check!(result == expected, "row {index}, trunk {trunk}");
-            check!(
-                coord.read_summary("g", TOPIC, partition).await == Ok(summary),
-                "row {index}, trunk {trunk}"
-            );
-        }
-    }
-}
-
-/// `WriteShareGroupState` as Kafka's `ShareCoordinatorShard.writeState`
-/// answers it, under the rules of Kafka 4.3.1 and of Kafka trunk, and the
-/// stored summary after each write.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests.feature",
-    name = "write matches kafka checks and record rules"
-)]
-#[tokio::test]
-async fn write_matches_kafka_checks_and_record_rules() {}
 
 /// `ReadShareGroupState` as Kafka's `readStateAndMaybeUpdateLeaderEpoch`
 /// answers it, then a write with leader epoch 3, and the stored leader epoch
@@ -1182,4 +675,287 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
             );
         }
     }
+}
+
+#[derive(Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind")]
+enum ObservedShareOperation {
+    Ok,
+    Refused { code: i16, message: String },
+    Operation { code: i16, message: String },
+}
+
+type ObservedShareSummary = (i32, i32, i64, i32);
+type ShareSummaryObservation = Result<Option<ObservedShareSummary>, i16>;
+
+fn observed_share_error(error: ShareStateError) -> ObservedShareOperation {
+    match error {
+        ShareStateError::Refused { code, message } => ObservedShareOperation::Refused {
+            code,
+            message: message.to_owned(),
+        },
+        ShareStateError::Operation { code, message } => ObservedShareOperation::Operation {
+            code,
+            message: message.to_owned(),
+        },
+    }
+}
+
+fn observed_share_operation(result: WriteOutcome) -> ObservedShareOperation {
+    result.map_or_else(observed_share_error, |()| ObservedShareOperation::Ok)
+}
+
+fn observed_share_summary(
+    result: Result<Option<ShareStateSummary>, i16>,
+) -> ShareSummaryObservation {
+    result
+        .map(|summary| summary.map(|(state, leader, start, count)| (state, leader, start.0, count)))
+}
+
+#[derive(serde::Deserialize)]
+struct InitializeStateRequest {
+    state_epoch: i32,
+    start_offset: i64,
+}
+
+#[derive(serde::Deserialize)]
+struct ExpectedInitialization {
+    outcome: ObservedShareOperation,
+    snapshots: usize,
+    summary: Option<ObservedShareSummary>,
+}
+
+#[derive(Default)]
+struct ShareStateInitialization {
+    setup: Option<ConfiguredCoordinator>,
+    image: Option<MetadataImage>,
+    request: Option<InitializeStateRequest>,
+    reply: Option<ObservedShareOperation>,
+    snapshots: Option<usize>,
+    summary: Option<ShareSummaryObservation>,
+    _directory_guard: Option<tempfile::TempDir>,
+}
+
+#[rstest::fixture]
+fn share_state_initialization() -> ShareStateInitialization {
+    // One initialized state key and its physical log belong to each example.
+    ShareStateInitialization::default()
+}
+
+#[rstest_bdd_macros::given(
+    "a share coordinator with trunk rules {trunk} initialized group g at state epoch 5 and start offset 100"
+)]
+async fn initialized_share_state_key(
+    share_state_initialization: &mut ShareStateInitialization,
+    trunk: bool,
+) {
+    let directory = tempdir().expect("fresh share state log directory");
+    let setup = configured_coordinator(directory.path(), rules(trunk));
+    lead_all(&setup.coord).await;
+    let image = image_with_topic(TOPIC, 1);
+    setup
+        .coord
+        .initialize(&image, "g", TOPIC, 0, 5, Offset(100))
+        .await
+        .expect("initial share state");
+    share_state_initialization.setup = Some(setup);
+    share_state_initialization.image = Some(image);
+    share_state_initialization._directory_guard = Some(directory);
+}
+
+#[rstest_bdd_macros::given("the repeated InitializeShareGroupState request is JSON {request}")]
+fn requested_share_state_initialization(
+    share_state_initialization: &mut ShareStateInitialization,
+    request: String,
+) {
+    share_state_initialization.request =
+        Some(serde_json::from_str(&request).expect("explicit state epoch and start offset"));
+}
+
+#[rstest_bdd_macros::when("the coordinator initializes that stored share state key again")]
+async fn initialize_existing_share_state(
+    share_state_initialization: &mut ShareStateInitialization,
+) {
+    let coord = &share_state_initialization
+        .setup
+        .as_ref()
+        .expect("initialized coordinator was given")
+        .coord;
+    let image = share_state_initialization
+        .image
+        .as_ref()
+        .expect("topic metadata was given");
+    let request = share_state_initialization
+        .request
+        .as_ref()
+        .expect("second initialization request was given");
+    share_state_initialization.reply = Some(observed_share_operation(
+        coord
+            .initialize(
+                image,
+                "g",
+                TOPIC,
+                0,
+                request.state_epoch,
+                Offset(request.start_offset),
+            )
+            .await,
+    ));
+    let partition = coord
+        .state_partition_for("g", &TOPIC, 0)
+        .expect("state partition route");
+    share_state_initialization.snapshots = Some(
+        logged_records(coord, partition)
+            .into_iter()
+            .filter(|record| matches!(record.logged, Logged::Snapshot(_)))
+            .count(),
+    );
+    share_state_initialization.summary = Some(observed_share_summary(
+        coord.read_summary("g", TOPIC, 0).await,
+    ));
+}
+
+#[rstest_bdd_macros::then(
+    "the initialization outcome, persisted snapshot count and stored summary are JSON {expected}"
+)]
+fn expected_share_state_initialization(
+    share_state_initialization: &ShareStateInitialization,
+    expected: String,
+) {
+    let expected: ExpectedInitialization =
+        serde_json::from_str(&expected).expect("independent complete initialization observations");
+    check!(share_state_initialization.reply.as_ref() == Some(&expected.outcome));
+    check!(share_state_initialization.snapshots == Some(expected.snapshots));
+    check!(share_state_initialization.summary.as_ref() == Some(&Ok(expected.summary)));
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/initialize.feature",
+    name = "Initialize an existing key under Kafka release rules"
+)]
+#[tokio::test]
+async fn initialize_follows_the_rules_of_each_kafka_release(
+    share_state_initialization: ShareStateInitialization,
+    case: String,
+    trunk: bool,
+    request: String,
+    expected: String,
+) {
+    let _ = (share_state_initialization, case, trunk, request, expected);
+}
+
+#[derive(serde::Deserialize)]
+struct ShareStateWriteRequest {
+    partition: i32,
+    state_epoch: i32,
+    leader_epoch: i32,
+    start_offset: i64,
+    delivery_complete_count: i32,
+    drop_log: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct ExpectedShareStateWrite {
+    outcome: ObservedShareOperation,
+    summary: Option<ObservedShareSummary>,
+}
+
+#[derive(Default)]
+struct ShareStateWrite {
+    seeded: Option<Seeded>,
+    request: Option<ShareStateWriteRequest>,
+    reply: Option<ObservedShareOperation>,
+    summary: Option<ShareSummaryObservation>,
+    _directory_guard: Option<tempfile::TempDir>,
+}
+
+#[rstest::fixture]
+fn share_state_write() -> ShareStateWrite {
+    // The seeded coordinator and each write's durable state are independent.
+    ShareStateWrite::default()
+}
+
+#[rstest_bdd_macros::given(
+    "a share coordinator with trunk rules {trunk} stores group g at state epoch 2, leader epoch 3, offset 10 and delivery count 4"
+)]
+async fn seeded_share_state_write(share_state_write: &mut ShareStateWrite, trunk: bool) {
+    let directory = tempdir().expect("fresh share state write log");
+    share_state_write.seeded = Some(seeded(directory.path(), trunk).await);
+    share_state_write._directory_guard = Some(directory);
+}
+
+#[rstest_bdd_macros::given(
+    "the WriteShareGroupState request and missing-log fault are JSON {request}"
+)]
+fn requested_share_state_write(share_state_write: &mut ShareStateWrite, request: String) {
+    let request: ShareStateWriteRequest =
+        serde_json::from_str(&request).expect("explicit share write and log availability inputs");
+    if request.drop_log {
+        let coord = &share_state_write
+            .seeded
+            .as_ref()
+            .expect("seeded coordinator was given")
+            .coord;
+        let partition = coord
+            .state_partition_for("g", &TOPIC, request.partition)
+            .expect("state partition route");
+        coord.partitions.remove(SHARE_STATE_TOPIC, partition);
+    }
+    share_state_write.request = Some(request);
+}
+
+#[rstest_bdd_macros::when("the coordinator writes the supplied share state and delivery range")]
+async fn write_seeded_share_state(share_state_write: &mut ShareStateWrite) {
+    let Seeded { coord, image } = share_state_write
+        .seeded
+        .as_ref()
+        .expect("seeded coordinator was given");
+    let request = share_state_write
+        .request
+        .as_ref()
+        .expect("share write request was given");
+    let result = coord
+        .write(
+            image,
+            "g",
+            TOPIC,
+            request.partition,
+            share_write(
+                (request.state_epoch, request.leader_epoch),
+                (request.start_offset, request.delivery_complete_count),
+                vec![batch(
+                    Offset(request.start_offset)..=Offset(request.start_offset + 9),
+                )],
+            ),
+        )
+        .await;
+    share_state_write.reply = Some(observed_share_operation(result));
+    share_state_write.summary = Some(observed_share_summary(
+        coord.read_summary("g", TOPIC, request.partition).await,
+    ));
+}
+
+#[rstest_bdd_macros::then(
+    "the share write outcome and complete stored summary are JSON {expected}"
+)]
+fn expected_share_state_write(share_state_write: &ShareStateWrite, expected: String) {
+    let expected: ExpectedShareStateWrite =
+        serde_json::from_str(&expected).expect("independent share write result and full summary");
+    check!(share_state_write.reply.as_ref() == Some(&expected.outcome));
+    check!(share_state_write.summary.as_ref() == Some(&Ok(expected.summary)));
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature",
+    name = "Write stored share state under Kafka release rules"
+)]
+#[tokio::test]
+async fn write_matches_kafka_checks_and_record_rules(
+    share_state_write: ShareStateWrite,
+    case: String,
+    trunk: bool,
+    request: String,
+    expected: String,
+) {
+    let _ = (share_state_write, case, trunk, request, expected);
 }

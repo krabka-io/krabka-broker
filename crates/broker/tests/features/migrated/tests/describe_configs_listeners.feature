@@ -1,4 +1,12 @@
-Feature: tests describe configs listeners
+Feature: Listener configuration described through role-specific endpoints
 
-  Scenario: each role reports the listener keys through the listener a client uses
-    Then describe configs listeners: each role reports the listener keys through the listener a client uses
+  Scenario Outline: each role reports the listener keys through the listener a client uses
+    Given a node configured with <roles> process roles
+    When DescribeConfigs requests listener keys through every endpoint that serves the node
+    Then every endpoint reports the role-specific listener values sources synonyms and mutability
+
+    Examples:
+      | roles           |
+      | controller-only |
+      | broker-only     |
+      | combined        |

@@ -684,331 +684,13 @@ mod tests {
     use {
         super::*,
         crate::coordinator::unified::streams::{
-            persistence::StoredCopartitionGroup,
-            topology::test_support::{image_with, sub},
+            persistence::StoredCopartitionGroup, topology::test_support::image_with,
         },
         assert2::check,
-        krabka_log::topic_name::validate_topic_name,
     };
 
     /// A row: its label, the topology and image to configure, and the whole
     /// configured topology or error it gives.
-    struct Row {
-        name: &'static str,
-        topology: StreamsGroupTopologyValue,
-        image: MetadataImage,
-        expected: Result<ConfiguredTopology, ConfigureTopicsError>,
-    }
-
-    fn info(name: &str, partitions: i32) -> StoredTopicInfo {
-        StoredTopicInfo {
-            name: name.into(),
-            partitions,
-            replication_factor: 0,
-            topic_configs: vec![],
-        }
-    }
-
-    fn internal(name: &str, partitions: i32) -> ConfiguredInternalTopic {
-        ConfiguredInternalTopic {
-            name: name.into(),
-            partitions,
-            replication_factor: None,
-            configs: BTreeMap::new(),
-        }
-    }
-
-    /// `topics` by name.
-    fn by_name(
-        topics: impl IntoIterator<Item = ConfiguredInternalTopic>,
-    ) -> BTreeMap<String, ConfiguredInternalTopic> {
-        topics
-            .into_iter()
-            .map(|topic| (topic.name.clone(), topic))
-            .collect()
-    }
-
-    fn names(topics: &[&str]) -> BTreeSet<String> {
-        topics.iter().map(|topic| (*topic).to_owned()).collect()
-    }
-
-    #[bon::builder]
-    fn configured_subtopology(
-        number_of_tasks: i32,
-        #[builder(default)] source_topics: BTreeSet<String>,
-        #[builder(default)] repartition_source_topics: BTreeMap<String, ConfiguredInternalTopic>,
-        #[builder(default)] repartition_sink_topics: BTreeSet<String>,
-        #[builder(default)] state_changelog_topics: BTreeMap<String, ConfiguredInternalTopic>,
-    ) -> ConfiguredSubtopology {
-        ConfiguredSubtopology {
-            number_of_tasks,
-            source_topics,
-            repartition_source_topics,
-            repartition_sink_topics,
-            state_changelog_topics,
-        }
-    }
-
-    fn copartition(sources: Vec<i16>, repartition_sources: Vec<i16>) -> StoredCopartitionGroup {
-        StoredCopartitionGroup {
-            source_topics: sources,
-            source_topic_regex: vec![],
-            repartition_source_topics: repartition_sources,
-        }
-    }
-
-    fn topology(subtopologies: Vec<StoredSubtopology>) -> StreamsGroupTopologyValue {
-        StreamsGroupTopologyValue {
-            epoch: 1,
-            subtopologies,
-        }
-    }
-
-    fn status_only(code: i8, detail: &str) -> ConfiguredTopology {
-        ConfiguredTopology {
-            topology_epoch: 1,
-            subtopologies: None,
-            internal_topics_to_create: BTreeMap::new(),
-            status: Some(TopologyStatus {
-                code,
-                detail: detail.into(),
-            }),
-        }
-    }
-
-    /// Subtopology 0 reads `orders` (6 partitions) and writes `rp`.
-    /// Subtopology 1 reads `rp` and `customers` (3 partitions) in one
-    /// copartition group, and keeps `store-changelog`. Kafka coerces `rp` to 3.
-    fn copartition_coercion() -> Row {
-        let mut s0 = sub("0");
-        s0.source_topics = vec!["orders".into()];
-        s0.repartition_sink_topics = vec!["rp".into()];
-        let mut s1 = sub("1");
-        s1.source_topics = vec!["customers".into()];
-        s1.repartition_source_topics = vec![info("rp", 0)];
-        s1.state_changelog_topics = vec![info("store-changelog", 0)];
-        s1.copartition_groups = vec![copartition(vec![0], vec![0])];
-        let expected = ConfiguredTopology {
-            topology_epoch: 1,
-            subtopologies: Some(BTreeMap::from([
-                (
-                    "0".to_owned(),
-                    configured_subtopology()
-                        .number_of_tasks(6)
-                        .source_topics(names(&["orders"]))
-                        .repartition_sink_topics(names(&["rp"]))
-                        .call(),
-                ),
-                (
-                    "1".to_owned(),
-                    configured_subtopology()
-                        .number_of_tasks(3)
-                        .source_topics(names(&["customers"]))
-                        .repartition_source_topics(by_name([internal("rp", 3)]))
-                        .state_changelog_topics(by_name([internal("store-changelog", 3)]))
-                        .call(),
-                ),
-            ])),
-            internal_topics_to_create: by_name([internal("rp", 3), internal("store-changelog", 3)]),
-            status: Some(TopologyStatus {
-                code: status::MISSING_INTERNAL_TOPICS,
-                detail: "Internal topics are missing: rp, store-changelog".into(),
-            }),
-        };
-        Row {
-            name: "copartition coerces the flexible repartition topic",
-            topology: topology(vec![s0, s1]),
-            image: image_with(&[("orders", 1, 6), ("customers", 2, 3)]),
-            expected: Ok(expected),
-        }
-    }
-
-    /// Subtopology 1 reads `rp` from the 4-partition subtopology 0 and `other`
-    /// (8 partitions) with no copartition group. Kafka sizes `rp` with 4.
-    fn writer_partition_count() -> Row {
-        let mut s0 = sub("0");
-        s0.source_topics = vec!["in".into()];
-        s0.repartition_sink_topics = vec!["rp".into()];
-        let mut s1 = sub("1");
-        s1.source_topics = vec!["other".into()];
-        s1.repartition_source_topics = vec![info("rp", 0)];
-        let expected = ConfiguredTopology {
-            topology_epoch: 1,
-            subtopologies: Some(BTreeMap::from([
-                (
-                    "0".to_owned(),
-                    configured_subtopology()
-                        .number_of_tasks(4)
-                        .source_topics(names(&["in"]))
-                        .repartition_sink_topics(names(&["rp"]))
-                        .call(),
-                ),
-                (
-                    "1".to_owned(),
-                    configured_subtopology()
-                        .number_of_tasks(8)
-                        .source_topics(names(&["other"]))
-                        .repartition_source_topics(by_name([internal("rp", 4)]))
-                        .call(),
-                ),
-            ])),
-            internal_topics_to_create: BTreeMap::new(),
-            status: None,
-        };
-        Row {
-            name: "a flexible repartition topic takes its writer's partition count",
-            topology: topology(vec![s0, s1]),
-            image: image_with(&[("in", 1, 4), ("other", 2, 8), ("rp", 3, 4)]),
-            expected: Ok(expected),
-        }
-    }
-
-    /// The rows that stop with a status.
-    fn status_rows() -> Vec<Row> {
-        let mut fixed = [sub("0"), sub("1")];
-        fixed[0].source_topics = vec!["in".into()];
-        fixed[0].repartition_sink_topics = vec!["rp1".into(), "rp2".into()];
-        fixed[1].repartition_source_topics = vec![info("rp1", 2), info("rp2", 3)];
-        fixed[1].copartition_groups = vec![copartition(vec![], vec![0, 1])];
-
-        let mut external = sub("0");
-        external.source_topics = vec!["a".into(), "b".into()];
-        external.copartition_groups = vec![copartition(vec![0, 1], vec![])];
-
-        let mut stateful = sub("0");
-        stateful.source_topics = vec!["in".into()];
-        stateful.state_changelog_topics = vec![info("store-changelog", 0)];
-
-        let mut missing = sub("0");
-        missing.source_topics = ["b", "a", "c", "d", "e"].map(String::from).to_vec();
-        missing.state_changelog_topics = vec![info("store-changelog", 0)];
-
-        vec![
-            Row {
-                name: "fixed repartition topics disagree",
-                topology: topology(fixed.to_vec()),
-                image: image_with(&[("in", 1, 2)]),
-                expected: Ok(status_only(
-                    status::INCORRECTLY_PARTITIONED_TOPICS,
-                    "Following topics do not have the same number of partitions: [{rp1=2, rp2=3}]",
-                )),
-            },
-            Row {
-                name: "external copartitioned topics disagree",
-                topology: topology(vec![external]),
-                image: image_with(&[("a", 1, 2), ("b", 2, 3)]),
-                expected: Ok(status_only(
-                    status::INCORRECTLY_PARTITIONED_TOPICS,
-                    "Following topics do not have the same number of partitions: [{a=2, b=3}]",
-                )),
-            },
-            Row {
-                name: "an existing changelog topic has another partition count",
-                topology: topology(vec![stateful]),
-                image: image_with(&[("in", 1, 2), ("store-changelog", 2, 5)]),
-                expected: Ok(status_only(
-                    status::INCORRECTLY_PARTITIONED_TOPICS,
-                    "Existing topic store-changelog has different number of partitions: \
-                     expected 2, found 5",
-                )),
-            },
-            Row {
-                name: "missing source topics stop before any internal topic",
-                topology: topology(vec![missing]),
-                image: image_with(&[("c", 1, 1)]),
-                expected: Ok(status_only(
-                    status::MISSING_SOURCE_TOPICS,
-                    "Source topics a, b, d and 1 additional topics are missing.",
-                )),
-            },
-        ]
-    }
-
-    /// The rows that Kafka throws out of the heartbeat.
-    fn error_rows() -> Vec<Row> {
-        let mut never_written = sub("0");
-        never_written.source_topics = vec!["in".into()];
-        never_written.repartition_source_topics = vec![info("rp", 0)];
-
-        let mut looped = [sub("0"), sub("1")];
-        looped[0].repartition_source_topics = vec![info("rp-b", 0)];
-        looped[0].repartition_sink_topics = vec!["rp-a".into()];
-        looped[1].repartition_source_topics = vec![info("rp-a", 0)];
-        looped[1].repartition_sink_topics = vec!["rp-b".into()];
-
-        let mut invalid_name = sub("0");
-        invalid_name.source_topics = vec!["in".into()];
-        invalid_name.state_changelog_topics = vec![info("bad/name", 0)];
-
-        vec![
-            Row {
-                name: "a repartition source topic is never written",
-                topology: topology(vec![never_written]),
-                image: image_with(&[("in", 1, 1)]),
-                expected: Err(ConfigureTopicsError::InvalidTopology(
-                    "Failed to compute number of partitions for all repartition topics, because \
-                     a repartition source topic is never used as a sink topic."
-                        .into(),
-                )),
-            },
-            Row {
-                name: "repartition topics loop",
-                topology: topology(looped.to_vec()),
-                image: image_with(&[]),
-                expected: Err(ConfigureTopicsError::InvalidTopology(
-                    "Failed to compute number of partitions for all repartition topics. There \
-                     may be loops in the topology that cannot be resolved."
-                        .into(),
-                )),
-            },
-            Row {
-                name: "a subtopology has no source topics",
-                topology: topology(vec![sub("0")]),
-                image: image_with(&[]),
-                expected: Err(ConfigureTopicsError::InvalidTopology(
-                    "No source topics found for subtopology 0".into(),
-                )),
-            },
-            Row {
-                name: "an internal topic name is invalid",
-                topology: topology(vec![invalid_name]),
-                image: image_with(&[("in", 1, 1)]),
-                expected: Err(ConfigureTopicsError::InvalidTopic(
-                    validate_topic_name("bad/name").unwrap_err().to_string(),
-                )),
-            },
-        ]
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams topology configured tests: configure topics follows kafka internal topic manager"
-    )]
-    fn bdd_verify_configure_topics_follows_kafka_internal_topic_manager() {
-        let rows = [copartition_coercion(), writer_partition_count()]
-            .into_iter()
-            .chain(status_rows())
-            .chain(error_rows());
-        for Row {
-            name,
-            topology,
-            image,
-            expected,
-        } in rows
-        {
-            check!(configure_topics(&topology, &image) == expected, "{name}");
-        }
-    }
-
-    /// Kafka's `InternalTopicManager.configureTopics`. Each row is a topology
-    /// and an image, and the whole configured topology or error it gives.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/topology/configured.feature",
-        name = "tests: configure topics follows kafka internal topic manager"
-    )]
-    fn configure_topics_follows_kafka_internal_topic_manager() {}
-
     #[test]
     fn configure_topics_error_codes_and_messages() {
         let rows = [
@@ -1032,4 +714,216 @@ mod tests {
             check!((error.error_code(), error.error_message()) == (code, message));
         }
     }
+    use {
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+        serde::Deserialize,
+        serde_json::{Value, json},
+    };
+    #[derive(Default)]
+    struct ConfiguredTopics {
+        topology: Option<StreamsGroupTopologyValue>,
+        image: Option<MetadataImage>,
+        outcome: Option<Result<ConfiguredTopology, ConfigureTopicsError>>,
+    }
+    #[rstest::fixture]
+    fn configured_topics() -> ConfiguredTopics {
+        // Start this scenario with fresh inputs and observations.
+        ConfiguredTopics::default()
+    }
+
+    #[derive(Deserialize)]
+    struct TopologyInput {
+        epoch: i32,
+        subtopologies: Vec<SubtopologyInput>,
+    }
+    #[derive(Deserialize)]
+    struct InternalTopicInput {
+        name: String,
+        partitions: i32,
+        replication_factor: i16,
+        topic_configs: Vec<(String, String)>,
+    }
+    #[derive(Deserialize)]
+    struct CopartitionInput {
+        source_topics: Vec<i16>,
+        source_topic_regex: Vec<i16>,
+        repartition_source_topics: Vec<i16>,
+    }
+    #[derive(Deserialize)]
+    struct SubtopologyInput {
+        subtopology_id: String,
+        source_topics: Vec<String>,
+        source_topic_regex: Vec<String>,
+        repartition_sink_topics: Vec<String>,
+        state_changelog_topics: Vec<InternalTopicInput>,
+        repartition_source_topics: Vec<InternalTopicInput>,
+        copartition_groups: Vec<CopartitionInput>,
+    }
+    impl From<InternalTopicInput> for StoredTopicInfo {
+        fn from(value: InternalTopicInput) -> Self {
+            Self {
+                name: value.name,
+                partitions: value.partitions,
+                replication_factor: value.replication_factor,
+                topic_configs: value.topic_configs,
+            }
+        }
+    }
+    impl From<TopologyInput> for StreamsGroupTopologyValue {
+        fn from(value: TopologyInput) -> Self {
+            Self {
+                epoch: value.epoch,
+                subtopologies: value
+                    .subtopologies
+                    .into_iter()
+                    .map(|sub| StoredSubtopology {
+                        subtopology_id: sub.subtopology_id,
+                        source_topics: sub.source_topics,
+                        source_topic_regex: sub.source_topic_regex,
+                        repartition_sink_topics: sub.repartition_sink_topics,
+                        state_changelog_topics: sub
+                            .state_changelog_topics
+                            .into_iter()
+                            .map(StoredTopicInfo::from)
+                            .collect(),
+                        repartition_source_topics: sub
+                            .repartition_source_topics
+                            .into_iter()
+                            .map(StoredTopicInfo::from)
+                            .collect(),
+                        copartition_groups: sub
+                            .copartition_groups
+                            .into_iter()
+                            .map(|group| StoredCopartitionGroup {
+                                source_topics: group.source_topics,
+                                source_topic_regex: group.source_topic_regex,
+                                repartition_source_topics: group.repartition_source_topics,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            }
+        }
+    }
+    #[derive(DataTableRow)]
+    struct SourceTopicInput {
+        name: String,
+        id: u8,
+        partitions: i32,
+    }
+    #[given("the Streams application publishes this complete topology")]
+    fn published_application_topology(configured_topics: &mut ConfiguredTopics, docstring: String) {
+        configured_topics.topology = Some(StreamsGroupTopologyValue::from(
+            serde_json::from_str::<TopologyInput>(&docstring).expect("complete topology input"),
+        ));
+    }
+    #[given("the metadata image contains these topic partition counts")]
+    fn configured_source_topics(
+        configured_topics: &mut ConfiguredTopics,
+        #[datatable] rows: Rows<SourceTopicInput>,
+    ) {
+        let rows = rows.into_iter().collect::<Vec<_>>();
+        let topics = rows
+            .iter()
+            .map(|row| (row.name.as_str(), row.id, row.partitions))
+            .collect::<Vec<_>>();
+        configured_topics.image = Some(image_with(&topics));
+    }
+    #[when("the internal topic manager configures the topology against the metadata image")]
+    fn configure_internal_topics(configured_topics: &mut ConfiguredTopics) {
+        configured_topics.outcome = Some(configure_topics(
+            configured_topics
+                .topology
+                .as_ref()
+                .expect("application topology given"),
+            configured_topics
+                .image
+                .as_ref()
+                .expect("metadata topics given"),
+        ));
+    }
+    fn configured_topic_snapshot(info: &ConfiguredInternalTopic) -> Value {
+        let ConfiguredInternalTopic {
+            name,
+            partitions,
+            replication_factor,
+            configs,
+        } = info;
+        json!({"name":name,"partitions":partitions,"replication_factor":replication_factor,"configs":configs})
+    }
+    fn configured_topic_snapshots(topics: &BTreeMap<String, ConfiguredInternalTopic>) -> Value {
+        json!(
+            topics
+                .iter()
+                .map(|(name, topic)| (name.clone(), configured_topic_snapshot(topic)))
+                .collect::<BTreeMap<_, _>>()
+        )
+    }
+    fn configured_subtopology_snapshot(subtopology: &ConfiguredSubtopology) -> Value {
+        let ConfiguredSubtopology {
+            number_of_tasks,
+            source_topics,
+            repartition_source_topics,
+            repartition_sink_topics,
+            state_changelog_topics,
+        } = subtopology;
+        json!({
+            "number_of_tasks":number_of_tasks,
+            "source_topics":source_topics,
+            "repartition_source_topics":configured_topic_snapshots(repartition_source_topics),
+            "repartition_sink_topics":repartition_sink_topics,
+            "state_changelog_topics":configured_topic_snapshots(state_changelog_topics),
+        })
+    }
+    fn configured_outcome_snapshot(
+        result: &Result<ConfiguredTopology, ConfigureTopicsError>,
+    ) -> Value {
+        match result {
+            Ok(topology) => {
+                let ConfiguredTopology {
+                    topology_epoch,
+                    subtopologies,
+                    internal_topics_to_create,
+                    status,
+                } = topology;
+                let subtopologies = subtopologies.as_ref().map(|subs| {
+                    subs.iter()
+                        .map(|(id, sub)| (id.clone(), configured_subtopology_snapshot(sub)))
+                        .collect::<BTreeMap<_, _>>()
+                });
+                let status = status
+                    .as_ref()
+                    .map(|TopologyStatus { code, detail }| json!({"code":code,"detail":detail}));
+                json!({
+                    "topology_epoch":topology_epoch,
+                    "subtopologies":subtopologies,
+                    "internal_topics_to_create":configured_topic_snapshots(internal_topics_to_create),
+                    "status":status,
+                })
+            }
+            Err(error) => {
+                let (kind, message) = match error {
+                    ConfigureTopicsError::InvalidTopology(message) => ("invalid-topology", message),
+                    ConfigureTopicsError::InvalidTopic(message) => ("invalid-topic", message),
+                    ConfigureTopicsError::Internal(message) => ("internal", message),
+                };
+                json!({"error_kind":kind,"message":message})
+            }
+        }
+    }
+    #[then("the complete configured topology or exact configuration error is")]
+    fn expected_configured_topology(configured_topics: &ConfiguredTopics, docstring: String) {
+        let expected = serde_json::from_str::<Value>(&docstring)
+            .expect("complete configured topology expectation");
+        check!(
+            configured_outcome_snapshot(
+                configured_topics
+                    .outcome
+                    .as_ref()
+                    .expect("topology configured")
+            ) == expected
+        );
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/streams/topology/configured.feature",fixtures=[configured_topics:ConfiguredTopics]);
 }

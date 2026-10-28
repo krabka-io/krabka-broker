@@ -1,16 +1,13 @@
-Feature: tests metrics contract
+Feature: Operational dashboards and snapshots agree with the broker metric registry
+  Scenario: Operational dashboards and alert rules reference real exported samples
+    Given a fresh broker metric registry has one placeholder label set in every registered family
+    And the checked in Grafana dashboard and alert rules define the operational series contract
+    When the metric registry encodes its complete canonical exposition
+    Then every referenced dashboard and alert series is actually exported and each document names at least ten series
 
-  Scenario: every dashboard and rule series is one the registry exports
-    Then metrics contract: every dashboard and rule series is one the registry exports
-
-  Scenario: checked in body matches a fresh registry
-    Then metrics contract: checked in body matches a fresh registry
-
-  Scenario: sample names expand by metric type
-    Then metrics contract: sample names expand by metric type
-
-  Scenario: canonical body sorts counter samples and keeps bucket order
-    Then metrics contract: canonical body sorts counter samples and keeps bucket order
-
-  Scenario: referenced names are metric tokens only
-    Then metrics contract: referenced names are metric tokens only
+  Scenario: The checked in exposition stays synchronized with the complete registry
+    Given a fresh broker metric registry has one placeholder label set in every registered family
+    And the checked in metrics body defines the complete encoded registry contract
+    When the metric registry encodes its complete canonical exposition
+    And the checked in metrics body is read after any requested regeneration
+    Then the checked in body exactly matches the fresh canonical registry exposition

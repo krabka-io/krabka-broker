@@ -13,17 +13,36 @@ use {
         topics::{creatable_topic, create_topic_request},
     },
     krabka_broker::{codes, coordinator::AUDIT_TOPIC},
+    krabka_client_core::ClientError,
+    krabka_protocol::owned::{
+        create_topics_response::CreateTopicsResponse, fetch_response::FetchResponse,
+    },
 };
+struct DeniedAuditRequest {
+    broker: Option<support::InProcess>,
+    creation: Option<CreateTopicsResponse>,
+    fetch: Option<Result<FetchResponse, ClientError>>,
+}
+#[rstest::fixture]
+fn denied_audit() -> DeniedAuditRequest {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "audit denied operations: denied operation returns topic authorization failed"
-)]
-async fn bdd_verify_denied_operation_returns_topic_authorization_failed() {
-    // Start a broker with a deny-all authorizer.
-    let p = Box::pin(support::start_with_deny_all_authz()).await;
-
-    // Attempt a create that will be denied.
+    DeniedAuditRequest {
+        broker: None,
+        creation: None,
+        fetch: None,
+    }
+}
+#[rstest_bdd_macros::given("a broker whose authorizer denies every operation")]
+async fn deny_all_audit_broker(denied_audit: &mut DeniedAuditRequest) {
+    denied_audit.broker = Some(Box::pin(support::start_with_deny_all_authz()).await);
+}
+#[rstest_bdd_macros::when("an anonymous client creates denied-topic")]
+async fn denied_audited_creation(denied_audit: &mut DeniedAuditRequest) {
+    let p = denied_audit
+        .broker
+        .as_ref()
+        .expect("deny-all broker started");
     let resp = p
         .client
         .send(create_topic_request(
@@ -32,16 +51,26 @@ async fn bdd_verify_denied_operation_returns_topic_authorization_failed() {
         .await
         .unwrap();
 
-    // Verify the broker actually denied the request (error_code
-    // TOPIC_AUTHORIZATION_FAILED = 29): the deny-all authorizer denies the
-    // cluster Create shortcut, then denies the per-topic Create fallback too.
+    denied_audit.creation = Some(resp);
+}
+#[rstest_bdd_macros::then("CreateTopics returns topic authorization error 29")]
+fn audit_creation_denied(denied_audit: &DeniedAuditRequest) {
+    let resp = denied_audit
+        .creation
+        .as_ref()
+        .expect("topic creation attempted");
     let denied = resp
         .topics
         .iter()
         .any(|t| t.error_code == codes::TOPIC_AUTHORIZATION_FAILED);
     assert2::check!(denied, "expected CreateTopics to be denied; resp: {resp:?}");
-
-    // Verify the broker is still alive by checking the audit topic is reachable.
+}
+#[rstest_bdd_macros::when("the same client fetches the audit topic after the denial")]
+async fn fetch_after_audit_denial(denied_audit: &mut DeniedAuditRequest) {
+    let p = denied_audit
+        .broker
+        .as_ref()
+        .expect("deny-all broker started");
     let topic_id = support::topic_id_for(&p.client, AUDIT_TOPIC).await;
     let fr = p
         .client
@@ -56,14 +85,19 @@ async fn bdd_verify_denied_operation_returns_topic_authorization_failed() {
                 })
                 .call(),
         )
-        .await
-        .unwrap();
-    // The broker responded to the Fetch request without crashing.
-    let _ = fr;
-
-    p.broker.shutdown().await;
+        .await;
+    denied_audit.fetch = Some(fr);
 }
-
+#[rstest_bdd_macros::then("the broker still returns a decoded Fetch response")]
+fn broker_survives_audit_denial(denied_audit: &DeniedAuditRequest) {
+    assert2::check!(
+        denied_audit
+            .fetch
+            .as_ref()
+            .expect("audit Fetch attempted")
+            .is_ok()
+    );
+}
 /// Verifies that the authorizer-decorator path denies an unauthorized
 /// operation.
 ///
@@ -99,4 +133,11 @@ async fn bdd_verify_denied_operation_returns_topic_authorization_failed() {
     name = "denied operation returns topic authorization failed"
 )]
 #[tokio::test]
-async fn denied_operation_returns_topic_authorization_failed() {}
+async fn denied_operation_returns_topic_authorization_failed(denied_audit: DeniedAuditRequest) {
+    denied_audit
+        .broker
+        .expect("broker started")
+        .broker
+        .shutdown()
+        .await;
+}

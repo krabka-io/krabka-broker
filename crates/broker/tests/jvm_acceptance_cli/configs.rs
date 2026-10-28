@@ -1,66 +1,110 @@
-//! The `kafka-configs` tool: an `--alter --add-config` and `--describe`
-//! round-trip over a topic configuration.
+//! Topic configuration and configuration-entity administration through Kafka tools.
 
 use {
     crate::{
+        config_output::{Configs, parse_describe, quota_entities},
         jvm_acceptance::{
             alter_console_topic_config, broker0_advertised, docker_run_kafka_tool,
             docker_run_kafka_tool_allowing_failure, nc_check_connectivity, start_console_broker,
             start_host_broker, tool_output,
         },
-        oracle::OracleComparison,
+        oracle::{CliRun, OracleComparison},
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::{collections::BTreeMap, process::Output},
+    tempfile::TempDir,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm acceptance cli configs: kafka configs alter round trip")]
-async fn bdd_verify_kafka_configs_alter_round_trip() {
-    const TOPIC: &str = "krabka-cfg-alter-itest";
+struct TopicConfiguration {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    topic: String,
+    settings: Vec<(String, String)>,
+    description: String,
+    streams: BTreeMap<String, Vec<String>>,
+    streams_descriptions: BTreeMap<String, String>,
+    refused_alter: Option<Output>,
+}
 
-    let (_broker, _dir) = start_console_broker(TOPIC, 1).await;
+#[fixture]
+fn configuration() -> TopicConfiguration {
+    // Start this scenario with fresh inputs and observations.
 
-    alter_console_topic_config(TOPIC, "retention.ms=60000");
+    TopicConfiguration {
+        broker: None,
+        directory: None,
+        topic: String::new(),
+        settings: Vec::new(),
+        description: String::new(),
+        streams: BTreeMap::new(),
+        streams_descriptions: BTreeMap::new(),
+        refused_alter: None,
+    }
+}
 
-    let out = docker_run_kafka_tool(&[
-        "kafka-configs",
-        "--describe",
+#[given("administrative topic {topic} exists with one partition")]
+async fn administrative_topic(configuration: &mut TopicConfiguration, topic: String) {
+    let (broker, directory) = start_console_broker(&topic, 1).await;
+    configuration.broker = Some(broker);
+    configuration.directory = Some(directory);
+    configuration.topic = topic;
+}
+
+#[given("the requested topic configuration settings are")]
+fn topic_settings(configuration: &mut TopicConfiguration, datatable: Vec<Vec<String>>) {
+    configuration.settings = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let columns: [String; 2] = row.try_into().expect("configuration key and value");
+            columns.into()
+        })
+        .collect();
+}
+
+#[when("kafka-configs applies the requested topic settings")]
+fn alter_topic(configuration: &TopicConfiguration) {
+    let added = configuration
+        .settings
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    alter_console_topic_config(&configuration.topic, &added);
+}
+
+fn describe_topic_settings(configuration: &mut TopicConfiguration, effective: bool) {
+    let mut args = vec!["kafka-configs", "--describe"];
+    if effective {
+        args.push("--all");
+    }
+    args.extend_from_slice(&[
         "--entity-type",
         "topics",
         "--entity-name",
-        TOPIC,
+        &configuration.topic,
         "--bootstrap-server",
         broker0_advertised(),
     ]);
-    let s = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        s.contains("retention.ms=60000"),
-        "describe output missing retention.ms=60000: {s}"
-    );
+    let output = docker_run_kafka_tool(&args);
+    configuration.description = String::from_utf8_lossy(&output.stdout).into_owned();
 }
 
-/// `kafka-configs --alter --add-config retention.ms=60000 --topic t` then
-/// `--describe` round-trips through `V1TopicConfig` and the supervisor
-/// reconcile push.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
-    name = "kafka configs alter round trip"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kafka_configs_alter_round_trip() {}
+#[when("kafka-configs describes the topic overrides")]
+fn describe_overrides(configuration: &mut TopicConfiguration) {
+    describe_topic_settings(configuration, false);
+}
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance cli configs: kafka configs describe all shows effective values and their sources"
-)]
-async fn bdd_verify_kafka_configs_describe_all_shows_effective_values_and_their_sources() {
-    const TOPIC: &str = "krabka-cfg-describe-all-itest";
+#[when("kafka-configs describes all effective topic values")]
+fn describe_effective(configuration: &mut TopicConfiguration) {
+    describe_topic_settings(configuration, true);
+}
 
-    let (_broker, _dir) = start_console_broker(TOPIC, 1).await;
-    alter_console_topic_config(TOPIC, "retention.ms=60000");
-    // The cluster-wide default the topic will inherit.
+#[when("kafka-configs sets the cluster default unclean.leader.election.enable to true")]
+fn alter_cluster_default() {
     docker_run_kafka_tool(&[
         "kafka-configs",
         "--alter",
@@ -72,237 +116,54 @@ async fn bdd_verify_kafka_configs_describe_all_shows_effective_values_and_their_
         "--bootstrap-server",
         broker0_advertised(),
     ]);
+}
 
-    let out = docker_run_kafka_tool(&[
-        "kafka-configs",
-        "--describe",
-        "--all",
-        "--entity-type",
-        "topics",
-        "--entity-name",
-        TOPIC,
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
-    let rendered = String::from_utf8_lossy(&out.stdout);
-
-    for (label, expected) in [
-        (
-            "the topic override sits at the head of its broker synonym chain",
-            "retention.ms=60000 sensitive=false \
-             synonyms={DYNAMIC_TOPIC_CONFIG:retention.ms=60000, \
-             DEFAULT_CONFIG:log.retention.hours=168}",
-        ),
-        (
-            "an inherited value names the cluster default above the built-in one",
-            "unclean.leader.election.enable=true sensitive=false \
-             synonyms={DYNAMIC_DEFAULT_BROKER_CONFIG:unclean.leader.election.enable=true, \
-             DEFAULT_CONFIG:unclean.leader.election.enable=false}",
-        ),
-        (
-            "a key nobody set reports its effective value and the broker default behind it",
-            "cleanup.policy=delete sensitive=false \
-             synonyms={DEFAULT_CONFIG:log.cleanup.policy=delete}",
-        ),
-    ] {
+#[then("every requested topic setting is described unchanged")]
+fn described_overrides(configuration: &TopicConfiguration) {
+    for (key, value) in &configuration.settings {
         assert!(
-            rendered.contains(expected),
-            "{label}: expected {expected:?} in {rendered}"
+            configuration
+                .description
+                .contains(&format!("{key}={value}")),
+            "describe output missing {key}={value}: {}",
+            configuration.description
         );
     }
 }
 
-/// `kafka-configs --describe --all` renders the effective configuration and
-/// the provenance of every value in it (KIP-226).
-///
-/// This is the surface an operator uses to tell a dynamic override from an
-/// inherited default, and it only works if the broker types each key and
-/// returns its synonym chain. The JVM tool prints
-/// `name=value sensitive=… synonyms={SOURCE:name=value, …}`, so the three
-/// assertions below are the three cases the chain has: a topic override, a
-/// value inherited from the cluster-wide default, and a key nobody has set.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
-    name = "kafka configs describe all shows effective values and their sources"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kafka_configs_describe_all_shows_effective_values_and_their_sources() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance cli configs: kafka configs alter round trips every registered topic key"
-)]
-async fn bdd_verify_kafka_configs_alter_round_trips_every_registered_topic_key() {
-    const TOPIC: &str = "krabka-cfg-every-key-itest";
-    /// A config key and a value for it.
-    struct ConfigSetting {
-        key: &'static str,
-        value: &'static str,
-    }
-
-    /// Each key with a value Kafka's own `ConfigDef` accepts for it.
-    const SETTINGS: &[ConfigSetting] = &[
-        ConfigSetting {
-            key: "segment.ms",
-            value: "60000",
-        },
-        ConfigSetting {
-            key: "segment.index.bytes",
-            value: "10485760",
-        },
-        ConfigSetting {
-            key: "segment.jitter.ms",
-            value: "0",
-        },
-        ConfigSetting {
-            key: "min.compaction.lag.ms",
-            value: "0",
-        },
-        ConfigSetting {
-            key: "max.compaction.lag.ms",
-            value: "86400000",
-        },
-        ConfigSetting {
-            key: "min.cleanable.dirty.ratio",
-            value: "0.25",
-        },
-        ConfigSetting {
-            key: "file.delete.delay.ms",
-            value: "60000",
-        },
-        ConfigSetting {
-            key: "flush.messages",
-            value: "10000",
-        },
-        ConfigSetting {
-            key: "flush.ms",
-            value: "1000",
-        },
-        ConfigSetting {
-            key: "index.interval.bytes",
-            value: "8192",
-        },
-        ConfigSetting {
-            key: "preallocate",
-            value: "false",
-        },
-        ConfigSetting {
-            key: "message.timestamp.type",
-            value: "CreateTime",
-        },
-        ConfigSetting {
-            key: "message.timestamp.after.max.ms",
-            value: "3600000",
-        },
-        ConfigSetting {
-            key: "message.timestamp.before.max.ms",
-            value: "3600000",
-        },
-    ];
-
-    let (_broker, _dir) = start_console_broker(TOPIC, 1).await;
-
-    let added = SETTINGS
-        .iter()
-        .map(|ConfigSetting { key, value }| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join(",");
-    docker_run_kafka_tool(&[
-        "kafka-configs",
-        "--alter",
-        "--entity-type",
-        "topics",
-        "--entity-name",
-        TOPIC,
-        "--add-config",
-        &added,
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
-
-    let out = docker_run_kafka_tool(&[
-        "kafka-configs",
-        "--describe",
-        "--entity-type",
-        "topics",
-        "--entity-name",
-        TOPIC,
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
-    let rendered = String::from_utf8_lossy(&out.stdout);
-    for ConfigSetting { key, value } in SETTINGS {
+#[then("the effective description includes these value and provenance chains")]
+fn described_provenance(configuration: &TopicConfiguration, datatable: Vec<Vec<String>>) {
+    for row in datatable.into_iter().skip(1) {
+        let [expected]: [String; 1] = row.try_into().expect("one rendered provenance chain");
         assert!(
-            rendered.contains(&format!("{key}={value}")),
-            "describe output missing {key}={value}: {rendered}"
+            configuration.description.contains(&expected),
+            "expected {expected:?} in {}",
+            configuration.description
         );
     }
 }
 
-/// `kafka-configs --alter --add-config` over every Kafka `TopicConfig` key
-/// krabka registers, then `--describe` back.
-///
-/// The JVM tool parses each value with the type the broker reports for the
-/// key, so a key krabka typed differently from Kafka fails here rather than
-/// in a client months later. One `--alter` carries the whole set, as an
-/// operator's own command would.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
-    name = "kafka configs alter round trips every registered topic key"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kafka_configs_alter_round_trips_every_registered_topic_key() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance cli configs: kafka topics create accepts the streams internal topic configs"
-)]
-async fn bdd_verify_kafka_topics_create_accepts_the_streams_internal_topic_configs() {
-    /// A topic, the `--config` arguments Streams sends, and the `--describe`
-    /// substring that proves the broker stored them.
-    struct StreamsTopicCase {
-        topic: &'static str,
-        configs: &'static [&'static str],
-        expected: &'static str,
-    }
-
-    const CASES: &[StreamsTopicCase] = &[
-        StreamsTopicCase {
-            topic: "krabka-streams-repartition-itest",
-            configs: &[
-                "cleanup.policy=delete",
-                "segment.bytes=52428800",
-                "retention.ms=-1",
-                "message.timestamp.type=CreateTime",
-            ],
-            expected: "cleanup.policy=delete",
-        },
-        StreamsTopicCase {
-            topic: "krabka-streams-windowed-changelog-itest",
-            configs: &[
-                "cleanup.policy=compact,delete",
-                "retention.ms=86400000",
-                "min.compaction.lag.ms=0",
-                "message.timestamp.type=CreateTime",
-            ],
-            expected: "cleanup.policy=compact,delete",
-        },
-    ];
-
-    let (_broker, _dir) = start_host_broker().await;
+#[given("Kafka Streams requires these internal topic configurations")]
+async fn streams_settings(configuration: &mut TopicConfiguration, datatable: Vec<Vec<String>>) {
+    let (broker, directory) = start_host_broker().await;
     nc_check_connectivity();
+    configuration.broker = Some(broker);
+    configuration.directory = Some(directory);
+    for row in datatable.into_iter().skip(1) {
+        let [topic, key, value]: [String; 3] =
+            row.try_into().expect("topic and configuration setting");
+        configuration
+            .streams
+            .entry(topic)
+            .or_default()
+            .push(format!("{key}={value}"));
+    }
+}
 
-    for StreamsTopicCase {
-        topic,
-        configs,
-        expected,
-    } in CASES
-    {
-        let mut create = vec![
+#[when("kafka-topics creates and kafka-configs describes those Streams topics")]
+fn create_streams_topics(configuration: &mut TopicConfiguration) {
+    for (topic, settings) in &configuration.streams {
+        let mut args = vec![
             "kafka-topics",
             "--create",
             "--if-not-exists",
@@ -315,13 +176,11 @@ async fn bdd_verify_kafka_topics_create_accepts_the_streams_internal_topic_confi
             "--bootstrap-server",
             broker0_advertised(),
         ];
-        for config in *configs {
-            create.push("--config");
-            create.push(config);
+        for setting in settings {
+            args.extend_from_slice(&["--config", setting]);
         }
-        docker_run_kafka_tool(&create);
-
-        let out = docker_run_kafka_tool(&[
+        docker_run_kafka_tool(&args);
+        let output = docker_run_kafka_tool(&[
             "kafka-configs",
             "--describe",
             "--entity-type",
@@ -331,44 +190,38 @@ async fn bdd_verify_kafka_topics_create_accepts_the_streams_internal_topic_confi
             "--bootstrap-server",
             broker0_advertised(),
         ]);
-        let rendered = String::from_utf8_lossy(&out.stdout);
-        assert!(
-            rendered.contains(expected),
-            "{topic}: describe output missing {expected}: {rendered}"
+        configuration.streams_descriptions.insert(
+            topic.clone(),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
         );
     }
 }
 
-/// `kafka-topics --create` with the override set Kafka Streams'
-/// `RepartitionTopicConfig` sends on every internal repartition topic, and
-/// the `WindowedChangelogTopicConfig` set whose `cleanup.policy` is exactly
-/// `compact,delete`. A broker that refuses either cannot host a Streams
-/// application.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
-    name = "kafka topics create accepts the streams internal topic configs"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kafka_topics_create_accepts_the_streams_internal_topic_configs() {}
+#[then("the Streams topic cleanup policies are preserved")]
+fn described_streams(configuration: &TopicConfiguration, datatable: Vec<Vec<String>>) {
+    for row in datatable.into_iter().skip(1) {
+        let [topic, policy]: [String; 2] = row.try_into().expect("topic and cleanup policy");
+        let description = configuration
+            .streams_descriptions
+            .get(&topic)
+            .expect("the topic was described");
+        assert!(
+            description.contains(&format!("cleanup.policy={policy}")),
+            "{topic}: describe output missing cleanup.policy={policy}: {description}"
+        );
+    }
+}
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance cli configs: kafka configs refuses tiered storage on a compacted topic"
-)]
-async fn bdd_verify_kafka_configs_refuses_tiered_storage_on_a_compacted_topic() {
-    const TOPIC: &str = "krabka-cfg-compact-tiered-itest";
-
-    let (_broker, _dir) = start_host_broker().await;
+#[given("compacted topic {topic} uses compact and delete cleanup")]
+async fn compacted_topic(configuration: &mut TopicConfiguration, topic: String) {
+    let (broker, directory) = start_host_broker().await;
     nc_check_connectivity();
-
     docker_run_kafka_tool(&[
         "kafka-topics",
         "--create",
         "--if-not-exists",
         "--topic",
-        TOPIC,
+        &topic,
         "--partitions",
         "1",
         "--replication-factor",
@@ -378,213 +231,256 @@ async fn bdd_verify_kafka_configs_refuses_tiered_storage_on_a_compacted_topic() 
         "--bootstrap-server",
         broker0_advertised(),
     ]);
+    configuration.broker = Some(broker);
+    configuration.directory = Some(directory);
+    configuration.topic = topic;
+}
 
-    // The alter is the case, so the tool must be allowed to fail: it exits
-    // non-zero and prints the broker's `InvalidConfigurationException`, which
-    // is exactly the evidence this test wants.
-    let out = docker_run_kafka_tool_allowing_failure(&[
+#[when("kafka-configs enables remote storage on the compacted topic")]
+fn enable_tiering(configuration: &mut TopicConfiguration) {
+    configuration.refused_alter = Some(docker_run_kafka_tool_allowing_failure(&[
         "kafka-configs",
         "--alter",
         "--entity-type",
         "topics",
         "--entity-name",
-        TOPIC,
+        &configuration.topic,
         "--add-config",
         "remote.storage.enable=true",
         "--bootstrap-server",
         broker0_advertised(),
-    ]);
-    let rendered = tool_output(&out);
+    ]));
+}
+
+#[then("tiered storage is refused with Kafka's configuration validation explanation")]
+fn rejected_tiering(configuration: &TopicConfiguration) {
+    let output = configuration
+        .refused_alter
+        .as_ref()
+        .expect("the configuration alter completed");
+    let rendered = tool_output(output);
     assert!(
-        !out.status.success(),
+        !output.status.success(),
         "the alter must be refused, not applied: {rendered}"
     );
-    assert!(
-        rendered.contains(
-            "Remote log storage only supports topics with cleanup.policy=delete or \
-             cleanup.policy being an empty list."
-        ) || rendered.contains("Tiered Storage functionality is disabled in the broker."),
-        "alter should be refused with Kafka's message: {rendered}"
-    );
+    assert!(rendered.contains("Remote log storage only supports topics with cleanup.policy=delete or cleanup.policy being an empty list.")
+        || rendered.contains("Tiered Storage functionality is disabled in the broker."), "alter should be refused with Kafka's message: {rendered}");
 }
 
-/// Kafka's `LogConfig.validate` refuses tiered storage on a compacted topic,
-/// and the JVM tool surfaces that as a `ConfigException` on the alter. The
-/// refusal covers `compact,delete` as well, because Kafka tests the policy
-/// list for membership.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
-    name = "kafka configs refuses tiered storage on a compacted topic"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kafka_configs_refuses_tiered_storage_on_a_compacted_topic() {}
-
-// ── the entity types `kafka-configs` reaches through the other two APIs ─────
-//
-// `topics` and `brokers`, above, are `IncrementalAlterConfigs` and
-// `DescribeConfigs`. The four entity types below are not: `groups` and
-// `client-metrics` are the same pair over two more resource types, and
-// `clients` and the `users`+`clients` tuple are `AlterClientQuotas` and
-// `DescribeClientQuotas` instead. `ConfigCommand` chooses which pair to send
-// from the `--entity-type` alone, so an entity type that reaches the wrong
-// handler -- or no handler -- is invisible to any test that only drives
-// `topics`.
-//
-// Each case runs the same `kafka-configs` binary, from the same
-// `apache/kafka:4.3.1` image, against krabka and against a stock broker of that
-// release, and compares the parsed answer.
-
-use crate::config_output::{Configs, parse_describe, quota_entities};
-
-/// One entity type, addressed and altered the way an operator addresses it.
-///
-/// `entity` is spliced into both the `--alter` and the `--describe`, so the
-/// tuple case is expressible: it is two `--entity-type`/`--entity-name` pairs
-/// in one entity, and nothing but the argument list says so.
-struct EntityCase {
-    /// What a failure names.
-    label: &'static str,
-    /// The `--entity-type`/`--entity-name` arguments that address it.
-    entity: &'static [&'static str],
-    /// The `--add-config` argument.
-    add_config: &'static str,
-    /// The keys the describe must report back, whatever values it gives them.
-    ///
-    /// The values are not written down here: the quota path renders every
-    /// number as a Java `double`, so `1024` comes back as `1024.0`, and a
-    /// suite that pinned one spelling of that would be asserting Java's
-    /// `Double.toString` rather than anything about a broker. The oracle
-    /// settles the values instead.
-    keys: &'static [&'static str],
-    /// What the quota path calls this entity, or `None` for the entity types
-    /// that go through `DescribeConfigs` and print no such line.
-    quota_entity: Option<&'static str>,
+struct EntitySetting {
+    label: String,
+    selector: Vec<String>,
+    settings: String,
+    keys: Vec<String>,
+    quota_entity: Option<String>,
 }
 
-/// The four entity types this file did not previously reach.
-///
-/// `groups` carries `share.auto.offset.reset` rather than one of the
-/// `consumer.*` group configs. That is the key both releases agree is a group
-/// config; the `consumer.*` ones are Kafka's and krabka does not register
-/// them, so a case built on those would be a report of that gap rather than a
-/// test of the `groups` entity type, which is what this table is for.
-const ENTITY_CASES: &[EntityCase] = &[
-    EntityCase {
-        label: "clients",
-        entity: &["--entity-type", "clients", "--entity-name", "krabka-client"],
-        add_config: "consumer_byte_rate=1024,producer_byte_rate=2048",
-        keys: &["consumer_byte_rate", "producer_byte_rate"],
-        quota_entity: Some("client-id 'krabka-client'"),
-    },
-    EntityCase {
-        label: "groups",
-        entity: &["--entity-type", "groups", "--entity-name", "krabka-cfg-grp"],
-        add_config: "share.auto.offset.reset=earliest",
-        keys: &["share.auto.offset.reset"],
-        quota_entity: None,
-    },
-    EntityCase {
-        label: "client-metrics",
-        entity: &[
-            "--entity-type",
-            "client-metrics",
-            "--entity-name",
-            "krabka-cfg-metrics",
-        ],
-        add_config: "interval.ms=60000,metrics=org.apache.kafka.",
-        keys: &["interval.ms", "metrics"],
-        quota_entity: None,
-    },
-    EntityCase {
-        label: "the users+clients tuple",
-        entity: &[
-            "--entity-type",
-            "users",
-            "--entity-name",
-            "krabka-cfg-user",
-            "--entity-type",
-            "clients",
-            "--entity-name",
-            "krabka-client",
-        ],
-        add_config: "request_percentage=42",
-        keys: &["request_percentage"],
-        // Both components, in the order `ConfigCommand` renders a tuple. A
-        // broker that dropped the client half would answer for the user alone,
-        // and every value above would still match.
-        quota_entity: Some("user-principal 'krabka-cfg-user', client-id 'krabka-client'"),
-    },
-];
+struct EntityAnswer {
+    side: String,
+    altered: CliRun,
+    described: CliRun,
+    values: Configs,
+    quota_entities: Vec<String>,
+}
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance cli configs: kafka configs entity types round trip as apache kafka does"
-)]
-async fn bdd_verify_kafka_configs_entity_types_round_trip_as_apache_kafka_does() {
-    // Kafka first: a key one release calls a group config and the other does
-    // not fails here, on the stock broker, rather than being read as a krabka
-    // bug.
-    let comparison = OracleComparison::start("configs-entities").await;
-    let [oracle_side, krabka_side] = comparison.sides();
+struct EntityConfiguration {
+    comparison: Option<OracleComparison>,
+    cases: Vec<EntitySetting>,
+    answers: Vec<Vec<EntityAnswer>>,
+}
 
-    for case in ENTITY_CASES {
-        let mut answers: Vec<Configs> = Vec::new();
-        for side in [&oracle_side, &krabka_side] {
+#[fixture]
+fn entities() -> EntityConfiguration {
+    // Start this scenario with fresh inputs and observations.
+
+    EntityConfiguration {
+        comparison: None,
+        cases: Vec::new(),
+        answers: Vec::new(),
+    }
+}
+
+#[given("stock Kafka and krabka receive these configuration entity changes")]
+async fn entity_changes(entities: &mut EntityConfiguration, datatable: Vec<Vec<String>>) {
+    entities.comparison = Some(OracleComparison::start("configs-entities").await);
+    entities.cases = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [label, selector, settings, keys, quota_entity]: [String; 5] =
+                row.try_into().expect("five configuration entity columns");
+            EntitySetting {
+                label,
+                selector: selector.split_whitespace().map(str::to_owned).collect(),
+                settings,
+                keys: keys.split(',').map(str::to_owned).collect(),
+                quota_entity: (quota_entity != "none").then_some(quota_entity),
+            }
+        })
+        .collect();
+}
+
+#[when("the same Kafka tool alters and describes every entity on both brokers")]
+fn compare_entities(entities: &mut EntityConfiguration) {
+    let comparison = entities
+        .comparison
+        .as_ref()
+        .expect("the two brokers were started");
+    let sides = comparison.sides();
+    for case in &entities.cases {
+        let mut answers = Vec::new();
+        let selector = case.selector.iter().map(String::as_str).collect::<Vec<_>>();
+        for side in &sides {
             let mut alter = vec!["--bootstrap-server", side.bootstrap(), "--alter"];
-            alter.extend_from_slice(case.entity);
-            alter.extend_from_slice(&["--add-config", case.add_config]);
+            alter.extend_from_slice(&selector);
+            alter.extend_from_slice(&["--add-config", &case.settings]);
             let altered = side.run("kafka-configs", &alter);
-            assert!(
-                altered.succeeded(),
-                "{}: --alter over {} was refused:\n{}",
-                side.label(),
-                case.label,
-                altered.text(),
-            );
-
             let mut describe = vec!["--bootstrap-server", side.bootstrap(), "--describe"];
-            describe.extend_from_slice(case.entity);
-            let described = side.run("kafka-configs", &describe).expect_success();
-            let configs = parse_describe(&described.stdout);
-            for key in case.keys {
+            describe.extend_from_slice(&selector);
+            let described = side.run("kafka-configs", &describe);
+            answers.push(EntityAnswer {
+                side: side.label().into(),
+                values: parse_describe(&described.stdout),
+                quota_entities: quota_entities(&described.stdout),
+                altered,
+                described,
+            });
+        }
+        entities.answers.push(answers);
+    }
+}
+
+#[then(
+    "both tools accept every change and return all requested keys and complete entity identities"
+)]
+fn accepted_entities(entities: &EntityConfiguration) {
+    assert!(entities.answers.len() == entities.cases.len());
+    for (case, answers) in entities.cases.iter().zip(&entities.answers) {
+        assert!(answers.len() == 2);
+        for answer in answers {
+            assert!(
+                answer.altered.succeeded(),
+                "{}: --alter over {} was refused:\n{}",
+                answer.side,
+                case.label,
+                answer.altered.text()
+            );
+            assert!(
+                answer.described.succeeded(),
+                "{}: --describe over {} was refused:\n{}",
+                answer.side,
+                case.label,
+                answer.described.text()
+            );
+            for key in &case.keys {
                 assert!(
-                    configs.contains_key(*key),
-                    "{}: --describe over {} lost {key}: got {configs:?}\n{}",
-                    side.label(),
+                    answer.values.contains_key(key),
+                    "{}: --describe over {} lost {key}: {:?}",
+                    answer.side,
                     case.label,
-                    described.stdout,
+                    answer.values
                 );
             }
-            let entities = quota_entities(&described.stdout);
-            let expected: Vec<String> = case.quota_entity.into_iter().map(str::to_owned).collect();
+            let expected = case.quota_entity.iter().cloned().collect::<Vec<_>>();
             assert!(
-                entities == expected,
-                "{}: --describe over {} named {entities:?}, expected {expected:?}\n{}",
-                side.label(),
+                answer.quota_entities == expected,
+                "{}: --describe over {} named {:?}, expected {expected:?}",
+                answer.side,
                 case.label,
-                described.stdout,
+                answer.quota_entities
             );
-            answers.push(configs);
         }
-        assert!(
-            answers[0] == answers[1],
-            "{}: krabka and Apache Kafka disagreed: {answers:?}",
-            case.label,
-        );
     }
-
-    comparison.broker.shutdown().await;
 }
 
-/// `--alter --add-config` then `--describe` over each entity type, compared
-/// with Apache Kafka.
+#[then("krabka and stock Kafka agree on every described configuration value")]
+fn equivalent_values(entities: &EntityConfiguration) {
+    for (case, answers) in entities.cases.iter().zip(&entities.answers) {
+        assert!(
+            answers[0].values == answers[1].values,
+            "{}: krabka and Apache Kafka disagreed",
+            case.label
+        );
+    }
+}
+
+async fn stop_configuration(configuration: TopicConfiguration) {
+    configuration
+        .broker
+        .expect("a host broker was started")
+        .shutdown()
+        .await;
+}
+
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
-    name = "kafka configs entity types round trip as apache kafka does"
+    name = "A topic configuration alteration is visible in its description"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_configs_alter_round_trip(configuration: TopicConfiguration) {
+    stop_configuration(configuration).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
+    name = "Effective topic values retain their dynamic and inherited provenance"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_configs_describe_all_shows_effective_values_and_their_sources(
+    configuration: TopicConfiguration,
+) {
+    stop_configuration(configuration).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
+    name = "All registered topic configuration keys round trip through the stock tool"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_configs_alter_round_trips_every_registered_topic_key(
+    configuration: TopicConfiguration,
+) {
+    stop_configuration(configuration).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
+    name = "Kafka Streams internal topic configurations are accepted unchanged"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_topics_create_accepts_the_streams_internal_topic_configs(
+    configuration: TopicConfiguration,
+) {
+    stop_configuration(configuration).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
+    name = "A compacted topic cannot enable tiered storage"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_configs_refuses_tiered_storage_on_a_compacted_topic(
+    configuration: TopicConfiguration,
+) {
+    stop_configuration(configuration).await;
+}
+
+#[ignore = "requires Docker"]
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_cli/configs.feature",
+    name = "Configuration entity round trips match stock Kafka across both admin APIs"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn kafka_configs_entity_types_round_trip_as_apache_kafka_does() {}
+async fn kafka_configs_entity_types_round_trip_as_apache_kafka_does(entities: EntityConfiguration) {
+    entities
+        .comparison
+        .expect("two brokers were started")
+        .broker
+        .shutdown()
+        .await;
+}

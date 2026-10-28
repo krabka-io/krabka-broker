@@ -15,6 +15,7 @@ use {
     },
     assert2::assert,
     krabka_broker::{KafkaRlmmConfig, RlmmKind},
+    krabka_client_core::Client,
     krabka_client_producer::{Compression, Producer},
     krabka_protocol::owned::create_topics_request::CreatableTopic,
     std::{
@@ -28,32 +29,71 @@ const TOPIC: &str = "tiered-soak-shape";
 const PARTITIONS: i32 = 3;
 const RECORDS_PER_PARTITION: usize = 60;
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "tiered storage multi broker multi soak shape: every rlmm catches up on the soak contracts cluster"
+#[derive(Default)]
+struct TieredSoak {
+    cluster: Option<TieredCluster>,
+    admin: Option<Client>,
+}
+
+#[rstest::fixture]
+fn tiered_soak() -> TieredSoak {
+    // Every broker's independently bootstrapped manager observes this workload.
+    TieredSoak::default()
+}
+
+impl TieredSoak {
+    fn cluster(&self) -> &TieredCluster { self.cluster.as_ref().expect("tiered soak cluster") }
+
+    async fn shutdown(self) {
+        let Self { cluster, admin } = self;
+        admin.expect("tiered admin").close();
+        let TieredCluster {
+            brokers,
+            log_dirs,
+            remote_dir,
+            ..
+        } = cluster.expect("tiered soak cluster");
+        for broker in brokers {
+            broker.shutdown().await;
+        }
+        drop((log_dirs, remote_dir));
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "three brokers independently bootstrap topic-backed RLMMs from their own listeners with three metadata partitions, RF3 and min ISR2, and create three RF3 tiered data partitions with 1-KiB segments"
 )]
-async fn bdd_verify_every_rlmm_catches_up_on_the_soak_contracts_cluster() {
-    let TieredCluster {
-        brokers,
-        log_dirs: _log_dirs,
-        remote_dir: _remote_dir,
-        ..
-    } = start_tiered_cluster_with([krabka_units::kibibytes(1); 3], |_, config| {
-        config.remote_log_metadata = RlmmKind::TopicBacked(KafkaRlmmConfig {
-            bootstrap: config.advertised_listener.clone(),
-            num_partitions: 3,
-            replication: 3,
-            min_isr: 2,
-            snapshot_interval: krabka_units::hours(1),
-            snapshot_dir: PathBuf::new(),
-            security: None,
-            ..KafkaRlmmConfig::default()
-        });
-    })
-    .await;
-    let [b1, b2, b3] = &brokers;
-    let admin = ready_admin([b1, b2, b3], "soak-shape-admin").await;
-    let response = admin
+async fn soak_tiered_metadata_topology(tiered_soak: &mut TieredSoak) {
+    tiered_soak.cluster = Some(
+        start_tiered_cluster_with([krabka_units::kibibytes(1); 3], |_, config| {
+            config.remote_log_metadata = RlmmKind::TopicBacked(KafkaRlmmConfig {
+                bootstrap: config.advertised_listener.clone(),
+                num_partitions: 3,
+                replication: 3,
+                min_isr: 2,
+                snapshot_interval: krabka_units::hours(1),
+                snapshot_dir: PathBuf::new(),
+                security: None,
+                ..KafkaRlmmConfig::default()
+            });
+        })
+        .await,
+    );
+    tiered_soak.admin = Some(
+        ready_admin(
+            [
+                &tiered_soak.cluster().brokers[0],
+                &tiered_soak.cluster().brokers[1],
+                &tiered_soak.cluster().brokers[2],
+            ],
+            "soak-shape-admin",
+        )
+        .await,
+    );
+    let response = tiered_soak
+        .admin
+        .as_ref()
+        .expect("tiered admin")
         .send(create_topic_request(CreatableTopic {
             configs: tiered_configs(Some("1024")),
             ..creatable_topic()
@@ -66,14 +106,24 @@ async fn bdd_verify_every_rlmm_catches_up_on_the_soak_contracts_cluster() {
         .expect("CreateTopics");
     assert!(response.topics[0].error_code == 0, "{response:?}");
     await_tiered_replicas(
-        &[b1, b2, b3],
+        &[
+            &tiered_soak.cluster().brokers[0],
+            &tiered_soak.cluster().brokers[1],
+            &tiered_soak.cluster().brokers[2],
+        ],
         TOPIC,
         Some(krabka_units::kibibytes(1)),
         "tiered config did not propagate",
     )
     .await;
+}
 
-    let bootstrap = format!("127.0.0.1:{}", b1.listen_addr().port());
+#[rstest_bdd_macros::when("each data partition receives sixty 200-byte LZ4 records")]
+async fn soak_tiered_metadata_records(tiered_soak: &TieredSoak) {
+    let bootstrap = format!(
+        "127.0.0.1:{}",
+        tiered_soak.cluster().brokers[0].listen_addr().port()
+    );
     {
         let producer = Producer::builder()
             .bootstrap(bootstrap)
@@ -99,11 +149,16 @@ async fn bdd_verify_every_rlmm_catches_up_on_the_soak_contracts_cluster() {
         producer.close().await
     }
     .expect("producer close");
+}
 
+#[rstest_bdd_macros::then(
+    "within ninety seconds every broker lists at least one remote segment for each data partition"
+)]
+async fn caught_up_soak_metadata(tiered_soak: &TieredSoak) {
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         let mut states = Vec::new();
-        for broker in &brokers {
+        for broker in &tiered_soak.cluster().brokers {
             for partition in 0..PARTITIONS {
                 let listed = broker
                     .remote_log_segments_for_test(TOPIC, partition)
@@ -134,17 +189,13 @@ async fn bdd_verify_every_rlmm_catches_up_on_the_soak_contracts_cluster() {
         );
         time::sleep(Duration::from_millis(500)).await;
     }
-
-    drop(admin);
-    for broker in brokers {
-        broker.shutdown().await;
-    }
 }
 
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/tiered_storage_multi_broker/multi_soak_shape.feature",
     name = "every rlmm catches up on the soak contracts cluster"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn every_rlmm_catches_up_on_the_soak_contracts_cluster() {}
+async fn every_rlmm_catches_up_on_the_soak_contracts_cluster(tiered_soak: TieredSoak) {
+    tiered_soak.shutdown().await;
+}

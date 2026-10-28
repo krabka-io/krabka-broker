@@ -295,41 +295,11 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified reconciler tests: the subscription metadata update bumps as kafka does"
-    )]
-    fn bdd_verify_the_subscription_metadata_update_bumps_as_kafka_does() {
-        let rows = [
-            ("nothing changed", false, 2, 2, (false, 1)),
-            ("the subscription changed", true, 2, 2, (true, 2)),
-            ("the topic grew", false, 2, 4, (true, 2)),
-            ("both", true, 2, 4, (true, 2)),
-        ];
-        for (case, bump, recorded, now, expected) in rows {
-            let mut g = group_with_single_member("m1", "t");
-            let at_record = input("t", recorded).input;
-            g.record_metadata_hash(metadata_hash(&g, &at_record));
-            let current = input("t", now).input;
-            let bumped = update_subscription_metadata(&mut g, &current, bump).unwrap();
-            check!((bumped, g.group_epoch) == expected, "{case}");
-            check!(g.metadata_hash() == metadata_hash(&g, &current), "{case}");
-            check!(!g.metadata_refresh_requested(), "{case}");
-        }
-    }
-
     /// Kafka's `updateSubscriptionMetadata`: (case, bump asked, the topic's
     /// partitions when the group recorded its hash, the partitions now) to
     /// (epoch bumped, group epoch after). A new hash bumps the epoch even when
     /// the heartbeat did not ask for it, and an unchanged hash with no bump
     /// asked keeps it.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/reconciler.feature",
-        name = "tests: the subscription metadata update bumps as kafka does"
-    )]
-    fn the_subscription_metadata_update_bumps_as_kafka_does() {}
-
     #[test]
     fn an_exhausted_epoch_bumps_nothing() {
         let mut group = GroupState::new("g");
@@ -799,4 +769,48 @@ mod tests {
             "regex match flows into membership set"
         );
     }
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct SubscriptionRefresh {
+        group: Option<GroupState>,
+        current: Option<ReconcileInput>,
+        bumped: Option<bool>,
+    }
+    #[rstest::fixture]
+    fn refresh() -> SubscriptionRefresh {
+        // Start this scenario with fresh inputs and observations.
+        SubscriptionRefresh::default()
+    }
+    #[given(
+        "member m1 subscribes to t whose recorded partition count is {recorded} and current partition count is {current}"
+    )]
+    fn subscription_metadata(refresh: &mut SubscriptionRefresh, recorded: i32, current: i32) {
+        let mut group = group_with_single_member("m1", "t");
+        let previous = input("t", recorded).input;
+        group.record_metadata_hash(metadata_hash(&group, &previous));
+        refresh.group = Some(group);
+        refresh.current = Some(input("t", current).input);
+    }
+    #[when("the coordinator refreshes subscription metadata with explicit epoch bump {requested}")]
+    fn refresh_subscription_metadata(refresh: &mut SubscriptionRefresh, requested: bool) {
+        refresh.bumped = Some(
+            update_subscription_metadata(
+                refresh.group.as_mut().expect("group prepared"),
+                refresh.current.as_ref().expect("current metadata"),
+                requested,
+            )
+            .expect("epoch available"),
+        );
+    }
+    #[then(
+        "the epoch was bumped {bumped} to {epoch} and the current metadata hash is recorded without a pending refresh"
+    )]
+    fn refreshed_subscription_metadata(refresh: &SubscriptionRefresh, bumped: bool, epoch: i32) {
+        let group = refresh.group.as_ref().expect("group prepared");
+        let current = refresh.current.as_ref().expect("current metadata");
+        check!((refresh.bumped, group.group_epoch) == (Some(bumped), epoch));
+        check!(group.metadata_hash() == metadata_hash(group, current));
+        check!(!group.metadata_refresh_requested());
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/reconciler.feature",fixtures=[refresh:SubscriptionRefresh]);
 }

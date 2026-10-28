@@ -15,7 +15,6 @@ use {
         fs,
         path::{Path, PathBuf},
         process::{Command, Output},
-        thread,
     },
 };
 
@@ -32,9 +31,8 @@ const STANDALONE: &[&str] = &[
     "controller-1:9093",
 ];
 
-/// A cluster id in Kafka's form, and the same id in the hyphenated form.
+/// The shared cluster id in Kafka's form.
 const CLUSTER_ID: &str = "AQIDBAUGBwgJCgsMDQ4PEA";
-const CLUSTER_ID_HYPHENATED: &str = "01020304-0506-0708-090a-0b0c0d0e0f10";
 
 fn krabka_format(args: &[&str], fault: Option<&str>) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_krabka-format"));
@@ -98,200 +96,444 @@ krabka_macros::directory_tree_fixture!(
     (|_dir: &Path, path: &Path| (path.to_path_buf(), fs::read(path).expect("read")))
 );
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kafka storage parity: the cluster id is written and printed in kafka form for {example}"
-)]
-fn bdd_verify_the_cluster_id_is_written_and_printed_in_kafka_form(example: String) {
-    type Example<'a> = (&'a str,);
-    let (scenario,): Example<'_> = match example.as_str() {
-        "kafka form" => ("Kafka form",),
-        "hyphenated" => ("hyphenated form",),
-        "uppercase hyphenated" => ("upper-case hyphenated form",),
-        "padded" => ("Kafka form with canonical padding",),
-        "unused bits" => ("unused low bits set in the last character",),
-        "reserved zero" => ("the reserved zero id",),
-        "reserved one" => ("the reserved one id",),
-        "too short" => ("too short",),
-        "too long" => ("too long",),
-        "invalid alphabet" => ("outside the url-safe alphabet",),
-        "invalid hyphenated" => ("hyphenated but not hex",),
-        "unhyphenated hex" => ("unhyphenated hex",),
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    /// What it is, `--cluster-id`, and the id written, or `None` for a refused
-    /// one.
-    struct Case<'a> {
-        what: &'a str,
-        input: &'a str,
-        written: Option<&'a str>,
-    }
-    let cases: &[Case] = &[
-        Case {
-            what: "Kafka form",
-            input: CLUSTER_ID,
-            written: Some(CLUSTER_ID),
-        },
-        Case {
-            what: "hyphenated form",
-            input: CLUSTER_ID_HYPHENATED,
-            written: Some(CLUSTER_ID),
-        },
-        Case {
-            what: "upper-case hyphenated form",
-            input: "01020304-0506-0708-090A-0B0C0D0E0F10",
-            written: Some(CLUSTER_ID),
-        },
-        Case {
-            what: "Kafka form with canonical padding",
-            input: "AQIDBAUGBwgJCgsMDQ4PEA==",
-            written: Some(CLUSTER_ID),
-        },
-        Case {
-            what: "unused low bits set in the last character",
-            input: "AQIDBAUGBwgJCgsMDQ4PEB",
-            written: Some(CLUSTER_ID),
-        },
-        Case {
-            what: "the reserved zero id",
-            input: "AAAAAAAAAAAAAAAAAAAAAA",
-            written: Some("AAAAAAAAAAAAAAAAAAAAAA"),
-        },
-        Case {
-            what: "the reserved one id",
-            input: "AAAAAAAAAAAAAAAAAAAAAQ",
-            written: Some("AAAAAAAAAAAAAAAAAAAAAQ"),
-        },
-        Case {
-            what: "too short",
-            input: "AQIDBAUGBwgJCgsMDQ4P",
-            written: None,
-        },
-        Case {
-            what: "too long",
-            input: "AQIDBAUGBwgJCgsMDQ4PEBES",
-            written: None,
-        },
-        Case {
-            what: "outside the url-safe alphabet",
-            input: "AQIDBAUGBwgJCgsMDQ4P+A",
-            written: None,
-        },
-        Case {
-            what: "hyphenated but not hex",
-            input: "01020304-0506-0708-090a-0b0c0d0e0fzz",
-            written: None,
-        },
-        Case {
-            what: "unhyphenated hex",
-            input: "0102030405060708090a0b0c0d0e0f10",
-            written: None,
-        },
-    ];
-    let Case {
-        what,
-        input,
-        written,
-    } = cases
-        .iter()
-        .find(|case| case.what == scenario)
-        .expect("named yare case exists");
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let dir = tmp.path().join("data");
-    let out = krabka_format(
-        &[
-            "--log-dir",
-            path_str(&dir),
-            "--cluster-id",
-            input,
-            "--node-id",
-            NODE,
-            "--no-initial-controllers",
-        ],
-        None,
-    );
-    if let Some(id) = written {
-        assert2::assert!(out.status.code() == Some(0), "{what}: {}", stderr(&out));
-        let got = (
-            written_cluster_id(&dir),
-            manifest_cluster_id(&dir),
-            stdout(&out).contains(&format!("with cluster-id {id} ")),
-        );
-        assert2::assert!(got == ((*id).to_owned(), (*id).to_owned(), true), "{what}");
-    } else {
-        assert2::assert!(out.status.code() == Some(2), "{what}");
-        assert2::assert!(!dir.exists(), "{what}: nothing is written");
+struct FormatBinaryScenario {
+    root: tempfile::TempDir,
+    log_dirs: Vec<String>,
+    metadata: Option<String>,
+    spelling: String,
+    cluster: Option<String>,
+    node: String,
+    flags: Vec<String>,
+    output: Option<Output>,
+    initial: Option<Output>,
+    initial_ids: Option<MetaProperties>,
+    before: Vec<(PathBuf, Vec<u8>)>,
+    seed_records: Option<usize>,
+}
+#[rstest::fixture]
+fn format_binary() -> FormatBinaryScenario {
+    let root = tempfile::tempdir().expect("format binary root");
+    FormatBinaryScenario {
+        root,
+        log_dirs: vec!["data".into()],
+        metadata: None,
+        spelling: "repeated".into(),
+        cluster: Some(CLUSTER_ID.into()),
+        node: NODE.into(),
+        flags: Vec::new(),
+        output: None,
+        initial: None,
+        initial_ids: None,
+        before: Vec::new(),
+        seed_records: None,
     }
 }
+impl FormatBinaryScenario {
+    fn argv(&self) -> Vec<String> {
+        let mut arguments = Vec::new();
+        if let Some(metadata) = &self.metadata {
+            arguments.extend([
+                "--metadata-log-dir".into(),
+                self.root.path().join(metadata).display().to_string(),
+            ]);
+        }
+        let paths: Vec<String> = self
+            .log_dirs
+            .iter()
+            .map(|directory| self.root.path().join(directory).display().to_string())
+            .collect();
+        if self.spelling == "comma-separated" {
+            arguments.extend(["--log-dir".into(), paths.join(",")]);
+        } else {
+            for directory in paths {
+                arguments.extend(["--log-dir".into(), directory]);
+            }
+        }
+        if let Some(cluster) = &self.cluster {
+            arguments.extend(["--cluster-id".into(), cluster.clone()]);
+        }
+        arguments.extend(["--node-id".into(), self.node.clone()]);
+        arguments.extend(self.flags.clone());
+        arguments
+    }
 
-/// The id form: whatever `--cluster-id` names, the directory, the manifest,
-/// and stdout carry Kafka's 22-character form. The reserved ids parse, as
-/// they do in `kafka-storage format -t AAAAAAAAAAAAAAAAAAAAAA`. clap refuses a
-/// bad id with its usage error, exit 2, before anything is written.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
-    name = "the cluster id is written and printed in kafka form"
-)]
-fn the_cluster_id_is_written_and_printed_in_kafka_form(example: String) { let _ = example; }
+    fn run(&self, fault: Option<&str>) -> Output {
+        let arguments = self.argv();
+        let borrowed: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        krabka_format(&borrowed, fault)
+    }
 
-#[cfg(test)]
+    fn output(&self) -> &Output { self.output.as_ref().expect("format binary ran") }
+}
+#[rstest_bdd_macros::given("format cluster ID argument {input}")]
+fn binary_cluster_argument(format_binary: &mut FormatBinaryScenario, input: String) {
+    format_binary.cluster = Some(input);
+    format_binary.flags = vec!["--no-initial-controllers".into()];
+}
+#[rstest_bdd_macros::given("format directory identity options {options}")]
+fn binary_directory_argument(format_binary: &mut FormatBinaryScenario, options: String) {
+    format_binary.flags = options.split_whitespace().map(str::to_owned).collect();
+}
+#[rstest_bdd_macros::when("the format binary executes")]
+fn execute_format_binary(format_binary: &mut FormatBinaryScenario) {
+    format_binary.output = Some(format_binary.run(None));
+}
+#[rstest_bdd_macros::then("the cluster ID is stored and printed as {canonical}")]
+fn binary_canonical_cluster(format_binary: &FormatBinaryScenario, canonical: String) {
+    let output = format_binary.output();
+    assert2::assert!(output.status.code() == Some(0), "{}", stderr(output));
+    let directory = format_binary.root.path().join("data");
+    let got = (
+        written_cluster_id(&directory),
+        manifest_cluster_id(&directory),
+        stdout(output).contains(&format!("with cluster-id {canonical} ")),
+    );
+    assert2::assert!(got == (canonical.clone(), canonical, true));
+}
 #[rstest_bdd_macros::then(
-    "kafka storage parity: directory ids are written in kafka form for {example}"
+    "the malformed cluster ID exits with usage error before writing a directory"
 )]
-fn bdd_verify_directory_ids_are_written_in_kafka_form(example: String) {
-    type Example<'a> = (&'a [&'a str],);
-    let (extra,): Example<'_> = match example.as_str() {
-        "directory id kafka form" => (&["--directory-id", "AAAAAAAAAAAAAAAAAAAAZA"],),
-        "directory id hyphenated" => (&["--directory-id", "00000000-0000-0000-0000-000000000064"],),
-        "controller id kafka form" => (&[
-            "--initial-controllers",
-            "1@controller-1:9093:AAAAAAAAAAAAAAAAAAAAZA",
-        ],),
-        "controller id hyphenated" => (&[
-            "--initial-controllers",
-            "1@controller-1:9093:00000000-0000-0000-0000-000000000064",
-        ],),
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    const DIRECTORY_ID: &str = "AAAAAAAAAAAAAAAAAAAAZA";
-    let current = thread::current();
-    let what = current.name().expect("case name");
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let dir = tmp.path().join("data");
-    let mut args = vec![
-        "--log-dir",
-        path_str(&dir),
-        "--cluster-id",
-        CLUSTER_ID,
-        "--node-id",
-        NODE,
-    ];
-    args.extend_from_slice(extra);
-    format_successfully(&args, what);
-    // The broker reads back exactly what was written.
+fn binary_rejected_cluster(format_binary: &FormatBinaryScenario) {
+    assert2::assert!(format_binary.output().status.code() == Some(2));
+    assert2::assert!(!format_binary.root.path().join("data").exists());
+}
+#[rstest_bdd_macros::then("the broker reads directory UUID 100 in Kafka form")]
+fn binary_canonical_directory(format_binary: &FormatBinaryScenario) {
     assert2::assert!(
-        bootstrap::read_meta_properties(&dir).ok()
+        format_binary.output().status.code() == Some(0),
+        "{}",
+        stderr(format_binary.output())
+    );
+    let directory = format_binary.root.path().join("data");
+    assert2::assert!(
+        bootstrap::read_meta_properties(&directory).ok()
             == Some(MetaProperties {
                 cluster_id: CLUSTER_ID.parse().expect("cluster id"),
                 node_id: NODE_ID,
-                directory_id: Some(DirectoryId(uuid::Uuid::from_u128(100))),
-            }),
-        "{what}"
+                directory_id: Some(DirectoryId(uuid::Uuid::from_u128(100)))
+            })
     );
-    assert2::assert!(written_directory_id(&dir) == DIRECTORY_ID, "{what}");
+    assert2::assert!(written_directory_id(&directory) == "AAAAAAAAAAAAAAAAAAAAZA");
 }
-
-/// `--directory-id` and the directory id of an `--initial-controllers` entry
-/// take either form and are written in Kafka's.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
-    name = "directory ids are written in kafka form"
+#[rstest_bdd_macros::given(
+    "a standalone format of log directories {directories} using {spelling} flags and metadata {metadata}"
 )]
-fn directory_ids_are_written_in_kafka_form(example: String) { let _ = example; }
+fn binary_directory_layout(
+    format_binary: &mut FormatBinaryScenario,
+    directories: String,
+    spelling: String,
+    metadata: String,
+) {
+    format_binary.log_dirs = directories.split(',').map(str::to_owned).collect();
+    format_binary.metadata = (metadata != "first-log-dir").then_some(metadata);
+    format_binary.spelling = spelling;
+    format_binary.flags = vec![
+        "--standalone".into(),
+        "--controller-listener".into(),
+        "controller-1:9093".into(),
+    ];
+}
+#[rstest_bdd_macros::given("a reference standalone bootstrap record count")]
+fn binary_seed_baseline(format_binary: &mut FormatBinaryScenario) {
+    format_binary.seed_records = Some(standalone_seed_records(format_binary.root.path()));
+}
+#[rstest_bdd_macros::then(
+    "the binary reports and writes these directories in metadata-first order"
+)]
+fn binary_ordered_directories(format_binary: &FormatBinaryScenario, datatable: Vec<Vec<String>>) {
+    let output = format_binary.output();
+    assert2::assert!(output.status.code() == Some(0), "{}", stderr(output));
+    let seed_records = format_binary
+        .seed_records
+        .expect("standalone baseline given");
+    let rows: Vec<(PathBuf, bool)> = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [directory, kind] = row.as_slice() else {
+                panic!("directory and kind columns required")
+            };
+            (
+                format_binary.root.path().join(directory),
+                match kind.as_str() {
+                    "metadata-voter" => true,
+                    "data" => false,
+                    _ => panic!("unknown directory kind {kind}"),
+                },
+            )
+        })
+        .collect();
+    let got: Vec<Formatted> = rows
+        .iter()
+        .map(|(directory, _)| formatted(directory))
+        .collect();
+    let expected: Vec<Formatted> = rows
+        .iter()
+        .map(|(_, voter)| {
+            if *voter {
+                metadata_directory(true, seed_records)
+            } else {
+                data_directory()
+            }
+        })
+        .collect();
+    assert2::assert!(got == expected);
+    let mut lines: Vec<String> = rows
+        .iter()
+        .map(|(directory, voter)| {
+            format!(
+                "Formatting {} {} with metadata.version 4.3-IV0.",
+                if *voter {
+                    "dynamic metadata voter directory"
+                } else {
+                    "data directory"
+                },
+                directory.display()
+            )
+        })
+        .collect();
+    lines.push(format!(
+        "Formatted {} log directories with cluster-id {CLUSTER_ID} ({seed_records} seed record(s))",
+        rows.len()
+    ));
+    assert2::assert!(stdout(output).lines().collect::<Vec<_>>() == lines);
+    let ids: BTreeSet<String> = rows
+        .iter()
+        .map(|(directory, _)| written_directory_id(directory))
+        .collect();
+    assert2::assert!(ids.len() == rows.len(), "{ids:?}");
+    for (directory, voter) in &rows {
+        let expected = if *voter {
+            vec![
+                "__cluster_metadata-0/00000000000000000000-0000000000.checkpoint",
+                "bootstrap.json",
+                "bootstrap.records.bin",
+                META_PROPERTIES,
+            ]
+        } else {
+            vec![META_PROPERTIES]
+        };
+        assert2::assert!(files_under(directory) == expected);
+    }
+}
+#[rstest_bdd_macros::given("directory a is formatted and directory b is absent")]
+fn one_formatted_directory(format_binary: &mut FormatBinaryScenario) {
+    format_binary.log_dirs = vec!["a".into()];
+    format_binary.initial = Some(format_binary.run(None));
+    format_binary.initial_ids = Some(written_ids(&format_binary.root.path().join("a")));
+    format_binary.log_dirs = vec!["a".into(), "b".into()];
+    format_binary.spelling = "comma-separated".into();
+}
+fn check_format_refusal(output: &Output, message: String) {
+    assert2::assert!((output.status.code(), stderr(output)) == (Some(3), message));
+}
+#[rstest_bdd_macros::then("the existing directory refuses the run and directory b remains absent")]
+fn refused_existing_directory(format_binary: &FormatBinaryScenario) {
+    assert2::assert!(
+        format_binary
+            .initial
+            .as_ref()
+            .expect("initial format ran")
+            .status
+            .success()
+    );
+    let output = format_binary.output();
+    let directory = format_binary.root.path().join("a");
+    check_format_refusal(
+        output,
+        format!(
+            "Log directory {} is already formatted. Use --ignore-formatted to ignore this directory and format the others.\n",
+            directory.display()
+        ),
+    );
+    assert2::assert!(!format_binary.root.path().join("b").exists());
+}
+#[rstest_bdd_macros::when("the format binary tries another cluster with ignore-formatted")]
+fn mismatched_ignored_format(format_binary: &mut FormatBinaryScenario) {
+    format_binary.cluster = Some("BQIDBAUGBwgJCgsMDQ4PEA".into());
+    format_binary.flags = vec!["--ignore-formatted".into()];
+    format_binary.output = Some(format_binary.run(None));
+}
+#[rstest_bdd_macros::then(
+    "the existing cluster ID mismatch is refused even when formatted directories are ignored"
+)]
+fn refused_ignored_cluster(format_binary: &FormatBinaryScenario) {
+    let output = format_binary.output();
+    let directory = format_binary.root.path().join("a");
+    check_format_refusal(
+        output,
+        format!(
+            "Invalid cluster.id in: {}. Expected BQIDBAUGBwgJCgsMDQ4PEA, but read {CLUSTER_ID}\n",
+            directory.join(META_PROPERTIES).display()
+        ),
+    );
+}
+#[rstest_bdd_macros::when(
+    "the format binary ignores formatted directories and discovers the cluster ID"
+)]
+fn ignore_and_discover_cluster(format_binary: &mut FormatBinaryScenario) {
+    format_binary.cluster = None;
+    format_binary.flags = vec!["--ignore-formatted".into()];
+    format_binary.output = Some(format_binary.run(None));
+}
+#[rstest_bdd_macros::then(
+    "directory a keeps its identity and directory b joins the cluster with a distinct identity"
+)]
+fn mixed_directory_format(format_binary: &FormatBinaryScenario) {
+    let output = format_binary.output();
+    assert2::assert!(output.status.code() == Some(0), "{}", stderr(output));
+    let a = format_binary.root.path().join("a");
+    let b = format_binary.root.path().join("b");
+    let a_ids = format_binary
+        .initial_ids
+        .expect("initial directory IDs recorded");
+    assert2::assert!(written_ids(&a) == a_ids);
+    let b_ids = written_ids(&b);
+    assert2::assert!(
+        MetaProperties {
+            directory_id: None,
+            ..b_ids
+        } == MetaProperties {
+            directory_id: None,
+            ..a_ids
+        }
+    );
+    assert2::assert!(b_ids.directory_id != a_ids.directory_id);
+    assert2::assert!(stdout(output).contains(&format!(
+        "Formatting data directory {} with metadata.version 4.3-IV0.",
+        b.display()
+    )));
+}
+#[rstest_bdd_macros::when("the format binary ignores the fully formatted directory set again")]
+fn ignore_formatted_again(format_binary: &mut FormatBinaryScenario) {
+    format_binary.before = snapshot(format_binary.root.path());
+    format_binary.cluster = Some(CLUSTER_ID.into());
+    format_binary.flags = vec!["--ignore-formatted".into()];
+    format_binary.output = Some(format_binary.run(None));
+}
+#[rstest_bdd_macros::then(
+    "the already-formatted message is printed and every file remains unchanged"
+)]
+fn unchanged_ignored_format(format_binary: &FormatBinaryScenario) {
+    let output = format_binary.output();
+    assert2::assert!(output.status.code() == Some(0), "{}", stderr(output));
+    assert2::assert!(
+        stdout(output)
+            .lines()
+            .last()
+            .is_some_and(|line| line == "All of the log directories are already formatted.")
+    );
+    assert2::assert!(snapshot(format_binary.root.path()) == format_binary.before);
+}
+#[rstest_bdd_macros::when("the format binary is interrupted after {artifact}")]
+fn interrupt_format_binary(format_binary: &mut FormatBinaryScenario, artifact: String) {
+    format_binary.output = Some(format_binary.run(Some(&artifact)));
+}
+#[rstest_bdd_macros::then("the injected interruption exits with code 4")]
+fn injected_format_failure(format_binary: &FormatBinaryScenario) {
+    let output = format_binary.output();
+    assert2::assert!(output.status.code() == Some(4));
+    assert2::assert!(stderr(output).contains("injected failure after"));
+}
+#[rstest_bdd_macros::when("the format binary is rerun without interruption")]
+fn rerun_format_binary(format_binary: &mut FormatBinaryScenario) {
+    format_binary.output = Some(format_binary.run(None));
+}
+#[rstest_bdd_macros::then("the format binary exits with code {code}")]
+fn format_binary_exit(format_binary: &FormatBinaryScenario, code: i32) {
+    assert2::assert!(
+        format_binary.output().status.code() == Some(code),
+        "{}",
+        stderr(format_binary.output())
+    );
+}
+#[rstest_bdd_macros::when("the interrupted format is resumed with ignore-formatted")]
+fn resume_published_format(format_binary: &mut FormatBinaryScenario) {
+    format_binary.flags.push("--ignore-formatted".into());
+    format_binary.output = Some(format_binary.run(None));
+}
+#[rstest_bdd_macros::then(
+    "both interrupted-format directories contain complete Kafka artifacts with voters only in the checkpoint"
+)]
+fn resumed_format_artifacts(format_binary: &FormatBinaryScenario) {
+    let metadata = format_binary.root.path().join("meta");
+    let data = format_binary.root.path().join("data");
+    for directory in [&metadata, &data] {
+        let properties = bootstrap::read_meta_properties(directory)
+            .unwrap_or_else(|error| panic!("{} does not read: {error}", directory.display()));
+        assert2::assert!(
+            (properties.cluster_id, properties.node_id)
+                == (
+                    ClusterId(uuid::Uuid::from_u128(
+                        0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10
+                    )),
+                    NODE_ID
+                )
+        );
+    }
+    assert2::assert!(
+        [files_under(&metadata), files_under(&data)]
+            == [
+                vec![
+                    "__cluster_metadata-0/00000000000000000000-0000000000.checkpoint",
+                    "bootstrap.json",
+                    "bootstrap.records.bin",
+                    META_PROPERTIES
+                ],
+                vec![META_PROPERTIES]
+            ]
+    );
+    let records = bootstrap::load_bootstrap_records(&metadata).expect("records");
+    assert2::assert!(
+        records
+            .iter()
+            .all(|record| !matches!(record, MetadataRecord::V1Voters(_)))
+    );
+}
+#[rstest_bdd_macros::given(
+    "metadata directory meta and log directory data for node 2147483647 with directory UUID 100"
+)]
+fn binary_property_layout(format_binary: &mut FormatBinaryScenario) {
+    format_binary.metadata = Some("meta".into());
+    format_binary.log_dirs = vec!["data".into()];
+    format_binary.node = "2147483647".into();
+    format_binary.flags = vec!["--directory-id".into(), "AAAAAAAAAAAAAAAAAAAAZA".into()];
+}
+#[rstest_bdd_macros::then(
+    "every meta.properties file has Kafka's ordered fields and UTC date comment"
+)]
+fn binary_property_bytes(format_binary: &FormatBinaryScenario) {
+    assert2::assert!(
+        format_binary.output().status.code() == Some(0),
+        "{}",
+        stderr(format_binary.output())
+    );
+    let metadata = format_binary.root.path().join("meta");
+    let data = format_binary.root.path().join("data");
+    for (directory, id) in [
+        (&metadata, "AAAAAAAAAAAAAAAAAAAAZA".to_owned()),
+        (&data, written_directory_id(&data)),
+    ] {
+        let text = fs::read_to_string(directory.join(META_PROPERTIES)).expect("meta.properties");
+        let mut lines: Vec<&str> = text.split_inclusive('\n').collect();
+        let date = lines.get(1).map(|line| line.trim_end_matches('\n'));
+        assert2::assert!(
+            date.is_some_and(is_utc_date_comment),
+            "{}: {date:?}",
+            directory.display()
+        );
+        lines[1] = "#<date>\n";
+        assert2::assert!(
+            lines.concat()
+                == format!(
+                    "#\n#<date>\ncluster.id={CLUSTER_ID}\ndirectory.id={id}\nnode.id=2147483647\nversion=1\n"
+                ),
+            "{}",
+            directory.display()
+        );
+    }
+}
+rstest_bdd_macros::scenarios!("tests/features/format_binary_parity", fixtures = [format_binary: FormatBinaryScenario]);
 
 /// What one directory of a multi-directory format holds.
 #[derive(Debug, PartialEq, Eq)]
@@ -362,458 +604,6 @@ fn files_under(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Spells the `--log-dir` flags for two directories.
-type Spelling = fn(&str, &str) -> Vec<String>;
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kafka storage parity: every log dir is formatted in one run for {example}"
-)]
-fn bdd_verify_every_log_dir_is_formatted_in_one_run(example: String) {
-    type Example<'a> = (&'a str, Spelling);
-    let (what, spell): Example<'_> = match example.as_str() {
-        "repeated flags" => ("repeated", repeated_log_dirs as Spelling),
-        "comma separated" => ("comma-separated", comma_separated_log_dirs as Spelling),
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let seed_records = standalone_seed_records(tmp.path());
-    let run = tmp.path().join(what);
-    let (meta_dir, data_dir) = (run.join("meta"), run.join("data"));
-    let mut args = spell(path_str(&meta_dir), path_str(&data_dir));
-    args.extend(["--cluster-id", CLUSTER_ID].map(String::from));
-    args.extend(STANDALONE.iter().map(|a| (*a).to_owned()));
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = format_successfully(&args, what);
-
-    assert2::assert!(
-        [formatted(&meta_dir), formatted(&data_dir)]
-            == [metadata_directory(true, seed_records), data_directory()],
-        "{what}"
-    );
-    let directory_ids: BTreeSet<String> = [&meta_dir, &data_dir]
-        .iter()
-        .map(|dir| written_directory_id(dir))
-        .collect();
-    assert2::assert!(directory_ids.len() == 2, "{what}: {directory_ids:?}");
-    assert2::assert!(
-        stdout(&out).lines().take(2).collect::<Vec<_>>()
-            == vec![
-                format!(
-                    "Formatting dynamic metadata voter directory {} with metadata.version \
-                         4.3-IV0.",
-                    meta_dir.display()
-                ),
-                format!(
-                    "Formatting data directory {} with metadata.version 4.3-IV0.",
-                    data_dir.display()
-                ),
-            ],
-        "{what}"
-    );
-}
-
-#[cfg(test)]
-/// Repeated and comma-separated `--log-dir` format every directory in one
-/// run, as `kafka-storage format` formats every entry of `log.dirs`. The set
-/// shares one cluster id, and each directory has its own id. Only the first
-/// directory gets the bootstrap files and the `__cluster_metadata-0`
-/// checkpoint. It is the metadata log directory, as `metadata.log.dir`
-/// defaults to the first entry of `log.dirs`.
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
-    name = "every log dir is formatted in one run"
-)]
-fn every_log_dir_is_formatted_in_one_run(example: String) { let _ = example; }
-
-fn repeated_log_dirs(a: &str, b: &str) -> Vec<String> {
-    vec!["--log-dir".into(), a.into(), "--log-dir".into(), b.into()]
-}
-
-fn comma_separated_log_dirs(a: &str, b: &str) -> Vec<String> {
-    vec!["--log-dir".into(), format!("{a},{b}")]
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kafka storage parity: a metadata log dir is formatted with the log dirs for {example}"
-)]
-fn bdd_verify_a_metadata_log_dir_is_formatted_with_the_log_dirs(example: String) {
-    type Example<'a> = (&'a str,);
-    let (scenario,): Example<'_> = match example.as_str() {
-        "separate metadata directory" => ("a separate metadata log directory",),
-        "metadata is log dir" => ("a metadata log directory that is also a log directory",),
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    const VOTER: &str = "dynamic metadata voter directory";
-    const DATA: &str = "data directory";
-    /// A directory and its Kafka description.
-    struct Written<'a> {
-        dir: &'a str,
-        description: &'a str,
-    }
-    /// What it is, `--metadata-log-dir`, the `--log-dir` entries, and each
-    /// directory in write order with its Kafka description.
-    struct Case<'a> {
-        what: &'a str,
-        metadata: &'a str,
-        log_dirs: &'a [&'a str],
-        want: &'a [Written<'a>],
-    }
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let seed_records = standalone_seed_records(tmp.path());
-
-    let cases: &[Case] = &[
-        Case {
-            what: "a separate metadata log directory",
-            metadata: "m",
-            log_dirs: &["a", "b"],
-            want: &[
-                Written {
-                    dir: "m",
-                    description: VOTER,
-                },
-                Written {
-                    dir: "a",
-                    description: DATA,
-                },
-                Written {
-                    dir: "b",
-                    description: DATA,
-                },
-            ],
-        },
-        Case {
-            what: "a metadata log directory that is also a log directory",
-            metadata: "b",
-            log_dirs: &["a", "b"],
-            want: &[
-                Written {
-                    dir: "b",
-                    description: VOTER,
-                },
-                Written {
-                    dir: "a",
-                    description: DATA,
-                },
-            ],
-        },
-    ];
-    let Case {
-        what,
-        metadata,
-        log_dirs,
-        want,
-    } = cases
-        .iter()
-        .find(|case| case.what == scenario)
-        .expect("named yare case exists");
-    let run = tmp.path().join(what.replace(' ', "-"));
-    let metadata_dir = run.join(metadata);
-    let joined = log_dirs
-        .iter()
-        .map(|dir| run.join(dir).display().to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    let mut args = vec![
-        "--metadata-log-dir",
-        path_str(&metadata_dir),
-        "--log-dir",
-        &joined,
-        "--cluster-id",
-        CLUSTER_ID,
-    ];
-    args.extend_from_slice(STANDALONE);
-    let out = format_successfully(&args, what);
-
-    let mut lines: Vec<String> = want
-        .iter()
-        .map(|Written { dir, description }| {
-            format!(
-                "Formatting {description} {} with metadata.version 4.3-IV0.",
-                run.join(dir).display()
-            )
-        })
-        .collect();
-    lines.push(format!(
-        "Formatted {} log directories with cluster-id {CLUSTER_ID} ({seed_records} seed \
-             record(s))",
-        want.len()
-    ));
-    assert2::assert!(stdout(&out).lines().collect::<Vec<_>>() == lines, "{what}");
-
-    let dirs: Vec<PathBuf> = want.iter().map(|written| run.join(written.dir)).collect();
-    let got: Vec<Formatted> = dirs.iter().map(|dir| formatted(dir)).collect();
-    let expected: Vec<Formatted> = want
-        .iter()
-        .map(|Written { description, .. }| {
-            if *description == VOTER {
-                metadata_directory(true, seed_records)
-            } else {
-                data_directory()
-            }
-        })
-        .collect();
-    assert2::assert!(got == expected, "{what}");
-    assert2::assert!(
-        files_under(&metadata_dir)
-            == vec![
-                "__cluster_metadata-0/00000000000000000000-0000000000.checkpoint",
-                "bootstrap.json",
-                "bootstrap.records.bin",
-                META_PROPERTIES,
-            ],
-        "{what}"
-    );
-    for dir in dirs.iter().filter(|dir| **dir != metadata_dir) {
-        assert2::assert!(
-            files_under(dir) == vec![META_PROPERTIES],
-            "{what}: {}",
-            dir.display()
-        );
-    }
-    let directory_ids: BTreeSet<String> =
-        dirs.iter().map(|dir| written_directory_id(dir)).collect();
-    assert2::assert!(
-        directory_ids.len() == dirs.len(),
-        "{what}: {directory_ids:?}"
-    );
-}
-
-#[cfg(test)]
-/// `--metadata-log-dir` is `metadata.log.dir`: `kafka-storage format` adds it
-/// to the `log.dirs` set, so one run formats it and every `--log-dir`. It is
-/// the one metadata directory, and it is formatted once when it is also a
-/// `--log-dir`. Only it gets the bootstrap files and the
-/// `__cluster_metadata-0` checkpoint. Each other directory is a data
-/// directory with `meta.properties` alone. The set shares one cluster id,
-/// each directory has its own id, and the metadata directory is written first.
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
-    name = "a metadata log dir is formatted with the log dirs"
-)]
-fn a_metadata_log_dir_is_formatted_with_the_log_dirs(example: String) { let _ = example; }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kafka storage parity: ignore formatted skips the formatted and formats the rest"
-)]
-fn bdd_verify_ignore_formatted_skips_the_formatted_and_formats_the_rest() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
-    let both = format!("{},{}", a.display(), b.display());
-
-    let first = krabka_format(
-        &[
-            "--log-dir",
-            path_str(&a),
-            "--cluster-id",
-            CLUSTER_ID,
-            "--node-id",
-            NODE,
-        ],
-        None,
-    );
-    assert2::assert!(first.status.success());
-    let a_ids = written_ids(&a);
-
-    let refused = krabka_format(
-        &[
-            "--log-dir",
-            &both,
-            "--cluster-id",
-            CLUSTER_ID,
-            "--node-id",
-            NODE,
-        ],
-        None,
-    );
-    assert2::assert!(
-        (refused.status.code(), stderr(&refused))
-            == (
-                Some(3),
-                format!(
-                    "Log directory {} is already formatted. Use --ignore-formatted to ignore \
-                     this directory and format the others.\n",
-                    a.display()
-                )
-            )
-    );
-    assert2::assert!(!b.exists(), "a refused run writes nothing");
-
-    let other_cluster = krabka_format(
-        &[
-            "--log-dir",
-            &both,
-            "--cluster-id",
-            "BQIDBAUGBwgJCgsMDQ4PEA",
-            "--node-id",
-            NODE,
-            "--ignore-formatted",
-        ],
-        None,
-    );
-    assert2::assert!(
-        (other_cluster.status.code(), stderr(&other_cluster))
-            == (
-                Some(3),
-                format!(
-                    "Invalid cluster.id in: {}. Expected BQIDBAUGBwgJCgsMDQ4PEA, but read {CLUSTER_ID}\n",
-                    a.join(META_PROPERTIES).display()
-                )
-            )
-    );
-
-    // No --cluster-id: the formatted directory supplies it.
-    let mixed = krabka_format(
-        &["--log-dir", &both, "--node-id", NODE, "--ignore-formatted"],
-        None,
-    );
-    assert2::assert!(mixed.status.code() == Some(0), "{}", stderr(&mixed));
-    assert2::assert!(written_ids(&a) == a_ids);
-    let b_ids = written_ids(&b);
-    assert2::assert!(
-        MetaProperties {
-            directory_id: None,
-            ..b_ids
-        } == MetaProperties {
-            directory_id: None,
-            ..a_ids
-        }
-    );
-    assert2::assert!(b_ids.directory_id != a_ids.directory_id);
-    assert2::assert!(stdout(&mixed).contains(&format!(
-        "Formatting data directory {} with metadata.version 4.3-IV0.",
-        b.display()
-    )));
-
-    let before = (snapshot(&a), snapshot(&b));
-    let again = krabka_format(
-        &[
-            "--log-dir",
-            &both,
-            "--cluster-id",
-            CLUSTER_ID,
-            "--node-id",
-            NODE,
-            "--ignore-formatted",
-        ],
-        None,
-    );
-    assert2::assert!(again.status.code() == Some(0), "{}", stderr(&again));
-    assert2::assert!(
-        stdout(&again)
-            .lines()
-            .last()
-            .is_some_and(|line| line == "All of the log directories are already formatted.")
-    );
-    assert2::assert!((snapshot(&a), snapshot(&b)) == before);
-}
-
-#[cfg(test)]
-/// Without `--ignore-formatted`, one formatted directory refuses the whole
-/// run with Kafka's message, and the others are left alone. With it, the
-/// formatted directories are skipped, the rest are formatted under the same
-/// cluster id, and a second run changes nothing.
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
-    name = "ignore formatted skips the formatted and formats the rest"
-)]
-fn ignore_formatted_skips_the_formatted_and_formats_the_rest() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kafka storage parity: an interrupted run can be run again for {example}"
-)]
-fn bdd_verify_an_interrupted_run_can_be_run_again(example: String) {
-    type Example<'a> = (&'a str, i32);
-    let (fault, rerun_exit): Example<'_> = match example.as_str() {
-        "checkpoint interrupted" => ("00000000000000000000-0000000000.checkpoint", 0),
-        "bootstrap records interrupted" => ("bootstrap.records.bin", 0),
-        "manifest interrupted" => ("bootstrap.json", 0),
-        "temporary marker interrupted" => ("meta.properties.tmp", 0),
-        "published marker interrupted" => (META_PROPERTIES, 3),
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    let (_tmp, meta_dir, data_dir) = metadata_and_data_directories();
-    let dirs = format!("{},{}", meta_dir.display(), data_dir.display());
-    let mut args = vec!["--log-dir", &dirs, "--cluster-id", CLUSTER_ID];
-    args.extend_from_slice(STANDALONE);
-
-    let interrupted = krabka_format(&args, Some(fault));
-    assert2::assert!(interrupted.status.code() == Some(4), "{fault}");
-    assert2::assert!(
-        stderr(&interrupted).contains("injected failure after"),
-        "{fault}"
-    );
-
-    let rerun = krabka_format(&args, None);
-    assert2::assert!(
-        rerun.status.code() == Some(rerun_exit),
-        "{fault}: {}",
-        stderr(&rerun)
-    );
-    if rerun_exit != 0 {
-        let mut ignoring = args.clone();
-        ignoring.push("--ignore-formatted");
-        let finished = krabka_format(&ignoring, None);
-        assert2::assert!(
-            finished.status.code() == Some(0),
-            "{fault}: {}",
-            stderr(&finished)
-        );
-    }
-
-    for dir in [&meta_dir, &data_dir] {
-        let meta = bootstrap::read_meta_properties(dir)
-            .unwrap_or_else(|e| panic!("{fault}: {} does not read: {e}", dir.display()));
-        assert2::assert!(
-            (meta.cluster_id, meta.node_id)
-                == (
-                    ClusterId(uuid::Uuid::from_u128(
-                        0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10
-                    )),
-                    NODE_ID
-                ),
-            "{fault}"
-        );
-    }
-    assert2::assert!(
-        [files_under(&meta_dir), files_under(&data_dir)]
-            == [
-                vec![
-                    "__cluster_metadata-0/00000000000000000000-0000000000.checkpoint",
-                    "bootstrap.json",
-                    "bootstrap.records.bin",
-                    META_PROPERTIES,
-                ],
-                vec![META_PROPERTIES],
-            ],
-        "{fault}"
-    );
-    let records = bootstrap::load_bootstrap_records(&meta_dir).expect("records");
-    assert2::assert!(
-        records
-            .iter()
-            .all(|r| !matches!(r, MetadataRecord::V1Voters(_))),
-        "{fault}: voters live in the checkpoint"
-    );
-}
-
-#[cfg(test)]
-/// A run that stops after any file it writes leaves a directory the next run
-/// formats without an `rm -rf`, because `meta.properties` is the last file
-/// and is published by a rename. Once the marker has landed, the directory is
-/// formatted, and only `--ignore-formatted` passes it.
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
-    name = "an interrupted run can be run again"
-)]
-fn an_interrupted_run_can_be_run_again(example: String) { let _ = example; }
-
 /// Whether `line` is the date comment of `Properties.store` on a UTC host:
 /// `#` and `java.util.Date.toString`, `EEE MMM dd HH:mm:ss zzz yyyy`.
 fn is_utc_date_comment(line: &str) -> bool {
@@ -840,71 +630,3 @@ fn is_utc_date_comment(line: &str) -> bool {
         && *zone == "UTC"
         && digits(year, 4)
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("kafka storage parity: meta properties is the file kafka writes")]
-fn bdd_verify_meta_properties_is_the_file_kafka_writes() {
-    const DIRECTORY_ID: &str = "AAAAAAAAAAAAAAAAAAAAZA";
-    let (_tmp, meta_dir, data_dir) = metadata_and_data_directories();
-    let out = krabka_format(
-        &[
-            "--metadata-log-dir",
-            path_str(&meta_dir),
-            "--log-dir",
-            path_str(&data_dir),
-            "--cluster-id",
-            CLUSTER_ID,
-            "--node-id",
-            "2147483647",
-            "--directory-id",
-            DIRECTORY_ID,
-        ],
-        None,
-    );
-    assert2::assert!(out.status.code() == Some(0), "{}", stderr(&out));
-
-    // The data directory's id is generated, so its line is read back.
-    for (dir, directory_id) in [
-        (&meta_dir, DIRECTORY_ID.to_owned()),
-        (&data_dir, written_directory_id(&data_dir)),
-    ] {
-        let text = fs::read_to_string(dir.join(META_PROPERTIES)).expect("meta.properties");
-        let mut lines: Vec<&str> = text.split_inclusive('\n').collect();
-        let date = lines.get(1).map(|line| line.trim_end_matches('\n'));
-        assert2::assert!(
-            date.is_some_and(is_utc_date_comment),
-            "{}: {date:?}",
-            dir.display()
-        );
-        lines[1] = "#<date>\n";
-        assert2::assert!(
-            lines.concat()
-                == format!(
-                    "#\n#<date>\ncluster.id={CLUSTER_ID}\ndirectory.id={directory_id}\n\
-                     node.id=2147483647\nversion=1\n"
-                ),
-            "{}",
-            dir.display()
-        );
-    }
-}
-
-/// Every `meta.properties` a format writes is the file Kafka's
-/// `PropertiesUtils.writePropertiesFile` writes for the same ids, byte for
-/// byte, except for the time on the date comment: an empty comment line, the
-/// date, and `cluster.id`, `directory.id`, `node.id`, and `version=1` in key
-/// order, as `Properties.store` writes them on Java 18 and later.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kafka_storage_parity.feature",
-    name = "meta properties is the file kafka writes"
-)]
-fn meta_properties_is_the_file_kafka_writes() {}
-
-fn format_successfully(args: &[&str], what: &str) -> Output {
-    let out = krabka_format(args, None);
-    assert2::assert!(out.status.code() == Some(0), "{what}: {}", stderr(&out));
-    out
-}
-
-krabka_macros::format_directories_fixture!(metadata_and_data_directories);

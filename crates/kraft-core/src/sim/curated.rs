@@ -159,54 +159,76 @@ fn message_duplication() -> ScenarioTrace {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {
+        super::*,
+        rstest::fixture,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("sim curated tests: returns three traces")]
-    fn bdd_verify_returns_three_traces() {
-        let traces = scenarios();
+    struct Catalogue {
+        source: Option<fn() -> Vec<ScenarioTrace>>,
+        traces: Option<Vec<ScenarioTrace>>,
+    }
+
+    #[fixture]
+    fn catalogue() -> Catalogue {
+        // Start this scenario with fresh inputs and observations.
+
+        Catalogue {
+            source: None,
+            traces: None,
+        }
+    }
+
+    #[given("the built-in catalogue of consensus fault demonstrations")]
+    fn built_in_catalogue(catalogue: &mut Catalogue) { catalogue.source = Some(scenarios); }
+
+    #[when("the operator generates the curated consensus traces")]
+    fn generate_traces(catalogue: &mut Catalogue) {
+        let source = catalogue
+            .source
+            .expect("the built-in catalogue was selected");
+        catalogue.traces = Some(source());
+    }
+
+    #[then("the catalogue contains exactly three demonstrations")]
+    fn three_traces(catalogue: &Catalogue) {
+        let traces = catalogue
+            .traces
+            .as_ref()
+            .expect("the traces were generated");
         assert2::assert!(traces.len() == 3);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/sim/curated.feature",
-        name = "tests: returns three traces"
-    )]
-    fn returns_three_traces() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("sim curated tests: every trace has steps")]
-    fn bdd_verify_every_trace_has_steps() {
-        for trace in scenarios() {
+    #[then("every curated demonstration records at least one event")]
+    fn recorded_events(catalogue: &Catalogue) {
+        for trace in catalogue
+            .traces
+            .as_ref()
+            .expect("the traces were generated")
+        {
             assert2::assert!(!trace.steps.is_empty());
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/sim/curated.feature",
-        name = "tests: every trace has steps"
-    )]
-    fn every_trace_has_steps() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("sim curated tests: split brain ends with exactly one leader")]
-    fn bdd_verify_split_brain_ends_with_exactly_one_leader() {
-        let traces = scenarios();
+    #[then("the healed partition demonstration finishes with exactly one leader")]
+    fn healed_partition(catalogue: &Catalogue) {
+        let traces = catalogue
+            .traces
+            .as_ref()
+            .expect("the traces were generated");
         let split = traces
             .iter()
-            .find(|t| t.id == "split_brain_prevented")
+            .find(|trace| trace.id == "split_brain_prevented")
             .expect("split_brain_prevented trace present");
         let last = split.steps.last().expect("split-brain has steps");
-        let leaders = last.roles.iter().filter(|r| r.role == "Leader").count();
+        let leaders = last
+            .roles
+            .iter()
+            .filter(|role| role.role == "Leader")
+            .count();
         assert2::assert!(leaders == 1);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/sim/curated.feature",
-        name = "tests: split brain ends with exactly one leader"
-    )]
-    fn split_brain_ends_with_exactly_one_leader() {}
+    scenarios!("tests/features/migrated/src/sim/curated.feature", fixtures = [catalogue: Catalogue]);
 }

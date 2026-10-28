@@ -84,39 +84,38 @@ mod tests {
         check!(log.batches().await.is_empty());
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers offset delete tombstone tests: write errors map as kafka handle operation exception for {example}"
-    )]
-    fn bdd_verify_write_errors_map_as_kafka_handle_operation_exception(example: String) {
-        type Example = (i16, i16);
-        let (write, want): Example = match example.as_str() {
-            "network exception" => (
-                codes::NETWORK_EXCEPTION,
-                codes::COORDINATOR_LOAD_IN_PROGRESS,
-            ),
-            "unknown topic" => (
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-                codes::COORDINATOR_NOT_AVAILABLE,
-            ),
-            "corrupt message" => (codes::CORRUPT_MESSAGE, codes::CORRUPT_MESSAGE),
-            "not enough replicas" => (codes::NOT_ENOUGH_REPLICAS, codes::COORDINATOR_NOT_AVAILABLE),
-            "request timed out" => (codes::REQUEST_TIMED_OUT, codes::COORDINATOR_NOT_AVAILABLE),
-            "not leader" => (codes::NOT_LEADER_OR_FOLLOWER, codes::NOT_COORDINATOR),
-            "kafka storage error" => (codes::KAFKA_STORAGE_ERROR, codes::NOT_COORDINATOR),
-            "message too large" => (codes::MESSAGE_TOO_LARGE, codes::UNKNOWN_SERVER_ERROR),
-            "record list too large" => (codes::RECORD_LIST_TOO_LARGE, codes::UNKNOWN_SERVER_ERROR),
-            "unknown server error" => (codes::UNKNOWN_SERVER_ERROR, codes::UNKNOWN_SERVER_ERROR),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(operation_error_code(write) == want, "{write}");
+    #[derive(Default)]
+    struct OffsetDeleteWriteScenario {
+        write_error: i16,
+        operation_error: Option<i16>,
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/offset_delete/tombstone.feature",
-        name = "tests: write errors map as kafka handle operation exception"
+    #[rstest::fixture]
+    fn offset_delete_write() -> OffsetDeleteWriteScenario {
+        let operation_error = None;
+        OffsetDeleteWriteScenario {
+            operation_error,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "writing an offset deletion tombstone fails with Kafka error {write_error}"
     )]
-    fn write_errors_map_as_kafka_handle_operation_exception(example: String) { let _ = example; }
+    fn failed_tombstone_write(
+        offset_delete_write: &mut OffsetDeleteWriteScenario,
+        write_error: i16,
+    ) {
+        offset_delete_write.write_error = write_error;
+    }
+    #[rstest_bdd_macros::when(
+        "the offset deletion maps the write failure to its operation response"
+    )]
+    fn map_tombstone_failure(offset_delete_write: &mut OffsetDeleteWriteScenario) {
+        offset_delete_write.operation_error =
+            Some(operation_error_code(offset_delete_write.write_error));
+    }
+    #[rstest_bdd_macros::then("the offset deletion response error is {expected}")]
+    fn check_tombstone_failure(offset_delete_write: &OffsetDeleteWriteScenario, expected: i16) {
+        check!(offset_delete_write.operation_error.unwrap() == expected);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_offset_delete_write",fixtures=[offset_delete_write:OffsetDeleteWriteScenario]);
 }

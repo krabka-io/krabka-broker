@@ -25,11 +25,6 @@ use {
 mod support;
 
 const CLUSTER_METADATA_TOPIC: &str = "__cluster_metadata";
-const FENCED_LEADER_EPOCH: i16 = 74;
-const SNAPSHOT_NOT_FOUND: i16 = 98;
-const POSITION_OUT_OF_RANGE: i16 = 99;
-const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
-
 /// The `(end_offset, epoch)` of one snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct CheckpointId {
@@ -85,150 +80,217 @@ fn checkpoint_ids(dir: &Path) -> Vec<CheckpointId> {
     ids
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("fetch snapshot: fetch snapshot serves the named metadata snapshot")]
-async fn bdd_verify_fetch_snapshot_serves_the_named_metadata_snapshot() {
-    // The test owns the data directory, since the snapshot file it reads back
-    // lives under it.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let (broker, client) = support::start_with_dir(dir.path()).await;
+use {
+    krabka_broker::BrokerHandle,
+    krabka_client_core::Client,
+    krabka_protocol::owned::fetch_snapshot_response::FetchSnapshotResponse,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+};
 
-    // Make the metadata image non-empty so the snapshot has real content.
-    let resp = client
-        .send(create_topic_request(
-            creatable_topic().name(("snap-topic").into()).call(),
-        ))
+#[derive(Default)]
+struct SnapshotFetch {
+    broker: Option<BrokerHandle>,
+    client: Option<Client>,
+    directory: Option<TempDir>,
+    snapshot: Option<CheckpointId>,
+    leader_epoch: Option<i32>,
+    size: Option<i64>,
+    response: Option<FetchSnapshotResponse>,
+}
+
+#[fixture]
+fn snapshot_fetch() -> SnapshotFetch {
+    // Start this scenario with fresh inputs and observations.
+
+    SnapshotFetch {
+        broker: None,
+        client: None,
+        directory: None,
+        snapshot: None,
+        leader_epoch: None,
+        size: None,
+        response: None,
+    }
+}
+
+#[given("a broker with an owned metadata data directory")]
+async fn broker(snapshot_fetch: &mut SnapshotFetch) {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (broker, client) = support::start_with_dir(directory.path()).await;
+    snapshot_fetch.broker = Some(broker);
+    snapshot_fetch.client = Some(client);
+    snapshot_fetch.directory = Some(directory);
+}
+
+#[given("the metadata image contains topic {topic}")]
+async fn metadata(snapshot_fetch: &SnapshotFetch, topic: String) {
+    let response = snapshot_fetch
+        .client
+        .as_ref()
+        .unwrap()
+        .send(create_topic_request(creatable_topic().name(topic).call()))
         .await
         .unwrap();
-    assert!(resp.topics[0].error_code == 0);
+    assert!(response.topics[0].error_code == 0);
+}
 
-    broker
+#[when("a controller snapshot is requested")]
+async fn trigger(snapshot_fetch: &SnapshotFetch) {
+    snapshot_fetch
+        .broker
+        .as_ref()
+        .unwrap()
         .trigger_snapshot_for_test()
         .await
         .expect("trigger snapshot");
+}
 
-    // A stale leader epoch is refused, and the refusal names the leader and
-    // its epoch, which is how a fetcher learns the epoch to send.
-    let refused = client
-        .send(fetch(
-            CheckpointId {
-                end_offset: 0,
-                epoch: 0,
-            },
-            0,
-            0,
-        ))
-        .await
-        .unwrap()
-        .topics
-        .remove(0)
-        .partitions
-        .remove(0);
-    assert!(refused.error_code == FENCED_LEADER_EPOCH);
-    let leader_epoch = refused.current_leader.leader_epoch;
-    check!(refused.current_leader.leader_id == 1);
-    assert!(leader_epoch > 0);
+#[when(
+    "FetchSnapshot requests topic {topic}, snapshot offset {offset}, snapshot epoch {epoch}, leader epoch {leader_epoch}, and position {position}"
+)]
+async fn explicit_fetch(
+    snapshot_fetch: &mut SnapshotFetch,
+    topic: String,
+    offset: i64,
+    epoch: i32,
+    leader_epoch: i32,
+    position: i64,
+) {
+    let mut request = fetch(
+        CheckpointId {
+            end_offset: offset,
+            epoch,
+        },
+        leader_epoch,
+        position,
+    );
+    request.topics[0].name = topic;
+    snapshot_fetch.response = Some(
+        snapshot_fetch
+            .client
+            .as_ref()
+            .unwrap()
+            .send(request)
+            .await
+            .unwrap(),
+    );
+}
 
-    // The trigger only schedules the snapshot; it completes asynchronously.
-    // Wait for its file, whose name is the snapshot id a fetcher asks for.
-    let deadline = Instant::now() + Duration::from_secs(30);
+#[then(
+    "the partition refuses stale epoch with code {error} and advertises leader {leader} with a positive epoch"
+)]
+fn leader_refusal(snapshot_fetch: &mut SnapshotFetch, error: i16, leader: i32) {
+    let part = &snapshot_fetch.response.as_ref().unwrap().topics[0].partitions[0];
+    assert!(part.error_code == error);
+    check!(part.current_leader.leader_id == leader);
+    assert!(part.current_leader.leader_epoch > 0);
+    snapshot_fetch.leader_epoch = Some(part.current_leader.leader_epoch);
+}
+
+#[when(
+    "the checkpoint file appears within {seconds} seconds and its first page is requested using the advertised epoch"
+)]
+async fn first_page(snapshot_fetch: &mut SnapshotFetch, seconds: u64) {
+    let deadline = Instant::now() + Duration::from_secs(seconds);
     let snapshot = loop {
-        if let Some(id) = checkpoint_ids(dir.path()).into_iter().max() {
+        if let Some(id) = checkpoint_ids(snapshot_fetch.directory.as_ref().unwrap().path())
+            .into_iter()
+            .max()
+        {
             break id;
         }
         assert!(
             Instant::now() <= deadline,
-            "snapshot not written within 30s"
+            "snapshot not written within {seconds}s"
         );
-        // intentional: snapshot production completes asynchronously in raft
-        // and has no metadata-image or metric signal (the image was already
-        // non-empty after CreateTopics, so it does not change when the
-        // snapshot is written). The only observable is the checkpoint file,
-        // so we poll for it under a bounded deadline.
         time::sleep(Duration::from_millis(50)).await;
     };
+    snapshot_fetch.response = Some(
+        snapshot_fetch
+            .client
+            .as_ref()
+            .unwrap()
+            .send(fetch(snapshot, snapshot_fetch.leader_epoch.unwrap(), 0))
+            .await
+            .unwrap(),
+    );
+    snapshot_fetch.snapshot = Some(snapshot);
+}
 
-    let out = client.send(fetch(snapshot, leader_epoch, 0)).await.unwrap();
-    assert!(out.error_code == 0, "top-level error_code");
+#[then(
+    "the exact named snapshot succeeds on partition zero with a positive total size and nonempty page"
+)]
+fn named_page(snapshot_fetch: &mut SnapshotFetch) {
+    let snapshot = snapshot_fetch.snapshot.unwrap();
+    let out = snapshot_fetch.response.as_ref().unwrap();
+    assert!(out.error_code == 0);
     let part = &out.topics[0].partitions[0];
-    assert!(part.error_code == 0, "partition error_code");
+    assert!(part.error_code == 0);
     check!(part.index == 0);
     check!(part.snapshot_id.end_offset == snapshot.end_offset);
     check!(part.snapshot_id.epoch == snapshot.epoch);
-    check!(
-        part.size > 0,
-        "served snapshot reports a non-zero total size"
-    );
-    check!(
-        part.unaligned_records.payload_len() > 0,
-        "served snapshot page carries bytes"
-    );
-    let size = part.size;
-
-    // Another snapshot id is not served in its place, and the end of the
-    // snapshot is not a position to read from.
-    for (what, request, expected) in [
-        (
-            "an id that no snapshot has",
-            fetch(
-                CheckpointId {
-                    end_offset: snapshot.end_offset + 1,
-                    epoch: snapshot.epoch,
-                },
-                leader_epoch,
-                0,
-            ),
-            SNAPSHOT_NOT_FOUND,
-        ),
-        (
-            "the end of the snapshot",
-            fetch(snapshot, leader_epoch, size),
-            POSITION_OUT_OF_RANGE,
-        ),
-    ] {
-        let out = client.send(request).await.unwrap();
-        check!(out.error_code == 0, "{what}");
-        check!(out.topics[0].partitions[0].error_code == expected, "{what}");
-    }
-
-    broker.shutdown().await;
+    check!(part.size > 0);
+    check!(part.unaligned_records.payload_len() > 0);
+    snapshot_fetch.size = Some(part.size);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[when("the same epoch requests a snapshot with offset increased by {delta} at position zero")]
+async fn absent_snapshot(snapshot_fetch: &mut SnapshotFetch, delta: i64) {
+    let mut snapshot = snapshot_fetch.snapshot.unwrap();
+    snapshot.end_offset += delta;
+    snapshot_fetch.response = Some(
+        snapshot_fetch
+            .client
+            .as_ref()
+            .unwrap()
+            .send(fetch(snapshot, snapshot_fetch.leader_epoch.unwrap(), 0))
+            .await
+            .unwrap(),
+    );
+}
+
+#[when("the named snapshot is requested at its reported total size")]
+async fn past_end(snapshot_fetch: &mut SnapshotFetch) {
+    snapshot_fetch.response = Some(
+        snapshot_fetch
+            .client
+            .as_ref()
+            .unwrap()
+            .send(fetch(
+                snapshot_fetch.snapshot.unwrap(),
+                snapshot_fetch.leader_epoch.unwrap(),
+                snapshot_fetch.size.unwrap(),
+            ))
+            .await
+            .unwrap(),
+    );
+}
+
+#[then("FetchSnapshot has top-level error {top} and partition error {partition}")]
+fn errors(snapshot_fetch: &SnapshotFetch, top: i16, partition: i16) {
+    let response = snapshot_fetch.response.as_ref().unwrap();
+    check!(response.error_code == top);
+    check!(response.topics[0].partitions[0].error_code == partition);
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/fetch_snapshot.feature",
     name = "fetch snapshot serves the named metadata snapshot"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_snapshot_serves_the_named_metadata_snapshot() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("fetch snapshot: fetch snapshot rejects non metadata topic")]
-async fn bdd_verify_fetch_snapshot_rejects_non_metadata_topic() {
-    let env = support::start().await;
-
-    let mut req = fetch(
-        CheckpointId {
-            end_offset: 0,
-            epoch: 0,
-        },
-        0,
-        0,
-    );
-    req.topics[0].name = "not-metadata".into();
-    let out = env.client.send(req).await.unwrap();
-    assert!(out.error_code == 0, "top-level error_code is success");
-    // UNKNOWN_TOPIC_OR_PARTITION (3) for any topic other than
-    // __cluster_metadata, as Kafka's raft client answers it.
-    assert!(out.topics[0].partitions[0].error_code == UNKNOWN_TOPIC_OR_PARTITION);
-
-    env.broker.shutdown().await;
+async fn fetch_snapshot_serves_the_named_metadata_snapshot(snapshot_fetch: SnapshotFetch) {
+    drop(snapshot_fetch.client);
+    snapshot_fetch.broker.unwrap().shutdown().await;
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/fetch_snapshot.feature",
     name = "fetch snapshot rejects non metadata topic"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_snapshot_rejects_non_metadata_topic() {}
+async fn fetch_snapshot_rejects_non_metadata_topic(snapshot_fetch: SnapshotFetch) {
+    drop(snapshot_fetch.client);
+    snapshot_fetch.broker.unwrap().shutdown().await;
+}

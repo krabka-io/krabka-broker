@@ -301,120 +301,131 @@ pub async fn refuse_unsupported_rollback(
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use {
         super::{changed_files, file_contents, refusal_message},
         assert2::check,
         krabka_bench_driver::soak::lifecycle::LevelRange,
+        rstest::fixture,
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
         std::{collections::BTreeMap, fs},
+        tempfile::TempDir,
     };
 
-    fn files(files: &[(&str, &[u8])]) -> BTreeMap<String, Vec<u8>> {
-        files
-            .iter()
-            .map(|(name, bytes)| ((*name).to_owned(), bytes.to_vec()))
+    #[derive(DataTableRow)]
+    struct FileImage {
+        name: String,
+        contents_hex: String,
+    }
+
+    #[derive(Default)]
+    struct RollbackObservation {
+        before: BTreeMap<String, Vec<u8>>,
+        after: BTreeMap<String, Vec<u8>>,
+        changed: Vec<String>,
+        derived: Vec<String>,
+        directory: Option<TempDir>,
+        walked: BTreeMap<String, Vec<u8>>,
+        range: Option<LevelRange>,
+        refusal: Option<String>,
+    }
+
+    #[fixture]
+    fn rollback() -> RollbackObservation {
+        // Each rollback comparison retains its own byte images and observation.
+        RollbackObservation {
+            directory: None,
+            ..Default::default()
+        }
+    }
+
+    fn file_images(rows: Rows<FileImage>) -> BTreeMap<String, Vec<u8>> {
+        rows.into_iter()
+            .map(|row| {
+                (
+                    row.name,
+                    hex::decode(row.contents_hex).expect("a hexadecimal file image"),
+                )
+            })
             .collect()
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract rollback guard tests: only what an open rebuilds may change for {example}"
-    )]
-    fn bdd_verify_only_what_an_open_rebuilds_may_change(example: String) {
-        type Example<'a> = (
-            &'a [(&'a str, &'a [u8])],
-            &'a [(&'a str, &'a [u8])],
-            &'a [&'a str],
-            &'a [&'a str],
-        );
-        let (before, after, changed, derived): Example<'_> = match example.as_str() {
-            "untouched" => (&[("0.log", b"ab")], &[("0.log", b"ab")], &[], &[]),
-            "snapshot removed" => (
-                &[("0.log", b"ab"), ("55.snapshot", b"s")],
-                &[("0.log", b"ab")],
-                &[],
-                &["55.snapshot"],
-            ),
-            "time index rebuilt" => (
-                &[("0.timeindex", b"")],
-                &[("0.timeindex", b"entry")],
-                &[],
-                &["0.timeindex"],
-            ),
-            "offset index trimmed" => (&[("0.index", b"ab\0")], &[("0.index", b"ab")], &[], &[
-                "0.index",
-            ]),
-            "checkpoint rewritten" => (
-                &[("0-0.checkpoint", b"ab")],
-                &[("0-0.checkpoint", b"ac")],
-                &["0-0.checkpoint"],
-                &[],
-            ),
-            "segment appended" => (&[("0.log", b"ab")], &[("0.log", b"ab\0")], &["0.log"], &[]),
-            "quorum state written" => (&[], &[("quorum-state", b"{}")], &["quorum-state"], &[]),
-            _ => panic!("unknown BDD example: {example}"),
-        };
+    #[given("rollback files before opening are:")]
+    fn before_open(rollback: &mut RollbackObservation, #[datatable] rows: Rows<FileImage>) {
+        rollback.before = file_images(rows);
+    }
 
-        let (found, found_derived) = changed_files(&files(before), &files(after));
-        check!(
-            found
-                == changed
-                    .iter()
-                    .map(|name| (*name).to_owned())
-                    .collect::<Vec<_>>()
-        );
-        check!(
-            found_derived
-                == derived
-                    .iter()
-                    .map(|name| (*name).to_owned())
-                    .collect::<Vec<_>>()
+    #[given("rollback files after opening are:")]
+    fn after_open(rollback: &mut RollbackObservation, #[datatable] rows: Rows<FileImage>) {
+        rollback.after = file_images(rows);
+    }
+
+    #[when("the rollback guard compares persisted and rebuildable file changes")]
+    fn compare_file_images(rollback: &mut RollbackObservation) {
+        (rollback.changed, rollback.derived) = changed_files(&rollback.before, &rollback.after);
+    }
+
+    fn file_names(names: &str) -> Vec<String> {
+        if names == "none" {
+            Vec::new()
+        } else {
+            names.split(',').map(str::to_owned).collect()
+        }
+    }
+
+    #[then("persisted changes are {changed} and derived rebuilds are {derived}")]
+    fn classified_file_changes(rollback: &RollbackObservation, changed: String, derived: String) {
+        check!(rollback.changed == file_names(&changed));
+        check!(rollback.derived == file_names(&derived));
+    }
+
+    #[given("a rollback data directory contains p-0/0.log with byte x")]
+    fn persisted_directory(rollback: &mut RollbackObservation) {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir(directory.path().join("p-0")).unwrap();
+        fs::write(directory.path().join("p-0").join("0.log"), b"x").unwrap();
+        rollback.directory = Some(directory);
+    }
+
+    #[when("the rollback guard reads each file's bytes below the data directory")]
+    fn read_persisted_files(rollback: &mut RollbackObservation) {
+        rollback.walked = file_contents(
+            rollback
+                .directory
+                .as_ref()
+                .expect("the data directory exists")
+                .path(),
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/rollback_guard.feature",
-        name = "tests: only what an open rebuilds may change"
-    )]
-    fn only_what_an_open_rebuilds_may_change(example: String) { let _ = example; }
+    #[then("the byte image contains only p-0/0.log with x")]
+    fn persisted_file_image(rollback: &RollbackObservation) {
+        check!(rollback.walked == BTreeMap::from([("p-0/0.log".to_owned(), b"x".to_vec())]));
+    }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract rollback guard tests: a directory is read file by file"
-    )]
-    fn bdd_verify_a_directory_is_read_file_by_file() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::create_dir(dir.path().join("p-0")).unwrap();
-        fs::write(dir.path().join("p-0").join("0.log"), b"x").unwrap();
+    #[given("the rollback source supports feature levels seven through thirty")]
+    fn rollback_source_range(rollback: &mut RollbackObservation) {
+        rollback.range = Some(LevelRange { min: 7, max: 30 });
+    }
+
+    #[when("the rollback guard explains refusal of metadata.version thirty-three")]
+    fn explain_rollback_refusal(rollback: &mut RollbackObservation) {
+        rollback.refusal = Some(refusal_message(
+            rollback.range.expect("the source range was supplied"),
+        ));
+    }
+
+    #[then("the refusal uses Kafka's FeatureLevelRecord wording and the source range")]
+    fn kafka_rollback_message(rollback: &RollbackObservation) {
         check!(
-            file_contents(dir.path()) == BTreeMap::from([("p-0/0.log".to_owned(), b"x".to_vec())])
+            rollback.refusal.as_deref()
+                == Some(
+                    "Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=33), but this controller only supports versions 7-30"
+                )
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/rollback_guard.feature",
-        name = "tests: a directory is read file by file"
-    )]
-    fn a_directory_is_read_file_by_file() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract rollback guard tests: the refusal is kafkas with the sources range"
-    )]
-    fn bdd_verify_the_refusal_is_kafkas_with_the_sources_range() {
-        check!(
-            refusal_message(LevelRange { min: 7, max: 30 })
-                == "Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', \
-                    featureLevel=33), but this controller only supports versions 7-30"
-        );
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/rollback_guard.feature",
-        name = "tests: the refusal is kafkas with the sources range"
-    )]
-    fn the_refusal_is_kafkas_with_the_sources_range() {}
+    scenarios!("tests/features/migrated/tests/soak_contract/rollback_guard.feature", fixtures = [rollback: RollbackObservation]);
 }

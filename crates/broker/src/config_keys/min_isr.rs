@@ -157,41 +157,45 @@ mod tests {
         image
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "config keys min isr tests: the topic override wins then the cluster default then kafkas own for {example}"
-    )]
-    fn bdd_verify_the_topic_override_wins_then_the_cluster_default_then_kafkas_own(
-        example: String,
-    ) {
-        type Example = (Option<&'static str>, Option<&'static str>, usize, usize);
-        let (topic_override, cluster_default, replication_factor, expected): Example =
-            match example.as_str() {
-                "nothing published" => (None, None, 3, 1),
-                "cluster default" => (None, Some("2"), 3, 2),
-                "topic override" => (Some("3"), Some("2"), 3, 3),
-                "unparseable value" => (Some("many"), None, 3, 1),
-                "replication factor caps topic" => (Some("5"), None, 3, 3),
-                "replication factor caps cluster" => (None, Some("9"), 2, 2),
-                _ => panic!("unknown BDD example: {example}"),
-            };
-
-        check!(
-            effective_min_insync_replicas(
-                &image(topic_override, cluster_default),
-                "t",
-                replication_factor,
-            ) == expected
-        );
+    #[derive(Default)]
+    struct MinimumIsrScenario {
+        topic: Option<String>,
+        cluster: Option<String>,
+        replicas: usize,
+        resolved: Option<usize>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/config_keys/min_isr.feature",
-        name = "tests: the topic override wins then the cluster default then kafkas own"
+    #[rstest::fixture]
+    fn minimum_isr() -> MinimumIsrScenario {
+        // Keep minimum isr inputs and observations fresh for each scenario.
+        MinimumIsrScenario::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "topic min.insync.replicas is {topic} and the cluster default is {cluster}"
     )]
-    fn the_topic_override_wins_then_the_cluster_default_then_kafkas_own(example: String) {
-        let _ = example;
+    fn minimum_isr_overrides(minimum_isr: &mut MinimumIsrScenario, topic: String, cluster: String) {
+        minimum_isr.topic = (topic != "unset").then_some(topic);
+        minimum_isr.cluster = (cluster != "unset").then_some(cluster);
+    }
+
+    #[rstest_bdd_macros::given("the topic's replication factor is {replicas}")]
+    fn minimum_isr_replication(minimum_isr: &mut MinimumIsrScenario, replicas: usize) {
+        minimum_isr.replicas = replicas;
+    }
+
+    #[rstest_bdd_macros::when("the broker resolves the topic's effective minimum ISR")]
+    fn resolve_minimum_isr(minimum_isr: &mut MinimumIsrScenario) {
+        minimum_isr.resolved = Some(effective_min_insync_replicas(
+            &image(minimum_isr.topic.as_deref(), minimum_isr.cluster.as_deref()),
+            "t",
+            minimum_isr.replicas,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the effective minimum ISR is {expected}")]
+    fn effective_minimum_isr(minimum_isr: &MinimumIsrScenario, expected: usize) {
+        check!(minimum_isr.resolved == Some(expected));
     }
 
     /// Node 2 carries a per-node `min.insync.replicas` where node 3 carries
@@ -254,4 +258,6 @@ mod tests {
         );
         check!(clear_elr_records(&image, None).len() == 2);
     }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/config_keys/min_isr.feature", fixtures = [minimum_isr: MinimumIsrScenario]);
 }

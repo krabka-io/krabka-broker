@@ -183,261 +183,150 @@ fn row(error_code: i16, name: &str) -> MetadataResponseTopic {
     }
 }
 
-/// One expected row of a case.
-#[derive(Debug, Clone)]
-enum Expect {
-    /// The full row of [`EXISTING`], with these authorized operations.
-    Existing(i32),
-    /// A partitionless row.
-    Row(i16, &'static str, i32),
-}
-
-struct Case {
-    name: &'static str,
-    /// The broker's `auto.create.topics.enable`.
-    auto_create_topics_enable: bool,
+#[derive(Default)]
+struct MetadataAuthorizationScenario {
+    fixture: Option<Fixture>,
     version: i16,
-    topics: &'static [&'static str],
-    allow_auto_topic_creation: bool,
-    include_ops: bool,
-    grants: Vec<Grant>,
-    rows: Vec<Expect>,
-    /// The missing topics the case auto-creates.
-    creates: &'static [&'static str],
+    existing: Option<MetadataResponseTopic>,
+    response: Option<MetadataResponse>,
+    requested: Vec<String>,
 }
-
-/// The cases of [`topic_rows_follow_kafka_authorization_and_auto_creation`].
-fn topic_row_cases() -> Vec<Case> {
-    use {
-        AclOperation::{Create, Describe},
-        Expect::{Existing, Row},
-    };
-    vec![
-        Case {
-            name: "cluster Create auto-creates a missing topic and answers 3",
-            auto_create_topics_enable: true,
-            version: 12,
-            topics: &["authz-cluster-create"],
-            allow_auto_topic_creation: true,
-            include_ops: false,
-            grants: vec![topic("authz-cluster-create", Describe), cluster(Create)],
-            rows: vec![Row(
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-                "authz-cluster-create",
-                i32::MIN,
-            )],
-            creates: &["authz-cluster-create"],
-        },
-        Case {
-            name: "topic Create alone auto-creates a missing topic",
-            auto_create_topics_enable: true,
-            version: 12,
-            topics: &["authz-topic-create"],
-            allow_auto_topic_creation: true,
-            include_ops: false,
-            grants: vec![
-                topic("authz-topic-create", Describe),
-                topic("authz-topic-create", Create),
-            ],
-            rows: vec![Row(
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-                "authz-topic-create",
-                i32::MIN,
-            )],
-            creates: &["authz-topic-create"],
-        },
-        Case {
-            name: "no Create answers 29 with the zero id",
-            auto_create_topics_enable: true,
-            version: 12,
-            topics: &["authz-no-create"],
-            allow_auto_topic_creation: true,
-            include_ops: false,
-            grants: vec![topic("authz-no-create", Describe)],
-            rows: vec![Row(
-                codes::TOPIC_AUTHORIZATION_FAILED,
-                "authz-no-create",
-                i32::MIN,
-            )],
-            creates: &[],
-        },
-        Case {
-            name: "no auto-creation asked needs no Create",
-            auto_create_topics_enable: true,
-            version: 12,
-            topics: &["authz-no-auto"],
-            allow_auto_topic_creation: false,
-            include_ops: false,
-            grants: vec![topic("authz-no-auto", Describe)],
-            rows: vec![Row(
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-                "authz-no-auto",
-                i32::MIN,
-            )],
-            creates: &[],
-        },
-        Case {
-            name: "an invalid name answers 17 and is not created",
-            auto_create_topics_enable: true,
-            version: 12,
-            topics: &["authz bad name"],
-            allow_auto_topic_creation: true,
-            include_ops: false,
-            grants: vec![topic("authz bad name", Describe), cluster(Create)],
-            rows: vec![Row(
-                codes::INVALID_TOPIC_EXCEPTION,
-                "authz bad name",
-                i32::MIN,
-            )],
-            creates: &[],
-        },
-        Case {
-            name: "rows are described, then denied Create, then denied Describe",
-            auto_create_topics_enable: true,
-            version: 12,
-            topics: &["authz-hidden", "authz-order-no-create", EXISTING],
-            allow_auto_topic_creation: true,
-            include_ops: false,
-            grants: vec![
-                topic(EXISTING, Describe),
-                topic("authz-order-no-create", Describe),
-            ],
-            rows: vec![
-                Existing(i32::MIN),
-                Row(
-                    codes::TOPIC_AUTHORIZATION_FAILED,
-                    "authz-order-no-create",
-                    i32::MIN,
-                ),
-                Row(codes::TOPIC_AUTHORIZATION_FAILED, "authz-hidden", i32::MIN),
-            ],
-            creates: &[],
-        },
-        Case {
-            name: "a repeated name answers one row",
-            auto_create_topics_enable: true,
-            version: 12,
-            topics: &[EXISTING, EXISTING, "authz-twice", "authz-twice"],
-            allow_auto_topic_creation: false,
-            include_ops: false,
-            grants: vec![topic(EXISTING, Describe), topic("authz-twice", Describe)],
-            rows: vec![
-                Existing(i32::MIN),
-                Row(codes::UNKNOWN_TOPIC_OR_PARTITION, "authz-twice", i32::MIN),
-            ],
-            creates: &[],
-        },
-        Case {
-            name: "the missing topic row carries its authorized operations",
-            auto_create_topics_enable: true,
-            version: 10,
-            topics: &["authz-ops-missing", EXISTING],
-            allow_auto_topic_creation: false,
-            include_ops: true,
-            grants: vec![
-                topic(EXISTING, Describe),
-                topic("authz-ops-missing", Describe),
-                topic("authz-ops-missing", Create),
-            ],
-            rows: vec![
-                Existing(DESCRIBE_BIT),
-                Row(
-                    codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    "authz-ops-missing",
-                    DESCRIBE_BIT | CREATE_BIT,
-                ),
-            ],
-            creates: &[],
-        },
-        Case {
-            name: "auto.create.topics.enable = false answers 3 and creates nothing",
-            auto_create_topics_enable: false,
-            version: 12,
-            topics: &["authz-auto-create-disabled"],
-            allow_auto_topic_creation: true,
-            include_ops: false,
-            grants: vec![
-                topic("authz-auto-create-disabled", Describe),
-                cluster(Create),
-            ],
-            rows: vec![Row(
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-                "authz-auto-create-disabled",
-                i32::MIN,
-            )],
-            creates: &[],
-        },
-    ]
+#[rstest::fixture]
+fn metadata_authorization() -> MetadataAuthorizationScenario {
+    let fixture = None;
+    MetadataAuthorizationScenario {
+        fixture,
+        ..Default::default()
+    }
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers metadata authorization tests: topic rows follow kafka authorization and auto creation"
+#[rstest_bdd_macros::given(
+    "a metadata broker with automatic topic creation {enabled} and protocol version {version}"
 )]
-async fn bdd_verify_topic_rows_follow_kafka_authorization_and_auto_creation() {
-    use Expect::{Existing, Row};
-    let enabled = start(true).await;
-    let disabled = start(false).await;
-    for case in topic_row_cases() {
-        let fixture = if case.auto_create_topics_enable {
-            &enabled
-        } else {
-            &disabled
-        };
-        let existing = fixture.existing_row(case.version).await;
-        fixture.grants.set(&case.grants);
-        let response = fixture
-            .metadata(
-                case.version,
-                &named(
-                    case.topics,
-                    case.allow_auto_topic_creation,
-                    case.include_ops,
-                ),
-            )
-            .await;
-        let expected: Vec<MetadataResponseTopic> = case
-            .rows
-            .iter()
-            .map(|expect| match expect {
-                Existing(ops) => MetadataResponseTopic {
-                    topic_authorized_operations: *ops,
-                    ..existing.clone()
-                },
-                Row(error_code, name, ops) => MetadataResponseTopic {
-                    topic_authorized_operations: *ops,
-                    ..row(*error_code, name)
-                },
-            })
-            .collect();
-        assert!(response.topics == expected, "{}", case.name);
-        for name in case.creates {
-            fixture.broker.wait_until_partition_present(name, 0).await;
-        }
+async fn metadata_creation_policy(
+    metadata_authorization: &mut MetadataAuthorizationScenario,
+    enabled: bool,
+    version: i16,
+) {
+    let fixture = start(enabled).await;
+    metadata_authorization.existing = Some(fixture.existing_row(version).await);
+    metadata_authorization.fixture = Some(fixture);
+    metadata_authorization.version = version;
+}
+#[rstest_bdd_macros::given("the metadata principal holds these exact grants")]
+fn metadata_topic_grants(
+    metadata_authorization: &mut MetadataAuthorizationScenario,
+    datatable: Vec<Vec<String>>,
+) {
+    let grants = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let operation = match row[1].as_str() {
+                "Describe" => AclOperation::Describe,
+                "Create" => AclOperation::Create,
+                value => panic!("unknown operation {value}"),
+            };
+            if row[0] == "cluster" {
+                cluster(operation)
+            } else {
+                topic(&row[0], operation)
+            }
+        })
+        .collect::<Vec<_>>();
+    metadata_authorization
+        .fixture
+        .as_ref()
+        .expect("started broker")
+        .grants
+        .set(&grants);
+}
+#[rstest_bdd_macros::when(
+    "metadata requests automatic creation {auto} and authorized operations {ops} for these topics"
+)]
+async fn request_authorized_metadata(
+    metadata_authorization: &mut MetadataAuthorizationScenario,
+    auto: bool,
+    ops: bool,
+    datatable: Vec<Vec<String>>,
+) {
+    metadata_authorization.requested = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| row[0].clone())
+        .collect();
+    let names = metadata_authorization
+        .requested
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    metadata_authorization.response = Some(
+        metadata_authorization
+            .fixture
+            .as_ref()
+            .expect("started broker")
+            .metadata(metadata_authorization.version, &named(&names, auto, ops))
+            .await,
+    );
+}
+#[rstest_bdd_macros::then("metadata returns these complete ordered topic rows")]
+fn authorized_metadata_rows(
+    metadata_authorization: &MetadataAuthorizationScenario,
+    datatable: Vec<Vec<String>>,
+) {
+    let expected = datatable
+        .into_iter()
+        .skip(1)
+        .map(|cells| {
+            let base = if cells[1] == "full" {
+                metadata_authorization
+                    .existing
+                    .as_ref()
+                    .expect("existing topic baseline")
+                    .clone()
+            } else {
+                row(cells[1].parse().expect("error code"), &cells[0])
+            };
+            MetadataResponseTopic {
+                topic_authorized_operations: cells[2].parse().expect("authorized operations"),
+                ..base
+            }
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        metadata_authorization
+            .response
+            .as_ref()
+            .expect("metadata response")
+            .topics
+            == expected
+    );
+}
+#[rstest_bdd_macros::then("only these requested missing topics are created: \"{created}\"")]
+async fn metadata_creation_effects(
+    metadata_authorization: &mut MetadataAuthorizationScenario,
+    created: String,
+) {
+    let fixture = metadata_authorization
+        .fixture
+        .take()
+        .expect("started broker");
+    let created = created
+        .split(',')
+        .filter(|name| !name.is_empty() && *name != "<empty>")
+        .collect::<Vec<_>>();
+    for name in &created {
+        fixture.broker.wait_until_partition_present(name, 0).await;
+    }
+    {
         let image = fixture.broker.controller_image_for_test();
-        for name in case.topics {
-            if !case.creates.contains(name) && *name != EXISTING {
-                assert!(image.topic(name).is_none(), "{}: {name}", case.name);
+        for name in &metadata_authorization.requested {
+            if name != EXISTING && !created.contains(&name.as_str()) {
+                assert!(image.topic(name).is_none(), "unexpected topic {name}");
             }
         }
     }
-    enabled.broker.shutdown().await;
-    disabled.broker.shutdown().await;
+    fixture.broker.shutdown().await;
 }
-
-/// Kafka's `handleTopicMetadataRequest`: `Describe` first, then cluster
-/// `Create`, then topic `Create`, for a missing topic that the request asks to
-/// auto-create on a broker whose `auto.create.topics.enable` holds, and no
-/// auto-creation at all on one where it does not; rows ordered described, denied `Create`, denied `Describe`;
-/// one row per distinct name; and the topic authorized operations on every
-/// described row, the rows for missing topics included.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/metadata/authorization_tests.feature",
-    name = "topic rows follow kafka authorization and auto creation"
-)]
-#[tokio::test]
-async fn topic_rows_follow_kafka_authorization_and_auto_creation() {}
 
 /// KIP-430 `cluster_authorized_operations`: Kafka answers 0 when `Describe`
 /// on the cluster is denied, whatever else the principal holds, and the bit
@@ -573,3 +462,66 @@ async fn quiet_probes_leave_no_denial_behind_and_a_named_refusal_does() {
     assert!(denied("Describe", "Topic") == 1);
     fixture.broker.shutdown().await;
 }
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_metadata_authorization.feature",
+    name = "cluster Create auto-creates a missing topic and answers 3"
+)]
+#[tokio::test]
+async fn metadata_authorization_case_0(metadata_authorization: MetadataAuthorizationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_metadata_authorization.feature",
+    name = "topic Create alone auto-creates a missing topic"
+)]
+#[tokio::test]
+async fn metadata_authorization_case_1(metadata_authorization: MetadataAuthorizationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_metadata_authorization.feature",
+    name = "no Create answers 29 with the zero id"
+)]
+#[tokio::test]
+async fn metadata_authorization_case_2(metadata_authorization: MetadataAuthorizationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_metadata_authorization.feature",
+    name = "no auto-creation asked needs no Create"
+)]
+#[tokio::test]
+async fn metadata_authorization_case_3(metadata_authorization: MetadataAuthorizationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_metadata_authorization.feature",
+    name = "an invalid name answers 17 and is not created"
+)]
+#[tokio::test]
+async fn metadata_authorization_case_4(metadata_authorization: MetadataAuthorizationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_metadata_authorization.feature",
+    name = "rows are described, then denied Create, then denied Describe"
+)]
+#[tokio::test]
+async fn metadata_authorization_case_5(metadata_authorization: MetadataAuthorizationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_metadata_authorization.feature",
+    name = "a repeated name answers one row"
+)]
+#[tokio::test]
+async fn metadata_authorization_case_6(metadata_authorization: MetadataAuthorizationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_metadata_authorization.feature",
+    name = "the missing topic row carries its authorized operations"
+)]
+#[tokio::test]
+async fn metadata_authorization_case_7(metadata_authorization: MetadataAuthorizationScenario) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_metadata_authorization.feature",
+    name = "auto.create.topics.enable = false answers 3 and creates nothing"
+)]
+#[tokio::test]
+async fn metadata_authorization_case_8(metadata_authorization: MetadataAuthorizationScenario) {}

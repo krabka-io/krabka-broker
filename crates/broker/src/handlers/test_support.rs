@@ -26,16 +26,6 @@ macro_rules! allow_all_broker_setup {
     };
 }
 
-macro_rules! empty_share_offsets_response {
-    ($response:ident, $error_code:expr, $error_message:expr) => {
-        krabka_macros::unthrottled_wire!($response {
-            error_code: $error_code,
-            error_message: $error_message,
-            responses: Vec::new(),
-        })
-    };
-}
-
 macro_rules! anonymous_request_identity {
     ($principal:ident, $peer:ident, $ctx:ident, $client:expr $(, $connection:expr)? $(,)?) => {
         krabka_macros::request_test_identity! {
@@ -65,12 +55,12 @@ use {
         producer_state::ProducerState,
         share_partition::state::RecordState,
         test_support::{
-            ControllerPeerAllowed, DenyAll, GrantsInPrincipalName, ShareApiSupport,
-            StandalonePartitionSetup, StorageMode, broker_registration, decode_response,
-            encode_request, initialize_share_state, peer, principal, request_context,
-            sasl_principal, start_broker_no_audit_with,
-            start_broker_with as start_test_broker_with, start_group_broker_no_audit,
-            start_share_broker, tolerate_starved_heartbeats, try_dispatch_context,
+            ControllerPeerAllowed, DenyAll, GrantsInPrincipalName, StandalonePartitionSetup,
+            StorageMode, broker_registration, decode_response, encode_request,
+            initialize_share_state, peer, principal, request_context, sasl_principal,
+            start_broker_no_audit_with, start_broker_with as start_test_broker_with,
+            start_group_broker_no_audit, start_share_broker, tolerate_starved_heartbeats,
+            try_dispatch_context,
         },
         topic_policy::TopicPolicy,
     },
@@ -453,52 +443,6 @@ pub struct StartedBroker {
     pub broker: BrokerHandle,
     pub dir: tempfile::TempDir,
 }
-/// An independent share API input and expected refusal response.
-pub struct ShareRefusalCase<Input, Response> {
-    pub name: &'static str,
-    pub authorizer: Arc<dyn Authorizer>,
-    pub enabled: ShareApiSupport,
-    pub input: Input,
-    pub expected: Response,
-}
-
-/// The shared feature and group-refusal policies, constructed before case inputs.
-pub struct ShareRefusalPolicy {
-    name: &'static str,
-    authorizer: Arc<dyn Authorizer>,
-    enabled: ShareApiSupport,
-}
-impl ShareRefusalPolicy {
-    pub fn unsupported(name: &'static str) -> Self {
-        Self {
-            name,
-            authorizer: Arc::new(AllowAllAuthorizer),
-            enabled: ShareApiSupport::Disabled,
-        }
-    }
-
-    pub fn group_denied(name: &'static str) -> Self {
-        Self {
-            name,
-            authorizer: Arc::new(ControllerPeerAllowed(DenyAll)),
-            enabled: ShareApiSupport::Enabled,
-        }
-    }
-
-    pub fn with_input<Input, Response>(
-        self,
-        input: Input,
-        expected: Response,
-    ) -> ShareRefusalCase<Input, Response> {
-        ShareRefusalCase {
-            name: self.name,
-            authorizer: self.authorizer,
-            enabled: self.enabled,
-            input,
-            expected,
-        }
-    }
-}
 /// A broker handle and its live view, retaining the broker directory.
 pub struct LiveBrokerFixture {
     pub handle: BrokerHandle,
@@ -692,13 +636,6 @@ pub async fn share_acknowledge_wire(
 pub struct CaseOutcomes<T> {
     pub actual: T,
     pub expected: T,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct LabeledCaseOutcome<Response, State> {
-    pub label: &'static str,
-    pub response: Response,
-    pub state: State,
 }
 
 /// The actual or the expected outcome of one [`TopicResolutionCase`].

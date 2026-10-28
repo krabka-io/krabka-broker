@@ -157,140 +157,57 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers incremental alter configs client metrics scope tests: refusals match kafka"
-    )]
-    fn bdd_verify_refusals_match_kafka() {
-        let illegal = |entry: &str| {
-            refused(
-                codes::INVALID_CONFIG,
-                &format!("Illegal client matching pattern: {entry}"),
-            )
-        };
-        let cases = [
-            (
-                "bogus",
-                OP_SET,
-                Some("x"),
-                refused(
-                    codes::INVALID_REQUEST,
-                    "Unknown client metrics configuration: bogus",
-                ),
-            ),
-            (
-                "interval.ms",
-                OP_SET,
-                Some("99"),
-                refused(
-                    codes::INVALID_REQUEST,
-                    "Invalid value 99 for interval.ms, interval must be between 100 and 3600000 \
-                     (1 hour)",
-                ),
-            ),
-            (
-                "interval.ms",
-                OP_SET,
-                Some("abc"),
-                refused(
-                    codes::INVALID_CONFIG,
-                    "Invalid value abc for configuration interval.ms: Not a number of type INT",
-                ),
-            ),
-            (
-                "metrics",
-                OP_SET,
-                Some("a.,,b."),
-                refused(
-                    codes::INVALID_CONFIG,
-                    "Configuration 'metrics' values must not be empty.",
-                ),
-            ),
-            (
-                "metrics",
-                OP_SET,
-                Some("a., a."),
-                refused(
-                    codes::INVALID_CONFIG,
-                    "Configuration 'metrics' values must not be duplicated.",
-                ),
-            ),
-            (
-                "match",
-                OP_SET,
-                Some("client_id=a,,client_id=b"),
-                refused(
-                    codes::INVALID_CONFIG,
-                    "Configuration 'match' values must not be empty.",
-                ),
-            ),
-            (
-                "match",
-                OP_SET,
-                Some("client_id=a=b"),
-                illegal("client_id=a=b"),
-            ),
-            ("match", OP_SET, Some("client_id="), illegal("client_id=")),
-            (
-                "match",
-                OP_SET,
-                Some("client_foo=x"),
-                illegal("client_foo=x"),
-            ),
-            (
-                "match",
-                OP_SET,
-                Some("client_id=[x"),
-                illegal("client_id=[x"),
-            ),
-            (
-                "match",
-                OP_SET,
-                Some("client_id=(?P<n>x)"),
-                illegal("client_id=(?P<n>x)"),
-            ),
-            (
-                "metrics",
-                OP_APPEND,
-                Some("b."),
-                refused(
-                    codes::INVALID_CONFIG,
-                    "Can't APPEND to key metrics because its type is not LIST.",
-                ),
-            ),
-            (
-                "metrics",
-                OP_SUBTRACT,
-                Some("a."),
-                refused(
-                    codes::INVALID_CONFIG,
-                    "Can't SUBTRACT to key metrics because its type is not LIST.",
-                ),
-            ),
-        ];
-        for (key, op, value, expected) in cases {
-            let Handled {
-                response,
-                records: to_submit,
-            } = run("sub-a", &[Op {
-                key,
-                operation: op,
-                value,
-            }]);
-            check!(response == expected, "{key} op {op} = {value:?}");
-            check!(to_submit.is_empty(), "{key} op {op} = {value:?}");
+    #[derive(Default)]
+    struct ClientMetricsAlterationScenario {
+        key: String,
+        operation: i8,
+        value: String,
+        handled: Option<Handled>,
+    }
+    #[rstest::fixture]
+    fn client_metrics_alteration() -> ClientMetricsAlterationScenario {
+        let key = String::new();
+        ClientMetricsAlterationScenario {
+            key,
+            ..Default::default()
         }
     }
-
-    /// Kafka's `ClientMetricsConfigs.validate` on the merged map, with the
-    /// codes `ConfigurationControlManager.validateAlterConfig` maps its
-    /// exceptions to.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/incremental_alter_configs/client_metrics_scope.feature",
-        name = "tests: refusals match kafka"
+    #[rstest_bdd_macros::given(
+        "subscription sub-a alters key {key} with operation {operation} and value {value}"
     )]
-    fn refusals_match_kafka() {}
+    fn client_metrics_alteration_input(
+        client_metrics_alteration: &mut ClientMetricsAlterationScenario,
+        key: String,
+        operation: i8,
+        value: String,
+    ) {
+        client_metrics_alteration.key = key;
+        client_metrics_alteration.operation = operation;
+        client_metrics_alteration.value = value;
+    }
+    #[rstest_bdd_macros::when("the alteration merges with interval 60000 and metrics a.")]
+    fn merge_client_metrics_alteration(
+        client_metrics_alteration: &mut ClientMetricsAlterationScenario,
+    ) {
+        client_metrics_alteration.handled = Some(run("sub-a", &[Op {
+            key: &client_metrics_alteration.key,
+            operation: client_metrics_alteration.operation,
+            value: Some(&client_metrics_alteration.value),
+        }]));
+    }
+    #[rstest_bdd_macros::then(
+        "the client metrics alteration returns code {code} message {message} and stages no record"
+    )]
+    fn check_client_metrics_alteration(
+        client_metrics_alteration: &ClientMetricsAlterationScenario,
+        code: i16,
+        message: String,
+    ) {
+        let handled = client_metrics_alteration.handled.as_ref().unwrap();
+        check!(handled.response == refused(code, &message));
+        check!(handled.records.is_empty());
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_client_metrics_alteration",fixtures=[client_metrics_alteration:ClientMetricsAlterationScenario]);
 
     /// Accepted alterations stage the whole merged map, and one that changes
     /// nothing stages no record, as Kafka writes a `ConfigRecord` only for a

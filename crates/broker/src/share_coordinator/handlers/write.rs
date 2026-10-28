@@ -83,6 +83,9 @@ async fn write_state(
 mod tests {
     use {
         super::*,
+        crate::share_coordinator::handlers::test_support::{
+            StateFixture, group_name_literal, initialized_state, retain_leadership,
+        },
         assert2::check,
         krabka_protocol::{
             UnknownTaggedFields,
@@ -100,13 +103,6 @@ mod tests {
     struct PartitionAt {
         partition: i32,
         state_epoch: i32,
-    }
-
-    fn at(partition: i32, state_epoch: i32) -> PartitionAt {
-        PartitionAt {
-            partition,
-            state_epoch,
-        }
     }
 
     fn request(group_id: &str, partitions: &[PartitionAt]) -> WriteShareGroupStateRequest {
@@ -158,97 +154,200 @@ mod tests {
         state_response(WIRE_TOPIC, partitions)
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "share coordinator handlers write tests: write state answers as kafka"
+    #[derive(Default)]
+    struct WriteStateStory {
+        state: Option<StateFixture>,
+        directory: Option<tempfile::TempDir>,
+        observed: Option<WriteShareGroupStateResponse>,
+        summary: rstest_bdd::Slot<Option<(i32, i32, Offset, i32)>>,
+    }
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct WriteStateInput {
+        partition: i32,
+        state_epoch: i32,
+    }
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct WriteStateExpected {
+        partition: i32,
+        code: i16,
+        message: String,
+    }
+    #[rstest::fixture]
+    fn write_state_story() -> WriteStateStory {
+        // State and RPC observations are isolated for each write request.
+        WriteStateStory::default()
+    }
+    #[rstest_bdd_macros::given(
+        "a led Share coordinator has topic 33333333-3333-3333-3333-333333333333 with 8 partitions and share-group partition 4 at state epoch 17 start 90 leader epoch 0 completed 0"
     )]
-    async fn bdd_verify_write_state_answers_as_kafka() {
-        let initial = Some((17, 0, Offset(90), 0));
-        // (led, request, expected response, summary of partition 4 after)
-        let rows = [
-            (
-                true,
-                request("share-group", &[at(4, 17)]),
-                response(vec![row(4, codes::NONE, None)]),
-                Some((17, 0, Offset(101), 9)),
-            ),
-            (
-                true,
-                request("share-group", &[at(6, 17)]),
-                response(vec![row(
-                    6,
-                    codes::INVALID_REQUEST,
-                    Some("Write operation on uninitialized share partition not allowed."),
-                )]),
-                initial,
-            ),
-            (
-                true,
-                request("share-group", &[at(4, 16)]),
-                response(vec![row(
-                    4,
-                    codes::FENCED_STATE_EPOCH,
-                    Some(
-                        "The coordinator rejected the request because the state epoch did not match.",
-                    ),
-                )]),
-                initial,
-            ),
-            (
-                false,
-                request("share-group", &[at(4, 17)]),
-                response(vec![row(
-                    4,
-                    codes::NOT_COORDINATOR,
-                    Some("Unable to write share group state: This is not the correct coordinator."),
-                )]),
-                None,
-            ),
-            (
-                true,
-                request("", &[at(4, 17)]),
-                WriteShareGroupStateResponse::default(),
-                initial,
-            ),
-            (
-                true,
-                request("share-group", &[]),
-                WriteShareGroupStateResponse::default(),
-                initial,
-            ),
-        ];
-
-        for (index, (led, req, expected, summary)) in rows.into_iter().enumerate() {
-            let dir = tempfile::TempDir::new().expect("tempdir");
-            let super::super::test_support::StateFixture { coordinator, image } =
-                super::super::test_support::initialized_state()
-                    .log_dir(dir.path())
-                    .topic(TOPIC)
-                    .partitions(8)
-                    .partition(4)
-                    .call()
-                    .await;
-            super::super::test_support::retain_leadership(&coordinator, led).await;
-
-            let resp = write_state(&coordinator, &image, req).await;
-            check!(resp == expected, "row {index}");
-            let stored = coordinator
+    async fn initialized_write_state(write_state_story: &mut WriteStateStory) {
+        write_state_story.directory = Some(tempfile::TempDir::new().expect("share state logs"));
+        write_state_story.state = Some(
+            initialized_state()
+                .log_dir(write_state_story.directory.as_ref().expect("logs").path())
+                .topic(TOPIC)
+                .partitions(8)
+                .partition(4)
+                .call()
+                .await,
+        );
+    }
+    #[rstest_bdd_macros::given("the WriteShareGroupState coordinator leadership is {led}")]
+    async fn write_state_leadership(write_state_story: &WriteStateStory, led: bool) {
+        retain_leadership(
+            &write_state_story
+                .state
+                .as_ref()
+                .expect("initialized state")
+                .coordinator,
+            led,
+        )
+        .await;
+    }
+    #[rstest_bdd_macros::when(
+        "WriteShareGroupState writes group {group} leader epoch 3 start 101 completed 9 acknowledged batch 101..105 count 3 to these partitions and observes stored partition 4"
+    )]
+    async fn issue_state_write(
+        write_state_story: &mut WriteStateStory,
+        group: String,
+        #[datatable] datatable: rstest_bdd::datatable::Rows<WriteStateInput>,
+    ) {
+        let group = group_name_literal(group);
+        let partitions: Vec<_> = datatable
+            .into_iter()
+            .map(|row| PartitionAt {
+                partition: row.partition,
+                state_epoch: row.state_epoch,
+            })
+            .collect();
+        write_state_story.observed = Some(
+            write_state(
+                &write_state_story
+                    .state
+                    .as_ref()
+                    .expect("initialized state")
+                    .coordinator,
+                &write_state_story
+                    .state
+                    .as_ref()
+                    .expect("initialized state")
+                    .image,
+                request(&group, &partitions),
+            )
+            .await,
+        );
+        write_state_story.summary.set(
+            write_state_story
+                .state
+                .as_ref()
+                .expect("initialized state")
+                .coordinator
                 .read_summary("share-group", TOPIC, 4)
                 .await
                 .ok()
-                .flatten();
-            check!(stored == summary, "row {index}");
-        }
+                .flatten(),
+        );
+    }
+    #[rstest_bdd_macros::then(
+        "the complete WriteShareGroupState response has these rows and default tags"
+    )]
+    fn state_write_response(
+        write_state_story: &WriteStateStory,
+        #[datatable] datatable: rstest_bdd::datatable::Rows<WriteStateExpected>,
+    ) {
+        let expected: Vec<_> = datatable
+            .into_iter()
+            .map(|expected| {
+                row(
+                    expected.partition,
+                    expected.code,
+                    if expected.message == "null" {
+                        None
+                    } else {
+                        Some(expected.message.as_str())
+                    },
+                )
+            })
+            .collect();
+        let expected = if expected.is_empty() {
+            WriteShareGroupStateResponse::default()
+        } else {
+            response(expected)
+        };
+        check!(
+            write_state_story
+                .observed
+                .as_ref()
+                .expect("write completed")
+                == &expected
+        );
+    }
+    #[rstest_bdd_macros::then("the stored Share write summary is {summary}")]
+    fn state_write_summary(write_state_story: &WriteStateStory, summary: String) {
+        let expected: Option<(i32, i32, i64, i32)> =
+            serde_json::from_str(&summary).expect("nullable summary tuple");
+        let expected = expected
+            .map(|(state, leader, offset, complete)| (state, leader, Offset(offset), complete));
+        check!(
+            write_state_story
+                .summary
+                .get()
+                .expect("stored summary observed")
+                == expected
+        );
     }
 
-    /// The whole `WriteShareGroupStateResponse` for each request shape, over
-    /// one initialized key (partition 4, state epoch 17), and the stored
-    /// summary after the request.
-    #[cfg(test)]
     #[rstest_bdd_macros::scenario(
         path = "tests/features/migrated/src/share_coordinator/handlers/write.feature",
-        name = "tests: write state answers as kafka"
+        name = "A matching state epoch applies the delivery delta"
     )]
     #[tokio::test]
-    async fn write_state_answers_as_kafka() {}
+    async fn write_state_answers_as_kafka(write_state_story: WriteStateStory) {
+        drop(write_state_story);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/write.feature",
+        name = "An uninitialized key refuses the write"
+    )]
+    #[tokio::test]
+    async fn write_state_answers_as_kafka1(write_state_story: WriteStateStory) {
+        drop(write_state_story);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/write.feature",
+        name = "An old state epoch is fenced"
+    )]
+    #[tokio::test]
+    async fn write_state_answers_as_kafka2(write_state_story: WriteStateStory) {
+        drop(write_state_story);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/write.feature",
+        name = "A resigned coordinator refuses the write"
+    )]
+    #[tokio::test]
+    async fn write_state_answers_as_kafka3(write_state_story: WriteStateStory) {
+        drop(write_state_story);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/write.feature",
+        name = "An empty group returns no rows"
+    )]
+    #[tokio::test]
+    async fn write_state_answers_as_kafka4(write_state_story: WriteStateStory) {
+        drop(write_state_story);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/share_coordinator/handlers/write.feature",
+        name = "An empty partition list returns no rows"
+    )]
+    #[tokio::test]
+    async fn write_state_answers_as_kafka5(write_state_story: WriteStateStory) {
+        drop(write_state_story);
+    }
 }

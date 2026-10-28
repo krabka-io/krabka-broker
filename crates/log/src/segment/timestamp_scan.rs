@@ -775,48 +775,29 @@ mod record_limit_tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "segment timestamp scan record limit tests: a lookup by timestamp refuses only the records kafka reads for {example}"
+    #[derive(Default)]
+    struct SegmentTimestampScenario {
+        segment: Option<TempSegment>,
+        result: Option<Result<Option<(Offset, i64)>, LogError>>,
+    }
+    #[rstest::fixture]
+    fn segment_timestamp() -> SegmentTimestampScenario {
+        let segment = None;
+        SegmentTimestampScenario {
+            segment,
+            ..SegmentTimestampScenario::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "a {codec} segment with a 10-byte record at timestamp 1000 and a 1000-byte record at 1001"
     )]
-    fn bdd_verify_a_lookup_by_timestamp_refuses_only_the_records_kafka_reads(example: String) {
-        type Example<'a> = (&'a str, CompressionType, Option<ByteSize>, i64, Lookup);
-        let (name, codec, limit, target, expected): Example<'_> = match example.as_str() {
-            "before oversized batch" => (
-                "found before the oversized batch",
-                CompressionType::Gzip,
-                Some(LIMIT),
-                1_000,
-                Ok(Some((Offset(0), 1_000))),
-            ),
-            "oversized match" => (
-                "the oversized record is the match",
-                CompressionType::Gzip,
-                Some(LIMIT),
-                1_001,
-                Err(LARGE),
-            ),
-            "gzip without limit" => (
-                "no limit",
-                CompressionType::Gzip,
-                None,
-                1_001,
-                Ok(Some((Offset(1), 1_001))),
-            ),
-            "uncompressed" => (
-                "an uncompressed batch is never held to it",
-                CompressionType::None,
-                Some(LIMIT),
-                1_001,
-                Ok(Some((Offset(1), 1_001))),
-            ),
-            _ => panic!("unknown BDD example: {example}"),
+    fn timestamp_scan_segment(segment_timestamp: &mut SegmentTimestampScenario, codec: String) {
+        let codec = match codec.as_str() {
+            "gzip" => CompressionType::Gzip,
+            "uncompressed" => CompressionType::None,
+            _ => panic!("unknown compression {codec}"),
         };
-
-        let TempSegment {
-            dir: _dir,
-            segment: seg,
-        } = segment(&[
+        segment_timestamp.segment = Some(segment(&[
             batch(
                 0,
                 &[TimedRecord {
@@ -833,23 +814,68 @@ mod record_limit_tests {
                 }],
                 codec,
             ),
-        ]);
-        let found = seg.offset_for_timestamp_with_window(target, WINDOW, limit);
-        check!(answer(found) == expected, "{name}");
+        ]));
     }
-
-    /// A batch whose max timestamp is below the target is skipped without being
-    /// decompressed, and a batch is read only up to the record the lookup
-    /// returns, so the limit fails a lookup only for a record Kafka reads. An
-    /// uncompressed batch is never held to it.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/segment/timestamp_scan.feature",
-        name = "record limit tests: a lookup by timestamp refuses only the records kafka reads"
+    #[rstest_bdd_macros::when(
+        "segment timestamp lookup searches for {timestamp} with record limit {limit}"
     )]
-    fn a_lookup_by_timestamp_refuses_only_the_records_kafka_reads(example: String) {
-        let _ = example;
+    fn scan_segment_timestamp(
+        segment_timestamp: &mut SegmentTimestampScenario,
+        timestamp: i64,
+        limit: String,
+    ) {
+        let limit = if limit == "unlimited" {
+            None
+        } else {
+            Some(bytes(limit.parse().expect("record byte limit")))
+        };
+        segment_timestamp.result = Some(
+            segment_timestamp
+                .segment
+                .as_ref()
+                .expect("timestamped segment given")
+                .segment
+                .offset_for_timestamp_with_window(timestamp, WINDOW, limit),
+        );
     }
+    #[rstest_bdd_macros::then(
+        "segment timestamp lookup returns offset {offset} at timestamp {timestamp}"
+    )]
+    fn found_segment_timestamp(
+        segment_timestamp: &SegmentTimestampScenario,
+        offset: i64,
+        timestamp: i64,
+    ) {
+        let found = segment_timestamp
+            .result
+            .as_ref()
+            .expect("timestamp lookup performed")
+            .as_ref()
+            .expect("matching record accepted");
+        check!(*found == Some((Offset(offset), timestamp)));
+    }
+    #[rstest_bdd_macros::then(
+        "segment timestamp lookup rejects a {size}-byte record against limit {limit}"
+    )]
+    fn oversized_segment_timestamp(
+        segment_timestamp: &SegmentTimestampScenario,
+        size: usize,
+        limit: usize,
+    ) {
+        let Err(LogError::RecordTooLarge {
+            size: found_size,
+            limit: found_limit,
+        }) = segment_timestamp
+            .result
+            .as_ref()
+            .expect("timestamp lookup performed")
+        else {
+            panic!("oversized compressed record not rejected")
+        };
+        check!(*found_size == size);
+        check!(*found_limit == limit);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/segment_timestamp_limit", fixtures = [segment_timestamp: SegmentTimestampScenario]);
 
     /// Kafka's iterator decodes lazily, so a record after the one it returns is
     /// never read, and one before it always is.

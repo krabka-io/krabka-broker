@@ -65,210 +65,6 @@ async fn initialize_share_partitions(
     );
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("share groups share group state: lifecycle initializes share state")]
-async fn bdd_verify_lifecycle_initializes_share_state() {
-    let (broker, bootstrap, _d) = boot().await;
-    let client = connect(&bootstrap).await;
-    create_topic(&client, "t5", 3).await;
-    let tid = topic_id(&broker, "t5");
-
-    initialize_share_partitions(&broker, &client, "g5", "t5", 3).await;
-
-    for p in 0..3 {
-        let (_se, _le, start_offset, _dcc) = broker
-            .share_state_summary_for_test("g5", tid, p)
-            .await
-            .unwrap();
-        assert!(
-            start_offset == UNINITIALIZED_START_OFFSET,
-            "partition {p} initialized at start_offset {UNINITIALIZED_START_OFFSET}, \
-             got {start_offset}"
-        );
-    }
-}
-
-/// KIP-932 group-coordinator lifecycle. When a share group joins a topic with
-/// `P` partitions, the coordinator initializes the per-partition share state in
-/// the `__share_group_state` persister. Each entry has a present state, not the
-/// missing-key sentinel, and `start_offset`
-/// [`UNINITIALIZED_START_OFFSET`]: the coordinator records that the
-/// partition exists and leaves where it starts to the share partition, which
-/// resolves the group's `share.auto.offset.reset` on its first load, as
-/// Kafka's `SharePartition.maybeInitialize` does. The heartbeat hook runs
-/// after the reconcile.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
-    name = "lifecycle initializes share state"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lifecycle_initializes_share_state() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share groups share group state: lifecycle metadata survives restart")]
-async fn bdd_verify_lifecycle_metadata_survives_restart() {
-    let (tid, dir) = {
-        let (broker, bootstrap, dir) = boot().await;
-        let client = connect(&bootstrap).await;
-        create_topic(&client, "t6", 2).await;
-        let tid = topic_id(&broker, "t6");
-
-        initialize_share_partitions(&broker, &client, "g6", "t6", 2).await;
-        // Both partitions are initialized before restart.
-        for p in 0..2 {
-            assert!(
-                broker
-                    .share_state_summary_for_test("g6", tid, p)
-                    .await
-                    .is_some(),
-                "partition {p} initialized pre-restart"
-            );
-        }
-        broker.shutdown().await;
-        (tid, dir)
-    };
-    let log_dir = dir.path().to_path_buf();
-
-    {
-        let (broker, client) = rejoin(log_dir).await;
-
-        // The recovered ShareCoordinator replays __share_group_state once it
-        // becomes active for the state partition, which happens after
-        // `Broker::start` returns. Until then a read answers an error, not
-        // the summary, so wait for the recovery rather than read at once.
-        for p in 0..2 {
-            broker.wait_for_share_state_summary("g6", tid, p).await;
-        }
-
-        // Re-join the recovered group; the coordinator's recovered
-        // ShareGroupStatePartitionMetadata means the heartbeat hook treats the
-        // partitions as already initialized and does NOT re-Initialize them
-        // (a re-init would FENCE on the same state_epoch). The group stays
-        // healthy and the state remains present.
-        let desc = describe(&client, "g6").await;
-        let mid = desc.groups[0].members[0].member_id.clone();
-        let mut hb = heartbeat("g6", &mid, desc.groups[0].group_epoch);
-        hb.subscribed_topic_names = Some(vec!["t6".into()]);
-        let _ = client.send(hb).await.unwrap();
-
-        // Await rather than sleep: confirm the recovered summaries are still
-        // present (the coordinator must NOT re-initialize already-initialized
-        // partitions after restart).
-        for p in 0..2 {
-            broker.wait_for_share_state_summary("g6", tid, p).await;
-            assert!(
-                broker
-                    .share_state_summary_for_test("g6", tid, p)
-                    .await
-                    .is_some(),
-                "partition {p} share-state still present after restart re-join"
-            );
-        }
-    }
-}
-
-/// After a restart, the broker recovers the group's
-/// `ShareGroupStatePartitionMetadata`, so a rejoin does not initialize the
-/// state again. A stale, non-zero `start_offset` written straight to the
-/// persister survives, because the coordinator skips already-initialized
-/// partitions on the post-restart heartbeat.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
-    name = "lifecycle metadata survives restart"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lifecycle_metadata_survives_restart() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "share groups share group state: delete groups deletes an empty share group and its state"
-)]
-async fn bdd_verify_delete_groups_deletes_an_empty_share_group_and_its_state() {
-    use krabka_protocol::owned::delete_groups_request::DeleteGroupsRequest;
-
-    let (broker, bootstrap, _d) = boot().await;
-    let client = connect(&bootstrap).await;
-    create_topic(&client, "t-delete", 2).await;
-    let tid = topic_id(&broker, "t-delete");
-
-    let mut join = heartbeat("g-delete", &uuid::Uuid::new_v4().to_string(), 0);
-    join.subscribed_topic_names = Some(vec!["t-delete".into()]);
-    let joined = client.send(join).await.unwrap();
-    assert!(
-        joined.error_code == 0,
-        "join failed: {:?}",
-        joined.error_code
-    );
-    let member_id = joined.member_id.clone().unwrap();
-    let initialized = time::timeout(Duration::from_secs(30), async {
-        loop {
-            let mut hb = heartbeat("g-delete", &member_id, joined.member_epoch);
-            hb.subscribed_topic_names = Some(vec!["t-delete".into()]);
-            let _ = client.send(hb).await.unwrap();
-            let mut all = true;
-            for p in 0..2 {
-                all &= broker
-                    .share_state_summary_for_test("g-delete", tid, p)
-                    .await
-                    .is_some();
-            }
-            if all {
-                break;
-            }
-        }
-    })
-    .await;
-    assert!(initialized.is_ok(), "share state never initialized");
-
-    // (step, leave the group before the delete, expected error code, share
-    //  state present after the step)
-    let steps = [
-        ("delete with a member", false, 68_i16, true),
-        ("delete after the leave", true, 0, false),
-        ("delete again", false, 69, false),
-    ];
-    for (step, leave, expected, state_present) in steps {
-        if leave {
-            let left = client
-                .send(heartbeat("g-delete", &member_id, -1))
-                .await
-                .unwrap();
-            assert!(left.error_code == 0, "{step}: leave failed");
-        }
-        let resp = client
-            .send(DeleteGroupsRequest {
-                groups_names: vec!["g-delete".into()],
-                ..Default::default()
-            })
-            .await
-            .expect("DeleteGroups");
-        assert!(resp.results[0].error_code == expected, "{step}: {resp:?}");
-        for p in 0..2 {
-            let present = broker
-                .share_state_summary_for_test("g-delete", tid, p)
-                .await
-                .is_some();
-            assert!(present == state_present, "{step}: partition {p}");
-        }
-    }
-}
-
-/// `DeleteGroups` on a share group, as Kafka's
-/// `GroupCoordinatorService.deleteGroups` answers it. A group with a member
-/// gets `NON_EMPTY_GROUP` (68) and keeps its share state. After the member
-/// leaves, the delete succeeds, removes the share state of every initialized
-/// partition, and drops the group. A second delete gets `GROUP_ID_NOT_FOUND`
-/// (69).
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
-    name = "delete groups deletes an empty share group and its state"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_groups_deletes_an_empty_share_group_and_its_state() {}
-
 /// A group member, the epoch it last held, and the topics it subscribes to.
 #[derive(Clone, Copy)]
 struct MemberSubscription<'a> {
@@ -328,35 +124,237 @@ async fn heartbeat_until(
     );
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("share groups share group state: a deleted topic loses its share state")]
-async fn bdd_verify_a_deleted_topic_loses_its_share_state() {
-    use krabka_protocol::owned::delete_topics_request::{DeleteTopicState, DeleteTopicsRequest};
+use {
+    krabka_broker::BrokerHandle,
+    krabka_client_core::Client,
+    krabka_protocol::owned::{
+        create_partitions_request::{CreatePartitionsRequest, CreatePartitionsTopic},
+        delete_groups_request::DeleteGroupsRequest,
+        delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::{collections::BTreeMap, sync::Arc},
+    tempfile::TempDir,
+};
 
-    let (broker, bootstrap, _d) = boot().await;
-    let client = connect(&bootstrap).await;
-    create_topic(&client, "doomed", 2).await;
-    create_topic(&client, "kept", 2).await;
-    let doomed = topic_id(&broker, "doomed");
-    let kept = topic_id(&broker, "kept");
-    let subscription: &[&str] = &["doomed", "kept"];
+#[derive(Default)]
+struct ShareLifecycle {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    client: Option<Arc<Client>>,
+    group: String,
+    topics: BTreeMap<String, (uuid::Uuid, i32)>,
+    members: BTreeMap<String, i32>,
+    error: Option<i16>,
+}
 
-    let mut join = heartbeat("g-doomed", "member-a", 0);
-    join.subscribed_topic_names = Some(vec!["doomed".into(), "kept".into()]);
-    let joined = client.send(join).await.unwrap();
-    assert!(joined.error_code == 0, "join failed");
-    let members = [MemberSubscription {
-        member_id: "member-a",
-        epoch: joined.member_epoch,
-        topics: subscription,
-    }];
-    heartbeat_until(&broker, &client, "g-doomed", &members, doomed, 0..2, true).await;
-    heartbeat_until(&broker, &client, "g-doomed", &members, kept, 0..2, true).await;
+#[fixture]
+fn share_lifecycle() -> ShareLifecycle {
+    // Topic IDs and actual member epochs remain stable across lifecycle operations.
+    ShareLifecycle::default()
+}
 
-    let deleted = client
+impl ShareLifecycle {
+    fn broker(&self) -> &BrokerHandle { self.broker.as_ref().expect("share broker") }
+
+    fn client(&self) -> &Client { self.client.as_ref().expect("share client") }
+}
+
+#[given("a running share lifecycle coordinator for group {group}")]
+async fn lifecycle_coordinator(share_lifecycle: &mut ShareLifecycle, group: String) {
+    let (broker, bootstrap, directory) = boot().await;
+    share_lifecycle.client = Some(connect(&bootstrap).await);
+    share_lifecycle.broker = Some(broker);
+    share_lifecycle.directory = Some(directory);
+    share_lifecycle.group = group;
+}
+
+#[given("share lifecycle topic {topic} has {partitions} partitions")]
+async fn lifecycle_topic(share_lifecycle: &mut ShareLifecycle, topic: String, partitions: i32) {
+    create_topic(share_lifecycle.client(), &topic, partitions).await;
+    let identity = topic_id(share_lifecycle.broker(), &topic);
+    share_lifecycle.topics.insert(topic, (identity, partitions));
+}
+
+#[when("the share group lifecycle initializes topic {topic}")]
+async fn initialize_lifecycle(share_lifecycle: &ShareLifecycle, topic: String) {
+    initialize_share_partitions(
+        share_lifecycle.broker(),
+        share_lifecycle.client(),
+        &share_lifecycle.group,
+        &topic,
+        share_lifecycle.topics[&topic].1,
+    )
+    .await;
+}
+
+#[then("every share state partition of {topic} exists with an uninitialized start offset")]
+async fn uninitialized_share_state(share_lifecycle: &ShareLifecycle, topic: String) {
+    let (identity, partitions) = share_lifecycle.topics[&topic];
+    let mut offsets = Vec::new();
+    for partition in 0..partitions {
+        let (_, _, offset, _) = share_lifecycle
+            .broker()
+            .share_state_summary_for_test(&share_lifecycle.group, identity, partition)
+            .await
+            .expect("partition initialized");
+        offsets.push(offset);
+    }
+    assert!(offsets == vec![UNINITIALIZED_START_OFFSET; usize::try_from(partitions).unwrap()]);
+}
+
+#[then("every share state partition of {topic} is present: {present}")]
+async fn lifecycle_state_present(share_lifecycle: &ShareLifecycle, topic: String, present: bool) {
+    let (identity, partitions) = share_lifecycle.topics[&topic];
+    for partition in 0..partitions {
+        assert!(
+            share_lifecycle
+                .broker()
+                .share_state_summary_for_test(&share_lifecycle.group, identity, partition)
+                .await
+                .is_some()
+                == present,
+            "share state of {topic}-{partition} must be present={present}"
+        );
+    }
+}
+
+#[when("the lifecycle broker restarts and the group's state summaries recover")]
+async fn restart_share_lifecycle(share_lifecycle: &mut ShareLifecycle) {
+    share_lifecycle
+        .broker
+        .take()
+        .expect("first broker")
+        .shutdown()
+        .await;
+    let (broker, client) = rejoin(
+        share_lifecycle
+            .directory
+            .as_ref()
+            .expect("durable directory")
+            .path()
+            .to_path_buf(),
+    )
+    .await;
+    for (identity, partitions) in share_lifecycle.topics.values() {
+        for partition in 0..*partitions {
+            broker
+                .wait_for_share_state_summary(&share_lifecycle.group, *identity, partition)
+                .await;
+        }
+    }
+    share_lifecycle.broker = Some(broker);
+    share_lifecycle.client = Some(client);
+}
+
+#[when("the recovered member heartbeats again for topic {topic}")]
+async fn heartbeat_recovered_lifecycle(share_lifecycle: &ShareLifecycle, topic: String) {
+    let described = describe(share_lifecycle.client(), &share_lifecycle.group).await;
+    let member = &described.groups[0].members[0].member_id;
+    let mut request = heartbeat(
+        &share_lifecycle.group,
+        member,
+        described.groups[0].group_epoch,
+    );
+    request.subscribed_topic_names = Some(vec![topic.clone()]);
+    share_lifecycle.client().send(request).await.unwrap();
+    let (identity, partitions) = share_lifecycle.topics[&topic];
+    for partition in 0..partitions {
+        share_lifecycle
+            .broker()
+            .wait_for_share_state_summary(&share_lifecycle.group, identity, partition)
+            .await;
+    }
+}
+
+#[given("member {member} has initialized its subscription to {subscriptions}")]
+async fn initialized_subscription(
+    share_lifecycle: &mut ShareLifecycle,
+    member: String,
+    subscriptions: String,
+) {
+    let topics: Vec<&str> = subscriptions.split(',').collect();
+    let mut request = heartbeat(&share_lifecycle.group, &member, 0);
+    request.subscribed_topic_names = Some(topics.iter().map(|topic| (*topic).to_owned()).collect());
+    let response = share_lifecycle.client().send(request).await.unwrap();
+    assert!(response.error_code == 0, "join failed: {response:?}");
+    let actual_member = response.member_id.expect("joined member identity");
+    for topic in &topics {
+        let (identity, partitions) = share_lifecycle.topics[*topic];
+        heartbeat_until(
+            share_lifecycle.broker(),
+            share_lifecycle.client(),
+            &share_lifecycle.group,
+            &[MemberSubscription {
+                member_id: &actual_member,
+                epoch: response.member_epoch,
+                topics: &topics,
+            }],
+            identity,
+            0..partitions,
+            true,
+        )
+        .await;
+    }
+    share_lifecycle
+        .members
+        .insert(actual_member, response.member_epoch);
+}
+
+#[given(
+    "member {member} has joined its subscription to {topic} without waiting for state initialization"
+)]
+async fn joined_lifecycle_subscription(
+    share_lifecycle: &mut ShareLifecycle,
+    member: String,
+    topic: String,
+) {
+    let mut request = heartbeat(&share_lifecycle.group, &member, 0);
+    request.subscribed_topic_names = Some(vec![topic]);
+    let response = share_lifecycle.client().send(request).await.unwrap();
+    assert!(response.error_code == 0, "second join failed: {response:?}");
+    share_lifecycle.members.insert(
+        response.member_id.expect("joined member identity"),
+        response.member_epoch,
+    );
+}
+
+#[when("an administrator deletes the share group")]
+async fn delete_lifecycle_group(share_lifecycle: &mut ShareLifecycle) {
+    let response = share_lifecycle
+        .client()
+        .send(DeleteGroupsRequest {
+            groups_names: vec![share_lifecycle.group.clone()],
+            ..Default::default()
+        })
+        .await
+        .expect("DeleteGroups");
+    share_lifecycle.error = Some(response.results[0].error_code);
+}
+
+#[when("share lifecycle member {member} leaves at epoch minus one")]
+async fn leave_lifecycle_group(share_lifecycle: &mut ShareLifecycle, member: String) {
+    let response = share_lifecycle
+        .client()
+        .send(heartbeat(&share_lifecycle.group, &member, -1))
+        .await
+        .unwrap();
+    share_lifecycle.error = Some(response.error_code);
+}
+
+#[then("the share lifecycle operation returns error {error}")]
+fn lifecycle_operation_code(share_lifecycle: &ShareLifecycle, error: i16) {
+    assert!(share_lifecycle.error == Some(error));
+}
+
+#[when("an administrator deletes share lifecycle topic {topic}")]
+async fn delete_lifecycle_topic(share_lifecycle: &mut ShareLifecycle, topic: String) {
+    let response = share_lifecycle
+        .client()
         .send(DeleteTopicsRequest {
             topics: vec![DeleteTopicState {
-                name: Some("doomed".into()),
+                name: Some(topic),
                 ..Default::default()
             }],
             timeout_ms: 5_000,
@@ -364,174 +362,49 @@ async fn bdd_verify_a_deleted_topic_loses_its_share_state() {
         })
         .await
         .expect("DeleteTopics");
-    assert!(deleted.responses[0].error_code == 0, "{deleted:?}");
-
-    heartbeat_until(&broker, &client, "g-doomed", &members, doomed, 0..2, false).await;
-    for p in 0..2 {
-        assert!(
-            broker
-                .share_state_summary_for_test("g-doomed", kept, p)
-                .await
-                .is_some(),
-            "share state of kept-{p} was deleted"
-        );
-    }
+    share_lifecycle.error = Some(response.responses[0].error_code);
 }
 
-/// A topic that is deleted loses its share state, as Kafka's
-/// `GroupMetadataManager.maybeCleanupShareGroupState` deletes it on the
-/// metadata update. The share state of the other subscribed topic stays.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
-    name = "a deleted topic loses its share state"
+#[when(
+    "member {member} heartbeats subscribed to {subscriptions} until topic {topic} state is present {present}"
 )]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_deleted_topic_loses_its_share_state() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "share groups share group state: unassigned partitions keep their share state"
-)]
-async fn bdd_verify_unassigned_partitions_keep_their_share_state() {
-    // (group, the second member subscribes to `b` from the start, the first
-    //  member moves to `b` instead of leaving)
-    let rows = [("g-keep-leave", true, false), ("g-keep-move", false, true)];
-    for (group, second_member, move_subscription) in rows {
-        let (broker, bootstrap, _d) = boot().await;
-        let client = connect(&bootstrap).await;
-        create_topic(&client, "a", 2).await;
-        create_topic(&client, "b", 2).await;
-        let topic_a = topic_id(&broker, "a");
-        let topic_b = topic_id(&broker, "b");
-
-        let join = |member_id: &str, topic: &str| {
-            let mut hb = heartbeat(group, member_id, 0);
-            hb.subscribed_topic_names = Some(vec![topic.to_owned()]);
-            hb
-        };
-        let first = client.send(join("member-a", "a")).await.unwrap();
-        assert!(first.error_code == 0, "{group}: first join failed");
-        heartbeat_until(
-            &broker,
-            &client,
-            group,
-            &[MemberSubscription {
-                member_id: "member-a",
-                epoch: first.member_epoch,
-                topics: &["a"],
-            }],
-            topic_a,
-            0..2,
-            true,
-        )
-        .await;
-
-        if second_member {
-            let second = client.send(join("member-b", "b")).await.unwrap();
-            assert!(second.error_code == 0, "{group}: second join failed");
-            let left = client.send(heartbeat(group, "member-a", -1)).await.unwrap();
-            assert!(left.error_code == 0, "{group}: leave failed");
-            heartbeat_until(
-                &broker,
-                &client,
-                group,
-                &[MemberSubscription {
-                    member_id: "member-b",
-                    epoch: second.member_epoch,
-                    topics: &["b"],
-                }],
-                topic_b,
-                0..2,
-                true,
-            )
-            .await;
-        }
-        if move_subscription {
-            heartbeat_until(
-                &broker,
-                &client,
-                group,
-                &[MemberSubscription {
-                    member_id: "member-a",
-                    epoch: first.member_epoch,
-                    topics: &["b"],
-                }],
-                topic_b,
-                0..2,
-                true,
-            )
-            .await;
-        }
-
-        for p in 0..2 {
-            assert!(
-                broker
-                    .share_state_summary_for_test(group, topic_a, p)
-                    .await
-                    .is_some(),
-                "{group}: share state of a-{p} was deleted"
-            );
-        }
-        broker.shutdown().await;
-    }
-}
-
-/// A partition that no member is assigned keeps its share state, as in Kafka:
-/// the heartbeat only initializes. Rows: the only consumer of one of two
-/// topics leaves while a consumer of the other topic stays, and a member
-/// moves its subscription from one topic to the other.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
-    name = "unassigned partitions keep their share state"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unassigned_partitions_keep_their_share_state() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "share groups share group state: every initialized partition starts uninitialized"
-)]
-async fn bdd_verify_every_initialized_partition_starts_uninitialized() {
-    use krabka_protocol::owned::create_partitions_request::{
-        CreatePartitionsRequest, CreatePartitionsTopic,
-    };
-
-    let (broker, bootstrap, _d) = boot().await;
-    let client = connect(&bootstrap).await;
-    create_topic(&client, "t-grow", 2).await;
-    let tid = topic_id(&broker, "t-grow");
-
-    let mut join = heartbeat("g-grow", "member-a", 0);
-    join.subscribed_topic_names = Some(vec!["t-grow".into()]);
-    let joined = client.send(join).await.unwrap();
-    assert!(
-        joined.error_code == 0,
-        "join failed: {:?}",
-        joined.error_code
-    );
+async fn reconcile_lifecycle_subscription(
+    share_lifecycle: &ShareLifecycle,
+    member: String,
+    subscriptions: String,
+    topic: String,
+    present: bool,
+) {
+    let topics: Vec<&str> = subscriptions.split(',').collect();
+    let (identity, partitions) = share_lifecycle.topics[&topic];
     heartbeat_until(
-        &broker,
-        &client,
-        "g-grow",
+        share_lifecycle.broker(),
+        share_lifecycle.client(),
+        &share_lifecycle.group,
         &[MemberSubscription {
-            member_id: "member-a",
-            epoch: joined.member_epoch,
-            topics: &["t-grow"],
+            member_id: &member,
+            epoch: share_lifecycle.members[&member],
+            topics: &topics,
         }],
-        tid,
-        0..2,
-        true,
+        identity,
+        0..partitions,
+        present,
     )
     .await;
+}
 
-    let grown = client
+#[when("an administrator grows share lifecycle topic {topic} to {partitions} partitions")]
+async fn grow_lifecycle_topic(
+    share_lifecycle: &mut ShareLifecycle,
+    topic: String,
+    partitions: i32,
+) {
+    let response = share_lifecycle
+        .client()
         .send(CreatePartitionsRequest {
             topics: vec![CreatePartitionsTopic {
-                name: "t-grow".into(),
-                count: 4,
-                // No manual assignment: Kafka's admin client sends null.
+                name: topic.clone(),
+                count: partitions,
                 assignments: None,
                 ..Default::default()
             }],
@@ -540,43 +413,115 @@ async fn bdd_verify_every_initialized_partition_starts_uninitialized() {
         })
         .await
         .expect("CreatePartitions");
-    assert!(grown.results[0].error_code == 0, "{grown:?}");
-    heartbeat_until(
-        &broker,
-        &client,
-        "g-grow",
-        &[MemberSubscription {
-            member_id: "member-a",
-            epoch: joined.member_epoch,
-            topics: &["t-grow"],
-        }],
-        tid,
-        0..4,
-        true,
-    )
-    .await;
-
-    let mut start_offsets = Vec::new();
-    for p in 0..4 {
-        let (_, _, start_offset, _) = broker
-            .share_state_summary_for_test("g-grow", tid, p)
-            .await
-            .expect("initialized");
-        start_offsets.push(start_offset);
-    }
-    assert!(start_offsets == vec![UNINITIALIZED_START_OFFSET; 4]);
+    share_lifecycle.error = Some(response.results[0].error_code);
+    share_lifecycle
+        .topics
+        .get_mut(&topic)
+        .expect("existing topic")
+        .1 = partitions;
 }
 
-/// The start offset that the group coordinator initializes a share partition
-/// at, as Kafka 4.3.1's `buildInitializeShareGroupStateRequest` picks it:
-/// `-1` for every partition, a new partition of a topic that the group
-/// already knows included. The share partition resolves
-/// `share.auto.offset.reset` when it first loads (`SharePartition.
-/// startOffsetDuringInitialization`).
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
+    name = "lifecycle initializes share state"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lifecycle_initializes_share_state(share_lifecycle: ShareLifecycle) {
+    share_lifecycle
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_lifecycle);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
+    name = "lifecycle metadata survives restart"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lifecycle_metadata_survives_restart(share_lifecycle: ShareLifecycle) {
+    share_lifecycle
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_lifecycle);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
+    name = "delete groups deletes an empty share group and its state"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_groups_deletes_an_empty_share_group_and_its_state(share_lifecycle: ShareLifecycle) {
+    share_lifecycle
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_lifecycle);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
+    name = "a deleted topic loses its share state"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_deleted_topic_loses_its_share_state(share_lifecycle: ShareLifecycle) {
+    share_lifecycle
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_lifecycle);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
+    name = "unassigned partitions keep their share state"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unassigned_partitions_keep_their_share_state(share_lifecycle: ShareLifecycle) {
+    share_lifecycle
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_lifecycle);
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
     name = "every initialized partition starts uninitialized"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn every_initialized_partition_starts_uninitialized() {}
+async fn every_initialized_partition_starts_uninitialized(share_lifecycle: ShareLifecycle) {
+    share_lifecycle
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_lifecycle);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_groups/share_group_state.feature",
+    name = "a member moving subscriptions keeps the old topic state"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_member_moving_subscriptions_keeps_the_old_topic_state(share_lifecycle: ShareLifecycle) {
+    share_lifecycle
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_lifecycle);
+}

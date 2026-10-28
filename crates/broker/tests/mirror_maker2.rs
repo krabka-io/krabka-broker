@@ -102,7 +102,7 @@ mod support;
 
 use {
     assert2::assert,
-    jvm_acceptance::{broker0_listen, host_port, start_host_broker_with},
+    jvm_acceptance::{host_port, start_host_broker_with},
     std::{
         env, fs,
         path::PathBuf,
@@ -986,71 +986,196 @@ async fn commit_source_group(bootstrap: &str) {
 
 // ------------------------------------------------------------------ the case
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("mirror maker2: mirror maker2 migrates a kafka cluster onto krabka")]
-async fn bdd_verify_mirror_maker2_migrates_a_kafka_cluster_onto_krabka() {
+use {
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
+};
+
+struct Migration {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    source: Option<SourceKafka>,
+    mirror: Option<MirrorMaker>,
+    target: String,
+    mirrored: String,
+    records: Vec<Record>,
+    replicated: Vec<Record>,
+    translated: Option<i64>,
+    resumed: Option<Vec<Record>>,
+    acl_output: Option<String>,
+    mirror_logs: Option<String>,
+}
+#[fixture]
+fn migration() -> Migration {
+    // Start this scenario with fresh inputs and observations.
+
+    Migration {
+        broker: None,
+        directory: None,
+        source: None,
+        mirror: None,
+        target: String::new(),
+        mirrored: format!("{SOURCE_ALIAS}.{TOPIC}"),
+        records: Vec::new(),
+        replicated: Vec::new(),
+        translated: None,
+        resumed: None,
+        acl_output: None,
+        mirror_logs: None,
+    }
+}
+#[given(
+    "a stock Kafka source holds ten keyed and headered records with its consumer group committed at four and krabka is the empty target"
+)]
+async fn migration_source(migration: &mut Migration) {
     let gateway = docker_bridge_gateway();
     let target = format!("{gateway}:{}", host_port());
     let advertised = target.clone();
-    // krabka advertises the bridge gateway rather than the
-    // `host.docker.internal` name the other JVM suites use, so MM2 and the
-    // source broker are named the same way from every side.
-    let (broker, _dir) = start_host_broker_with(move |config| {
-        config.advertised_listener = advertised;
-    })
-    .await;
-    eprintln!(
-        "KRABKA[test] krabka listens on {} and is advertised as {target}",
-        broker0_listen(),
-    );
-
+    let (broker, directory) =
+        start_host_broker_with(move |config| config.advertised_listener = advertised).await;
     let source = SourceKafka::start(&gateway).await;
     let records = seeded_records();
     seed_source(&source.bootstrap, &records);
     commit_source_group(&source.bootstrap).await;
-
-    let mm2 = MirrorMaker::start(&source.bootstrap, &target);
-    let mirrored = format!("{SOURCE_ALIAS}.{TOPIC}");
-
-    let replicated = poll_until(MIRROR_BUDGET, "the source topic was mirrored", &mm2, || {
-        let read = consume(&target, &mirrored, None, RECORDS, true);
-        (read.len() == RECORDS).then_some(read)
-    })
-    .await;
-    assert!(
-        replicated == records,
-        "the mirrored records differ from the source records; {}",
-        mm2.diagnostics(),
-    );
-
-    // The config change goes in here, as soon as the mirror is established,
-    // rather than beside the wait that reads it back. It is still a change
-    // made after mirroring is live, which is what the assertion is about, and
-    // asking for it now leaves it with the whole of the two waits below to
-    // arrive in rather than with `EFFECT_BUDGET` alone.
-    alter_source_retention(&source.bootstrap);
-
-    assert_internal_topics(&target, &mm2).await;
-    assert_translated_offsets(&target, &mirrored, &records, &mm2).await;
-    assert_topic_config_sync(&target, &mirrored, &mm2).await;
-    assert_acl_sync(&target, &mm2);
-
-    drop(mm2);
-    drop(source);
-    broker.shutdown().await;
+    migration.broker = Some(broker);
+    migration.directory = Some(directory);
+    migration.source = Some(source);
+    migration.records = records;
+    migration.target = target;
 }
-
-/// MM2 migrates a stock Kafka cluster onto krabka: the records and their
-/// headers, the internal topics it needs, the consumer group's translated
-/// position, and a topic config changed after the fact.
+#[when("stock MirrorMaker starts and copies the source topic onto krabka")]
+async fn mirror_records(migration: &mut Migration) {
+    let source = migration.source.as_ref().expect("source seeded");
+    let mirror = MirrorMaker::start(&source.bootstrap, &migration.target);
+    migration.replicated = poll_until(
+        MIRROR_BUDGET,
+        "the source topic was mirrored",
+        &mirror,
+        || {
+            let read = consume(&migration.target, &migration.mirrored, None, RECORDS, true);
+            (read.len() == RECORDS).then_some(read)
+        },
+    )
+    .await;
+    migration.mirror = Some(mirror);
+}
+#[then("every mirrored record retains its source key value and headers")]
+fn records_preserved(migration: &Migration) {
+    assert!(
+        migration.replicated == migration.records,
+        "the mirrored records differ from source records; {}",
+        migration
+            .mirror
+            .as_ref()
+            .expect("mirror started")
+            .diagnostics()
+    );
+}
+#[when("the source operator changes retention after mirroring is established")]
+fn change_retention(migration: &mut Migration) {
+    alter_source_retention(&migration.source.as_ref().expect("source seeded").bootstrap);
+}
+#[then("the mirror internal topics are single partition compacted topics")]
+async fn internal_topics(migration: &Migration) {
+    assert_internal_topics(
+        &migration.target,
+        migration.mirror.as_ref().expect("mirror started"),
+    )
+    .await;
+}
+#[when("the consumer group cuts over to krabka and resumes reading")]
+async fn cutover(migration: &mut Migration) {
+    let mirror = migration.mirror.as_ref().expect("mirror started");
+    migration.translated = Some(
+        poll_until(
+            EFFECT_BUDGET,
+            "MM2 translated the group's offset onto krabka",
+            mirror,
+            || committed_offset(&migration.target, GROUP, &migration.mirrored),
+        )
+        .await,
+    );
+    migration.resumed = Some(consume(
+        &migration.target,
+        &migration.mirrored,
+        Some(GROUP),
+        RECORDS - COMMITTED,
+        false,
+    ));
+}
+#[then(
+    "the translated position is four and the consumer receives exactly the unread source suffix"
+)]
+fn resumed(migration: &Migration) {
+    assert!(migration.translated == Some(i64::try_from(COMMITTED).expect("offset fits")));
+    assert!(
+        migration.resumed.as_ref().expect("cutover read completed")
+            == &migration.records[COMMITTED..]
+    );
+}
+#[then("the live source retention change reaches the target topic")]
+async fn retention_synced(migration: &Migration) {
+    assert_topic_config_sync(
+        &migration.target,
+        &migration.mirrored,
+        migration.mirror.as_ref().expect("mirror started"),
+    )
+    .await;
+}
+#[when("the operator inspects mirror logs and attempts the target side ACL operation")]
+fn inspect_acl(migration: &mut Migration) {
+    migration.mirror_logs = Some(migration.mirror.as_ref().expect("mirror started").logs());
+    let output = tool_allowing_failure("kafka-acls", &[
+        "--bootstrap-server",
+        &migration.target,
+        "--add",
+        "--allow-principal",
+        "User:krabka-mm2",
+        "--operation",
+        "Read",
+        "--topic",
+        TOPIC,
+    ]);
+    migration.acl_output = Some(both_streams(&output));
+}
+#[then(
+    "ACL sync logs contain no failure and the unsecured target reports Kafka's security disabled exception"
+)]
+fn acl_compatibility(migration: &Migration) {
+    assert!(
+        !migration
+            .mirror_logs
+            .as_ref()
+            .expect("mirror logs read")
+            .contains("Could not sync ACL")
+    );
+    let text = migration
+        .acl_output
+        .as_ref()
+        .expect("target ACL request completed");
+    assert!(
+        text.contains("SecurityDisabledException")
+            && text.contains("No Authorizer is configured on the broker"),
+        "unexpected target ACL response: {text}"
+    );
+}
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/mirror_maker2.feature",
-    name = "mirror maker2 migrates a kafka cluster onto krabka"
+    name = "Stock MirrorMaker migrates records consumer position and live configuration"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn mirror_maker2_migrates_a_kafka_cluster_onto_krabka() {}
+async fn mirror_maker2_migrates_a_kafka_cluster_onto_krabka(migration: Migration) {
+    drop(migration.mirror);
+    drop(migration.source);
+    migration
+        .broker
+        .expect("target broker started")
+        .shutdown()
+        .await;
+}
 
 /// MM2's three internal topics exist on the target with the shape
 /// `MirrorUtils.createSinglePartitionCompactedTopic` asks for.
@@ -1101,42 +1226,6 @@ async fn assert_internal_topics(target: &str, mm2: &MirrorMaker) {
     );
 }
 
-/// The source group's position survives the cutover: MM2 translates it onto
-/// the target, and a consumer of that group on the target resumes at the
-/// record the source group had not read yet.
-///
-/// This is the case a broker that is 99% compatible fails silently. A position
-/// translated one record early replays; one record late skips; and neither
-/// reports anything to anybody.
-async fn assert_translated_offsets(
-    target: &str,
-    mirrored: &str,
-    records: &[Record],
-    mm2: &MirrorMaker,
-) {
-    let expected_offset = i64::try_from(COMMITTED).expect("the committed offset fits an i64");
-    let translated = poll_until(
-        EFFECT_BUDGET,
-        "MM2 translated the group's offset onto krabka",
-        mm2,
-        || committed_offset(target, GROUP, mirrored),
-    )
-    .await;
-    assert!(
-        translated == expected_offset,
-        "the group resumes on krabka at {translated}, not at the source's {COMMITTED}; {}",
-        mm2.diagnostics(),
-    );
-
-    let resumed = consume(target, mirrored, Some(GROUP), RECORDS - COMMITTED, false);
-    let expected: Vec<Record> = records[COMMITTED..].to_vec();
-    assert!(
-        resumed == expected,
-        "the cut-over group read {resumed:?} rather than resuming at {expected:?}; {}",
-        mm2.diagnostics(),
-    );
-}
-
 /// Set [`RETENTION_MS`] on the source topic, which mirroring is by now live
 /// over, so `sync.topic.configs` has a change to carry.
 fn alter_source_retention(source: &str) {
@@ -1170,44 +1259,6 @@ async fn assert_topic_config_sync(target: &str, mirrored: &str, mm2: &MirrorMake
     );
 }
 
-/// The default `sync.topic.acls.enabled=true` path leaves the run alone, and
-/// the target-side call it would make is refused the way a stock Kafka target
-/// with no authorizer refuses it.
-///
-/// MM2's ACL sync stops at the source here, which has no authorizer either, so
-/// the first half is a negative: nothing in MM2's log says a sync failed. The
-/// second half makes the call MM2 would have made and reads krabka's answer
-/// directly, which is the `SECURITY_DISABLED` (54) this milestone landed.
-fn assert_acl_sync(target: &str, mm2: &MirrorMaker) {
-    assert!(
-        !mm2.logs().contains("Could not sync ACL"),
-        "MM2 reported an ACL sync failure; {}",
-        mm2.diagnostics(),
-    );
-
-    let out = tool_allowing_failure("kafka-acls", &[
-        "--bootstrap-server",
-        target,
-        "--add",
-        "--allow-principal",
-        "User:krabka-mm2",
-        "--operation",
-        "Read",
-        "--topic",
-        TOPIC,
-    ]);
-    let text = both_streams(&out);
-    // `kafka-acls --add` first asks DescribeAcls whether the binding exists
-    // (`AclCommand.addAcls`), so the refusal it prints is DescribeAcls's and not
-    // CreateAcls's shorter "No Authorizer is configured.".
-    assert!(
-        text.contains("SecurityDisabledException")
-            && text.contains("No Authorizer is configured on the broker"),
-        "krabka answered MM2's target-side ACL creation with something other than Kafka's \
-         SecurityDisabledException:\n{text}",
-    );
-}
-
 // -------------------------------------------------------------------- units
 
 /// The readings above, held to renderings the JVM tools really produce. They
@@ -1222,234 +1273,253 @@ mod tests {
             parse_container_state, role_of, seeded_records,
         },
         assert2::assert,
+        rstest::fixture,
+        rstest_bdd::Slot,
+        rstest_bdd_macros::{given, scenarios, then, when},
     };
+    #[derive(Default)]
+    struct RecordLines {
+        source: Vec<Record>,
+        lines: Vec<String>,
+        parsed: Vec<Option<Record>>,
+    }
+    #[fixture]
+    fn records() -> RecordLines {
+        // Start this scenario with fresh inputs and observations.
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "mirror maker2 tests: a produced line parses back into the same record"
-    )]
-    fn bdd_verify_a_produced_line_parses_back_into_the_same_record() {
-        for record in seeded_records() {
-            assert!(Record::parse(&record.line()) == Some(record));
+        RecordLines {
+            source: Vec::new(),
+            lines: Vec::new(),
+            parsed: Vec::new(),
         }
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/mirror_maker2.feature",
-        name = "tests: a produced line parses back into the same record"
-    )]
-    fn a_produced_line_parses_back_into_the_same_record() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "mirror maker2 tests: a line that is not a record is not read as one"
-    )]
-    fn bdd_verify_a_line_that_is_not_a_record_is_not_read_as_one() {
-        for line in ["Processed a total of 10 messages", "", "a\tb\tc\td"] {
-            assert!(Record::parse(line) == None);
-        }
+    #[given("the migration fixture's keyed and headered records")]
+    fn seeded(records: &mut RecordLines) { records.source = seeded_records(); }
+    #[given("the console formatter outputs these lines")]
+    fn console_lines(records: &mut RecordLines, datatable: Vec<Vec<String>>) {
+        records.lines = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                row.into_iter()
+                    .next()
+                    .expect("console line")
+                    .replace("\\t", "\t")
+            })
+            .collect();
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/mirror_maker2.feature",
-        name = "tests: a line that is not a record is not read as one"
-    )]
-    fn a_line_that_is_not_a_record_is_not_read_as_one() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "mirror maker2 tests: a record without headers parses as the tools render it"
-    )]
-    fn bdd_verify_a_record_without_headers_parses_as_the_tools_render_it() {
-        assert!(
-            Record::parse("NO_HEADERS\tkey-0\torder-0")
-                == Some(Record {
-                    headers: "NO_HEADERS".to_owned(),
-                    key: "key-0".to_owned(),
-                    value: "order-0".to_owned(),
+    #[when("the seeded records are rendered and parsed as console lines")]
+    fn round_trip(records: &mut RecordLines) {
+        records.parsed = records
+            .source
+            .iter()
+            .map(|record| Record::parse(&record.line()))
+            .collect();
+    }
+    #[when("the console record parser interprets those lines")]
+    fn parse_lines(records: &mut RecordLines) {
+        records.parsed = records
+            .lines
+            .iter()
+            .map(|line| Record::parse(line))
+            .collect();
+    }
+    #[then("every rendered record retains the original headers key and value")]
+    fn retained(records: &RecordLines) {
+        assert!(!records.source.is_empty());
+        assert!(records.parsed == records.source.iter().cloned().map(Some).collect::<Vec<_>>());
+    }
+    #[then("all notices and malformed lines remain absent records")]
+    fn ignored(records: &RecordLines) {
+        assert!(records.parsed.len() == 3);
+        assert!(records.parsed.iter().all(Option::is_none));
+    }
+    #[then("the decoded record has the expected headers key and value")]
+    fn headerless_record(records: &RecordLines, datatable: Vec<Vec<String>>) {
+        let expected: Vec<Option<Record>> = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [headers, key, value]: [String; 3] = row.try_into().expect("headers key value");
+                Some(Record {
+                    headers,
+                    key,
+                    value,
                 })
-        );
+            })
+            .collect();
+        assert!(records.parsed == expected);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/mirror_maker2.feature",
-        name = "tests: a record without headers parses as the tools render it"
-    )]
-    fn a_record_without_headers_parses_as_the_tools_render_it() {}
+    #[derive(Default)]
+    struct TopicRoles {
+        names: Vec<String>,
+        roles: Vec<Option<Role>>,
+    }
+    #[fixture]
+    fn topics() -> TopicRoles {
+        // Start this scenario with fresh inputs and observations.
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "mirror maker2 tests: each mirror maker internal topic is recognised by its shape"
-    )]
-    fn bdd_verify_each_mirror_maker_internal_topic_is_recognised_by_its_shape() {
-        let cases = [
-            ("heartbeats", Some(Role::Heartbeats)),
-            ("source.checkpoints.internal", Some(Role::Checkpoints)),
-            ("mm2-offset-syncs.target.internal", Some(Role::OffsetSyncs)),
-            ("mm2-offset-syncs.source.internal", Some(Role::OffsetSyncs)),
-            // The Connect stores MM2 keeps on the target are not among them.
-            ("mm2-offsets.source.internal", None),
-            ("mm2-configs.source.internal", None),
-            ("mm2-status.source.internal", None),
-            ("source.krabka-mm2-orders", None),
-            ("__consumer_offsets", None),
-        ];
-        for (name, role) in cases {
-            assert!(role_of(name) == role, "{name}");
+        TopicRoles {
+            names: Vec::new(),
+            roles: Vec::new(),
         }
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/mirror_maker2.feature",
-        name = "tests: each mirror maker internal topic is recognised by its shape"
-    )]
-    fn each_mirror_maker_internal_topic_is_recognised_by_its_shape() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "mirror maker2 tests: the partition count is read out of a topic description"
-    )]
-    fn bdd_verify_the_partition_count_is_read_out_of_a_topic_description() {
-        let text = "Topic: heartbeats\tTopicId: sVCK0oNBQtOb4tGXEmuJHw\tPartitionCount: 1\t\
-                    ReplicationFactor: 1\tConfigs: cleanup.policy=compact\n\
-                    \tTopic: heartbeats\tPartition: 0\tLeader: 1\tReplicas: 1\tIsr: 1\n";
-        assert!(described_partitions(text) == Some(1));
-        assert!(described_partitions("Topic: heartbeats\n") == None);
+    #[given("the target has topic names")]
+    fn names(topics: &mut TopicRoles, datatable: Vec<Vec<String>>) {
+        topics.names = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| row.into_iter().next().expect("topic name"))
+            .collect();
+    }
+    #[when("the migration inspector classifies the internal topic roles")]
+    fn classify(topics: &mut TopicRoles) {
+        topics.roles = topics.names.iter().map(|name| role_of(name)).collect();
+    }
+    #[then("only heartbeat checkpoint and offset sync topic shapes have these roles")]
+    fn roles(topics: &TopicRoles, datatable: Vec<Vec<String>>) {
+        let expected: Vec<Option<Role>> = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| match row[0].as_str() {
+                "Heartbeats" => Some(Role::Heartbeats),
+                "Checkpoints" => Some(Role::Checkpoints),
+                "OffsetSyncs" => Some(Role::OffsetSyncs),
+                "none" => None,
+                role => panic!("unknown expected role {role}"),
+            })
+            .collect();
+        assert!(topics.roles == expected);
     }
 
-    /// `kafka-topics --describe` as Kafka 4.3 renders a compacted internal
-    /// topic, tabs and all.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/mirror_maker2.feature",
-        name = "tests: the partition count is read out of a topic description"
-    )]
-    fn the_partition_count_is_read_out_of_a_topic_description() {}
+    #[derive(Default)]
+    struct ToolReport {
+        text: String,
+        partitions: Slot<Option<u32>>,
+        configs: Vec<Option<String>>,
+        offsets: Vec<Option<i64>>,
+    }
+    #[fixture]
+    fn report() -> ToolReport {
+        // Start this scenario with fresh inputs and observations.
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "mirror maker2 tests: a config value is not taken from the synonyms field"
-    )]
-    fn bdd_verify_a_config_value_is_not_taken_from_the_synonyms_field() {
-        let text = "Dynamic configs for topic heartbeats are:\n  \
-                    cleanup.policy=compact sensitive=false \
-                    synonyms={DYNAMIC_TOPIC_CONFIG:cleanup.policy=compact}\n";
-        assert!(described_config(text, "cleanup.policy") == Some("compact".to_owned()));
-        assert!(described_config(text, "retention.ms") == None);
+        ToolReport {
+            text: String::new(),
+            partitions: Slot::default(),
+            configs: Vec::new(),
+            offsets: Vec::new(),
+        }
+    }
+    #[given("stock Kafka prints the migration inspection report")]
+    fn text(report: &mut ToolReport, docstring: String) { report.text = docstring; }
+    #[when("the inspector reads the partition count")]
+    fn partitions(report: &mut ToolReport) {
+        report.partitions.set(described_partitions(&report.text));
+    }
+    #[then("the report describes one partition")]
+    fn one_partition(report: &ToolReport) {
+        assert!(report.partitions.get() == Some(Some(1)));
+    }
+    #[then("the missing partition count remains absent")]
+    fn no_partition(report: &ToolReport) {
+        assert!(report.partitions.get() == Some(None));
+    }
+    #[when("the inspector reads cleanup policy and an absent retention setting")]
+    fn configs(report: &mut ToolReport) {
+        report.configs = ["cleanup.policy", "retention.ms"]
+            .into_iter()
+            .map(|key| described_config(&report.text, key))
+            .collect();
+    }
+    #[then("the effective cleanup policy is compact and no retention setting is invented")]
+    fn cleanup(report: &ToolReport) {
+        assert!(report.configs == vec![Some("compact".into()), None]);
+    }
+    #[when("the inspector reads the rider group's mirrored orders offset and an absent topic")]
+    fn offsets(report: &mut ToolReport) {
+        report.offsets = ["source.krabka-mm2-orders", "source.absent"]
+            .into_iter()
+            .map(|topic| described_offset(&report.text, "krabka-mm2-riders", topic))
+            .collect();
+    }
+    #[then("the orders offset is four and the absent topic has no offset")]
+    fn committed(report: &ToolReport) {
+        assert!(report.offsets == vec![Some(4), None]);
+    }
+    #[when("the inspector reads the rider group's uncommitted orders offset")]
+    fn uncommitted(report: &mut ToolReport) {
+        report.offsets = vec![described_offset(
+            &report.text,
+            "krabka-mm2-riders",
+            "source.krabka-mm2-orders",
+        )];
+    }
+    #[then("an uncommitted group has no offset rather than zero")]
+    fn no_commit(report: &ToolReport) {
+        assert!(report.offsets == vec![None]);
     }
 
-    /// `kafka-configs --describe` prints the value and then a `synonyms=`
-    /// field that repeats the key inside itself.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/mirror_maker2.feature",
-        name = "tests: a config value is not taken from the synonyms field"
-    )]
-    fn a_config_value_is_not_taken_from_the_synonyms_field() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "mirror maker2 tests: a groups committed offset is read off its own row"
-    )]
-    fn bdd_verify_a_groups_committed_offset_is_read_off_its_own_row() {
-        let text = "\nGROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG \
-                    CONSUMER-ID HOST CLIENT-ID\n\
-                    krabka-mm2-riders source.krabka-mm2-orders 0 4 10 6 - - -\n\
-                    krabka-mm2-riders source.other 0 9 9 0 - - -\n";
-        assert!(described_offset(text, "krabka-mm2-riders", "source.krabka-mm2-orders") == Some(4));
-        assert!(described_offset(text, "krabka-mm2-riders", "source.absent") == None);
+    #[derive(Default)]
+    struct LogSummary {
+        log: String,
+        excerpt: Option<String>,
     }
+    #[fixture]
+    fn logs() -> LogSummary {
+        // Start this scenario with fresh inputs and observations.
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/mirror_maker2.feature",
-        name = "tests: a groups committed offset is read off its own row"
-    )]
-    fn a_groups_committed_offset_is_read_off_its_own_row() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "mirror maker2 tests: an uncommitted group reads as no offset rather than zero"
-    )]
-    fn bdd_verify_an_uncommitted_group_reads_as_no_offset_rather_than_zero() {
-        let text = "krabka-mm2-riders source.krabka-mm2-orders 0 - 10 - - - -\n";
-        assert!(described_offset(text, "krabka-mm2-riders", "source.krabka-mm2-orders") == None);
+        LogSummary {
+            log: String::new(),
+            excerpt: None,
+        }
     }
-
-    /// A group that has joined but committed nothing prints a dash, which must
-    /// not be read as offset zero.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/mirror_maker2.feature",
-        name = "tests: an uncommitted group reads as no offset rather than zero"
+    #[given(
+        "a herder error is followed by five hundred shutdown notices and the final stopped notice"
     )]
-    fn an_uncommitted_group_reads_as_no_offset_rather_than_zero() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "mirror maker2 tests: a log excerpt keeps the cause a long shutdown pushed out of the tail"
-    )]
-    fn bdd_verify_a_log_excerpt_keeps_the_cause_a_long_shutdown_pushed_out_of_the_tail() {
-        let mut log = vec![
+    fn shutdown_log(logs: &mut LogSummary) {
+        let mut lines = vec![
             "[2026-09-08 03:39:20,001] ERROR Uncaught exception in herder work thread, exiting"
                 .to_owned(),
         ];
         for index in 0..500 {
-            log.push(format!(
+            lines.push(format!(
                 "[2026-09-08 03:39:21,{index:03}] INFO Metrics reporters closed"
             ));
         }
-        log.push("[2026-09-08 03:40:08,761] INFO Kafka MirrorMaker stopped.".to_owned());
-        let excerpt = log_excerpt(&log.join("\n"));
-
+        lines.push("[2026-09-08 03:40:08,761] INFO Kafka MirrorMaker stopped.".into());
+        logs.log = lines.join("\n");
+    }
+    #[given("the mirror log contains five hundred warning lines")]
+    fn warnings(logs: &mut LogSummary) {
+        logs.log = (0..500)
+            .map(|index| format!("[ts] WARN something went wrong: {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    #[given("the mirror log is empty")]
+    fn empty(logs: &mut LogSummary) { logs.log.clear(); }
+    #[when("the migration diagnostic excerpts the mirror log")]
+    fn excerpt(logs: &mut LogSummary) { logs.excerpt = Some(log_excerpt(&logs.log)); }
+    #[then(
+        "the bounded excerpt retains both the original herder cause and the final shutdown notice"
+    )]
+    fn cause(logs: &LogSummary) {
+        let excerpt = logs.excerpt.as_ref().expect("log excerpt generated");
         assert!(excerpt.contains("Uncaught exception in herder work thread"));
         assert!(excerpt.contains("Kafka MirrorMaker stopped."));
         assert!(excerpt.contains("502 lines, of which 1 reported a problem"));
         assert!(excerpt.lines().count() <= LOG_PROBLEM_LINES + LOG_TAIL_LINES + 2);
     }
-
-    /// The shape of the failure this bound exists for: an MM2 that stopped on
-    /// purpose writes hundreds of INFO lines closing itself down after the
-    /// error that made it stop, so a tail alone loses the cause.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/mirror_maker2.feature",
-        name = "tests: a log excerpt keeps the cause a long shutdown pushed out of the tail"
-    )]
-    fn a_log_excerpt_keeps_the_cause_a_long_shutdown_pushed_out_of_the_tail() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "mirror maker2 tests: a log excerpt is bounded however long the log is"
-    )]
-    fn bdd_verify_a_log_excerpt_is_bounded_however_long_the_log_is() {
-        let problems: Vec<String> = (0..500)
-            .map(|index| format!("[ts] WARN something went wrong: {index}"))
-            .collect();
-        let excerpt = log_excerpt(&problems.join("\n"));
-
+    #[then("the bounded excerpt retains the newest warning and omits the first warning")]
+    fn bounded(logs: &LogSummary) {
+        let excerpt = logs.excerpt.as_ref().expect("log excerpt generated");
         assert!(excerpt.lines().count() <= LOG_PROBLEM_LINES + LOG_TAIL_LINES + 2);
-        // The last of each half is kept, and the first of the log is not.
         assert!(excerpt.contains("something went wrong: 499"));
         assert!(!excerpt.contains("something went wrong: 0\n"));
     }
-
-    /// Neither half of the excerpt grows with the log, whichever half the log
-    /// is made of.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/mirror_maker2.feature",
-        name = "tests: a log excerpt is bounded however long the log is"
-    )]
-    fn a_log_excerpt_is_bounded_however_long_the_log_is() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("mirror maker2 tests: an empty log excerpts to a count of none")]
-    fn bdd_verify_an_empty_log_excerpts_to_a_count_of_none() {
+    #[then("the empty excerpt reports zero lines problems and section lengths")]
+    fn empty_excerpt(logs: &LogSummary) {
         let expected = [
             "0 lines, of which 0 reported a problem; the last 0 of those:",
             "",
@@ -1457,62 +1527,81 @@ mod tests {
             "",
         ]
         .join("\n");
-        assert!(log_excerpt("") == expected);
+        assert!(logs.excerpt.as_ref().expect("log excerpt generated") == &expected);
     }
 
-    /// An empty log has no halves to take, and must still render.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/mirror_maker2.feature",
-        name = "tests: an empty log excerpts to a count of none"
-    )]
-    fn an_empty_log_excerpts_to_a_count_of_none() {}
+    #[derive(Default)]
+    struct DockerReadings {
+        renderings: Vec<String>,
+        states: Vec<Option<ContainerState>>,
+        gateways: Vec<Option<String>>,
+    }
+    #[fixture]
+    fn docker() -> DockerReadings {
+        // Start this scenario with fresh inputs and observations.
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "mirror maker2 tests: a container state is read out of the inspect rendering"
-    )]
-    fn bdd_verify_a_container_state_is_read_out_of_the_inspect_rendering() {
-        assert!(
-            parse_container_state("true|0\n")
-                == Some(ContainerState {
-                    running: true,
-                    exit_code: 0,
-                })
-        );
-        assert!(
-            parse_container_state("false|143\n")
-                == Some(ContainerState {
-                    running: false,
-                    exit_code: 143,
-                })
-        );
-        // What `docker inspect` prints for a container that is not there: an
-        // error on stderr and nothing at all on stdout.
-        assert!(parse_container_state("") == None);
+        DockerReadings {
+            renderings: Vec::new(),
+            states: Vec::new(),
+            gateways: Vec::new(),
+        }
+    }
+    #[given("Docker inspect prints these container or network outputs")]
+    fn docker_outputs(docker: &mut DockerReadings, datatable: Vec<Vec<String>>) {
+        docker.renderings = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| row.into_iter().next().expect("Docker stdout"))
+            .collect();
+    }
+    #[when("the inspector parses running zero stopped 143 and missing container renderings")]
+    fn containers(docker: &mut DockerReadings) {
+        docker.states = docker
+            .renderings
+            .iter()
+            .map(|text| parse_container_state(text))
+            .collect();
+    }
+    #[then("the interpreted container states are")]
+    fn states(docker: &DockerReadings, datatable: Vec<Vec<String>>) {
+        let expected: Vec<Option<ContainerState>> = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [running, exit_code]: [String; 2] =
+                    row.try_into().expect("running and exit code");
+                if running == "missing" {
+                    None
+                } else {
+                    Some(ContainerState {
+                        running: running.parse().expect("boolean running state"),
+                        exit_code: exit_code.parse().expect("exit code"),
+                    })
+                }
+            })
+            .collect();
+        assert!(docker.states == expected);
+    }
+    #[when("the inspector reads explicit subnet fallback and malformed network metadata")]
+    fn gateways(docker: &mut DockerReadings) {
+        docker.gateways = docker
+            .renderings
+            .iter()
+            .map(|text| bridge_gateway(text))
+            .collect();
+    }
+    #[then("the interpreted bridge gateways are")]
+    fn gateway_results(docker: &DockerReadings, datatable: Vec<Vec<String>>) {
+        let expected: Vec<Option<String>> = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let gateway = row.into_iter().next().expect("expected gateway");
+                (gateway != "missing").then_some(gateway)
+            })
+            .collect();
+        assert!(docker.gateways == expected);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/mirror_maker2.feature",
-        name = "tests: a container state is read out of the inspect rendering"
-    )]
-    fn a_container_state_is_read_out_of_the_inspect_rendering() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "mirror maker2 tests: the bridge gateway falls back to the subnets first address"
-    )]
-    fn bdd_verify_the_bridge_gateway_falls_back_to_the_subnets_first_address() {
-        assert!(bridge_gateway("172.17.0.1|172.17.0.0/16\n") == Some("172.17.0.1".to_owned()));
-        assert!(bridge_gateway("|172.20.0.0/16\n") == Some("172.20.0.1".to_owned()));
-        assert!(bridge_gateway("no separator here") == None);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/mirror_maker2.feature",
-        name = "tests: the bridge gateway falls back to the subnets first address"
-    )]
-    fn the_bridge_gateway_falls_back_to_the_subnets_first_address() {}
+    scenarios!("tests/features/migrated/tests/mirror_maker2_readings.feature", fixtures=[records:RecordLines, topics:TopicRoles, report:ToolReport, logs:LogSummary, docker:DockerReadings]);
 }

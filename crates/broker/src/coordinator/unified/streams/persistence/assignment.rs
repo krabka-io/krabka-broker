@@ -194,6 +194,7 @@ mod tests {
     use {
         super::*,
         crate::coordinator::unified::{
+            codec_observations::{EncodedRecord, KafkaDecodedRecord},
             streams::persistence::{
                 KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT, KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER,
                 StreamsGroupKey, encode_current_member_assignment_key,
@@ -202,41 +203,13 @@ mod tests {
             test_support::{peek_version, wire_bytes},
         },
         assert2::assert,
+        rstest_bdd_macros::{given, scenarios, then, when},
         std::collections::BTreeMap,
     };
 
     fn active_tasks(partitions: &[i32]) -> BTreeMap<String, Vec<i32>> {
         BTreeMap::from([("0".to_owned(), partitions.to_vec())])
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams persistence assignment tests: target assignment member bytes match kafka schema"
-    )]
-    fn bdd_verify_target_assignment_member_bytes_match_kafka_schema() {
-        let v = StreamsGroupTargetAssignmentMemberValue {
-            active: active_tasks(&[1]),
-            standby: BTreeMap::new(),
-            warmup: BTreeMap::new(),
-        };
-        let want = wire_bytes(&[
-            "0000", "02",   // one ActiveTasks entry
-            "0230", // SubtopologyId "0"
-            "02",   // one partition
-            "00000001", "00", // TaskIds tagged fields
-            "01", // empty StandbyTasks
-            "01", // empty WarmupTasks
-            "00", // message tagged fields
-        ]);
-        assert!(&v.encode()[..] == &want[..]);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",
-        name = "tests: target assignment member bytes match kafka schema"
-    )]
-    fn target_assignment_member_bytes_match_kafka_schema() {}
 
     #[test]
     fn target_assignment_member_round_trip() {
@@ -262,35 +235,6 @@ mod tests {
         };
         assert!(StreamsGroupTargetAssignmentMemberValue::decode(&v.encode()).unwrap() == v);
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams persistence assignment tests: current member assignment bytes match kafka schema"
-    )]
-    fn bdd_verify_current_member_assignment_bytes_match_kafka_schema() {
-        let v = StreamsGroupCurrentMemberAssignmentValue {
-            member_epoch: 5,
-            previous_member_epoch: 4,
-            state: StreamsMemberWireState::UnrevokedTasks,
-            ..Default::default()
-        };
-        let want = wire_bytes(&[
-            "0000",
-            "00000005",
-            "00000004",
-            "02",           // streams MemberState.UNREVOKED_TASKS
-            "010101010101", // six empty task lists
-            "00",           // message tagged fields
-        ]);
-        assert!(&v.encode()[..] == &want[..]);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",
-        name = "tests: current member assignment bytes match kafka schema"
-    )]
-    fn current_member_assignment_bytes_match_kafka_schema() {}
 
     #[test]
     fn current_member_assignment_round_trip() {
@@ -324,104 +268,10 @@ mod tests {
         assert!(StreamsGroupCurrentMemberAssignmentValue::decode(&v.encode()).unwrap() == v);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams persistence assignment tests: current member assignment epochs match kafka schema"
-    )]
-    fn bdd_verify_current_member_assignment_epochs_match_kafka_schema() {
-        let v = StreamsGroupCurrentMemberAssignmentValue {
-            member_epoch: 5,
-            previous_member_epoch: 4,
-            state: StreamsMemberWireState::UnrevokedTasks,
-            active: maplit::btreemap! {"0".to_owned() => vec![1, 2]},
-            standby: maplit::btreemap! {"1".to_owned() => vec![0]},
-            active_pending_revocation: maplit::btreemap! {"0".to_owned() => vec![3]},
-            active_epochs: maplit::btreemap! {"0".to_owned() => vec![4, 5]},
-            active_pending_revocation_epochs: maplit::btreemap! {"0".to_owned() => vec![3]},
-            ..Default::default()
-        };
-        let mut want: Vec<u8> = vec![0x00, 0x00];
-        want.extend_from_slice(&5i32.to_be_bytes());
-        want.extend_from_slice(&4i32.to_be_bytes());
-        want.push(0x02); // streams MemberState.UNREVOKED_TASKS
-        // ActiveTasks: one entry, "0", partitions [1, 2], one tagged field:
-        // tag 0, nine bytes, AssignmentEpochs [4, 5].
-        want.extend_from_slice(b"\x02\x020\x03");
-        want.extend_from_slice(&1i32.to_be_bytes());
-        want.extend_from_slice(&2i32.to_be_bytes());
-        want.extend_from_slice(b"\x01\x00\x09\x03");
-        want.extend_from_slice(&4i32.to_be_bytes());
-        want.extend_from_slice(&5i32.to_be_bytes());
-        // StandbyTasks: one entry, "1", partitions [0], no tagged field.
-        want.extend_from_slice(b"\x02\x021\x02");
-        want.extend_from_slice(&0i32.to_be_bytes());
-        want.push(0x00);
-        want.push(0x01); // empty WarmupTasks
-        // ActiveTasksPendingRevocation: "0", [3], AssignmentEpochs [3].
-        want.extend_from_slice(b"\x02\x020\x02");
-        want.extend_from_slice(&3i32.to_be_bytes());
-        want.extend_from_slice(b"\x01\x00\x05\x02");
-        want.extend_from_slice(&3i32.to_be_bytes());
-        want.extend_from_slice(&[0x01, 0x01]); // empty standby and warmup revocations
-        want.push(0x00); // message tagged fields
-        assert!(&v.encode()[..] == &want[..]);
-        assert!(StreamsGroupCurrentMemberAssignmentValue::decode(&want).unwrap() == v);
-    }
-
     /// The `TaskIds` of the current assignment carries `AssignmentEpochs` as
     /// tagged field 0, a compact `[]int32`, as Kafka 4.3.1's
     /// `toTaskIdsWithEpochs` writes it for every active entry, and without it
     /// as `toTaskIds` writes the standby and warmup entries.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",
-        name = "tests: current member assignment epochs match kafka schema"
-    )]
-    fn current_member_assignment_epochs_match_kafka_schema() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams persistence assignment tests: wire state matches kafkas stream member discriminants"
-    )]
-    fn bdd_verify_wire_state_matches_kafkas_stream_member_discriminants() {
-        // org.apache.kafka.coordinator.group.streams.MemberState.
-        assert!(StreamsMemberWireState::Stable as i8 == 1);
-        assert!(StreamsMemberWireState::UnrevokedTasks as i8 == 2);
-        assert!(StreamsMemberWireState::UnreleasedTasks as i8 == 3);
-        assert!(StreamsMemberWireState::from_i8(0).is_err());
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",
-        name = "tests: wire state matches kafkas stream member discriminants"
-    )]
-    fn wire_state_matches_kafkas_stream_member_discriminants() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams persistence assignment tests: wire state matches kafkas streams member state for {example}"
-    )]
-    fn bdd_verify_wire_state_matches_kafkas_streams_member_state(example: String) {
-        type Example = (StreamsMemberAssignmentState,);
-        let (state,): Example = match example.as_str() {
-            "stable" => (StreamsMemberAssignmentState::Stable,),
-            "unrevoked tasks" => (StreamsMemberAssignmentState::UnrevokedTasks,),
-            "unreleased tasks" => (StreamsMemberAssignmentState::UnreleasedTasks,),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let wire = StreamsMemberWireState::from(state);
-        assert2::assert!(StreamsMemberAssignmentState::from(wire) == state);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",
-        name = "tests: wire state matches kafkas streams member state"
-    )]
-    fn wire_state_matches_kafkas_streams_member_state(example: String) { let _ = example; }
-
     #[test]
     fn task_map_multi_subtopology_empty_partitions_round_trip() {
         // A task map with several subtopologies, some carrying no partitions,
@@ -445,5 +295,229 @@ mod tests {
         assert!(StreamsGroupTargetAssignmentMemberValue::decode(&t[..t.len() - 1]).is_err());
         let c = StreamsGroupCurrentMemberAssignmentValue::default().encode();
         assert!(StreamsGroupCurrentMemberAssignmentValue::decode(&c[..c.len() - 1]).is_err());
+    }
+    mod bdd_target_assignment_member {
+        use {super::*, assert2::assert};
+        type EncodedValue = EncodedRecord<StreamsGroupTargetAssignmentMemberValue>;
+        #[rstest::fixture]
+        fn stored_value() -> EncodedValue {
+            // Start this scenario with fresh inputs and observations.
+            EncodedValue::default()
+        }
+        #[given(
+            "a Streams target assignment contains active task 1 in subtopology 0 and no standby or warmup tasks"
+        )]
+        fn prepared_value(stored_value: &mut EncodedValue) {
+            let v = StreamsGroupTargetAssignmentMemberValue {
+                active: active_tasks(&[1]),
+                standby: BTreeMap::new(),
+                warmup: BTreeMap::new(),
+            };
+
+            stored_value.value = Some(v);
+        }
+        #[when(
+            "the coordinator persists the Streams target member assignment in the compacted group log"
+        )]
+        fn encode_group_record(stored_value: &mut EncodedValue) {
+            stored_value.encoded = Some(
+                stored_value
+                    .value
+                    .as_ref()
+                    .expect("group record prepared")
+                    .encode(),
+            );
+        }
+        #[then(
+            "the persisted Streams target member assignment matches Kafka schema bytes including compact lengths and tagged trailers"
+        )]
+        fn kafka_record_layout(stored_value: &EncodedValue) {
+            let want = wire_bytes(&[
+                "0000", "02",   // one ActiveTasks entry
+                "0230", // SubtopologyId "0"
+                "02",   // one partition
+                "00000001", "00", // TaskIds tagged fields
+                "01", // empty StandbyTasks
+                "01", // empty WarmupTasks
+                "00", // message tagged fields
+            ]);
+
+            assert!(&stored_value.encoded.as_ref().expect("record encoded")[..] == &want[..]);
+        }
+        scenarios!("tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",tags="@target_assignment_member",fixtures=[stored_value: EncodedValue]);
+    }
+
+    mod bdd_current_member_assignment {
+        use {super::*, assert2::assert};
+        type EncodedValue = EncodedRecord<StreamsGroupCurrentMemberAssignmentValue>;
+        #[rstest::fixture]
+        fn stored_value() -> EncodedValue {
+            // Start this scenario with fresh inputs and observations.
+            EncodedValue::default()
+        }
+        #[given(
+            "a Streams current assignment at epochs 5 and 4 has unrevoked tasks and six empty task lists"
+        )]
+        fn prepared_value(stored_value: &mut EncodedValue) {
+            let v = StreamsGroupCurrentMemberAssignmentValue {
+                member_epoch: 5,
+                previous_member_epoch: 4,
+                state: StreamsMemberWireState::UnrevokedTasks,
+                ..Default::default()
+            };
+
+            stored_value.value = Some(v);
+        }
+        #[when(
+            "the coordinator persists the Streams current member assignment in the compacted group log"
+        )]
+        fn encode_group_record(stored_value: &mut EncodedValue) {
+            stored_value.encoded = Some(
+                stored_value
+                    .value
+                    .as_ref()
+                    .expect("group record prepared")
+                    .encode(),
+            );
+        }
+        #[then(
+            "the persisted Streams current member assignment matches Kafka schema bytes including compact lengths and tagged trailers"
+        )]
+        fn kafka_record_layout(stored_value: &EncodedValue) {
+            let want = wire_bytes(&[
+                "0000",
+                "00000005",
+                "00000004",
+                "02",           // streams MemberState.UNREVOKED_TASKS
+                "010101010101", // six empty task lists
+                "00",           // message tagged fields
+            ]);
+
+            assert!(&stored_value.encoded.as_ref().expect("record encoded")[..] == &want[..]);
+        }
+        scenarios!("tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",tags="@current_member_assignment",fixtures=[stored_value: EncodedValue]);
+    }
+    mod bdd_current_member_assignment_epochs {
+        use super::*;
+        type RecordCompatibility =
+            KafkaDecodedRecord<StreamsGroupCurrentMemberAssignmentValue, BrokerError>;
+        #[rstest::fixture]
+        fn record() -> RecordCompatibility {
+            // Start this scenario with fresh inputs and observations.
+            RecordCompatibility::default()
+        }
+        #[given(
+            "Streams active tasks 1 and 2 have epochs 4 and 5 while active task 3 awaits revocation at epoch 3"
+        )]
+        fn native_record(record: &mut RecordCompatibility) {
+            let v = StreamsGroupCurrentMemberAssignmentValue {
+                member_epoch: 5,
+                previous_member_epoch: 4,
+                state: StreamsMemberWireState::UnrevokedTasks,
+                active: maplit::btreemap! {"0".to_owned() => vec![1, 2]},
+                standby: maplit::btreemap! {"1".to_owned() => vec![0]},
+                active_pending_revocation: maplit::btreemap! {"0".to_owned() => vec![3]},
+                active_epochs: maplit::btreemap! {"0".to_owned() => vec![4, 5]},
+                active_pending_revocation_epochs: maplit::btreemap! {"0".to_owned() => vec![3]},
+                ..Default::default()
+            };
+
+            let mut want: Vec<u8> = vec![0x00, 0x00];
+            want.extend_from_slice(&5i32.to_be_bytes());
+            want.extend_from_slice(&4i32.to_be_bytes());
+            want.push(0x02); // streams MemberState.UNREVOKED_TASKS
+            // ActiveTasks: one entry, "0", partitions [1, 2], one tagged field:
+            // tag 0, nine bytes, AssignmentEpochs [4, 5].
+            want.extend_from_slice(b"\x02\x020\x03");
+            want.extend_from_slice(&1i32.to_be_bytes());
+            want.extend_from_slice(&2i32.to_be_bytes());
+            want.extend_from_slice(b"\x01\x00\x09\x03");
+            want.extend_from_slice(&4i32.to_be_bytes());
+            want.extend_from_slice(&5i32.to_be_bytes());
+            // StandbyTasks: one entry, "1", partitions [0], no tagged field.
+            want.extend_from_slice(b"\x02\x021\x02");
+            want.extend_from_slice(&0i32.to_be_bytes());
+            want.push(0x00);
+            want.push(0x01); // empty WarmupTasks
+            // ActiveTasksPendingRevocation: "0", [3], AssignmentEpochs [3].
+            want.extend_from_slice(b"\x02\x020\x02");
+            want.extend_from_slice(&3i32.to_be_bytes());
+            want.extend_from_slice(b"\x01\x00\x05\x02");
+            want.extend_from_slice(&3i32.to_be_bytes());
+            want.extend_from_slice(&[0x01, 0x01]); // empty standby and warmup revocations
+            want.push(0x00); // message tagged fields
+
+            record.value = Some(v);
+            record.golden = want;
+        }
+        #[when("the coordinator persists and reads this current_member_assignment_epochs record")]
+        fn record_codec(record: &mut RecordCompatibility) {
+            record.encoded = Some(record.value.as_ref().expect("record prepared").encode());
+            record.decoded = Some(StreamsGroupCurrentMemberAssignmentValue::decode(
+                record.encoded.as_ref().expect("record encoded"),
+            ));
+        }
+        #[then(
+            "the current_member_assignment_epochs bytes match Kafka exactly and decoding recovers all original record fields"
+        )]
+        fn complete_record_layout(record: &RecordCompatibility) { record.assert_compatible(); }
+
+        scenarios!("tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",tags="@current_member_assignment_epochs",fixtures=[record:RecordCompatibility]);
+    }
+    mod bdd_member_state {
+        use {super::*, assert2::assert};
+        #[derive(Default)]
+        struct MemberStateEncoding {
+            logical: Option<StreamsMemberAssignmentState>,
+            wire: Option<StreamsMemberWireState>,
+            recovered: Option<StreamsMemberAssignmentState>,
+            code: i8,
+            decoded: Option<Result<StreamsMemberWireState, BrokerError>>,
+        }
+        #[rstest::fixture]
+        fn member_state() -> MemberStateEncoding {
+            // Start this scenario with fresh inputs and observations.
+            MemberStateEncoding::default()
+        }
+        #[given("a Streams member is {state}")]
+        fn logical_member_state(member_state: &mut MemberStateEncoding, state: String) {
+            member_state.logical = Some(match state.as_str() {
+                "stable" => StreamsMemberAssignmentState::Stable,
+                "unrevoked" => StreamsMemberAssignmentState::UnrevokedTasks,
+                "unreleased" => StreamsMemberAssignmentState::UnreleasedTasks,
+                _ => panic!("unknown logical member state"),
+            });
+        }
+        #[when("the coordinator converts the Streams state to Kafka wire state and back")]
+        fn member_state_conversion(member_state: &mut MemberStateEncoding) {
+            let wire =
+                StreamsMemberWireState::from(member_state.logical.expect("logical state prepared"));
+            member_state.recovered = Some(StreamsMemberAssignmentState::from(wire));
+            member_state.wire = Some(wire);
+        }
+        #[then("the Streams state retains its identity and Kafka discriminant is {code}")]
+        fn logical_member_identity(member_state: &MemberStateEncoding, code: i8) {
+            assert!(member_state.recovered == member_state.logical);
+            assert!(member_state.wire.expect("state converted") as i8 == code);
+        }
+        #[given("the stored Streams member state discriminant is {code}")]
+        fn stored_member_discriminant(member_state: &mut MemberStateEncoding, code: i8) {
+            member_state.code = code;
+        }
+        #[when("the coordinator decodes the stored Streams member state")]
+        fn decode_member_discriminant(member_state: &mut MemberStateEncoding) {
+            member_state.decoded = Some(StreamsMemberWireState::from_i8(member_state.code));
+        }
+        #[then("the invalid Streams state discriminant is rejected")]
+        fn invalid_member_discriminant(member_state: &MemberStateEncoding) {
+            assert!(
+                member_state
+                    .decoded
+                    .as_ref()
+                    .expect("state decode attempted")
+                    .is_err()
+            );
+        }
+        scenarios!("tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature",tags="@member-state",fixtures=[member_state:MemberStateEncoding]);
     }
 }

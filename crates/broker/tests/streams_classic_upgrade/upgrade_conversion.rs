@@ -9,10 +9,7 @@ use {
     crate::{
         support::offsets::{offset_commit_partition, offset_commit_topic},
         upgrade_classic::classic_join_sync,
-        upgrade_harness::{
-            ERR_NONE, assert_committed_offset, boot, connect, create_topic,
-            finalize_streams_version, topic_id_for,
-        },
+        upgrade_harness::{ERR_NONE, UpgradeScenario, assert_committed_offset, upgrade_case},
         upgrade_streams::{streams_join_and_converge, topology},
     },
     assert2::assert,
@@ -21,57 +18,52 @@ use {
         leave_group_request::{LeaveGroupRequest, MemberIdentity},
         offset_commit_request::OffsetCommitRequest,
     },
+    rstest_bdd_macros::{scenario, then, when},
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "streams classic upgrade upgrade conversion: drained classic group converts and preserves offsets"
-)]
-async fn bdd_verify_drained_classic_group_converts_and_preserves_offsets() {
-    let (broker, bootstrap, _dir) = boot().await;
+#[when("a classic member joins and synchronizes the upgrade group")]
+async fn join_classic_upgrade(upgrade_case: &mut UpgradeScenario) {
+    let (member, generation) = classic_join_sync(upgrade_case.classic(), &upgrade_case.group).await;
+    upgrade_case.member = member;
+    upgrade_case.generation = generation;
+}
 
-    // Separate connections: JoinGroup parks the classic-protocol client for
-    // the full rebalance-delay; the streams heartbeat must not be queued
-    // behind it on the same socket.
-    let classic_client = connect(&bootstrap).await;
-    let streams_client = connect(&bootstrap).await;
-
-    finalize_streams_version(&classic_client).await;
-    create_topic(&classic_client, "in", 1).await;
-    let topic_id = topic_id_for(&classic_client, "in").await;
-
-    // ── Phase 1: form a classic group, commit offset 42, then leave. ──
-    let (member_id, generation_id) = classic_join_sync(&classic_client, "g").await;
-
-    // Commit offset 42 for ("in", 0).
-    let cr = classic_client
+#[when("the classic upgrade member commits input offset forty-two")]
+async fn commit_classic_upgrade(upgrade_case: &mut UpgradeScenario) {
+    let mut partition = offset_commit_partition(0, 42, Some(String::new()));
+    partition.committed_leader_epoch = 0;
+    let response = upgrade_case
+        .classic()
         .send(OffsetCommitRequest {
-            group_id: "g".into(),
-            generation_id_or_member_epoch: generation_id,
-            member_id: member_id.clone(),
-            topics: vec![{
-                let mut p = offset_commit_partition(0, 42, Some(String::new()));
-                p.committed_leader_epoch = 0;
-                offset_commit_topic("in", topic_id, vec![p])
-            }],
+            group_id: upgrade_case.group.clone(),
+            generation_id_or_member_epoch: upgrade_case.generation,
+            member_id: upgrade_case.member.clone(),
+            topics: vec![offset_commit_topic(
+                &upgrade_case.topic,
+                upgrade_case.topic_id.expect("topic identity"),
+                vec![partition],
+            )],
             ..Default::default()
         })
         .await
         .expect("OffsetCommit");
-    assert!(
-        cr.topics[0].partitions[0].error_code == ERR_NONE,
-        "OffsetCommit failed: {cr:?}"
-    );
+    upgrade_case.committed = Some(response.topics[0].partitions[0].error_code);
+}
 
-    // Leave — group is now drained (no live members).
-    // Use the `members` field (v3+ shape) since the client negotiates the
-    // max supported version (v5), which uses `members` not `member_id`.
-    let lr = classic_client
+#[then("the classic upgrade offset commit succeeds")]
+fn classic_upgrade_committed(upgrade_case: &UpgradeScenario) {
+    assert!(upgrade_case.committed == Some(ERR_NONE));
+}
+
+#[when("the classic member leaves the upgrade group")]
+async fn drain_classic_upgrade(upgrade_case: &mut UpgradeScenario) {
+    let response = upgrade_case
+        .classic()
         .send(LeaveGroupRequest {
-            group_id: "g".into(),
-            member_id: member_id.clone(),
+            group_id: upgrade_case.group.clone(),
+            member_id: upgrade_case.member.clone(),
             members: vec![MemberIdentity {
-                member_id: member_id.clone(),
+                member_id: upgrade_case.member.clone(),
                 group_instance_id: None,
                 ..Default::default()
             }],
@@ -79,50 +71,64 @@ async fn bdd_verify_drained_classic_group_converts_and_preserves_offsets() {
         })
         .await
         .expect("LeaveGroup");
-    assert!(lr.error_code == ERR_NONE, "LeaveGroup failed: {lr:?}");
-
-    // Precondition: the group must be Classic-typed.
-    broker.wait_until_group_type("g", GroupType::Classic).await;
-    assert!(
-        broker.group_type_for_test("g") == Some(GroupType::Classic),
-        "precondition: group_type must be Classic before upgrade, got {:?}",
-        broker.group_type_for_test("g")
-    );
-
-    // ── Phase 2: StreamsGroupHeartbeat for the same group_id → converge. ──
-    let (_, resp) = streams_join_and_converge(
-        &streams_client,
-        "g",
-        topology("in"),
-        1, // 1 partition
-        15,
-    )
-    .await;
-    assert!(
-        resp.error_code == ERR_NONE,
-        "streams heartbeat after conversion must succeed, got {resp:?}"
-    );
-
-    // Group must now be Streams-typed.
-    broker.wait_until_group_type("g", GroupType::Streams).await;
-    assert!(
-        broker.group_type_for_test("g") == Some(GroupType::Streams),
-        "group_type must be Streams after upgrade, got {:?}",
-        broker.group_type_for_test("g")
-    );
-
-    // ── Phase 3: committed offsets survive the flip. ──
-    assert_committed_offset(&streams_client, topic_id, 42).await;
+    upgrade_case.left = Some(response.error_code);
 }
 
-/// The broker converts a drained classic group to a streams group when a
-/// `StreamsGroupHeartbeat` arrives. A drained group has zero live members and
-/// keeps its committed offsets. Committed offsets survive the flip, and
-/// `OffsetFetch` can read them.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[then("the classic upgrade member leaves successfully")]
+fn classic_upgrade_left(upgrade_case: &UpgradeScenario) {
+    assert!(upgrade_case.left == Some(ERR_NONE));
+}
+
+#[when("a streams member joins the drained classic group and converges")]
+async fn convert_classic_upgrade(upgrade_case: &mut UpgradeScenario) {
+    upgrade_case.response = Some(
+        streams_join_and_converge(
+            upgrade_case.streams(),
+            &upgrade_case.group,
+            topology(&upgrade_case.topic),
+            1,
+            15,
+        )
+        .await
+        .1,
+    );
+}
+
+#[then("the converted group accepts the streams heartbeat and becomes Streams-typed")]
+async fn converted_classic_upgrade(upgrade_case: &UpgradeScenario) {
+    let response = upgrade_case
+        .response
+        .as_ref()
+        .expect("streams conversion answered");
+    assert!(response.error_code == ERR_NONE, "{response:?}");
+    upgrade_case
+        .broker()
+        .wait_until_group_type(&upgrade_case.group, GroupType::Streams)
+        .await;
+    assert!(
+        upgrade_case
+            .broker()
+            .group_type_for_test(&upgrade_case.group)
+            == Some(GroupType::Streams)
+    );
+}
+
+#[then("OffsetFetch through the streams connection still returns input offset forty-two")]
+async fn retained_classic_upgrade_offsets(upgrade_case: &UpgradeScenario) {
+    assert_committed_offset(
+        upgrade_case.streams(),
+        upgrade_case.topic_id.expect("topic identity"),
+        42,
+    )
+    .await;
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/streams_classic_upgrade/upgrade_conversion.feature",
     name = "drained classic group converts and preserves offsets"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn drained_classic_group_converts_and_preserves_offsets() {}
+async fn drained_classic_group_converts_and_preserves_offsets(upgrade_case: UpgradeScenario) {
+    upgrade_case.shutdown().await;
+    drop(upgrade_case);
+}

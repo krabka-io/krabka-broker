@@ -274,110 +274,194 @@ mod tests {
         super::*,
         crate::kafka_log::config::METADATA_TOPIC,
         assert2::{assert, check},
+        krabka_protocol::owned::metadata_response::{
+            MetadataResponse, MetadataResponsePartition, MetadataResponseTopic,
+        },
         krabka_units::prelude::{mebibytes, millis},
         std::{future, time::Duration},
         tokio::{sync::Notify, task},
     };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log consumer tests: initial connection retries without reassignment"
-    )]
-    async fn bdd_verify_initial_connection_retries_without_reassignment() {
+    enum ConnectionOutcome {
+        Connected(i32),
+        Cancelled,
+    }
+    struct ConsumerConnectionScenario {
+        cancel: CancellationToken,
+        retry_backoff: Duration,
+        failures_before_success: usize,
+        attempts: usize,
+        outcome: Option<ConnectionOutcome>,
+    }
+    #[rstest::fixture]
+    fn consumer_connection() -> ConsumerConnectionScenario {
         let cancel = CancellationToken::new();
-        let mut attempts = 0;
-        let client = connect_with_retry(&cancel, Duration::ZERO, || {
-            attempts += 1;
-            future::ready(if attempts == 1 {
-                Err("temporary connection failure")
-            } else {
-                Ok(42)
-            })
-        })
+        ConsumerConnectionScenario {
+            cancel,
+            retry_backoff: Duration::ZERO,
+            failures_before_success: 0,
+            attempts: 0,
+            outcome: None,
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "the initial metadata connection fails once before returning client 42"
+    )]
+    fn transient_initial_failure(consumer_connection: &mut ConsumerConnectionScenario) {
+        consumer_connection.failures_before_success = 1;
+        consumer_connection.retry_backoff = Duration::ZERO;
+    }
+    #[rstest_bdd_macros::given("metadata connection retries wait one hour")]
+    fn long_retry_delay(consumer_connection: &mut ConsumerConnectionScenario) {
+        consumer_connection.retry_backoff = Duration::from_secs(3600);
+    }
+    #[rstest_bdd_macros::when("the metadata consumer connects without being reassigned")]
+    async fn connect_consumer(consumer_connection: &mut ConsumerConnectionScenario) {
+        let attempts = &mut consumer_connection.attempts;
+        let failures = consumer_connection.failures_before_success;
+        let client = connect_with_retry(
+            &consumer_connection.cancel,
+            consumer_connection.retry_backoff,
+            || {
+                *attempts += 1;
+                future::ready(if *attempts <= failures {
+                    Err("temporary connection failure")
+                } else {
+                    Ok(42)
+                })
+            },
+        )
         .await;
-        assert!(client == Some(42));
-        assert!(attempts == 2);
+        consumer_connection.outcome =
+            Some(client.map_or(ConnectionOutcome::Cancelled, ConnectionOutcome::Connected));
+    }
+    #[rstest_bdd_macros::when("the consumer is cancelled while {stage}")]
+    async fn cancel_connection(
+        consumer_connection: &mut ConsumerConnectionScenario,
+        stage: String,
+    ) {
+        let result = match stage.as_str() {
+            "its initial connection is pending" => {
+                let pending = connect_with_retry::<(), &str, _, _>(
+                    &consumer_connection.cancel,
+                    consumer_connection.retry_backoff,
+                    future::pending,
+                );
+                tokio::pin!(pending);
+                tokio::select! {biased;result=&mut pending=>panic!("pending connection completed: {result:?}"),()=task::yield_now()=>{}}
+                consumer_connection.cancel.cancel();
+                pending.await
+            }
+            "waiting to retry a failed connection" => {
+                let started = Notify::new();
+                let retrying = connect_with_retry::<(), _, _, _>(
+                    &consumer_connection.cancel,
+                    consumer_connection.retry_backoff,
+                    || {
+                        started.notify_one();
+                        future::ready(Err("temporary connection failure"))
+                    },
+                );
+                tokio::pin!(retrying);
+                tokio::select! {biased;result=&mut retrying=>panic!("retry ended: {result:?}"),()=started.notified()=>{}}
+                consumer_connection.cancel.cancel();
+                retrying.await
+            }
+            _ => panic!("unknown connection stage: {stage}"),
+        };
+        consumer_connection.outcome = Some(match result {
+            None => ConnectionOutcome::Cancelled,
+            Some(()) => panic!("cancelled connection returned a client"),
+        });
+    }
+    #[rstest_bdd_macros::then("client 42 is returned after exactly two connection attempts")]
+    fn check_connection_retry(consumer_connection: &ConsumerConnectionScenario) {
+        assert!(matches!(
+            consumer_connection.outcome,
+            Some(ConnectionOutcome::Connected(42))
+        ));
+        assert!(consumer_connection.attempts == 2);
+    }
+    #[rstest_bdd_macros::then("connection completion reports cancellation immediately")]
+    fn check_connection_cancelled(consumer_connection: &ConsumerConnectionScenario) {
+        assert!(matches!(
+            consumer_connection.outcome,
+            Some(ConnectionOutcome::Cancelled)
+        ));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/consumer.feature",
-        name = "tests: initial connection retries without reassignment"
-    )]
-    #[tokio::test]
-    async fn initial_connection_retries_without_reassignment() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log consumer tests: initial connection and retry delay are cancellable"
-    )]
-    async fn bdd_verify_initial_connection_and_retry_delay_are_cancellable() {
-        let cancel = CancellationToken::new();
-        let pending = connect_with_retry::<(), &str, _, _>(
-            &cancel,
-            Duration::from_secs(3600),
-            future::pending,
+    #[derive(Default)]
+    struct ConsumerRoutingScenario {
+        capacity: Option<MetadataEventQueueCapacity>,
+        channel: Option<MetadataEventChannel>,
+        metadata: Option<MetadataResponse>,
+        leaders: Option<(Option<i32>, Option<i32>)>,
+        state: Option<Arc<ConsumerState>>,
+        assigned: Option<Vec<i32>>,
+    }
+    #[rstest::fixture]
+    fn consumer_routing() -> ConsumerRoutingScenario {
+        let assigned = None;
+        ConsumerRoutingScenario {
+            assigned,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given("the metadata event queue capacity is {capacity}")]
+    fn event_capacity(consumer_routing: &mut ConsumerRoutingScenario, capacity: usize) {
+        consumer_routing.capacity = Some(MetadataEventQueueCapacity::new(capacity).unwrap());
+    }
+    #[rstest_bdd_macros::when("the metadata event channel is allocated")]
+    fn allocate_channel(consumer_routing: &mut ConsumerRoutingScenario) {
+        consumer_routing.channel = Some(metadata_event_channel(
+            consumer_routing.capacity.take().unwrap(),
+        ));
+    }
+    #[rstest_bdd_macros::then("the channel can buffer 2048 metadata events")]
+    fn check_channel_capacity(consumer_routing: &ConsumerRoutingScenario) {
+        check!(
+            consumer_routing
+                .channel
+                .as_ref()
+                .unwrap()
+                .sender
+                .max_capacity()
+                == 2048
         );
-        tokio::pin!(pending);
-        tokio::select! {
-            biased;
-            result = &mut pending => panic!("pending connection completed: {result:?}"),
-            () = task::yield_now() => {}
-        }
-        cancel.cancel();
-        assert!(pending.await.is_none());
-
-        let cancel = CancellationToken::new();
-        let started = Notify::new();
-        let retrying =
-            connect_with_retry::<(), _, _, _>(&cancel, Duration::from_secs(3600), || {
-                started.notify_one();
-                future::ready(Err("temporary connection failure"))
-            });
-        tokio::pin!(retrying);
-        tokio::select! {
-            biased;
-            result = &mut retrying => panic!("retry ended: {result:?}"),
-            () = started.notified() => {}
-        }
-        cancel.cancel();
-        assert!(retrying.await.is_none());
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/consumer.feature",
-        name = "tests: initial connection and retry delay are cancellable"
-    )]
-    #[tokio::test]
-    async fn initial_connection_and_retry_delay_are_cancellable() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log consumer tests: metadata event channel uses configured capacity"
-    )]
-    fn bdd_verify_metadata_event_channel_uses_configured_capacity() {
-        let MetadataEventChannel {
-            sender: tx,
-            receiver: _rx,
-        } = metadata_event_channel(MetadataEventQueueCapacity::new(2048).unwrap());
-        check!(tx.max_capacity() == 2048);
+    #[rstest_bdd_macros::given("remote metadata partition 2 is led by broker 9")]
+    fn metadata_partition_leader(consumer_routing: &mut ConsumerRoutingScenario) {
+        consumer_routing.metadata = Some(MetadataResponse {
+            topics: vec![MetadataResponseTopic {
+                name: Some(METADATA_TOPIC.into()),
+                partitions: vec![MetadataResponsePartition {
+                    partition_index: 2,
+                    leader_id: 9,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/consumer.feature",
-        name = "tests: metadata event channel uses configured capacity"
+    #[rstest_bdd_macros::when("leaders are requested for metadata partitions 2 and 1")]
+    fn lookup_metadata_leaders(consumer_routing: &mut ConsumerRoutingScenario) {
+        let metadata = consumer_routing.metadata.as_ref().unwrap();
+        consumer_routing.leaders = Some((
+            partition_leader(metadata, METADATA_TOPIC, 2),
+            partition_leader(metadata, METADATA_TOPIC, 1),
+        ));
+    }
+    #[rstest_bdd_macros::then("partition 2 routes to broker 9 and partition 1 has no leader")]
+    fn check_metadata_leaders(consumer_routing: &ConsumerRoutingScenario) {
+        check!(consumer_routing.leaders.unwrap() == (Some(9), None));
+    }
+    #[rstest_bdd_macros::given(
+        "a metadata consumer has fetch wait 750ms size 2MiB and retry delay 300ms"
     )]
-    fn metadata_event_channel_uses_configured_capacity() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log consumer tests: assignment handle tracks spawned partitions"
-    )]
-    async fn bdd_verify_assignment_handle_tracks_spawned_partitions() {
+    fn assignment_consumer(consumer_routing: &mut ConsumerRoutingScenario) {
         let (tx, _rx) = mpsc::channel::<MetadataEventRecord>(1);
-        let state = Arc::new(ConsumerState {
+        consumer_routing.state = Some(Arc::new(ConsumerState {
             bootstrap: "invalid-bootstrap".into(),
             client_id: "test-consumer".into(),
             security: None,
@@ -390,14 +474,16 @@ mod tests {
             dispatch_queue_capacity: ConnectionDispatchQueueCapacity::default(),
             frame_max: ClientFrameMax::default(),
             tasks: StdMutex::new(HashMap::new()),
-        });
-        check!(state.fetch_max_wait == millis(750));
-        check!(state.fetch_max_bytes == mebibytes(2));
-        check!(state.fetch_retry_backoff == millis(300));
+        }));
+    }
+    #[rstest_bdd_macros::when(
+        "partition 2 is spawned at 7 then 9 and partition 0 is added before removing partition 2"
+    )]
+    async fn change_assignments(consumer_routing: &mut ConsumerRoutingScenario) {
+        let state = consumer_routing.state.as_ref().unwrap();
         let handle = KafkaAssignmentHandle {
-            state: Arc::clone(&state),
+            state: Arc::clone(state),
         };
-
         state.spawn_partition(PartitionStart {
             partition: 2,
             start_offset: 7,
@@ -411,49 +497,49 @@ mod tests {
             start_offset: 0,
         });
         handle.remove(2);
-
-        assert!(handle.assigned() == vec![0]);
+        consumer_routing.assigned = Some(handle.assigned());
         state.cancel_all();
     }
-
-    #[cfg(test)]
+    #[rstest_bdd_macros::then(
+        "only partition 0 remains assigned and the configured fetch policy is retained"
+    )]
+    fn check_assignment_state(consumer_routing: &ConsumerRoutingScenario) {
+        let state = consumer_routing.state.as_ref().unwrap();
+        check!(state.fetch_max_wait == millis(750));
+        check!(state.fetch_max_bytes == mebibytes(2));
+        check!(state.fetch_retry_backoff == millis(300));
+        assert!(consumer_routing.assigned.as_ref().unwrap() == &vec![0]);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/consumer_routing",fixtures=[consumer_routing:ConsumerRoutingScenario]);
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/consumer.feature",
-        name = "tests: assignment handle tracks spawned partitions"
+        path = "tests/features/consumer_lifecycle/lifecycle.feature",
+        name = "Initial connection retries without reassignment"
     )]
     #[tokio::test]
-    async fn assignment_handle_tracks_spawned_partitions() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log consumer tests: partition fetches route to the metadata leader"
-    )]
-    fn bdd_verify_partition_fetches_route_to_the_metadata_leader() {
-        use krabka_protocol::owned::metadata_response::{
-            MetadataResponse, MetadataResponsePartition, MetadataResponseTopic,
-        };
-
-        let metadata = MetadataResponse {
-            topics: vec![MetadataResponseTopic {
-                name: Some(METADATA_TOPIC.into()),
-                partitions: vec![MetadataResponsePartition {
-                    partition_index: 2,
-                    leader_id: 9,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        check!(partition_leader(&metadata, METADATA_TOPIC, 2) == Some(9));
-        check!(partition_leader(&metadata, METADATA_TOPIC, 1) == None);
+    async fn initial_connection_retries_without_reassignment(
+        consumer_connection: ConsumerConnectionScenario,
+    ) {
+        let _ = consumer_connection;
     }
-
-    #[cfg(test)]
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log/consumer.feature",
-        name = "tests: partition fetches route to the metadata leader"
+        path = "tests/features/consumer_lifecycle/lifecycle.feature",
+        name = "Cancellation interrupts connection and retry waits"
     )]
-    fn partition_fetches_route_to_the_metadata_leader() {}
+    #[tokio::test]
+    async fn initial_connection_and_retry_delay_are_cancellable(
+        consumer_connection: ConsumerConnectionScenario,
+        stage: String,
+    ) {
+        let _ = (consumer_connection, stage);
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/consumer_lifecycle/lifecycle.feature",
+        name = "Assignments track replacement and removal of partition tasks"
+    )]
+    #[tokio::test]
+    async fn assignment_handle_tracks_spawned_partitions(
+        consumer_routing: ConsumerRoutingScenario,
+    ) {
+        let _ = consumer_routing;
+    }
 }

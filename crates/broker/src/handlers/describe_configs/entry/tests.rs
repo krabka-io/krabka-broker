@@ -99,26 +99,50 @@ fn the_chain_head_decides_the_value_and_the_source() {
     );
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers describe configs entry tests: a name kafka does not define is untyped withheld and read only"
+#[derive(Default)]
+struct UnknownConfigScenario {
+    name: String,
+    value: String,
+    entry: Option<DescribeConfigsResourceResult>,
+}
+#[rstest::fixture]
+fn unknown_config() -> UnknownConfigScenario {
+    let name = String::new();
+    UnknownConfigScenario {
+        name,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "an unregistered plugin key plugin.custom.key has dynamic default value x"
 )]
-fn bdd_verify_a_name_kafka_does_not_define_is_untyped_withheld_and_read_only() {
-    let entry = config_entry(
+fn unknown_plugin_config(unknown_config: &mut UnknownConfigScenario) {
+    unknown_config.name = "plugin.custom.key".into();
+    unknown_config.value = "x".into();
+}
+#[rstest_bdd_macros::when(
+    "DescribeConfigs renders the key with synonyms and documentation requested"
+)]
+fn render_unknown_config(unknown_config: &mut UnknownConfigScenario) {
+    unknown_config.entry = Some(config_entry(
         None,
-        "plugin.custom.key",
+        &unknown_config.name,
         &[Layer {
             source: CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
-            name: "plugin.custom.key",
-            value: "x",
+            name: &unknown_config.name,
+            value: &unknown_config.value,
         }],
         DefaultLayer::default(),
         BOTH,
-    );
-
+    ));
+}
+#[rstest_bdd_macros::then(
+    "the unknown key and its synonym are sensitive untyped read-only and withhold their values"
+)]
+fn check_unknown_config_entry(unknown_config: &UnknownConfigScenario) {
     assert!(
-        entry
-            == DescribeConfigsResourceResult {
+        unknown_config.entry.as_ref().unwrap()
+            == &DescribeConfigsResourceResult {
                 name: "plugin.custom.key".to_owned(),
                 value: None,
                 read_only: true,
@@ -132,21 +156,11 @@ fn bdd_verify_a_name_kafka_does_not_define_is_untyped_withheld_and_read_only() {
                 }],
                 config_type: 0,
                 documentation: None,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
+                unknown_tagged_fields: UnknownTaggedFields::default()
             }
     );
 }
-
-/// A name Kafka does not define has no row: `KafkaConfig.configType` is empty,
-/// so the entry is `UNKNOWN`-typed, its value is withheld (`maybeSensitive`
-/// treats an untyped key as sensitive), and, being in no dynamic set, it is
-/// read-only.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/describe_configs/entry/tests.feature",
-    name = "a name kafka does not define is untyped withheld and read only"
-)]
-fn a_name_kafka_does_not_define_is_untyped_withheld_and_read_only() {}
+rstest_bdd_macros::scenarios!("tests/features/handler_unknown_config_entry",fixtures=[unknown_config:UnknownConfigScenario]);
 
 /// The same row as `log.retention.ms` would carry, so the chain test does not
 /// depend on a key krabka happens to have.

@@ -345,66 +345,72 @@ fn honored_assignments_pass_through_verbatim() {
     );
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers create partitions assignment tests: invalid explicit assignments answer kafkas messages"
-)]
-fn bdd_verify_invalid_explicit_assignments_answer_kafkas_messages() {
-    /// The replica lists of an explicit assignment, and the message that refuses it.
-    struct RefusalCase {
-        lists: &'static [&'static [i32]],
-        message: &'static str,
-    }
-
-    let brokers = plain_brokers(&[0, 1, 2]);
-    let cases: [RefusalCase; 5] = [
-        RefusalCase {
-            lists: &[&[0, 1, 2]],
-            message: "The manual partition assignment includes a partition with 3 replica(s), but this \
-             is not consistent with previous partitions, which have 2 replica(s).",
-        },
-        RefusalCase {
-            lists: &[&[1, 1]],
-            message: "The manual partition assignment includes the broker 1 more than once.",
-        },
-        RefusalCase {
-            lists: &[&[0, 9]],
-            message: "The manual partition assignment includes broker 9, but no such broker is \
-             registered.",
-        },
-        RefusalCase {
-            lists: &[&[0, -1]],
-            message: "The manual partition assignment includes broker -1, but no such broker is \
-             registered.",
-        },
-        RefusalCase {
-            lists: &[&[0, 1], &[]],
-            message: "The manual partition assignment includes an empty replica list.",
-        },
-    ];
-
-    for RefusalCase { lists, message } in cases {
-        let provided: Vec<CreatePartitionsAssignment> =
-            lists.iter().map(|list| assn(list)).collect();
-        assert!(
-            explicit(&provided, &brokers, 2, None)
-                == Err(PlacementRefusal {
-                    code: codes::INVALID_REPLICA_ASSIGNMENT,
-                    message: message.to_owned(),
-                }),
-            "{message}"
-        );
+#[derive(Default)]
+struct ExplicitPartitionAssignmentScenario {
+    brokers: Vec<SiteBrokerView>,
+    assignments: Vec<CreatePartitionsAssignment>,
+    result: Option<Result<Vec<Vec<NodeId>>, PlacementRefusal>>,
+}
+#[rstest::fixture]
+fn explicit_partition_assignment() -> ExplicitPartitionAssignmentScenario {
+    let brokers = Vec::new();
+    ExplicitPartitionAssignmentScenario {
+        brokers,
+        ..Default::default()
     }
 }
-
-/// Kafka's `validateManualPartitionAssignment` refuses an explicit list with
-/// these messages, on brokers 0 to 2 and a topic of replication factor 2.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/create_partitions/assignment/tests.feature",
-    name = "invalid explicit assignments answer kafkas messages"
+#[rstest_bdd_macros::given(
+    "brokers 0 1 and 2 are registered and the topic replication factor is 2"
 )]
-fn invalid_explicit_assignments_answer_kafkas_messages() {}
+fn explicit_assignment_brokers(
+    explicit_partition_assignment: &mut ExplicitPartitionAssignmentScenario,
+) {
+    explicit_partition_assignment.brokers = plain_brokers(&[0, 1, 2]);
+}
+#[rstest_bdd_macros::given("new partitions have explicit replica lists {lists}")]
+fn requested_explicit_replica_lists(
+    explicit_partition_assignment: &mut ExplicitPartitionAssignmentScenario,
+    lists: String,
+) {
+    explicit_partition_assignment.assignments = lists
+        .split(';')
+        .map(|list| {
+            let ids: Vec<i32> = if list == "empty" {
+                Vec::new()
+            } else {
+                list.split(',').map(|id| id.parse().unwrap()).collect()
+            };
+            assn(&ids)
+        })
+        .collect();
+}
+#[rstest_bdd_macros::when("CreatePartitions validates the explicit assignments")]
+fn validate_explicit_partition_assignment(
+    explicit_partition_assignment: &mut ExplicitPartitionAssignmentScenario,
+) {
+    explicit_partition_assignment.result = Some(explicit(
+        &explicit_partition_assignment.assignments,
+        &explicit_partition_assignment.brokers,
+        2,
+        None,
+    ));
+}
+#[rstest_bdd_macros::then(
+    "the assignment is refused as invalid replica assignment with message {message}"
+)]
+fn check_explicit_partition_assignment(
+    explicit_partition_assignment: &ExplicitPartitionAssignmentScenario,
+    message: String,
+) {
+    assert!(
+        explicit_partition_assignment.result.as_ref().unwrap()
+            == &Err(PlacementRefusal {
+                code: codes::INVALID_REPLICA_ASSIGNMENT,
+                message
+            })
+    );
+}
+rstest_bdd_macros::scenarios!("tests/features/handler_explicit_partition_assignment",fixtures=[explicit_partition_assignment:ExplicitPartitionAssignmentScenario]);
 
 /// An automatic placement that cannot put `rf` replicas on the brokers
 /// answers the message of Kafka's placer. `createPartitions` lets that

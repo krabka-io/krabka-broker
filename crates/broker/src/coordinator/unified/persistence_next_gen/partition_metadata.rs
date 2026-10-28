@@ -153,57 +153,91 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified persistence next gen partition metadata tests: value bytes match kafka schema"
-    )]
-    fn bdd_verify_value_bytes_match_kafka_schema() {
-        assert!(PartitionMetadataValue::decode(GOLDEN).unwrap() == golden_value());
-        assert!(&golden_value().encode()[..] == GOLDEN);
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct PartitionMetadataCodec {
+        value: Option<PartitionMetadataValue>,
+        bytes: Vec<u8>,
+        encoded: Option<Bytes>,
+        decoded: Option<Result<PartitionMetadataValue, BrokerError>>,
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/partition_metadata.feature",
-        name = "tests: value bytes match kafka schema"
+    #[rstest::fixture]
+    fn partition_metadata() -> PartitionMetadataCodec {
+        // Start this scenario with fresh inputs and observations.
+        PartitionMetadataCodec::default()
+    }
+    #[given(
+        "consumer partition metadata contains the Kafka golden topic and partition rack assignments"
     )]
-    fn value_bytes_match_kafka_schema() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified persistence next gen partition metadata tests: value decode refuses what kafka refuses"
-    )]
-    fn bdd_verify_value_decode_refuses_what_kafka_refuses() {
-        struct Row<'a> {
-            name: &'static str,
-            bytes: &'a [u8],
-        }
-
-        let mut version_1 = GOLDEN.to_vec();
-        version_1[1] = 1;
-        let rows: [Row<'_>; 3] = [
-            Row {
-                name: "value version 1",
-                bytes: &version_1,
-            },
-            Row {
-                name: "truncated value",
-                bytes: &GOLDEN[..GOLDEN.len() - 1],
-            },
-            Row {
-                name: "empty value",
-                bytes: b"",
-            },
-        ];
-        for Row { name, bytes } in rows {
-            check!(PartitionMetadataValue::decode(bytes).is_err(), "{name}");
+    fn golden_partition_metadata(partition_metadata: &mut PartitionMetadataCodec) {
+        partition_metadata.value = Some(golden_value());
+        partition_metadata.bytes = GOLDEN.to_vec();
+    }
+    #[given("the consumer partition metadata bytes have corruption {corruption}")]
+    fn corrupt_partition_metadata(
+        partition_metadata: &mut PartitionMetadataCodec,
+        corruption: String,
+    ) {
+        partition_metadata.bytes = GOLDEN.to_vec();
+        match corruption.as_str() {
+            "unknown-value-version" => partition_metadata.bytes[1] = 1,
+            "missing-trailer" => {
+                partition_metadata.bytes.pop();
+            }
+            "empty" => partition_metadata.bytes.clear(),
+            _ => panic!("unknown partition metadata corruption"),
         }
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/partition_metadata.feature",
-        name = "tests: value decode refuses what kafka refuses"
+    #[when("the coordinator writes the partition metadata and reads Kafka golden bytes")]
+    fn partition_metadata_compatibility(partition_metadata: &mut PartitionMetadataCodec) {
+        partition_metadata.encoded = Some(
+            partition_metadata
+                .value
+                .as_ref()
+                .expect("native metadata prepared")
+                .encode(),
+        );
+        partition_metadata.decoded =
+            Some(PartitionMetadataValue::decode(&partition_metadata.bytes));
+    }
+    #[when("the coordinator reads the consumer partition metadata bytes")]
+    fn read_partition_metadata(partition_metadata: &mut PartitionMetadataCodec) {
+        partition_metadata.decoded =
+            Some(PartitionMetadataValue::decode(&partition_metadata.bytes));
+    }
+    #[then(
+        "the partition metadata encodes exactly as Kafka and recovers every topic partition and rack field"
     )]
-    fn value_decode_refuses_what_kafka_refuses() {}
+    fn partition_metadata_golden(partition_metadata: &PartitionMetadataCodec) {
+        assert!(
+            &partition_metadata
+                .encoded
+                .as_ref()
+                .expect("metadata encoded")[..]
+                == GOLDEN
+        );
+        assert!(
+            partition_metadata
+                .decoded
+                .as_ref()
+                .expect("decode attempted")
+                .as_ref()
+                .expect("valid golden bytes")
+                == partition_metadata
+                    .value
+                    .as_ref()
+                    .expect("native metadata prepared")
+        );
+    }
+    #[then("Kafka incompatible partition metadata is rejected")]
+    fn partition_metadata_refused(partition_metadata: &PartitionMetadataCodec) {
+        check!(
+            partition_metadata
+                .decoded
+                .as_ref()
+                .expect("decode attempted")
+                .is_err()
+        );
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/persistence_next_gen/partition_metadata.feature",fixtures=[partition_metadata:PartitionMetadataCodec]);
 }

@@ -11,8 +11,7 @@ use {
         support::client::connect_client,
         upgrade_classic::join_request,
         upgrade_harness::{
-            ERR_GROUP_ID_NOT_FOUND, ERR_MEMBER_ID_REQUIRED, boot, connect, create_topic,
-            finalize_streams_version,
+            ERR_GROUP_ID_NOT_FOUND, ERR_MEMBER_ID_REQUIRED, UpgradeScenario, connect, upgrade_case,
         },
         upgrade_streams::{first_join, topology},
     },
@@ -66,62 +65,86 @@ async fn hold_live_classic_member(
     broker.wait_until_classic_group_member_count(group, 1).await;
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "streams classic upgrade upgrade live member: classic group with live member rejects streams heartbeat"
-)]
-async fn bdd_verify_classic_group_with_live_member_rejects_streams_heartbeat() {
-    let (broker, bootstrap, _dir) = boot().await;
-    let streams_client = connect(&bootstrap).await;
-    finalize_streams_version(&streams_client).await;
-    create_topic(&streams_client, "in2", 1).await;
+use rstest_bdd_macros::{given, scenario, then, when};
 
-    // (row, group id, the classic member's instance id)
-    let rows = [
-        ("a dynamic classic member", "g2", None),
-        ("a static classic member", "g3", Some("instance-1")),
-    ];
-    for (row, group, instance_id) in rows {
-        hold_live_classic_member(&broker, &bootstrap, group, instance_id).await;
-        assert!(
-            broker.group_type_for_test(group) == Some(GroupType::Classic),
-            "{row}: precondition: group_type must be Classic, got {:?}",
-            broker.group_type_for_test(group)
-        );
-
-        let resp = streams_client
-            .send(first_join(group, topology("in2")))
-            .await
-            .expect("StreamsGroupHeartbeat");
-        check!(
-            resp == StreamsGroupHeartbeatResponse {
-                error_code: ERR_GROUP_ID_NOT_FOUND,
-                error_message: Some(format!("Group {group} is not a streams group.")),
-                ..Default::default()
-            },
-            "{row}"
-        );
-
-        // Group must STILL be Classic-typed (no flip), with its member.
-        check!(
-            broker.group_type_for_test(group) == Some(GroupType::Classic),
-            "{row}: group_type must remain Classic after rejected upgrade"
-        );
-        broker.wait_until_classic_group_member_count(group, 1).await;
-    }
+#[given("the classic upgrade group retains a live member with instance ID {instance}")]
+async fn live_classic_upgrade_member(upgrade_case: &UpgradeScenario, instance: String) {
+    hold_live_classic_member(
+        upgrade_case.broker(),
+        &upgrade_case.bootstrap,
+        &upgrade_case.group,
+        if instance == "absent" {
+            None
+        } else {
+            Some(&instance)
+        },
+    )
+    .await;
+    assert!(
+        upgrade_case
+            .broker()
+            .group_type_for_test(&upgrade_case.group)
+            == Some(GroupType::Classic)
+    );
 }
 
-/// A classic group with a **live** member, dynamic or static, rejects the
-/// `StreamsGroupHeartbeat` and remains Classic-typed.
-///
-/// Kafka 4.3.1's `getOrCreateStreamsGroup` converts only an empty classic
-/// group. Any other is refused by `castToStreamsGroup` with
-/// `GROUP_ID_NOT_FOUND` and the message "Group {id} is not a streams group.",
-/// and a static member holds its group like a dynamic one.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[when("a streams first-join heartbeat targets the occupied classic group")]
+async fn refused_classic_upgrade(upgrade_case: &mut UpgradeScenario) {
+    upgrade_case.response = Some(
+        upgrade_case
+            .streams()
+            .send(first_join(
+                &upgrade_case.group,
+                topology(&upgrade_case.topic),
+            ))
+            .await
+            .expect("StreamsGroupHeartbeat"),
+    );
+}
+
+#[then("the occupied classic group returns the complete not-a-streams-group refusal")]
+fn occupied_classic_upgrade_refusal(upgrade_case: &UpgradeScenario) {
+    check!(
+        upgrade_case
+            .response
+            .as_ref()
+            .expect("streams heartbeat answered")
+            == &StreamsGroupHeartbeatResponse {
+                error_code: ERR_GROUP_ID_NOT_FOUND,
+                error_message: Some(format!(
+                    "Group {} is not a streams group.",
+                    upgrade_case.group
+                )),
+                ..Default::default()
+            }
+    );
+}
+
+#[then("the occupied classic group retains its single live member")]
+async fn occupied_classic_upgrade_unchanged(upgrade_case: &UpgradeScenario) {
+    check!(
+        upgrade_case
+            .broker()
+            .group_type_for_test(&upgrade_case.group)
+            == Some(GroupType::Classic)
+    );
+    upgrade_case
+        .broker()
+        .wait_until_classic_group_member_count(&upgrade_case.group, 1)
+        .await;
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/streams_classic_upgrade/upgrade_live_member.feature",
     name = "classic group with live member rejects streams heartbeat"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn classic_group_with_live_member_rejects_streams_heartbeat() {}
+async fn classic_group_with_live_member_rejects_streams_heartbeat(
+    upgrade_case: UpgradeScenario,
+    group: String,
+    instance: String,
+) {
+    let _ = (group, instance);
+    upgrade_case.shutdown().await;
+    drop(upgrade_case);
+}

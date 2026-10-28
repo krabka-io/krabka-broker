@@ -519,171 +519,10 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified actor regex resolution tests: the conditions of a refresh follow kafka"
-    )]
-    fn bdd_verify_the_conditions_of_a_refresh_follow_kafka() {
-        struct Row {
-            name: &'static str,
-            /// Time since the last resolution, in milliseconds.
-            since_ms: i64,
-            /// The metadata version of the latest relevant image.
-            refresh_version: i64,
-            /// The member that heartbeats: its old and new pattern.
-            old: Option<&'static str>,
-            new: Option<&'static str>,
-            /// Whether the resolver is asked.
-            resolves: bool,
-            update: RegexUpdate,
-        }
-        let rows = [
-            Row {
-                name: "nothing changed and the resolution is fresh",
-                since_ms: 60_000,
-                refresh_version: 5,
-                old: Some("a.*"),
-                new: Some("a.*"),
-                resolves: false,
-                update: RegexUpdate::NoChange,
-            },
-            Row {
-                name: "the image changed since the resolution",
-                since_ms: 60_000,
-                refresh_version: 6,
-                old: Some("a.*"),
-                new: Some("a.*"),
-                resolves: true,
-                update: RegexUpdate::NoChange,
-            },
-            Row {
-                name: "the image changed but the last resolution is within ten seconds",
-                since_ms: 10_000,
-                refresh_version: 6,
-                old: Some("a.*"),
-                new: Some("a.*"),
-                resolves: false,
-                update: RegexUpdate::NoChange,
-            },
-            Row {
-                name: "the image changed and the last resolution is just over ten seconds old",
-                since_ms: 10_001,
-                refresh_version: 6,
-                old: Some("a.*"),
-                new: Some("a.*"),
-                resolves: true,
-                update: RegexUpdate::NoChange,
-            },
-            Row {
-                name: "the refresh interval elapsed",
-                since_ms: 600_001,
-                refresh_version: 5,
-                old: Some("a.*"),
-                new: Some("a.*"),
-                resolves: true,
-                update: RegexUpdate::NoChange,
-            },
-            Row {
-                name: "the refresh interval has not elapsed",
-                since_ms: 600_000,
-                refresh_version: 5,
-                old: Some("a.*"),
-                new: Some("a.*"),
-                resolves: false,
-                update: RegexUpdate::NoChange,
-            },
-            Row {
-                name: "a new pattern, within ten seconds of the last resolution, waits",
-                since_ms: 5_000,
-                refresh_version: 5,
-                old: None,
-                new: Some("b.*"),
-                resolves: false,
-                update: RegexUpdate::Updated,
-            },
-            Row {
-                name: "a new pattern is resolved with the others",
-                since_ms: 60_000,
-                refresh_version: 5,
-                old: None,
-                new: Some("b.*"),
-                resolves: true,
-                update: RegexUpdate::Updated,
-            },
-            Row {
-                name: "a pattern that another member uses and the group resolved",
-                since_ms: 60_000,
-                refresh_version: 5,
-                old: None,
-                new: Some("a.*"),
-                resolves: false,
-                update: RegexUpdate::UpdatedAndResolved,
-            },
-            Row {
-                name: "a member without a pattern refreshes the group's stale resolution",
-                since_ms: 600_001,
-                refresh_version: 6,
-                old: None,
-                new: None,
-                resolves: true,
-                update: RegexUpdate::NoChange,
-            },
-            Row {
-                name: "a member without a pattern, within ten seconds of the last resolution, waits",
-                since_ms: 5_000,
-                refresh_version: 6,
-                old: None,
-                new: None,
-                resolves: false,
-                update: RegexUpdate::NoChange,
-            },
-            Row {
-                name: "a member drops its pattern",
-                since_ms: 60_000,
-                refresh_version: 5,
-                old: Some("a.*"),
-                new: None,
-                resolves: false,
-                update: RegexUpdate::UpdatedAndResolved,
-            },
-        ];
-        for row in rows {
-            let mut state = group(&[("m1", Some("a.*")), ("m2", row.old)]);
-            state.set_resolved_regex("a.*".into(), resolution(&["a1"], 5, NOW_MS - row.since_ms));
-            let resolver = table(&[entry("a.*", &["a1"]), entry("b.*", &["b1"])]);
-
-            let Ran { update, .. } = run(
-                &mut state,
-                "m2",
-                PatternChange {
-                    old: row.old,
-                    new: row.new,
-                },
-                &resolver,
-                NOW_MS,
-                row.refresh_version,
-            );
-
-            check!(update == row.update, "{}", row.name);
-            check!(
-                (resolver.calls.lock().unwrap().len() == 1) == row.resolves,
-                "{}",
-                row.name
-            );
-        }
-    }
-
     /// Kafka's `maybeUpdateRegularExpressions`, row by row: the state of the
     /// group before the heartbeat, the heartbeat, and whether it resolves and
     /// what it reports. Every row starts from a group whose member `m1`
     /// subscribes to `a.*`, resolved at version 5 at `NOW_MS - since`.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/actor/regex_resolution.feature",
-        name = "tests: the conditions of a refresh follow kafka"
-    )]
-    fn the_conditions_of_a_refresh_follow_kafka() {}
-
     /// A stored pattern, including an omitted heartbeat field that keeps it,
     /// obeys the same inclusive minimum-refresh boundary at any group size.
     /// A newer metadata image and unresolved patterns cannot bypass it.
@@ -873,4 +712,66 @@ mod tests {
         check!(state.resolved_regex("b.*").is_some());
         assert!(delete_unsubscribed_regexes(&mut state).is_empty());
     }
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct RegexRefresh {
+        state: Option<GroupState>,
+        old: Option<String>,
+        resolver: Option<Table>,
+        update: Option<RegexUpdate>,
+        calls: Option<usize>,
+    }
+    #[rstest::fixture]
+    fn regex_refresh() -> RegexRefresh {
+        // Start this scenario with fresh inputs and observations.
+        RegexRefresh::default()
+    }
+    #[given(
+        "m1 uses a.* resolved at metadata version 5 with age {age} milliseconds and m2 previously uses {old}"
+    )]
+    fn regex_refresh_state(regex_refresh: &mut RegexRefresh, age: i64, old: String) {
+        let old = if old == "absent" { None } else { Some(old) };
+        let mut state = group(&[("m1", Some("a.*")), ("m2", old.as_deref())]);
+        state.set_resolved_regex("a.*".into(), resolution(&["a1"], 5, NOW_MS - age));
+        regex_refresh.state = Some(state);
+        regex_refresh.old = old;
+        regex_refresh.resolver = Some(table(&[entry("a.*", &["a1"]), entry("b.*", &["b1"])]));
+    }
+    #[when("m2 heartbeats with pattern {pattern} against metadata version {version}")]
+    fn regex_refresh_heartbeat(regex_refresh: &mut RegexRefresh, pattern: String, version: i64) {
+        let pattern = if pattern == "absent" {
+            None
+        } else {
+            Some(pattern.as_str())
+        };
+        let resolver = regex_refresh
+            .resolver
+            .as_ref()
+            .expect("resolver configured");
+        let Ran { update, .. } = run(
+            regex_refresh.state.as_mut().expect("group prepared"),
+            "m2",
+            PatternChange {
+                old: regex_refresh.old.as_deref(),
+                new: pattern,
+            },
+            resolver,
+            NOW_MS,
+            version,
+        );
+        regex_refresh.update = Some(update);
+        regex_refresh.calls = Some(resolver.calls.lock().expect("resolution call log").len());
+    }
+    #[then("the pattern update is {update} and the resolver is invoked {resolves}")]
+    fn regex_refresh_result(regex_refresh: &RegexRefresh, update: String, resolves: bool) {
+        let expected = match update.as_str() {
+            "unchanged" => RegexUpdate::NoChange,
+            "updated" => RegexUpdate::Updated,
+            "updated-and-resolved" => RegexUpdate::UpdatedAndResolved,
+            _ => panic!("unknown regex update"),
+        };
+        check!(regex_refresh.update == Some(expected));
+        check!((regex_refresh.calls.expect("heartbeat handled") == 1) == resolves);
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/actor/regex_resolution.feature",fixtures=[regex_refresh:RegexRefresh]);
 }

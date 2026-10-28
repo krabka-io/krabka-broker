@@ -4,14 +4,16 @@ use {
     assert2::assert,
     krabka_broker::config,
     krabka_protocol::owned::produce_request,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
     std::{
         env,
         fmt::{self, Display, Formatter},
         fs::File,
-        io::{BufReader, ErrorKind},
+        io::{BufReader, ErrorKind, Write},
         net::{SocketAddr, TcpStream},
         path::{Path, PathBuf},
-        process::{Child, Command, Stdio},
+        process::{Child, Command, ExitStatus, Output, Stdio},
         sync::{
             mpsc,
             mpsc::{Receiver, RecvTimeoutError},
@@ -19,6 +21,7 @@ use {
         thread::{self, JoinHandle},
         time::{Duration, Instant},
     },
+    tempfile::TempDir,
     tokio::runtime::{Builder, Runtime},
 };
 
@@ -69,192 +72,6 @@ fn current_thread_runtime() -> Runtime {
         .build()
         .expect("current-thread runtime")
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("cli smoke: help mentions cluster id and advertised listener")]
-fn bdd_verify_help_mentions_cluster_id_and_advertised_listener() {
-    let out = Command::new(broker_bin()).arg("--help").output().unwrap();
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let help = String::from_utf8(out.stdout).unwrap();
-    assert!(
-        help.contains("--cluster-id"),
-        "help missing --cluster-id:\n{help}"
-    );
-    assert!(
-        help.contains("--advertised-listener"),
-        "help missing --advertised-listener:\n{help}"
-    );
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/cli_smoke.feature",
-    name = "help mentions cluster id and advertised listener"
-)]
-fn help_mentions_cluster_id_and_advertised_listener() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("cli smoke: version returns zero")]
-fn bdd_verify_version_returns_zero() {
-    let out = Command::new(broker_bin())
-        .arg("--version")
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/cli_smoke.feature",
-    name = "version returns zero"
-)]
-fn version_returns_zero() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("cli smoke: boots with config file listener")]
-fn bdd_verify_boots_with_config_file_listener() {
-    use std::io::Write as _;
-
-    let tmp = tempfile::tempdir().expect("tempdir");
-
-    let cfg_path = tmp.path().join("broker.toml");
-    let mut f = File::create(&cfg_path).unwrap();
-    writeln!(
-        f,
-        r#"
-inter_broker_listener_name = "PLAIN"
-
-[[listeners]]
-name = "PLAIN"
-bind_addr = "127.0.0.1:0"
-advertised = "127.0.0.1:0"
-protocol = "Plaintext"
-"#
-    )
-    .unwrap();
-
-    let running = start_retrying("the config-file node", |attempt| {
-        // KIP-853: the broker refuses to boot an unformatted log dir, so seed
-        // it first. `krabka format` creates the directory itself (it must be
-        // empty or non-existent), so don't pre-create it. The controller
-        // listener goes into the voter set, so it needs its port up front.
-        let log_dir = tmp.path().join(format!("data-{attempt}"));
-        let controller = free_port();
-        run_krabka_format(&log_dir, 1, &controller.to_string());
-        Process::spawn(&[
-            format!("--config-file={}", cfg_path.display()),
-            format!("--log-dir={}", log_dir.display()),
-            "--broker-id=1".to_owned(),
-            format!("--controller-listen-addr={controller}"),
-        ])
-        .wait_until_started()
-    });
-    let addr = running
-        .started
-        .listen_addr
-        .expect("the startup line names the listener");
-
-    assert!(addr.port() != 0);
-    assert!(TcpStream::connect(addr).is_ok());
-}
-
-/// Boot `krabka-broker` with `--config-file` set to a minimal TOML, and
-/// assert that the process binds the listener declared in the file. The
-/// address comes from the file, not from a CLI flag. The file binds port 0, so
-/// no other process can take the port first, and the startup line names the
-/// port the listener got. The controller listener takes a [`free_port`].
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/cli_smoke.feature",
-    name = "boots with config file listener"
-)]
-fn boots_with_config_file_listener() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("cli smoke: errors when config file and listen addr both set")]
-fn bdd_verify_errors_when_config_file_and_listen_addr_both_set() {
-    let out = Command::new(broker_bin())
-        .arg("--config-file=/tmp/nonexistent.toml")
-        .arg("--listen-addr=127.0.0.1:9092")
-        .output()
-        .expect("spawn krabka-broker");
-
-    assert!(!out.status.success(), "expected non-zero exit");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("config-file") && stderr.contains("listen-addr"),
-        "expected clap mutual-exclusion error, got stderr:\n{stderr}"
-    );
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/cli_smoke.feature",
-    name = "errors when config file and listen addr both set"
-)]
-fn errors_when_config_file_and_listen_addr_both_set() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("cli smoke: refuses a log dir formatted for another node")]
-fn bdd_verify_refuses_a_log_dir_formatted_for_another_node() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let log_dir = tmp.path().join("data");
-    run_krabka_format(&log_dir, 1, "127.0.0.1:9093");
-
-    let mut cmd = Command::new(broker_bin());
-    cmd.args([
-        format!("--log-dir={}", log_dir.display()),
-        "--broker-id=2".into(),
-        "--listen-addr=127.0.0.1:0".into(),
-        "--controller-listen-addr=127.0.0.1:0".into(),
-        "--metrics-listen-addr=none".into(),
-    ]);
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::piped());
-    let mut child = cmd.spawn().expect("spawn krabka-broker");
-    let timeout = Duration::from_secs(30);
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        if let Some(status) = child.try_wait().expect("poll krabka-broker") {
-            break Some(status);
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            break None;
-        }
-        // intentional: waiting on a spawned krabka-broker subprocess to exit;
-        // it has no in-process handle to await.
-        thread::sleep(Duration::from_millis(100));
-    };
-    let output = child.wait_with_output().expect("collect stderr");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(
-        status.and_then(|status| status.code()) == Some(1),
-        "{stderr}"
-    );
-    let want = format!(
-        "startup failed: Stored node id 1 doesn't match previous node id 2 in {}. If you moved \
-         your data, make sure your configured node id matches. If you intend to create a new \
-         node, you should remove all data in your data directories.",
-        log_dir.join("meta.properties").display()
-    );
-    assert!(stderr.contains(&want), "{stderr}");
-}
-
-/// A log directory formatted for node 1 does not start node 2. The broker
-/// exits 1 with the message of Kafka's `MetaPropertiesEnsemble.verify`, as
-/// `KafkaRaftServer.initializeLogDirs` refuses the same directory.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/cli_smoke.feature",
-    name = "refuses a log dir formatted for another node"
-)]
-fn refuses_a_log_dir_formatted_for_another_node() {}
 
 /// The cluster id of the nodes that [`each_role_opens_only_its_own_listeners`]
 /// starts.
@@ -617,11 +434,237 @@ fn start_node(dir: &Path, case: &Case, quorum: Option<SocketAddr>) -> Node {
     })
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("cli smoke: each role opens only its own listeners")]
-fn bdd_verify_each_role_opens_only_its_own_listeners() {
-    let runtime = current_thread_runtime();
+struct BrokerCommand {
+    binary: Option<PathBuf>,
+    directory: Option<TempDir>,
+    config_path: Option<PathBuf>,
+    log_dir: Option<PathBuf>,
+    output: Option<Output>,
+    status: Option<ExitStatus>,
+    running: Option<Running>,
+    cases: Vec<Case>,
+    observed: Vec<Observed>,
+    expected: Vec<Observed>,
+    nodes: Vec<Node>,
+}
+
+#[fixture]
+fn command() -> BrokerCommand {
+    // Start this scenario with fresh inputs and observations.
+
+    BrokerCommand {
+        binary: None,
+        directory: None,
+        config_path: None,
+        log_dir: None,
+        output: None,
+        status: None,
+        running: None,
+        cases: Vec::new(),
+        observed: Vec::new(),
+        expected: Vec::new(),
+        nodes: Vec::new(),
+    }
+}
+
+#[given("the built broker executable")]
+fn broker_executable(command: &mut BrokerCommand) { command.binary = Some(broker_bin()); }
+
+#[when("the broker is invoked with {flag}")]
+fn invoke_flag(command: &mut BrokerCommand, flag: String) {
+    command.output = Some(
+        Command::new(command.binary.as_ref().expect("the broker executable"))
+            .arg(flag)
+            .output()
+            .expect("spawn krabka-broker"),
+    );
+}
+
+#[then("the broker command exits successfully")]
+fn successful_command(command: &BrokerCommand) {
+    let output = command
+        .output
+        .as_ref()
+        .expect("the broker command was invoked");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[then("the help lists --cluster-id and --advertised-listener")]
+fn public_help(command: &BrokerCommand) {
+    let output = command.output.as_ref().expect("broker help was requested");
+    let help = String::from_utf8(output.stdout.clone()).unwrap();
+    assert!(
+        help.contains("--cluster-id"),
+        "help missing --cluster-id:\n{help}"
+    );
+    assert!(
+        help.contains("--advertised-listener"),
+        "help missing --advertised-listener:\n{help}"
+    );
+}
+
+#[given("a config file with one PLAIN listener bound and advertised on port zero")]
+fn listener_config(command: &mut BrokerCommand) {
     let tmp = tempfile::tempdir().expect("tempdir");
+
+    let cfg_path = tmp.path().join("broker.toml");
+    let mut f = File::create(&cfg_path).unwrap();
+    writeln!(
+        f,
+        r#"
+inter_broker_listener_name = "PLAIN"
+
+[[listeners]]
+name = "PLAIN"
+bind_addr = "127.0.0.1:0"
+advertised = "127.0.0.1:0"
+protocol = "Plaintext"
+"#
+    )
+    .unwrap();
+
+    command.directory = Some(tmp);
+    command.config_path = Some(cfg_path);
+}
+
+#[when("the broker boots using the config-file listener")]
+fn boot_config_file(command: &mut BrokerCommand) {
+    let tmp = command
+        .directory
+        .as_ref()
+        .expect("a listener config directory");
+    let cfg_path = command.config_path.as_ref().expect("a broker config file");
+    let running = start_retrying("the config-file node", |attempt| {
+        // KIP-853: the broker refuses to boot an unformatted log dir, so seed
+        // it first. `krabka format` creates the directory itself (it must be
+        // empty or non-existent), so don't pre-create it. The controller
+        // listener goes into the voter set, so it needs its port up front.
+        let log_dir = tmp.path().join(format!("data-{attempt}"));
+        let controller = free_port();
+        run_krabka_format(&log_dir, 1, &controller.to_string());
+        Process::spawn(&[
+            format!("--config-file={}", cfg_path.display()),
+            format!("--log-dir={}", log_dir.display()),
+            "--broker-id=1".to_owned(),
+            format!("--controller-listen-addr={controller}"),
+        ])
+        .wait_until_started()
+    });
+    command.running = Some(running);
+}
+
+#[then("the startup listener has a nonzero port accepting TCP connections")]
+fn started_listener(command: &BrokerCommand) {
+    let addr = command
+        .running
+        .as_ref()
+        .expect("the broker was booted")
+        .started
+        .listen_addr
+        .expect("the startup line names the listener");
+    assert!(addr.port() != 0);
+    assert!(TcpStream::connect(addr).is_ok());
+}
+
+#[when("the broker is invoked with both --config-file and --listen-addr")]
+fn conflicting_listeners(command: &mut BrokerCommand) {
+    command.output = Some(
+        Command::new(command.binary.as_ref().expect("the broker executable"))
+            .arg("--config-file=/tmp/nonexistent.toml")
+            .arg("--listen-addr=127.0.0.1:9092")
+            .output()
+            .expect("spawn krabka-broker"),
+    );
+}
+
+#[then("the command fails with a config-file and listen-addr mutual-exclusion error")]
+fn conflicting_flags_rejected(command: &BrokerCommand) {
+    let out = command
+        .output
+        .as_ref()
+        .expect("conflicting CLI flags were submitted");
+    assert!(!out.status.success(), "expected non-zero exit");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("config-file") && stderr.contains("listen-addr"),
+        "expected clap mutual-exclusion error, got stderr:\n{stderr}"
+    );
+}
+
+#[given("a standalone log directory formatted for node 1")]
+fn formatted_directory(command: &mut BrokerCommand) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let log_dir = tmp.path().join("data");
+    run_krabka_format(&log_dir, 1, "127.0.0.1:9093");
+    command.directory = Some(tmp);
+    command.log_dir = Some(log_dir);
+}
+
+#[when("node 2 attempts to boot from that directory")]
+fn mismatched_node(command: &mut BrokerCommand) {
+    let log_dir = command
+        .log_dir
+        .as_ref()
+        .expect("a formatted node-1 log directory");
+    let mut cmd = Command::new(broker_bin());
+    cmd.args([
+        format!("--log-dir={}", log_dir.display()),
+        "--broker-id=2".into(),
+        "--listen-addr=127.0.0.1:0".into(),
+        "--controller-listen-addr=127.0.0.1:0".into(),
+        "--metrics-listen-addr=none".into(),
+    ]);
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn krabka-broker");
+    let timeout = Duration::from_secs(30);
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll krabka-broker") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            break None;
+        }
+        // intentional: waiting on a spawned krabka-broker subprocess to exit;
+        // it has no in-process handle to await.
+        thread::sleep(Duration::from_millis(100));
+    };
+    let output = child.wait_with_output().expect("collect stderr");
+    command.status = status;
+    command.output = Some(output);
+}
+
+#[then("the broker exits 1 with the stored-node-id mismatch and recovery guidance")]
+fn mismatched_identity(command: &BrokerCommand) {
+    let output = command.output.as_ref().expect("node 2 attempted to start");
+    let log_dir = command
+        .log_dir
+        .as_ref()
+        .expect("a formatted node-1 log directory");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let status = command.status;
+    assert!(
+        status.and_then(|status| status.code()) == Some(1),
+        "{stderr}"
+    );
+    let want = format!(
+        "startup failed: Stored node id 1 doesn't match previous node id 2 in {}. If you moved \
+         your data, make sure your configured node id matches. If you intend to create a new \
+         node, you should remove all data in your data directories.",
+        log_dir.join("meta.properties").display()
+    );
+    assert!(stderr.contains(&want), "{stderr}");
+}
+
+#[given("controller-only, broker-only joining that quorum, and standalone combined nodes")]
+fn configured_roles(command: &mut BrokerCommand) {
+    command.directory = Some(tempfile::tempdir().expect("tempdir"));
     let cases = [
         Case {
             roles: "controller",
@@ -664,11 +707,21 @@ fn bdd_verify_each_role_opens_only_its_own_listeners() {
         },
     ];
 
+    command.cases = cases.into_iter().collect();
+}
+
+#[when("the role-configured nodes boot and both their listener ports are probed")]
+fn start_roles(command: &mut BrokerCommand) {
+    let runtime = current_thread_runtime();
+    let tmp = command
+        .directory
+        .as_ref()
+        .expect("the role configuration directory");
     let mut running = Vec::new();
     let mut observed = Vec::new();
     let mut expected = Vec::new();
     let mut quorum = None;
-    for case in cases {
+    for case in command.cases.drain(..) {
         let node = start_node(tmp.path(), &case, quorum);
         quorum = quorum.or(Some(node.controller));
         observed.push(Observed {
@@ -687,10 +740,53 @@ fn bdd_verify_each_role_opens_only_its_own_listeners() {
         });
         running.push(node);
     }
-    drop(running);
-
-    assert!(observed == expected);
+    command.nodes = running;
+    command.observed = observed;
+    command.expected = expected;
 }
+
+#[then("each startup line and port expose only the listeners required by its roles")]
+fn role_listeners(command: &BrokerCommand) {
+    assert!(command.observed == command.expected);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/cli_smoke.feature",
+    name = "help mentions cluster id and advertised listener"
+)]
+fn help_mentions_cluster_id_and_advertised_listener(command: BrokerCommand) { drop(command); }
+
+#[scenario(
+    path = "tests/features/migrated/tests/cli_smoke.feature",
+    name = "version returns zero"
+)]
+fn version_returns_zero(command: BrokerCommand) { drop(command); }
+
+/// Boot `krabka-broker` with `--config-file` set to a minimal TOML, and
+/// assert that the process binds the listener declared in the file. The
+/// address comes from the file, not from a CLI flag. The file binds port 0, so
+/// no other process can take the port first, and the startup line names the
+/// port the listener got. The controller listener takes a [`free_port`].
+#[scenario(
+    path = "tests/features/migrated/tests/cli_smoke.feature",
+    name = "boots with config file listener"
+)]
+fn boots_with_config_file_listener(command: BrokerCommand) { drop(command); }
+
+#[scenario(
+    path = "tests/features/migrated/tests/cli_smoke.feature",
+    name = "errors when config file and listen addr both set"
+)]
+fn errors_when_config_file_and_listen_addr_both_set(command: BrokerCommand) { drop(command); }
+
+/// A log directory formatted for node 1 does not start node 2. The broker
+/// exits 1 with the message of Kafka's `MetaPropertiesEnsemble.verify`, as
+/// `KafkaRaftServer.initializeLogDirs` refuses the same directory.
+#[scenario(
+    path = "tests/features/migrated/tests/cli_smoke.feature",
+    name = "refuses a log dir formatted for another node"
+)]
+fn refuses_a_log_dir_formatted_for_another_node(command: BrokerCommand) { drop(command); }
 
 /// Every `process.roles` value opens the listeners of its roles and no other,
 /// as Kafka does. Kafka's `ControllerServer` opens only the listeners that
@@ -706,9 +802,8 @@ fn bdd_verify_each_role_opens_only_its_own_listeners() {
 /// The controller-only node is the quorum of the broker-only node, which
 /// cannot start without one, so the cases run in order and every node runs
 /// until the end. The combined node is a standalone quorum of its own.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/cli_smoke.feature",
     name = "each role opens only its own listeners"
 )]
-fn each_role_opens_only_its_own_listeners() {}
+fn each_role_opens_only_its_own_listeners(command: BrokerCommand) { drop(command); }

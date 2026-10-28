@@ -114,149 +114,294 @@ pub async fn describe_until(
     last
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("share admin offsets describe: describe reflects spso after consume")]
-async fn bdd_verify_describe_reflects_spso_after_consume() {
-    // Acquire 0..2, Accept all → SPSO advances to 3.
-    let (_permit, _broker, client, _dir, tid, member, row) = acquired_topic().await;
-    assert!(acquired_count(&row) == 3, "must acquire all 3 offsets");
-    acknowledge_success(
-        &client,
-        ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)),
+use {
+    krabka_broker::BrokerHandle,
+    krabka_protocol::owned::{
+        share_fetch_response::PartitionData, update_features_response::UpdateFeaturesResponse,
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::sync::Arc,
+    tempfile::TempDir,
+    tokio::sync::OwnedSemaphorePermit,
+};
+
+#[derive(Default)]
+struct ShareOffsetDescription {
+    permit: Option<OwnedSemaphorePermit>,
+    directory: Option<TempDir>,
+    broker: Option<BrokerHandle>,
+    client: Option<Arc<Client>>,
+    member: Option<String>,
+    topic: Option<uuid::Uuid>,
+    acquired: Option<PartitionData>,
+    group: Option<DescribeShareGroupOffsetsResponseGroup>,
+    downgrade: Option<UpdateFeaturesResponse>,
+}
+
+#[fixture]
+fn share_offset_description() -> ShareOffsetDescription {
+    // Store RPC results independently from the live membership and acquired records.
+    ShareOffsetDescription::default()
+}
+
+#[given("a fresh share-enabled broker for offset description")]
+async fn description_broker(share_offset_description: &mut ShareOffsetDescription) {
+    share_offset_description.permit = Some(broker_test_permit().await);
+    let directory = TempDir::new().unwrap();
+    let broker = Broker::start(broker_config(directory.path().to_path_buf()))
+        .await
+        .unwrap();
+    share_offset_description.client = Some(connect(&broker.listen_addr().to_string()).await);
+    share_offset_description.broker = Some(broker);
+    share_offset_description.directory = Some(directory);
+}
+
+#[given("the description broker's share-state persister is ready for g1")]
+async fn description_persister(share_offset_description: &ShareOffsetDescription) {
+    bootstrap_share_state(
+        share_offset_description
+            .broker
+            .as_ref()
+            .expect("share broker"),
+        share_offset_description
+            .client
+            .as_ref()
+            .expect("share client"),
+        "g1",
     )
     .await;
+}
 
-    // Let the persister land the advanced SPSO durably.
-    let group = describe_until(&client, "g1", "t", vec![0], 3).await;
-    let part = &group.topics[0].partitions[0];
-    check!(
-        group.error_code == NONE,
-        "group error: {}",
-        group.error_code
-    );
-    check!(group.topics[0].topic_name == "t");
-    check!(
-        part.error_code == NONE,
-        "partition error: {}",
-        part.error_code
-    );
-    check!(
-        part.start_offset == 3,
-        "SPSO must be 3 after Accept of 0..2, got {}",
-        part.start_offset
-    );
-    // End offset 3 (3 produced), SPSO 3, 0 delivered past it ⇒ lag 0.
-    check!(
-        part.lag == 0,
-        "lag must be 0 (end offset 3 − SPSO 3), got {}",
-        part.lag
+#[given("the description broker holds topic t")]
+async fn description_topic(share_offset_description: &ShareOffsetDescription) {
+    create_topic()
+        .broker(
+            share_offset_description
+                .broker
+                .as_ref()
+                .expect("share broker"),
+        )
+        .client(
+            share_offset_description
+                .client
+                .as_ref()
+                .expect("share client"),
+        )
+        .call()
+        .await;
+}
+
+#[given("g1's member has acquired the three records on t partition 0")]
+async fn description_acquisition(share_offset_description: &mut ShareOffsetDescription) {
+    let (permit, broker, client, directory, topic, member, row) = acquired_topic().await;
+    share_offset_description.permit = Some(permit);
+    share_offset_description.broker = Some(broker);
+    share_offset_description.client = Some(client);
+    share_offset_description.directory = Some(directory);
+    share_offset_description.topic = Some(topic);
+    share_offset_description.member = Some(member);
+    share_offset_description.acquired = Some(row);
+}
+
+#[then("the described-group fixture acquired all three offsets")]
+fn description_acquired(share_offset_description: &ShareOffsetDescription) {
+    assert!(
+        acquired_count(
+            share_offset_description
+                .acquired
+                .as_ref()
+                .expect("records acquired")
+        ) == 3
     );
 }
 
-/// Describe reflects the SPSO after a consume that Accepts all records.
-///
-/// The SPSO advances to 3, and the lag, from the end offset the leader
-/// reports to `ListOffsets`, is 0.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[when("the described-group member accepts offsets 0 through 2")]
+async fn accept_described_group(share_offset_description: &ShareOffsetDescription) {
+    acknowledge_success(
+        share_offset_description
+            .client
+            .as_ref()
+            .expect("share client"),
+        ShareAck::prefix_for(
+            share_offset_description.member.as_ref().expect("member"),
+            share_offset_description.topic.expect("topic identity"),
+            krabka_ids::Offset(2),
+        ),
+    )
+    .await;
+}
+
+#[when("DescribeShareGroupOffsets waits for g1's start offset to reach 3")]
+async fn describe_consumed_group(share_offset_description: &mut ShareOffsetDescription) {
+    share_offset_description.group = Some(
+        describe_until(
+            share_offset_description
+                .client
+                .as_ref()
+                .expect("share client"),
+            "g1",
+            "t",
+            vec![0],
+            3,
+        )
+        .await,
+    );
+}
+
+#[then("g1 describes topic t successfully with start offset 3 and lag zero")]
+fn consumed_group_description(share_offset_description: &ShareOffsetDescription) {
+    let group = share_offset_description
+        .group
+        .as_ref()
+        .expect("group described");
+    let partition = &group.topics[0].partitions[0];
+    check!(group.error_code == NONE);
+    check!(group.topics[0].topic_name == "t");
+    check!(partition.error_code == NONE);
+    check!(partition.start_offset == 3);
+    check!(partition.lag == 0);
+}
+
+#[when("g1's offsets for topic {topic} partition 0 are described")]
+async fn describe_named_group(
+    share_offset_description: &mut ShareOffsetDescription,
+    topic: String,
+) {
+    share_offset_description.group = Some(
+        describe_offsets(
+            share_offset_description
+                .client
+                .as_ref()
+                .expect("share client"),
+            "g1",
+            &topic,
+            vec![0],
+        )
+        .await,
+    );
+}
+
+#[then("the unknown topic description succeeds with zero topic ID and missing start and lag")]
+fn missing_group_description(share_offset_description: &ShareOffsetDescription) {
+    let group = share_offset_description
+        .group
+        .as_ref()
+        .expect("group described");
+    assert!(group.error_code == NONE);
+    assert!(
+        group.topics
+            == vec![DescribeShareGroupOffsetsResponseTopic {
+                topic_name: "nonexistent".into(),
+                topic_id: Uuid::default(),
+                partitions: vec![DescribeShareGroupOffsetsResponsePartition {
+                    partition_index: 0,
+                    start_offset: -1,
+                    leader_epoch: 0,
+                    lag: -1,
+                    error_code: NONE,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }]
+    );
+}
+
+#[then("share offset description is available")]
+fn enabled_group_description(share_offset_description: &ShareOffsetDescription) {
+    assert!(
+        share_offset_description
+            .group
+            .as_ref()
+            .expect("group described")
+            .error_code
+            != UNSUPPORTED_VERSION
+    );
+}
+
+#[when("share.version is safely downgraded to zero")]
+async fn disable_share_offsets(share_offset_description: &mut ShareOffsetDescription) {
+    share_offset_description.downgrade = Some(
+        share_offset_description
+            .client
+            .as_ref()
+            .expect("share client")
+            .send(UpdateFeaturesRequest {
+                feature_updates: vec![feature_update("share.version", 0, SAFE_DOWNGRADE)],
+                ..Default::default()
+            })
+            .await
+            .expect("UpdateFeatures"),
+    );
+}
+
+#[then("the share-version downgrade succeeds")]
+fn disabled_share_version(share_offset_description: &ShareOffsetDescription) {
+    let response = share_offset_description
+        .downgrade
+        .as_ref()
+        .expect("downgrade answered");
+    assert!(response.error_code == NONE, "{response:?}");
+}
+
+#[then("share offset description is refused with UNSUPPORTED_VERSION")]
+fn disabled_group_description(share_offset_description: &ShareOffsetDescription) {
+    assert!(
+        share_offset_description
+            .group
+            .as_ref()
+            .expect("group described")
+            .error_code
+            == UNSUPPORTED_VERSION
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/share_admin_offsets/describe.feature",
     name = "describe reflects spso after consume"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_reflects_spso_after_consume() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("share admin offsets describe: describe unknown topic")]
-async fn bdd_verify_describe_unknown_topic() {
-    let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    // The persister must exist for the handler to reach topic resolution. The
-    // bootstrap makes the share coordinator available.
-    bootstrap_share_state(&broker, &client, "g1").await;
-
-    let group = describe_offsets(&client, "g1", "nonexistent", vec![0]).await;
-    assert!(
-        group.error_code == NONE,
-        "group-level describe must succeed, got {}",
-        group.error_code
-    );
-    let expected = vec![DescribeShareGroupOffsetsResponseTopic {
-        topic_name: "nonexistent".into(),
-        topic_id: Uuid::default(),
-        partitions: vec![DescribeShareGroupOffsetsResponsePartition {
-            partition_index: 0,
-            start_offset: -1,
-            leader_epoch: 0,
-            lag: -1,
-            error_code: NONE,
-            ..Default::default()
-        }],
-        ..Default::default()
-    }];
-    assert!(group.topics == expected);
+async fn describe_reflects_spso_after_consume(share_offset_description: ShareOffsetDescription) {
+    share_offset_description
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_offset_description);
 }
 
-/// Describe of an unknown topic reports no data, not an error: start offset
-/// and lag -1, leader epoch 0 and error 0 per partition, the all-zero topic
-/// id, as Kafka's `GroupCoordinatorService.describeShareGroupOffsets`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/share_admin_offsets/describe.feature",
     name = "describe unknown topic"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn describe_unknown_topic() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "share admin offsets describe: admin offsets rejected when share disabled"
-)]
-async fn bdd_verify_admin_offsets_rejected_when_share_disabled() {
-    let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let cfg = broker_config(dir.path().to_path_buf());
-    let broker = Broker::start(cfg).await.unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic().broker(&broker).client(&client).call().await;
-    let enabled = describe_offsets(&client, "g1", "t", vec![0]).await;
-    assert!(
-        enabled.error_code != UNSUPPORTED_VERSION,
-        "a fresh cluster finalizes share.version 1, got {}",
-        enabled.error_code
-    );
-
-    let downgrade = client
-        .send(UpdateFeaturesRequest {
-            feature_updates: vec![feature_update("share.version", 0, SAFE_DOWNGRADE)],
-            ..Default::default()
-        })
-        .await
-        .expect("UpdateFeatures");
-    assert!(downgrade.error_code == NONE, "{downgrade:?}");
-
-    let group = describe_offsets(&client, "g1", "t", vec![0]).await;
-    assert!(
-        group.error_code == UNSUPPORTED_VERSION,
-        "share-disabled describe must be UNSUPPORTED_VERSION (35), got {}",
-        group.error_code
-    );
+async fn describe_unknown_topic(share_offset_description: ShareOffsetDescription) {
+    share_offset_description
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_offset_description);
 }
 
-/// With `share.version` finalized at 0, as `kafka-features downgrade
-/// --feature share.version=0` leaves it, the admin offset RPCs are
-/// unavailable: `DescribeShareGroupOffsets` marks each requested group
-/// `UNSUPPORTED_VERSION`, as Kafka's `isShareGroupProtocolEnabled` gate does.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/share_admin_offsets/describe.feature",
     name = "admin offsets rejected when share disabled"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn admin_offsets_rejected_when_share_disabled() {}
+async fn admin_offsets_rejected_when_share_disabled(
+    share_offset_description: ShareOffsetDescription,
+) {
+    share_offset_description
+        .broker
+        .take()
+        .expect("share broker")
+        .shutdown()
+        .await;
+    drop(share_offset_description);
+}
 
 /// The initialized partition indexes for a topic; missing topics have no indexes.
 pub fn initialized_partitions(

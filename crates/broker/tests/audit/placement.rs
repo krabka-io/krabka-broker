@@ -14,21 +14,58 @@ use {
     tokio::time,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "audit placement: every combined node leads one audit partition with a minimum isr of one"
+struct AuditPlacement {
+    nodes: u64,
+    min_isr: i32,
+    poll_millis: u32,
+    cluster: Vec<(
+        krabka_broker::BrokerHandle,
+        krabka_broker::BrokerConfig,
+        tempfile::TempDir,
+    )>,
+}
+#[rstest::fixture]
+fn placement() -> AuditPlacement {
+    // Start this scenario with fresh inputs and observations.
+
+    AuditPlacement {
+        nodes: 0,
+        min_isr: 0,
+        poll_millis: 0,
+        cluster: Vec::new(),
+    }
+}
+#[rstest_bdd_macros::given(
+    "{nodes} combined nodes with default minimum ISR {min_isr} and gauge interval {poll_millis} milliseconds"
 )]
-async fn bdd_verify_every_combined_node_leads_one_audit_partition_with_a_minimum_isr_of_one() {
-    let cluster = support::start_n_node_customized_with_retry(
-        3,
+fn audit_placement_settings(
+    placement: &mut AuditPlacement,
+    nodes: u64,
+    min_isr: i32,
+    poll_millis: u32,
+) {
+    placement.nodes = nodes;
+    placement.min_isr = min_isr;
+    placement.poll_millis = poll_millis;
+}
+#[rstest_bdd_macros::when("the combined nodes start together and provision the audit topic")]
+async fn start_audit_placement(placement: &mut AuditPlacement) {
+    placement.cluster = support::start_n_node_customized_with_retry(
+        placement.nodes,
         |_, config| {
-            config.default_min_insync_replicas = 2;
-            config.gauge_poll_interval = krabka_units::millis(100);
+            config.default_min_insync_replicas = placement.min_isr;
+            config.gauge_poll_interval = krabka_units::millis(placement.poll_millis);
         },
         "combined audit cluster",
     )
     .await;
-    for (handle, config, _) in &cluster {
+}
+#[rstest_bdd_macros::then(
+    "each node leads its own single replica audit partition with effective minimum ISR 1 and no under-minimum partitions"
+)]
+async fn audit_partition_placement(placement: &AuditPlacement) {
+    let cluster = &placement.cluster;
+    for (handle, config, _) in cluster {
         handle
             .wait_for_image(|image| image.partitions_of(AUDIT_TOPIC).count() == 3)
             .await;
@@ -86,14 +123,14 @@ async fn bdd_verify_every_combined_node_leads_one_audit_partition_with_a_minimum
             config.node_id.0
         );
     }
-
-    support::shutdown_cluster(cluster).await;
 }
-
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/audit/placement.feature",
     name = "every combined node leads one audit partition with a minimum isr of one"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn every_combined_node_leads_one_audit_partition_with_a_minimum_isr_of_one() {}
+async fn every_combined_node_leads_one_audit_partition_with_a_minimum_isr_of_one(
+    placement: AuditPlacement,
+) {
+    support::shutdown_cluster(placement.cluster).await;
+}

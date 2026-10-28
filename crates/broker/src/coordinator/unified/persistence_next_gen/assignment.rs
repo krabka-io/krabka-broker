@@ -225,38 +225,15 @@ fn get_nullable_i32_array(buf: &mut &[u8]) -> Result<Option<Vec<i32>>, ProtocolE
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::coordinator::unified::test_support::wire_bytes, assert2::assert};
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified persistence next gen assignment tests: target assignment member bytes match kafka schema"
-    )]
-    fn bdd_verify_target_assignment_member_bytes_match_kafka_schema() {
-        let v = TargetAssignmentMemberValue {
-            topic_partitions: vec![AssignedTopicPartitions {
-                topic_id: Uuid([1; 16]),
-                partitions: vec![0, 1],
-            }],
-        };
-        let want = wire_bytes(&[
-            "0000",                             // value version 0
-            "02",                               // one TopicPartition
-            "01010101010101010101010101010101", // TopicId, sixteen raw bytes
-            "03",                               // two partitions
-            "00000000",
-            "00000001",
-            "00", // TopicPartition tagged fields
-            "00", // message tagged fields
-        ]);
-        assert!(&v.encode()[..] == &want[..]);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/assignment.feature",
-        name = "tests: target assignment member bytes match kafka schema"
-    )]
-    fn target_assignment_member_bytes_match_kafka_schema() {}
+    use {
+        super::*,
+        crate::coordinator::unified::{
+            codec_observations::{EncodedRecord, KafkaDecodedRecord},
+            test_support::wire_bytes,
+        },
+        assert2::assert,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
 
     #[test]
     fn target_assignment_member_roundtrip() {
@@ -268,61 +245,6 @@ mod tests {
         };
         assert!(TargetAssignmentMemberValue::decode(&v.encode()).unwrap() == v);
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified persistence next gen assignment tests: current member assignment bytes match kafka schema"
-    )]
-    fn bdd_verify_current_member_assignment_bytes_match_kafka_schema() {
-        let v = CurrentMemberAssignmentValue {
-            member_epoch: 5,
-            previous_member_epoch: 4,
-            state: MemberAssignmentState::UnrevokedPartitions,
-            assigned_partitions: vec![CurrentTopicPartitions {
-                topic_id: Uuid([2; 16]),
-                partitions: vec![7, 8],
-                assignment_epochs: Some(vec![3, 5]),
-            }],
-            partitions_pending_revocation: vec![CurrentTopicPartitions {
-                topic_id: Uuid([3; 16]),
-                partitions: vec![1],
-                assignment_epochs: None,
-            }],
-        };
-        let want = wire_bytes(&[
-            "0000",
-            "00000005",
-            "00000004",
-            "01", // MemberState.UNREVOKED_PARTITIONS
-            "02", // one assigned TopicPartitions
-            "02020202020202020202020202020202",
-            "03", // two partitions
-            "00000007",
-            "00000008",
-            "01", // one tagged field
-            "00", // tag 0, AssignmentEpochs
-            "09", // payload size: 1 + 2 * 4
-            "03", // two epochs
-            "00000003",
-            "00000005",
-            "02", // one pending TopicPartitions
-            "03030303030303030303030303030303",
-            "02", // one partition
-            "00000001",
-            "00", // null AssignmentEpochs is omitted
-            "00", // message tagged fields
-        ]);
-        let encoded = v.encode();
-        assert!(&encoded[..] == &want[..]);
-        assert!(CurrentMemberAssignmentValue::decode(&encoded).unwrap() == v);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/assignment.feature",
-        name = "tests: current member assignment bytes match kafka schema"
-    )]
-    fn current_member_assignment_bytes_match_kafka_schema() {}
 
     /// Kafka's `Utils.assignmentFromTopicPartitions`: the stored epochs when
     /// there is one per partition, and otherwise the member epoch raised to 0.
@@ -387,32 +309,175 @@ mod tests {
         assert!(CurrentMemberAssignmentValue::decode(&encoded).unwrap() == want);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified persistence next gen assignment tests: member state discriminants match kafka"
-    )]
-    fn bdd_verify_member_state_discriminants_match_kafka() {
-        // org.apache.kafka.coordinator.group.modern.MemberState.
-        assert!(MemberAssignmentState::Stable as i8 == 0);
-        assert!(MemberAssignmentState::UnrevokedPartitions as i8 == 1);
-        assert!(MemberAssignmentState::UnreleasedPartitions as i8 == 2);
-        assert!(
-            MemberAssignmentState::from_i8(1).unwrap()
-                == MemberAssignmentState::UnrevokedPartitions
-        );
-        assert!(MemberAssignmentState::from_i8(3).is_err());
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/assignment.feature",
-        name = "tests: member state discriminants match kafka"
-    )]
-    fn member_state_discriminants_match_kafka() {}
-
     #[test]
     fn assignment_records_reject_a_missing_tagged_trailer() {
         let t = TargetAssignmentMemberValue::default().encode();
         assert!(TargetAssignmentMemberValue::decode(&t[..t.len() - 1]).is_err());
+    }
+    mod bdd_target_assignment_member {
+        use {super::*, assert2::assert};
+        type EncodedValue = EncodedRecord<TargetAssignmentMemberValue>;
+        #[rstest::fixture]
+        fn stored_value() -> EncodedValue {
+            // Start this scenario with fresh inputs and observations.
+            EncodedValue::default()
+        }
+        #[given(
+            "a consumer target assignment assigns partitions 0 and 1 of the all-one topic UUID"
+        )]
+        fn prepared_value(stored_value: &mut EncodedValue) {
+            let v = TargetAssignmentMemberValue {
+                topic_partitions: vec![AssignedTopicPartitions {
+                    topic_id: Uuid([1; 16]),
+                    partitions: vec![0, 1],
+                }],
+            };
+
+            stored_value.value = Some(v);
+        }
+        #[when(
+            "the coordinator encodes this TargetAssignmentMemberValue record for the compacted group log"
+        )]
+        fn encode_group_record(stored_value: &mut EncodedValue) {
+            stored_value.encoded = Some(
+                stored_value
+                    .value
+                    .as_ref()
+                    .expect("group record prepared")
+                    .encode(),
+            );
+        }
+        #[then(
+            "the TargetAssignmentMemberValue record matches Kafka schema bytes including compact lengths and tagged trailers"
+        )]
+        fn kafka_record_layout(stored_value: &EncodedValue) {
+            let want = wire_bytes(&[
+                "0000",                             // value version 0
+                "02",                               // one TopicPartition
+                "01010101010101010101010101010101", // TopicId, sixteen raw bytes
+                "03",                               // two partitions
+                "00000000",
+                "00000001",
+                "00", // TopicPartition tagged fields
+                "00", // message tagged fields
+            ]);
+
+            assert!(&stored_value.encoded.as_ref().expect("record encoded")[..] == &want[..]);
+        }
+        scenarios!("tests/features/migrated/src/coordinator/unified/persistence_next_gen/assignment.feature",tags="@target_assignment_member",fixtures=[stored_value: EncodedValue]);
+    }
+    mod bdd_current_member_assignment {
+        use super::*;
+        type RecordCompatibility = KafkaDecodedRecord<CurrentMemberAssignmentValue, BrokerError>;
+        #[rstest::fixture]
+        fn record() -> RecordCompatibility {
+            // Start this scenario with fresh inputs and observations.
+            RecordCompatibility::default()
+        }
+        #[given(
+            "consumer member epochs 5 and 4 hold partitions 7 and 8 at assignment epochs 3 and 5 while partition 1 awaits revocation"
+        )]
+        fn native_record(record: &mut RecordCompatibility) {
+            let v = CurrentMemberAssignmentValue {
+                member_epoch: 5,
+                previous_member_epoch: 4,
+                state: MemberAssignmentState::UnrevokedPartitions,
+                assigned_partitions: vec![CurrentTopicPartitions {
+                    topic_id: Uuid([2; 16]),
+                    partitions: vec![7, 8],
+                    assignment_epochs: Some(vec![3, 5]),
+                }],
+                partitions_pending_revocation: vec![CurrentTopicPartitions {
+                    topic_id: Uuid([3; 16]),
+                    partitions: vec![1],
+                    assignment_epochs: None,
+                }],
+            };
+
+            let want = wire_bytes(&[
+                "0000",
+                "00000005",
+                "00000004",
+                "01", // MemberState.UNREVOKED_PARTITIONS
+                "02", // one assigned TopicPartitions
+                "02020202020202020202020202020202",
+                "03", // two partitions
+                "00000007",
+                "00000008",
+                "01", // one tagged field
+                "00", // tag 0, AssignmentEpochs
+                "09", // payload size: 1 + 2 * 4
+                "03", // two epochs
+                "00000003",
+                "00000005",
+                "02", // one pending TopicPartitions
+                "03030303030303030303030303030303",
+                "02", // one partition
+                "00000001",
+                "00", // null AssignmentEpochs is omitted
+                "00", // message tagged fields
+            ]);
+
+            record.value = Some(v);
+            record.golden = want;
+        }
+        #[when("the coordinator persists and reads this current_member_assignment record")]
+        fn record_codec(record: &mut RecordCompatibility) {
+            record.encoded = Some(record.value.as_ref().expect("record prepared").encode());
+            record.decoded = Some(CurrentMemberAssignmentValue::decode(
+                record.encoded.as_ref().expect("record encoded"),
+            ));
+        }
+        #[then(
+            "the current_member_assignment bytes match Kafka exactly and decoding recovers all original record fields"
+        )]
+        fn complete_record_layout(record: &RecordCompatibility) { record.assert_compatible(); }
+
+        scenarios!("tests/features/migrated/src/coordinator/unified/persistence_next_gen/assignment.feature",tags="@current_member_assignment",fixtures=[record:RecordCompatibility]);
+    }
+    mod bdd_member_state {
+        use {super::*, assert2::assert};
+        #[derive(Default)]
+        struct StoredMemberState {
+            code: i8,
+            decoded: Option<Result<MemberAssignmentState, BrokerError>>,
+        }
+        #[rstest::fixture]
+        fn stored_state() -> StoredMemberState {
+            // Start this scenario with fresh inputs and observations.
+            StoredMemberState::default()
+        }
+        #[given("a consumer member state is stored with discriminant {code}")]
+        fn consumer_state_code(stored_state: &mut StoredMemberState, code: i8) {
+            stored_state.code = code;
+        }
+        #[when("the coordinator decodes the Kafka consumer member state")]
+        fn decode_consumer_state(stored_state: &mut StoredMemberState) {
+            stored_state.decoded = Some(MemberAssignmentState::from_i8(stored_state.code));
+        }
+        #[then("the consumer state is {state} and its wire discriminant is preserved")]
+        fn decoded_consumer_state(stored_state: &StoredMemberState, state: String) {
+            let decoded = stored_state
+                .decoded
+                .as_ref()
+                .expect("state decode attempted");
+            let expected = match state.as_str() {
+                "stable" => Some(MemberAssignmentState::Stable),
+                "unrevoked" => Some(MemberAssignmentState::UnrevokedPartitions),
+                "unreleased" => Some(MemberAssignmentState::UnreleasedPartitions),
+                "rejected" => None,
+                _ => panic!("unknown consumer state"),
+            };
+            match expected {
+                Some(expected) => {
+                    assert!(decoded.as_ref().expect("valid state") == &expected);
+                    assert!(expected as i8 == stored_state.code);
+                }
+                None => {
+                    assert!(decoded.is_err());
+                }
+            }
+        }
+        scenarios!("tests/features/migrated/src/coordinator/unified/persistence_next_gen/assignment.feature",tags="@member-state",fixtures=[stored_state:StoredMemberState]);
     }
 }

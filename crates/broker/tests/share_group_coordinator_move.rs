@@ -127,99 +127,180 @@ fn position_of(cluster: &Cluster, node_id: u64) -> usize {
     panic!("a cluster member");
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "share group coordinator move: a join that does not commit is not answered"
-)]
-async fn bdd_verify_a_join_that_does_not_commit_is_not_answered() {
-    let mut cluster = start_three().await;
-    let lookup_cli = client(&cluster[0].0).await;
-    let coordinator = coordinator_of(&lookup_cli, None).await;
-    lookup_cli.close();
-    // FindCoordinator exposes metadata leadership before the local runtime
-    // has necessarily installed its ISR. The stopped follower must belong to
-    // the full, installed ISR for this fault to prevent the join from committing.
-    let coordinator_handle = &cluster[position_of(&cluster, coordinator)].0;
-    coordinator_handle
-        .wait_until_isr_len(OFFSETS_TOPIC, 0, cluster.len())
-        .await;
-    coordinator_handle
-        .wait_until_local_partition_leader(OFFSETS_TOPIC, 0, NodeId(coordinator))
-        .await;
-    let stopped_dir = crash_follower(&mut cluster, coordinator).await;
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::mem::take,
+};
 
-    let member = client(&cluster[position_of(&cluster, coordinator)].0).await;
-    let joined = heartbeat_once_loaded(&member, heartbeat("member-1", 0)).await;
+#[derive(Default)]
+struct ShareCoordinatorMove {
+    cluster: Cluster,
+    coordinator: u64,
+    retired_directory: Option<TempDir>,
+    joined: Option<ShareGroupHeartbeatResponse>,
+    resumed: Option<ShareGroupHeartbeatResponse>,
+}
+
+#[fixture]
+fn share_coordinator_move() -> ShareCoordinatorMove {
+    // Retain the acknowledged member epoch while ownership of the offsets partition changes.
+    ShareCoordinatorMove::default()
+}
+
+#[given("three brokers replicate share-move's offsets partition without shrinking its ISR")]
+async fn replicated_share_coordinator(share_coordinator_move: &mut ShareCoordinatorMove) {
+    share_coordinator_move.cluster = start_three().await;
+    let lookup = client(&share_coordinator_move.cluster[0].0).await;
+    share_coordinator_move.coordinator = coordinator_of(&lookup, None).await;
+    lookup.close();
+}
+
+#[given("the share coordinator has installed the full three-replica offsets ISR")]
+async fn installed_share_offsets_isr(share_coordinator_move: &ShareCoordinatorMove) {
+    let broker = &share_coordinator_move.cluster[position_of(
+        &share_coordinator_move.cluster,
+        share_coordinator_move.coordinator,
+    )]
+    .0;
+    broker
+        .wait_until_isr_len(OFFSETS_TOPIC, 0, share_coordinator_move.cluster.len())
+        .await;
+    broker
+        .wait_until_local_partition_leader(
+            OFFSETS_TOPIC,
+            0,
+            NodeId(share_coordinator_move.coordinator),
+        )
+        .await;
+}
+
+#[when("an offsets follower crashes while remaining in the share coordinator's ISR")]
+async fn stop_share_offsets_follower(share_coordinator_move: &mut ShareCoordinatorMove) {
+    share_coordinator_move.retired_directory = Some(
+        crash_follower(
+            &mut share_coordinator_move.cluster,
+            share_coordinator_move.coordinator,
+        )
+        .await,
+    );
+}
+
+#[when("member-1 joins the share coordinator at epoch zero")]
+async fn join_moving_share_group(share_coordinator_move: &mut ShareCoordinatorMove) {
+    let member = client(
+        &share_coordinator_move.cluster[position_of(
+            &share_coordinator_move.cluster,
+            share_coordinator_move.coordinator,
+        )]
+        .0,
+    )
+    .await;
+    share_coordinator_move.joined =
+        Some(heartbeat_once_loaded(&member, heartbeat("member-1", 0)).await);
     member.close();
+}
 
+#[then("the uncommitted join returns only COORDINATOR_NOT_AVAILABLE without an epoch")]
+fn uncommitted_share_join(share_coordinator_move: &ShareCoordinatorMove) {
     assert!(
-        joined
-            == ShareGroupHeartbeatResponse {
+        share_coordinator_move
+            .joined
+            .as_ref()
+            .expect("join answered")
+            == &ShareGroupHeartbeatResponse {
                 error_code: COORDINATOR_NOT_AVAILABLE,
                 ..Default::default()
             }
     );
-
-    shutdown_cluster(cluster).await;
-    drop(stopped_dir);
 }
 
-/// A join whose records cannot commit, because a follower of the group's
-/// offsets partition is down but still in its ISR, is not answered with an
-/// epoch. It times out as Kafka's coordinator write does, and the client
-/// gets `COORDINATOR_NOT_AVAILABLE`, which it retries.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[then("the share join succeeds with a positive member epoch")]
+fn committed_share_join(share_coordinator_move: &ShareCoordinatorMove) {
+    let joined = share_coordinator_move
+        .joined
+        .as_ref()
+        .expect("join answered");
+    assert!(joined.error_code == 0, "{joined:?}");
+    assert!(joined.member_epoch > 0, "{joined:?}");
+}
+
+#[when("the share coordinator completes a controlled shutdown within thirty seconds")]
+async fn drain_share_coordinator(share_coordinator_move: &mut ShareCoordinatorMove) {
+    let position = position_of(
+        &share_coordinator_move.cluster,
+        share_coordinator_move.coordinator,
+    );
+    let (broker, _, directory) = share_coordinator_move.cluster.remove(position);
+    share_coordinator_move.retired_directory = Some(directory);
+    broker
+        .controlled_shutdown(Duration::from_secs(30))
+        .await
+        .expect("controlled shutdown drains");
+}
+
+#[when("member-1 resumes at its acknowledged epoch through the replacement coordinator")]
+async fn resume_moving_share_group(share_coordinator_move: &mut ShareCoordinatorMove) {
+    let survivor = client(&share_coordinator_move.cluster[0].0).await;
+    let next = coordinator_of(&survivor, Some(share_coordinator_move.coordinator)).await;
+    survivor.close();
+    let member = client(
+        &share_coordinator_move.cluster[position_of(&share_coordinator_move.cluster, next)].0,
+    )
+    .await;
+    share_coordinator_move.resumed = Some(
+        heartbeat_once_loaded(
+            &member,
+            heartbeat(
+                "member-1",
+                share_coordinator_move
+                    .joined
+                    .as_ref()
+                    .expect("acknowledged join")
+                    .member_epoch,
+            ),
+        )
+        .await,
+    );
+    member.close();
+}
+
+#[then("the recovered member succeeds with the same identity and an epoch at least as new")]
+fn resumed_share_join(share_coordinator_move: &ShareCoordinatorMove) {
+    let response = share_coordinator_move
+        .resumed
+        .as_ref()
+        .expect("resumed heartbeat answered");
+    check!(response.error_code == 0, "{response:?}");
+    check!(response.member_id.as_deref() == Some("member-1"));
+    check!(
+        response.member_epoch
+            >= share_coordinator_move
+                .joined
+                .as_ref()
+                .expect("acknowledged join")
+                .member_epoch
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/share_group_coordinator_move.feature",
     name = "a join that does not commit is not answered"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_join_that_does_not_commit_is_not_answered() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "share group coordinator move: a member keeps its epoch when its coordinator stops cleanly"
-)]
-async fn bdd_verify_a_member_keeps_its_epoch_when_its_coordinator_stops_cleanly() {
-    let mut cluster = start_three().await;
-    let lookup = client(&cluster[0].0).await;
-    let coordinator = coordinator_of(&lookup, None).await;
-    lookup.close();
-
-    let position = position_of(&cluster, coordinator);
-    let member = client(&cluster[position].0).await;
-    let joined = heartbeat_once_loaded(&member, heartbeat("member-1", 0)).await;
-    member.close();
-    assert!(joined.error_code == 0, "{joined:?}");
-    assert!(joined.member_epoch > 0, "{joined:?}");
-
-    let (stopped, _, stopped_dir) = cluster.remove(position);
-    stopped
-        .controlled_shutdown(Duration::from_secs(30))
-        .await
-        .expect("the controlled shutdown drains");
-    let survivor = client(&cluster[0].0).await;
-    let next = coordinator_of(&survivor, Some(coordinator)).await;
-    survivor.close();
-    let member = client(&cluster[position_of(&cluster, next)].0).await;
-    let resumed = heartbeat_once_loaded(&member, heartbeat("member-1", joined.member_epoch)).await;
-    member.close();
-
-    check!(resumed.error_code == 0, "{resumed:?}");
-    check!(resumed.member_id.as_deref() == Some("member-1"));
-    check!(resumed.member_epoch >= joined.member_epoch);
-
-    shutdown_cluster(cluster).await;
-    drop(stopped_dir);
+async fn a_join_that_does_not_commit_is_not_answered(share_coordinator_move: ShareCoordinatorMove) {
+    shutdown_cluster(take(&mut share_coordinator_move.cluster)).await;
+    drop(share_coordinator_move);
 }
 
-/// The start of `ShareConsumerTest.test_broker_failure` at a small scale:
-/// a member joins, its coordinator stops cleanly, and the broker that takes
-/// the group over accepts the member's next heartbeat at the epoch it had.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/share_group_coordinator_move.feature",
     name = "a member keeps its epoch when its coordinator stops cleanly"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_member_keeps_its_epoch_when_its_coordinator_stops_cleanly() {}
+async fn a_member_keeps_its_epoch_when_its_coordinator_stops_cleanly(
+    share_coordinator_move: ShareCoordinatorMove,
+) {
+    shutdown_cluster(take(&mut share_coordinator_move.cluster)).await;
+    drop(share_coordinator_move);
+}

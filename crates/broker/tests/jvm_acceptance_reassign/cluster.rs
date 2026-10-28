@@ -6,6 +6,7 @@ use {
             create_console_topic, plain_client_properties,
             start_three_broker_sasl_plaintext_jvm_cluster, write_plain_props, write_temp_file,
         },
+        oracle::{CliRun, Side},
         support::jvm_docker_command,
     },
     krabka_broker::BrokerHandle,
@@ -247,4 +248,37 @@ pub fn execute_plan(
         String::from_utf8_lossy(&out.stderr)
     );
     (file, mount)
+}
+
+/// A SASL replica topology whose target can remain offline during a command.
+#[derive(Default)]
+pub struct OfflineReplicaCommand {
+    pub handles: [Option<BrokerHandle>; 3],
+    pub dirs: Option<[tempfile::TempDir; 3]>,
+    pub topic: String,
+    pub props: String,
+    pub advertised: String,
+    pub output: Option<CliRun>,
+}
+impl OfflineReplicaCommand {
+    pub async fn start(&mut self, topic: String) -> RegisteredCluster {
+        let (brokers, props, advertised) = Box::pin(admin_text_cluster()).await;
+        self.topic = topic;
+        self.props = props;
+        self.advertised = advertised;
+        brokers
+    }
+
+    pub fn side(&self) -> Side<'_> {
+        Side::Krabka {
+            bootstrap: &self.advertised,
+        }
+    }
+
+    pub async fn shutdown(mut self) {
+        for handle in self.handles.iter_mut().filter_map(Option::take) {
+            handle.shutdown().await;
+        }
+        drop(self);
+    }
 }

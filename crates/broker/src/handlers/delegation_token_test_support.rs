@@ -2,10 +2,7 @@
 
 use {
     crate::{
-        codes::{
-            DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_NOT_FOUND,
-            DELEGATION_TOKEN_OWNER_MISMATCH, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, NONE,
-        },
+        codes::NONE,
         network::auth::ConnectionAuth,
         test_support::{KafkaErrorCode, UnixMillis, principal},
         time_util::now_ms,
@@ -15,7 +12,6 @@ use {
     krabka_raft::{Controller, ControllerConfig, ControllerHandle, NodeId},
     krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism},
     std::{
-        fmt,
         future::Future,
         path::PathBuf,
         sync::Arc,
@@ -151,47 +147,112 @@ pub(super) async fn mutation_token_for_case(
         .await
 }
 
+/// Prepared controller state for a token mutation, retained through its storage assertions.
+#[derive(Default)]
+pub(super) struct TokenMutationContext<Response> {
+    pub refusals: Option<RefusalFixture>,
+    pub fixture: Option<TokenFixture>,
+    pub seeded: Option<SeededToken>,
+    pub authentication: Option<ConnectionAuth>,
+    pub secret: SecretProvision,
+    pub hmac: Vec<u8>,
+    pub period: i64,
+    pub execution: Option<MutationExecution<Response>>,
+}
+
+impl<Response: Default> TokenMutationContext<Response> {
+    pub async fn refusal_request(
+        token: &str,
+        caller: &str,
+        credential: &str,
+        secret: &str,
+        period: i64,
+    ) -> Self {
+        let refusals = RefusalFixture::new().await;
+        let hmac = match token {
+            "live" => refusals.live.hmac.clone(),
+            "expired" => refusals.expired.hmac.clone(),
+            "missing" => vec![0xFF; 32],
+            "wrong-secret" => krabka_security::compute_token_hmac(b"other", "live"),
+            _ => panic!("unknown token selection: {token}"),
+        };
+        let authentication = match credential {
+            "password" => authed(caller),
+            "delegation-token" => authed_with_token(caller, CredentialSource::DelegationToken),
+            _ => panic!("unknown credential source: {credential}"),
+        };
+        let secret = match secret {
+            "configured" => SecretProvision::Configured,
+            "absent" => SecretProvision::Absent,
+            _ => panic!("unknown secret provision: {secret}"),
+        };
+        Self {
+            refusals: Some(refusals),
+            authentication: Some(authentication),
+            hmac,
+            period,
+            secret,
+            ..Self::default()
+        }
+    }
+
+    pub async fn allowed_request(caller: &str, expiry: i64, maximum: i64, period: i64) -> Self {
+        let fixture = TokenFixture::new().await;
+        let seeded = mutation_token_for_case(
+            &fixture.controller,
+            0,
+            TokenPeriodMillis(expiry),
+            TokenPeriodMillis(maximum),
+        )
+        .await;
+        Self {
+            hmac: seeded.hmac.clone(),
+            authentication: Some(authed(caller)),
+            period,
+            fixture: Some(fixture),
+            seeded: Some(seeded),
+            ..Self::default()
+        }
+    }
+
+    pub fn resources(&self) -> &TokenFixture {
+        self.refusals.as_ref().map_or_else(
+            || self.fixture.as_ref().expect("token mutation fixture"),
+            |refusals| &refusals.resources,
+        )
+    }
+
+    pub fn expiry_setup(&self, deadline: &str) -> TokenExpirySetup {
+        let period = if deadline == "maximum" {
+            None
+        } else {
+            Some(TokenPeriodMillis(
+                deadline.parse().expect("expiry period milliseconds"),
+            ))
+        };
+        TokenExpirySetup {
+            window: self.execution.as_ref().expect("mutation executed").window,
+            expectation: ExpiryExpectation::for_period(
+                period,
+                UnixMillis(self.seeded.as_ref().expect("token seeded").maximum),
+            ),
+        }
+    }
+
+    pub async fn check_refusal_deadlines(&self) {
+        let refusals = self.refusals.as_ref().expect("refusal tokens given");
+        let controller = &refusals.resources.controller;
+        assert!(stored_expiry(controller, "live") == Some(refusals.live.expires_at));
+        assert!(stored_expiry(controller, "expired") == Some(refusals.expired.expires_at));
+        controller.cancel().await;
+    }
+}
+
 pub(super) struct MutationResponse<Response> {
     pub(super) actual: Response,
     pub(super) expected: Response,
     pub(super) case: &'static str,
 }
-/// Retain the token resources through each ordered refusal and the final storage check.
-#[bon::builder]
-pub(super) async fn check_refusals<Cases, Response>(
-    cases: impl FnOnce(&RefusalToken, &RefusalToken) -> Cases,
-    mut mutation: impl AsyncFnMut(
-        &ControllerHandle,
-        &krabka_security::SecretBytes,
-        TokenMutationRefusalSetup,
-    ) -> MutationResponse<Response>,
-    verify: impl FnOnce(&ControllerHandle, &RefusalToken, &RefusalToken),
-) where
-    Cases: IntoIterator<Item = TokenMutationRefusalSetup>,
-    Response: PartialEq + fmt::Debug,
-{
-    let RefusalFixture {
-        resources:
-            TokenFixture {
-                directory: _directory,
-                controller,
-                secret,
-            },
-        live,
-        expired,
-    } = RefusalFixture::new().await;
-    for case in cases(&live, &expired) {
-        let MutationResponse {
-            actual,
-            expected,
-            case,
-        } = mutation(&controller, &secret, case).await;
-        assert!(actual == expected, "{case}");
-    }
-    verify(&controller, &live, &expired);
-    controller.cancel().await;
-}
-
 #[derive(Clone, Copy, Default)]
 pub(super) enum SecretProvision {
     #[default]
@@ -213,127 +274,6 @@ impl SecretProvision {
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub(super) struct TokenPeriodMillis(pub i64);
-
-#[derive(krabka_macros::FieldDefaults)]
-pub(super) struct TokenMutationRefusalSetup {
-    #[default("token refusal")]
-    pub name: &'static str,
-    #[default(authed("alice"))]
-    pub authentication: ConnectionAuth,
-    pub secret: SecretProvision,
-    pub hmac: Vec<u8>,
-    #[default(TokenPeriodMillis(-1))]
-    pub period: TokenPeriodMillis,
-    pub error: KafkaErrorCode,
-    pub expiry: UnixMillis,
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct OwnershipRefusalSetup {
-    #[default("foreign caller")]
-    pub name: &'static str,
-    #[default("eve")]
-    pub caller: &'static str,
-    #[default(TokenPeriodMillis(-1))]
-    pub period: TokenPeriodMillis,
-}
-
-#[bon::builder]
-pub(super) fn ownership_refusal(
-    hmac: &[u8],
-    #[builder(default = "foreign caller")] name: &'static str,
-    #[builder(default = "eve")] caller: &'static str,
-    #[builder(into, default = TokenPeriodMillis (- 1))] period: TokenPeriodMillis,
-) -> TokenMutationRefusalSetup {
-    let setup = OwnershipRefusalSetup {
-        name,
-        caller,
-        period,
-    };
-    TokenMutationRefusalSetup {
-        name: setup.name,
-        authentication: authed(setup.caller),
-        hmac: hmac.to_vec(),
-        period: setup.period,
-        error: KafkaErrorCode(DELEGATION_TOKEN_OWNER_MISMATCH),
-        ..Default::default()
-    }
-}
-
-#[derive(Clone, Copy)]
-struct OwnershipRefusalIdentity {
-    name: &'static str,
-    caller: &'static str,
-}
-
-const ORDINARY_OWNERSHIP_REFUSALS: [OwnershipRefusalIdentity; 3] = [
-    OwnershipRefusalIdentity {
-        name: "foreign caller",
-        caller: "eve",
-    },
-    OwnershipRefusalIdentity {
-        name: "super user",
-        caller: "admin",
-    },
-    OwnershipRefusalIdentity {
-        name: "requester of a token created for another owner",
-        caller: "minter",
-    },
-];
-
-pub(super) fn ordinary_ownership_refusals(hmac: &[u8]) -> [TokenMutationRefusalSetup; 3] {
-    ORDINARY_OWNERSHIP_REFUSALS.map(|identity| {
-        ownership_refusal()
-            .hmac(hmac)
-            .name(identity.name)
-            .caller(identity.caller)
-            .call()
-    })
-}
-
-/// The shared credential and HMAC refusals precede each API's ownership and expiry checks.
-pub(super) fn mutation_credential_refusals(
-    live_hmac: &[u8],
-) -> impl Iterator<Item = TokenMutationRefusalSetup> + '_ {
-    let token_authenticated = [
-        ("token-authenticated owner", SecretProvision::Configured),
-        (
-            "token-authenticated owner, tokens disabled",
-            SecretProvision::Absent,
-        ),
-    ]
-    .into_iter()
-    .map(move |(name, secret)| TokenMutationRefusalSetup {
-        name,
-        authentication: authed_with_token("alice", CredentialSource::DelegationToken),
-        secret,
-        hmac: live_hmac.to_vec(),
-        error: KafkaErrorCode(DELEGATION_TOKEN_REQUEST_NOT_ALLOWED),
-        expiry: UnixMillis(-1),
-        ..Default::default()
-    });
-    token_authenticated.chain([
-        TokenMutationRefusalSetup {
-            name: "tokens disabled",
-            secret: SecretProvision::Absent,
-            hmac: live_hmac.to_vec(),
-            error: KafkaErrorCode(DELEGATION_TOKEN_AUTH_DISABLED),
-            ..Default::default()
-        },
-        TokenMutationRefusalSetup {
-            name: "unknown hmac",
-            hmac: vec![0xFF; 32],
-            error: KafkaErrorCode(DELEGATION_TOKEN_NOT_FOUND),
-            ..Default::default()
-        },
-        TokenMutationRefusalSetup {
-            name: "hmac computed under another secret key",
-            hmac: krabka_security::compute_token_hmac(b"other", "live"),
-            error: KafkaErrorCode(DELEGATION_TOKEN_NOT_FOUND),
-            ..Default::default()
-        },
-    ])
-}
 
 /// Starts a single-voter controller and waits for its leader.
 pub(super) async fn test_controller(log_dir: PathBuf) -> Arc<ControllerHandle> {
@@ -546,28 +486,6 @@ pub(super) async fn in_mutation_window<F: Future>(mutation: F) -> MutationExecut
     MutationExecution {
         window: TokenMutationWindow { before, after },
         response,
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-pub(super) enum TokenPersistence {
-    #[default]
-    Deleted,
-    Stored,
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum TokenExpiryRule {
-    RelativeToMutation(TokenPeriodMillis),
-    LifetimeCap,
-}
-
-impl TokenExpiryRule {
-    pub fn with_cap(self, maximum: UnixMillis) -> ExpiryExpectation {
-        match self {
-            Self::RelativeToMutation(period) => ExpiryExpectation::RelativeToMutation(period),
-            Self::LifetimeCap => ExpiryExpectation::LifetimeCap(maximum),
-        }
     }
 }
 

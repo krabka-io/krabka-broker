@@ -698,154 +698,121 @@ fn a_heartbeat_stores_its_cordoned_dirs_from_4_3_iv0() {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "handlers broker heartbeat tests: each transition writes kafkas registration change"
-)]
-fn bdd_verify_each_transition_writes_kafkas_registration_change() {
-    use {
-        BrokerControlState::{ControlledShutdown, Fenced, ShutdownNow, Unfenced},
-        krabka_metadata::{
-            BrokerRegistrationChangeRecord, FencingChange, MetadataImage, MetadataRecord,
-            TopicRecord,
-        },
-    };
-
-    let registered = |fenced: bool, in_controlled_shutdown: bool| {
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        let MetadataRecord::V1BrokerRegistration(registration) = new_registration(2) else {
-            unreachable!("new_registration builds a registration");
-        };
-        image.apply(&MetadataRecord::V1BrokerRegistration(
-            krabka_metadata::BrokerRegistrationRecord {
-                broker_epoch: 40,
-                fenced,
-                in_controlled_shutdown,
-                ..registration
-            },
-        ));
-        image
-    };
-    let change = |fenced: FencingChange, in_controlled_shutdown: bool| {
-        MetadataRecord::V1BrokerRegistrationChange(BrokerRegistrationChangeRecord {
-            fenced,
-            in_controlled_shutdown,
-            ..BrokerRegistrationChangeRecord::no_change(NodeId(2), 40)
-        })
-    };
-    // Stands in for the partition changes that take broker 2 out of its ISRs,
-    // which the handler passes in for a fence, a shutdown and a controlled
-    // shutdown.
-    let leave = MetadataRecord::V1Topic(TopicRecord {
-        name: "leave".into(),
-        topic_id: uuid::Uuid::from_u128(9),
-        partitions: 1,
-        replication_factor: 1,
-    });
-    // Stands in for the elections an unfence makes possible, which the
-    // handler passes in for that transition alone.
-    let elect = MetadataRecord::V1Topic(TopicRecord {
-        name: "elect".into(),
-        topic_id: uuid::Uuid::from_u128(10),
-        partitions: 1,
-        replication_factor: 1,
-    });
-
-    let cases = [
-        (
-            "fenced -> unfenced",
-            registered(true, false),
-            Fenced,
-            Unfenced,
-            vec![],
-            vec![change(FencingChange::Unfence, false)],
-        ),
-        // `handleBrokerUnfenced` writes the registration change first and
-        // then the elections over `partitionsWithNoLeader`.
-        (
-            "fenced -> unfenced elects for the partitions with no leader",
-            registered(true, false),
-            Fenced,
-            Unfenced,
-            vec![elect.clone()],
-            vec![change(FencingChange::Unfence, false), elect],
-        ),
-        (
-            "fenced stays fenced",
-            registered(true, false),
-            Fenced,
-            Fenced,
-            vec![leave.clone()],
-            vec![leave.clone()],
-        ),
-        (
-            "fenced -> shutdown now",
-            registered(true, false),
-            Fenced,
-            ShutdownNow,
-            vec![leave.clone()],
-            vec![leave.clone()],
-        ),
-        (
-            "unfenced -> fenced",
-            registered(false, false),
-            Unfenced,
-            Fenced,
-            vec![leave.clone()],
-            vec![leave.clone(), change(FencingChange::Fence, false)],
-        ),
-        (
-            "unfenced -> shutdown now",
-            registered(false, false),
-            Unfenced,
-            ShutdownNow,
-            vec![leave.clone()],
-            vec![leave.clone(), change(FencingChange::Fence, false)],
-        ),
-        (
-            "unfenced -> controlled shutdown",
-            registered(false, false),
-            Unfenced,
-            ControlledShutdown,
-            vec![leave.clone()],
-            vec![change(FencingChange::None, true), leave.clone()],
-        ),
-        (
-            "controlled shutdown already on the registration",
-            registered(false, true),
-            Unfenced,
-            ControlledShutdown,
-            vec![leave.clone()],
-            vec![leave.clone()],
-        ),
-        (
-            "controlled shutdown -> shutdown now",
-            registered(false, true),
-            ControlledShutdown,
-            ShutdownNow,
-            vec![leave.clone()],
-            vec![leave, change(FencingChange::Fence, false)],
-        ),
-    ];
-    for (what, image, current, next, leaving, want) in cases {
-        check!(
-            transition_records(&image, NodeId(2), current, next, leaving) == want,
-            "{what}"
-        );
+#[derive(Default)]
+struct BrokerTransitionScenario {
+    image: Option<krabka_metadata::MetadataImage>,
+    current: Option<BrokerControlState>,
+    next: Option<BrokerControlState>,
+    partition_changes: Vec<krabka_metadata::MetadataRecord>,
+    records: Option<Vec<krabka_metadata::MetadataRecord>>,
+}
+#[rstest::fixture]
+fn broker_transition() -> BrokerTransitionScenario {
+    let image = None;
+    BrokerTransitionScenario {
+        image,
+        ..Default::default()
     }
 }
-
-/// krabka-io/krabka-broker#1009: the records each heartbeat transition
-/// writes, as `ReplicationControlManager.processBrokerHeartbeat` writes them.
-/// `handleBrokerFenced` (for `FENCED` and `SHUTDOWN_NOW`) puts the partition
-/// changes before a `BrokerRegistrationChangeRecord` with `Fenced = 1`;
-/// `handleBrokerUnfenced` writes `Fenced = -1`, and
-/// `handleBrokerInControlledShutdown` writes `InControlledShutdown = 1` ahead
-/// of the partition changes, and not at all when the registration already
-/// holds it. Every change names the broker's registered epoch.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/handlers/broker_heartbeat/tests.feature",
-    name = "each transition writes kafkas registration change"
+fn transition_state(state: &str) -> BrokerControlState {
+    match state {
+        "fenced" => BrokerControlState::Fenced,
+        "unfenced" => BrokerControlState::Unfenced,
+        "controlled-shutdown" => BrokerControlState::ControlledShutdown,
+        "shutdown-now" => BrokerControlState::ShutdownNow,
+        other => panic!("unknown broker state {other}"),
+    }
+}
+fn transition_partition_marker(name: &str) -> krabka_metadata::MetadataRecord {
+    krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+        name: name.to_owned(),
+        topic_id: uuid::Uuid::from_u128(match name {
+            "leave" => 9,
+            "elect" => 10,
+            other => panic!("unknown partition marker {other}"),
+        }),
+        partitions: 1,
+        replication_factor: 1,
+    })
+}
+#[rstest_bdd_macros::given(
+    "broker 2 is registered at epoch 40 with fenced {fenced} and controlled shutdown {shutdown}"
 )]
-fn each_transition_writes_kafkas_registration_change() {}
+fn transition_registration(
+    broker_transition: &mut BrokerTransitionScenario,
+    fenced: bool,
+    shutdown: bool,
+) {
+    let krabka_metadata::MetadataRecord::V1BrokerRegistration(registration) = new_registration(2)
+    else {
+        unreachable!("registration helper")
+    };
+    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&krabka_metadata::MetadataRecord::V1BrokerRegistration(
+        krabka_metadata::BrokerRegistrationRecord {
+            broker_epoch: 40,
+            fenced,
+            in_controlled_shutdown: shutdown,
+            ..registration
+        },
+    ));
+    broker_transition.image = Some(image);
+}
+#[rstest_bdd_macros::given(
+    "the heartbeat moves from {current} to {next} with partition changes {changes}"
+)]
+fn heartbeat_transition_input(
+    broker_transition: &mut BrokerTransitionScenario,
+    current: String,
+    next: String,
+    changes: String,
+) {
+    broker_transition.current = Some(transition_state(&current));
+    broker_transition.next = Some(transition_state(&next));
+    broker_transition.partition_changes = if changes == "none" {
+        Vec::new()
+    } else {
+        vec![transition_partition_marker(&changes)]
+    };
+}
+#[rstest_bdd_macros::when("the controller constructs heartbeat transition records")]
+fn build_heartbeat_transition(broker_transition: &mut BrokerTransitionScenario) {
+    broker_transition.records = Some(transition_records(
+        broker_transition.image.as_ref().expect("registration"),
+        NodeId(2),
+        broker_transition.current.expect("current state"),
+        broker_transition.next.expect("next state"),
+        broker_transition.partition_changes.clone(),
+    ));
+}
+#[rstest_bdd_macros::then("the exact ordered heartbeat records are {records}")]
+fn heartbeat_transition_records(broker_transition: &BrokerTransitionScenario, records: String) {
+    use krabka_metadata::{BrokerRegistrationChangeRecord, FencingChange, MetadataRecord};
+    let expected = records
+        .split(',')
+        .filter(|record| *record != "none")
+        .map(|record| match record {
+            "leave" | "elect" => transition_partition_marker(record),
+            "unfence" | "fence" | "controlled-shutdown" => {
+                MetadataRecord::V1BrokerRegistrationChange(BrokerRegistrationChangeRecord {
+                    fenced: match record {
+                        "unfence" => FencingChange::Unfence,
+                        "fence" => FencingChange::Fence,
+                        _ => FencingChange::None,
+                    },
+                    in_controlled_shutdown: record == "controlled-shutdown",
+                    ..BrokerRegistrationChangeRecord::no_change(NodeId(2), 40)
+                })
+            }
+            other => panic!("unknown output record {other}"),
+        })
+        .collect::<Vec<_>>();
+    check!(
+        broker_transition
+            .records
+            .as_ref()
+            .expect("transition records")
+            == &expected
+    );
+}
+rstest_bdd_macros::scenarios!("tests/features/handler_broker_heartbeat_transitions.feature", fixtures = [broker_transition: BrokerTransitionScenario]);

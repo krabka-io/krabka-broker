@@ -14,6 +14,10 @@ use {
         classic_sync_request, join_protocol, sync_assignment,
     },
     assert2::{assert, check},
+    bytes::Bytes,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    support::InProcess,
 };
 mod support;
 
@@ -41,34 +45,46 @@ fn join_setup() -> ClassicJoinSetup {
             ..Default::default()
         },
         protocol_type: PROTOCOL_TYPE.into(),
-        protocols: vec![join_protocol(PROTOCOL_NAME, bytes::Bytes::new())],
+        protocols: vec![join_protocol(PROTOCOL_NAME, Bytes::new())],
         ..Default::default()
     }
 }
 
-/// A joined group member: its id and the generation of the group.
-struct BootstrappedMember {
-    member_id: String,
-    generation: i32,
+struct ProtocolDiscovery {
+    broker: Option<InProcess>,
+    bootstrap: Option<JoinGroupResponse>,
+    joined: Option<JoinGroupResponse>,
+    synchronized: Option<SyncGroupResponse>,
 }
 
-async fn bootstrap_member(p: &support::InProcess) -> BootstrappedMember {
-    // Step 1: empty member_id → broker returns MEMBER_ID_REQUIRED with a
-    // generated id. KIP-559 doesn't require fields here (the group state
-    // hasn't recorded a protocol yet).
-    let r1 = p
+#[fixture]
+fn protocol() -> ProtocolDiscovery {
+    // Start this scenario with fresh inputs and observations.
+
+    ProtocolDiscovery {
+        broker: None,
+        bootstrap: None,
+        joined: None,
+        synchronized: None,
+    }
+}
+
+#[given("a ready coordinator for proxy-visible group negotiation")]
+async fn ready_coordinator(protocol: &mut ProtocolDiscovery) {
+    protocol.broker = Some(start().await);
+}
+
+#[when("a member joins the consumer range group")]
+async fn join_consumer(protocol: &mut ProtocolDiscovery) {
+    let p = protocol.broker.as_ref().expect("a coordinator was started");
+    let bootstrap = p
         .client
         .send(classic_join_request_from(join_setup()))
         .await
-        .expect("JoinGroup (bootstrap)");
-    assert!(r1.error_code == 79, "expected MEMBER_ID_REQUIRED");
-    let member_id = r1.member_id;
-    assert!(!member_id.is_empty());
-
-    // Step 2: re-join with the assigned member_id, falls out as leader.
+        .expect("JoinGroup bootstrap");
     let mut rejoin = join_setup();
-    rejoin.member_id = member_id.clone();
-    let r2 = p
+    rejoin.member_id.clone_from(&bootstrap.member_id);
+    let joined = p
         .client
         .send(
             classic_join_request()
@@ -81,188 +97,206 @@ async fn bootstrap_member(p: &support::InProcess) -> BootstrappedMember {
         )
         .await
         .expect("JoinGroup");
-    check!(r2.error_code == 0, "JoinGroup must succeed: {r2:?}");
-
-    // KIP-559: protocol_type and protocol_name must be set on the
-    // success response.
-    check!(
-        r2.protocol_type.as_deref() == Some(PROTOCOL_TYPE),
-        "JoinGroup must echo protocol_type: {r2:?}"
-    );
-    check!(
-        r2.protocol_name.as_deref() == Some(PROTOCOL_NAME),
-        "JoinGroup must echo protocol_name: {r2:?}"
-    );
-
-    BootstrappedMember {
-        member_id,
-        generation: r2.generation_id,
-    }
+    protocol.bootstrap = Some(bootstrap);
+    protocol.joined = Some(joined);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip559 l7 proxy fields: join group response carries protocol type and name on success"
-)]
-async fn bdd_verify_join_group_response_carries_protocol_type_and_name_on_success() {
-    let p = start().await;
-    let BootstrappedMember {
-        member_id: _mid,
-        generation: _generation,
-    } = bootstrap_member(&p).await;
-    p.broker.shutdown().await;
+#[then("membership bootstrap supplies a nonempty member id")]
+fn assigned_member(protocol: &ProtocolDiscovery) {
+    let bootstrap = protocol
+        .bootstrap
+        .as_ref()
+        .expect("membership bootstrap completed");
+    assert!(bootstrap.error_code == 79, "expected MEMBER_ID_REQUIRED");
+    assert!(!bootstrap.member_id.is_empty());
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip559_l7_proxy_fields.feature",
-    name = "join group response carries protocol type and name on success"
-)]
-#[tokio::test]
-async fn join_group_response_carries_protocol_type_and_name_on_success() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip559 l7 proxy fields: sync group response carries protocol type and name on success"
-)]
-async fn bdd_verify_sync_group_response_carries_protocol_type_and_name_on_success() {
-    let p = start().await;
-    let BootstrappedMember {
-        member_id: mid,
-        generation,
-    } = bootstrap_member(&p).await;
-
-    let r3 = p
-        .client
-        .send(
-            classic_sync_request()
-                .group_id((GROUP).into())
-                .generation_id(generation)
-                .member_id(mid.clone())
-                .maybe_protocol_type(Some(Some(PROTOCOL_TYPE.into())))
-                .maybe_protocol_name(Some(Some(PROTOCOL_NAME.into())))
-                .assignments(vec![sync_assignment(
-                    mid.clone(),
-                    bytes::Bytes::from_static(b"asgn"),
-                )])
-                .call(),
-        )
-        .await
-        .expect("SyncGroup");
-    check!(r3.error_code == 0, "SyncGroup must succeed: {r3:?}");
-
-    // KIP-559: both fields must be echoed on the v5+ response.
+#[then("successful JoinGroup identifies consumer and range")]
+fn joined_protocol(protocol: &ProtocolDiscovery) {
+    let joined = protocol.joined.as_ref().expect("JoinGroup completed");
+    check!(joined.error_code == 0, "JoinGroup must succeed: {joined:?}");
     check!(
-        r3.protocol_type.as_deref() == Some(PROTOCOL_TYPE),
-        "SyncGroup must echo protocol_type: {r3:?}"
+        joined.protocol_type.as_deref() == Some(PROTOCOL_TYPE),
+        "JoinGroup must echo protocol_type: {joined:?}"
     );
     check!(
-        r3.protocol_name.as_deref() == Some(PROTOCOL_NAME),
-        "SyncGroup must echo protocol_name: {r3:?}"
+        joined.protocol_name.as_deref() == Some(PROTOCOL_NAME),
+        "JoinGroup must echo protocol_name: {joined:?}"
     );
-
-    p.broker.shutdown().await;
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip559_l7_proxy_fields.feature",
-    name = "sync group response carries protocol type and name on success"
-)]
-#[tokio::test]
-async fn sync_group_response_carries_protocol_type_and_name_on_success() {}
+#[when("the joined member synchronizes its assignment")]
+async fn sync_member(protocol: &mut ProtocolDiscovery) {
+    let p = protocol.broker.as_ref().expect("a coordinator was started");
+    let joined = protocol.joined.as_ref().expect("a member joined");
+    let member_id = protocol
+        .bootstrap
+        .as_ref()
+        .expect("membership bootstrap completed")
+        .member_id
+        .clone();
+    protocol.synchronized = Some(
+        p.client
+            .send(
+                classic_sync_request()
+                    .group_id(GROUP.into())
+                    .generation_id(joined.generation_id)
+                    .member_id(member_id.clone())
+                    .maybe_protocol_type(Some(Some(PROTOCOL_TYPE.into())))
+                    .maybe_protocol_name(Some(Some(PROTOCOL_NAME.into())))
+                    .assignments(vec![sync_assignment(
+                        member_id,
+                        Bytes::from_static(b"asgn"),
+                    )])
+                    .call(),
+            )
+            .await
+            .expect("SyncGroup"),
+    );
+}
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kip559 l7 proxy fields: join group inconsistent protocol error carries no protocol fields"
-)]
-async fn bdd_verify_join_group_inconsistent_protocol_error_carries_no_protocol_fields() {
-    let p = start().await;
-    // Bootstrap the group as `consumer/range`.
-    let BootstrappedMember {
-        member_id: _mid,
-        generation: _gen,
-    } = bootstrap_member(&p).await;
+#[then("successful SyncGroup identifies consumer and range")]
+fn synchronized_protocol(protocol: &ProtocolDiscovery) {
+    let response = protocol.synchronized.as_ref().expect("SyncGroup completed");
+    check!(
+        response.error_code == 0,
+        "SyncGroup must succeed: {response:?}"
+    );
+    check!(
+        response.protocol_type.as_deref() == Some(PROTOCOL_TYPE),
+        "SyncGroup must echo protocol_type: {response:?}"
+    );
+    check!(
+        response.protocol_name.as_deref() == Some(PROTOCOL_NAME),
+        "SyncGroup must echo protocol_name: {response:?}"
+    );
+}
 
-    // A second member with a different protocol_type is turned away with
-    // INCONSISTENT_GROUP_PROTOCOL (23). Kafka's `classicGroupJoinNewMember`
-    // answers it with the member id and the error alone: the protocol
-    // fields stay null, as in every `JoinGroup` error Kafka sends.
-    let r = p
-        .client
-        .send(
-            classic_join_request()
-                .group_id(join_setup().group_id)
-                .member_id(join_setup().member_id)
-                .timeouts(join_setup().timeouts)
-                .protocol_type(("stream").into())
-                .protocols(vec![join_protocol("doesnt-matter", bytes::Bytes::new())])
-                .call(),
-        )
-        .await
-        .expect("JoinGroup");
+#[when("another member tries to join using the stream protocol")]
+async fn join_incompatible(protocol: &mut ProtocolDiscovery) {
+    let p = protocol.broker.as_ref().expect("a coordinator was started");
+    protocol.joined = Some(
+        p.client
+            .send(
+                classic_join_request()
+                    .group_id(join_setup().group_id)
+                    .member_id(join_setup().member_id)
+                    .timeouts(join_setup().timeouts)
+                    .protocol_type("stream".into())
+                    .protocols(vec![join_protocol("doesnt-matter", Bytes::new())])
+                    .call(),
+            )
+            .await
+            .expect("JoinGroup"),
+    );
+}
+
+#[then("JoinGroup returns only INCONSISTENT_GROUP_PROTOCOL without protocol identity")]
+fn join_refusal(protocol: &ProtocolDiscovery) {
+    let response = protocol
+        .joined
+        .as_ref()
+        .expect("the incompatible join completed");
     assert!(
-        r == JoinGroupResponse {
-            error_code: 23,
-            protocol_name: None,
-            ..JoinGroupResponse::default()
-        },
-        "expected a bare INCONSISTENT_GROUP_PROTOCOL (23), got {r:?}"
+        *response
+            == JoinGroupResponse {
+                error_code: 23,
+                protocol_name: None,
+                ..Default::default()
+            },
+        "expected a bare INCONSISTENT_GROUP_PROTOCOL (23), got {response:?}"
     );
-    p.broker.shutdown().await;
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip559_l7_proxy_fields.feature",
-    name = "join group inconsistent protocol error carries no protocol fields"
-)]
-#[tokio::test]
-async fn join_group_inconsistent_protocol_error_carries_no_protocol_fields() {}
+#[when("an unknown member tries to synchronize the current generation")]
+async fn sync_unknown_member(protocol: &mut ProtocolDiscovery) {
+    let p = protocol.broker.as_ref().expect("a coordinator was started");
+    let generation = protocol
+        .joined
+        .as_ref()
+        .expect("a member joined")
+        .generation_id;
+    protocol.synchronized = Some(
+        p.client
+            .send(
+                classic_sync_request()
+                    .group_id(GROUP.into())
+                    .generation_id(generation)
+                    .member_id("ghost-member".into())
+                    .maybe_protocol_type(Some(Some(PROTOCOL_TYPE.into())))
+                    .maybe_protocol_name(Some(Some(PROTOCOL_NAME.into())))
+                    .call(),
+            )
+            .await
+            .expect("SyncGroup"),
+    );
+}
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("kip559 l7 proxy fields: sync group error carries no protocol fields")]
-async fn bdd_verify_sync_group_error_carries_no_protocol_fields() {
-    let p = start().await;
-    let BootstrappedMember {
-        member_id: _mid,
-        generation,
-    } = bootstrap_member(&p).await;
-
-    let r = p
-        .client
-        .send(
-            classic_sync_request()
-                .group_id((GROUP).into())
-                .generation_id(generation)
-                .member_id(("ghost-member").into())
-                .maybe_protocol_type(Some(Some(PROTOCOL_TYPE.into())))
-                .maybe_protocol_name(Some(Some(PROTOCOL_NAME.into())))
-                .call(),
-        )
-        .await
-        .expect("SyncGroup");
+#[then("SyncGroup returns only UNKNOWN_MEMBER_ID without protocol identity or assignment")]
+fn sync_refusal(protocol: &ProtocolDiscovery) {
+    let response = protocol
+        .synchronized
+        .as_ref()
+        .expect("the unknown member synchronization completed");
     check!(
-        r == SyncGroupResponse {
-            error_code: 25,
-            protocol_type: None,
-            protocol_name: None,
-            assignment: bytes::Bytes::default(),
-            ..Default::default()
-        }
+        *response
+            == SyncGroupResponse {
+                error_code: 25,
+                protocol_type: None,
+                protocol_name: None,
+                assignment: Bytes::default(),
+                ..Default::default()
+            }
     );
-
-    p.broker.shutdown().await;
 }
 
-/// A `SyncGroup` that Kafka refuses carries only the error code. Kafka's
-/// `GroupCoordinatorService.syncGroup` answers every error with
-/// `new SyncGroupResponseData().setErrorCode(...)`, so `protocol_type` and
-/// `protocol_name` stay null even though the group has a recorded protocol.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+async fn stop_coordinator(protocol: ProtocolDiscovery) {
+    protocol
+        .broker
+        .expect("a coordinator was started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/kip559_l7_proxy_fields.feature",
-    name = "sync group error carries no protocol fields"
+    name = "JoinGroup exposes its negotiated protocol to a stateless proxy"
 )]
 #[tokio::test]
-async fn sync_group_error_carries_no_protocol_fields() {}
+async fn join_group_response_carries_protocol_type_and_name_on_success(
+    protocol: ProtocolDiscovery,
+) {
+    stop_coordinator(protocol).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip559_l7_proxy_fields.feature",
+    name = "SyncGroup exposes its negotiated protocol to a stateless proxy"
+)]
+#[tokio::test]
+async fn sync_group_response_carries_protocol_type_and_name_on_success(
+    protocol: ProtocolDiscovery,
+) {
+    stop_coordinator(protocol).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip559_l7_proxy_fields.feature",
+    name = "A refused incompatible join does not advertise a negotiated protocol"
+)]
+#[tokio::test]
+async fn join_group_inconsistent_protocol_error_carries_no_protocol_fields(
+    protocol: ProtocolDiscovery,
+) {
+    stop_coordinator(protocol).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/kip559_l7_proxy_fields.feature",
+    name = "A refused synchronization does not advertise a protocol or assignment"
+)]
+#[tokio::test]
+async fn sync_group_error_carries_no_protocol_fields(protocol: ProtocolDiscovery) {
+    stop_coordinator(protocol).await;
+}

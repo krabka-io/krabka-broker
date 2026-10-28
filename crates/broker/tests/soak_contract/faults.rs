@@ -356,96 +356,173 @@ pub fn inject(
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use {
         super::{Cleanup, FaultGuard, ballast_bytes},
         assert2::{assert, check},
         krabka_units::prelude::*,
-        std::fs,
+        rstest::fixture,
+        rstest_bdd_macros::{given, scenarios, then, when},
+        std::{fs, path::PathBuf},
+        tempfile::TempDir,
     };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract faults tests: a disk fill reaches its watermark or is refused for {example}"
-    )]
-    fn bdd_verify_a_disk_fill_reaches_its_watermark_or_is_refused(example: String) {
-        type Example = (u64, u64, Result<u64, ()>);
-        let (used, host_free, expected): Example = match example.as_str() {
-            "fills to the watermark" => (100 << 20, 10 << 30, Ok(412 << 20)),
-            "already past it" => (600 << 20, 10 << 30, Ok(0)),
-            "exactly the reserve left" => (0, (4 << 30) + (512 << 20), Ok(512 << 20)),
-            "refused below the reserve" => (0, (4 << 30) + (511 << 20), Err(())),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let fill = ballast_bytes(percent(25), gibibytes(2), used, host_free, gibibytes(4));
-        let outcome = fill.clone().map_err(|_| ());
-        check!(outcome == expected, "{fill:?}");
+    struct DiskFaultScenario {
+        capacity: ByteSize,
+        watermark: Ratio,
+        reserve: ByteSize,
+        used: u64,
+        host_free: u64,
+        ballast: Option<Result<u64, String>>,
+        directory: Option<TempDir>,
+        path: Option<PathBuf>,
+        guard: Option<FaultGuard>,
+        cleanups: Vec<Result<String, String>>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/faults.feature",
-        name = "tests: a disk fill reaches its watermark or is refused"
-    )]
-    fn a_disk_fill_reaches_its_watermark_or_is_refused(example: String) { let _ = example; }
+    #[fixture]
+    fn disk_fault() -> DiskFaultScenario {
+        // Resource reservations and fault guards belong to one fault example.
+        DiskFaultScenario {
+            capacity: gibibytes(2),
+            watermark: percent(25),
+            reserve: gibibytes(4),
+            used: 0,
+            host_free: 0,
+            ballast: None,
+            directory: None,
+            path: None,
+            guard: None,
+            cleanups: Vec::new(),
+        }
+    }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak contract faults tests: a refusal says why")]
-    fn bdd_verify_a_refusal_says_why() {
-        let refusal =
-            ballast_bytes(percent(80), gibibytes(500), 0, 100 << 30, gibibytes(50)).unwrap_err();
+    #[given(
+        "disk capacity is {capacity} GiB watermark is {watermark} percent and host reserve is {reserve} GiB"
+    )]
+    fn pressure_limits(
+        disk_fault: &mut DiskFaultScenario,
+        capacity: u32,
+        watermark: u32,
+        reserve: u32,
+    ) {
+        disk_fault.capacity = gibibytes(capacity);
+        disk_fault.watermark = percent(watermark);
+        disk_fault.reserve = gibibytes(reserve);
+    }
+
+    #[given("the broker uses {used} bytes and the host has {host_free} bytes free")]
+    fn pressure_usage(disk_fault: &mut DiskFaultScenario, used: u64, host_free: u64) {
+        disk_fault.used = used;
+        disk_fault.host_free = host_free;
+    }
+
+    #[when("the executor computes ballast needed to reach the disk watermark")]
+    fn compute_ballast(disk_fault: &mut DiskFaultScenario) {
+        disk_fault.ballast = Some(ballast_bytes(
+            disk_fault.watermark,
+            disk_fault.capacity,
+            disk_fault.used,
+            disk_fault.host_free,
+            disk_fault.reserve,
+        ));
+    }
+
+    #[then("the required ballast is {bytes}")]
+    fn required_ballast(disk_fault: &DiskFaultScenario, bytes: String) {
+        let fill = disk_fault
+            .ballast
+            .as_ref()
+            .expect("the ballast was computed");
+        let expected = if bytes == "refused" {
+            Err(())
+        } else {
+            Ok(bytes.parse::<u64>().expect("an expected ballast size"))
+        };
+        check!(fill.clone().map_err(|_| ()) == expected, "{fill:?}");
+    }
+
+    #[then("the disk-fill refusal identifies the host reserve as its reason")]
+    fn reserve_refusal_explained(disk_fault: &DiskFaultScenario) {
+        let refusal = disk_fault
+            .ballast
+            .as_ref()
+            .expect("the ballast was computed")
+            .as_ref()
+            .unwrap_err();
         assert!(refusal.starts_with("disk fill refused:"));
         check!(refusal.contains("reserve"));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/faults.feature",
-        name = "tests: a refusal says why"
-    )]
-    fn a_refusal_says_why() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak contract faults tests: a dropped guard undoes its fault")]
-    fn bdd_verify_a_dropped_guard_undoes_its_fault() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("ballast");
+    #[given("a fault guard owns an existing ballast file")]
+    fn ballast_guard(disk_fault: &mut DiskFaultScenario) {
+        disk_fault.directory = Some(TempDir::new().unwrap());
+        let path = disk_fault
+            .directory
+            .as_ref()
+            .expect("the ballast directory exists")
+            .path()
+            .join("ballast");
         fs::write(&path, b"x").unwrap();
-        drop(FaultGuard::new(Cleanup::RemoveBallast {
+        disk_fault.guard = Some(FaultGuard::new(Cleanup::RemoveBallast {
             path: path.clone(),
         }));
-        check!(!path.exists());
+        disk_fault.path = Some(path);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/faults.feature",
-        name = "tests: a dropped guard undoes its fault"
-    )]
-    fn a_dropped_guard_undoes_its_fault() {}
+    #[when("the disk-pressure fault guard is dropped")]
+    fn drop_ballast_guard(disk_fault: &mut DiskFaultScenario) {
+        drop(disk_fault.guard.take().expect("the ballast guard exists"));
+    }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak contract faults tests: a cleared guard reports its cleanup")]
-    fn bdd_verify_a_cleared_guard_reports_its_cleanup() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("ballast");
-        fs::write(&path, b"x").unwrap();
-        let guard = FaultGuard::new(Cleanup::RemoveBallast { path: path.clone() });
-        check!(guard.clear().is_ok_and(|how| how.starts_with("removed")));
-        check!(!path.exists());
-        let never = FaultGuard::new(Cleanup::RemoveBallast { path });
+    #[then("the ballast file no longer exists")]
+    fn ballast_removed(disk_fault: &DiskFaultScenario) {
         check!(
-            never
-                .clear()
+            !disk_fault
+                .path
+                .as_ref()
+                .expect("a ballast path exists")
+                .exists()
+        );
+    }
+
+    #[when("the disk-pressure fault guard is explicitly cleared")]
+    fn clear_ballast_guard(disk_fault: &mut DiskFaultScenario) {
+        disk_fault.cleanups.push(
+            disk_fault
+                .guard
+                .take()
+                .expect("the ballast guard exists")
+                .clear(),
+        );
+    }
+
+    #[then("cleanup reports that the ballast was removed")]
+    fn ballast_cleanup_reported(disk_fault: &DiskFaultScenario) {
+        check!(
+            disk_fault.cleanups[0]
+                .as_ref()
+                .is_ok_and(|how| how.starts_with("removed"))
+        );
+    }
+
+    #[when("another guard clears the same now-missing ballast path")]
+    fn clear_missing_ballast(disk_fault: &mut DiskFaultScenario) {
+        let guard = FaultGuard::new(Cleanup::RemoveBallast {
+            path: disk_fault.path.clone().expect("a ballast path exists"),
+        });
+        disk_fault.cleanups.push(guard.clear());
+    }
+
+    #[then("the second cleanup reports that the ballast was never written")]
+    fn missing_ballast_reported(disk_fault: &DiskFaultScenario) {
+        check!(
+            disk_fault.cleanups[1]
+                .as_ref()
                 .is_ok_and(|how| how.ends_with("was never written"))
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/faults.feature",
-        name = "tests: a cleared guard reports its cleanup"
-    )]
-    fn a_cleared_guard_reports_its_cleanup() {}
+    scenarios!("tests/features/migrated/tests/soak_contract/faults.feature", fixtures = [disk_fault: DiskFaultScenario]);
 }

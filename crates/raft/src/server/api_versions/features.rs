@@ -111,88 +111,58 @@ mod tests {
 
     krabka_macros::finalized_feature_fixture!(finalized);
 
-    use crate::test_support::feature_image as image;
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "server api versions features tests: supported features follow kafkas minimums and alter level zero for {example}"
+    use {
+        crate::test_support::feature_image as image,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
+    #[derive(Default)]
+    struct SupportedFeatures {
+        unstable: Option<UnstableFeatureVersions>,
+        keys: Option<Vec<SupportedFeatureKey>>,
+    }
+    #[rstest::fixture]
+    fn feature_support() -> SupportedFeatures {
+        // Start this scenario with fresh inputs and observations.
+        SupportedFeatures::default()
+    }
+    #[given("unstable feature versions are {enabled}")]
+    fn unstable_features(feature_support: &mut SupportedFeatures, enabled: bool) {
+        feature_support.unstable = Some(if enabled {
+            UnstableFeatureVersions::Enabled
+        } else {
+            UnstableFeatureVersions::Disabled
+        });
+    }
+    #[when("supported features are advertised at ApiVersions version {version}")]
+    fn advertise_features(feature_support: &mut SupportedFeatures, version: i16) {
+        feature_support.keys = Some(supported_feature_keys(
+            version,
+            feature_support.unstable.expect("feature policy configured"),
+        ));
+    }
+    #[then(
+        "metadata version spans its production minimum through {maximum} and modern feature minimums are included {modern} with share maximum {share}"
     )]
-    fn bdd_verify_supported_features_follow_kafkas_minimums_and_alter_level_zero(example: String) {
-        type Example = (i16, UnstableFeatureVersions, Vec<SupportedFeatureKey>);
-        let (api_version, unstable, expected): Example = match example.as_str() {
-            "stable v0" => (0, crate::UnstableFeatureVersions::Disabled, vec![
-                supported("metadata.version", METADATA_VERSION_MIN, 30),
-            ]),
-            "stable v3" => (3, crate::UnstableFeatureVersions::Disabled, vec![
-                supported("metadata.version", METADATA_VERSION_MIN, 30),
-            ]),
-            "stable v4" => (
-                4,
-                crate::UnstableFeatureVersions::Disabled,
-                modern_supported(supported("metadata.version", METADATA_VERSION_MIN, 30), 1),
-            ),
-            "stable v5" => (
-                5,
-                crate::UnstableFeatureVersions::Disabled,
-                modern_supported(supported("metadata.version", METADATA_VERSION_MIN, 30), 1),
-            ),
-            "unstable v0" => (0, crate::UnstableFeatureVersions::Enabled, vec![supported(
-                "metadata.version",
-                METADATA_VERSION_MIN,
-                METADATA_VERSION_MAX,
-            )]),
-            "unstable v3" => (3, crate::UnstableFeatureVersions::Enabled, vec![supported(
-                "metadata.version",
-                METADATA_VERSION_MIN,
-                METADATA_VERSION_MAX,
-            )]),
-            "unstable v4" => (
-                4,
-                crate::UnstableFeatureVersions::Enabled,
-                modern_supported(
-                    supported(
-                        "metadata.version",
-                        METADATA_VERSION_MIN,
-                        METADATA_VERSION_MAX,
-                    ),
-                    2,
-                ),
-            ),
-            "unstable v5" => (
-                5,
-                crate::UnstableFeatureVersions::Enabled,
-                modern_supported(
-                    supported(
-                        "metadata.version",
-                        METADATA_VERSION_MIN,
-                        METADATA_VERSION_MAX,
-                    ),
-                    2,
-                ),
-            ),
-            _ => panic!("unknown BDD example: {example}"),
+    fn supported_feature_ranges(
+        feature_support: &SupportedFeatures,
+        maximum: String,
+        modern: bool,
+        share: i16,
+    ) {
+        let maximum = match maximum.as_str() {
+            "stable" => 30,
+            "trunk" => METADATA_VERSION_MAX,
+            _ => panic!("unknown metadata version ceiling"),
         };
-
-        // `share.version` 2 (KIP-1191) is trunk's, so only the flag advertises it.
-        check!(
-            supported_feature_keys(api_version, unstable) == expected,
-            "v{api_version} {unstable:?}"
-        );
+        let metadata = supported("metadata.version", METADATA_VERSION_MIN, maximum);
+        let expected = if modern {
+            modern_supported(metadata, share)
+        } else {
+            vec![metadata]
+        };
+        check!(feature_support.keys.as_ref() == Some(&expected));
     }
-
-    /// #783's table: below v4 only the features with a non-zero minimum stay;
-    /// from v4 every feature is advertised from Kafka's minimum production
-    /// level. #784: `metadata.version` tops out at 4.3.1's latest production
-    /// level, 30, unless `unstable.feature.versions.enable` is set, as
-    /// `BrokerFeatures.defaultSupportedFeatures` caps it.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/server/api_versions/features.feature",
-        name = "tests: supported features follow kafkas minimums and alter level zero"
-    )]
-    fn supported_features_follow_kafkas_minimums_and_alter_level_zero(example: String) {
-        let _ = example;
-    }
+    scenarios!("tests/features/migrated/src/server/api_versions/features.feature", fixtures = [feature_support: SupportedFeatures]);
 
     /// A feature whose maximum is 0 cannot be finalized above 0, and Kafka
     /// does not advertise it at any version.

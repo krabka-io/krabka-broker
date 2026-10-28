@@ -4,8 +4,6 @@
 //! sits here with the methods that delegate to it, so that the divergence
 //! contract is stated once.
 
-#[cfg(test)]
-use super::UNDEFINED_EPOCH;
 use {
     super::{LeaderEpochCheckpoint, UNDEFINED_OFFSET, epoch_and_offset_for_entries},
     krabka_ids::{LeaderEpoch, Offset},
@@ -95,8 +93,8 @@ mod tests {
         super::*,
         crate::{
             leader_epoch_checkpoint::{
-                EpochEntry,
-                test_support::{TempCheckpoint, checkpoint, entry, fresh},
+                UNDEFINED_EPOCH,
+                test_support::{TempCheckpoint, checkpoint, entry, fresh, history_entries},
             },
             test_support::TempPath,
         },
@@ -199,88 +197,42 @@ mod tests {
 
     // ── epoch_and_offset_for (KIP-320) ────────────────────────────────────────
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "leader epoch checkpoint lookup tests: epoch and offset for follows kafka end offset for for {example}"
-    )]
-    fn bdd_verify_epoch_and_offset_for_follows_kafka_end_offset_for(example: String) {
-        type Example<'a> = (&'a str, &'a [EpochEntry], i32, i64, (LeaderEpoch, Offset));
-        let (name, recorded, requested, log_end, expected): Example<'_> = match example.as_str() {
-            "empty" => (
-                "empty checkpoint",
-                &[][..],
-                0,
-                9,
-                (UNDEFINED_EPOCH, UNDEFINED_OFFSET),
-            ),
-            "undefined" => (
-                "undefined requested epoch",
-                &[entry(0, 0), entry(1, 50)][..],
-                -1,
-                100,
-                (UNDEFINED_EPOCH, UNDEFINED_OFFSET),
-            ),
-            "latest" => (
-                "latest recorded epoch keeps the log end",
-                &[entry(0, 0), entry(1, 50)][..],
-                1,
-                100,
-                (LeaderEpoch(1), Offset(100)),
-            ),
-            "oldest" => (
-                "oldest epoch ends at the next start",
-                &[entry(0, 0), entry(1, 50), entry(2, 100)][..],
-                0,
-                200,
-                (LeaderEpoch(0), Offset(50)),
-            ),
-            "middle" => (
-                "middle epoch ends at the next start",
-                &[entry(0, 0), entry(1, 50), entry(2, 100)][..],
-                1,
-                200,
-                (LeaderEpoch(1), Offset(100)),
-            ),
-            "gap" => (
-                "gap epoch resolves to the floor epoch",
-                &[entry(0, 0), entry(5, 100)][..],
-                3,
-                200,
-                (LeaderEpoch(0), Offset(100)),
-            ),
-            "future" => (
-                "future epoch cannot be placed",
-                &[entry(0, 0), entry(1, 50)][..],
-                7,
-                100,
-                (UNDEFINED_EPOCH, UNDEFINED_OFFSET),
-            ),
-            "below first" => (
-                "below every recorded epoch keeps the requested epoch",
-                &[entry(3, 30), entry(4, 40)][..],
-                1,
-                100,
-                (LeaderEpoch(1), Offset(30)),
-            ),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let TempCheckpoint {
-            dir: _d,
-            checkpoint: c,
-        } = checkpoint(recorded);
-        check!(
-            c.epoch_and_offset_for(LeaderEpoch(requested), Offset(log_end)) == expected,
-            "{name}"
+    #[derive(Default)]
+    struct EpochLookupScenario {
+        checkpoint: Option<TempCheckpoint>,
+        answer: Option<(LeaderEpoch, Offset)>,
+    }
+    #[rstest::fixture]
+    fn epoch_lookup() -> EpochLookupScenario {
+        let checkpoint = None;
+        EpochLookupScenario {
+            checkpoint,
+            ..EpochLookupScenario::default()
+        }
+    }
+    #[rstest_bdd_macros::given("leader epoch lookup history {history}")]
+    fn given_epoch_lookup_history(epoch_lookup: &mut EpochLookupScenario, history: String) {
+        epoch_lookup.checkpoint = Some(checkpoint(&history_entries(&history)));
+    }
+    #[rstest_bdd_macros::when("epoch {requested} is looked up with log end {log_end}")]
+    fn find_epoch_end(epoch_lookup: &mut EpochLookupScenario, requested: i32, log_end: i64) {
+        epoch_lookup.answer = Some(
+            epoch_lookup
+                .checkpoint
+                .as_ref()
+                .expect("checkpoint history given")
+                .checkpoint
+                .epoch_and_offset_for(LeaderEpoch(requested), Offset(log_end)),
         );
     }
-
-    /// One row per branch of Kafka's `endOffsetFor`, over checkpoints built
-    /// through `append` as the log builds them.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/leader_epoch_checkpoint/lookup.feature",
-        name = "tests: epoch and offset for follows kafka end offset for"
-    )]
-    fn epoch_and_offset_for_follows_kafka_end_offset_for(example: String) { let _ = example; }
+    #[rstest_bdd_macros::then("the epoch lookup returns epoch {epoch} ending at offset {offset}")]
+    fn expected_epoch_end(epoch_lookup: &EpochLookupScenario, epoch: i32, offset: i64) {
+        let expected_epoch = if epoch == -1 {
+            UNDEFINED_EPOCH
+        } else {
+            LeaderEpoch(epoch)
+        };
+        check!(epoch_lookup.answer == Some((expected_epoch, Offset(offset))));
+    }
+    rstest_bdd_macros::scenarios!("tests/features/leader_epoch_lookup", fixtures = [epoch_lookup: EpochLookupScenario]);
 }

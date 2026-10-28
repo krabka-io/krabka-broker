@@ -1,10 +1,15 @@
-Feature: tests legacy fetch downconversion
+Feature: Record-preserving Fetch downconversion for legacy consumers
+  Scenario: Fetch v3 preserves modern record keys and values in legacy framing
+    Given a modern batch contains keyed records key0=val0 and key1=val1
+    When Fetch version 3 requests the modern record batch
+    Then the legacy message set preserves both record keys and values
 
-  Scenario: fetch v3 downconverts v2 batch to v0 messageset
-    Then legacy fetch downconversion: fetch v3 downconverts v2 batch to v0 messageset
+  Scenario: Fetch v0 removes timestamps that its framing cannot represent
+    Given a modern record has key k value v and a nonzero create timestamp
+    When Fetch version 0 requests the modern record batch
+    Then the v0 message set retains k and v but contains no record timestamp
 
-  Scenario: fetch v0 downconverts to magic v0 without timestamps
-    Then legacy fetch downconversion: fetch v0 downconverts to magic v0 without timestamps
-
-  Scenario: fetch v3 meters every converted partition of a topic
-    Then legacy fetch downconversion: fetch v3 meters every converted partition of a topic
+  Scenario: Legacy conversion meters every converted partition under one topic
+    Given three topic partitions each hold their own acknowledged record
+    When Fetch v3 requests all three partitions together
+    Then every returned partition contains its own legacy record and increments conversion metering

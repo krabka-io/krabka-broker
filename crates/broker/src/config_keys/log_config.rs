@@ -226,6 +226,7 @@ mod tests {
         assert2::assert,
         krabka_protocol::records::TimestampType,
         krabka_units::{bytes, mebibytes, millis, minutes},
+        rstest_bdd::datatable::Rows,
         std::collections::BTreeMap,
     };
 
@@ -441,44 +442,65 @@ mod tests {
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "config keys log config tests: apply maps the remaining kafka keys onto the log config"
+    #[derive(Default)]
+    struct AppliedLogConfiguration {
+        overrides: BTreeMap<String, String>,
+        applied: Option<LogConfig>,
+    }
+
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct SuppliedLogProperty {
+        key: String,
+        value: String,
+    }
+
+    #[rstest::fixture]
+    fn log_configuration() -> AppliedLogConfiguration {
+        // Each partition starts with its own topic overrides and observations.
+        AppliedLogConfiguration::default()
+    }
+
+    #[rstest_bdd_macros::given("a partition has these topic log overrides:")]
+    fn partition_log_overrides(
+        log_configuration: &mut AppliedLogConfiguration,
+        #[datatable] rows: Rows<SuppliedLogProperty>,
+    ) {
+        log_configuration.overrides = rows.into_iter().map(|row| (row.key, row.value)).collect();
+    }
+
+    #[rstest_bdd_macros::when(
+        "the overrides are applied to the default partition log configuration"
     )]
-    fn bdd_verify_apply_maps_the_remaining_kafka_keys_onto_the_log_config() {
-        let overrides = maplit::btreemap! {
-        SEGMENT_MS.to_owned() => "60000".to_owned(),
-        INDEX_INTERVAL_BYTES.to_owned() => "8192".to_owned(),
-        SEGMENT_INDEX_BYTES.to_owned() => "1048576".to_owned(),
-        MIN_COMPACTION_LAG_MS.to_owned() => "30000".to_owned(),
-        MAX_COMPACTION_LAG_MS.to_owned() => "120000".to_owned(),
-        MIN_CLEANABLE_DIRTY_RATIO.to_owned() => "0.25".to_owned(),
-        MESSAGE_TIMESTAMP_TYPE.to_owned() => "LogAppendTime".to_owned()};
+    fn apply_partition_log_overrides(log_configuration: &mut AppliedLogConfiguration) {
+        log_configuration.applied = Some(apply_to_log_config(
+            &log_configuration.overrides,
+            &LogConfig::default(),
+        ));
+    }
 
-        let out = apply_to_log_config(&overrides, &LogConfig::default());
-
+    #[rstest_bdd_macros::then(
+        "rolling, index sizing, compaction and append timestamps use the supplied values"
+    )]
+    fn mapped_partition_log_configuration(log_configuration: &AppliedLogConfiguration) {
         assert!(
-            out == LogConfig {
-                segment_roll_interval: minutes(1),
-                index_interval: bytes(8192),
-                segment_index_size: bytes(1_048_576),
-                min_compaction_lag: millis(30_000),
-                max_compaction_lag: Some(millis(120_000)),
-                min_cleanable_dirty_ratio: krabka_units::fraction(0.25),
-                message_timestamp_type: TimestampType::LogAppendTime,
-                ..LogConfig::default()
-            }
+            log_configuration.applied.as_ref()
+                == Some(&LogConfig {
+                    segment_roll_interval: minutes(1),
+                    index_interval: bytes(8192),
+                    segment_index_size: bytes(1_048_576),
+                    min_compaction_lag: millis(30_000),
+                    max_compaction_lag: Some(millis(120_000)),
+                    min_cleanable_dirty_ratio: krabka_units::fraction(0.25),
+                    message_timestamp_type: TimestampType::LogAppendTime,
+                    ..LogConfig::default()
+                })
         );
     }
 
-    /// The keys Kafka's `TopicConfig` carries that krabka now maps onto the
-    /// log a partition runs with.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/config_keys/log_config.feature",
-        name = "tests: apply maps the remaining kafka keys onto the log config"
-    )]
-    fn apply_maps_the_remaining_kafka_keys_onto_the_log_config() {}
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/config_keys/log_config.feature",
+        fixtures = [log_configuration: AppliedLogConfiguration]
+    );
 
     /// Kafka's `max.compaction.lag.ms` default is `Long.MAX_VALUE`, which is
     /// how an operator spells "no bound".

@@ -193,57 +193,75 @@ mod tests {
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams migration tests: streams tombstone batch follows kafka"
-    )]
-    fn bdd_verify_streams_tombstone_batch_follows_kafka() {
-        let g = "g";
-        let rows = [
-            ("no members", vec![], vec![
-                encode_target_assignment_metadata_key(g).unwrap(),
-                encode_group_metadata_key(g).unwrap(),
-                encode_topology_key(g).unwrap(),
-            ]),
-            ("one member", vec!["m1".to_owned()], vec![
-                encode_current_member_assignment_key(g, "m1").unwrap(),
-                encode_target_assignment_member_key(g, "m1").unwrap(),
-                encode_target_assignment_metadata_key(g).unwrap(),
-                encode_member_metadata_key(g, "m1").unwrap(),
-                encode_group_metadata_key(g).unwrap(),
-                encode_topology_key(g).unwrap(),
-            ]),
-        ];
-        for (name, members, keys) in rows {
-            let batch = streams_records_tombstone_batch(g, &members, 123).unwrap();
-            let records = record_contents(&batch);
-            let expected: Vec<_> = keys.into_iter().map(|key| (Some(key), None)).collect();
-            assert2::check!(records == expected, "{name}");
-            assert2::check!(batch.max_timestamp == 123, "{name}");
-        }
-    }
-
+    use crate::coordinator::unified::persistence::GroupMetadataValue;
     /// The streams tombstones follow Kafka 4.3.1's
     /// `StreamsGroup.createGroupTombstoneRecords`: k22 and k21 for each
     /// member, k20, k19 for each member, then k17 and k23. Kafka defines no
     /// type 18, so none is written.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/migration.feature",
-        name = "tests: streams tombstone batch follows kafka"
+    /// Kafka 4.3.1's `classicGroupJoinToClassicGroup` for a drained streams
+    /// group: the streams tombstones, then `newEmptyGroupMetadataRecord`, in
+    /// one batch.
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct StreamsDeletion {
+        members: Vec<String>,
+        batch: Option<RecordBatch>,
+    }
+    #[rstest::fixture]
+    fn deletion() -> StreamsDeletion {
+        // Start this scenario with fresh inputs and observations.
+        StreamsDeletion::default()
+    }
+    #[given("Streams group g has member identifiers {members}")]
+    fn streams_group_members(deletion: &mut StreamsDeletion, members: String) {
+        deletion.members = if members == "none" {
+            vec![]
+        } else {
+            members.split(',').map(str::to_owned).collect()
+        };
+    }
+    #[when("the coordinator tombstones the Streams group at timestamp 123")]
+    fn tombstone_streams_group(deletion: &mut StreamsDeletion) {
+        deletion.batch = Some(
+            streams_records_tombstone_batch("g", &deletion.members, 123).expect("deletion batch"),
+        );
+    }
+    #[then(
+        "the Streams deletion records follow Kafka current target metadata member group topology order with null values"
     )]
-    fn streams_tombstone_batch_follows_kafka() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams migration tests: streams to classic batch follows kafka"
+    fn ordered_streams_tombstones(deletion: &StreamsDeletion) {
+        let keys = if deletion.members.is_empty() {
+            vec![
+                encode_target_assignment_metadata_key("g").expect("target epoch key"),
+                encode_group_metadata_key("g").expect("group key"),
+                encode_topology_key("g").expect("topology key"),
+            ]
+        } else {
+            vec![
+                encode_current_member_assignment_key("g", "m1").expect("current key"),
+                encode_target_assignment_member_key("g", "m1").expect("target key"),
+                encode_target_assignment_metadata_key("g").expect("target epoch key"),
+                encode_member_metadata_key("g", "m1").expect("member key"),
+                encode_group_metadata_key("g").expect("group key"),
+                encode_topology_key("g").expect("topology key"),
+            ]
+        };
+        let expected = keys
+            .into_iter()
+            .map(|key| (Some(key), None))
+            .collect::<Vec<_>>();
+        let batch = deletion.batch.as_ref().expect("deletion generated");
+        assert2::check!(record_contents(batch) == expected);
+        assert2::check!(batch.max_timestamp == 123);
+    }
+    #[when("the coordinator cold converts the drained Streams group to classic at timestamp 123")]
+    fn downgrade_streams_group(deletion: &mut StreamsDeletion) {
+        deletion.batch = Some(streams_to_classic_batch("g", 123).expect("conversion batch"));
+    }
+    #[then(
+        "the conversion tombstones Streams metadata and appends one empty classic group in the same timestamped batch"
     )]
-    fn bdd_verify_streams_to_classic_batch_follows_kafka() {
-        use crate::coordinator::unified::persistence::GroupMetadataValue;
-
-        let batch = streams_to_classic_batch("g", 123).unwrap();
-
-        let records = record_contents(&batch);
+    fn streams_conversion_batch(deletion: &StreamsDeletion) {
         let empty = GroupMetadataValue {
             protocol_type: String::new(),
             generation: 0,
@@ -264,17 +282,10 @@ mod tests {
                 Some(empty.encode_value().unwrap()),
             ),
         ];
-        assert2::check!(records == expected);
+
+        let batch = deletion.batch.as_ref().expect("conversion generated");
+        assert2::check!(record_contents(batch) == expected);
         assert2::check!(batch.max_timestamp == 123);
     }
-
-    /// Kafka 4.3.1's `classicGroupJoinToClassicGroup` for a drained streams
-    /// group: the streams tombstones, then `newEmptyGroupMetadataRecord`, in
-    /// one batch.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/migration.feature",
-        name = "tests: streams to classic batch follows kafka"
-    )]
-    fn streams_to_classic_batch_follows_kafka() {}
+    scenarios!("tests/features/migrated/src/coordinator/unified/streams/migration.feature",fixtures=[deletion:StreamsDeletion]);
 }

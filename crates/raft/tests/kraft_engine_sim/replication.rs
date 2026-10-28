@@ -3,69 +3,122 @@
 //! travels to every follower and lands in all three metadata images.
 
 use {
-    crate::harness::{
-        await_single_leader, await_until, start_engines, three_voter_network, topic_record,
+    crate::{
+        harness::{
+            await_single_leader, await_until, start_engines, three_voter_network, topic_record,
+        },
+        sim_net::SimNet,
     },
-    krabka_raft::RaftError,
+    krabka_raft::{RaftError, kraft::NodeId},
+    rstest_bdd_macros::{given, then, when},
     std::time::Duration,
     tokio::time,
 };
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("kraft engine sim replication: follower submit change propagates")]
-async fn bdd_verify_follower_submit_change_propagates() {
+struct ReplicationCluster {
+    net: SimNet,
+    ids: [NodeId; 3],
+    directories: Vec<tempfile::TempDir>,
+    leader: Option<NodeId>,
+    refusal: Option<Result<krabka_raft::SubmitChangeResult, RaftError>>,
+}
+#[rstest::fixture]
+fn replication_cluster() -> ReplicationCluster {
     let (net, ids) = three_voter_network();
-    let cid = uuid::Uuid::from_u128(200);
-
-    let _dirs = start_engines().net(&net).ids(&ids).cluster_id(cid).call();
-
-    let (leader, _epoch) = await_single_leader(&net, &ids, Duration::from_secs(10)).await;
-
-    // Submit on a FOLLOWER. The follower rejects with NotLeader{leader}; we then
-    // submit to the leader (the handle layer's forward is Task 8 — here we drive
-    // the forward explicitly via the leader handle the hint points at).
-    let follower = *ids.iter().find(|&&id| id != leader).unwrap();
-    let fol = net.get(follower).unwrap();
-    let res = fol.submit_change(vec![topic_record("orders", 1)]).await;
-    let leader_hint = match res {
-        Err(RaftError::NotLeader { current_leader }) => current_leader,
-        other => panic!("follower submit should reject with NotLeader, got {other:?}"),
-    };
-    assert2::assert!(leader_hint == Some(leader));
-
-    // Forward to the leader (record-carrying replication commits it on a majority).
+    ReplicationCluster {
+        net,
+        ids,
+        directories: vec![],
+        leader: None,
+        refusal: None,
+    }
+}
+#[given("three running voters have elected a leader for the metadata log")]
+async fn replication_leader(replication_cluster: &mut ReplicationCluster) {
+    replication_cluster.directories = start_engines()
+        .net(&replication_cluster.net)
+        .ids(&replication_cluster.ids)
+        .cluster_id(uuid::Uuid::from_u128(200))
+        .call();
+    replication_cluster.leader = Some(
+        await_single_leader(
+            &replication_cluster.net,
+            &replication_cluster.ids,
+            Duration::from_secs(10),
+        )
+        .await
+        .0,
+    );
+}
+#[when("a follower receives the orders topic submission")]
+async fn follower_submission(replication_cluster: &mut ReplicationCluster) {
+    let leader = replication_cluster.leader.expect("leader elected");
+    let follower = *replication_cluster
+        .ids
+        .iter()
+        .find(|&&id| id != leader)
+        .expect("follower");
+    replication_cluster.refusal = Some(
+        replication_cluster
+            .net
+            .get(follower)
+            .expect("follower running")
+            .submit_change(vec![topic_record("orders", 1)])
+            .await,
+    );
+}
+#[then("the follower refuses with NotLeader and the current leader hint")]
+fn follower_hint(replication_cluster: &ReplicationCluster) {
+    assert2::assert!(let Some(Err(RaftError::NotLeader { current_leader })) = replication_cluster.refusal.as_ref());
+    assert2::assert!(*current_leader == replication_cluster.leader);
+}
+#[when("the hinted leader commits the orders topic and every voter applies it")]
+async fn leader_submission(replication_cluster: &mut ReplicationCluster) {
+    let leader = replication_cluster.leader.expect("leader elected");
     time::timeout(
         Duration::from_secs(10),
-        net.get(leader)
-            .unwrap()
+        replication_cluster
+            .net
+            .get(leader)
+            .expect("leader running")
             .submit_change(vec![topic_record("orders", 1)]),
     )
     .await
     .expect("leader submit did not hang")
-    .expect("leader submit ok");
-
-    // The topic must appear in ALL three engines' current_image (real replication
-    // carried the record bytes to the followers, which applied on HWM advance).
-    for &id in &ids {
-        let ctrl = net.get(id).unwrap();
+    .expect("leader submit committed");
+    for &id in &replication_cluster.ids {
+        let controller = replication_cluster.net.get(id).expect("voter running");
         await_until(Duration::from_secs(10), || {
-            ctrl.current_image().topic("orders").map(|_| ())
+            controller.current_image().topic("orders").map(|_| ())
         })
         .await;
-        assert2::assert!(ctrl.current_image().topic("orders").is_some());
-    }
-
-    for &id in &ids {
-        net.get(id).unwrap().shutdown().await;
     }
 }
-
-/// 2. `submit_change` on a follower forwards to the leader, commits through
-///    record-carrying replication, and the topic appears in ALL three images.
-#[cfg(test)]
+#[then("all three metadata images contain the orders topic")]
+fn replicated_topic(replication_cluster: &ReplicationCluster) {
+    for &id in &replication_cluster.ids {
+        assert2::assert!(
+            replication_cluster
+                .net
+                .get(id)
+                .expect("voter running")
+                .current_image()
+                .topic("orders")
+                .is_some()
+        );
+    }
+}
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/kraft_engine_sim/replication.feature",
-    name = "follower submit change propagates"
+    name = "A follower hints the leader and the leader replicates the submitted topic"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn follower_submit_change_propagates() {}
+async fn follower_submit_change_propagates(replication_cluster: ReplicationCluster) {
+    for id in replication_cluster.ids {
+        replication_cluster
+            .net
+            .get(id)
+            .expect("voter running")
+            .shutdown()
+            .await;
+    }
+}

@@ -33,7 +33,14 @@
 #![cfg(test)]
 
 mod support;
-use {crate::support::tiered as topic_fixture, tokio::runtime::Builder};
+use {
+    crate::support::tiered as topic_fixture,
+    krabka_broker::BrokerHandle,
+    krabka_client_core::Client,
+    krabka_protocol::owned::fetch_response::PartitionData,
+    tempfile::TempDir,
+    tokio::runtime::{Builder, Runtime},
+};
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
@@ -55,15 +62,28 @@ mod rlmm_round_trip;
 mod rlmm_sasl;
 
 use std::{
-    future::Future,
-    sync::{Mutex, OnceLock},
+    path::{Path, PathBuf},
+    sync::{Mutex, MutexGuard, OnceLock},
     time::Duration,
 };
 
-fn run_broker_test(test: impl Future<Output = ()>) {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let _guard = LOCK
-        .get_or_init(|| Mutex::new(()))
+/// One bounded broker runtime, serialized through the same gate as legacy cases.
+struct TopicRlmmScenario {
+    runtime: Runtime,
+    guard: MutexGuard<'static, ()>,
+    cluster: Option<(krabka_broker::BrokerHandle, TempDir, TempDir)>,
+    client: Option<Client>,
+    first_value: rstest_bdd::Slot<Option<bytes::Bytes>>,
+    topic: String,
+    tiered_before: Vec<PathBuf>,
+    delete_outcomes: Vec<(i16, i64)>,
+    refused: Option<PartitionData>,
+    above: rstest_bdd::Slot<Option<Vec<u8>>>,
+}
+
+#[rstest::fixture]
+fn topic_rlmm() -> TopicRlmmScenario {
+    let guard = broker_test_lock()
         .lock()
         .expect("broker test lock should not be poisoned");
     let runtime = Builder::new_multi_thread()
@@ -71,11 +91,58 @@ fn run_broker_test(test: impl Future<Output = ()>) {
         .enable_all()
         .build()
         .expect("broker test runtime");
-    runtime.block_on(test);
-    // Broker shutdown closes the listeners and async tasks, but some blocking
-    // helpers can outlive the test body. A plain Runtime drop waits for those
-    // helpers forever and prevents the serialized test cases from advancing.
-    // Keep the lock held through a bounded shutdown so teardown cannot overlap
-    // the next broker instance while still guaranteeing forward progress.
-    runtime.shutdown_timeout(Duration::from_secs(5));
+    TopicRlmmScenario {
+        runtime,
+        guard,
+        cluster: None,
+        client: None,
+        first_value: rstest_bdd::Slot::default(),
+        topic: String::new(),
+        tiered_before: Vec::new(),
+        delete_outcomes: Vec::new(),
+        refused: None,
+        above: rstest_bdd::Slot::default(),
+    }
+}
+
+impl TopicRlmmScenario {
+    fn start_active_plaintext(&mut self) {
+        self.cluster = Some(
+            self.runtime
+                .block_on(rlmm_cluster::start_broker_with_topic_rlmm()),
+        );
+        self.runtime
+            .block_on(rlmm_cluster::await_activation(self.broker()));
+        self.client = Some(
+            self.runtime
+                .block_on(rlmm_cluster::build_client(self.broker())),
+        );
+    }
+
+    fn broker(&self) -> &BrokerHandle { &self.cluster.as_ref().expect("topic RLMM broker").0 }
+
+    fn remote_dir(&self) -> &Path { self.cluster.as_ref().expect("topic RLMM broker").2.path() }
+
+    fn client(&self) -> &Client { self.client.as_ref().expect("topic RLMM client") }
+
+    fn shutdown(self) {
+        let Self {
+            runtime,
+            guard,
+            cluster,
+            client,
+            ..
+        } = self;
+        drop(client);
+        let (broker, log_dir, remote_dir) = cluster.expect("topic RLMM broker");
+        runtime.block_on(broker.shutdown());
+        runtime.shutdown_timeout(Duration::from_secs(5));
+        drop((log_dir, remote_dir));
+        drop(guard);
+    }
+}
+
+fn broker_test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }

@@ -19,6 +19,7 @@ use {
     jvm_acceptance::*,
     krabka_audit::signing::FileEd25519Signer,
     krabka_log::LogConfig,
+    krabka_remote_storage::{ArchiveVerifyReport, S3Config},
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
     std::{
         fs,
@@ -46,16 +47,37 @@ const TOPIC: &str = "krabka-worm-lock-itest";
 /// once. The same fixture the `jvm_acceptance_tiered` suites use.
 const RECORDS: usize = 200;
 
-// Same multi-thread caveat as the other container suites: blocking
-// `Command::output()` calls would starve the broker accept loop on a
-// single-threaded runtime.
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "worm object lock: object lock bucket refuses delete of an archived segment"
+#[derive(Default)]
+struct WormArchive {
+    minio: Option<MinioContainer>,
+    key_dir: Option<tempfile::TempDir>,
+    broker: Option<WormBroker>,
+    retired_log: Option<tempfile::TempDir>,
+    public_key: Vec<u8>,
+    s3: Option<S3Config>,
+    listing: String,
+    log_keys: Vec<String>,
+    consumed: Option<usize>,
+    removal: Option<Output>,
+    report: Option<ArchiveVerifyReport>,
+}
+
+#[rstest::fixture]
+fn worm_archive() -> WormArchive {
+    // The bucket and signing key remain alive through the final deep audit.
+    WormArchive::default()
+}
+
+impl WormArchive {
+    fn broker(&self) -> &WormBroker { self.broker.as_ref().expect("WORM broker") }
+}
+
+#[rstest_bdd_macros::given(
+    "a compliance-locked MinIO bucket backs a readable WORM broker with a fresh trusted Ed25519 key, conditional PUT and SHA256 checksums"
 )]
-async fn bdd_verify_object_lock_bucket_refuses_delete_of_an_archived_segment() {
+async fn locked_worm_archive(worm_archive: &mut WormArchive) {
     let minio_port = minio_port();
-    let _minio = MinioContainer::start();
+    worm_archive.minio = Some(MinioContainer::start());
     minio_make_locked_bucket(BUCKET);
 
     // The signing key is a throwaway PKCS#8 Ed25519 key in a temp file, minted
@@ -65,9 +87,10 @@ async fn bdd_verify_object_lock_bucket_refuses_delete_of_an_archived_segment() {
     let key_path = key_dir.path().join("worm-signing.pk8");
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("generate PKCS#8 key");
     fs::write(&key_path, pkcs8.as_ref()).expect("write the signing key");
-    let public_key = FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), KEY_ID.to_owned())
-        .expect("ring mints a valid PKCS#8 Ed25519 key")
-        .public_key();
+    worm_archive.public_key =
+        FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), KEY_ID.to_owned())
+            .expect("ring mints a valid PKCS#8 Ed25519 key")
+            .public_key();
 
     let s3 = krabka_remote_storage::S3Config {
         bucket: BUCKET.to_owned(),
@@ -92,30 +115,36 @@ async fn bdd_verify_object_lock_bucket_refuses_delete_of_an_archived_segment() {
         ..krabka_remote_storage::S3Config::default()
     };
 
-    let WormBroker {
-        handle: broker,
-        dir: _dir,
-    } = start_worm_broker(s3.clone(), &key_path).await;
+    worm_archive.broker = Some(start_worm_broker(s3.clone(), &key_path).await);
+    worm_archive.s3 = Some(s3);
+    worm_archive.key_dir = Some(key_dir);
     nc_check_connectivity();
 
-    create_tiered_topic(&broker, TOPIC).await;
-    produce_records(TOPIC, RECORDS);
+    create_tiered_topic(&worm_archive.broker().handle, TOPIC).await;
+}
 
+#[rstest_bdd_macros::when("the JVM producer writes 200 records to the tiered WORM topic")]
+fn populate_worm_archive() { produce_records(TOPIC, RECORDS); }
+
+#[rstest_bdd_macros::then("at least two archived log objects each have their own signed manifest")]
+async fn manifested_worm_segments(worm_archive: &mut WormArchive) {
     // Wait for the copy pass to land at least two sealed segments, the same
     // gate the tiered suites use, and then for each copy to reach its commit
     // point.
     wait_for_minio_segments(BUCKET, 2).await;
-    let listing = wait_for_sealed_manifests(BUCKET, 2).await;
+    worm_archive.listing = wait_for_sealed_manifests(BUCKET, 2).await;
+    let listing = &worm_archive.listing;
 
     // A manifest beside every segment, under the segment's own key. Without
     // one the archive is only objects: nothing signed says what their bytes
     // should be.
-    let log_keys = object_keys_with_extension(&listing, "log");
+    worm_archive.log_keys = object_keys_with_extension(listing, "log");
+    let log_keys = &worm_archive.log_keys;
     assert!(
         log_keys.len() >= 2,
         "expected >=2 archived `.log` objects. Bucket listing:\n{listing}"
     );
-    for key in &log_keys {
+    for key in log_keys {
         let stem = key
             .strip_suffix(".log")
             .expect("the key was selected by its `.log` extension");
@@ -125,25 +154,41 @@ async fn bdd_verify_object_lock_bucket_refuses_delete_of_an_archived_segment() {
             "no `{manifest}` beside `{key}`. Bucket listing:\n{listing}"
         );
     }
+}
 
-    // `write_only` is false, so the archive is still a readable tier. Offsets
-    // whose local segment the retention pass already evicted come back from
-    // MinIO, which is what makes this a read through the WORM backend.
-    let consumed = consume_records(TOPIC, RECORDS, 20_000, broker0_advertised());
+#[rstest_bdd_macros::when("the JVM consumer reads the WORM topic through the readable tier")]
+fn consume_worm_archive(worm_archive: &mut WormArchive) {
+    worm_archive.consumed = Some(consume_records(
+        TOPIC,
+        RECORDS,
+        20_000,
+        broker0_advertised(),
+    ));
+}
+
+#[rstest_bdd_macros::then("at least 200 records are returned")]
+fn readable_worm_archive(worm_archive: &WormArchive) {
+    let consumed = worm_archive.consumed.expect("WORM records consumed");
     assert!(
         consumed >= RECORDS,
         "expected >={RECORDS} records back through the WORM archive, got {consumed}"
     );
+}
 
-    // The point of the suite. Delete every version of one archived segment
-    // body, with credentials that have every right the broker has. Compliance
-    // mode must refuse it.
-    //
-    // `--versions` matters: the bucket is versioned, and a plain `mc rm`
-    // writes a delete marker instead of removing the locked version. A delete
-    // marker succeeds and proves nothing.
-    let victim = log_keys.first().expect("the listing holds a `.log` object");
-    let removal = minio_rm_all_versions(BUCKET, victim);
+#[rstest_bdd_macros::when(
+    "an operator attempts to delete every version of the first archived segment with the broker's credentials"
+)]
+fn delete_locked_worm_segment(worm_archive: &mut WormArchive) {
+    worm_archive.removal = Some(minio_rm_all_versions(
+        BUCKET,
+        worm_archive.log_keys.first().expect("archived segment"),
+    ));
+}
+
+#[rstest_bdd_macros::then("MinIO refuses the delete and the same segment object remains listed")]
+fn retained_locked_worm_segment(worm_archive: &WormArchive) {
+    let removal = worm_archive.removal.as_ref().expect("delete attempted");
+    let victim = worm_archive.log_keys.first().expect("archived segment");
     let stdout = String::from_utf8_lossy(&removal.stdout);
     let stderr = String::from_utf8_lossy(&removal.stderr);
     check!(
@@ -161,26 +206,44 @@ async fn bdd_verify_object_lock_bucket_refuses_delete_of_an_archived_segment() {
         "{victim} is gone after the delete attempt; the bucket did not hold it. stdout={stdout}, \
          stderr={stderr}\nBucket listing:\n{after}"
     );
+}
 
-    // Stop the broker before the audit, so no copy is in flight and the
-    // archive the verifier reads is the finished one.
-    broker.shutdown().await;
-
-    // The auditor's run, in process: recompute every chain head, check every
-    // signature against the key the broker signed with, and re-hash every
-    // object body. `Deep` is the only depth that catches a body replaced with
-    // different bytes of the same length.
+#[rstest_bdd_macros::when(
+    "the broker stops and a deep audit verifies every body, chain head and signature against its trusted public key"
+)]
+async fn audit_locked_worm_archive(worm_archive: &mut WormArchive) {
+    let WormBroker { handle, dir } = worm_archive.broker.take().expect("WORM broker");
+    worm_archive.retired_log = Some(dir);
+    handle.shutdown().await;
     let store =
-        krabka_object_store::build_object_store(&krabka_object_store::ObjectStoreConfig::S3(s3))
-            .expect("build the verifier's object store");
-    let trusted = krabka_remote_storage::TrustedManifestKeys::single(KEY_ID.to_owned(), public_key);
+        krabka_object_store::build_object_store(&krabka_object_store::ObjectStoreConfig::S3(
+            worm_archive
+                .s3
+                .as_ref()
+                .expect("archive configuration")
+                .clone(),
+        ))
+        .expect("build the verifier's object store");
+    let trusted = krabka_remote_storage::TrustedManifestKeys::single(
+        KEY_ID.to_owned(),
+        worm_archive.public_key.clone(),
+    );
     let request = krabka_remote_storage::VerifyRequest {
         depth: krabka_remote_storage::VerifyDepth::Deep,
         ..krabka_remote_storage::VerifyRequest::default()
     };
-    let report = krabka_remote_storage::verify_archive(&store, &request, &trusted)
-        .await
-        .expect("the archive is readable");
+    worm_archive.report = Some(
+        krabka_remote_storage::verify_archive(&store, &request, &trusted)
+            .await
+            .expect("the archive is readable"),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the archive verifies successfully, is fully attested and covers at least two manifests"
+)]
+fn verified_locked_worm_archive(worm_archive: &WormArchive) {
+    let report = worm_archive.report.as_ref().expect("archive audited");
     check!(
         report.ok(),
         "the archive did not verify: {:?}",
@@ -194,18 +257,17 @@ async fn bdd_verify_object_lock_bucket_refuses_delete_of_an_archived_segment() {
         report.manifests() >= 2,
         "expected the audit to cover the archived segments; report={report:?}"
     );
-
-    // `_minio` is dropped here; the container is removed with `docker rm -f`.
 }
 
 #[ignore = "requires Docker"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/worm_object_lock.feature",
     name = "object lock bucket refuses delete of an archived segment"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn object_lock_bucket_refuses_delete_of_an_archived_segment() {}
+async fn object_lock_bucket_refuses_delete_of_an_archived_segment(worm_archive: WormArchive) {
+    drop(worm_archive);
+}
 
 /// A running WORM broker and its `log.dir`, which the caller keeps alive.
 struct WormBroker {

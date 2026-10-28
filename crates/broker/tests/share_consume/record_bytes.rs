@@ -40,79 +40,6 @@ async fn acknowledge_prefix_release(
     acknowledge_success(client, acknowledgement.release()).await;
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("share consume record bytes: acquire past leading batch returns bytes")]
-async fn bdd_verify_acquire_past_leading_batch_returns_bytes() {
-    let ConsumptionFixture {
-        _permit,
-        broker: _broker,
-        client,
-        _dir,
-        tid,
-        member,
-    } = consumption_fixture().call().await;
-    let session = acquire_three_and_acknowledge(
-        &client,
-        ShareAck::prefix_for(&member, tid, krabka_ids::Offset(2)).reject(),
-    )
-    .await;
-
-    // A separate single-record batch at offset 3 (this starts a new batch; the
-    // acquired range 3..3 begins past the leading 0..2 batch).
-    produce_n().client(&client).topic_id(tid).call().await;
-
-    // Acquire offset 3 — the payload must carry the record bytes.
-    let row3 = share_fetch(&client, session.fetch_at(ShareSessionEpoch(2))).await;
-    let row3 = refetch_while_empty()
-        .client(&client)
-        .row(row3)
-        .session(ShareSessionSetup {
-            member: &member,
-            topic_id: tid,
-            ..Default::default()
-        })
-        .call()
-        .await;
-    assert!(
-        acquired_count(&row3) == 1,
-        "offset 3 must be acquired, got {:?}",
-        row3.acquired_records
-    );
-    assert!(
-        row3.acquired_records[0].first_offset == 3,
-        "acquired offset must be 3, got {:?}",
-        row3.acquired_records
-    );
-    let batches = row3
-        .records
-        .as_ref()
-        .and_then(|r| r.as_v2())
-        .expect("acquired offset 3 must carry decodable v2 record bytes");
-    let values: Vec<String> = record_values(batches);
-    assert!(
-        values == vec!["v0"],
-        "offset 3's record bytes must be returned, got {values:?}"
-    );
-}
-
-/// Regression: a `ShareFetch` whose acquired offset begins a *later* record
-/// batch must still return that offset's record bytes, not an empty payload.
-/// The broker already consumed or archived a leading multi-record batch.
-///
-/// `ShareFetch.partition_max_bytes` is a v0-only field. At the supported
-/// versions (v1+) it is absent and decodes to 0. The read path must not use
-/// that 0 as the log-read byte budget. A 0 budget reads only one batch header,
-/// which cannot skip the leading batch to reach the acquired offset. The broker
-/// then returns the acquired record with no bytes, and the record stays locked.
-/// The read must fall back to the request-level `max_bytes`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/share_consume/record_bytes.feature",
-    name = "acquire past leading batch returns bytes"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn acquire_past_leading_batch_returns_bytes() {}
-
 /// Produce a single record carrying `value` into `(topic, partition)` as its OWN
 /// batch, so each offset is a distinct on-disk batch. This matters for the
 /// fragmented-window read test: the share-fetch read path reads verbatim bytes
@@ -130,96 +57,241 @@ async fn produce_one(client: &Client, topic: &str, tid: uuid::Uuid, partition: i
         .await;
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "share consume record bytes: fragmented window records match acquired offsets"
-)]
-async fn bdd_verify_fragmented_window_records_match_acquired_offsets() {
-    let (_permit, broker, client, _dir, tid) = Box::pin(permitted_topic_fixture().call()).await;
+use {
+    krabka_protocol::owned::share_fetch_response::PartitionData,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+
+#[derive(Default)]
+struct ShareRecordBytes {
+    fixture: Option<ConsumptionFixture>,
+    response: Option<PartitionData>,
+}
+
+#[fixture]
+fn share_record_bytes() -> ShareRecordBytes {
+    // Keep the actual acquired ranges and their returned record bytes together.
+    ShareRecordBytes::default()
+}
+
+#[given("a share member has a leading three-record batch available")]
+async fn leading_share_batch(share_record_bytes: &mut ShareRecordBytes) {
+    share_record_bytes.fixture = Some(consumption_fixture().call().await);
+}
+
+#[given("a share member has three distinct single-record batches v0,v1,v2 available")]
+async fn separate_share_batches(share_record_bytes: &mut ShareRecordBytes) {
+    let (permit, broker, client, directory, topic) =
+        Box::pin(permitted_topic_fixture().call()).await;
     bootstrap_share_state(&broker, &client, "g1").await;
-    // Three separate single-record batches: offset 0=v0, 1=v1, 2=v2.
-    produce_one(&client, "t", tid, 0, "v0").await;
-    produce_one(&client, "t", tid, 0, "v1").await;
-    produce_one(&client, "t", tid, 0, "v2").await;
-    let MemberSession { member, .. } = join_consume_member(&broker, &client, tid).await;
-    let session = acquire_three_and_acknowledge(
-        &client,
-        ShareAck::single_for(&member, tid, krabka_ids::Offset(1)),
+    for value in ["v0", "v1", "v2"] {
+        produce_one(&client, "t", topic, 0, value).await;
+    }
+    let MemberSession { member, .. } = join_consume_member(&broker, &client, topic).await;
+    share_record_bytes.fixture = Some(ConsumptionFixture {
+        _permit: permit,
+        broker,
+        client,
+        _dir: directory,
+        tid: topic,
+        member,
+    });
+}
+
+#[when("the member acquires and archives offsets zero through two")]
+async fn archive_leading_share_batch(share_record_bytes: &ShareRecordBytes) {
+    acquire_three_and_acknowledge(
+        &share_record_bytes.fixture().client,
+        ShareAck::prefix_for(
+            &share_record_bytes.fixture().member,
+            share_record_bytes.fixture().tid,
+            krabka_ids::Offset(2),
+        )
+        .reject(),
     )
     .await;
-    acknowledge_prefix_release(&client, session, 2, 0, None).await;
-    acknowledge_prefix_release(&client, session, 3, 2, Some(krabka_ids::Offset(2))).await;
+}
 
-    // Re-fetch: the acquired set is the DISJOINT {0, 2} (offset 1 is gone). The
-    // returned records payload must decode to exactly offsets {0, 2}.
-    let mut row2 = share_fetch(&client, session.fetch_at(ShareSessionEpoch(4))).await;
-    for epoch in 5..20 {
-        if acquired_count(&row2) >= 2 {
-            break;
-        }
-        // intentional: bounded RPC poll — re-acquiring the released disjoint set
-        // {0, 2} happens only via this ShareFetch; no image/metric reflects it.
-        time::sleep(Duration::from_millis(100)).await;
-        row2 = share_fetch(&client, session.fetch_at(ShareSessionEpoch(epoch))).await;
-    }
-    // The authoritative acquired offset set.
-    let acquired_offsets: BTreeSet<i64> = row2
-        .acquired_records
-        .iter()
-        .flat_map(|r| r.first_offset..=r.last_offset)
-        .collect();
-    assert!(
-        acquired_offsets == maplit::btreeset! {0, 2},
-        "must re-acquire the disjoint set {{0, 2}}, got {acquired_offsets:?}"
-    );
+#[when("a new single-record v0 batch is appended at offset three")]
+async fn append_later_share_batch(share_record_bytes: &ShareRecordBytes) {
+    produce_n()
+        .client(&share_record_bytes.fixture().client)
+        .topic_id(share_record_bytes.fixture().tid)
+        .call()
+        .await;
+}
 
-    // Decode the records payload and collect the absolute offsets it carries.
-    let batches = row2
-        .records
-        .as_ref()
-        .and_then(|r| r.as_v2())
-        .expect("disjoint acquired ranges must carry decodable v2 record bytes");
-    let record_offsets: BTreeSet<i64> = batches
-        .iter()
-        .flat_map(|b| {
-            let base = b.base_offset;
-            b.records
-                .iter()
-                .map(move |r| base + i64::from(r.offset_delta))
-        })
-        .collect();
-    assert!(
-        record_offsets == acquired_offsets,
-        "records payload offsets {record_offsets:?} must equal acquired offsets \
-         {acquired_offsets:?} (gap offset 1 must be excluded)"
+#[when("the member fetches the record beyond the archived leading batch")]
+async fn fetch_later_share_batch(share_record_bytes: &mut ShareRecordBytes) {
+    let session = ShareSessionSetup::opening(
+        &share_record_bytes.fixture().member,
+        share_record_bytes.fixture().tid,
     );
-    // Belt-and-suspenders: the gap offset's value (v1) must never appear.
-    let values: Vec<String> = record_values(batches);
-    assert!(
-        !values.contains(&"v1".to_owned()),
-        "the gap offset's value v1 must be excluded, got {values:?}"
+    let response = share_fetch(
+        &share_record_bytes.fixture().client,
+        session.fetch_at(ShareSessionEpoch(2)),
+    )
+    .await;
+    share_record_bytes.response = Some(
+        refetch_while_empty()
+            .client(&share_record_bytes.fixture().client)
+            .row(response)
+            .session(ShareSessionSetup {
+                member: &share_record_bytes.fixture().member,
+                topic_id: share_record_bytes.fixture().tid,
+                ..Default::default()
+            })
+            .call()
+            .await,
     );
 }
 
-/// F5 (fragmented window): a single share fetch that returns DISJOINT acquired
-/// ranges must carry record bytes for exactly the acquired offsets. The gap
-/// offset's value must not appear.
-///
-/// Scenario: produce 3 records as THREE separate single-record batches, so
-/// offsets 0, 1, 2 are each their own on-disk batch. The share-fetch read is
-/// batch-granular, so byte-exact disjoint reads need separate batches. Acquire
-/// 0..2, then Accept the MIDDLE offset (1) only and Release the outer offsets 0
-/// and 2. The SPSO stays at 0 because offset 0 is not accepted. The broker
-/// acknowledges offset 1, and offsets 0, 2 return to Available, and that leaves
-/// a gap at offset 1.
-///
-/// The re-fetch acquires the DISJOINT set {0, 2}. The read concatenates the
-/// per-range bytes, so the payload decodes to exactly offsets {0, 2} (values
-/// v0, v2), never the gap offset 1's value v1.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[then("offset three is acquired alone and carries the decodable v0 payload")]
+fn later_share_batch_bytes(share_record_bytes: &ShareRecordBytes) {
+    let response = share_record_bytes
+        .response
+        .as_ref()
+        .expect("later batch fetched");
+    assert!(
+        acquired_count(response) == 1,
+        "{:?}",
+        response.acquired_records
+    );
+    assert!(response.acquired_records[0].first_offset == 3);
+    let batches = response
+        .records
+        .as_ref()
+        .and_then(|records| records.as_v2())
+        .expect("offset three carries decodable v2 bytes");
+    assert!(record_values(batches) == vec!["v0"]);
+}
+
+#[when("the member acquires all three records and accepts only middle offset one")]
+async fn accept_middle_share_record(share_record_bytes: &ShareRecordBytes) {
+    acquire_three_and_acknowledge(
+        &share_record_bytes.fixture().client,
+        ShareAck::single_for(
+            &share_record_bytes.fixture().member,
+            share_record_bytes.fixture().tid,
+            krabka_ids::Offset(1),
+        ),
+    )
+    .await;
+}
+
+#[when("the member releases the outer offsets zero and two")]
+async fn release_outer_share_records(share_record_bytes: &ShareRecordBytes) {
+    let session = ShareSessionSetup::opening(
+        &share_record_bytes.fixture().member,
+        share_record_bytes.fixture().tid,
+    );
+    acknowledge_prefix_release(&share_record_bytes.fixture().client, session, 2, 0, None).await;
+    acknowledge_prefix_release(
+        &share_record_bytes.fixture().client,
+        session,
+        3,
+        2,
+        Some(krabka_ids::Offset(2)),
+    )
+    .await;
+}
+
+#[when("the member fetches until both disjoint outer offsets are reacquired")]
+async fn fetch_disjoint_share_records(share_record_bytes: &mut ShareRecordBytes) {
+    let session = ShareSessionSetup::opening(
+        &share_record_bytes.fixture().member,
+        share_record_bytes.fixture().tid,
+    );
+    let mut response = share_fetch(
+        &share_record_bytes.fixture().client,
+        session.fetch_at(ShareSessionEpoch(4)),
+    )
+    .await;
+    for epoch in 5..20 {
+        if acquired_count(&response) >= 2 {
+            break;
+        }
+        time::sleep(Duration::from_millis(100)).await;
+        response = share_fetch(
+            &share_record_bytes.fixture().client,
+            session.fetch_at(ShareSessionEpoch(epoch)),
+        )
+        .await;
+    }
+    share_record_bytes.response = Some(response);
+}
+
+#[then(
+    "the acquired offsets are exactly zero and two and the record bytes exclude offset one's v1"
+)]
+fn disjoint_share_record_bytes(share_record_bytes: &ShareRecordBytes) {
+    let response = share_record_bytes
+        .response
+        .as_ref()
+        .expect("disjoint batch fetched");
+    let acquired: BTreeSet<i64> = response
+        .acquired_records
+        .iter()
+        .flat_map(|range| range.first_offset..=range.last_offset)
+        .collect();
+    assert!(acquired == maplit::btreeset! {0, 2});
+    let batches = response
+        .records
+        .as_ref()
+        .and_then(|records| records.as_v2())
+        .expect("disjoint acquired ranges carry decodable v2 bytes");
+    let offsets: BTreeSet<i64> = batches
+        .iter()
+        .flat_map(|batch| {
+            let base = batch.base_offset;
+            batch
+                .records
+                .iter()
+                .map(move |record| base + i64::from(record.offset_delta))
+        })
+        .collect();
+    assert!(
+        offsets == acquired,
+        "record offsets must exactly match acquired offsets"
+    );
+    assert!(!record_values(batches).contains(&"v1".to_owned()));
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/share_consume/record_bytes.feature",
+    name = "acquire past leading batch returns bytes"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acquire_past_leading_batch_returns_bytes(share_record_bytes: ShareRecordBytes) {
+    share_record_bytes
+        .fixture
+        .take()
+        .expect("share fixture")
+        .broker
+        .shutdown()
+        .await;
+    drop(share_record_bytes);
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/share_consume/record_bytes.feature",
     name = "fragmented window records match acquired offsets"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fragmented_window_records_match_acquired_offsets() {}
+async fn fragmented_window_records_match_acquired_offsets(share_record_bytes: ShareRecordBytes) {
+    share_record_bytes
+        .fixture
+        .take()
+        .expect("share fixture")
+        .broker
+        .shutdown()
+        .await;
+    drop(share_record_bytes);
+}
+
+impl ShareRecordBytes {
+    fn fixture(&self) -> &ConsumptionFixture {
+        self.fixture.as_ref().expect("live scenario fixture")
+    }
+}

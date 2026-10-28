@@ -1,10 +1,18 @@
-Feature: src sim curated
+Feature: Published consensus fault demonstrations
+  The playground and generated documentation consume a catalogue of deterministic
+  partition, reordered-delivery and duplicate-message recordings.
 
-  Scenario: tests: returns three traces
-    Then sim curated tests: returns three traces
+  Background:
+    Given the built-in catalogue of consensus fault demonstrations
 
-  Scenario: tests: every trace has steps
-    Then sim curated tests: every trace has steps
+  Scenario: The catalogue contains all three curated fault demonstrations
+    When the operator generates the curated consensus traces
+    Then the catalogue contains exactly three demonstrations
 
-  Scenario: tests: split brain ends with exactly one leader
-    Then sim curated tests: split brain ends with exactly one leader
+  Scenario: Every demonstration exposes a recorded event timeline
+    When the operator generates the curated consensus traces
+    Then every curated demonstration records at least one event
+
+  Scenario: The partition demonstration ends after leadership reconverges
+    When the operator generates the curated consensus traces
+    Then the healed partition demonstration finishes with exactly one leader

@@ -24,7 +24,13 @@
 #![cfg(test)]
 mod model;
 
-use {krabka_ids::NodeId, model::ConsensusModel, stateright::Checker};
+use {
+    krabka_ids::NodeId,
+    model::ConsensusModel,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenarios, then, when},
+    stateright::{Checker, Model},
+};
 
 /// Hard backstop on the explored, that is generated, states. It bounds memory
 /// even if `within_boundary` is looser than intended. It is set well above the
@@ -112,118 +118,97 @@ const MAX_DEPTH: usize = 60;
 // new leader lacked. The core now acts only on an answer from the leader it
 // follows, in its epoch, as the engine's fence and Kafka's
 // `maybeHandleCommonResponse` do, and the `always` properties hold again.
-const PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY: usize = 27_343;
-const PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE: usize = 70_037;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 3_224_882;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 2_614_970;
-const PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA: usize = 344_543;
+struct ModelScenario {
+    model: Option<ConsensusModel>,
+    checker: Option<Box<dyn Checker<ConsensusModel>>>,
+}
 
-krabka_macros::bounded_bfs!(bounded_bfs);
+#[fixture]
+fn consensus_model() -> ModelScenario {
+    // Start this scenario with fresh inputs and observations.
 
-fn run(model: ConsensusModel, label: &str, pinned_unique_states: usize) {
-    // Both truncation caps must remain strictly above the completed search.
-    let checker = bounded_bfs(model, label, MAX_DEPTH, MAX_STATES);
-    // Pin: a changed count is a changed model, not a retuning knob.
+    ModelScenario {
+        model: None,
+        checker: None,
+    }
+}
+
+#[given("the bounded consensus configuration {configuration}")]
+fn model_configuration(consensus_model: &mut ModelScenario, configuration: String) {
+    consensus_model.model = Some(match configuration.as_str() {
+        "three-voter-election-safety" => {
+            ConsensusModel::elections(&[NodeId(1), NodeId(2), NodeId(3)])
+        }
+        "two-voter-linearizable-two-appends" => {
+            ConsensusModel::linearizable(&[NodeId(1), NodeId(2)], 2)
+        }
+        "three-voter-loss-duplication-one-crash" => {
+            ConsensusModel::faults(&[NodeId(1), NodeId(2), NodeId(3)])
+        }
+        "three-voter-one-append-one-crash" => {
+            ConsensusModel::three_voters_append(&[NodeId(1), NodeId(2), NodeId(3)], 1)
+        }
+        "two-voter-stateless-two-appends" => ConsensusModel::append_via(&[NodeId(1), NodeId(2)], 2),
+        _ => panic!("unknown bounded consensus configuration: {configuration}"),
+    });
+}
+
+#[when("every reachable consensus state is explored breadth first")]
+fn exhaust_consensus_model(consensus_model: &mut ModelScenario) {
+    let model = consensus_model
+        .model
+        .take()
+        .expect("a bounded model configuration was given");
+    let checker = model
+        .checker()
+        .target_max_depth(MAX_DEPTH)
+        .target_state_count(MAX_STATES)
+        .spawn_bfs()
+        .join();
+    eprintln!(
+        "unique_states={} generated={} max_depth={}",
+        checker.unique_state_count(),
+        checker.state_count(),
+        checker.max_depth()
+    );
+    consensus_model.checker = Some(Box::new(checker));
+}
+
+#[then("the model search reaches neither its state-count nor its depth backstop")]
+fn exhaustive_search(consensus_model: &ModelScenario) {
+    let checker = consensus_model
+        .checker
+        .as_ref()
+        .expect("the model was explored");
     assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
+        checker.max_depth() < MAX_DEPTH,
+        "hit depth cap {MAX_DEPTH}: depth-truncated, not exhaustive"
     );
-    checker.assert_properties();
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("kraft model: three voters election safety")]
-fn bdd_verify_three_voters_election_safety() {
-    run(
-        ConsensusModel::elections(&[NodeId(1), NodeId(2), NodeId(3)]),
-        "three_voters_election_safety",
-        PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY,
+    assert2::assert!(
+        checker.state_count() < MAX_STATES,
+        "hit state cap {MAX_STATES}: truncated, not exhaustive"
     );
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_model.feature",
-    name = "three voters election safety"
-)]
-fn three_voters_election_safety() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("kraft model: two voters linearizable")]
-fn bdd_verify_two_voters_linearizable() {
-    run(
-        ConsensusModel::linearizable(&[NodeId(1), NodeId(2)], 2),
-        "two_voters_linearizable",
-        PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE,
+#[then("the exact reachable-state count is {states}")]
+fn pinned_state_count(consensus_model: &ModelScenario, states: usize) {
+    let checker = consensus_model
+        .checker
+        .as_ref()
+        .expect("the model was explored");
+    assert2::assert!(
+        checker.unique_state_count() == states,
+        "unique-state count moved: the reachable set of this model changed"
     );
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_model.feature",
-    name = "two voters linearizable"
-)]
-fn two_voters_linearizable() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("kraft model: three voters faults")]
-fn bdd_verify_three_voters_faults() {
-    // Election + log-matching safety under an adversarial network: message
-    // loss, duplication, and a single crash/recover. 3 voters so a crash leaves
-    // a majority that can still make progress.
-    run(
-        ConsensusModel::faults(&[NodeId(1), NodeId(2), NodeId(3)]),
-        "three_voters_faults",
-        PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS,
-    );
+#[then("all consensus safety properties and progress witnesses hold")]
+fn model_properties(consensus_model: &ModelScenario) {
+    consensus_model
+        .checker
+        .as_ref()
+        .expect("the model was explored")
+        .assert_properties();
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_model.feature",
-    name = "three voters faults"
-)]
-fn three_voters_faults() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("kraft model: three voters append")]
-fn bdd_verify_three_voters_append() {
-    // Leader completeness under a stale majority: three voters, client appends,
-    // and one crash at a time, so a committed prefix can live on a bare
-    // majority while the crashed voter misses it. The `leader_completeness`
-    // property then holds every elected leader to that prefix, and the
-    // `stale_candidate_refused` witness proves the refusal is actually reached.
-    run(
-        ConsensusModel::three_voters_append(&[NodeId(1), NodeId(2), NodeId(3)], 1),
-        "three_voters_append",
-        PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND,
-    );
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_model.feature",
-    name = "three voters append"
-)]
-fn three_voters_append() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("kraft model: two voters append via linearizable")]
-fn bdd_verify_two_voters_append_via_linearizable() {
-    run(
-        // The diskless linearizability leg deliberately uses the design's
-        // exhaustive tiny bound: two voters, two stateless appenders, and two
-        // appends. The separate crash model and 3-broker black-box gate cover
-        // minority WAL-node loss.
-        ConsensusModel::append_via(&[NodeId(1), NodeId(2)], 2),
-        "two_voters_append_via_linearizable",
-        PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA,
-    );
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_model.feature",
-    name = "two voters append via linearizable"
-)]
-fn two_voters_append_via_linearizable() {}
+scenarios!("tests/features/migrated/tests/kraft_model.feature", fixtures = [consensus_model: ModelScenario]);

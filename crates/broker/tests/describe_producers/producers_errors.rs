@@ -7,28 +7,15 @@
 
 use {
     crate::{
-        producers_harness::create_topic,
-        support::{
-            self, admin::describe_producers_request, client::connect_with_context,
-            registered_cluster, shutdown_cluster,
-        },
+        producers_harness::{ProducerSnapshot, create_topic, snapshot},
+        support::{client::connect_with_context, registered_cluster},
     },
     assert2::{assert, check},
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "describe producers producers errors: unknown topic returns unknown topic or partition"
-)]
-async fn bdd_verify_unknown_topic_returns_unknown_topic_or_partition() {
-    let p = support::start().await;
-
-    let resp = p
-        .client
-        .send(describe_producers_request("ghost".into(), vec![0, 1]))
-        .await
-        .expect("DescribeProducers");
-
+#[rstest_bdd_macros::then("both unknown-topic partition rows return error 3 and no producers")]
+fn unknown_producer_topic(snapshot: &ProducerSnapshot) {
+    let resp = snapshot.response.as_ref().expect("producers described");
     assert!(resp.topics.len() == 1);
     assert!(resp.topics[0].partitions.len() == 2);
     for part in &resp.topics[0].partitions {
@@ -38,33 +25,10 @@ async fn bdd_verify_unknown_topic_returns_unknown_topic_or_partition() {
         );
         assert!(part.active_producers.is_empty());
     }
-
-    p.broker.shutdown().await;
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/describe_producers/producers_errors.feature",
-    name = "unknown topic returns unknown topic or partition"
-)]
-#[tokio::test]
-async fn unknown_topic_returns_unknown_topic_or_partition() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "describe producers producers errors: out of range partition returns unknown topic or partition"
-)]
-async fn bdd_verify_out_of_range_partition_returns_unknown_topic_or_partition() {
-    let p = support::start().await;
-    create_topic(&p.client, "small").await;
-
-    // Partition 5 doesn't exist (topic was created with 1 partition).
-    let resp = p
-        .client
-        .send(describe_producers_request("small".into(), vec![0, 5]))
-        .await
-        .expect("DescribeProducers");
-
+#[rstest_bdd_macros::then("partition 0 succeeds while nonexistent partition 5 returns error 3")]
+fn out_of_range_producer_partition(snapshot: &ProducerSnapshot) {
+    let resp = snapshot.response.as_ref().expect("producers described");
     assert!(resp.topics[0].partitions.len() == 2);
     // Partition 0 exists → error_code 0.
     let p0 = resp.topics[0]
@@ -80,23 +44,19 @@ async fn bdd_verify_out_of_range_partition_returns_unknown_topic_or_partition() 
         .find(|p| p.partition_index == 5)
         .expect("p5");
     assert!(p5.error_code == 3, "{p5:?}");
-
-    p.broker.shutdown().await;
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/describe_producers/producers_errors.feature",
-    name = "out of range partition returns unknown topic or partition"
+#[rstest_bdd_macros::then("the non-hosted partition row has index 0 error 6 and no producers")]
+fn nonhosted_producer_partition(snapshot: &ProducerSnapshot) {
+    let resp = snapshot.response.as_ref().expect("producers described");
+    let partition = &resp.topics[0].partitions[0];
+    assert!(partition.partition_index == 0);
+    check!(partition.error_code == 6, "expected NOT_LEADER_OR_FOLLOWER");
+    check!(partition.active_producers.is_empty());
+}
+#[rstest_bdd_macros::given(
+    "a two broker cluster knows remote partition 0 but the connected broker does not host it"
 )]
-#[tokio::test]
-async fn out_of_range_partition_returns_unknown_topic_or_partition() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "describe producers producers errors: metadata known partition not hosted locally returns not leader"
-)]
-async fn bdd_verify_metadata_known_partition_not_hosted_locally_returns_not_leader() {
+async fn nonhosted_producer_setup(snapshot: &mut ProducerSnapshot) {
     let cluster = registered_cluster(2).await;
 
     let admin =
@@ -125,23 +85,35 @@ async fn bdd_verify_metadata_known_partition_not_hosted_locally_returns_not_lead
     )
     .await;
 
-    let resp = client
-        .send(describe_producers_request("remote".into(), vec![0]))
-        .await
-        .expect("DescribeProducers");
-
-    let partition = &resp.topics[0].partitions[0];
-    assert!(partition.partition_index == 0);
-    check!(partition.error_code == 6, "expected NOT_LEADER_OR_FOLLOWER");
-    check!(partition.active_producers.is_empty());
-
-    shutdown_cluster(cluster).await;
+    snapshot.cluster = cluster;
+    snapshot.connection = Some(client);
 }
 
-#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_producers/producers_errors.feature",
+    name = "unknown topic returns unknown topic or partition"
+)]
+#[tokio::test]
+async fn unknown_topic_returns_unknown_topic_or_partition(snapshot: ProducerSnapshot) {
+    snapshot.shutdown().await;
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_producers/producers_errors.feature",
+    name = "out of range partition returns unknown topic or partition"
+)]
+#[tokio::test]
+async fn out_of_range_partition_returns_unknown_topic_or_partition(snapshot: ProducerSnapshot) {
+    snapshot.shutdown().await;
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/describe_producers/producers_errors.feature",
     name = "metadata known partition not hosted locally returns not leader"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn metadata_known_partition_not_hosted_locally_returns_not_leader() {}
+async fn metadata_known_partition_not_hosted_locally_returns_not_leader(
+    snapshot: ProducerSnapshot,
+) {
+    snapshot.shutdown().await;
+}

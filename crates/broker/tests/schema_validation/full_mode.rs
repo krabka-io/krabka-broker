@@ -1,29 +1,17 @@
-//! The difference between the two validation modes: `id` decides from the
-//! Confluent header alone, and `full` decodes the body against the schema the
-//! header names.
-//!
-//! One case covers both, because the claim is a comparison: the same value has
-//! to be admitted under `id` and rejected under `full` for either half to mean
-//! anything.
+//! Full validation decodes the Avro body while ID validation checks its binding.
 
 use {
     crate::harness::{
-        INVALID_RECORD, KNOWN_ID, VALIDATED, create_topic, framed, mock_topic_fixture,
-        order_avro_body, produce_value,
+        KNOWN_ID, SchemaScenario, create_topic, framed, order_avro_body, produce_value, schema,
     },
-    assert2::check,
+    rstest_bdd_macros::{given, scenario, when},
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "schema validation full mode: full mode checks the body and id mode does not"
-)]
-async fn bdd_verify_full_mode_checks_the_body_and_id_mode_does_not() {
-    let (_registry, broker, client, _dir, id_mode) =
-        mock_topic_fixture("validated", VALIDATED).await;
-    let full_mode = create_topic()
-        .broker(&broker)
-        .client(&client)
+#[given("validated-full checks the complete schema body")]
+async fn full_validation_topic(schema: &mut SchemaScenario) {
+    let id = create_topic()
+        .broker(schema.broker())
+        .client(schema.client())
         .name("validated-full")
         .configs(&[
             ("schema.validation.value", "true"),
@@ -31,40 +19,34 @@ async fn bdd_verify_full_mode_checks_the_body_and_id_mode_does_not() {
         ])
         .call()
         .await;
+    schema.topics.insert("validated-full".to_owned(), id);
+}
 
-    // Framed with a bound id, but the body is not an Avro datum of the schema
-    // that id names.
-    let garbage = framed(KNOWN_ID, b"\xff\xff\xff\xff\xff\xff");
+#[given("the record names schema 42 but contains six invalid Avro bytes")]
+fn invalid_avro_body(schema: &SchemaScenario) {
+    schema
+        .payload
+        .set(Some(framed(KNOWN_ID, b"\xff\xff\xff\xff\xff\xff")));
+}
 
-    let under_id = produce_value(&client, "validated", id_mode, Some(garbage.clone())).await;
-    let under_full = produce_value(&client, "validated-full", full_mode, Some(garbage)).await;
-
-    // `id` mode decides from the header alone, so it admits this.
-    check!(under_id.error_code == 0, "{under_id:?}");
-    // `full` mode decodes the body, so it does not.
-    check!(under_full.error_code == INVALID_RECORD, "{under_full:?}");
-
-    check!(broker.local_log_end_offset("validated", 0) == Some(1));
-    check!(broker.local_log_end_offset("validated-full", 0) == Some(0));
-
-    // And a body that IS an instance of the schema passes `full`.
-    let good = produce_value(
-        &client,
+#[when("the producer sends a valid Avro Order to validated-full")]
+async fn valid_order_body(schema: &mut SchemaScenario) {
+    let out = produce_value(
+        schema.client(),
         "validated-full",
-        full_mode,
+        schema.topic("validated-full"),
         Some(framed(KNOWN_ID, &order_avro_body())),
     )
     .await;
-    check!(good.error_code == 0, "{good:?}");
-    check!(broker.local_log_end_offset("validated-full", 0) == Some(1));
-
-    broker.shutdown().await;
+    schema.outcomes.insert("validated-full".to_owned(), out);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/schema_validation/full_mode.feature",
     name = "full mode checks the body and id mode does not"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn full_mode_checks_the_body_and_id_mode_does_not() {}
+async fn full_mode_checks_the_body_and_id_mode_does_not(schema: SchemaScenario) {
+    schema.shutdown().await;
+    drop(schema);
+}

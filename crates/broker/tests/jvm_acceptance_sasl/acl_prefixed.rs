@@ -7,23 +7,44 @@
 
 use {
     crate::jvm_acceptance::{
-        ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, broker0_advertised,
+        ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, ClientPropsFile, KAFKA_IMAGE_TXN, broker0_advertised,
         create_console_topic, denied_console_consumer, docker_run_kafka_tool_with_image_and_mount,
         nc_check_connectivity, plain_jaas, produce_console,
         start_sasl_plaintext_broker_with_super_user, write_client_props, write_plain_props,
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
+    std::process::Output,
+    tempfile::TempDir,
 };
+const PREFIX: &str = "team-";
+const TOPIC_OK: &str = "team-foo";
+const TOPIC_DENIED: &str = "other-foo";
+const GROUP: &str = "cg-prefixed";
+struct PrefixAuthorization {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    client: Option<ClientPropsFile>,
+    allowed: Option<Output>,
+    denied: Option<Output>,
+}
+#[rstest::fixture]
+fn authorization() -> PrefixAuthorization {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm acceptance sasl acl prefixed: jvm prefixed topic acl works")]
-async fn bdd_verify_jvm_prefixed_topic_acl_works() {
-    const PREFIX: &str = "team-";
-    const TOPIC_OK: &str = "team-foo";
-    const TOPIC_DENIED: &str = "other-foo";
-    const GROUP: &str = "cg-prefixed";
-
-    let (broker, _dir) = start_sasl_plaintext_broker_with_super_user(ADMIN, &[
+    PrefixAuthorization {
+        broker: None,
+        directory: None,
+        client: None,
+        allowed: None,
+        denied: None,
+    }
+}
+#[rstest_bdd_macros::given(
+    "alice can read the team prefix and her group while both matching and unrelated topics contain a seed record"
+)]
+async fn prefix_grant(authorization: &mut PrefixAuthorization) {
+    let (broker, directory) = start_sasl_plaintext_broker_with_super_user(ADMIN, &[
         (ADMIN, ADMIN_PASS),
         (ALICE, ALICE_PASS),
     ])
@@ -100,10 +121,17 @@ async fn bdd_verify_jvm_prefixed_topic_acl_works() {
         );
     }
 
-    // ---- Alice: consume team-foo (allowed by prefix).
-    let alice_props = write_plain_props(ALICE, ALICE_PASS);
-    let alice_mount = alice_props.mount_str();
-
+    authorization.broker = Some(broker);
+    authorization.directory = Some(directory);
+    authorization.client = Some(write_plain_props(ALICE, ALICE_PASS));
+}
+#[rstest_bdd_macros::when("alice consumes from the topic covered by her prefix grant")]
+fn allowed_read(authorization: &mut PrefixAuthorization) {
+    let alice_mount = authorization
+        .client
+        .as_ref()
+        .expect("alice configured")
+        .mount_str();
     let consumer_out =
         docker_run_kafka_tool_with_image_and_mount(KAFKA_IMAGE_TXN, &alice_mount, &[
             "kafka-console-consumer",
@@ -121,53 +149,60 @@ async fn bdd_verify_jvm_prefixed_topic_acl_works() {
             "--consumer.config",
             "/client.properties",
         ]);
-    let stdout = String::from_utf8_lossy(&consumer_out.stdout);
+    authorization.allowed = Some(consumer_out);
+}
+#[rstest_bdd_macros::then("alice receives the matching topic's seeded record")]
+fn visible(authorization: &PrefixAuthorization) {
+    let output = authorization
+        .allowed
+        .as_ref()
+        .expect("matching topic was consumed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let needle = format!("seed-{TOPIC_OK}");
     assert!(
         stdout.contains(&needle),
-        "alice should read {needle} from prefixed topic; got: {stdout}",
+        "alice should read {needle} from prefixed topic; got: {stdout}"
     );
-
-    // ---- Alice: consume other-foo (denied — no matching prefix).
-    let denied_out = denied_console_consumer(
+}
+#[rstest_bdd_macros::when(
+    "alice consumes from the unrelated topic using the same authorized group"
+)]
+fn denied_read(authorization: &mut PrefixAuthorization) {
+    let alice_mount = authorization
+        .client
+        .as_ref()
+        .expect("alice configured")
+        .mount_str();
+    authorization.denied = Some(denied_console_consumer(
         &alice_mount,
         TOPIC_DENIED,
         GROUP,
         "spawn alice denied consumer",
-    );
-    let denied_stderr = String::from_utf8_lossy(&denied_out.stderr);
-    let denied_stdout = String::from_utf8_lossy(&denied_out.stdout);
-    eprintln!(
-        "KRABKA[test] alice denied consumer status={} stderr={denied_stderr} stdout={denied_stdout}",
-        denied_out.status,
-    );
-    assert!(
-        denied_stderr.contains("TopicAuthorizationException"),
-        "alice should be denied on {TOPIC_DENIED}; stderr={denied_stderr} stdout={denied_stdout}",
-    );
-
-    broker.shutdown().await;
+    ));
 }
-
-/// JVM acceptance: a prefixed topic ACL grants exactly the prefix.
-///
-/// Admin provisions:
-/// - `Allow Read Topic PREFIXED "team-"` for alice (Describe implied by Read)
-/// - `Allow Read Group LITERAL "cg-prefixed"` for alice (Describe implied by Read)
-///
-/// Admin then creates two topics: `team-foo`, which the prefix covers, and
-/// `other-foo`, which it does NOT cover. Admin seeds one record into each.
-/// Admin is a super-user, so it bypasses authorize.
-///
-/// Alice's consumer:
-/// 1. `--topic team-foo` succeeds and reads the seeded record. This
-///    exercises the PREFIXED Read path in `authorize`.
-/// 2. `--topic other-foo` fails with `TopicAuthorizationException`.
+#[rstest_bdd_macros::then("the unrelated topic is refused with TopicAuthorizationException")]
+fn refused(authorization: &PrefixAuthorization) {
+    let output = authorization
+        .denied
+        .as_ref()
+        .expect("unrelated topic was requested");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stderr.contains("TopicAuthorizationException"),
+        "alice should be denied on {TOPIC_DENIED}; stderr={stderr} stdout={stdout}"
+    );
+}
 #[ignore = "requires Docker"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_sasl/acl_prefixed.feature",
-    name = "jvm prefixed topic acl works"
+    name = "A prefix read grant permits only matching topic names"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn jvm_prefixed_topic_acl_works() {}
+async fn jvm_prefixed_topic_acl_works(authorization: PrefixAuthorization) {
+    authorization
+        .broker
+        .expect("ACL broker started")
+        .shutdown()
+        .await;
+}

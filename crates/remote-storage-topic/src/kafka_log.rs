@@ -675,24 +675,51 @@ mod tests {
     use {
         super::*,
         assert2::{assert, check},
+        krabka_client_core::MetadataTopics,
+        krabka_protocol::owned::metadata_request::{MetadataRequest, MetadataRequestTopic},
     };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log tests: metadata requests name only the metadata topic without auto creation"
+    #[derive(Default)]
+    struct KafkaAdapterScenario {
+        topics: Option<MetadataTopics>,
+        request: Option<MetadataRequest>,
+        config: Option<KafkaMetadataLogConfig>,
+        bootstrap: String,
+        resolved: Option<Result<Vec<(SocketAddr, String)>, MetadataLogError>>,
+        policy_error: Option<MetadataLogError>,
+        topic: String,
+        partitions: i32,
+        partition: i32,
+        key: Option<Bytes>,
+        record: Option<Result<ProducerRecord, MetadataLogError>>,
+    }
+    #[rstest::fixture]
+    fn kafka_adapter() -> KafkaAdapterScenario {
+        let bootstrap = String::new();
+        KafkaAdapterScenario {
+            bootstrap,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "the metadata request scope contains only the remote metadata topic"
     )]
-    fn bdd_verify_metadata_requests_name_only_the_metadata_topic_without_auto_creation() {
-        use {
-            krabka_client_core::MetadataTopics,
-            krabka_protocol::owned::metadata_request::{MetadataRequest, MetadataRequestTopic},
-        };
-
+    fn metadata_scope(kafka_adapter: &mut KafkaAdapterScenario) {
         let topics = MetadataTopics::new(METADATA_TOPIC_SCOPE);
         topics.set([config::METADATA_TOPIC]);
-
+        kafka_adapter.topics = Some(topics);
+    }
+    #[rstest_bdd_macros::when("a metadata discovery request is built")]
+    fn build_metadata_request(kafka_adapter: &mut KafkaAdapterScenario) {
+        kafka_adapter.request = Some(kafka_adapter.topics.as_ref().unwrap().request());
+    }
+    #[rstest_bdd_macros::then(
+        "discovery names only the remote metadata topic and forbids automatic creation"
+    )]
+    fn check_metadata_request(kafka_adapter: &KafkaAdapterScenario) {
         check!(
-            topics.request()
-                == MetadataRequest {
+            kafka_adapter.request.as_ref().unwrap()
+                == &MetadataRequest {
                     topics: Some(vec![MetadataRequestTopic {
                         name: Some(config::METADATA_TOPIC.to_owned()),
                         ..Default::default()
@@ -702,79 +729,75 @@ mod tests {
                 }
         );
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log.feature",
-        name = "tests: metadata requests name only the metadata topic without auto creation"
+    #[rstest_bdd_macros::given(
+        "the metadata log has a zero creation timeout and an invalid bootstrap address"
     )]
-    fn metadata_requests_name_only_the_metadata_topic_without_auto_creation() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log tests: open read only rejects invalid policy before connecting"
-    )]
-    async fn bdd_verify_open_read_only_rejects_invalid_policy_before_connecting() {
-        let cfg = KafkaMetadataLogConfig {
+    fn invalid_policy(kafka_adapter: &mut KafkaAdapterScenario) {
+        kafka_adapter.config = Some(KafkaMetadataLogConfig {
             topic_create_timeout: Time::ZERO,
             ..KafkaMetadataLogConfig::new("not a socket address")
-        };
-
-        let error = KafkaMetadataEventLog::open_read_only(cfg)
-            .await
-            .err()
-            .expect("invalid policy must fail before network I/O");
-        assert!(error.to_string().contains("topic_create_timeout"));
+        });
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log.feature",
-        name = "tests: open read only rejects invalid policy before connecting"
-    )]
-    #[tokio::test]
-    async fn open_read_only_rejects_invalid_policy_before_connecting() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log tests: bootstrap resolution names the address it could not use for {example}"
-    )]
-    async fn bdd_verify_bootstrap_resolution_names_the_address_it_could_not_use(example: String) {
-        type Example<'a> = (&'a str, &'a str);
-        let (bootstrap, expected): Example<'_> = match example.as_str() {
-            "empty" => ("", "bootstrap \"\" resolved to no address"),
-            "separators only" => (" , ", "bootstrap \" , \" resolved to no address"),
-            "missing port" => ("no-port", "DNS lookup of no-port failed"),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let options = ConnectionOptions::default();
-        let error = resolve_bootstrap(bootstrap, &options).await.unwrap_err();
-        check!(
-            error.to_string().contains(expected),
-            "{bootstrap:?}: {error}"
+    #[rstest_bdd_macros::when("the metadata log is opened in {mode} mode")]
+    async fn open_adapter(kafka_adapter: &mut KafkaAdapterScenario, mode: String) {
+        let config = kafka_adapter.config.take().unwrap();
+        kafka_adapter.policy_error = Some(match mode.as_str() {
+            "read only" => KafkaMetadataEventLog::open_read_only(config)
+                .await
+                .err()
+                .expect("invalid policy must fail before network I/O"),
+            "read write" => KafkaMetadataEventLog::start(config)
+                .await
+                .err()
+                .expect("invalid policy must fail before network I/O"),
+            _ => panic!("unknown access mode: {mode}"),
+        });
+    }
+    #[rstest_bdd_macros::then("the creation timeout is rejected before bootstrap resolution")]
+    fn check_invalid_policy(kafka_adapter: &KafkaAdapterScenario) {
+        assert!(
+            kafka_adapter
+                .policy_error
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("topic_create_timeout")
         );
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log.feature",
-        name = "tests: bootstrap resolution names the address it could not use"
-    )]
-    #[tokio::test]
-    async fn bootstrap_resolution_names_the_address_it_could_not_use(example: String) {
-        let _ = example;
+    #[rstest_bdd_macros::given("the bootstrap address text is {bootstrap}")]
+    fn bootstrap_addresses(kafka_adapter: &mut KafkaAdapterScenario, bootstrap: String) {
+        kafka_adapter.bootstrap = bootstrap;
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log tests: bootstrap resolution keeps valid addresses in order"
-    )]
-    async fn bdd_verify_bootstrap_resolution_keeps_valid_addresses_in_order() {
-        let options = ConnectionOptions::default();
-        let resolved = resolve_bootstrap(" 127.0.0.1:9092, ,localhost:9093", &options)
-            .await
-            .unwrap();
+    #[rstest_bdd_macros::given("the bootstrap address text is empty")]
+    fn empty_bootstrap(kafka_adapter: &mut KafkaAdapterScenario) {
+        kafka_adapter.bootstrap.clear();
+    }
+    #[rstest_bdd_macros::given("the bootstrap address text contains only separators")]
+    fn separator_bootstrap(kafka_adapter: &mut KafkaAdapterScenario) {
+        kafka_adapter.bootstrap = " , ".into();
+    }
+    #[rstest_bdd_macros::when("bootstrap addresses are resolved")]
+    async fn resolve_addresses(kafka_adapter: &mut KafkaAdapterScenario) {
+        kafka_adapter.resolved =
+            Some(resolve_bootstrap(&kafka_adapter.bootstrap, &ConnectionOptions::default()).await);
+    }
+    #[rstest_bdd_macros::then("bootstrap resolution reports {message}")]
+    fn check_resolution_error(kafka_adapter: &KafkaAdapterScenario, message: String) {
+        let error = kafka_adapter
+            .resolved
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap_err();
+        check!(
+            error.to_string().contains(&message),
+            "{}: {error}",
+            kafka_adapter.bootstrap
+        );
+    }
+    #[rstest_bdd_macros::then("the numeric address precedes all localhost addresses on port 9093")]
+    fn check_resolution_order(kafka_adapter: &KafkaAdapterScenario) {
+        let resolved = kafka_adapter.resolved.as_ref().unwrap().as_ref().unwrap();
         check!(
             resolved.first() == Some(&("127.0.0.1:9092".parse().unwrap(), "127.0.0.1".to_owned()))
         );
@@ -785,90 +808,91 @@ mod tests {
                 .all(|(address, host)| address.port() == 9093 && host == "localhost")
         );
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log.feature",
-        name = "tests: bootstrap resolution keeps valid addresses in order"
+    #[rstest_bdd_macros::given(
+        "a tombstone for key range in partition 2 of the three-partition WAL index"
     )]
-    #[tokio::test]
-    async fn bootstrap_resolution_keeps_valid_addresses_in_order() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("kafka log tests: start rejects invalid policy before connecting")]
-    async fn bdd_verify_start_rejects_invalid_policy_before_connecting() {
-        let cfg = KafkaMetadataLogConfig {
-            topic_create_timeout: Time::ZERO,
-            ..KafkaMetadataLogConfig::new("not a socket address")
-        };
-
-        let Err(error) = KafkaMetadataEventLog::start(cfg).await else {
-            panic!("invalid policy must fail before network I/O");
-        };
-        assert!(error.to_string().contains("topic_create_timeout"));
+    fn keyed_tombstone(kafka_adapter: &mut KafkaAdapterScenario) {
+        kafka_adapter.topic = "__diskless_wal_index".into();
+        kafka_adapter.partitions = 3;
+        kafka_adapter.partition = 2;
+        kafka_adapter.key = Some(Bytes::from_static(b"range"));
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log.feature",
-        name = "tests: start rejects invalid policy before connecting"
+    #[rstest_bdd_macros::given(
+        "a record targets partition {partition} of the three-partition index"
     )]
-    #[tokio::test]
-    async fn start_rejects_invalid_policy_before_connecting() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log tests: keyed tombstone record is partitioned and preserves the null value"
-    )]
-    fn bdd_verify_keyed_tombstone_record_is_partitioned_and_preserves_the_null_value() {
-        let record = producer_record(
-            "__diskless_wal_index",
-            3,
-            2,
-            Some(Bytes::from_static(b"range")),
+    fn invalid_partition(kafka_adapter: &mut KafkaAdapterScenario, partition: i32) {
+        kafka_adapter.topic = "index".into();
+        kafka_adapter.partitions = 3;
+        kafka_adapter.partition = partition;
+    }
+    #[rstest_bdd_macros::when("the producer record is built")]
+    fn build_record(kafka_adapter: &mut KafkaAdapterScenario) {
+        kafka_adapter.record = Some(producer_record(
+            &kafka_adapter.topic,
+            kafka_adapter.partitions,
+            kafka_adapter.partition,
+            kafka_adapter.key.clone(),
             None,
-        )
-        .unwrap();
-
+        ));
+    }
+    #[rstest_bdd_macros::then("the producer preserves its WAL topic partition key and null value")]
+    fn check_tombstone(kafka_adapter: &KafkaAdapterScenario) {
+        let record = kafka_adapter.record.as_ref().unwrap().as_ref().unwrap();
         assert!(record.topic == "__diskless_wal_index");
         assert!(record.partition == Some(2));
         assert!(record.key.as_deref() == Some(b"range".as_slice()));
         assert!(record.value.is_none());
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log.feature",
-        name = "tests: keyed tombstone record is partitioned and preserves the null value"
-    )]
-    fn keyed_tombstone_record_is_partitioned_and_preserves_the_null_value() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "kafka log tests: keyed record rejects out of range partitions for {example}"
-    )]
-    fn bdd_verify_keyed_record_rejects_out_of_range_partitions(example: String) {
-        type Example = (i32,);
-        let (partition,): Example = match example.as_str() {
-            "negative" => (-1,),
-            "upper bound" => (3,),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let error = producer_record("index", 3, partition, None, None).unwrap_err();
-        assert2::assert!(matches!(
-            error,
-            MetadataLogError::PartitionOutOfRange {
-                partition: got,
-                count: 3
-            } if got == partition
-        ));
+    #[rstest_bdd_macros::then("the requested partition is rejected against a partition count of 3")]
+    fn check_partition_error(kafka_adapter: &KafkaAdapterScenario) {
+        let error = kafka_adapter.record.as_ref().unwrap().as_ref().unwrap_err();
+        assert!(
+            matches!(error, MetadataLogError::PartitionOutOfRange {partition, count: 3} if *partition == kafka_adapter.partition)
+        );
     }
-
-    #[cfg(test)]
+    rstest_bdd_macros::scenarios!("tests/features/kafka_adapter_sync", fixtures = [kafka_adapter: KafkaAdapterScenario]);
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/kafka_log.feature",
-        name = "tests: keyed record rejects out of range partitions"
+        path = "tests/features/kafka_adapter_network/bootstrap.feature",
+        name = "Invalid policy wins over invalid bootstrap"
     )]
-    fn keyed_record_rejects_out_of_range_partitions(example: String) { let _ = example; }
+    #[tokio::test]
+    async fn invalid_policy_precedes_bootstrap(kafka_adapter: KafkaAdapterScenario, mode: String) {
+        let _ = (kafka_adapter, mode);
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/kafka_adapter_network/bootstrap.feature",
+        name = "Bootstrap resolution identifies unusable addresses"
+    )]
+    #[tokio::test]
+    async fn bootstrap_resolution_names_the_address_it_could_not_use(
+        kafka_adapter: KafkaAdapterScenario,
+        bootstrap: String,
+        message: String,
+    ) {
+        let _ = (kafka_adapter, bootstrap, message);
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/kafka_adapter_network/bootstrap.feature",
+        name = "Empty bootstrap has no resolved addresses"
+    )]
+    #[tokio::test]
+    async fn empty_bootstrap_address(kafka_adapter: KafkaAdapterScenario) { let _ = kafka_adapter; }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/kafka_adapter_network/bootstrap.feature",
+        name = "Separators do not constitute a bootstrap address"
+    )]
+    #[tokio::test]
+    async fn separator_only_bootstrap(kafka_adapter: KafkaAdapterScenario) {
+        let _ = kafka_adapter;
+    }
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/kafka_adapter_network/bootstrap.feature",
+        name = "Resolution preserves address order and ignores empty entries"
+    )]
+    #[tokio::test]
+    async fn bootstrap_resolution_keeps_valid_addresses_in_order(
+        kafka_adapter: KafkaAdapterScenario,
+    ) {
+        let _ = kafka_adapter;
+    }
 }

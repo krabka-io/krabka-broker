@@ -8,8 +8,9 @@
 use {
     crate::{
         control_plane::freeze_scope,
-        support::offsets::{
-            delete_records_partition, delete_records_request, delete_records_topic,
+        support::{
+            InProcess,
+            offsets::{delete_records_partition, delete_records_request, delete_records_topic},
         },
         wire::{CONTROL, controlled_fixture, produce},
     },
@@ -20,6 +21,8 @@ use {
         krabka::freeze::PATTERN_TYPE_LITERAL,
         owned::delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
     },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
 };
 
 /// Trim `topic` up to `offset`, and hand back the partition row's error code.
@@ -52,46 +55,89 @@ async fn delete_topic(client: &Client, topic: &str) -> i16 {
     response.responses[0].error_code
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "topic freeze deletion: delete records and delete topics refuse on a frozen topic"
-)]
-async fn bdd_verify_delete_records_and_delete_topics_refuse_on_a_frozen_topic() {
-    let (p, frozen, control) = Box::pin(controlled_fixture("orders")).await;
-    for _ in 0..2 {
-        check!(produce(&p.client, "orders", frozen).await.error_code == codes::NONE);
-        check!(produce(&p.client, CONTROL, control).await.error_code == codes::NONE);
-    }
-
-    freeze_scope(&p.client, PATTERN_TYPE_LITERAL, "orders", "promotion").await;
-
-    check!(delete_records(&p.client, "orders", 1).await == codes::POLICY_VIOLATION);
-    check!(p.broker.partition_log_start_for_test("orders", 0) == Some(0));
-    check!(p.broker.local_log_end_offset("orders", 0) == Some(2));
-
-    check!(delete_topic(&p.client, "orders").await == codes::POLICY_VIOLATION);
-    check!(p.broker.partition_exists_for_test("orders", 0));
-
-    // The control topic takes both, so the two refusals above are the freeze
-    // and not a broker that refuses every deletion.
-    check!(delete_records(&p.client, CONTROL, 1).await == codes::NONE);
-    check!(delete_topic(&p.client, CONTROL).await == codes::NONE);
-
-    p.broker.shutdown().await;
+#[derive(Default)]
+struct FrozenDeletion {
+    broker: Option<InProcess>,
+    error: Option<i16>,
 }
 
-/// A freeze refuses both paths that take data out of the topic.
-///
-/// A freeze that stopped new writes and let a trim through would be worse than
-/// no freeze at all: an operator who froze a topic for a disaster-recovery
-/// promotion needs the frozen prefix byte-identical between sites, and both of
-/// these paths destroy exactly that. The break-glass workflow is deliberately
-/// off on this broker, so nothing but the freeze can produce the refusal, and
-/// the control topic proves both paths still work when nothing is frozen.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+impl FrozenDeletion {
+    fn broker(&self) -> &InProcess {
+        self.broker
+            .as_ref()
+            .expect("the frozen-topic broker is running")
+    }
+}
+
+#[fixture]
+fn deletion() -> FrozenDeletion {
+    // Each scenario owns fresh services and observations.
+    FrozenDeletion {
+        broker: None,
+        error: None,
+    }
+}
+
+#[given("orders is frozen after two records and control also contains two records")]
+async fn frozen_prefix(deletion: &mut FrozenDeletion) {
+    let (broker, frozen, control) = Box::pin(controlled_fixture("orders")).await;
+    for _ in 0..2 {
+        check!(produce(&broker.client, "orders", frozen).await.error_code == codes::NONE);
+        check!(produce(&broker.client, CONTROL, control).await.error_code == codes::NONE);
+    }
+    freeze_scope(&broker.client, PATTERN_TYPE_LITERAL, "orders", "promotion").await;
+    deletion.broker = Some(broker);
+}
+
+#[when("the administrator trims {topic} through offset one")]
+async fn trim_topic(deletion: &mut FrozenDeletion, topic: String) {
+    deletion.error = Some(delete_records(&deletion.broker().client, &topic, 1).await);
+}
+
+#[when("the administrator deletes topic {topic}")]
+async fn remove_topic(deletion: &mut FrozenDeletion, topic: String) {
+    deletion.error = Some(delete_topic(&deletion.broker().client, &topic).await);
+}
+
+#[then("the frozen trim is refused and orders still spans offsets zero through two")]
+fn frozen_prefix_unchanged(deletion: &FrozenDeletion) {
+    check!(deletion.error == Some(codes::POLICY_VIOLATION));
+    check!(
+        deletion
+            .broker()
+            .broker
+            .partition_log_start_for_test("orders", 0)
+            == Some(0)
+    );
+    check!(deletion.broker().broker.local_log_end_offset("orders", 0) == Some(2));
+}
+
+#[then("the frozen deletion is refused and orders still exists")]
+fn frozen_topic_unchanged(deletion: &FrozenDeletion) {
+    check!(deletion.error == Some(codes::POLICY_VIOLATION));
+    check!(
+        deletion
+            .broker()
+            .broker
+            .partition_exists_for_test("orders", 0)
+    );
+}
+
+#[then("the control topic deletion operation succeeds")]
+fn control_deletion_allowed(deletion: &FrozenDeletion) {
+    check!(deletion.error == Some(codes::NONE));
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/topic_freeze/deletion.feature",
     name = "delete records and delete topics refuse on a frozen topic"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_records_and_delete_topics_refuse_on_a_frozen_topic() {}
+async fn delete_records_and_delete_topics_refuse_on_a_frozen_topic(deletion: FrozenDeletion) {
+    deletion
+        .broker
+        .expect("the frozen-topic broker is running")
+        .broker
+        .shutdown()
+        .await;
+}

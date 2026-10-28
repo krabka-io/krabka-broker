@@ -787,33 +787,59 @@ connections_max_idle = "5s"
         check_config_case(label, &result, &expected);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "file config listener settings tests: apply to omitted idle window keeps kafkas default"
-    )]
-    fn bdd_verify_apply_to_omitted_idle_window_keeps_kafkas_default() {
-        use crate::config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE};
-
-        let file: FileConfig = toml::from_str("broker_id = 0").unwrap();
-        assert!(file.connections_max_idle.is_none());
-
-        let mut cfg = BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
-        // Unset stays unset -- that is what `DescribeConfigs` reports as
-        // DEFAULT_CONFIG -- and the window in force is Kafka's default.
-        assert!(cfg.connections_max_idle.is_none());
-        assert!(cfg.effective_connections_max_idle() == DEFAULT_CONNECTIONS_MAX_IDLE);
-        assert!(cfg.connections_max_idle_overrides.is_empty());
+    #[derive(Default)]
+    struct ListenerIdleFile {
+        source: String,
+        parsed_idle: rstest_bdd::Slot<Option<krabka_units::Time>>,
+        broker: Option<BrokerConfig>,
     }
 
-    /// Omitted everywhere, the broker keeps Kafka's 600000 default and no
-    /// listener carries an override.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/file_config/listener_settings.feature",
-        name = "tests: apply to omitted idle window keeps kafkas default"
+    #[rstest::fixture]
+    fn listener_idle_file() -> ListenerIdleFile {
+        // Each idle-window policy is selected from a fresh operator file.
+        ListenerIdleFile::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "the listener configuration file names broker 0 and no idle-window settings"
     )]
-    fn apply_to_omitted_idle_window_keeps_kafkas_default() {}
+    fn omitted_listener_idle_window(listener_idle_file: &mut ListenerIdleFile) {
+        listener_idle_file.source = "broker_id = 0".to_owned();
+    }
+
+    #[rstest_bdd_macros::when("the listener configuration is parsed and applied to the broker")]
+    fn apply_listener_idle_file(listener_idle_file: &mut ListenerIdleFile) {
+        use crate::config::BrokerConfig;
+        let file: FileConfig =
+            toml::from_str(&listener_idle_file.source).expect("parse listener configuration");
+        let mut config = BrokerConfig::default();
+        listener_idle_file
+            .parsed_idle
+            .set(file.connections_max_idle);
+        file.apply_to(&mut config)
+            .expect("apply listener configuration");
+        listener_idle_file.broker = Some(config);
+    }
+
+    #[rstest_bdd_macros::then(
+        "the idle window remains unsupplied and all listeners use Kafka's default without overrides"
+    )]
+    fn retained_default_listener_idle_window(listener_idle_file: &ListenerIdleFile) {
+        use crate::config::DEFAULT_CONNECTIONS_MAX_IDLE;
+        assert!(listener_idle_file.parsed_idle.get() == Some(None));
+        let config = listener_idle_file
+            .broker
+            .as_ref()
+            .expect("file was applied");
+        assert!(config.connections_max_idle.is_none());
+        assert!(config.effective_connections_max_idle() == DEFAULT_CONNECTIONS_MAX_IDLE);
+        assert!(config.connections_max_idle_overrides.is_empty());
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/file_config/listener_settings.feature",
+        fixtures = [listener_idle_file: ListenerIdleFile]
+    );
 
     #[test]
     fn apply_to_reads_two_phase_commit_enable_from_server_properties() {

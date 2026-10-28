@@ -180,95 +180,132 @@ async fn commit_via_end_txn(
     }
 }
 
-struct RecoveryCase {
-    name: &'static str,
-    topic: &'static str,
-    tid: &'static str,
-    downgrade_to: Option<i16>,
-    completion_epoch_delta: i16,
+use {
+    krabka_broker::BrokerHandle,
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+
+#[derive(Default)]
+struct TransactionLogRecovery {
+    directory: Option<TempDir>,
+    broker: Option<BrokerHandle>,
+    client: Option<Client>,
+    transactional_id: String,
+    producer: Option<ProducerIdentity>,
+    response: Option<EndTxnResponse>,
 }
 
-/// Persist an `Ongoing` transaction, restart on the same data directory, and
-/// compare the complete `EndTxn` response after recovery. Success proves that
-/// the broker decoded the selected transaction-log codec with the original
-/// producer identity. The expected completion epoch also checks KIP-890: the
-/// `EndTxn` v5 request that these tests send is a `TV_2` client whatever
-/// `transaction.version` the cluster finalized, so it bumps the epoch at every
-/// level, and the level only picks the log codec.
-async fn assert_ongoing_txn_survives_restart(case: &RecoveryCase) {
-    let dir = TempDir::new().unwrap();
-    let log_dir = dir.path().to_path_buf();
-
-    let producer;
-    {
-        let (broker, _bootstrap, client) =
-            start_client(recovery_config(log_dir.clone()), Some("krabka-txnv-test")).await;
-        create_topic(&client, case.topic, TopicPartitionCount(1)).await;
-        if let Some(level) = case.downgrade_to {
-            downgrade_transaction_version(&client, level).await;
-        }
-
-        producer = init_producer_id(&client, case.tid).await;
-        add_partition_ongoing(&client, case.tid, producer, case.topic, 0).await;
-        // Deliberately do NOT commit: the entry stays Ongoing on disk.
-
-        broker.shutdown().await;
-    }
-
-    // Re-boot on the same dir: triggers TxnCoordinator::recover + decode.
-    {
-        let (broker, _bootstrap, client) =
-            start_client(rejoin_config(log_dir), Some("krabka-txnv-test")).await;
-
-        let response = commit_via_end_txn(&client, case.tid, producer).await;
-        let expected = EndTxnResponse {
-            producer_id: producer.id.0,
-            producer_epoch: producer.epoch.0 + case.completion_epoch_delta,
-            ..Default::default()
-        };
-        assert!(
-            response == expected,
-            "{} recovery returned an unexpected EndTxn response: {response:?}",
-            case.name
-        );
-
-        broker.shutdown().await;
-    }
+#[fixture]
+fn transaction_log_recovery() -> TransactionLogRecovery {
+    // The durable directory and original identity outlive the first broker incarnation.
+    TransactionLogRecovery::default()
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transaction version txnver restart recovery: versioned ongoing transactions survive restart and decode recovery"
+#[given(
+    "an ongoing transaction {transactional_id} on topic {topic} persisted at transaction version {level}"
 )]
-async fn bdd_verify_versioned_ongoing_transactions_survive_restart_and_decode_recovery() {
-    let cases = [
-        RecoveryCase {
-            name: "v1/TV_2",
-            topic: "rec1",
-            tid: "recover-v1-tid",
-            downgrade_to: None,
-            completion_epoch_delta: 1,
-        },
-        RecoveryCase {
-            name: "v0/TV_0",
-            topic: "rec0",
-            tid: "recover-v0-tid",
-            downgrade_to: Some(0),
-            completion_epoch_delta: 1,
-        },
-    ];
-
-    for case in &cases {
-        Box::pin(assert_ongoing_txn_survives_restart(case)).await;
+async fn persisted_transaction(
+    transaction_log_recovery: &mut TransactionLogRecovery,
+    transactional_id: String,
+    topic: String,
+    level: i16,
+) {
+    let directory = TempDir::new().unwrap();
+    let (broker, _, client) = start_client(
+        recovery_config(directory.path().to_path_buf()),
+        Some("krabka-txnv-test"),
+    )
+    .await;
+    create_topic(&client, &topic, TopicPartitionCount(1)).await;
+    if level == 0 {
+        downgrade_transaction_version(&client, level).await;
     }
+    let producer = init_producer_id(&client, &transactional_id).await;
+    add_partition_ongoing(&client, &transactional_id, producer, &topic, 0).await;
+    transaction_log_recovery.directory = Some(directory);
+    transaction_log_recovery.broker = Some(broker);
+    transaction_log_recovery.client = Some(client);
+    transaction_log_recovery.transactional_id = transactional_id;
+    transaction_log_recovery.producer = Some(producer);
 }
 
-/// Primary durability matrix for the v1 (flexible, `TV_2` default) and v0
-/// (classic, `TV_0`) transaction-log codecs.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[when("the transaction broker restarts and decodes the same durable state directory")]
+async fn decode_transaction_log(transaction_log_recovery: &mut TransactionLogRecovery) {
+    transaction_log_recovery
+        .broker
+        .take()
+        .expect("original broker")
+        .shutdown()
+        .await;
+    let (broker, _, client) = start_client(
+        rejoin_config(
+            transaction_log_recovery
+                .directory
+                .as_ref()
+                .expect("durable directory")
+                .path()
+                .to_path_buf(),
+        ),
+        Some("krabka-txnv-test"),
+    )
+    .await;
+    transaction_log_recovery.broker = Some(broker);
+    transaction_log_recovery.client = Some(client);
+}
+
+#[when("the original producer commits the recovered ongoing transaction")]
+async fn commit_decoded_transaction(transaction_log_recovery: &mut TransactionLogRecovery) {
+    transaction_log_recovery.response = Some(
+        commit_via_end_txn(
+            transaction_log_recovery
+                .client
+                .as_ref()
+                .expect("recovered coordinator client"),
+            &transaction_log_recovery.transactional_id,
+            transaction_log_recovery
+                .producer
+                .expect("original identity"),
+        )
+        .await,
+    );
+}
+
+#[then("the recovered EndTxn response succeeds with the original producer ID and its next epoch")]
+fn decoded_transaction_committed(transaction_log_recovery: &TransactionLogRecovery) {
+    let producer = transaction_log_recovery
+        .producer
+        .expect("original identity");
+    assert!(
+        transaction_log_recovery
+            .response
+            .as_ref()
+            .expect("recovered EndTxn answered")
+            == &EndTxnResponse {
+                producer_id: producer.id.0,
+                producer_epoch: producer.epoch.0 + 1,
+                ..Default::default()
+            }
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/transaction_version/txnver_restart_recovery.feature",
     name = "versioned ongoing transactions survive restart and decode recovery"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn versioned_ongoing_transactions_survive_restart_and_decode_recovery() {}
+async fn versioned_ongoing_transactions_survive_restart_and_decode_recovery(
+    transaction_log_recovery: TransactionLogRecovery,
+    transactional_id: String,
+    topic: String,
+    level: i16,
+) {
+    let _ = (transactional_id, topic, level);
+    transaction_log_recovery
+        .broker
+        .take()
+        .expect("recovered broker")
+        .shutdown()
+        .await;
+    drop(transaction_log_recovery);
+}

@@ -388,13 +388,43 @@ async fn retry_until_moved(
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "group coordinator failover: acknowledged offsets survive a coordinator failover behind a replication barrier"
+#[derive(Default)]
+struct GroupCoordinatorFailover {
+    cluster: Option<RelayedCluster>,
+    coordinator: u64,
+    topic_id: WireUuid,
+    connection: Option<Connection>,
+    consumer: Option<Committer>,
+    classic: Option<Committer>,
+    heartbeat_interval_ms: i32,
+    acknowledged_end: i64,
+    acknowledged_commits: Vec<OffsetCommitResponse>,
+    acknowledged_watermarks: Vec<Option<i64>>,
+    pending_commits: Vec<JoinHandle<OffsetCommitResponse>>,
+    pending_read: Option<OffsetFetchResponse>,
+    timeout_responses: Vec<OffsetCommitResponse>,
+    timeout_read: Option<OffsetFetchResponse>,
+    timeout_watermarks: Vec<Option<i64>>,
+    survivors: Vec<(u64, Connection)>,
+    moved: Option<Moved>,
+    new_partition_leader: Option<u64>,
+    elsewhere: Option<Round>,
+    recommitted: Vec<OffsetCommitResponse>,
+    recommitted_read: Option<OffsetFetchResponse>,
+}
+#[rstest::fixture]
+fn group_failover() -> GroupCoordinatorFailover {
+    let cluster = None;
+    GroupCoordinatorFailover {
+        cluster,
+        ..Default::default()
+    }
+}
+#[rstest_bdd_macros::given(
+    "a three-replica offsets partition coordinates a joined KIP-848 group and a classic group, while their data topic is on another broker and ISR shrink is disabled for one hour"
 )]
-async fn bdd_verify_acknowledged_offsets_survive_a_coordinator_failover_behind_a_replication_barrier()
- {
-    let mut cluster = RelayedCluster::start(|config| {
+async fn replicated_group_coordinator(group_failover: &mut GroupCoordinatorFailover) {
+    let cluster = RelayedCluster::start(|config| {
         config.offsets_topic_num_partitions = 1;
         // The coordinator keeps its followers in the ISR while they cannot
         // reach it, so the high watermark stops below what it appends then.
@@ -459,103 +489,270 @@ async fn bdd_verify_acknowledged_offsets_survive_a_coordinator_failover_behind_a
             generation_or_epoch: generation,
         }
     };
+    group_failover.cluster = Some(cluster);
+    group_failover.coordinator = coordinator;
+    group_failover.topic_id = topic_id;
+    group_failover.connection = Some(to_coordinator);
+    group_failover.consumer = Some(consumer);
+    group_failover.classic = Some(classic);
+    group_failover.heartbeat_interval_ms = heartbeat_interval_ms;
+}
+#[rstest_bdd_macros::when(
+    "the KIP-848 member commits offset 5 and the classic member commits offset 7 before the replication barrier"
+)]
+async fn acknowledged_group_commits(group_failover: &mut GroupCoordinatorFailover) {
+    let connection = group_failover
+        .connection
+        .as_ref()
+        .expect("coordinator connection");
+    let consumer = group_failover.consumer.as_ref().expect("KIP-848 member");
+    let classic = group_failover.classic.as_ref().expect("classic member");
     for (committer, offset) in [
-        (&consumer, ACKNOWLEDGED.consumer),
-        (&classic, ACKNOWLEDGED.classic),
+        (consumer, ACKNOWLEDGED.consumer),
+        (classic, ACKNOWLEDGED.classic),
     ] {
-        let committed = commit(&to_coordinator, committer, topic_id, offset).await;
-        assert!(committed == commit_answer(topic_id, NONE));
+        group_failover
+            .acknowledged_commits
+            .push(commit(connection, committer, group_failover.topic_id, offset).await);
     }
-    let acknowledged_end = cluster
-        .handle(coordinator)
+    let cluster = group_failover.cluster.as_ref().expect("relayed cluster");
+    group_failover.acknowledged_end = cluster
+        .handle(group_failover.coordinator)
         .local_log_end_offset(OFFSETS_TOPIC, 0)
-        .expect("the coordinator hosts the offsets partition");
-    let high_watermark = cluster
-        .handle(coordinator)
-        .high_watermark_for_test(OFFSETS_TOPIC, 0)
-        .await;
-    assert!(high_watermark == Some(acknowledged_end));
-
-    // Cut the coordinator off from its followers, and commit newer offsets.
-    cluster.relay(coordinator).cut();
-    let timed_out = [
-        (consumer.clone(), TIMED_OUT.consumer),
-        (classic.clone(), TIMED_OUT.classic),
-    ]
-    .map(|(committer, offset)| {
-        let address = cluster.address(coordinator);
-        tokio::spawn(async move {
-            let connection = connect(address).await;
-            commit(&connection, &committer, topic_id, offset).await
-        })
-    });
-    cluster
-        .handle(coordinator)
-        .wait_until_local_log_end_offset(OFFSETS_TOPIC, 0, acknowledged_end + 2)
-        .await;
-
-    // A read sent while both commits wait for the high watermark is served
-    // at the last committed offset of the partition, at once: Kafka's
-    // `scheduleReadOperation` does not queue behind a pending write, so the
-    // answer comes while both commits still wait, well inside their write
-    // timeout.
-    let read_while_pending = fetch(&to_coordinator, topic_id).await;
-    assert!(read_while_pending == fetch_answer(topic_id, ACKNOWLEDGED));
-    assert!(!timed_out.iter().any(JoinHandle::is_finished));
-
-    for commit in timed_out {
-        let answered = commit.await.expect("the OffsetCommit task");
-        assert!(answered == commit_answer(topic_id, COORDINATOR_NOT_AVAILABLE));
-    }
-    let read_after_timeout = fetch(&to_coordinator, topic_id).await;
-    assert!(read_after_timeout == fetch_answer(topic_id, ACKNOWLEDGED));
-    let high_watermark = cluster
-        .handle(coordinator)
-        .high_watermark_for_test(OFFSETS_TOPIC, 0)
-        .await;
-    assert!(high_watermark == Some(acknowledged_end));
-    to_coordinator.close();
-
-    // The coordinator dies with the timed-out commits in its log only.
-    cluster.take(coordinator).crash_for_test().await;
-    let mut survivors = Vec::with_capacity(2);
-    for node in (1..=3).filter(|node| *node != coordinator) {
-        survivors.push((node, connect(cluster.address(node)).await));
-    }
-    let Moved {
-        coordinator: next,
-        round,
-        errors,
-    } = retry_until_moved(&survivors, topic_id, &consumer, &classic).await;
-    // Whatever the survivors answered while the partition moved was a code a
-    // client retries. A fast election can leave nothing to observe here; the
-    // other survivor's `NOT_COORDINATOR` below is checked either way.
-    assert!(errors.iter().all(|code| RETRIABLE.contains(code)));
-    assert!(partition_leader(cluster.handle(next), OFFSETS_TOPIC, SETTLE).await == next);
-
-    // The new coordinator holds the acknowledged offsets, and both members.
-    assert!(round.fetched == fetch_answer(topic_id, ACKNOWLEDGED));
+        .expect("offsets log end");
+    group_failover.acknowledged_watermarks.push(
+        cluster
+            .handle(group_failover.coordinator)
+            .high_watermark_for_test(OFFSETS_TOPIC, 0)
+            .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "both complete commit responses succeed and the offsets high watermark equals the acknowledged log end"
+)]
+fn replicated_acknowledged_group_commits(group_failover: &GroupCoordinatorFailover) {
     assert!(
-        round.member
+        group_failover.acknowledged_commits
+            == vec![
+                commit_answer(group_failover.topic_id, NONE),
+                commit_answer(group_failover.topic_id, NONE)
+            ]
+    );
+    assert!(
+        group_failover.acknowledged_watermarks.as_slice()
+            == [Some(group_failover.acknowledged_end)]
+    );
+}
+#[rstest_bdd_macros::when(
+    "the coordinator's replication relay is cut and both members submit newer offsets 9 and 11 while a read is sent before either commit completes"
+)]
+async fn barriered_group_commits(group_failover: &mut GroupCoordinatorFailover) {
+    let cluster = group_failover.cluster.as_ref().expect("relayed cluster");
+    cluster.relay(group_failover.coordinator).cut();
+    let address = cluster.address(group_failover.coordinator);
+    let topic_id = group_failover.topic_id;
+    for (committer, offset) in [
+        (
+            group_failover
+                .consumer
+                .as_ref()
+                .expect("KIP-848 member")
+                .clone(),
+            TIMED_OUT.consumer,
+        ),
+        (
+            group_failover
+                .classic
+                .as_ref()
+                .expect("classic member")
+                .clone(),
+            TIMED_OUT.classic,
+        ),
+    ] {
+        group_failover
+            .pending_commits
+            .push(tokio::spawn(async move {
+                let connection = connect(address).await;
+                commit(&connection, &committer, topic_id, offset).await
+            }));
+    }
+    cluster
+        .handle(group_failover.coordinator)
+        .wait_until_local_log_end_offset(OFFSETS_TOPIC, 0, group_failover.acknowledged_end + 2)
+        .await;
+    group_failover.pending_read = Some(
+        fetch(
+            group_failover
+                .connection
+                .as_ref()
+                .expect("coordinator connection"),
+            topic_id,
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "the read returns exactly acknowledged offsets 5 and 7 while both newer commit tasks are still pending"
+)]
+fn read_during_pending_group_commits(group_failover: &GroupCoordinatorFailover) {
+    assert!(
+        group_failover
+            .pending_read
+            .as_ref()
+            .expect("read during pending writes")
+            == &fetch_answer(group_failover.topic_id, ACKNOWLEDGED)
+    );
+    assert!(group_failover.pending_commits.len() == 2);
+    assert!(
+        !group_failover
+            .pending_commits
+            .iter()
+            .any(JoinHandle::is_finished)
+    );
+}
+#[rstest_bdd_macros::when(
+    "both newer commits reach their write timeout and the client reads offsets again"
+)]
+async fn timed_out_group_commits(group_failover: &mut GroupCoordinatorFailover) {
+    for pending in mem::take(&mut group_failover.pending_commits) {
+        group_failover
+            .timeout_responses
+            .push(pending.await.expect("OffsetCommit task"));
+    }
+    group_failover.timeout_read = Some(
+        fetch(
+            group_failover
+                .connection
+                .as_ref()
+                .expect("coordinator connection"),
+            group_failover.topic_id,
+        )
+        .await,
+    );
+    group_failover.timeout_watermarks.push(
+        group_failover
+            .cluster
+            .as_ref()
+            .expect("relayed cluster")
+            .handle(group_failover.coordinator)
+            .high_watermark_for_test(OFFSETS_TOPIC, 0)
+            .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "both complete timeout responses are COORDINATOR_NOT_AVAILABLE 15, the read still returns 5 and 7 and the high watermark is unchanged"
+)]
+fn refused_unreplicated_group_commits(group_failover: &GroupCoordinatorFailover) {
+    assert!(
+        group_failover.timeout_responses
+            == vec![
+                commit_answer(group_failover.topic_id, COORDINATOR_NOT_AVAILABLE),
+                commit_answer(group_failover.topic_id, COORDINATOR_NOT_AVAILABLE)
+            ]
+    );
+    assert!(
+        group_failover
+            .timeout_read
+            .as_ref()
+            .expect("read after timeouts")
+            == &fetch_answer(group_failover.topic_id, ACKNOWLEDGED)
+    );
+    assert!(
+        group_failover.timeout_watermarks.as_slice() == [Some(group_failover.acknowledged_end)]
+    );
+}
+#[rstest_bdd_macros::when(
+    "the old coordinator crashes and the clients retry both survivors until one serves both existing members"
+)]
+async fn move_group_coordinator(group_failover: &mut GroupCoordinatorFailover) {
+    group_failover
+        .connection
+        .take()
+        .expect("old coordinator connection")
+        .close();
+    let cluster = group_failover.cluster.as_mut().expect("relayed cluster");
+    cluster
+        .take(group_failover.coordinator)
+        .crash_for_test()
+        .await;
+    for node in (1..=3).filter(|node| *node != group_failover.coordinator) {
+        group_failover
+            .survivors
+            .push((node, connect(cluster.address(node)).await));
+    }
+    let moved = retry_until_moved(
+        &group_failover.survivors,
+        group_failover.topic_id,
+        group_failover.consumer.as_ref().expect("KIP-848 member"),
+        group_failover.classic.as_ref().expect("classic member"),
+    )
+    .await;
+    group_failover.new_partition_leader =
+        Some(partition_leader(cluster.handle(moved.coordinator), OFFSETS_TOPIC, SETTLE).await);
+    group_failover.moved = Some(moved);
+}
+#[rstest_bdd_macros::then(
+    "the new offsets leader preserves offsets 5 and 7, the KIP-848 epoch and classic generation, and every error during the move is 14, 15 or 16"
+)]
+fn replayed_group_coordinator_state(group_failover: &GroupCoordinatorFailover) {
+    let moved = group_failover.moved.as_ref().expect("new coordinator");
+    assert!(moved.errors.iter().all(|code| RETRIABLE.contains(code)));
+    assert!(group_failover.new_partition_leader == Some(moved.coordinator));
+    assert!(moved.round.fetched == fetch_answer(group_failover.topic_id, ACKNOWLEDGED));
+    assert!(
+        moved.round.member
             == ConsumerGroupHeartbeatResponse {
                 member_id: Some(MEMBER.into()),
-                member_epoch: consumer.generation_or_epoch,
-                heartbeat_interval_ms,
+                member_epoch: group_failover
+                    .consumer
+                    .as_ref()
+                    .expect("KIP-848 member")
+                    .generation_or_epoch,
+                heartbeat_interval_ms: group_failover.heartbeat_interval_ms,
                 ..Default::default()
             }
     );
-    assert!(round.classic == HeartbeatResponse::default());
-
-    // The other survivor sends the groups' clients to the new coordinator.
-    let (other, to_other) = survivors
+    assert!(moved.round.classic == HeartbeatResponse::default());
+}
+#[rstest_bdd_macros::when(
+    "the clients send offset fetch and both member heartbeats to the other surviving broker"
+)]
+async fn query_noncoordinator_survivor(group_failover: &mut GroupCoordinatorFailover) {
+    let next = group_failover
+        .moved
+        .as_ref()
+        .expect("new coordinator")
+        .coordinator;
+    let (other, connection) = group_failover
+        .survivors
         .iter()
         .find(|(node, _)| *node != next)
-        .expect("the other survivor");
-    cluster
+        .expect("other survivor");
+    group_failover
+        .cluster
+        .as_ref()
+        .expect("relayed cluster")
         .handle(*other)
-        .wait_until_partition_leader_changed(OFFSETS_TOPIC, 0, NodeId(coordinator))
+        .wait_until_partition_leader_changed(OFFSETS_TOPIC, 0, NodeId(group_failover.coordinator))
         .await;
-    let elsewhere = Round::send(to_other, topic_id, &consumer, &classic).await;
+    group_failover.elsewhere = Some(
+        Round::send(
+            connection,
+            group_failover.topic_id,
+            group_failover.consumer.as_ref().expect("KIP-848 member"),
+            group_failover.classic.as_ref().expect("classic member"),
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "all three complete responses from the other survivor are NOT_COORDINATOR 16"
+)]
+fn noncoordinator_group_responses(group_failover: &GroupCoordinatorFailover) {
+    let elsewhere = group_failover
+        .elsewhere
+        .as_ref()
+        .expect("noncoordinator responses");
     assert!(elsewhere.fetched == fetch_refusal(NOT_COORDINATOR));
     assert!(
         elsewhere.member
@@ -571,46 +768,73 @@ async fn bdd_verify_acknowledged_offsets_survive_a_coordinator_failover_behind_a
                 ..Default::default()
             }
     );
-
-    // Both members commit to the new coordinator at the epoch and the
-    // generation the old one gave them.
-    let (_, to_next) = survivors
+}
+#[rstest_bdd_macros::when(
+    "both original members commit offsets 13 and 17 to the new coordinator at their original epoch and generation"
+)]
+async fn recommit_after_group_failover(group_failover: &mut GroupCoordinatorFailover) {
+    let next = group_failover
+        .moved
+        .as_ref()
+        .expect("new coordinator")
+        .coordinator;
+    let (_, connection) = group_failover
+        .survivors
         .iter()
         .find(|(node, _)| *node == next)
-        .expect("the new coordinator");
+        .expect("new coordinator connection");
     for (committer, offset) in [
-        (&consumer, RECOMMITTED.consumer),
-        (&classic, RECOMMITTED.classic),
+        (
+            group_failover.consumer.as_ref().expect("KIP-848 member"),
+            RECOMMITTED.consumer,
+        ),
+        (
+            group_failover.classic.as_ref().expect("classic member"),
+            RECOMMITTED.classic,
+        ),
     ] {
-        let committed = commit(to_next, committer, topic_id, offset).await;
-        assert!(committed == commit_answer(topic_id, NONE));
+        group_failover
+            .recommitted
+            .push(commit(connection, committer, group_failover.topic_id, offset).await);
     }
-    assert!(fetch(to_next, topic_id).await == fetch_answer(topic_id, RECOMMITTED));
-
-    for (_, connection) in survivors {
+    group_failover.recommitted_read = Some(fetch(connection, group_failover.topic_id).await);
+}
+#[rstest_bdd_macros::then(
+    "both complete recommit responses succeed and offset fetch returns exactly 13 and 17"
+)]
+async fn persisted_group_recommits(group_failover: &mut GroupCoordinatorFailover) {
+    assert!(
+        group_failover.recommitted
+            == vec![
+                commit_answer(group_failover.topic_id, NONE),
+                commit_answer(group_failover.topic_id, NONE)
+            ]
+    );
+    assert!(
+        group_failover
+            .recommitted_read
+            .as_ref()
+            .expect("recommitted offset read")
+            == &fetch_answer(group_failover.topic_id, RECOMMITTED)
+    );
+    for (_, connection) in mem::take(&mut group_failover.survivors) {
         connection.close();
     }
-    cluster.shutdown().await;
+    group_failover
+        .cluster
+        .take()
+        .expect("relayed cluster")
+        .shutdown()
+        .await;
 }
-
-/// Offsets that a KIP-848 group and a classic group committed survive their
-/// coordinator dying behind a replication barrier, the commits that timed out
-/// behind it do not, and every client answer during the move is a retriable
-/// coordinator error.
-///
-/// Both groups live on the one `__consumer_offsets` partition. Each commits
-/// an offset that is acknowledged, so replicated. The coordinator's relay is
-/// then cut, its followers stay in the ISR, and each group commits a newer
-/// offset, which reaches the coordinator's log only: Kafka answers both
-/// commits `COORDINATOR_NOT_AVAILABLE` after the write timeout, and an
-/// `OffsetFetch` still reads the acknowledged offsets. The coordinator then
-/// dies, a follower takes the partition over, and the new coordinator serves
-/// the acknowledged offsets, the KIP-848 member at its epoch, and the classic
-/// member at its generation.
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/group_coordinator_failover.feature",
-    name = "acknowledged offsets survive a coordinator failover behind a replication barrier"
+    path = "tests/features/storage/group_coordinator_failover.feature",
+    name = "Only acknowledged group offsets survive replication-barrier coordinator failover"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acknowledged_offsets_survive_a_coordinator_failover_behind_a_replication_barrier() {}
+async fn acknowledged_offsets_survive_a_coordinator_failover_behind_a_replication_barrier(
+    group_failover: GroupCoordinatorFailover,
+) {
+}
+
+use std::mem;

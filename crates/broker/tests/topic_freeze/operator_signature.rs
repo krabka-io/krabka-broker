@@ -16,8 +16,8 @@ use {
             client::{BrokerWithClient, connect_to_broker},
         },
         wire::{
-            CONTROL, accepted, create_controlled_topic, create_topic, finish_with_control_record,
-            now_ms, produce_outcome, refused, wait_controlled_partitions,
+            CONTROL, ProduceOutcome, accepted, create_controlled_topic, create_topic, now_ms,
+            produce_outcome, refused, wait_controlled_partitions,
         },
     },
     assert2::check,
@@ -32,22 +32,10 @@ use {
         },
         primitives::uuid::Uuid as WireUuid,
     },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
     std::path::Path,
 };
-
-async fn check_frozen_then_shutdown(
-    broker: BrokerHandle,
-    client: &Client,
-    frozen: WireUuid,
-    control: WireUuid,
-) {
-    check!(
-        produce_outcome(&broker, client, "orders", frozen).await
-            == refused("literal", "orders", "incident", 0)
-    );
-    check!(produce_outcome(&broker, client, CONTROL, control).await == accepted(1));
-    broker.shutdown().await;
-}
 
 /// [`support::start_with_operator_key`] with `freeze.require_signature` on.
 ///
@@ -64,323 +52,6 @@ async fn start_requiring_signatures(dir: &Path, key: &OperatorKey) -> BrokerWith
     let client = connect_to_broker(&broker).await;
     BrokerWithClient { broker, client }
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "topic freeze operator signature: require signature decides whether an unsigned freeze is accepted for {example}"
-)]
-async fn bdd_verify_require_signature_decides_whether_an_unsigned_freeze_is_accepted(
-    example: String,
-) {
-    type Example = (bool,);
-    let (require_signature,): Example = match example.as_str() {
-        "attestation" => (false,),
-        "required signature" => (true,),
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    let (code, after) = if require_signature {
-        (codes::OPERATOR_SIGNATURE_REQUIRED, accepted(2))
-    } else {
-        (codes::NONE, refused("literal", "orders", "incident", 1))
-    };
-    let OperatorCase {
-        keys: _keys,
-        logs: _logs,
-        broker,
-        client,
-        frozen,
-        control,
-        ..
-    } = operator_case(require_signature).await;
-    check!(produce_outcome(&broker, &client, "orders", frozen).await == accepted(1));
-
-    let response = set_freeze(
-        &client,
-        freeze_request(PATTERN_TYPE_LITERAL, "orders", "incident"),
-    )
-    .await;
-    check!(response.error_code == code, "{response:?}");
-    wait_for_registry_len(&client, usize::from(code == codes::NONE)).await;
-
-    check!(produce_outcome(&broker, &client, "orders", frozen).await == after);
-    finish_with_control_record(broker, &client, control).await;
-}
-
-/// `freeze.require_signature` is what decides whether the broker takes an
-/// operator's word for a freeze.
-///
-/// The asymmetry it controls is deliberate and easy to lose: a freeze is the
-/// safe direction, and an operator has to reach it in one command on a cluster
-/// where nobody installed key material yet. That leaves a registry that can
-/// hold proved entries beside attested ones, and this setting is the only thing
-/// that removes the mixture. The refused arm carries its own control: the
-/// topic never froze, so it keeps taking writes.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
-    name = "require signature decides whether an unsigned freeze is accepted"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn require_signature_decides_whether_an_unsigned_freeze_is_accepted(example: String) {
-    let _ = example;
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "topic freeze operator signature: a signed freeze round trips with its key id and signature intact"
-)]
-async fn bdd_verify_a_signed_freeze_round_trips_with_its_key_id_and_signature_intact() {
-    let OperatorCase {
-        keys: _keys,
-        logs: _logs,
-        broker,
-        client,
-        key,
-        frozen,
-        control,
-    } = operator_case(false).await;
-
-    let FreshIncident {
-        cluster,
-        set_at_ms,
-        request,
-    } = fresh_incident_request(&client, &key).await;
-    let signature = request.signature.clone();
-    let response = set_freeze(&client, request).await;
-    check!(
-        response.error_code == codes::NONE,
-        "signed freeze: {response:?}"
-    );
-
-    let entries = wait_for_registry_len(&client, 1).await;
-    check!(
-        entries[0]
-            == DescribedTopicFreeze {
-                scope: "orders".to_owned(),
-                pattern_type: PATTERN_TYPE_LITERAL,
-                reason: "incident".to_owned(),
-                set_by: support::ANONYMOUS.to_owned(),
-                set_at_ms,
-                proposal_id: WireUuid::ZERO,
-                key_id: key.key_id.clone(),
-                signature,
-                ..DescribedTopicFreeze::default()
-            }
-    );
-    check!(verifies_locally(&key, &cluster, &entries[0]));
-
-    check_frozen_then_shutdown(broker, &client, frozen, control).await;
-}
-
-/// A signed freeze reaches the registry with its `key_id` and its signature
-/// intact, and the signature verifies away from the broker.
-///
-/// The signature is the only part of a freeze record that the broker cannot
-/// forge, so it is the only part that proves who set it. That proof is worth
-/// nothing unless the exact bytes the operator signed come back out of
-/// `DescribeTopicFreezes`, which is why the whole entry is compared rather than
-/// a field at a time: a broker that dropped the signature, re-stamped
-/// `set_at_ms`, or rewrote `set_by` would still answer every other case here.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
-    name = "a signed freeze round trips with its key id and signature intact"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_signed_freeze_round_trips_with_its_key_id_and_signature_intact() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "topic freeze operator signature: an unsigned thaw is refused whatever require signature says for {example}"
-)]
-async fn bdd_verify_an_unsigned_thaw_is_refused_whatever_require_signature_says(example: String) {
-    type Example = (bool,);
-    let (require_signature,): Example = match example.as_str() {
-        "default" => (false,),
-        "required signature" => (true,),
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    let OperatorCase {
-        keys: _keys,
-        logs: _logs,
-        broker,
-        client,
-        key,
-        frozen,
-        control,
-    } = operator_case(require_signature).await;
-
-    let SignedIncident { response, .. } = sign_incident(&client, &key).await;
-    check!(response.error_code == codes::NONE, "{response:?}");
-    wait_for_registry_len(&client, 1).await;
-
-    let thaw = set_freeze(&client, SetTopicFreezeRequest {
-        scope: "orders".to_owned(),
-        pattern_type: PATTERN_TYPE_LITERAL,
-        frozen: false,
-        reason: "let me back in".to_owned(),
-        proposal_id: WireUuid(*uuid::Uuid::new_v4().as_bytes()),
-        set_at_ms: now_ms(),
-        ..SetTopicFreezeRequest::default()
-    })
-    .await;
-    check!(
-        thaw.error_code == codes::OPERATOR_SIGNATURE_REQUIRED,
-        "{thaw:?}"
-    );
-
-    check!(wait_for_registry_len(&client, 1).await[0].scope == "orders");
-    check!(
-        produce_outcome(&broker, &client, "orders", frozen).await
-            == refused("literal", "orders", "incident", 0)
-    );
-    finish_with_control_record(broker, &client, control).await;
-}
-
-/// An unsigned thaw is refused whatever `freeze.require_signature` says.
-///
-/// This is the half of the asymmetry that carries the security of the whole
-/// feature. A freeze that one unsigned command can lift is exactly as strong as
-/// the one credential that sends it, and when the incident is a compromise the
-/// attacker already holds that credential. `require_signature` is about the
-/// freeze direction alone, so it is asserted with the setting both on and off:
-/// a thaw that started depending on it would look correct in the strict
-/// configuration and be wide open in the default one.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
-    name = "an unsigned thaw is refused whatever require signature says"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_unsigned_thaw_is_refused_whatever_require_signature_says(example: String) {
-    let _ = example;
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "topic freeze operator signature: a signature captured from a freeze is refused as a thaw"
-)]
-async fn bdd_verify_a_signature_captured_from_a_freeze_is_refused_as_a_thaw() {
-    let case = operator_case(false).await;
-    let (broker, client, key) = (case.broker, case.client, case.key);
-    let (frozen, control) = (case.frozen, case.control);
-
-    let FreshIncident {
-        set_at_ms,
-        request: freeze,
-        ..
-    } = fresh_incident_request(&client, &key).await;
-    let captured = freeze.signature.clone();
-    check!(set_freeze(&client, freeze).await.error_code == codes::NONE);
-    wait_for_registry_len(&client, 1).await;
-
-    // The two shapes the capture can take: the record the attacker holds, with
-    // only `frozen` flipped, and the same signature carried forward onto a
-    // fresh timestamp so the "newer than the entry it replaces" rule cannot be
-    // what refuses it.
-    for (label, replay_at_ms) in [
-        ("the otherwise identical thaw", set_at_ms),
-        ("the same signature on a fresh timestamp", now_ms() + 1_000),
-    ] {
-        let thaw = set_freeze(&client, SetTopicFreezeRequest {
-            scope: "orders".to_owned(),
-            pattern_type: PATTERN_TYPE_LITERAL,
-            frozen: false,
-            reason: "incident".to_owned(),
-            proposal_id: WireUuid::ZERO,
-            set_at_ms: replay_at_ms,
-            key_id: key.key_id.clone(),
-            signature: captured.clone(),
-            ..SetTopicFreezeRequest::default()
-        })
-        .await;
-        check!(
-            thaw.error_code == codes::OPERATOR_SIGNATURE_INVALID,
-            "{label}: {thaw:?}"
-        );
-    }
-
-    check!(wait_for_registry_len(&client, 1).await[0].scope == "orders");
-    check_frozen_then_shutdown(broker, &client, frozen, control).await;
-}
-
-/// A signature captured from a freeze cannot be replayed as the thaw.
-///
-/// `frozen` and `set_at_ms` are both inside the signed bytes for this attack
-/// and no other. Drop `frozen` from the payload and the freeze record and the
-/// thaw record differ by one byte that nothing covers, so one captured
-/// signature would authorize both directions -- and the direction an attacker
-/// wants is the one that lifts the freeze. Both replays are asserted only on
-/// the error code, because all six signature checks answer
-/// `OPERATOR_SIGNATURE_INVALID` on purpose: a code that separated them would
-/// tell an attacker which check they got past.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
-    name = "a signature captured from a freeze is refused as a thaw"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_signature_captured_from_a_freeze_is_refused_as_a_thaw() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "topic freeze operator signature: a signature survives a controller restart and still verifies"
-)]
-async fn bdd_verify_a_signature_survives_a_controller_restart_and_still_verifies() {
-    let OperatorDirectories { keys, logs } = operator_directories();
-    let key = support::mint_operator_key(keys.path(), "alice-yubi", support::ANONYMOUS);
-    let started = support::start_with_operator_key(logs.path(), &key).await;
-    let broker = started.broker;
-    let client = started.client;
-    let mut config = started.config;
-    create_topic(&broker, &client, "orders").await;
-    create_topic(&broker, &client, CONTROL).await;
-
-    let SignedIncident { cluster, response } = sign_incident(&client, &key).await;
-    check!(
-        response.error_code == codes::NONE,
-        "signed freeze: {response:?}"
-    );
-    let before = wait_for_registry_len(&client, 1).await;
-    drop(client);
-    broker.shutdown().await;
-
-    // The harness cannot infer the mode on a second boot, and a node that
-    // re-bootstraps comes back with an empty registry -- which would make this
-    // case fail for a reason that has nothing to do with the signature.
-    config.bootstrap_mode = BootstrapMode::Rejoin;
-    let broker = support::start_reusing_addrs(&config, "the signed-freeze restart").await;
-    let client = connect_to_broker(&broker).await;
-    wait_controlled_partitions(&broker, "orders").await;
-
-    let after = wait_for_registry_len(&client, 1).await;
-    check!(after == before);
-    check!(cluster_id(&client).await == cluster);
-    check!(verifies_locally(&key, &cluster, &after[0]));
-
-    let frozen = support::topic_id_for(&client, "orders").await;
-    let control = support::topic_id_for(&client, CONTROL).await;
-    check_frozen_then_shutdown(broker, &client, frozen, control).await;
-}
-
-/// A signature survives a controller restart and still verifies from the
-/// reloaded image.
-///
-/// This is the durability claim the design makes about the proof rather than
-/// about the state: an auditor holding the operator public keys can say who
-/// froze a topic, from a broker that was not running when they signed. A broker
-/// that kept the registry across a restart but dropped the signature would pass
-/// every other durability case and quietly turn every proved entry into an
-/// attested one.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
-    name = "a signature survives a controller restart and still verifies"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_signature_survives_a_controller_restart_and_still_verifies() {}
 
 /// A running broker, its client, the operator key it trusts and the ids of the
 /// frozen and control topics.
@@ -491,14 +162,354 @@ async fn operator_case(require_signature: bool) -> OperatorCase {
     }
 }
 
-/// The cluster id and the answer to a signed freeze of `orders`.
-struct SignedIncident {
-    cluster: String,
-    response: SetTopicFreezeResponse,
+#[derive(Default)]
+struct OperatorScenario {
+    case: Option<OperatorCase>,
+    fresh: Option<FreshIncident>,
+    response: Option<SetTopicFreezeResponse>,
+    replays: Vec<(&'static str, SetTopicFreezeResponse)>,
+    write: Option<ProduceOutcome>,
+    control_write: Option<ProduceOutcome>,
+    config: Option<BrokerConfig>,
+    before: Vec<DescribedTopicFreeze>,
+    after: Vec<DescribedTopicFreeze>,
+    cluster_after: Option<String>,
 }
 
-async fn sign_incident(client: &Client, key: &OperatorKey) -> SignedIncident {
-    let cluster = cluster_id(client).await;
-    let response = set_freeze(client, incident_request(key, &cluster, now_ms())).await;
-    SignedIncident { cluster, response }
+impl OperatorScenario {
+    fn case(&self) -> &OperatorCase { self.case.as_ref().expect("the operator broker is running") }
+
+    async fn shutdown(self) {
+        self.case
+            .expect("the operator broker is running")
+            .broker
+            .shutdown()
+            .await;
+    }
+}
+
+#[fixture]
+fn operator() -> OperatorScenario {
+    // Each scenario owns fresh services and observations.
+    OperatorScenario {
+        case: None,
+        ..Default::default()
+    }
+}
+
+#[given("an operator broker with require_signature set to {require_signature}")]
+async fn signature_policy(operator: &mut OperatorScenario, require_signature: bool) {
+    operator.case = Some(operator_case(require_signature).await);
+}
+
+#[given("the operator has already signed an incident freeze for orders")]
+async fn signed_incident_fixture(operator: &mut OperatorScenario) {
+    let fresh = fresh_incident_request(&operator.case().client, &operator.case().key).await;
+    let response = set_freeze(&operator.case().client, fresh.request.clone()).await;
+    check!(
+        response.error_code == codes::NONE,
+        "signed freeze: {response:?}"
+    );
+    wait_for_registry_len(&operator.case().client, 1).await;
+    operator.fresh = Some(fresh);
+}
+
+#[given("a persistent operator broker has recorded a signed incident freeze")]
+async fn persistent_signed_incident(operator: &mut OperatorScenario) {
+    let OperatorDirectories { keys, logs } = operator_directories();
+    let key = support::mint_operator_key(keys.path(), "alice-yubi", support::ANONYMOUS);
+    let started = support::start_with_operator_key(logs.path(), &key).await;
+    let broker = started.broker;
+    let client = started.client;
+    create_topic(&broker, &client, "orders").await;
+    create_topic(&broker, &client, CONTROL).await;
+    let fresh = fresh_incident_request(&client, &key).await;
+    let response = set_freeze(&client, fresh.request.clone()).await;
+    check!(
+        response.error_code == codes::NONE,
+        "signed freeze: {response:?}"
+    );
+    operator.before = wait_for_registry_len(&client, 1).await;
+    operator.config = Some(started.config);
+    operator.fresh = Some(fresh);
+    operator.case = Some(OperatorCase {
+        keys,
+        logs,
+        broker,
+        client,
+        key,
+        frozen: WireUuid::ZERO,
+        control: WireUuid::ZERO,
+    });
+}
+
+#[when("the operator sends an unsigned incident freeze for orders")]
+async fn unsigned_incident(operator: &mut OperatorScenario) {
+    operator.response = Some(
+        set_freeze(
+            &operator.case().client,
+            freeze_request(PATTERN_TYPE_LITERAL, "orders", "incident"),
+        )
+        .await,
+    );
+}
+
+#[when("the operator submits a freshly signed incident freeze for orders")]
+async fn signed_incident(operator: &mut OperatorScenario) {
+    let fresh = fresh_incident_request(&operator.case().client, &operator.case().key).await;
+    operator.response = Some(set_freeze(&operator.case().client, fresh.request.clone()).await);
+    operator.fresh = Some(fresh);
+}
+
+#[when("an unsigned thaw attempts to lift the incident freeze")]
+async fn unsigned_thaw(operator: &mut OperatorScenario) {
+    operator.response = Some(
+        set_freeze(&operator.case().client, SetTopicFreezeRequest {
+            scope: "orders".to_owned(),
+            pattern_type: PATTERN_TYPE_LITERAL,
+            frozen: false,
+            reason: "let me back in".to_owned(),
+            proposal_id: WireUuid(*uuid::Uuid::new_v4().as_bytes()),
+            set_at_ms: now_ms(),
+            ..SetTopicFreezeRequest::default()
+        })
+        .await,
+    );
+}
+
+#[then("the operator mutation returns Kafka error {code}")]
+fn mutation_code(operator: &OperatorScenario, code: i16) {
+    let response = operator
+        .response
+        .as_ref()
+        .expect("an operator mutation was sent");
+    check!(
+        response.error_code == code,
+        "operator mutation: {response:?}"
+    );
+}
+
+#[then("the registry contains {count} incident freeze entries")]
+async fn registry_size(operator: &OperatorScenario, count: usize) {
+    wait_for_registry_len(&operator.case().client, count).await;
+}
+
+#[then("the incident registry entry preserves the signed fields and verifies locally")]
+async fn signed_fields_round_trip(operator: &OperatorScenario) {
+    let fresh = operator.fresh.as_ref().expect("the incident was signed");
+    let case = operator.case();
+    let entries = wait_for_registry_len(&case.client, 1).await;
+    check!(
+        entries[0]
+            == DescribedTopicFreeze {
+                scope: "orders".to_owned(),
+                pattern_type: PATTERN_TYPE_LITERAL,
+                reason: "incident".to_owned(),
+                set_by: support::ANONYMOUS.to_owned(),
+                set_at_ms: fresh.set_at_ms,
+                proposal_id: WireUuid::ZERO,
+                key_id: case.key.key_id.clone(),
+                signature: fresh.request.signature.clone(),
+                ..DescribedTopicFreeze::default()
+            }
+    );
+    check!(verifies_locally(&case.key, &fresh.cluster, &entries[0]));
+}
+
+#[when("an attacker replays the freeze signature as a thaw at original and fresh timestamps")]
+async fn replay_freeze_as_thaw(operator: &mut OperatorScenario) {
+    let fresh = operator
+        .fresh
+        .as_ref()
+        .expect("the signed incident was recorded");
+    let captured = fresh.request.signature.clone();
+    let times = [
+        ("the otherwise identical thaw", fresh.set_at_ms),
+        ("the same signature on a fresh timestamp", now_ms() + 1_000),
+    ];
+    for (label, timestamp) in times {
+        let response = set_freeze(&operator.case().client, SetTopicFreezeRequest {
+            scope: "orders".to_owned(),
+            pattern_type: PATTERN_TYPE_LITERAL,
+            frozen: false,
+            reason: "incident".to_owned(),
+            proposal_id: WireUuid::ZERO,
+            set_at_ms: timestamp,
+            key_id: operator.case().key.key_id.clone(),
+            signature: captured.clone(),
+            ..SetTopicFreezeRequest::default()
+        })
+        .await;
+        operator.replays.push((label, response));
+    }
+}
+
+#[then("both replayed thaws return OPERATOR_SIGNATURE_INVALID")]
+fn replayed_signatures_invalid(operator: &OperatorScenario) {
+    for (label, response) in &operator.replays {
+        check!(
+            response.error_code == codes::OPERATOR_SIGNATURE_INVALID,
+            "{label}: {response:?}"
+        );
+    }
+    check!(operator.replays.len() == 2);
+}
+
+#[then("the incident registry still protects the orders scope")]
+async fn incident_still_registered(operator: &OperatorScenario) {
+    check!(wait_for_registry_len(&operator.case().client, 1).await[0].scope == "orders");
+}
+
+#[when("the signed-freeze controller restarts in rejoin mode")]
+async fn restart_signed_controller(operator: &mut OperatorScenario) {
+    let OperatorCase {
+        keys,
+        logs,
+        broker,
+        client,
+        key,
+        ..
+    } = operator
+        .case
+        .take()
+        .expect("the operator broker is running");
+    drop(client);
+    broker.shutdown().await;
+    let config = operator
+        .config
+        .as_mut()
+        .expect("the persistent configuration was retained");
+    config.bootstrap_mode = BootstrapMode::Rejoin;
+    let broker = support::start_reusing_addrs(config, "the signed-freeze restart").await;
+    let client = connect_to_broker(&broker).await;
+    wait_controlled_partitions(&broker, "orders").await;
+    operator.after = wait_for_registry_len(&client, 1).await;
+    operator.cluster_after = Some(cluster_id(&client).await);
+    let frozen = support::topic_id_for(&client, "orders").await;
+    let control = support::topic_id_for(&client, CONTROL).await;
+    operator.case = Some(OperatorCase {
+        keys,
+        logs,
+        broker,
+        client,
+        key,
+        frozen,
+        control,
+    });
+}
+
+#[then("the recovered entry and cluster identity are unchanged and the signature still verifies")]
+fn recovered_signature_intact(operator: &OperatorScenario) {
+    let cluster = &operator
+        .fresh
+        .as_ref()
+        .expect("the incident was signed")
+        .cluster;
+    check!(operator.after == operator.before);
+    check!(
+        operator
+            .cluster_after
+            .as_ref()
+            .expect("the controller rejoined")
+            == cluster
+    );
+    check!(verifies_locally(
+        &operator.case().key,
+        cluster,
+        &operator.after[0]
+    ));
+}
+
+#[when("a client probes writes to incident topic orders")]
+async fn probe_incident_write(operator: &mut OperatorScenario) {
+    let case = operator.case();
+    operator.write = Some(produce_outcome(&case.broker, &case.client, "orders", case.frozen).await);
+}
+
+#[then("the incident topic write is {outcome} at log end {offset}")]
+fn incident_write_outcome(operator: &OperatorScenario, outcome: String, offset: i64) {
+    let expected = match outcome.as_str() {
+        "accepted" => accepted(offset),
+        "refused" => refused("literal", "orders", "incident", offset),
+        _ => panic!("unsupported incident write outcome {outcome}"),
+    };
+    check!(operator.write.as_ref().expect("orders was written") == &expected);
+}
+
+#[when("a client writes to the signed-freeze control topic")]
+async fn probe_operator_control(operator: &mut OperatorScenario) {
+    let case = operator.case();
+    operator.control_write =
+        Some(produce_outcome(&case.broker, &case.client, CONTROL, case.control).await);
+}
+
+#[then("the signed-freeze control accepts its first record")]
+fn operator_control_accepts(operator: &OperatorScenario) {
+    check!(
+        operator
+            .control_write
+            .as_ref()
+            .expect("control was written")
+            == &accepted(1)
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
+    name = "require signature decides whether an unsigned freeze is accepted"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn require_signature_decides_whether_an_unsigned_freeze_is_accepted(
+    operator: OperatorScenario,
+    require_signature: bool,
+    code: i16,
+    entries: usize,
+    outcome: String,
+    offset: i64,
+) {
+    let _ = (require_signature, code, entries, outcome, offset);
+    operator.shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
+    name = "a signed freeze round trips with its key id and signature intact"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_signed_freeze_round_trips_with_its_key_id_and_signature_intact(
+    operator: OperatorScenario,
+) {
+    operator.shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
+    name = "an unsigned thaw is refused whatever require signature says"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unsigned_thaw_is_refused_whatever_require_signature_says(
+    operator: OperatorScenario,
+    example: String,
+    require_signature: bool,
+) {
+    let _ = (example, require_signature);
+    operator.shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
+    name = "a signature captured from a freeze is refused as a thaw"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_signature_captured_from_a_freeze_is_refused_as_a_thaw(operator: OperatorScenario) {
+    operator.shutdown().await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/topic_freeze/operator_signature.feature",
+    name = "a signature survives a controller restart and still verifies"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_signature_survives_a_controller_restart_and_still_verifies(operator: OperatorScenario) {
+    operator.shutdown().await;
 }

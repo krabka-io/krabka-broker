@@ -170,88 +170,161 @@ async fn read_committed(bootstrap: &str, last: &str) -> Vec<String> {
     read_committed_through(bootstrap, TOPIC, last, SETTLE).await
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "transactions txn coordinator failover: a transaction commits through the next coordinator"
-)]
-async fn bdd_verify_a_transaction_commits_through_the_next_coordinator() {
-    let mut cluster = registered_transaction_cluster(|_, config| {
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+
+#[derive(Default)]
+struct CoordinatorRecovery {
+    cluster: Cluster,
+    coordinator: u64,
+    producer: Option<ProducerIdentity>,
+    retired_directory: Option<TempDir>,
+    committed: Option<EndTxnResponse>,
+    seen: Option<Vec<String>>,
+}
+
+#[fixture]
+fn coordinator_recovery() -> CoordinatorRecovery {
+    // Keep the original transaction identity across coordinator replacement.
+    CoordinatorRecovery::default()
+}
+
+#[given("a three-replica transaction coordinator with an acknowledged open a,b,c transaction")]
+async fn recoverable_transaction(coordinator_recovery: &mut CoordinatorRecovery) {
+    coordinator_recovery.cluster = registered_transaction_cluster(|_, config| {
         config.transaction_state_num_partitions = 1;
         config.transaction_state_replication_factor = 3;
     })
     .await;
-    let admin = client(&cluster[0].0.listen_addr().to_string()).await;
+    let admin = client(&coordinator_recovery.cluster[0].0.listen_addr().to_string()).await;
     find_coordinator(&admin).await;
-    let coordinator = leader_of(&cluster[0].0, STATE_TOPIC).await;
+    coordinator_recovery.coordinator =
+        leader_of(&coordinator_recovery.cluster[0].0, STATE_TOPIC).await;
     create_assigned_topic()
         .client(&admin)
         .topic(AssignedTopicSetup::leader_first(
             TOPIC,
-            krabka_metadata::NodeId(coordinator),
+            krabka_metadata::NodeId(coordinator_recovery.coordinator),
         ))
         .maybe_context(Some("CreateTopics"))
         .call()
         .await;
-    cluster[0].0.wait_until_isr_len(STATE_TOPIC, 0, 3).await;
-    cluster[0].0.wait_until_isr_len(TOPIC, 0, 3).await;
-
-    // Open the transaction on the coordinator.
-    let first = client(&address_of(&cluster, coordinator)).await;
+    coordinator_recovery.cluster[0]
+        .0
+        .wait_until_isr_len(STATE_TOPIC, 0, 3)
+        .await;
+    coordinator_recovery.cluster[0]
+        .0
+        .wait_until_isr_len(TOPIC, 0, 3)
+        .await;
+    let first = client(&address_of(
+        &coordinator_recovery.cluster,
+        coordinator_recovery.coordinator,
+    ))
+    .await;
     let producer = init_producer(&first).await;
     add_partition(&first, producer).await;
-    let data_leader = data_leader_client(&cluster).await;
+    let data_leader = data_leader_client(&coordinator_recovery.cluster).await;
     produce(&data_leader, Some(producer), &["a", "b", "c"]).await;
     first.close();
     data_leader.close();
     admin.close();
+    coordinator_recovery.producer = Some(producer);
+}
 
-    // Stop the coordinator. A surviving broker leads the state partition next.
-    let position = cluster
+#[when("the transaction coordinator stops and surviving replicas elect new state and data leaders")]
+async fn replace_transaction_coordinator(coordinator_recovery: &mut CoordinatorRecovery) {
+    let coordinator = coordinator_recovery.coordinator;
+    let position = coordinator_recovery
+        .cluster
         .iter()
-        .position(|(handle, _, _)| handle.node_id() == coordinator)
-        .expect("the coordinator is a cluster member");
-    let (stopped, _, stopped_dir) = cluster.remove(position);
-    stopped.shutdown().await;
-    cluster[0]
+        .position(|(broker, _, _)| broker.node_id() == coordinator)
+        .expect("coordinator member");
+    let (broker, _, directory) = coordinator_recovery.cluster.remove(position);
+    coordinator_recovery.retired_directory = Some(directory);
+    broker.shutdown().await;
+    coordinator_recovery.cluster[0]
         .0
         .wait_until_partition_leader_changed(STATE_TOPIC, 0, NodeId(coordinator))
         .await;
-    cluster[0]
+    coordinator_recovery.cluster[0]
         .0
         .wait_until_partition_leader_changed(TOPIC, 0, NodeId(coordinator))
         .await;
-    let next = leader_of(&cluster[0].0, STATE_TOPIC).await;
+}
 
-    // Commit through the next coordinator. Transaction version 2 bumps the
-    // epoch on completion.
-    let second = client(&address_of(&cluster, next)).await;
-    let committed = end_txn(&second, producer).await;
+#[when("the producer retries its commit through the new transaction coordinator")]
+async fn commit_recovered_transaction(coordinator_recovery: &mut CoordinatorRecovery) {
+    let next = leader_of(&coordinator_recovery.cluster[0].0, STATE_TOPIC).await;
+    let second = client(&address_of(&coordinator_recovery.cluster, next)).await;
+    coordinator_recovery.committed = Some(
+        end_txn(
+            &second,
+            coordinator_recovery
+                .producer
+                .expect("open producer identity"),
+        )
+        .await,
+    );
+    second.close();
+}
+
+#[then("the recovered commit succeeds and advances the producer epoch by one")]
+fn recovered_commit(coordinator_recovery: &CoordinatorRecovery) {
+    let producer = coordinator_recovery
+        .producer
+        .expect("open producer identity");
     assert!(
-        committed
-            == EndTxnResponse {
+        coordinator_recovery
+            .committed
+            .as_ref()
+            .expect("commit answered")
+            == &EndTxnResponse {
                 producer_id: producer.id.0,
                 producer_epoch: producer.epoch.0 + 1,
                 ..Default::default()
             },
         "EndTxn through the next coordinator"
     );
-    second.close();
-
-    let data_leader = data_leader_client(&cluster).await;
-    produce(&data_leader, None, &["z"]).await;
-    data_leader.close();
-    let bootstrap = cluster[0].0.listen_addr().to_string();
-    let seen = read_committed(&bootstrap, "z").await;
-    assert!(seen == ["a", "b", "c", "z"]);
-
-    shutdown_cluster(cluster).await;
-    drop(stopped_dir);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[when("a nontransactional z is appended and a committed reader reads through it")]
+async fn read_recovered_records(coordinator_recovery: &mut CoordinatorRecovery) {
+    let data_leader = data_leader_client(&coordinator_recovery.cluster).await;
+    produce(&data_leader, None, &["z"]).await;
+    data_leader.close();
+    coordinator_recovery.seen = Some(
+        read_committed(
+            &coordinator_recovery.cluster[0].0.listen_addr().to_string(),
+            "z",
+        )
+        .await,
+    );
+}
+
+#[then("the committed reader sees a,b,c,z in order after coordinator recovery")]
+fn recovered_records(coordinator_recovery: &CoordinatorRecovery) {
+    assert!(
+        coordinator_recovery
+            .seen
+            .as_ref()
+            .expect("committed records read")
+            == &["a", "b", "c", "z"]
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/transactions/txn_coordinator_failover.feature",
     name = "a transaction commits through the next coordinator"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_transaction_commits_through_the_next_coordinator() {}
+async fn a_transaction_commits_through_the_next_coordinator(
+    coordinator_recovery: CoordinatorRecovery,
+) {
+    shutdown_cluster(take(&mut coordinator_recovery.cluster)).await;
+    drop(coordinator_recovery);
+}
+
+use std::mem::take;

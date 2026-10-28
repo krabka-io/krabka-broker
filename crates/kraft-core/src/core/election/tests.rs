@@ -424,33 +424,65 @@ fn a_candidate_that_times_out_pre_votes_again_with_a_fresh_timeout() {
     );
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "core election tests: every election timer lies in kafkas jittered window"
-)]
-fn bdd_verify_every_election_timer_lies_in_kafkas_jittered_window() {
-    let log = FakeLog::new(5, 1);
-    let now = SimInstant(10_000);
-    let mut deadlines = BTreeSet::new();
-    for id in 1..=5 {
+struct ElectionDraws {
+    voters: Vec<NodeId>,
+    log: Option<FakeLog>,
+    now: SimInstant,
+    deadlines: Vec<(NodeId, u32, SimInstant)>,
+}
+
+#[rstest::fixture]
+fn draws() -> ElectionDraws {
+    // Start this scenario with fresh inputs and observations.
+
+    ElectionDraws {
+        voters: Vec::new(),
+        log: None,
+        now: SimInstant(0),
+        deadlines: Vec::new(),
+    }
+}
+
+#[rstest_bdd_macros::given("five voters with an epoch-one log and a 1000 ms election timeout")]
+fn jittered_voters(draws: &mut ElectionDraws) {
+    draws.voters = vec![NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)];
+    draws.log = Some(FakeLog::new(5, 1));
+    draws.now = SimInstant(10_000);
+}
+
+#[rstest_bdd_macros::when("every voter times out in each of the first 64 epochs")]
+fn draw_election_deadlines(draws: &mut ElectionDraws) {
+    let log = draws.log.as_ref().expect("an epoch-one log was given");
+    for &id in &draws.voters {
         for epoch in 0..64 {
-            let mut m = machine(NodeId(id), &[
-                NodeId(1),
-                NodeId(2),
-                NodeId(3),
-                NodeId(4),
-                NodeId(5),
-            ]);
-            m.force_epoch(epoch);
-            m.on_event(Event::ElectionTimeout, &log, now);
-            let deadline = nominee_deadline(&m);
-            check!(
-                (now.saturating_add_ms(1_000)..now.saturating_add_ms(2_000)).contains(&deadline),
-                "node {id} epoch {epoch}: {deadline:?}"
-            );
-            deadlines.insert(deadline);
+            let mut voter = machine(id, &draws.voters);
+            voter.force_epoch(epoch);
+            voter.on_event(Event::ElectionTimeout, log, draws.now);
+            draws.deadlines.push((id, epoch, nominee_deadline(&voter)));
         }
     }
+}
+
+#[rstest_bdd_macros::then(
+    "every new election deadline is at least 1000 ms and less than 2000 ms away"
+)]
+fn deadlines_inside_window(draws: &ElectionDraws) {
+    for &(id, epoch, deadline) in &draws.deadlines {
+        check!(
+            (draws.now.saturating_add_ms(1_000)..draws.now.saturating_add_ms(2_000))
+                .contains(&deadline),
+            "node {id} epoch {epoch}: {deadline:?}"
+        );
+    }
+}
+
+#[rstest_bdd_macros::then("the voters draw more than 64 distinct deadlines across those epochs")]
+fn deadlines_are_staggered(draws: &ElectionDraws) {
+    let deadlines: BTreeSet<_> = draws
+        .deadlines
+        .iter()
+        .map(|&(_, _, deadline)| deadline)
+        .collect();
     check!(
         deadlines.len() > 64,
         "{} distinct deadlines",
@@ -458,17 +490,7 @@ fn bdd_verify_every_election_timer_lies_in_kafkas_jittered_window() {
     );
 }
 
-/// Every election timer a voter arms runs for Kafka's
-/// `electionTimeoutMs + random.nextInt(electionTimeoutMs)`: at least the
-/// configured timeout and less than twice it. The draw also differs between
-/// voters, so two voters that time out together in one epoch do not keep
-/// timing out together.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/core/election/tests.feature",
-    name = "every election timer lies in kafkas jittered window"
-)]
-fn every_election_timer_lies_in_kafkas_jittered_window() {}
+rstest_bdd_macros::scenarios!("tests/features/migrated/src/core/election/tests.feature", fixtures = [draws: ElectionDraws]);
 
 /// How a pre-vote round began: from following a leader whose fetches stopped,
 /// or with no leader to abandon.

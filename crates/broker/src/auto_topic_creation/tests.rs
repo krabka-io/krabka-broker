@@ -1,13 +1,10 @@
 use {
     super::*,
     crate::{
-        barrier::STATE_TOPIC,
         coordinator::{bootstrap, bootstrap::OFFSETS_TOPIC},
         handlers::test_support::StartedBroker,
-        share_coordinator::bootstrap::TOPIC as SHARE_TOPIC,
         test_support::{PartitionCount, ReplicationFactor, start_broker_no_audit},
         time_util::now_ms,
-        txn::bootstrap::TOPIC as TXN_TOPIC,
     },
     assert2::{assert, check},
     krabka_protocol::{
@@ -18,6 +15,7 @@ use {
         },
         primitives::uuid::Uuid as ProtoUuid,
     },
+    rstest_bdd::datatable::Rows,
     std::{net::IpAddr, path::PathBuf},
 };
 
@@ -36,20 +34,6 @@ fn configs(pairs: &[ConfigPair<'_>]) -> Vec<CreatableTopicConfig> {
             ..Default::default()
         })
         .collect()
-}
-
-fn segment_bytes() -> ConfigPair<'static> {
-    ConfigPair {
-        name: "segment.bytes",
-        value: "104857600",
-    }
-}
-
-fn compact_cleanup() -> ConfigPair<'static> {
-    ConfigPair {
-        name: "cleanup.policy",
-        value: "compact",
-    }
 }
 
 struct AutoTopicSetup<'a> {
@@ -100,157 +84,6 @@ fn topic(
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auto topic creation tests: creatable topic follows kafkas creatable topic"
-)]
-fn bdd_verify_creatable_topic_follows_kafkas_creatable_topic() {
-    let mut config = BrokerConfig::for_tests(PathBuf::from("/tmp"));
-    config.offsets_topic_num_partitions = 11;
-    config.offsets_topic_replication_factor = 3;
-    config.transaction_state_num_partitions = 12;
-    config.transaction_state_replication_factor = 2;
-    config.transaction_state_min_isr = 2;
-    config.share_coordinator.state_topic_num_partitions = 13;
-    config.share_coordinator.state_topic_replication_factor = 4;
-    config.share_coordinator.state_topic_min_isr = 3;
-    config.barrier_state_num_partitions = 14;
-    config.barrier_state_replication_factor = 5;
-    config.num_partitions = 6;
-    config.default_replication_factor = 7;
-    let mut partitions_supplied = config.clone();
-    partitions_supplied
-        .static_config_origins
-        .topic_creation
-        .num_partitions = true;
-    let mut both_supplied = partitions_supplied.clone();
-    both_supplied
-        .static_config_origins
-        .topic_creation
-        .default_replication_factor = true;
-
-    let cases = [
-        (
-            "__consumer_offsets",
-            &config,
-            OFFSETS_TOPIC,
-            topic()
-                .name(OFFSETS_TOPIC)
-                .num_partitions(11)
-                .replication_factor(3)
-                .configs(configs(&[
-                    compact_cleanup(),
-                    ConfigPair {
-                        name: "compression.type",
-                        value: "producer",
-                    },
-                    segment_bytes(),
-                ]))
-                .call(),
-        ),
-        (
-            "__transaction_state",
-            &config,
-            TXN_TOPIC,
-            topic()
-                .name(TXN_TOPIC)
-                .num_partitions(12)
-                .replication_factor(2)
-                .configs(configs(&[
-                    compact_cleanup(),
-                    ConfigPair {
-                        name: "compression.type",
-                        value: "uncompressed",
-                    },
-                    ConfigPair {
-                        name: "min.insync.replicas",
-                        value: "2",
-                    },
-                    segment_bytes(),
-                    ConfigPair {
-                        name: "unclean.leader.election.enable",
-                        value: "false",
-                    },
-                ]))
-                .call(),
-        ),
-        (
-            "__share_group_state",
-            &config,
-            SHARE_TOPIC,
-            topic()
-                .name(SHARE_TOPIC)
-                .num_partitions(13)
-                .replication_factor(4)
-                .configs(configs(&[
-                    ConfigPair {
-                        name: "cleanup.policy",
-                        value: "delete",
-                    },
-                    ConfigPair {
-                        name: "compression.type",
-                        value: "producer",
-                    },
-                    ConfigPair {
-                        name: "min.insync.replicas",
-                        value: "3",
-                    },
-                    ConfigPair {
-                        name: "retention.ms",
-                        value: "-1",
-                    },
-                    segment_bytes(),
-                ]))
-                .call(),
-        ),
-        (
-            "__barrier_state",
-            &config,
-            STATE_TOPIC,
-            topic()
-                .name(STATE_TOPIC)
-                .num_partitions(14)
-                .replication_factor(5)
-                .configs(configs(&[compact_cleanup()]))
-                .call(),
-        ),
-        ("no default supplied", &config, "orders", topic().call()),
-        (
-            "an internal name that is not a coordinator topic",
-            &config,
-            "__remote_log_metadata",
-            topic().name("__remote_log_metadata").call(),
-        ),
-        (
-            "num.partitions supplied",
-            &partitions_supplied,
-            "orders",
-            topic().num_partitions(6).call(),
-        ),
-        (
-            "both defaults supplied",
-            &both_supplied,
-            "orders",
-            topic().num_partitions(6).replication_factor(7).call(),
-        ),
-    ];
-    for (case, config, name, expected) in cases {
-        check!(creatable_topic(config, name) == expected, "{case}");
-    }
-}
-
-/// Kafka's `DefaultAutoTopicCreationManager.creatableTopic` gives each
-/// coordinator topic its configured partition count, replication factor and
-/// topic configs. The values below differ per topic, so a mix-up of two
-/// settings shows. Any other name gets the broker defaults only when the
-/// operator supplied them, and -1 else.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/auto_topic_creation/tests.feature",
-    name = "creatable topic follows kafkas creatable topic"
-)]
-fn creatable_topic_follows_kafkas_creatable_topic() {}
-
 /// Before the broker binds itself, a request creates nothing, and its caller
 /// retries as it does for any other `COORDINATOR_NOT_AVAILABLE`.
 #[tokio::test]
@@ -260,38 +93,6 @@ async fn an_unbound_request_creates_nothing() {
     check!(creation.started() == 0);
     check!(!creation.is_in_flight(bootstrap::OFFSETS_TOPIC));
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auto topic creation tests: the dead letter topic is created as kafka creates it"
-)]
-fn bdd_verify_the_dead_letter_topic_is_created_as_kafka_creates_it() {
-    check!(
-        dead_letter_topic("dlq.orders")
-            == topic()
-                .name("dlq.orders")
-                .configs(configs(&[
-                    ConfigPair {
-                        name: "errors.deadletterqueue.group.enable",
-                        value: "true"
-                    },
-                    ConfigPair {
-                        name: "message.timestamp.type",
-                        value: "CreateTime"
-                    },
-                ]))
-                .call()
-    );
-}
-
-/// KIP-1191: the dead-letter topic asks for the cluster's default partition
-/// count and replication factor, opts itself in, and pins `CreateTime`.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/auto_topic_creation/tests.feature",
-    name = "the dead letter topic is created as kafka creates it"
-)]
-fn the_dead_letter_topic_is_created_as_kafka_creates_it() {}
 
 /// An unbound component cannot create the dead-letter topic: the write
 /// fails, and the leader archives the record regardless.
@@ -384,91 +185,6 @@ fn result_row(name: &str, error_code: i16, error_message: Option<&str>) -> Creat
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auto topic creation tests: a finished streams creation caches kafkas errors"
-)]
-fn bdd_verify_a_finished_streams_creation_caches_kafkas_errors() {
-    let names = ["a", "b", "c", "d"].map(str::to_owned);
-    let response = CreateTopicsResponse {
-        throttle_time_ms: 0,
-        topics: vec![
-            result_row("a", codes::NONE, None),
-            result_row(
-                "b",
-                codes::TOPIC_ALREADY_EXISTS,
-                Some("Topic 'b' already exists."),
-            ),
-            result_row("c", codes::INVALID_CONFIG, None),
-            result_row("d", codes::INVALID_REPLICATION_FACTOR, Some("")),
-        ],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
-    let message = |text: &str| Some(text.to_owned());
-    let cases = [
-        ("an answer", Ok(response), [
-            None,
-            message("Topic 'b' already exists."),
-            message("Configuration is invalid."),
-            message(
-                "Replication factor is below 1 or larger than the number of available \
-                     brokers.",
-            ),
-        ]),
-        (
-            "a timeout",
-            Err(TopicCreatorError::Timeout),
-            [(); 4].map(|()| message("CreateTopicsRequest to controller timed out")),
-        ),
-        (
-            "a refused envelope",
-            Err(TopicCreatorError::Envelope(
-                codes::CLUSTER_AUTHORIZATION_FAILED,
-            )),
-            [(); 4].map(|()| message("Cluster authorization failed.")),
-        ),
-    ];
-    for (case, result, expected) in cases {
-        let creation = AutoTopicCreation::default();
-        for name in &names {
-            assert!(creation.begin(name));
-        }
-        creation.finish_streams_creation(&names, &result, 1_000, 100);
-        for name in &names {
-            check!(!creation.is_in_flight(name), "{case}: {name}");
-        }
-        let expected: BTreeMap<String, String> = names
-            .iter()
-            .zip(expected)
-            .filter_map(|(name, message)| message.map(|message| (name.clone(), message)))
-            .collect();
-        check!(
-            creation
-                .streams_internal_topic_creation_errors(names.iter().map(String::as_str), 1_099)
-                == expected,
-            "{case}"
-        );
-        check!(
-            creation
-                .streams_internal_topic_creation_errors(names.iter().map(String::as_str), 1_100)
-                == BTreeMap::new(),
-            "{case}"
-        );
-    }
-}
-
-/// The completion of Kafka's `sendCreateTopicRequestWithErrorCaching`. The
-/// in-flight marks clear. A request that got no answer caches its message
-/// for every topic. An answer caches each row that is not `NONE`,
-/// `TOPIC_ALREADY_EXISTS` included, with the default message of its code
-/// when the row carries a null or empty one.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/auto_topic_creation/tests.feature",
-    name = "a finished streams creation caches kafkas errors"
-)]
-fn a_finished_streams_creation_caches_kafkas_errors() {}
-
 /// Kafka's `createStreamsInternalTopics` skips a topic whose last failure has
 /// not expired and a topic whose creation is in flight. It sends a request
 /// only when some topic is left.
@@ -517,3 +233,288 @@ async fn a_streams_creation_skips_a_backed_off_or_in_flight_topic() {
     );
     handle.shutdown().await;
 }
+
+#[derive(Default)]
+struct AutoTopicDefinition {
+    broker: Option<BrokerConfig>,
+    name: String,
+    created: Option<CreatableTopic>,
+}
+
+#[derive(rstest_bdd_macros::DataTableRow)]
+struct ExpectedTopicDefinition {
+    field: String,
+    value: String,
+}
+
+#[rstest::fixture]
+fn auto_topic_definition() -> AutoTopicDefinition {
+    // Each topic request reads independently supplied broker defaults.
+    AutoTopicDefinition::default()
+}
+
+#[rstest_bdd_macros::given(
+    "ordinary topic defaults are {partitions} partitions and replication {replication}"
+)]
+fn ordinary_auto_topic_defaults(
+    auto_topic_definition: &mut AutoTopicDefinition,
+    partitions: i32,
+    replication: i16,
+) {
+    let mut config = BrokerConfig::for_tests(PathBuf::from("/tmp"));
+    config.num_partitions = partitions;
+    config.default_replication_factor = replication;
+    auto_topic_definition.broker = Some(config);
+}
+
+#[rstest_bdd_macros::given(
+    "the {kind} coordinator topic uses {partitions} partitions and replication {replication}"
+)]
+fn coordinator_auto_topic_defaults(
+    auto_topic_definition: &mut AutoTopicDefinition,
+    kind: String,
+    partitions: i32,
+    replication: i16,
+) {
+    let config = auto_topic_definition
+        .broker
+        .as_mut()
+        .expect("broker defaults were given");
+    match kind.as_str() {
+        "offsets" => {
+            config.offsets_topic_num_partitions = partitions;
+            config.offsets_topic_replication_factor = replication;
+        }
+        "transaction" => {
+            config.transaction_state_num_partitions = partitions;
+            config.transaction_state_replication_factor = replication;
+        }
+        "share" => {
+            config.share_coordinator.state_topic_num_partitions = partitions;
+            config.share_coordinator.state_topic_replication_factor = replication;
+        }
+        "barrier" => {
+            config.barrier_state_num_partitions = partitions;
+            config.barrier_state_replication_factor = replication;
+        }
+        _ => panic!("unknown coordinator topic domain {kind}"),
+    }
+}
+
+#[rstest_bdd_macros::given("the {kind} coordinator topic minimum ISR is {minimum}")]
+fn coordinator_auto_topic_minimum_isr(
+    auto_topic_definition: &mut AutoTopicDefinition,
+    kind: String,
+    minimum: i32,
+) {
+    let config = auto_topic_definition
+        .broker
+        .as_mut()
+        .expect("broker defaults were given");
+    match kind.as_str() {
+        "transaction" => config.transaction_state_min_isr = minimum,
+        "share" => config.share_coordinator.state_topic_min_isr = minimum,
+        _ => panic!("unknown minimum ISR domain {kind}"),
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "the operator explicitly supplied topic partitions {partitions} and replication {replication}"
+)]
+fn explicitly_supplied_auto_topic_defaults(
+    auto_topic_definition: &mut AutoTopicDefinition,
+    partitions: bool,
+    replication: bool,
+) {
+    let origins = &mut auto_topic_definition
+        .broker
+        .as_mut()
+        .expect("broker defaults were given")
+        .static_config_origins
+        .topic_creation;
+    origins.num_partitions = partitions;
+    origins.default_replication_factor = replication;
+}
+
+#[rstest_bdd_macros::given("the requested automatic topic name is {name}")]
+fn supplied_auto_topic_name(auto_topic_definition: &mut AutoTopicDefinition, name: String) {
+    auto_topic_definition.name = name;
+}
+
+#[rstest_bdd_macros::when("the manager builds the automatic topic definition")]
+fn build_auto_topic_definition(auto_topic_definition: &mut AutoTopicDefinition) {
+    auto_topic_definition.created = Some(creatable_topic(
+        auto_topic_definition
+            .broker
+            .as_ref()
+            .expect("broker defaults were given"),
+        &auto_topic_definition.name,
+    ));
+}
+
+#[rstest_bdd_macros::when("the manager builds the dead-letter topic definition")]
+fn build_dead_letter_topic_definition(auto_topic_definition: &mut AutoTopicDefinition) {
+    auto_topic_definition.created = Some(dead_letter_topic(&auto_topic_definition.name));
+}
+
+#[rstest_bdd_macros::then("the complete automatic topic definition is:")]
+fn expected_auto_topic_definition(
+    auto_topic_definition: &AutoTopicDefinition,
+    #[datatable] rows: Rows<ExpectedTopicDefinition>,
+) {
+    let fields: BTreeMap<String, String> =
+        rows.into_iter().map(|row| (row.field, row.value)).collect();
+    let field = |name: &str| {
+        fields
+            .get(name)
+            .expect("complete expected topic definition")
+    };
+    let values: Vec<(String, String)> =
+        serde_json::from_str(field("configs")).expect("ordered independent topic config pairs");
+    let pairs: Vec<_> = values
+        .iter()
+        .map(|(name, value)| ConfigPair { name, value })
+        .collect();
+    let expected = topic()
+        .name(field("name"))
+        .num_partitions(
+            field("partitions")
+                .parse::<i32>()
+                .expect("expected partitions"),
+        )
+        .replication_factor(
+            field("replication")
+                .parse::<i16>()
+                .expect("expected replication"),
+        )
+        .configs(configs(&pairs))
+        .call();
+    check!(auto_topic_definition.created.as_ref() == Some(&expected));
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/auto_topic_creation/definitions",
+    fixtures = [auto_topic_definition: AutoTopicDefinition]
+);
+
+#[derive(Default)]
+struct StreamsTopicCompletion {
+    creation: Option<AutoTopicCreation>,
+    names: Vec<String>,
+    response: Option<Result<CreateTopicsResponse, TopicCreatorError>>,
+    cached: Option<BTreeMap<String, String>>,
+}
+
+#[derive(rstest_bdd_macros::DataTableRow)]
+struct ControllerTopicResult {
+    name: String,
+    code: i16,
+    message: String,
+}
+
+#[rstest::fixture]
+fn streams_topic_completion() -> StreamsTopicCompletion {
+    // Every controller completion receives its own in-flight set and error cache.
+    StreamsTopicCompletion::default()
+}
+
+#[rstest_bdd_macros::given("streams topics a, b, c and d are being created")]
+fn in_flight_streams_topics(streams_topic_completion: &mut StreamsTopicCompletion) {
+    let creation = AutoTopicCreation::default();
+    streams_topic_completion.names = ["a", "b", "c", "d"].map(str::to_owned).to_vec();
+    for name in &streams_topic_completion.names {
+        assert!(creation.begin(name));
+    }
+    streams_topic_completion.creation = Some(creation);
+}
+
+#[rstest_bdd_macros::given("the controller answered topic creation with:")]
+fn supplied_streams_topic_response(
+    streams_topic_completion: &mut StreamsTopicCompletion,
+    #[datatable] rows: Rows<ControllerTopicResult>,
+) {
+    let topics = rows
+        .into_iter()
+        .map(|row| {
+            let message: Option<String> =
+                serde_json::from_str(&row.message).expect("exact nullable controller message");
+            result_row(&row.name, row.code, message.as_deref())
+        })
+        .collect();
+    streams_topic_completion.response = Some(Ok(CreateTopicsResponse {
+        throttle_time_ms: 0,
+        topics,
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    }));
+}
+
+#[rstest_bdd_macros::given("the controller topic creation request timed out")]
+fn timed_out_streams_topic_response(streams_topic_completion: &mut StreamsTopicCompletion) {
+    streams_topic_completion.response = Some(Err(TopicCreatorError::Timeout));
+}
+
+#[rstest_bdd_macros::given("the controller refused the envelope with CLUSTER_AUTHORIZATION_FAILED")]
+fn refused_streams_topic_envelope(streams_topic_completion: &mut StreamsTopicCompletion) {
+    streams_topic_completion.response = Some(Err(TopicCreatorError::Envelope(
+        codes::CLUSTER_AUTHORIZATION_FAILED,
+    )));
+}
+
+#[rstest_bdd_macros::when(
+    "streams creation completes at millisecond 100 with error cache lifetime 1000 milliseconds"
+)]
+fn finish_streams_topic_response(streams_topic_completion: &StreamsTopicCompletion) {
+    streams_topic_completion
+        .creation
+        .as_ref()
+        .expect("in-flight creations were given")
+        .finish_streams_creation(
+            &streams_topic_completion.names,
+            streams_topic_completion
+                .response
+                .as_ref()
+                .expect("controller response was given"),
+            1000,
+            100,
+        );
+}
+
+#[rstest_bdd_macros::then("all four streams topics leave the in-flight set")]
+fn finished_streams_topics(streams_topic_completion: &StreamsTopicCompletion) {
+    let creation = streams_topic_completion
+        .creation
+        .as_ref()
+        .expect("in-flight creations were given");
+    for name in &streams_topic_completion.names {
+        check!(!creation.is_in_flight(name));
+    }
+}
+
+#[rstest_bdd_macros::when("streams creation errors are queried at millisecond {at}")]
+fn query_streams_topic_errors(streams_topic_completion: &mut StreamsTopicCompletion, at: i64) {
+    streams_topic_completion.cached = Some(
+        streams_topic_completion
+            .creation
+            .as_ref()
+            .expect("in-flight creations were given")
+            .streams_internal_topic_creation_errors(
+                streams_topic_completion.names.iter().map(String::as_str),
+                at,
+            ),
+    );
+}
+
+#[rstest_bdd_macros::then("the cached streams topic errors are JSON {errors}")]
+fn expected_streams_topic_errors(
+    streams_topic_completion: &StreamsTopicCompletion,
+    errors: String,
+) {
+    let expected: BTreeMap<String, String> =
+        serde_json::from_str(&errors).expect("independent per-topic controller failures");
+    check!(streams_topic_completion.cached.as_ref() == Some(&expected));
+}
+
+rstest_bdd_macros::scenarios!(
+    "tests/features/migrated/src/auto_topic_creation/completion.feature",
+    fixtures = [streams_topic_completion: StreamsTopicCompletion]
+);

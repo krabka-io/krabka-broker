@@ -428,106 +428,87 @@ mod tests {
         assert2::{assert, check},
         krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionElrRecord},
         krabka_units::{millis, secs},
-        std::{path::PathBuf, time::Duration},
+        std::{collections::BTreeMap, path::PathBuf, time::Duration},
         tokio::{task, time},
     };
 
-    /// One KIP-835 sample: what the source reports, when the gauge samples
-    /// it, and the gauges Kafka would show.
-    struct AppliedRecordCase {
-        name: &'static str,
-        reported: ReportedProgress,
-        now_ms: i64,
-        expected: AppliedRecordGauges,
+    #[derive(Default)]
+    struct MetadataGaugeSample {
+        now: Option<i64>,
+        reported: Option<ReportedProgress>,
+        sampled: Option<AppliedRecordGauges>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "broker gauges tests: applied record gauges follow kafka units and initial values"
-    )]
-    fn bdd_verify_applied_record_gauges_follow_kafka_units_and_initial_values() {
-        const APPENDED_MS: i64 = 1_700_000_000_000;
-        let cases = [
-            AppliedRecordCase {
-                name: "nothing applied: Kafka's MetadataProvenance.EMPTY",
-                reported: ReportedProgress {
-                    applied_offset: -1,
-                    committed_offset: -1,
-                    applied_timestamp_ms: 0,
-                },
-                now_ms: APPENDED_MS,
-                expected: AppliedRecordGauges {
-                    applied_offset: -1,
-                    committed_offset: -1,
-                    applied_timestamp_ms: -1,
-                    applied_lag_ms: APPENDED_MS + 1,
-                    lag_records: 0,
-                },
-            },
-            AppliedRecordCase {
-                name: "caught up, sampled 250 ms after the last append",
-                reported: ReportedProgress {
-                    applied_offset: 41,
-                    committed_offset: 41,
-                    applied_timestamp_ms: APPENDED_MS,
-                },
-                now_ms: APPENDED_MS + 250,
-                expected: AppliedRecordGauges {
-                    applied_offset: 41,
-                    committed_offset: 41,
-                    applied_timestamp_ms: APPENDED_MS,
-                    applied_lag_ms: 250,
-                    lag_records: 0,
-                },
-            },
-            AppliedRecordCase {
-                name: "behind the quorum by seven records and a minute",
-                reported: ReportedProgress {
-                    applied_offset: 100,
-                    committed_offset: 107,
-                    applied_timestamp_ms: APPENDED_MS,
-                },
-                now_ms: APPENDED_MS + 60_000,
-                expected: AppliedRecordGauges {
-                    applied_offset: 100,
-                    committed_offset: 107,
-                    applied_timestamp_ms: APPENDED_MS,
-                    applied_lag_ms: 60_000,
-                    lag_records: 7,
-                },
-            },
-            AppliedRecordCase {
-                name: "a record stamped ahead of the local clock lags negatively, unclamped",
-                reported: ReportedProgress {
-                    applied_offset: 5,
-                    committed_offset: 5,
-                    applied_timestamp_ms: APPENDED_MS + 30,
-                },
-                now_ms: APPENDED_MS,
-                expected: AppliedRecordGauges {
-                    applied_offset: 5,
-                    committed_offset: 5,
-                    applied_timestamp_ms: APPENDED_MS + 30,
-                    applied_lag_ms: -30,
-                    lag_records: 0,
-                },
-            },
-        ];
-        for case in cases {
-            check!(
-                AppliedRecordGauges::derive(case.reported, case.now_ms) == case.expected,
-                "{}",
-                case.name
-            );
-        }
+    #[rstest::fixture]
+    fn metadata_gauge_sample() -> MetadataGaugeSample {
+        // Sampling each source observation starts without prior gauge values.
+        MetadataGaugeSample::default()
     }
 
-    #[cfg(test)]
+    #[rstest_bdd_macros::given("metadata progress and sampling time are JSON {progress}")]
+    fn supplied_metadata_progress(
+        metadata_gauge_sample: &mut MetadataGaugeSample,
+        progress: String,
+    ) {
+        let fields: BTreeMap<String, i64> =
+            serde_json::from_str(&progress).expect("explicit metadata source offsets and clock");
+        let field = |name: &str| {
+            *fields
+                .get(name)
+                .expect("complete metadata source observation")
+        };
+        metadata_gauge_sample.reported = Some(ReportedProgress {
+            applied_offset: field("applied"),
+            committed_offset: field("committed"),
+            applied_timestamp_ms: field("append_timestamp"),
+        });
+        metadata_gauge_sample.now = Some(field("sample_at"));
+    }
+
+    #[rstest_bdd_macros::when("the metadata progress gauges are sampled")]
+    fn sample_metadata_progress(metadata_gauge_sample: &mut MetadataGaugeSample) {
+        metadata_gauge_sample.sampled = Some(AppliedRecordGauges::derive(
+            metadata_gauge_sample
+                .reported
+                .take()
+                .expect("source progress was given"),
+            metadata_gauge_sample.now.expect("sampling clock was given"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the complete Kafka metadata gauge sample is JSON {gauges}")]
+    fn expected_metadata_progress(metadata_gauge_sample: &MetadataGaugeSample, gauges: String) {
+        let fields: BTreeMap<String, i64> =
+            serde_json::from_str(&gauges).expect("independent complete Kafka gauge sample");
+        let field = |name: &str| {
+            *fields
+                .get(name)
+                .expect("complete expected metadata gauge sample")
+        };
+        check!(
+            metadata_gauge_sample.sampled
+                == Some(AppliedRecordGauges {
+                    applied_offset: field("applied"),
+                    committed_offset: field("committed"),
+                    applied_timestamp_ms: field("timestamp"),
+                    applied_lag_ms: field("lag_ms"),
+                    lag_records: field("lag_records")
+                })
+        );
+    }
+
     #[rstest_bdd_macros::scenario(
         path = "tests/features/migrated/src/broker/gauges.feature",
-        name = "tests: applied record gauges follow kafka units and initial values"
+        name = "Sample metadata progress using Kafka units and initial values"
     )]
-    fn applied_record_gauges_follow_kafka_units_and_initial_values() {}
+    fn applied_record_gauges_follow_kafka_units_and_initial_values(
+        metadata_gauge_sample: MetadataGaugeSample,
+        case: String,
+        progress: String,
+        gauges: String,
+    ) {
+        let _ = (metadata_gauge_sample, case, progress, gauges);
+    }
 
     /// Reads the KIP-835 applied-record gauges back from the registry.
     fn published_applied_record_gauges(metrics: &BrokerMetrics) -> AppliedRecordGauges {

@@ -231,78 +231,132 @@ pub(super) fn parse_header_pattern(s: &str) -> Result<HeaderPattern, String> {
 mod tests {
     use {super::*, crate::args::test_support::partition, assert2::check};
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "args value tests: parse cluster id accepts kafka base64 and hyphenated uuid forms"
-    )]
-    fn bdd_verify_parse_cluster_id_accepts_kafka_base64_and_hyphenated_uuid_forms() {
-        let id = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
-        check!(parse_cluster_id("AQIDBAUGBwgJCgsMDQ4PEA") == Ok(id));
-        check!(parse_cluster_id(&id.to_string()) == Ok(id));
-        check!(parse_cluster_id("not-a-cluster-id").is_err());
+    #[derive(Default)]
+    struct RestoreArgumentScenario {
+        text: String,
+        cluster: Option<Result<Uuid, String>>,
+        topic: Option<Result<String, String>>,
+        node: Option<Result<NodeId, String>>,
+        partition: Option<PartitionRef>,
+        rendered: String,
+    }
+    #[rstest::fixture]
+    fn restore_argument() -> RestoreArgumentScenario {
+        let text = String::new();
+        RestoreArgumentScenario {
+            text,
+            ..RestoreArgumentScenario::default()
+        }
     }
 
-    /// `--cluster-id` accepts Kafka's base64 `Uuid` form -- what `Metadata`
-    /// and `DescribeCluster` report (#1082) -- as well as the hyphenated
-    /// `java.util.UUID` form.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/args/value.feature",
-        name = "tests: parse cluster id accepts kafka base64 and hyphenated uuid forms"
-    )]
-    fn parse_cluster_id_accepts_kafka_base64_and_hyphenated_uuid_forms() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("args value tests: topic names accept kafka names for {example}")]
-    fn bdd_verify_topic_names_accept_kafka_names(example: String) {
-        type Example = (String,);
-        let (good,): Example = match example.as_str() {
-            "common" => ("orders".to_owned(),),
-            "one character" => ("a".to_owned(),),
-            "punctuation" => ("a.b_c-d".to_owned(),),
-            "digit" => ("0".to_owned(),),
-            "maximum length" => ("x".repeat(MAX_TOPIC_NAME_LEN),),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(parse_topic_name(&good) == Ok(good.clone()), "{good:?}");
+    #[rstest_bdd_macros::given("restore cluster ID text {text}")]
+    fn cluster_id_text(restore_argument: &mut RestoreArgumentScenario, text: String) {
+        restore_argument.text = text;
+    }
+    #[rstest_bdd_macros::when("the restore cluster ID is parsed")]
+    fn parse_restore_cluster(restore_argument: &mut RestoreArgumentScenario) {
+        restore_argument.cluster = Some(parse_cluster_id(&restore_argument.text));
+    }
+    #[rstest_bdd_macros::then("the cluster ID is 01020304-0506-0708-090a-0b0c0d0e0f10")]
+    fn parsed_cluster_id(restore_argument: &RestoreArgumentScenario) {
+        check!(
+            restore_argument.cluster
+                == Some(Ok(Uuid::from_u128(
+                    0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10
+                )))
+        );
+    }
+    #[rstest_bdd_macros::then("the restore cluster ID is rejected")]
+    fn rejected_cluster_id(restore_argument: &RestoreArgumentScenario) {
+        check!(
+            restore_argument
+                .cluster
+                .as_ref()
+                .expect("cluster ID parsed")
+                .is_err()
+        );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/args/value.feature",
-        name = "tests: topic names accept kafka names"
-    )]
-    fn topic_names_accept_kafka_names(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "args value tests: topic names reject invalid kafka names for {example}"
-    )]
-    fn bdd_verify_topic_names_reject_invalid_kafka_names(example: String) {
-        type Example = (String,);
-        let (bad,): Example = match example.as_str() {
-            "empty" => (String::new(),),
-            "dot" => (".".to_owned(),),
-            "double dot" => ("..".to_owned(),),
-            "whitespace" => ("has space".to_owned(),),
-            "slash" => ("has/slash".to_owned(),),
-            "colon" => ("has:colon".to_owned(),),
-            "equals" => ("has=equals".to_owned(),),
-            "non ascii" => ("café".to_owned(),),
-            "over limit" => ("x".repeat(MAX_TOPIC_NAME_LEN + 1),),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(parse_topic_name(&bad).is_err(), "{bad:?}");
+    #[rstest_bdd_macros::given("restore topic name {name}")]
+    fn restore_topic_text(restore_argument: &mut RestoreArgumentScenario, name: String) {
+        restore_argument.text = name;
+    }
+    #[rstest_bdd_macros::given("an empty restore argument")]
+    fn empty_restore_argument(restore_argument: &mut RestoreArgumentScenario) {
+        restore_argument.text.clear();
+    }
+    #[rstest_bdd_macros::given("a restore topic name of {length} x characters")]
+    fn restore_topic_length(restore_argument: &mut RestoreArgumentScenario, length: usize) {
+        restore_argument.text = "x".repeat(length);
+    }
+    #[rstest_bdd_macros::when("the restore topic name is parsed")]
+    fn parse_restore_topic(restore_argument: &mut RestoreArgumentScenario) {
+        restore_argument.topic = Some(parse_topic_name(&restore_argument.text));
+    }
+    #[rstest_bdd_macros::then("the restore topic name is retained verbatim")]
+    fn parsed_topic_name(restore_argument: &RestoreArgumentScenario) {
+        check!(restore_argument.topic == Some(Ok(restore_argument.text.clone())));
+    }
+    #[rstest_bdd_macros::then("the restore topic name is rejected")]
+    fn rejected_topic_name(restore_argument: &RestoreArgumentScenario) {
+        check!(
+            restore_argument
+                .topic
+                .as_ref()
+                .expect("topic name parsed")
+                .is_err(),
+            "{:?}",
+            restore_argument.text
+        );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/args/value.feature",
-        name = "tests: topic names reject invalid kafka names"
-    )]
-    fn topic_names_reject_invalid_kafka_names(example: String) { let _ = example; }
+    #[rstest_bdd_macros::given("restore node ID text {text}")]
+    fn restore_node_text(restore_argument: &mut RestoreArgumentScenario, text: String) {
+        restore_argument.text = text;
+    }
+    #[rstest_bdd_macros::when("the restore node ID is parsed")]
+    fn parse_restore_node(restore_argument: &mut RestoreArgumentScenario) {
+        restore_argument.node = Some(parse_node_id(&restore_argument.text));
+    }
+    #[rstest_bdd_macros::then("the restore node ID is rejected")]
+    fn rejected_node_id(restore_argument: &RestoreArgumentScenario) {
+        check!(
+            restore_argument
+                .node
+                .as_ref()
+                .expect("node ID parsed")
+                .is_err(),
+            "{:?}",
+            restore_argument.text
+        );
+    }
+    #[rstest_bdd_macros::then("the restore node ID equals {value}")]
+    fn parsed_node_id(restore_argument: &RestoreArgumentScenario, value: u64) {
+        check!(restore_argument.node == Some(Ok(NodeId(value))));
+    }
+
+    #[rstest_bdd_macros::given("restore topic {topic} partition {index}")]
+    fn restore_partition(
+        restore_argument: &mut RestoreArgumentScenario,
+        topic: String,
+        index: i32,
+    ) {
+        restore_argument.partition = Some(partition(&topic, index));
+    }
+    #[rstest_bdd_macros::when("the restore partition is displayed")]
+    fn display_restore_partition(restore_argument: &mut RestoreArgumentScenario) {
+        restore_argument.rendered = restore_argument
+            .partition
+            .as_ref()
+            .expect("partition given")
+            .to_string();
+    }
+    #[rstest_bdd_macros::then("the restore partition spelling is {name}")]
+    fn partition_spelling(restore_argument: &RestoreArgumentScenario, name: String) {
+        check!(restore_argument.rendered == name);
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/restore_arguments", fixtures = [restore_argument: RestoreArgumentScenario]);
 
     #[test]
     fn partition_refs_split_on_the_colon() {
@@ -323,19 +377,6 @@ mod tests {
     fn partition_refs_reject_malformed_input(bad: &str) {
         check!(parse_partition_ref(bad).is_err(), "{bad:?}");
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("args value tests: partition ref displays the kafka spelling")]
-    fn bdd_verify_partition_ref_displays_the_kafka_spelling() {
-        check!(partition("orders", 3).to_string() == "orders-3");
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/args/value.feature",
-        name = "tests: partition ref displays the kafka spelling"
-    )]
-    fn partition_ref_displays_the_kafka_spelling() {}
 
     #[test]
     fn offset_bounds_parse_to_an_inclusive_last_offset() {
@@ -452,44 +493,6 @@ mod tests {
         check!(parse_producer_id("42") == Ok(ProducerId(42)));
         check!(parse_producer_id(" 7 ") == Ok(ProducerId(7)));
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "args value tests: node ids reject values outside kafkas node id range for {example}"
-    )]
-    fn bdd_verify_node_ids_reject_values_outside_kafkas_node_id_range(example: String) {
-        type Example<'a> = (&'a str,);
-        let (bad,): Example<'_> = match example.as_str() {
-            "negative" => ("-1",),
-            "text" => ("x",),
-            "empty" => ("",),
-            "overflow" => ("2147483648",),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(parse_node_id(bad).is_err(), "{bad:?}");
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/args/value.feature",
-        name = "tests: node ids reject values outside kafkas node id range"
-    )]
-    fn node_ids_reject_values_outside_kafkas_node_id_range(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("args value tests: node ids accept kafkas node id range")]
-    fn bdd_verify_node_ids_accept_kafkas_node_id_range() {
-        check!(parse_node_id("3") == Ok(NodeId(3)));
-        check!(parse_node_id("2147483647") == Ok(NodeId(2_147_483_647)));
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/args/value.feature",
-        name = "tests: node ids accept kafkas node id range"
-    )]
-    fn node_ids_accept_kafkas_node_id_range() {}
 
     #[test]
     fn regexes_compile_or_report_why_not() {

@@ -108,239 +108,323 @@ async fn bootstrap_static_member(
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("static membership: static rejoin preserves assignment and generation")]
-async fn bdd_verify_static_rejoin_preserves_assignment_and_generation() {
-    let p = start().await;
+use {
+    krabka_protocol::owned::{
+        leave_group_response::LeaveGroupResponse, sync_group_response::SyncGroupResponse,
+    },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
 
-    let StaticMember {
-        member_id: mid1,
-        generation_id: gen1,
-        assignment,
-    } = bootstrap_static_member(
-        &p.client,
-        "g-static-1",
-        "instance-A",
-        Bytes::from_static(b"assignment-bytes"),
-    )
-    .await;
+#[derive(Default)]
+struct StaticMembership {
+    process: Option<support::InProcess>,
+    group: String,
+    instance: String,
+    incumbent: Option<StaticMember>,
+    joined: Option<JoinGroupResponse>,
+    heartbeat: Option<i16>,
+    synced: Option<SyncGroupResponse>,
+    left: Option<LeaveGroupResponse>,
+}
 
-    // Confirm Heartbeat works with both member_id and instance_id.
-    let hb = p
-        .client
-        .send(HeartbeatRequest {
-            group_id: "g-static-1".into(),
-            generation_id: gen1,
-            member_id: mid1.clone(),
-            group_instance_id: Some("instance-A".into()),
-            ..Default::default()
-        })
-        .await
-        .expect("Heartbeat");
-    assert!(hb.error_code == 0);
+#[fixture]
+fn static_membership() -> StaticMembership {
+    // Track the incumbent separately from replacement and intruder responses.
+    StaticMembership::default()
+}
 
-    // A restart: the same instance id with an empty member id. Kafka's
-    // `updateStaticMemberThenRebalanceOrCompleteJoin` gives it a new member
-    // id in place of the old one. The group is Stable and the selected
-    // protocol does not change, so the generation stays; at v9 the leader
-    // gets the member list with `skip_assignment` (KIP-814).
-    let rejoin = p
-        .client
-        .send(join_request("g-static-1", "", Some("instance-A")))
-        .await
-        .expect("static rejoin");
-    let mid2 = rejoin.member_id.clone();
-    check!(mid2 != mid1);
-    check!(mid2.starts_with("instance-A-"));
+#[given("a stable group {group} with static instance {instance} assigned {assignment}")]
+async fn stable_static_group(
+    static_membership: &mut StaticMembership,
+    group: String,
+    instance: String,
+    assignment: String,
+) {
+    let process = start().await;
+    static_membership.incumbent = Some(
+        bootstrap_static_member(&process.client, &group, &instance, Bytes::from(assignment)).await,
+    );
+    static_membership.process = Some(process);
+    static_membership.group = group;
+    static_membership.instance = instance;
+}
+
+#[when("the static instance rejoins with an empty member ID")]
+async fn static_rejoin(static_membership: &mut StaticMembership) {
+    static_membership.joined = Some(
+        static_membership
+            .process
+            .as_ref()
+            .expect("group broker")
+            .client
+            .send(join_request(
+                &static_membership.group,
+                "",
+                Some(&static_membership.instance),
+            ))
+            .await
+            .expect("static rejoin"),
+    );
+}
+
+#[then("the replacement keeps the generation and becomes leader without reassignment")]
+fn static_replacement(static_membership: &StaticMembership) {
+    let incumbent = static_membership
+        .incumbent
+        .as_ref()
+        .expect("incumbent member");
+    let rejoin = static_membership.joined.as_ref().expect("rejoin response");
+    let member = rejoin.member_id.clone();
+    check!(member != incumbent.member_id);
+    check!(member.starts_with(&format!("{}-", static_membership.instance)));
     check!(
         rejoin
-            == JoinGroupResponse {
-                generation_id: gen1,
+            == &JoinGroupResponse {
+                generation_id: incumbent.generation_id,
                 protocol_type: Some("consumer".into()),
                 protocol_name: Some("range".into()),
-                leader: mid2.clone(),
+                leader: member.clone(),
                 skip_assignment: true,
-                member_id: mid2.clone(),
+                member_id: member.clone(),
                 members: vec![JoinGroupResponseMember {
-                    member_id: mid2.clone(),
-                    group_instance_id: Some("instance-A".into()),
+                    member_id: member,
+                    group_instance_id: Some(static_membership.instance.clone()),
                     metadata: Bytes::new(),
                     ..Default::default()
                 }],
-                ..JoinGroupResponse::default()
-            },
-        "static rejoin must keep generation_id and replace the member id"
-    );
-
-    // The old instance is fenced, and the new member id keeps the
-    // assignment.
-    let old = p
-        .client
-        .send(HeartbeatRequest {
-            group_id: "g-static-1".into(),
-            generation_id: gen1,
-            member_id: mid1,
-            group_instance_id: Some("instance-A".into()),
-            ..Default::default()
-        })
-        .await
-        .expect("Heartbeat (old member id)");
-    check!(old.error_code == FENCED_INSTANCE_ID);
-    let sync = p
-        .client
-        .send(SyncGroupRequest {
-            group_id: "g-static-1".into(),
-            generation_id: gen1,
-            member_id: mid2,
-            group_instance_id: Some("instance-A".into()),
-            protocol_type: Some("consumer".into()),
-            protocol_name: Some("range".into()),
-            ..Default::default()
-        })
-        .await
-        .expect("SyncGroup (new member id)");
-    check!(sync.error_code == 0);
-    check!(sync.assignment == assignment);
-
-    p.broker.shutdown().await;
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/static_membership.feature",
-    name = "static rejoin preserves assignment and generation"
-)]
-#[tokio::test]
-async fn static_rejoin_preserves_assignment_and_generation() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("static membership: second client with same instance id is fenced")]
-async fn bdd_verify_second_client_with_same_instance_id_is_fenced() {
-    let p = start().await;
-
-    let StaticMember {
-        member_id: mid1,
-        generation_id: gen1,
-        ..
-    } = bootstrap_static_member(
-        &p.client,
-        "g-fence",
-        "instance-B",
-        Bytes::from_static(b"asgn"),
-    )
-    .await;
-
-    // A *different* live `member_id` claims the same instance id. The
-    // KIP-345 rule: reject with FENCED_INSTANCE_ID.
-    let intruder = p
-        .client
-        .send(join_request(
-            "g-fence",
-            "imposter-member-id",
-            Some("instance-B"),
-        ))
-        .await
-        .expect("intruder JoinGroup");
-    assert!(intruder.error_code == FENCED_INSTANCE_ID);
-
-    // Heartbeat with a wrong member_id but the right instance id is also
-    // fenced. (Defense-in-depth: a client whose `member_id` was reset
-    // shouldn't be able to talk under the static slot until it
-    // re-bootstraps.)
-    let hb_fenced = p
-        .client
-        .send(HeartbeatRequest {
-            group_id: "g-fence".into(),
-            generation_id: gen1,
-            member_id: "wrong-member-id".into(),
-            group_instance_id: Some("instance-B".into()),
-            ..Default::default()
-        })
-        .await
-        .expect("Heartbeat (fenced)");
-    assert!(hb_fenced.error_code == FENCED_INSTANCE_ID);
-
-    // The original member is unaffected.
-    let hb_ok = p
-        .client
-        .send(HeartbeatRequest {
-            group_id: "g-fence".into(),
-            generation_id: gen1,
-            member_id: mid1.clone(),
-            group_instance_id: Some("instance-B".into()),
-            ..Default::default()
-        })
-        .await
-        .expect("Heartbeat (incumbent)");
-    assert!(hb_ok.error_code == 0);
-
-    p.broker.shutdown().await;
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/static_membership.feature",
-    name = "second client with same instance id is fenced"
-)]
-#[tokio::test]
-async fn second_client_with_same_instance_id_is_fenced() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("static membership: leave group resolves static member by instance id")]
-async fn bdd_verify_leave_group_resolves_static_member_by_instance_id() {
-    let p = start().await;
-
-    let StaticMember { member_id: mid, .. } = bootstrap_static_member(
-        &p.client,
-        "g-leave",
-        "instance-C",
-        Bytes::from_static(b"asgn"),
-    )
-    .await;
-
-    // LeaveGroup v3+ with empty member_id, identity carries only the
-    // instance id. Broker must resolve via the static index, remove the
-    // slot, and echo the instance id in the response with NONE.
-    let resp = p
-        .client
-        .send(LeaveGroupRequest {
-            group_id: "g-leave".into(),
-            member_id: String::new(),
-            members: vec![MemberIdentity {
-                member_id: String::new(),
-                group_instance_id: Some("instance-C".into()),
                 ..Default::default()
-            }],
+            },
+        "static rejoin must keep generation and replace member ID"
+    );
+}
+
+#[when("a member named imposter-member-id joins the incumbent static instance")]
+async fn static_intruder(static_membership: &mut StaticMembership) {
+    static_membership.joined = Some(
+        static_membership
+            .process
+            .as_ref()
+            .expect("group broker")
+            .client
+            .send(join_request(
+                &static_membership.group,
+                "imposter-member-id",
+                Some(&static_membership.instance),
+            ))
+            .await
+            .expect("intruder JoinGroup"),
+    );
+}
+
+#[then("the intruder join is fenced with FENCED_INSTANCE_ID")]
+fn intruder_fenced(static_membership: &StaticMembership) {
+    assert!(
+        static_membership
+            .joined
+            .as_ref()
+            .expect("intruder response")
+            .error_code
+            == FENCED_INSTANCE_ID
+    );
+}
+
+#[when("the {member} member heartbeats with the static instance ID")]
+async fn static_heartbeat(static_membership: &mut StaticMembership, member: String) {
+    let incumbent = static_membership
+        .incumbent
+        .as_ref()
+        .expect("incumbent member");
+    let member_id = match member.as_str() {
+        "incumbent" => incumbent.member_id.clone(),
+        "wrong" => "wrong-member-id".into(),
+        _ => panic!("unknown member {member}"),
+    };
+    let response = static_membership
+        .process
+        .as_ref()
+        .expect("group broker")
+        .client
+        .send(HeartbeatRequest {
+            group_id: static_membership.group.clone(),
+            generation_id: incumbent.generation_id,
+            member_id,
+            group_instance_id: Some(static_membership.instance.clone()),
             ..Default::default()
         })
         .await
-        .expect("LeaveGroup");
-    check!(resp.error_code == 0);
-    assert!(resp.members.len() == 1);
-    check!(resp.members[0].error_code == 0);
-    check!(resp.members[0].group_instance_id.as_deref() == Some("instance-C"));
+        .expect("static Heartbeat");
+    static_membership.heartbeat = Some(response.error_code);
+}
 
-    // A subsequent Heartbeat from the old member id should be rejected —
-    // the slot is gone.
-    let hb = p
+#[then("the static heartbeat returns error {error}")]
+fn static_heartbeat_code(static_membership: &StaticMembership, error: i16) {
+    assert!(static_membership.heartbeat == Some(error));
+}
+
+#[when("the replacement member requests its existing assignment")]
+async fn replacement_assignment(static_membership: &mut StaticMembership) {
+    static_membership.synced = Some(
+        static_membership
+            .process
+            .as_ref()
+            .expect("group broker")
+            .client
+            .send(SyncGroupRequest {
+                group_id: static_membership.group.clone(),
+                generation_id: static_membership
+                    .incumbent
+                    .as_ref()
+                    .expect("incumbent")
+                    .generation_id,
+                member_id: static_membership
+                    .joined
+                    .as_ref()
+                    .expect("replacement")
+                    .member_id
+                    .clone(),
+                group_instance_id: Some(static_membership.instance.clone()),
+                protocol_type: Some("consumer".into()),
+                protocol_name: Some("range".into()),
+                ..Default::default()
+            })
+            .await
+            .expect("replacement SyncGroup"),
+    );
+}
+
+#[then("the replacement receives the incumbent's assignment successfully")]
+fn assignment_preserved(static_membership: &StaticMembership) {
+    let synced = static_membership
+        .synced
+        .as_ref()
+        .expect("replacement SyncGroup answered");
+    check!(synced.error_code == 0);
+    check!(
+        synced.assignment
+            == static_membership
+                .incumbent
+                .as_ref()
+                .expect("incumbent")
+                .assignment
+    );
+}
+
+#[when("the static instance leaves with an empty member ID")]
+async fn instance_leave(static_membership: &mut StaticMembership) {
+    static_membership.left = Some(
+        static_membership
+            .process
+            .as_ref()
+            .expect("group broker")
+            .client
+            .send(LeaveGroupRequest {
+                group_id: static_membership.group.clone(),
+                member_id: String::new(),
+                members: vec![MemberIdentity {
+                    member_id: String::new(),
+                    group_instance_id: Some(static_membership.instance.clone()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .await
+            .expect("instance LeaveGroup"),
+    );
+}
+
+#[then("the leave response echoes the static instance and succeeds for its single member")]
+fn instance_left(static_membership: &StaticMembership) {
+    let response = static_membership
+        .left
+        .as_ref()
+        .expect("LeaveGroup answered");
+    check!(response.error_code == 0);
+    assert!(response.members.len() == 1);
+    check!(response.members[0].error_code == 0);
+    check!(
+        response.members[0].group_instance_id.as_deref()
+            == Some(static_membership.instance.as_str())
+    );
+}
+
+#[when("the departed incumbent heartbeats without a static instance ID")]
+async fn departed_heartbeat(static_membership: &mut StaticMembership) {
+    let response = static_membership
+        .process
+        .as_ref()
+        .expect("group broker")
         .client
         .send(HeartbeatRequest {
-            group_id: "g-leave".into(),
+            group_id: static_membership.group.clone(),
             generation_id: 1,
-            member_id: mid,
+            member_id: static_membership
+                .incumbent
+                .as_ref()
+                .expect("incumbent")
+                .member_id
+                .clone(),
             ..Default::default()
         })
         .await
         .expect("Heartbeat after leave");
-    assert!(hb.error_code != 0);
-
-    p.broker.shutdown().await;
+    static_membership.heartbeat = Some(response.error_code);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[then("the departed incumbent's heartbeat is rejected")]
+fn departed_member_rejected(static_membership: &StaticMembership) {
+    assert!(
+        static_membership
+            .heartbeat
+            .expect("departed heartbeat answered")
+            != 0
+    );
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/static_membership.feature",
+    name = "static rejoin preserves assignment and generation"
+)]
+#[tokio::test]
+async fn static_rejoin_preserves_assignment_and_generation(static_membership: StaticMembership) {
+    static_membership
+        .process
+        .take()
+        .expect("group broker")
+        .broker
+        .shutdown()
+        .await;
+    drop(static_membership);
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/static_membership.feature",
+    name = "second client with same instance id is fenced"
+)]
+#[tokio::test]
+async fn second_client_with_same_instance_id_is_fenced(static_membership: StaticMembership) {
+    static_membership
+        .process
+        .take()
+        .expect("group broker")
+        .broker
+        .shutdown()
+        .await;
+    drop(static_membership);
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/static_membership.feature",
     name = "leave group resolves static member by instance id"
 )]
 #[tokio::test]
-async fn leave_group_resolves_static_member_by_instance_id() {}
+async fn leave_group_resolves_static_member_by_instance_id(static_membership: StaticMembership) {
+    static_membership
+        .process
+        .take()
+        .expect("group broker")
+        .broker
+        .shutdown()
+        .await;
+    drop(static_membership);
+}

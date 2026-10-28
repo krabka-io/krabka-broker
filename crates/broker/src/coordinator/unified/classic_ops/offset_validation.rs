@@ -140,177 +140,9 @@ mod tests {
     /// One row of the `OffsetCommit` table: the group state, the request's
     /// member id, instance id and generation (`None` is the group's current
     /// generation), and the result.
-    struct OffsetCase {
-        state: GroupState,
-        member: &'static str,
-        instance: Option<&'static str>,
-        generation: Option<i32>,
-        want: Result<(), i16>,
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified classic ops offset validation tests: offset commit follows kafka classic group rule"
-    )]
-    fn bdd_verify_offset_commit_follows_kafka_classic_group_rule() {
-        let cases: [OffsetCase; 16] = [
-            // The admin client on an empty group commits.
-            OffsetCase {
-                state: GroupState::Empty,
-                member: "",
-                instance: None,
-                generation: Some(-1),
-                want: Ok(()),
-            },
-            // A negative generation on an empty group commits, whatever it
-            // names.
-            OffsetCase {
-                state: GroupState::Empty,
-                member: "ghost",
-                instance: None,
-                generation: Some(-1),
-                want: Ok(()),
-            },
-            // The admin client on a group with members is refused.
-            OffsetCase {
-                state: GroupState::Stable,
-                member: "",
-                instance: None,
-                generation: Some(-1),
-                want: Err(codes::UNKNOWN_MEMBER_ID),
-            },
-            OffsetCase {
-                state: GroupState::PreparingRebalance,
-                member: "",
-                instance: None,
-                generation: Some(-1),
-                want: Err(codes::UNKNOWN_MEMBER_ID),
-            },
-            // A generation at or above zero with no member id is validated.
-            OffsetCase {
-                state: GroupState::Stable,
-                member: "",
-                instance: None,
-                generation: None,
-                want: Err(codes::UNKNOWN_MEMBER_ID),
-            },
-            OffsetCase {
-                state: GroupState::Empty,
-                member: "",
-                instance: None,
-                generation: Some(0),
-                want: Err(codes::UNKNOWN_MEMBER_ID),
-            },
-            // An unknown member is refused.
-            OffsetCase {
-                state: GroupState::Stable,
-                member: "ghost",
-                instance: None,
-                generation: None,
-                want: Err(codes::UNKNOWN_MEMBER_ID),
-            },
-            // A known member with a negative generation is validated.
-            OffsetCase {
-                state: GroupState::Stable,
-                member: "m1",
-                instance: None,
-                generation: Some(-1),
-                want: Err(codes::ILLEGAL_GENERATION),
-            },
-            // A known member on another generation is refused.
-            OffsetCase {
-                state: GroupState::Stable,
-                member: "m1",
-                instance: None,
-                generation: Some(99),
-                want: Err(codes::ILLEGAL_GENERATION),
-            },
-            // A known member on the current generation commits.
-            OffsetCase {
-                state: GroupState::Stable,
-                member: "m1",
-                instance: None,
-                generation: None,
-                want: Ok(()),
-            },
-            OffsetCase {
-                state: GroupState::PreparingRebalance,
-                member: "m1",
-                instance: None,
-                generation: None,
-                want: Ok(()),
-            },
-            // ... but not while the group waits for the leader's SyncGroup.
-            OffsetCase {
-                state: GroupState::CompletingRebalance,
-                member: "m1",
-                instance: None,
-                generation: None,
-                want: Err(codes::REBALANCE_IN_PROGRESS),
-            },
-            // The instance pinned to another member id fences the request.
-            OffsetCase {
-                state: GroupState::Stable,
-                member: "",
-                instance: Some("i1"),
-                generation: None,
-                want: Err(codes::FENCED_INSTANCE_ID),
-            },
-            OffsetCase {
-                state: GroupState::Stable,
-                member: "m2",
-                instance: Some("i1"),
-                generation: None,
-                want: Err(codes::FENCED_INSTANCE_ID),
-            },
-            // An instance no member holds is unknown.
-            OffsetCase {
-                state: GroupState::Stable,
-                member: "m1",
-                instance: Some("i9"),
-                generation: None,
-                want: Err(codes::UNKNOWN_MEMBER_ID),
-            },
-            OffsetCase {
-                state: GroupState::Stable,
-                member: "m1",
-                instance: Some("i1"),
-                generation: None,
-                want: Ok(()),
-            },
-        ];
-        let mut group = stable_two_member_group();
-        group.static_members.insert("i1".into(), "m1".into());
-        let current = group.generation_id;
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for OffsetCase {
-            state,
-            member,
-            instance,
-            generation,
-            want,
-        } in cases
-        {
-            group.state = state;
-            let generation = generation.unwrap_or(current);
-            let got = validate_offset_commit(&group, member, instance, generation);
-            actual.push((state, member, instance, generation, got));
-            expected.push((state, member, instance, generation, want));
-        }
-        assert!(actual == expected);
-    }
-
     /// Kafka's `ClassicGroup.validateOffsetCommit` with
     /// `isTransactional = false`, row by row. The group holds `m1` and `m2`,
     /// and the static instance `i1` is pinned to `m1`.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/classic_ops/offset_validation.feature",
-        name = "tests: offset commit follows kafka classic group rule"
-    )]
-    fn offset_commit_follows_kafka_classic_group_rule() {}
-
     /// The commit refreshes the member's session only in `Stable` and
     /// `PreparingRebalance`.
     #[test]
@@ -334,4 +166,59 @@ mod tests {
         }
         assert!(actual == expected);
     }
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct ClassicCommit {
+        group: Option<ClassicState>,
+        result: Option<Result<(), i16>>,
+    }
+    #[rstest::fixture]
+    fn classic_commit() -> ClassicCommit {
+        // Start this scenario with fresh inputs and observations.
+        ClassicCommit::default()
+    }
+    #[given(
+        "the classic group has m1 and m2 with static instance i1 pinned to m1 and state {state}"
+    )]
+    fn classic_commit_group(classic_commit: &mut ClassicCommit, state: String) {
+        let mut group = stable_two_member_group();
+        group.static_members.insert("i1".into(), "m1".into());
+        group.state = match state.as_str() {
+            "empty" => GroupState::Empty,
+            "stable" => GroupState::Stable,
+            "preparing" => GroupState::PreparingRebalance,
+            "completing" => GroupState::CompletingRebalance,
+            _ => panic!("unknown classic state"),
+        };
+        classic_commit.group = Some(group);
+    }
+    #[when("classic member {member} instance {instance} commits with generation {generation}")]
+    fn classic_commit_request(
+        classic_commit: &mut ClassicCommit,
+        member: String,
+        instance: String,
+        generation: String,
+    ) {
+        let group = classic_commit
+            .group
+            .as_ref()
+            .expect("classic group prepared");
+        let member = if member == "empty" { "" } else { &member };
+        let instance = if instance == "absent" {
+            None
+        } else {
+            Some(instance.as_str())
+        };
+        let generation = if generation == "current" {
+            group.generation_id
+        } else {
+            generation.parse().expect("generation")
+        };
+        classic_commit.result = Some(validate_offset_commit(group, member, instance, generation));
+    }
+    #[then("the classic offset commit returns error code {code}")]
+    fn classic_commit_result(classic_commit: &ClassicCommit, code: i16) {
+        assert!(classic_commit.result == Some(if code == 0 { Ok(()) } else { Err(code) }));
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/classic_ops/offset_validation.feature",fixtures=[classic_commit:ClassicCommit]);
 }

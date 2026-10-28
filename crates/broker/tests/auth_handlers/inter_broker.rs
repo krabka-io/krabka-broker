@@ -14,58 +14,19 @@ use {
             wire::{decode_response_frame, read_frame, request_frame, write_frame},
         },
     },
-    krabka_broker::{Broker, config::InterBrokerCredentials, network::client::InterBrokerClient},
+    krabka_broker::{
+        Broker, BrokerHandle, config::InterBrokerCredentials, network::client::InterBrokerClient,
+    },
     krabka_protocol::owned::{
         api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
     },
     krabka_security::{ListenerProtocol, SaslMechanism},
     krabka_units::{ByteSize, convert::ByteSizeExt},
+    rstest::fixture,
+    rstest_bdd_macros::{given, then, when},
     std::{io, net::SocketAddr},
+    tempfile::TempDir,
 };
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "auth handlers inter broker: inter broker client authenticates via plain"
-)]
-async fn bdd_verify_inter_broker_client_authenticates_via_plain() {
-    let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
-    cfg.plain_credentials
-        .insert("broker".to_owned(), admin_plain_password());
-
-    run_inter_broker_auth_test(cfg, InterBrokerCredentials::Plain {
-        username: "broker".to_owned(),
-        password: admin_plain_password(),
-    })
-    .await
-    .expect("InterBrokerClient PLAIN auth + ApiVersions round-trip must succeed");
-}
-
-/// Start a broker with a `SASL_PLAINTEXT` listener and one PLAIN credential,
-/// then dial it with the public `InterBrokerClient` API.
-///
-/// The client must run `SaslHandshake` and `SaslAuthenticate` on its own, and
-/// it must return a stream that the caller can keep using for normal RPCs.
-/// The test proves this: it sends an `ApiVersions` request over the returned
-/// stream and decodes the response.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/auth_handlers/inter_broker.feature",
-    name = "inter broker client authenticates via plain"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn inter_broker_client_authenticates_via_plain() {}
-
-pub async fn run_inter_broker_auth_test(
-    cfg: krabka_broker::BrokerConfig,
-    credentials: InterBrokerCredentials,
-) -> Result<(), io::Error> {
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
-    let client = InterBrokerClient::new(None, Some(credentials));
-    let result = drive_inter_broker_client_then_apiversions(&client, addr).await;
-    handle.shutdown().await;
-    result
-}
 
 /// Drive `InterBrokerClient::connect` and run one `ApiVersions` round-trip
 /// over the post-auth stream to prove that the stream survives.
@@ -116,4 +77,86 @@ pub async fn drive_inter_broker_client_then_apiversions(
     let _av_resp: ApiVersionsResponse =
         decode_response_frame(&resp, 0, false, "ApiVersions decode")?;
     Ok(())
+}
+
+struct OutboundAuthentication {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    client: Option<InterBrokerClient>,
+    result: Option<io::Result<()>>,
+}
+
+#[fixture]
+fn outbound() -> OutboundAuthentication {
+    // Start this scenario with fresh inputs and observations.
+
+    OutboundAuthentication {
+        broker: None,
+        directory: None,
+        client: None,
+        result: None,
+    }
+}
+
+#[given("a SASL_PLAINTEXT peer accepting the broker PLAIN principal")]
+async fn plain_peer(outbound: &mut OutboundAuthentication) {
+    let (directory, mut config) = sasl_temp_config(vec![SaslMechanism::Plain]);
+    config
+        .plain_credentials
+        .insert("broker".to_owned(), admin_plain_password());
+    outbound.broker = Some(Broker::start(config).await.expect("broker must start"));
+    outbound.directory = Some(directory);
+}
+
+#[given("InterBrokerClient is configured with that principal's PLAIN credentials")]
+fn outbound_plain_credentials(outbound: &mut OutboundAuthentication) {
+    outbound.client = Some(InterBrokerClient::new(
+        None,
+        Some(InterBrokerCredentials::Plain {
+            username: "broker".to_owned(),
+            password: admin_plain_password(),
+        }),
+    ));
+}
+
+#[when("InterBrokerClient connects and sends ApiVersions on the returned authenticated stream")]
+async fn connect_plain_peer(outbound: &mut OutboundAuthentication) {
+    let client = outbound.client.as_ref().expect("an outbound PLAIN client");
+    let address = outbound
+        .broker
+        .as_ref()
+        .expect("a SASL peer broker")
+        .listen_addr();
+    outbound.result = Some(drive_inter_broker_client_then_apiversions(client, address).await);
+}
+
+#[then("the authenticated inter-broker stream returns a decodable ApiVersions response")]
+fn usable_outbound_stream(outbound: &OutboundAuthentication) {
+    outbound
+        .result
+        .as_ref()
+        .expect("InterBrokerClient connected and requested ApiVersions")
+        .as_ref()
+        .expect("InterBrokerClient PLAIN auth + ApiVersions round-trip must succeed");
+}
+
+/// Start a broker with a `SASL_PLAINTEXT` listener and one PLAIN credential,
+/// then dial it with the public `InterBrokerClient` API.
+///
+/// The client must run `SaslHandshake` and `SaslAuthenticate` on its own, and
+/// it must return a stream that the caller can keep using for normal RPCs.
+/// The test proves this: it sends an `ApiVersions` request over the returned
+/// stream and decodes the response.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/auth_handlers/inter_broker.feature",
+    name = "inter broker client authenticates via plain"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inter_broker_client_authenticates_via_plain(outbound: OutboundAuthentication) {
+    outbound
+        .broker
+        .expect("a SASL peer broker")
+        .shutdown()
+        .await;
 }

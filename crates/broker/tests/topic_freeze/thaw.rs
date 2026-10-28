@@ -10,19 +10,22 @@ use {
     crate::{
         control_plane::{cluster_id, freeze_scope, set_freeze, wait_for_registry_len},
         signing::{SignedFreeze, signed_request},
-        support::{self, OperatorKeysSetup},
-        wire::{CONTROL, accepted, create_topic, now_ms, produce_outcome, refused},
+        support::{self, OperatorKey, OperatorKeysSetup},
+        wire::{CONTROL, ProduceOutcome, accepted, create_topic, now_ms, produce_outcome, refused},
     },
     assert2::{assert, check},
-    krabka_broker::codes,
+    krabka_broker::{BrokerHandle, codes},
     krabka_client_core::Client,
     krabka_protocol::{
         krabka::{
             break_glass::{ApproveBreakGlassRequest, ProposeBreakGlassRequest},
-            freeze::PATTERN_TYPE_LITERAL,
+            freeze::{PATTERN_TYPE_LITERAL, SetTopicFreezeResponse},
         },
         primitives::uuid::Uuid as WireUuid,
     },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    tempfile::TempDir,
 };
 
 /// The `ThawTopicFreeze` break-glass action, on the wire.
@@ -64,20 +67,53 @@ async fn approve(client: &Client, proposal_id: uuid::Uuid) -> i32 {
     response.approvals_held
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("topic freeze thaw: a thaw restores writes")]
-async fn bdd_verify_a_thaw_restores_writes() {
+#[derive(Default)]
+struct ThawScenario {
+    keys: Option<TempDir>,
+    logs: Option<TempDir>,
+    key: Option<OperatorKey>,
+    broker: Option<BrokerHandle>,
+    alice: Option<Client>,
+    bootstrap: String,
+    frozen: WireUuid,
+    control: WireUuid,
+    proposal: Option<uuid::Uuid>,
+    approvals: Vec<i32>,
+    thaw: Option<SetTopicFreezeResponse>,
+    frozen_write: Option<ProduceOutcome>,
+    control_write: Option<ProduceOutcome>,
+}
+
+impl ThawScenario {
+    fn alice(&self) -> &Client { self.alice.as_ref().expect("Alice is connected") }
+
+    fn broker(&self) -> &BrokerHandle {
+        self.broker
+            .as_ref()
+            .expect("the signed-thaw broker is running")
+    }
+}
+
+#[fixture]
+fn thawing() -> ThawScenario {
+    // Each scenario owns fresh services and observations.
+    ThawScenario {
+        keys: None,
+        ..Default::default()
+    }
+}
+
+#[given("Alice froze orders after one record and Bob and Carol are independent approvers")]
+async fn approved_thaw_fixture(thawing: &mut ThawScenario) {
     let keys = tempfile::tempdir().expect("tempdir");
     let logs = tempfile::tempdir().expect("tempdir");
     let key = support::mint_operator_key(keys.path(), "alice-yubi", "User:alice");
     let (broker, bootstrap, _config) = support::start_with_operator_keys_sasl()
         .dir(logs.path())
-        .trust(
-            OperatorKeysSetup { keys: &[&key], approvers: // The proposer has to be in the set as well: a proposer outside it
-        // would turn a rule about three people into a rule about two people
-        // and a stranger. Alice still may not approve her own proposal.
-        &["User:alice", "User:bob", "User:carol"] },
-        )
+        .trust(OperatorKeysSetup {
+            keys: &[&key],
+            approvers: &["User:alice", "User:bob", "User:carol"],
+        })
         .users(&[("alice", "pw"), ("bob", "pw"), ("carol", "pw")])
         .call()
         .await;
@@ -85,56 +121,93 @@ async fn bdd_verify_a_thaw_restores_writes() {
     let frozen = create_topic(&broker, &alice, "orders").await;
     let control = create_topic(&broker, &alice, CONTROL).await;
     check!(produce_outcome(&broker, &alice, "orders", frozen).await == accepted(1));
-
     freeze_scope(&alice, PATTERN_TYPE_LITERAL, "orders", "cutover").await;
     check!(
         produce_outcome(&broker, &alice, "orders", frozen).await
             == refused("literal", "orders", "cutover", 1)
     );
-
-    // Alice proposes and may not approve her own proposal, so the two
-    // approvals come from two other people.
-    let proposal_id = propose_thaw(&alice, "literal:orders").await;
-    let bob = support::sasl_client(&bootstrap, "bob", "pw").await;
-    let carol = support::sasl_client(&bootstrap, "carol", "pw").await;
-    check!(approve(&bob, proposal_id).await == 1);
-    check!(approve(&carol, proposal_id).await == 2);
-
-    let thaw = set_freeze(
-        &alice,
-        signed_request(&SignedFreeze {
-            key: &key,
-            cluster_id: &cluster_id(&alice).await,
-            pattern_type: PATTERN_TYPE_LITERAL,
-            scope: "orders",
-            frozen: false,
-            reason: "the cutover finished",
-            set_at_ms: now_ms(),
-            proposal_id,
-        }),
-    )
-    .await;
-    check!(thaw.error_code == codes::NONE, "thaw: {thaw:?}");
-    wait_for_registry_len(&alice, 0).await;
-
-    check!(produce_outcome(&broker, &alice, "orders", frozen).await == accepted(2));
-    check!(produce_outcome(&broker, &alice, CONTROL, control).await == accepted(1));
-    broker.shutdown().await;
+    thawing.keys = Some(keys);
+    thawing.logs = Some(logs);
+    thawing.key = Some(key);
+    thawing.broker = Some(broker);
+    thawing.alice = Some(alice);
+    thawing.bootstrap = bootstrap;
+    thawing.frozen = frozen;
+    thawing.control = control;
 }
 
-/// A thaw lifts the freeze and the topic takes writes again.
-///
-/// The reverse direction has to be proved as its own case, because a freeze
-/// that could not be lifted would be a broken cluster rather than a safe one,
-/// and none of the refusal cases in this suite can tell a working thaw from a
-/// registry entry that nothing removes. It runs over SASL because the
-/// two-person rule needs three distinct principals -- a proposer who may not
-/// approve, and two approvers -- and every connection on a plaintext listener
-/// is the same anonymous principal.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[when("Alice proposes thawing the literal orders scope")]
+async fn alice_proposes_thaw(thawing: &mut ThawScenario) {
+    thawing.proposal = Some(propose_thaw(thawing.alice(), "literal:orders").await);
+}
+
+#[when("approver {principal} approves Alice's thaw proposal")]
+async fn independent_approval(thawing: &mut ThawScenario, principal: String) {
+    let approver = support::sasl_client(&thawing.bootstrap, &principal, "pw").await;
+    let held = approve(
+        &approver,
+        thawing.proposal.expect("Alice proposed the thaw"),
+    )
+    .await;
+    thawing.approvals.push(held);
+}
+
+#[then("the thaw proposal holds {count} independent approvals")]
+fn counted_approvals(thawing: &ThawScenario, count: i32) {
+    check!(thawing.approvals.last() == Some(&count));
+}
+
+#[when("Alice submits a signed thaw naming the approved proposal")]
+async fn alice_signs_thaw(thawing: &mut ThawScenario) {
+    let cluster = cluster_id(thawing.alice()).await;
+    let request = signed_request(&SignedFreeze {
+        key: thawing.key.as_ref().expect("Alice's key was installed"),
+        cluster_id: &cluster,
+        pattern_type: PATTERN_TYPE_LITERAL,
+        scope: "orders",
+        frozen: false,
+        reason: "the cutover finished",
+        set_at_ms: now_ms(),
+        proposal_id: thawing.proposal.expect("Alice proposed the thaw"),
+    });
+    thawing.thaw = Some(set_freeze(thawing.alice(), request).await);
+}
+
+#[then("the approved thaw succeeds and the freeze registry becomes empty")]
+async fn approved_thaw_succeeds(thawing: &ThawScenario) {
+    let response = thawing
+        .thaw
+        .as_ref()
+        .expect("the signed thaw was submitted");
+    check!(response.error_code == codes::NONE, "thaw: {response:?}");
+    wait_for_registry_len(thawing.alice(), 0).await;
+}
+
+#[when("clients write to thawed orders and its unfrozen control")]
+async fn write_after_thaw(thawing: &mut ThawScenario) {
+    thawing.frozen_write =
+        Some(produce_outcome(thawing.broker(), thawing.alice(), "orders", thawing.frozen).await);
+    thawing.control_write =
+        Some(produce_outcome(thawing.broker(), thawing.alice(), CONTROL, thawing.control).await);
+}
+
+#[then("orders accepts its second record and the control accepts its first")]
+fn thaw_restores_writes(thawing: &ThawScenario) {
+    check!(thawing.frozen_write.as_ref().expect("orders was written") == &accepted(2));
+    check!(thawing.control_write.as_ref().expect("control was written") == &accepted(1));
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/topic_freeze/thaw.feature",
     name = "a thaw restores writes"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_thaw_restores_writes() {}
+async fn a_thaw_restores_writes(thawing: ThawScenario) {
+    thawing
+        .broker
+        .expect("the signed-thaw broker is running")
+        .shutdown()
+        .await;
+    drop(thawing.logs);
+    drop(thawing.keys);
+}

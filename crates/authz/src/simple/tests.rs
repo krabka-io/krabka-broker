@@ -410,69 +410,74 @@ mod authorize_by_resource_type {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "simple tests authorize by resource type: literal and wildcard grants follow kafka pattern dominance for {example}"
-    )]
-    fn bdd_verify_literal_and_wildcard_grants_follow_kafka_pattern_dominance(example: String) {
-        type Example = (&'static str, PatternType, &'static str, AuthorizationResult);
-        let (grant, denied_pattern, denied_name, expected): Example = match example.as_str() {
-            "literal denies same name" => (
-                "orders",
-                PatternType::Literal,
-                "orders",
-                AuthorizationResult::Deny,
-            ),
-            "prefix denies within range" => (
-                "orders",
-                PatternType::Prefixed,
-                "ord",
-                AuthorizationResult::Deny,
-            ),
-            "prefix denies outside range" => (
-                "orders",
-                PatternType::Prefixed,
-                "orders-",
-                AuthorizationResult::Allow,
-            ),
-            "wildcard grant literal deny" => (
-                "*",
-                PatternType::Literal,
-                "hardcode",
-                AuthorizationResult::Allow,
-            ),
-            "wildcard grant prefix deny" => (
-                "*",
-                PatternType::Prefixed,
-                "hard",
-                AuthorizationResult::Allow,
-            ),
-            "wildcard denies wildcard" => {
-                ("*", PatternType::Literal, "*", AuthorizationResult::Deny)
-            }
-            _ => panic!("unknown BDD example: {example}"),
+    struct ResourceAuthorizationScenario {
+        image: krabka_metadata::MetadataImage,
+        decision: Option<AuthorizationResult>,
+    }
+
+    #[rstest::fixture]
+    fn resource_authorization() -> ResourceAuthorizationScenario {
+        // Start this scenario with fresh inputs and observations.
+
+        ResourceAuthorizationScenario {
+            image: img(),
+            decision: None,
+        }
+    }
+
+    #[rstest_bdd_macros::given("a WRITE allow ACL for topic {grant}")]
+    fn resource_grant(resource_authorization: &mut ResourceAuthorizationScenario, grant: String) {
+        resource_authorization
+            .image
+            .apply(&MetadataRecord::V1AccessControlEntry(
+                topic_acl().op(AclOperation::Write).name(&grant).call(),
+            ));
+    }
+
+    #[rstest_bdd_macros::given("a WRITE deny ACL with {pattern} topic pattern {name}")]
+    fn resource_denial(
+        resource_authorization: &mut ResourceAuthorizationScenario,
+        pattern: String,
+        name: String,
+    ) {
+        let pattern = match pattern.as_str() {
+            "literal" => PatternType::Literal,
+            "prefixed" => PatternType::Prefixed,
+            _ => panic!("unknown ACL pattern {pattern}"),
         };
-
-        let image = acl_image([
-            topic_acl().op(AclOperation::Write).name(grant).call(),
-            topic_acl()
-                .permission(PermissionType::Deny)
-                .op(AclOperation::Write)
-                .pattern(denied_pattern)
-                .name(denied_name)
-                .call(),
-        ]);
-        check_resource_type_access(&image, ResourceType::Topic, AclOperation::Write, expected);
+        resource_authorization
+            .image
+            .apply(&MetadataRecord::V1AccessControlEntry(
+                topic_acl()
+                    .permission(PermissionType::Deny)
+                    .op(AclOperation::Write)
+                    .pattern(pattern)
+                    .name(&name)
+                    .call(),
+            ));
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/simple/tests.feature",
-        name = "authorize by resource type: literal and wildcard grants follow kafka pattern dominance"
-    )]
-    fn literal_and_wildcard_grants_follow_kafka_pattern_dominance(example: String) {
-        let _ = example;
+    #[rstest_bdd_macros::when("Alice requests WRITE authorization by topic resource type")]
+    fn authorize_topic_type(resource_authorization: &mut ResourceAuthorizationScenario) {
+        resource_authorization.decision =
+            Some(AliceAuthorizer::default().authorize_by_resource_type(
+                &resource_authorization.image,
+                ResourceType::Topic,
+                AclOperation::Write,
+            ));
     }
+
+    #[rstest_bdd_macros::then("topic resource authorization is {decision}")]
+    fn resource_decision(resource_authorization: &ResourceAuthorizationScenario, decision: String) {
+        let expected = match decision.as_str() {
+            "allowed" => AuthorizationResult::Allow,
+            "denied" => AuthorizationResult::Deny,
+            _ => panic!("unknown ACL decision {decision}"),
+        };
+        assert2::assert!(resource_authorization.decision == Some(expected));
+    }
+
+    rstest_bdd_macros::scenarios!("tests/features/resource_authorization", fixtures = [resource_authorization: ResourceAuthorizationScenario]);
 
     #[yare::parameterized(
         different_principal = {

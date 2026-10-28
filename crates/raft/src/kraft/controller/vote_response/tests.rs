@@ -10,11 +10,6 @@ use {
     },
 };
 
-/// Kafka's `FENCED_LEADER_EPOCH`.
-const FENCED_LEADER_EPOCH: i16 = 74;
-/// Kafka's `INVALID_VOTER_KEY`.
-const INVALID_VOTER_KEY: i16 = 125;
-
 /// Node 1 asks at epoch 5.
 const ASKER: VoteAsker = VoteAsker {
     me: NodeId(1),
@@ -22,143 +17,73 @@ const ASKER: VoteAsker = VoteAsker {
     known_leader: None,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kraft controller vote response tests: a vote answer is read as kafka reads it for {example}"
-)]
-fn bdd_verify_a_vote_answer_is_read_as_kafka_reads_it(example: String) {
-    type Example = (
-        VoteAsker,
-        i16,
-        bool,
-        Option<NodeId>,
-        Epoch,
-        VoteResponseStep,
-    );
-    let (asker, error_code, granted, leader_id, epoch, expected): Example = match example.as_str() {
-        "older epoch" => (
-            ASKER,
-            0,
-            false,
-            Some(NodeId(2)),
-            4,
-            VoteResponseStep::Ignore,
-        ),
-        "unknown leader epoch" => (
-            ASKER,
-            UNKNOWN_LEADER_EPOCH,
-            false,
-            None,
-            5,
-            VoteResponseStep::Ignore,
-        ),
-        "newer epoch with a leader" => (
-            ASKER,
-            0,
-            false,
-            Some(NodeId(3)),
-            6,
-            VoteResponseStep::Follow {
-                leader_id: NodeId(3),
-                epoch: 6,
-            },
-        ),
-        "newer epoch fenced with a leader" => (
-            ASKER,
-            FENCED_LEADER_EPOCH,
-            false,
-            Some(NodeId(3)),
-            6,
-            VoteResponseStep::Follow {
-                leader_id: NodeId(3),
-                epoch: 6,
-            },
-        ),
-        "newer epoch without a leader" => {
-            (ASKER, 0, false, None, 6, VoteResponseStep::Unattached {
-                epoch: 6,
-            })
-        }
-        "newer epoch naming the asker" => (
-            ASKER,
-            0,
-            false,
-            Some(NodeId(1)),
-            6,
-            VoteResponseStep::Ignore,
-        ),
-        "same epoch leader while none is known" => (
-            ASKER,
-            0,
-            false,
-            Some(NodeId(3)),
-            5,
-            VoteResponseStep::Follow {
-                leader_id: NodeId(3),
-                epoch: 5,
-            },
-        ),
-        "same epoch leader with not leader" => (
-            ASKER,
-            NOT_LEADER_OR_FOLLOWER,
-            false,
-            Some(NodeId(3)),
-            5,
-            VoteResponseStep::Follow {
-                leader_id: NodeId(3),
-                epoch: 5,
-            },
-        ),
-        "same epoch leader while one is known" => (
-            VoteAsker {
-                known_leader: Some(NodeId(2)),
-                ..ASKER
-            },
-            0,
-            false,
-            Some(NodeId(3)),
-            5,
-            VoteResponseStep::Count {
-                epoch: 5,
-                granted: false,
-            },
-        ),
-        "same epoch grant" => (ASKER, 0, true, None, 5, VoteResponseStep::Count {
-            epoch: 5,
-            granted: true,
-        }),
-        "same epoch refusal" => (ASKER, 0, false, None, 5, VoteResponseStep::Count {
-            epoch: 5,
-            granted: false,
-        }),
-        "same epoch error" => (
-            ASKER,
-            INVALID_VOTER_KEY,
-            false,
-            None,
-            5,
-            VoteResponseStep::Ignore,
-        ),
-        _ => panic!("unknown BDD example: {example}"),
-    };
-
-    let answer = VoteAnswer {
-        error_code,
-        granted,
-        leader_id,
-        epoch,
-    };
-    assert2::assert!(vote_response_step(asker, answer) == expected);
+use rstest_bdd_macros::{given, scenarios, then, when};
+#[derive(Default)]
+struct VoteInterpretation {
+    known_leader: Option<NodeId>,
+    step: Option<VoteResponseStep>,
 }
+#[rstest::fixture]
+fn interpretation() -> VoteInterpretation {
+    // Start this scenario with fresh inputs and observations.
 
-/// Each answer is read as Kafka's `maybeHandleCommonResponse` and then
-/// `handleVoteResponse` read it.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/vote_response/tests.feature",
-    name = "a vote answer is read as kafka reads it"
+    VoteInterpretation::default()
+}
+fn response_leader(value: &str) -> Option<NodeId> {
+    if value == "none" {
+        None
+    } else {
+        Some(NodeId(value.parse().expect("leader node identifier")))
+    }
+}
+#[given("node 1 has requested votes at epoch 5 with known leader {leader}")]
+fn voting_node(interpretation: &mut VoteInterpretation, leader: String) {
+    interpretation.known_leader = response_leader(&leader);
+}
+#[when(
+    "a Vote response names leader {leader} at epoch {epoch} with error {error} and grant {granted}"
 )]
-fn a_vote_answer_is_read_as_kafka_reads_it(example: String) { let _ = example; }
+fn interpret_vote(
+    interpretation: &mut VoteInterpretation,
+    leader: String,
+    epoch: Epoch,
+    error: i16,
+    granted: bool,
+) {
+    interpretation.step = Some(vote_response_step(
+        VoteAsker {
+            known_leader: interpretation.known_leader,
+            ..ASKER
+        },
+        VoteAnswer {
+            error_code: error,
+            granted,
+            leader_id: response_leader(&leader),
+            epoch,
+        },
+    ));
+}
+#[then("the voter chooses {action} at epoch {epoch} with leader {leader} and grant {granted}")]
+fn vote_transition(
+    interpretation: &VoteInterpretation,
+    action: String,
+    epoch: Epoch,
+    leader: String,
+    granted: bool,
+) {
+    let expected = match action.as_str() {
+        "ignore" => VoteResponseStep::Ignore,
+        "follow" => VoteResponseStep::Follow {
+            leader_id: response_leader(&leader).expect("leader to follow"),
+            epoch,
+        },
+        "unattached" => VoteResponseStep::Unattached { epoch },
+        "count" => VoteResponseStep::Count { epoch, granted },
+        _ => panic!("unknown vote transition"),
+    };
+    assert2::assert!(interpretation.step.as_ref() == Some(&expected));
+}
+scenarios!("tests/features/migrated/src/kraft/controller/vote_response/tests.feature", fixtures = [interpretation: VoteInterpretation]);
 
 /// A Vote answer encoded as voter 2 sends it.
 fn answer(granted: bool, leader_id: Option<NodeId>, epoch: Epoch) -> bytes::Bytes {

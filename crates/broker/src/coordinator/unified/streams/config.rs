@@ -613,103 +613,9 @@ where
 mod tests {
     use {super::*, assert2::assert};
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("coordinator unified streams config tests: defaults are kafka ga")]
-    fn bdd_verify_defaults_are_kafka_ga() {
-        assert!(
-            StreamsGroupConfig::default()
-                == StreamsGroupConfig {
-                    enable: true,
-                    session_timeout: Duration::from_secs(45),
-                    heartbeat_interval: Duration::from_secs(5),
-                    min_session_timeout: Duration::from_secs(45),
-                    max_session_timeout: Duration::from_mins(1),
-                    min_heartbeat_interval: Duration::from_secs(5),
-                    max_heartbeat_interval: Duration::from_secs(15),
-                    max_size: 2_147_483_647,
-                    initial_rebalance_delay: Duration::from_secs(3),
-                    assignment_interval: Duration::from_secs(1),
-                    num_standby_replicas: 0,
-                    num_warmup_replicas: 2,
-                    acceptable_recovery_lag: 10_000,
-                    task_offset_interval: Duration::from_mins(1),
-                    assignor: StreamsAssignorKind::Auto,
-                    rack_aware_assignment_tags: Vec::new(),
-                    share_auto_offset_reset: ShareAutoOffsetReset::Latest,
-                    unstable_api_versions: UnstableApiVersions::Disabled,
-                    topology_description_plugin: TopologyDescriptionPlugin::None,
-                    actor_mailbox_capacity: 64,
-                }
-        );
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/config.feature",
-        name = "tests: defaults are kafka ga"
-    )]
-    fn defaults_are_kafka_ga() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams config tests: rack aware assignment tags parse as kafkas group config does for {example}"
-    )]
-    fn bdd_verify_rack_aware_assignment_tags_parse_as_kafkas_group_config_does(example: String) {
-        type Example<'a> = (
-            &'a str,
-            Result<(Vec<&'static str>, &'static str), &'static str>,
-        );
-        let (value, want): Example<'_> = match example.as_str() {
-            "empty" => ("", Ok((vec![], ""))),
-            "whitespace" => ("  ", Ok((vec![], ""))),
-            "one tag" => ("zone", Ok((vec!["zone"], "zone"))),
-            "trimmed ordered tags" => (" zone ,\track ", Ok((vec!["zone", "rack"], "zone,rack"))),
-            "duplicate tag" => ("rack,zone,rack", Err("duplicate")),
-            "duplicate after trim" => ("zone, zone", Err("duplicate")),
-            "empty entry" => ("zone,,rack", Err("empty")),
-            "trailing empty entry" => ("zone,", Err("empty")),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        const DUPLICATE: &str =
-            "streams.rack.aware.assignment.tags must not contain duplicate tag keys.";
-        const EMPTY: &str =
-            "Configuration 'streams.rack.aware.assignment.tags' values must not be empty.";
-        let overrides =
-            maplit::btreemap! {KEY_RACK_AWARE_ASSIGNMENT_TAGS.into() => value.to_owned()};
-        let got = StreamsGroupConfig::default()
-            .with_group_overrides(&overrides)
-            .map(|config| {
-                let reported = config.group_config_values()[KEY_RACK_AWARE_ASSIGNMENT_TAGS].clone();
-                (config.rack_aware_assignment_tags, reported)
-            });
-        let want = want
-            .map(|(tags, reported)| {
-                (
-                    tags.into_iter().map(str::to_owned).collect::<Vec<_>>(),
-                    reported.to_owned(),
-                )
-            })
-            .map_err(|message| match message {
-                "duplicate" => DUPLICATE.to_owned(),
-                "empty" => EMPTY.to_owned(),
-                _ => unreachable!(),
-            });
-        assert2::assert!(got == want, "{value:?}");
-    }
-
     /// Kafka trunk's `GroupConfig` parses `streams.rack.aware.assignment.tags`
     /// as a `LIST` and refuses a repeated or an empty tag key, and
     /// `DescribeConfigs` reports the parsed list joined with commas.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/config.feature",
-        name = "tests: rack aware assignment tags parse as kafkas group config does"
-    )]
-    fn rack_aware_assignment_tags_parse_as_kafkas_group_config_does(example: String) {
-        let _ = example;
-    }
-
     #[test]
     fn group_overrides_are_validated_and_applied() {
         let overrides = maplit::btreemap! {
@@ -725,66 +631,6 @@ mod tests {
         assert!(got.num_standby_replicas == 1);
         assert!(got.assignor == StreamsAssignorKind::HighlyAvailable);
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified streams config tests: share auto offset reset parses the three kafka forms for {example}"
-    )]
-    fn bdd_verify_share_auto_offset_reset_parses_the_three_kafka_forms(example: String) {
-        type Example<'a> = (&'a str, Option<ShareAutoOffsetReset>);
-        let (value, want): Example<'_> = match example.as_str() {
-            "latest" => ("latest", Some(ShareAutoOffsetReset::Latest)),
-            "earliest" => ("earliest", Some(ShareAutoOffsetReset::Earliest)),
-            "one hour" => (
-                "by_duration:PT1H",
-                Some(ShareAutoOffsetReset::ByDuration(Duration::from_secs(3_600))),
-            ),
-            "normalized duration" => (
-                "by_duration:P1DT2H3M4.5S",
-                Some(ShareAutoOffsetReset::ByDuration(Duration::new(
-                    93_784,
-                    500_000_000,
-                ))),
-            ),
-            "zero duration" => (
-                "by_duration:PT0S",
-                Some(ShareAutoOffsetReset::ByDuration(Duration::ZERO)),
-            ),
-            "negative duration" => ("by_duration:-PT1H", None),
-            "negative component" => ("by_duration:PT-1H", None),
-            "missing time" => ("by_duration:PT", None),
-            "missing date" => ("by_duration:P", None),
-            "empty duration" => ("by_duration:", None),
-            "missing colon" => ("by_duration", None),
-            "missing iso prefix" => ("by_duration:1H", None),
-            "invalid component" => ("by_duration:PT1X", None),
-            "weeks" => ("by_duration:P1W", None),
-            "out of order components" => ("by_duration:PT1M1H", None),
-            "case sensitive" => ("Earliest", None),
-            "unknown" => ("none", None),
-            "empty" => ("", None),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        // Kafka 4.3.1 types this key STRING with
-        // `[latest, earliest, by_duration:PnDTnHnMn.nS]`, defaults it to
-        // `latest`, and validates it with
-        // `ShareGroupAutoOffsetResetStrategy`, which delegates the duration to
-        // `java.time.Duration::parse` and rejects only a negative one.
-        let overrides = maplit::btreemap! {KEY_SHARE_AUTO_OFFSET_RESET.into() => value.to_owned()};
-        let got = StreamsGroupConfig::default()
-            .with_group_overrides(&overrides)
-            .ok()
-            .map(|config| config.share_auto_offset_reset);
-        assert2::assert!(got == want, "{KEY_SHARE_AUTO_OFFSET_RESET}={value}");
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/streams/config.feature",
-        name = "tests: share auto offset reset parses the three kafka forms"
-    )]
-    fn share_auto_offset_reset_parses_the_three_kafka_forms(example: String) { let _ = example; }
 
     #[test]
     fn share_auto_offset_reset_describe_config_defaults_to_latest() {
@@ -936,4 +782,146 @@ mod tests {
         assert!(reported[KEY_INITIAL_REBALANCE_DELAY_MS] == "0");
         assert!(reported[KEY_ASSIGNMENT_INTERVAL_MS] == "250");
     }
+    use rstest_bdd_macros::{given, scenarios, then, when};
+    #[derive(Default)]
+    struct StreamsConfiguration {
+        overrides: BTreeMap<String, String>,
+        configured: Option<Result<StreamsGroupConfig, String>>,
+    }
+    #[rstest::fixture]
+    fn streams_configuration() -> StreamsConfiguration {
+        // Start this scenario with fresh inputs and observations.
+        StreamsConfiguration::default()
+    }
+    #[given("no Streams group configuration values are overridden")]
+    fn default_streams_overrides(streams_configuration: &mut StreamsConfiguration) {
+        streams_configuration.overrides.clear();
+    }
+    #[given("the Streams rack awareness tags setting is JSON text {value}")]
+    fn rack_tags_input(streams_configuration: &mut StreamsConfiguration, value: String) {
+        let text = serde_json::from_str::<String>(&value).expect("quoted setting text");
+        streams_configuration
+            .overrides
+            .insert(KEY_RACK_AWARE_ASSIGNMENT_TAGS.into(), text);
+    }
+    #[given("the Streams Share auto offset reset setting is JSON text {value}")]
+    fn offset_reset_input(streams_configuration: &mut StreamsConfiguration, value: String) {
+        let text = serde_json::from_str::<String>(&value).expect("quoted setting text");
+        streams_configuration
+            .overrides
+            .insert(KEY_SHARE_AUTO_OFFSET_RESET.into(), text);
+    }
+    #[when("the coordinator applies Streams group overrides to its default configuration")]
+    fn apply_streams_config(streams_configuration: &mut StreamsConfiguration) {
+        streams_configuration.configured = Some(
+            StreamsGroupConfig::default().with_group_overrides(&streams_configuration.overrides),
+        );
+    }
+    #[then("every Streams setting equals the Kafka GA default")]
+    fn kafka_streams_defaults(streams_configuration: &StreamsConfiguration) {
+        let expected = StreamsGroupConfig {
+            enable: true,
+            session_timeout: Duration::from_secs(45),
+            heartbeat_interval: Duration::from_secs(5),
+            min_session_timeout: Duration::from_secs(45),
+            max_session_timeout: Duration::from_mins(1),
+            min_heartbeat_interval: Duration::from_secs(5),
+            max_heartbeat_interval: Duration::from_secs(15),
+            max_size: 2_147_483_647,
+            initial_rebalance_delay: Duration::from_secs(3),
+            assignment_interval: Duration::from_secs(1),
+            num_standby_replicas: 0,
+            num_warmup_replicas: 2,
+            acceptable_recovery_lag: 10_000,
+            task_offset_interval: Duration::from_mins(1),
+            assignor: StreamsAssignorKind::Auto,
+            rack_aware_assignment_tags: Vec::new(),
+            share_auto_offset_reset: ShareAutoOffsetReset::Latest,
+            unstable_api_versions: UnstableApiVersions::Disabled,
+            topology_description_plugin: TopologyDescriptionPlugin::None,
+            actor_mailbox_capacity: 64,
+        };
+        assert!(
+            streams_configuration
+                .configured
+                .as_ref()
+                .expect("overrides applied")
+                .as_ref()
+                .expect("valid defaults")
+                == &expected
+        );
+    }
+    #[then("rack tags become {tags} and DescribeConfigs reports JSON text {reported}")]
+    fn parsed_rack_tags(
+        streams_configuration: &StreamsConfiguration,
+        tags: String,
+        reported: String,
+    ) {
+        let config = streams_configuration
+            .configured
+            .as_ref()
+            .expect("overrides applied")
+            .as_ref()
+            .expect("valid rack tags");
+        let expected = if tags == "none" {
+            vec![]
+        } else {
+            tags.split(',').map(str::to_owned).collect::<Vec<_>>()
+        };
+        assert!(config.rack_aware_assignment_tags == expected);
+        assert!(
+            config.group_config_values()[KEY_RACK_AWARE_ASSIGNMENT_TAGS]
+                == serde_json::from_str::<String>(&reported).expect("quoted report")
+        );
+    }
+    #[then("rack awareness tags are rejected with Kafka {reason} validation message")]
+    fn refused_rack_tags(streams_configuration: &StreamsConfiguration, reason: String) {
+        let expected = match reason.as_str() {
+            "duplicate" => {
+                "streams.rack.aware.assignment.tags must not contain duplicate tag keys."
+            }
+            "empty" => {
+                "Configuration 'streams.rack.aware.assignment.tags' values must not be empty."
+            }
+            _ => panic!("unknown tag validation reason"),
+        };
+        assert!(
+            streams_configuration
+                .configured
+                .as_ref()
+                .expect("overrides applied")
+                .as_ref()
+                .err()
+                .map(String::as_str)
+                == Some(expected)
+        );
+    }
+    #[then(
+        "auto offset reset selects {strategy} with duration seconds {seconds} and nanoseconds {nanos}"
+    )]
+    fn parsed_offset_reset(
+        streams_configuration: &StreamsConfiguration,
+        strategy: String,
+        seconds: u64,
+        nanos: u32,
+    ) {
+        let actual = streams_configuration
+            .configured
+            .as_ref()
+            .expect("overrides applied")
+            .as_ref()
+            .ok()
+            .map(|config| config.share_auto_offset_reset);
+        let expected = match strategy.as_str() {
+            "latest" => Some(ShareAutoOffsetReset::Latest),
+            "earliest" => Some(ShareAutoOffsetReset::Earliest),
+            "duration" => Some(ShareAutoOffsetReset::ByDuration(Duration::new(
+                seconds, nanos,
+            ))),
+            "rejected" => None,
+            _ => panic!("unknown offset reset strategy"),
+        };
+        assert!(actual == expected);
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/streams/config.feature",fixtures=[streams_configuration:StreamsConfiguration]);
 }

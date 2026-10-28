@@ -24,24 +24,46 @@ impl TopicRegexResolver for OrdersResolver {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("regex resolver: a consumer can implement and call a custom resolver")]
-fn bdd_verify_a_consumer_can_implement_and_call_a_custom_resolver() {
+#[derive(Default)]
+struct CustomResolution {
+    patterns: BTreeSet<String>,
+    subscriptions: Option<HashMap<String, ResolvedRegularExpression>>,
+}
+
+#[rstest::fixture]
+fn custom_resolution() -> CustomResolution {
+    // Store the public resolver's inputs separately from its observations.
+    CustomResolution::default()
+}
+
+#[rstest_bdd_macros::given("a custom orders resolver subscription matching {pattern}")]
+fn orders_subscription(custom_resolution: &mut CustomResolution, pattern: String) {
+    custom_resolution.patterns.insert(pattern);
+}
+
+#[rstest_bdd_macros::when(
+    "a consumer resolves the subscriptions through the public resolver trait"
+)]
+fn resolve_orders(custom_resolution: &mut CustomResolution) {
     let resolver: &dyn TopicRegexResolver = &OrdersResolver;
-    let subscriptions = resolver.resolve(&BTreeSet::from(["orders.*".to_owned()]));
+    custom_resolution.subscriptions = Some(resolver.resolve(&custom_resolution.patterns));
+}
+
+#[rstest_bdd_macros::then(
+    "orders resolves to topic orders at version 42 and timestamp 1000 milliseconds"
+)]
+fn resolved_orders(custom_resolution: &CustomResolution) {
     assert!(
-        subscriptions
-            == HashMap::from([("orders.*".to_owned(), ResolvedRegularExpression {
+        custom_resolution
+            .subscriptions
+            .as_ref()
+            .expect("subscriptions resolved")
+            == &HashMap::from([("orders.*".to_owned(), ResolvedRegularExpression {
                 topics: BTreeSet::from(["orders".to_owned()]),
                 version: 42,
                 timestamp_ms: 1_000,
-            },)])
+            })])
     );
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/regex_resolver.feature",
-    name = "a consumer can implement and call a custom resolver"
-)]
-fn a_consumer_can_implement_and_call_a_custom_resolver() {}
+rstest_bdd_macros::scenarios!("tests/features/migrated/tests/regex_resolver.feature", fixtures = [custom_resolution: CustomResolution]);

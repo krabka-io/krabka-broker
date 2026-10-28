@@ -181,88 +181,120 @@ mod tests {
         assert!(partition.directories == vec![directory]);
     }
 
-    /// The topic reference and the partition that one request row reports.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum Report {
-        /// Partition 0 of the seeded topic, which broker 1 replicates.
-        KnownPartition,
-        /// Partition 7 of the seeded topic, which does not exist.
-        UnknownPartition,
-        /// A non-zero topic id that names no topic.
-        UnknownTopicId,
-        /// The zero topic id.
-        ZeroTopicId,
+    #[derive(Default)]
+    struct DirectoryReportScenario {
+        fixture: Option<SeededTopicFixture>,
+        reports: Vec<(uuid::Uuid, i32)>,
+        responses: Vec<AssignReplicasToDirsResponse>,
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers assign replicas to dirs tests: handle answers each partition with kafkas error code"
+    #[rstest::fixture]
+    fn directory_report() -> DirectoryReportScenario {
+        let fixture = None;
+        DirectoryReportScenario {
+            fixture,
+            ..Default::default()
+        }
+    }
+    #[rstest_bdd_macros::given(
+        "broker 1 hosts topic t UUID 187 partition 0 and may report directory UUID 170"
     )]
-    async fn bdd_verify_handle_answers_each_partition_with_kafkas_error_code() {
-        let fixture = seeded_topic_fixture(broker_fixture_support::start_broker_with(|_| {})).await;
-
-        let cases = [
-            (Report::KnownPartition, codes::NONE),
-            (Report::UnknownPartition, codes::UNKNOWN_TOPIC_OR_PARTITION),
-            (Report::UnknownTopicId, codes::UNKNOWN_TOPIC_ID),
-            (Report::ZeroTopicId, codes::UNKNOWN_TOPIC_ID),
-        ];
-        let mut actual = Vec::with_capacity(cases.len());
-        let mut expected = Vec::with_capacity(cases.len());
-        for (report, error_code) in cases {
-            let (topic_id, partition_index) = match report {
-                Report::KnownPartition => (fixture.topic_uuid, 0),
-                Report::UnknownPartition => (fixture.topic_uuid, 7),
-                Report::UnknownTopicId => (uuid::Uuid::from_u128(0xCC), 0),
-                Report::ZeroTopicId => (uuid::Uuid::nil(), 0),
-            };
-            let resp = handle_allowed(
-                &fixture.broker,
-                request(DirectoryAssignmentSetup {
-                    broker_epoch: fixture.broker_epoch,
-                    dir: fixture.dir_uuid,
-                    topic: topic_id,
-                    partitions: &[partition_index],
-                    ..Default::default()
-                }),
-            )
-            .await
-            .expect("AssignReplicasToDirs handler");
-            actual.push((report, resp));
-            expected.push((
-                report,
+    async fn known_reported_directory(directory_report: &mut DirectoryReportScenario) {
+        directory_report.fixture =
+            Some(seeded_topic_fixture(broker_fixture_support::start_broker_with(|_| {})).await);
+    }
+    #[rstest_bdd_macros::given(
+        "the broker submits these ordered topic and partition directory reports"
+    )]
+    fn ordered_directory_reports(
+        directory_report: &mut DirectoryReportScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        directory_report.reports = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [topic, partition] = row.as_slice() else {
+                    panic!("topic UUID and partition required")
+                };
+                (
+                    uuid::Uuid::from_u128(topic.parse().unwrap()),
+                    partition.parse().unwrap(),
+                )
+            })
+            .collect();
+    }
+    #[rstest_bdd_macros::when("the active controller handles every directory report in order")]
+    async fn handle_ordered_directory_reports(directory_report: &mut DirectoryReportScenario) {
+        let fixture = directory_report.fixture.as_ref().unwrap();
+        for (topic, partition) in &directory_report.reports {
+            directory_report.responses.push(
+                handle_allowed(
+                    &fixture.broker,
+                    request(DirectoryAssignmentSetup {
+                        broker_epoch: fixture.broker_epoch,
+                        dir: fixture.dir_uuid,
+                        topic: *topic,
+                        partitions: &[*partition],
+                        ..Default::default()
+                    }),
+                )
+                .await
+                .expect("AssignReplicasToDirs handler"),
+            );
+        }
+    }
+    #[rstest_bdd_macros::then(
+        "the complete directory responses have these ordered partition errors and the valid directory stays assigned"
+    )]
+    async fn check_ordered_directory_reports(
+        directory_report: &mut DirectoryReportScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let fixture = directory_report.fixture.as_ref().unwrap();
+        let expected: Vec<_> = datatable
+            .into_iter()
+            .skip(1)
+            .map(|row| {
+                let [topic, partition, code] = row.as_slice() else {
+                    panic!("topic UUID partition error code required")
+                };
                 krabka_macros::unthrottled_wire!(AssignReplicasToDirsResponse {
                     error_code: codes::NONE,
                     directories: vec![krabka_macros::tagged_wire!(RespDirData {
                         id: ProtocolUuid(fixture.dir_uuid.into_bytes()),
                         topics: vec![krabka_macros::tagged_wire!(RespTopicData {
-                            topic_id: ProtocolUuid(topic_id.into_bytes()),
+                            topic_id: ProtocolUuid(
+                                uuid::Uuid::from_u128(topic.parse().unwrap()).into_bytes()
+                            ),
                             partitions: vec![krabka_macros::tagged_wire!(RespPartData {
-                                partition_index,
-                                error_code,
-                            })],
-                        })],
-                    })],
-                }),
-            ));
-        }
-        assert!(actual == expected);
+                                partition_index: partition.parse().unwrap(),
+                                error_code: code.parse().unwrap()
+                            })]
+                        })]
+                    })]
+                })
+            })
+            .collect();
+        assert!(directory_report.responses == expected);
         check_partition_directory(&fixture.broker, fixture.dir_uuid);
-
-        fixture.handle.shutdown().await;
+        directory_report
+            .fixture
+            .take()
+            .unwrap()
+            .handle
+            .shutdown()
+            .await;
     }
-
-    /// Kafka's `ReplicationControlManager.handleAssignReplicasToDirs` answers
-    /// `UNKNOWN_TOPIC_ID` for a topic id that names no topic, the zero id
-    /// included, and `UNKNOWN_TOPIC_OR_PARTITION` for a partition that the
-    /// topic does not have.
-    #[cfg(test)]
     #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/assign_replicas_to_dirs.feature",
-        name = "tests: handle answers each partition with kafkas error code"
+        path = "tests/features/handler_directory_reports/reports.feature",
+        name = "A valid report remains assigned while unknown partitions and UUIDs receive their own errors"
     )]
     #[tokio::test]
-    async fn handle_answers_each_partition_with_kafkas_error_code() {}
+    async fn handle_answers_each_partition_with_kafkas_error_code(
+        directory_report: DirectoryReportScenario,
+    ) {
+        let _ = directory_report;
+    }
 
     /// Seed topic "t" with id `topic_uuid` and partition 0 on broker 1.
     async fn seed_topic(broker: &Broker, topic_uuid: uuid::Uuid) {

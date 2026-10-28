@@ -143,57 +143,72 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "wal quorum follower fetch tests: diverging epoch is absent at the kafka default and needs a real epoch for {example}"
-    )]
-    fn bdd_verify_diverging_epoch_is_absent_at_the_kafka_default_and_needs_a_real_epoch(
-        example: String,
-    ) {
-        type Example = (i32, i64, Result<Option<LogOffsetMetadata>, String>);
-        let (epoch, end_offset, expected): Example = match example.as_str() {
-            "kafka default" => (-1, -1, Ok(None)),
-            "negative end offset" => (3, -1, Ok(None)),
-            "named divergence" => (
-                3,
-                10,
-                Ok(Some(LogOffsetMetadata {
-                    offset: 10,
-                    epoch: 3,
-                })),
-            ),
-            "epoch zero" => (
-                0,
-                0,
-                Ok(Some(LogOffsetMetadata {
-                    offset: 0,
-                    epoch: 0,
-                })),
-            ),
-            "negative epoch" => (
-                -1,
-                10,
-                Err(String::from(
-                    "leader returned an invalid WAL diverging epoch",
-                )),
-            ),
-            _ => panic!("unknown BDD example: {example}"),
-        };
+    #[derive(Default)]
+    struct WalDivergenceResponse {
+        partition: Option<PartitionData>,
+        validated: Option<Result<Option<LogOffsetMetadata>, String>>,
+    }
 
+    #[rstest::fixture]
+    fn wal_divergence_response() -> WalDivergenceResponse {
+        // Each leader response has its own advertised epoch and validation result.
+        WalDivergenceResponse::default()
+    }
+
+    #[rstest_bdd_macros::given("the WAL leader advertises diverging epoch {epoch} ending at {end}")]
+    fn supplied_wal_divergence_response(
+        wal_divergence_response: &mut WalDivergenceResponse,
+        epoch: i32,
+        end: i64,
+    ) {
         let mut partition = frontiers(0, 0, 10);
         partition.diverging_epoch.epoch = epoch;
-        partition.diverging_epoch.end_offset = end_offset;
-        assert2::assert!(validate_diverging_epoch(&partition) == expected);
+        partition.diverging_epoch.end_offset = end;
+        wal_divergence_response.partition = Some(partition);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/wal/quorum/follower/fetch.feature",
-        name = "tests: diverging epoch is absent at the kafka default and needs a real epoch"
-    )]
-    fn diverging_epoch_is_absent_at_the_kafka_default_and_needs_a_real_epoch(example: String) {
-        let _ = example;
+    #[rstest_bdd_macros::when("the WAL follower validates the leader's diverging epoch")]
+    fn validate_wal_divergence_response(wal_divergence_response: &mut WalDivergenceResponse) {
+        wal_divergence_response.validated = Some(validate_diverging_epoch(
+            wal_divergence_response
+                .partition
+                .as_ref()
+                .expect("leader partition response was given"),
+        ));
     }
+
+    #[rstest_bdd_macros::then("the validated WAL divergence is absent")]
+    fn absent_wal_divergence_response(wal_divergence_response: &WalDivergenceResponse) {
+        assert2::assert!(wal_divergence_response.validated == Some(Ok(None)));
+    }
+
+    #[rstest_bdd_macros::then("the validated WAL divergence is epoch {epoch} at offset {end}")]
+    fn present_wal_divergence_response(
+        wal_divergence_response: &WalDivergenceResponse,
+        epoch: i32,
+        end: i64,
+    ) {
+        assert2::assert!(
+            wal_divergence_response.validated
+                == Some(Ok(Some(LogOffsetMetadata {
+                    offset: end,
+                    epoch: epoch.try_into().expect("nonnegative validated epoch")
+                })))
+        );
+    }
+
+    #[rstest_bdd_macros::then("WAL divergence validation fails with {message}")]
+    fn refused_wal_divergence_response(
+        wal_divergence_response: &WalDivergenceResponse,
+        message: String,
+    ) {
+        assert2::assert!(wal_divergence_response.validated == Some(Err(message)));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/wal/quorum/follower/fetch.feature",
+        fixtures = [wal_divergence_response: WalDivergenceResponse]
+    );
 
     #[test]
     fn fetch_progress_distinguishes_idle_advance_and_regression() {

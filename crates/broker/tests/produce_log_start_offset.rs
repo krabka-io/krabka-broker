@@ -56,6 +56,8 @@ use {
         primitives::uuid::Uuid as WireUuid,
         records::RecordBatch,
     },
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
 };
 
 mod support;
@@ -96,85 +98,135 @@ async fn seeded_orders() -> SeededOrders {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "produce log start offset: an accepted produce reports the trimmed log start offset"
-)]
-async fn bdd_verify_an_accepted_produce_reports_the_trimmed_log_start_offset() {
-    let SeededOrders {
-        process: p,
-        topic_id,
-    } = seeded_orders().await;
+struct LogStartScenario {
+    seeded: Option<SeededOrders>,
+    trimmed: Option<DeleteRecordsPartitionResult>,
+    appended: Option<PartitionProduceResponse>,
+    retried: Option<PartitionProduceResponse>,
+}
 
+#[fixture]
+fn log_start() -> LogStartScenario {
+    // Start this scenario with fresh inputs and observations.
+
+    LogStartScenario {
+        seeded: None,
+        trimmed: None,
+        appended: None,
+        retried: None,
+    }
+}
+
+#[given("the orders partition contains four acknowledged records")]
+async fn seeded_partition(log_start: &mut LogStartScenario) {
+    log_start.seeded = Some(seeded_orders().await);
+}
+
+#[when("DeleteRecords trims the partition to offset three")]
+async fn trim_partition(log_start: &mut LogStartScenario) {
+    let seeded = log_start.seeded.as_ref().expect("records were seeded");
+    log_start.trimmed = Some(trim(&seeded.process.client, "orders", TRIM_TO).await);
+}
+
+#[then("the trim acknowledges low watermark three")]
+fn trimmed_watermark(log_start: &LogStartScenario) {
     check!(
-        trim(&p.client, "orders", TRIM_TO).await
-            == DeleteRecordsPartitionResult {
+        log_start.trimmed.as_ref().expect("DeleteRecords completed")
+            == &DeleteRecordsPartitionResult {
                 partition_index: 0,
                 low_watermark: TRIM_TO,
                 error_code: codes::NONE,
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             }
     );
-
-    assert!(
-        produce(&p.client, "orders", topic_id).await == accepted(APPENDED_BEFORE_TRIM, TRIM_TO)
-    );
-
-    p.broker.shutdown().await;
 }
 
-/// An accepted produce reports the partition's real log start offset.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/produce_log_start_offset.feature",
-    name = "an accepted produce reports the trimmed log start offset"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_accepted_produce_reports_the_trimmed_log_start_offset() {}
+#[when("a nonidempotent record is appended to the trimmed partition")]
+async fn append_record(log_start: &mut LogStartScenario) {
+    let seeded = log_start.seeded.as_ref().expect("records were seeded");
+    log_start.appended = Some(produce(&seeded.process.client, "orders", seeded.topic_id).await);
+}
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "produce log start offset: an idempotent retry reports the trimmed log start offset"
-)]
-async fn bdd_verify_an_idempotent_retry_reports_the_trimmed_log_start_offset() {
-    let SeededOrders {
-        process: p,
-        topic_id,
-    } = seeded_orders().await;
+#[when("producer 777 appends its first record to the trimmed partition")]
+async fn append_idempotent(log_start: &mut LogStartScenario) {
+    let seeded = log_start.seeded.as_ref().expect("records were seeded");
+    log_start.appended = Some(
+        produce_as(
+            &seeded.process.client,
+            "orders",
+            seeded.topic_id,
+            PRODUCER_ID,
+            0,
+        )
+        .await,
+    );
+}
 
-    check!(trim(&p.client, "orders", TRIM_TO).await.low_watermark == TRIM_TO);
-
-    let first = produce_as(&p.client, "orders", topic_id, PRODUCER_ID, 0).await;
-    check!(first == accepted(APPENDED_BEFORE_TRIM, TRIM_TO));
-
-    // The same identity again. The log end offset does not move, so the row
-    // below is the dedup path's and not a second append's.
+#[then("the accepted append reports base offset four and log start offset three")]
+fn appended_watermark(log_start: &LogStartScenario) {
     assert!(
-        produce_as(&p.client, "orders", topic_id, PRODUCER_ID, 0).await
-            == PartitionProduceResponse {
+        log_start.appended.as_ref().expect("a record was produced")
+            == &accepted(APPENDED_BEFORE_TRIM, TRIM_TO)
+    );
+}
+
+#[when("producer 777 retries the identical epoch and sequence")]
+async fn retry_record(log_start: &mut LogStartScenario) {
+    let seeded = log_start.seeded.as_ref().expect("records were seeded");
+    log_start.retried = Some(
+        produce_as(
+            &seeded.process.client,
+            "orders",
+            seeded.topic_id,
+            PRODUCER_ID,
+            0,
+        )
+        .await,
+    );
+}
+
+#[then("the retry preserves the assigned offset timestamp and trimmed log start")]
+fn retry_watermark(log_start: &LogStartScenario) {
+    assert!(
+        log_start.retried.as_ref().expect("the record was retried")
+            == &PartitionProduceResponse {
                 log_append_time_ms: BATCH_MAX_TIMESTAMP,
                 ..accepted(APPENDED_BEFORE_TRIM, TRIM_TO)
             }
     );
-    check!(p.broker.local_log_end_offset("orders", 0) == Some(APPENDED_BEFORE_TRIM + 1));
-
-    p.broker.shutdown().await;
+    let seeded = log_start.seeded.as_ref().expect("records were seeded");
+    check!(
+        seeded.process.broker.local_log_end_offset("orders", 0) == Some(APPENDED_BEFORE_TRIM + 1)
+    );
 }
 
-/// An idempotent retry is an accepted produce too, so its row carries the same
-/// real log start offset rather than the sentinel.
-///
-/// The retry is recognized by `(producer_id, epoch, sequence)` and answered
-/// with the offset the first send was already assigned, without appending
-/// anything. That row is built on a different code path from the append's, so
-/// a fix that reached only the append would leave this one at -1.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+async fn stop_log_start(log_start: LogStartScenario) {
+    log_start
+        .seeded
+        .expect("a partition was seeded")
+        .process
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/produce_log_start_offset.feature",
-    name = "an idempotent retry reports the trimmed log start offset"
+    name = "An appended record reports the real trimmed start of its partition"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_idempotent_retry_reports_the_trimmed_log_start_offset() {}
+async fn an_accepted_produce_reports_the_trimmed_log_start_offset(log_start: LogStartScenario) {
+    stop_log_start(log_start).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/produce_log_start_offset.feature",
+    name = "An idempotent retry reports the same trimmed start without appending"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_idempotent_retry_reports_the_trimmed_log_start_offset(log_start: LogStartScenario) {
+    stop_log_start(log_start).await;
+}
 
 /// The partition row an accepted produce answers with.
 use crate::support::produce::expected_partition_success as accepted;

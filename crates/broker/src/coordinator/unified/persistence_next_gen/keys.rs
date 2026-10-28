@@ -76,58 +76,15 @@ pub fn encode_key(key: &NextGenKey) -> Result<Bytes, BrokerError> { key.encode()
 mod tests {
     use {super::*, assert2::assert};
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified persistence next gen keys tests: partition metadata key bytes match kafka schema"
-    )]
-    fn bdd_verify_partition_metadata_key_bytes_match_kafka_schema() {
-        let key = NextGenKey::PartitionMetadata {
-            group_id: "grp".into(),
-        };
-        let golden: &[u8] = b"\x00\x04\x00\x03grp";
-        assert!(&encode_key(&key).unwrap()[..] == golden);
-        assert!(parse_key(KEY_PARTITION_METADATA, &golden[2..]).unwrap() == key);
-    }
-
     /// `ConsumerGroupPartitionMetadataKey`: an `i16` key version of 4, then
     /// the group id as a non-flexible string.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/keys.feature",
-        name = "tests: partition metadata key bytes match kafka schema"
-    )]
-    fn partition_metadata_key_bytes_match_kafka_schema() {}
-
     #[test]
     fn unknown_key_version_rejected() {
         assert!(parse_key(99, &[]).is_err());
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "coordinator unified persistence next gen keys tests: regular expression key bytes match kafka schema"
-    )]
-    fn bdd_verify_regular_expression_key_bytes_match_kafka_schema() {
-        let key = NextGenKey::RegularExpression {
-            group_id: "g".into(),
-            regex: "a.*".into(),
-        };
-        assert!(&encode_key(&key).unwrap()[..] == b"\x00\x10\x00\x01g\x00\x03a.*");
-        let encoded = encode_key(&key).unwrap();
-        let mut r = &encoded[..];
-        let v = bytes::Buf::get_i16(&mut r);
-        assert!(parse_key(v, r).unwrap() == key);
-    }
-
     /// `ConsumerGroupRegularExpressionKey`: an `i16` key version of 16, then
     /// the group id and the regular expression as non-flexible strings.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/persistence_next_gen/keys.feature",
-        name = "tests: regular expression key bytes match kafka schema"
-    )]
-    fn regular_expression_key_bytes_match_kafka_schema() {}
-
     #[test]
     fn key_roundtrip_member_metadata() {
         let k = NextGenKey::MemberMetadata {
@@ -139,4 +96,51 @@ mod tests {
         let v = bytes::Buf::get_i16(&mut r);
         assert!(parse_key(v, r).unwrap() == k);
     }
+    use {
+        crate::coordinator::unified::test_support::wire_bytes,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
+    #[derive(Default)]
+    struct ConsumerKeyEncoding {
+        key: Option<NextGenKey>,
+        encoded: Option<Bytes>,
+        decoded: Option<NextGenKey>,
+    }
+    #[rstest::fixture]
+    fn consumer_key() -> ConsumerKeyEncoding {
+        // Start this scenario with fresh inputs and observations.
+        ConsumerKeyEncoding::default()
+    }
+    #[given("a consumer {kind} key for group {group} and expression {expression}")]
+    fn consumer_key_fields(
+        consumer_key: &mut ConsumerKeyEncoding,
+        kind: String,
+        group: String,
+        expression: String,
+    ) {
+        consumer_key.key = Some(match kind.as_str() {
+            "partition-metadata" => NextGenKey::PartitionMetadata { group_id: group },
+            "regular-expression" => NextGenKey::RegularExpression {
+                group_id: group,
+                regex: expression,
+            },
+            _ => panic!("unknown consumer key family"),
+        });
+    }
+    #[when("the coordinator encodes the consumer key and parses its Kafka key version")]
+    fn consumer_key_codec(consumer_key: &mut ConsumerKeyEncoding) {
+        let encoded = encode_key(consumer_key.key.as_ref().expect("key fields prepared"))
+            .expect("encode key");
+        let mut body = &encoded[..];
+        let version = bytes::Buf::get_i16(&mut body);
+        consumer_key.decoded = Some(parse_key(version, body).expect("decode key"));
+        consumer_key.encoded = Some(encoded);
+    }
+    #[then("the consumer key bytes are {hex} and all original key fields survive decoding")]
+    fn consumer_key_golden(consumer_key: &ConsumerKeyEncoding, hex: String) {
+        let want = wire_bytes(&[&hex]);
+        assert!(&consumer_key.encoded.as_ref().expect("key encoded")[..] == &want[..]);
+        assert!(consumer_key.decoded == consumer_key.key);
+    }
+    scenarios!("tests/features/migrated/src/coordinator/unified/persistence_next_gen/keys.feature",fixtures=[consumer_key:ConsumerKeyEncoding]);
 }

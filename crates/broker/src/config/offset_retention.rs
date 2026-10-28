@@ -44,24 +44,48 @@ mod tests {
         krabka_units::{convert::TimeExt as _, minutes},
     };
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "config offset retention tests: an untouched broker runs kafkas defaults"
-    )]
-    fn bdd_verify_an_untouched_broker_runs_kafkas_defaults() {
-        let config = BrokerConfig::default();
-
-        check!(config.offsets_retention() == DEFAULT_OFFSETS_RETENTION);
-        check!(config.offsets_retention().millis_i64() / 60_000 == 10_080);
-        check!(config.offsets_retention_check_interval().millis_i64() == 600_000);
+    #[derive(Default)]
+    struct OffsetRetentionScenario {
+        config: Option<BrokerConfig>,
+        observed: Option<(Time, Time)>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/config/offset_retention.feature",
-        name = "tests: an untouched broker runs kafkas defaults"
+    #[rstest::fixture]
+    fn retention() -> OffsetRetentionScenario {
+        // Keep retention inputs and observations fresh for each scenario.
+        OffsetRetentionScenario::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "the operator has not overridden offset retention or its sweep interval"
     )]
-    fn an_untouched_broker_runs_kafkas_defaults() {}
+    fn untouched_retention(retention: &mut OffsetRetentionScenario) {
+        retention.config = Some(BrokerConfig::default());
+    }
+
+    #[rstest_bdd_macros::when("the broker resolves its offset retention policy")]
+    fn resolve_retention(retention: &mut OffsetRetentionScenario) {
+        let config = retention
+            .config
+            .as_ref()
+            .expect("a broker config was given");
+        retention.observed = Some((
+            config.offsets_retention(),
+            config.offsets_retention_check_interval(),
+        ));
+    }
+
+    #[rstest_bdd_macros::then(
+        "offsets are retained for 10080 minutes with a 600000 millisecond sweep interval"
+    )]
+    fn kafka_retention_defaults(retention: &OffsetRetentionScenario) {
+        let (duration, interval) = retention
+            .observed
+            .expect("the retention policy was resolved");
+        check!(duration == DEFAULT_OFFSETS_RETENTION);
+        check!(duration.millis_i64() / 60_000 == 10_080);
+        check!(interval.millis_i64() == 600_000);
+    }
 
     #[test]
     fn an_operator_value_wins_even_when_it_equals_the_default() {
@@ -77,4 +101,6 @@ mod tests {
         check!(config.offsets_retention() == DEFAULT_OFFSETS_RETENTION);
         check!(config.offsets_retention_check_interval() == minutes(1));
     }
+
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/config/offset_retention.feature", fixtures = [retention: OffsetRetentionScenario]);
 }

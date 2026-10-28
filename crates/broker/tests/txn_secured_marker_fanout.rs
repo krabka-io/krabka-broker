@@ -60,6 +60,7 @@ use {
             },
             common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
             create_topics_response::CreateTopicsResponse,
+            end_txn_response::EndTxnResponse,
             find_coordinator_request::FindCoordinatorRequest,
             init_producer_id_response::InitProducerIdResponse,
             produce_request::ProduceRequest,
@@ -68,6 +69,7 @@ use {
         records::{Attributes, RecordBatch},
     },
     krabka_security::{ListenerProtocol, SaslMechanism},
+    rstest_bdd::datatable::Rows,
     std::{
         collections::BTreeSet,
         net::SocketAddr,
@@ -401,15 +403,46 @@ async fn find_coordinator(client: &Client, transactional_id: &str) -> Coordinato
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "txn secured marker fanout: end txn marker fanout to remote leader over sasl"
-)]
-async fn bdd_verify_end_txn_marker_fanout_to_remote_leader_over_sasl() {
-    let cluster = start_two_sasl_with_retry(|_| {}).await;
-    wait_both_registered(&cluster).await;
+#[derive(Default)]
+struct SecuredMarker {
+    cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
+    coordinator: Option<Client>,
+    producer: Option<ProducerIdentity>,
+    end: Option<EndTxnResponse>,
+}
 
-    let bootstrap = cluster[0].1.listen_addr.to_string();
+#[rstest::fixture]
+fn secured_marker() -> SecuredMarker {
+    // Authentication and coordinator state are fresh for every scenario.
+    SecuredMarker::default()
+}
+
+impl SecuredMarker {
+    fn coordinator(&self) -> &Client {
+        self.coordinator
+            .as_ref()
+            .expect("authenticated coordinator")
+    }
+
+    async fn shutdown(self) {
+        let Self {
+            cluster,
+            coordinator,
+            ..
+        } = self;
+        coordinator.expect("authenticated coordinator").close();
+        shutdown_cluster(cluster).await;
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "two SASL_PLAINTEXT brokers lead one partition each and tid remote-fanout-tid registers the partition led away from its coordinator"
+)]
+async fn remote_authenticated_partition(secured_marker: &mut SecuredMarker) {
+    secured_marker.cluster = start_two_sasl_with_retry(|_| {}).await;
+    wait_both_registered(&secured_marker.cluster).await;
+
+    let bootstrap = secured_marker.cluster[0].1.listen_addr.to_string();
     let admin = sasl_client(&bootstrap).await;
 
     // Topic with 2 partitions, RF=1. Round-robin places P0 on node 1 and P1 on
@@ -421,7 +454,7 @@ async fn bdd_verify_end_txn_marker_fanout_to_remote_leader_over_sasl() {
         cr.topics[0].error_code
     );
 
-    let leaders = partition_leaders(&admin, &cluster[0].0, TOPIC).await;
+    let leaders = partition_leaders(&admin, &secured_marker.cluster[0].0, TOPIC).await;
     let distinct: BTreeSet<i32> = leaders.iter().map(|leader| leader.leader_id).collect();
     assert!(
         distinct.len() == 2,
@@ -439,9 +472,10 @@ async fn bdd_verify_end_txn_marker_fanout_to_remote_leader_over_sasl() {
         .expect("a partition led by a non-coordinator broker");
 
     // Connect to the coordinator and run the transaction control plane.
-    let coord = sasl_client(&format!("{}:{}", coordinator.host, coordinator.port)).await;
+    secured_marker.coordinator =
+        Some(sasl_client(&format!("{}:{}", coordinator.host, coordinator.port)).await);
 
-    let init = init_producer(&coord, TID).await;
+    let init = init_producer(secured_marker.coordinator(), TID).await;
     let (pid, epoch) = (init.producer_id, init.producer_epoch);
 
     // AddPartitionsToTxn for the remote-led partition. Fill both the v4+
@@ -452,7 +486,8 @@ async fn bdd_verify_end_txn_marker_fanout_to_remote_leader_over_sasl() {
         partitions: vec![remote_partition],
         ..Default::default()
     };
-    let add = coord
+    let add = secured_marker
+        .coordinator()
         .send(AddPartitionsToTxnRequest {
             transactions: vec![AddPartitionsToTxnTransaction {
                 transactional_id: TID.into(),
@@ -475,37 +510,44 @@ async fn bdd_verify_end_txn_marker_fanout_to_remote_leader_over_sasl() {
         "AddPartitionsToTxn top-level error: {add:?}"
     );
 
-    // EndTxn(commit): the coordinator fans a WriteTxnMarkers to the remote
-    // partition's leader over the SASL_PLAINTEXT inter-broker listener. This is
-    // the path the fix repairs — the pre-fix one-shot client could not
-    // authenticate and EndTxn would surface a retriable UNKNOWN_SERVER_ERROR.
-    let end = coord
-        .send(
-            end_transaction_request()
-                .transactional_id(TID)
-                .producer(ProducerIdentity::from_wire((pid, epoch)))
-                .call(),
-        )
-        .await
-        .expect("end txn");
+    secured_marker.producer = Some(ProducerIdentity::from_wire((pid, epoch)));
+    admin.close();
+}
+
+#[rstest_bdd_macros::when("EndTxn commits remote-fanout-tid through its authenticated coordinator")]
+async fn commit_secured_remote_marker(secured_marker: &mut SecuredMarker) {
+    secured_marker.end = Some(
+        secured_marker
+            .coordinator()
+            .send(
+                end_transaction_request()
+                    .transactional_id(TID)
+                    .producer(secured_marker.producer.expect("transaction identity"))
+                    .call(),
+            )
+            .await
+            .expect("end txn"),
+    );
+}
+
+#[rstest_bdd_macros::then("EndTxn returns NONE after the authenticated remote marker fan-out")]
+fn successful_secured_marker(secured_marker: &SecuredMarker) {
+    let end = secured_marker.end.as_ref().expect("EndTxn answered");
     assert!(
         end.error_code == 0,
         "EndTxn must succeed: remote marker fan-out over SASL inter-broker (error_code={})",
         end.error_code
     );
-
-    admin.close();
-    coord.close();
-    shutdown_cluster(cluster).await;
 }
 
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/txn_secured_marker_fanout.feature",
     name = "end txn marker fanout to remote leader over sasl"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {}
+async fn end_txn_marker_fanout_to_remote_leader_over_sasl(secured_marker: SecuredMarker) {
+    secured_marker.shutdown().await;
+}
 
 const ADMIN_USER: &str = "admin";
 const ADMIN_PASS: &str = "admin-secret";
@@ -541,8 +583,8 @@ use crate::support::{acl::literal_allow_acl as allow, wire::At};
 
 /// One transactional `Produce` whose partition leader is not the transaction
 /// coordinator.
-struct VerificationCase {
-    name: &'static str,
+struct VerificationCase<'a> {
+    name: &'a str,
     /// `Produce` v11 only verifies the partition, so the client adds it first
     /// with its own `AddPartitionsToTxn` (v3). `Produce` v12 lets the leader
     /// add the partition.
@@ -567,14 +609,50 @@ async fn ready_leader_addr(
     cfg.listen_addr.to_string()
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "txn secured marker fanout: a remote coordinator verifies a produce for a broker with only cluster action"
+#[derive(Default)]
+struct SecuredVerification {
+    cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
+    admin: Option<Client>,
+    bootstrap: Option<Client>,
+    actual: Vec<(String, i32, PartitionProduceResponse, i16)>,
+}
+
+#[derive(rstest_bdd_macros::DataTableRow)]
+struct SecuredProduceInput {
+    name: String,
+    produce_version: i16,
+}
+
+#[rstest::fixture]
+fn secured_verification() -> SecuredVerification {
+    // ACLs and remote coordinator verification belong to this cluster alone.
+    SecuredVerification::default()
+}
+
+impl SecuredVerification {
+    fn admin(&self) -> &Client { self.admin.as_ref().expect("privileged SASL admin") }
+
+    fn bootstrap(&self) -> &Client { self.bootstrap.as_ref().expect("SASL client") }
+
+    async fn shutdown(self) {
+        let Self {
+            cluster,
+            admin,
+            bootstrap,
+            ..
+        } = self;
+        admin.expect("privileged SASL admin").close();
+        bootstrap.expect("SASL client").close();
+        shutdown_cluster(cluster).await;
+    }
+}
+
+#[rstest_bdd_macros::given(
+    "two SASL brokers grant broker only ClusterAction on kafka-cluster and client Write on all transactional IDs and topics"
 )]
-async fn bdd_verify_a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_action()
-{
-    let cluster = start_two_sasl_with_retry(apply_acls).await;
-    wait_both_registered(&cluster).await;
+async fn secured_verification_acls(secured_verification: &mut SecuredVerification) {
+    secured_verification.cluster = start_two_sasl_with_retry(apply_acls).await;
+    wait_both_registered(&secured_verification.cluster).await;
 
     let grants = [
         allow()
@@ -596,13 +674,13 @@ async fn bdd_verify_a_remote_coordinator_verifies_a_produce_for_a_broker_with_on
             .call(),
     ];
     for grant in grants {
-        cluster[0]
+        secured_verification.cluster[0]
             .0
             .submit_metadata_record_for_test(grant)
             .await
             .expect("seed ACL");
     }
-    for (handle, _, _) in &cluster {
+    for (handle, _, _) in &secured_verification.cluster {
         handle
             .wait_for_image(|img| {
                 img.matching_acls(ResourceType::Cluster, "kafka-cluster")
@@ -617,37 +695,59 @@ async fn bdd_verify_a_remote_coordinator_verifies_a_produce_for_a_broker_with_on
             .await;
     }
 
-    let admin = sasl_client_as(&cluster[0].1.listen_addr.to_string(), PlainLogin {
-        username: ADMIN_USER,
-        password: ADMIN_PASS,
-    })
-    .await;
-    let client_bootstrap =
-        sasl_client_as(&cluster[0].1.listen_addr.to_string(), CLIENT_LOGIN).await;
+    secured_verification.admin = Some(
+        sasl_client_as(
+            &secured_verification.cluster[0].1.listen_addr.to_string(),
+            PlainLogin {
+                username: ADMIN_USER,
+                password: ADMIN_PASS,
+            },
+        )
+        .await,
+    );
+    secured_verification.bootstrap = Some(
+        sasl_client_as(
+            &secured_verification.cluster[0].1.listen_addr.to_string(),
+            CLIENT_LOGIN,
+        )
+        .await,
+    );
+}
 
-    let cases = [
-        VerificationCase {
-            name: "verify-only-produce-v11",
-            produce_version: 11,
-        },
-        VerificationCase {
-            name: "add-produce-v12",
-            produce_version: 12,
-        },
-    ];
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for case in cases {
-        let created = create_two_partition_topic(&admin, case.name).await;
+#[rstest_bdd_macros::when(
+    "client produces one transactional v record at sequence 0 and timestamp 1 through a remote partition leader and commits each transaction"
+)]
+async fn remote_secured_produces(
+    secured_verification: &mut SecuredVerification,
+    #[datatable] rows: Rows<SecuredProduceInput>,
+) {
+    for row in rows {
+        let case = VerificationCase {
+            name: &row.name,
+            produce_version: row.produce_version,
+        };
+        let created = create_two_partition_topic(secured_verification.admin(), case.name).await;
         assert!(
             created.topics[0].error_code == 0,
             "{}: {created:?}",
             case.name
         );
-        let leaders = partition_leaders(&admin, &cluster[0].0, case.name).await;
-        wait_all_hold_topic(cluster.iter().map(|(handle, _, _)| handle), case.name).await;
+        let leaders = partition_leaders(
+            secured_verification.admin(),
+            &secured_verification.cluster[0].0,
+            case.name,
+        )
+        .await;
+        wait_all_hold_topic(
+            secured_verification
+                .cluster
+                .iter()
+                .map(|(handle, _, _)| handle),
+            case.name,
+        )
+        .await;
 
-        let coordinator = find_coordinator(&client_bootstrap, case.name).await;
+        let coordinator = find_coordinator(secured_verification.bootstrap(), case.name).await;
         let PartitionLeader {
             partition_index: partition,
             leader_id: leader,
@@ -656,7 +756,8 @@ async fn bdd_verify_a_remote_coordinator_verifies_a_produce_for_a_broker_with_on
             .copied()
             .find(|led| led.leader_id != coordinator.node_id)
             .expect("a partition led by a broker that is not the coordinator");
-        let leader_addr = ready_leader_addr(&cluster, case.name, partition, leader).await;
+        let leader_addr =
+            ready_leader_addr(&secured_verification.cluster, case.name, partition, leader).await;
         let to_coordinator = sasl_client_as(
             &format!("{}:{}", coordinator.host, coordinator.port),
             CLIENT_LOGIN,
@@ -726,50 +827,49 @@ async fn bdd_verify_a_remote_coordinator_verifies_a_produce_for_a_broker_with_on
             .await
             .expect("end txn");
 
-        actual.push((
-            case.name,
+        secured_verification.actual.push((
+            case.name.to_owned(),
+            partition,
             produced.responses[0].partition_responses[0].clone(),
             ended.error_code,
-        ));
-        expected.push((
-            case.name,
-            PartitionProduceResponse {
-                index: partition,
-                error_code: 0,
-                base_offset: 0,
-                log_append_time_ms: -1,
-                log_start_offset: 0,
-                ..Default::default()
-            },
-            0,
         ));
         to_coordinator.close();
         to_leader.close();
     }
-
-    admin.close();
-    client_bootstrap.close();
-    shutdown_cluster(cluster).await;
-    assert!(actual == expected);
 }
 
-/// KIP-890 verification of a transactional `Produce` when the transaction
-/// coordinator is on another broker, in a cluster with ACLs.
-///
-/// The partition leader sends `AddPartitionsToTxn` v4 or later to the
-/// coordinator as the broker principal. Kafka's
-/// `KafkaApis.handleAddPartitionsToTxnRequest` authorizes that request with
-/// `ClusterAction` on the cluster alone, and checks no transactional id or
-/// topic ACL. The broker user here holds only `ClusterAction`, so the produce
-/// succeeds only if the coordinator follows Kafka. The commit then fans the
-/// marker out to the remote leader as the same broker principal.
-#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "every complete Produce partition response succeeds at base offset 0, log append time -1 and log start 0, and EndTxn returns 0"
+)]
+fn successful_secured_verifications(secured_verification: &SecuredVerification) {
+    assert!(secured_verification.actual.len() == 2);
+    for (name, partition, produced, ended) in &secured_verification.actual {
+        assert!(
+            *produced
+                == PartitionProduceResponse {
+                    index: *partition,
+                    error_code: 0,
+                    base_offset: 0,
+                    log_append_time_ms: -1,
+                    log_start_offset: 0,
+                    ..Default::default()
+                },
+            "{name}: {produced:?}"
+        );
+        assert!(*ended == 0, "{name}: EndTxn error {ended}");
+    }
+}
+
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/txn_secured_marker_fanout.feature",
     name = "a remote coordinator verifies a produce for a broker with only cluster action"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_action() {}
+async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_action(
+    secured_verification: SecuredVerification,
+) {
+    secured_verification.shutdown().await;
+}
 
 /// `InitProducerId` for `transactional_id`, retried while the coordinator
 /// loads its partition.

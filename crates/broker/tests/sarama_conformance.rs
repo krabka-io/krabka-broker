@@ -114,6 +114,7 @@ use {
         support::{admin::topic_spec, client::connect_owned},
     },
     assert2::assert,
+    krabka_broker::BrokerHandle,
     krabka_client_admin::AdminClient,
     krabka_client_core::Client,
     krabka_protocol::owned::{
@@ -134,6 +135,7 @@ use {
         thread::{self, JoinHandle},
         time::Duration,
     },
+    tempfile::TempDir,
     tokio::{time, time::Instant},
 };
 
@@ -423,19 +425,6 @@ fn metadata_lists_topic() {
     assert!(
         row == vec![TOPIC.to_owned(), PARTITIONS.to_string(), "1".to_owned()],
         "kaf topics did not list {TOPIC} as krabka created it: {listing}"
-    );
-}
-
-/// `kaf produce`: one line of stdin becomes one record, and `kaf` reports the
-/// partition and offset the broker acknowledged.
-fn produce_lands() {
-    let receipt = run_kaf(
-        &["produce", TOPIC, "--partition", "0"],
-        Some(&format!("{PAYLOAD}\n")),
-    );
-    assert!(
-        receipt == "Sent record to partition 0 at offset 0.\n",
-        "unexpected produce receipt: {receipt}"
     );
 }
 
@@ -847,82 +836,183 @@ fn group_describe_shows_commit(offsets: &[CommittedOffset]) {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "sarama conformance: sarama round trip and cluster views agree with krabka"
-)]
-async fn bdd_verify_sarama_round_trip_and_cluster_views_agree_with_krabka() {
-    let (broker, _dir) = start_host_broker().await;
-    let mut admin = AdminClient::connect(&[broker.listen_addr().to_string()])
-        .await
-        .expect("admin client");
-    admin
+#[derive(Default)]
+struct SaramaBehavior {
+    host: Option<(BrokerHandle, TempDir)>,
+    admin: Option<AdminClient>,
+    client: Option<Client>,
+    receipt: Option<String>,
+    consumer: Option<GroupConsumer>,
+    outcome: Option<Result<GroupObservation, String>>,
+    consumed_stdout: Option<String>,
+    cluster: Option<DescribeClusterResponse>,
+    partitions: Option<Vec<DescribeTopicPartitionsResponsePartition>>,
+}
+
+#[rstest::fixture]
+fn sarama_behavior() -> SaramaBehavior {
+    // The external client and native API observations refer to one fresh topic.
+    SaramaBehavior::default()
+}
+
+impl SaramaBehavior {
+    fn host(&self) -> &(BrokerHandle, TempDir) { self.host.as_ref().expect("host broker") }
+
+    fn client(&self) -> &Client { self.client.as_ref().expect("native client") }
+
+    async fn shutdown(self) {
+        let Self {
+            host,
+            client,
+            admin,
+            ..
+        } = self;
+        client.expect("native client").close();
+        drop(admin);
+        let (broker, directory) = host.expect("host broker");
+        broker.shutdown().await;
+        drop(directory);
+    }
+}
+
+#[rstest_bdd_macros::given("sarama-conformance has three RF1 partitions on the host broker")]
+async fn sarama_topic(sarama_behavior: &mut SaramaBehavior) {
+    sarama_behavior.host = Some(start_host_broker().await);
+    sarama_behavior.admin = Some(
+        AdminClient::connect(&[sarama_behavior.host().0.listen_addr().to_string()])
+            .await
+            .expect("admin client"),
+    );
+    sarama_behavior
+        .admin
+        .as_mut()
+        .expect("admin client")
         .create_topics(
             &[topic_spec(TOPIC.to_owned(), PARTITIONS, 1)],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await
         .expect("create conformance topic");
-    let client = connect_owned(
-        broker.listen_addr().to_string(),
-        "krabka-sarama-conformance",
-        "client build",
-    )
-    .await;
+    sarama_behavior.client = Some(
+        connect_owned(
+            sarama_behavior.host().0.listen_addr().to_string(),
+            "krabka-sarama-conformance",
+            "client build",
+        )
+        .await,
+    );
+}
 
-    metadata_lists_topic();
-    produce_lands();
+#[rstest_bdd_macros::then(
+    "kaf topics lists sarama-conformance with three partitions and one replica"
+)]
+fn sarama_topic_listing() { metadata_lists_topic(); }
 
+#[rstest_bdd_macros::when("kaf produce sends hello-from-sarama to partition 0")]
+fn sarama_produce(sarama_behavior: &mut SaramaBehavior) {
+    sarama_behavior.receipt = Some(run_kaf(
+        &["produce", TOPIC, "--partition", "0"],
+        Some(&format!("{PAYLOAD}\n")),
+    ));
+}
+
+#[rstest_bdd_macros::then("the produce receipt reports partition 0 offset 0")]
+fn sarama_produce_receipt(sarama_behavior: &SaramaBehavior) {
+    assert!(
+        sarama_behavior.receipt.as_deref() == Some("Sent record to partition 0 at offset 0.\n"),
+        "unexpected produce receipt: {:?}",
+        sarama_behavior.receipt
+    );
+}
+
+#[rstest_bdd_macros::when(
+    "kaf consume joins sarama-conformance-group, reads the payload and commits its offset before the container stops"
+)]
+async fn sarama_group_consume(sarama_behavior: &mut SaramaBehavior) {
     let container = format!("krabka-sarama-consumer-{}", process::id());
-    let mut consumer = GroupConsumer::spawn(&container);
-    let outcome = observe_group_consumer(&client, &mut admin, &mut consumer).await;
-    // Stop and log the container before asserting, so the client's own account
-    // of the run is complete in the output of a failure.
-    let consumed_stdout = consumer.stop();
-    assert!(outcome.is_ok(), "{}", reason(&outcome));
-    let GroupObservation { member, offsets } = outcome.unwrap_or_default();
-    // The group was joined by *this* client and not by some other member the
-    // broker had lying around.
+    sarama_behavior.consumer = Some(GroupConsumer::spawn(&container));
+    sarama_behavior.outcome = Some(
+        observe_group_consumer(
+            sarama_behavior.client.as_ref().expect("native client"),
+            sarama_behavior.admin.as_mut().expect("admin client"),
+            sarama_behavior.consumer.as_mut().expect("sarama consumer"),
+        )
+        .await,
+    );
+    sarama_behavior.consumed_stdout = Some(
+        sarama_behavior
+            .consumer
+            .take()
+            .expect("sarama consumer")
+            .stop(),
+    );
+}
+
+#[rstest_bdd_macros::then(
+    "the member identifies as sarama, stdout is exactly the payload and only partition 0 is committed at offset 1"
+)]
+fn sarama_group_result(sarama_behavior: &SaramaBehavior) {
+    let outcome = sarama_behavior.outcome.as_ref().expect("group observed");
+    assert!(outcome.is_ok(), "{}", reason(outcome));
+    let GroupObservation { member, offsets } =
+        outcome.as_ref().expect("successful group observation");
     assert!(
         member == SARAMA_CLIENT_ID,
-        "{GROUP} was joined by client_id={member}, not sarama's default \
-         {SARAMA_CLIENT_ID}"
+        "{GROUP} was joined by client_id={member}, not sarama's default {SARAMA_CLIENT_ID}"
     );
     assert!(
-        consumed_stdout == format!("{PAYLOAD}\n"),
-        "kaf consume did not return the produced payload: stdout={consumed_stdout}"
+        sarama_behavior.consumed_stdout.as_deref() == Some(format!("{PAYLOAD}\n").as_str()),
+        "kaf consume did not return the produced payload: stdout={:?}",
+        sarama_behavior.consumed_stdout
     );
-    // The record is offset 0, so the group's committed position is 1, on the
-    // one partition it was produced to and on no other.
     assert!(
-        offsets
+        offsets.as_slice()
             == [CommittedOffset {
                 topic: TOPIC.to_owned(),
                 partition: 0,
-                offset: 1,
+                offset: 1
             }],
         "unexpected committed offsets for {GROUP}: {offsets:?}"
     );
-    group_describe_shows_commit(&offsets);
+    group_describe_shows_commit(offsets);
+}
 
-    let cluster = krabka_cluster(&client).await;
-    nodes_match_cluster(&cluster);
-    let partitions = krabka_partitions(&client).await;
+#[rstest_bdd_macros::when(
+    "the native client reads DescribeCluster and all DescribeTopicPartitions rows"
+)]
+async fn sarama_native_views(sarama_behavior: &mut SaramaBehavior) {
+    sarama_behavior.cluster = Some(krabka_cluster(sarama_behavior.client()).await);
+    sarama_behavior.partitions = Some(krabka_partitions(sarama_behavior.client()).await);
+}
+
+#[rstest_bdd_macros::then(
+    "kaf nodes and topic describe match the native cluster and all three partition rows"
+)]
+fn sarama_matching_views(sarama_behavior: &SaramaBehavior) {
+    nodes_match_cluster(
+        sarama_behavior
+            .cluster
+            .as_ref()
+            .expect("native cluster described"),
+    );
+    let partitions = sarama_behavior
+        .partitions
+        .as_ref()
+        .expect("native partitions described");
     assert!(
         partitions.len() == usize::try_from(PARTITIONS).expect("partition count fits usize"),
         "krabka describes {} partitions, not {PARTITIONS}",
         partitions.len()
     );
-    topic_describe_matches_partitions(&partitions);
-
-    broker.shutdown().await;
+    topic_describe_matches_partitions(partitions);
 }
 
 #[ignore = "requires Docker"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/sarama_conformance.feature",
     name = "sarama round trip and cluster views agree with krabka"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sarama_round_trip_and_cluster_views_agree_with_krabka() {}
+async fn sarama_round_trip_and_cluster_views_agree_with_krabka(sarama_behavior: SaramaBehavior) {
+    sarama_behavior.shutdown().await;
+}

@@ -71,7 +71,7 @@ mod history;
 #[path = "diskless_jepsen/readback.rs"]
 mod readback;
 
-use {crate::faults::FaultWitness, assert2::assert, tempfile::TempDir};
+use {assert2::assert, tempfile::TempDir};
 
 /// The one diskless topic this suite creates. The name is
 /// `[A-Za-z0-9_-]`-only, so it reaches the filesystem unchanged and
@@ -95,15 +95,44 @@ const VOTERS: usize = 3;
 /// plaintext listener.
 const PASSWORD: &str = "diskless-jepsen";
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "diskless jepsen: three broker fault schedule preserves the acked ledger"
+use {
+    crate::{
+        cluster::TestNode,
+        history::{AckedRecord, LedgerEntry},
+    },
+    krabka_broker::NodeId,
+    std::{iter, mem, path::PathBuf, process::Output},
+};
+#[derive(Default)]
+struct DisklessFaultSchedule {
+    cluster: Vec<TestNode>,
+    blocker: PathBuf,
+    victim: Option<usize>,
+    survivors: Vec<usize>,
+    old_controller: Option<NodeId>,
+    new_controller: Option<NodeId>,
+    promoted: Option<usize>,
+    ledger: Vec<AckedRecord>,
+    rust_readback: Option<Vec<LedgerEntry>>,
+    jvm_output: Option<Output>,
+    put_failures_before: u64,
+    put_failures_after: u64,
+    observed_failures: Option<u64>,
+    object_directory: Option<TempDir>,
+}
+#[rstest::fixture]
+fn diskless_fault_schedule() -> DisklessFaultSchedule {
+    // Each fault schedule owns its physical PUT blocker, broker disks and real history.
+    DisklessFaultSchedule::default()
+}
+#[rstest_bdd_macros::given(
+    "a three-voter RF1 diskless topic whose sole replica is the controller leader and whose object PUT namespace is blocked"
 )]
-async fn bdd_verify_three_broker_fault_schedule_preserves_the_acked_ledger() {
+async fn jepsen_blocked_quorum(diskless_fault_schedule: &mut DisklessFaultSchedule) {
     let object_dir = TempDir::new().expect("shared object dir");
     let put_blocker = faults::block_object_puts(object_dir.path());
 
-    let mut cluster = cluster::start_jepsen_cluster(object_dir.path()).await;
+    let cluster = cluster::start_jepsen_cluster(object_dir.path()).await;
     cluster::await_brokers_registered(&cluster).await;
     cluster::create_diskless_topic(&cluster[0].client_bootstrap()).await;
     cluster::await_topic_placement(&cluster).await;
@@ -120,82 +149,192 @@ async fn bdd_verify_three_broker_fault_schedule_preserves_the_acked_ledger() {
     cluster::await_wal_runtime(&cluster[victim], old_controller).await;
     cluster::assert_sole_classic_owner(&cluster, victim, &survivors, old_controller).await;
 
-    let put_failures_before = cluster[victim]
+    diskless_fault_schedule.put_failures_before = cluster[victim]
         .handle()
         .diskless_put_failure_count_for_test();
-    let ledger = history::produce_concurrently(&cluster[victim].client_bootstrap()).await;
-    history::assert_acked_ledger(&ledger);
-    history::assert_linearizable_history(&ledger);
-    let durable_end = history::durable_end(&ledger);
-
+    diskless_fault_schedule.cluster = cluster;
+    diskless_fault_schedule.blocker = put_blocker;
+    diskless_fault_schedule.victim = Some(victim);
+    diskless_fault_schedule.survivors = survivors;
+    diskless_fault_schedule.old_controller = Some(old_controller);
+    diskless_fault_schedule.object_directory = Some(object_dir);
+}
+#[rstest_bdd_macros::when(
+    "two concurrent idempotent appenders each produce four records with acks-all"
+)]
+async fn jepsen_concurrent_history(diskless_fault_schedule: &mut DisklessFaultSchedule) {
+    let victim = diskless_fault_schedule.victim.expect("accepting replica");
+    diskless_fault_schedule.ledger =
+        history::produce_concurrently(&diskless_fault_schedule.cluster[victim].client_bootstrap())
+            .await;
+}
+#[rstest_bdd_macros::then(
+    "the acknowledged {count} record ledger is gap-free, unique and linearizable in real-time order"
+)]
+fn jepsen_linearizable_ledger(diskless_fault_schedule: &DisklessFaultSchedule, count: usize) {
+    assert!(diskless_fault_schedule.ledger.len() == count);
+    history::assert_acked_ledger(&diskless_fault_schedule.ledger);
+    history::assert_linearizable_history(&diskless_fault_schedule.ledger);
+}
+#[rstest_bdd_macros::when(
+    "the blocked flusher fails a PUT and both nonreplica voters checkpoint the acknowledged prefix"
+)]
+async fn jepsen_fault_ready(diskless_fault_schedule: &mut DisklessFaultSchedule) {
+    let cluster = &diskless_fault_schedule.cluster;
+    let victim = diskless_fault_schedule.victim.expect("accepting replica");
+    let ledger = &diskless_fault_schedule.ledger;
+    let object_dir = diskless_fault_schedule
+        .object_directory
+        .as_ref()
+        .expect("object directory");
+    let put_blocker = &diskless_fault_schedule.blocker;
+    let survivors = &diskless_fault_schedule.survivors;
+    let put_failures_before = diskless_fault_schedule.put_failures_before;
+    let durable_end = history::durable_end(ledger);
     faults::await_put_failure(&cluster[victim], put_failures_before).await;
-    faults::assert_puts_still_blocked(object_dir.path(), &put_blocker);
-
-    // The acked prefix has to be on the two non-replica voters' disks before
-    // the victim's copy is taken away, or the readback proves nothing.
+    faults::assert_puts_still_blocked(object_dir.path(), put_blocker);
     cluster[victim]
         .handle()
         .wait_until_local_log_end_offset(TOPIC, 0, durable_end)
         .await;
-    for &index in &survivors {
+    for &index in survivors {
         faults::await_follower_checkpoint(&cluster[index], durable_end).await;
     }
-
-    faults::crash_and_erase(&mut cluster, victim).await;
-
-    let new_controller =
-        faults::converged_new_controller(&cluster, &survivors, old_controller).await;
-    let promoted = cluster::index_of(&cluster, new_controller);
-    cluster::force_partition_owner(&cluster, &survivors, promoted, new_controller).await;
-    cluster::await_promoted_leader(&cluster[promoted], new_controller, durable_end).await;
-
-    // The object tier is still unavailable here. A successful readback
-    // therefore proves that the acknowledged tail survived on the remaining
-    // WAL quorum, rather than being rescued by a completed object flush.
-    assert!(put_blocker.is_file());
-    readback::assert_rust_readback(&cluster[survivors[0]].client_bootstrap(), &ledger).await;
-
-    // The failed pre-crash attempt belonged to the victim's flusher. Before
-    // unblocking the store, require another failure after the handoff, so the
-    // replacement leader proves that its own retry loop is live and owns the
-    // durable tail.
-    let put_failures_after_crash = cluster[promoted]
-        .handle()
-        .diskless_put_failure_count_for_test();
-    faults::report_flush_state(&cluster[promoted], put_failures_after_crash).await;
-    let put_failures =
-        faults::await_put_failure(&cluster[promoted], put_failures_after_crash).await;
-
-    // Let the failed PUT retry only after the no-acked-loss assertion. A real
-    // `.ckwl` object is the recovery witness; removing the blocker alone is
-    // not enough.
-    faults::unblock_object_puts(object_dir.path(), &put_blocker);
-    faults::await_wal_object(object_dir.path(), cluster[promoted].config.broker_id).await;
-
-    readback::assert_jvm_differential(&cluster[survivors[0]].docker_bootstrap(), &ledger).await;
-
-    let witness = FaultWitness {
-        put_failures,
-        lost_wal_node: Some(old_controller),
-        old_controller: Some(old_controller),
-        new_controller: Some(new_controller),
-        old_partition_leader: Some(old_controller),
-        new_partition_leader: Some(new_controller),
-        object_retry_succeeded: true,
-        rust_ledger_checked: true,
-        jvm_differential_checked: true,
-    };
-    faults::assert_complete_witness(&witness, put_failures_after_crash);
-    eprintln!("[diskless_jepsen_witness] {witness:?}");
-
-    cluster::shutdown(cluster).await;
 }
-
+#[rstest_bdd_macros::when(
+    "the accepting controller is crashed and its canonical log erased before a surviving controller and partition leader take over"
+)]
+async fn jepsen_authority_handoff(diskless_fault_schedule: &mut DisklessFaultSchedule) {
+    let cluster = &mut diskless_fault_schedule.cluster;
+    let victim = diskless_fault_schedule.victim.expect("accepting replica");
+    let survivors = &diskless_fault_schedule.survivors;
+    let old_controller = diskless_fault_schedule
+        .old_controller
+        .expect("old controller");
+    let durable_end = history::durable_end(&diskless_fault_schedule.ledger);
+    faults::crash_and_erase(cluster, victim).await;
+    let new_controller = faults::converged_new_controller(cluster, survivors, old_controller).await;
+    let promoted = cluster::index_of(cluster, new_controller);
+    cluster::force_partition_owner(cluster, survivors, promoted, new_controller).await;
+    cluster::await_promoted_leader(&cluster[promoted], new_controller, durable_end).await;
+    diskless_fault_schedule.new_controller = Some(new_controller);
+    diskless_fault_schedule.promoted = Some(promoted);
+}
+#[rstest_bdd_macros::then(
+    "both authority leaders differ from the erased WAL node and object PUTs are still blocked"
+)]
+fn jepsen_changed_authority(diskless_fault_schedule: &DisklessFaultSchedule) {
+    let old = diskless_fault_schedule
+        .old_controller
+        .expect("erased controller/partition leader");
+    let new = diskless_fault_schedule
+        .new_controller
+        .expect("new controller/partition leader");
+    assert!(old != new);
+    assert!(
+        diskless_fault_schedule.cluster[diskless_fault_schedule.victim.expect("victim")]
+            .config
+            .node_id
+            == old
+    );
+    assert!(diskless_fault_schedule.blocker.is_file());
+}
+#[rstest_bdd_macros::when(
+    "the Rust partition reader fetches the acknowledged ledger from a survivor while object PUTs remain blocked"
+)]
+async fn jepsen_rust_readback(diskless_fault_schedule: &mut DisklessFaultSchedule) {
+    let survivor = diskless_fault_schedule.survivors[0];
+    diskless_fault_schedule.rust_readback = Some(
+        readback::consume_ledger(
+            &diskless_fault_schedule.cluster[survivor].client_bootstrap(),
+            diskless_fault_schedule.ledger.len(),
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "the Rust offsets and payload bytes exactly equal the acknowledged ledger"
+)]
+fn jepsen_expected_rust_ledger(diskless_fault_schedule: &DisklessFaultSchedule) {
+    let expected = history::ledger_values(&diskless_fault_schedule.ledger);
+    assert!(
+        diskless_fault_schedule
+            .rust_readback
+            .as_ref()
+            .expect("Rust fetch executed")
+            == &expected
+    );
+}
+#[rstest_bdd_macros::when(
+    "the replacement flusher fails another PUT before the object namespace is unblocked and a WAL object is written"
+)]
+async fn jepsen_retry_object_put(diskless_fault_schedule: &mut DisklessFaultSchedule) {
+    let promoted = diskless_fault_schedule.promoted.expect("promoted node");
+    let node = &diskless_fault_schedule.cluster[promoted];
+    let before = node.handle().diskless_put_failure_count_for_test();
+    faults::report_flush_state(node, before).await;
+    let failures = faults::await_put_failure(node, before).await;
+    let dir = diskless_fault_schedule
+        .object_directory
+        .as_ref()
+        .expect("object directory");
+    faults::unblock_object_puts(dir.path(), &diskless_fault_schedule.blocker);
+    faults::await_wal_object(dir.path(), node.config.broker_id).await;
+    diskless_fault_schedule.put_failures_after = before;
+    diskless_fault_schedule.observed_failures = Some(failures);
+}
+#[rstest_bdd_macros::then(
+    "the replacement flusher's failure counter advanced and the object namespace is a directory"
+)]
+fn jepsen_object_retry(diskless_fault_schedule: &DisklessFaultSchedule) {
+    assert!(
+        diskless_fault_schedule
+            .observed_failures
+            .expect("failed replacement PUT")
+            > diskless_fault_schedule.put_failures_after
+    );
+    assert!(diskless_fault_schedule.blocker.is_dir());
+}
+#[rstest_bdd_macros::when(
+    "the official JVM console consumer drains the acknowledged ledger through a survivor"
+)]
+async fn jepsen_jvm_readback(diskless_fault_schedule: &mut DisklessFaultSchedule) {
+    let survivor = diskless_fault_schedule.survivors[0];
+    diskless_fault_schedule.jvm_output = Some(
+        readback::jvm_consume_exact(
+            &diskless_fault_schedule.cluster[survivor].docker_bootstrap(),
+            diskless_fault_schedule.ledger.len(),
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "the JVM consumer succeeds with exactly the acknowledged payload bytes in offset order, one per line"
+)]
+fn jepsen_expected_jvm_ledger(diskless_fault_schedule: &DisklessFaultSchedule) {
+    let output = diskless_fault_schedule
+        .jvm_output
+        .as_ref()
+        .expect("JVM reader executed");
+    assert!(output.status.success(), "JVM consumer failed: {:?}", output);
+    let expected = history::ledger_values(&diskless_fault_schedule.ledger)
+        .iter()
+        .flat_map(|entry| entry.value.iter().copied().chain(iter::once(b'\n')))
+        .collect::<Vec<_>>();
+    assert!(output.stdout == expected);
+}
+#[rstest_bdd_macros::then("the diskless fault-schedule cluster is shut down")]
+async fn finish_diskless_schedule(diskless_fault_schedule: &mut DisklessFaultSchedule) {
+    cluster::shutdown(mem::take(&mut diskless_fault_schedule.cluster)).await;
+}
 #[ignore = "requires Docker; Linux-bound (host.docker.internal bridge)"]
-#[cfg(test)]
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/diskless_jepsen.feature",
     name = "three broker fault schedule preserves the acked ledger"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-async fn three_broker_fault_schedule_preserves_the_acked_ledger() {}
+async fn three_broker_fault_schedule_preserves_the_acked_ledger(
+    diskless_fault_schedule: DisklessFaultSchedule,
+) {
+    let _ = diskless_fault_schedule;
+}

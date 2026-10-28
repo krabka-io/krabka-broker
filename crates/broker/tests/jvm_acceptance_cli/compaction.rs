@@ -14,28 +14,37 @@ use {
         support::{ContainerInput, init_jvm_tracing, jvm_docker_command, jvm_stdin_output},
     },
     assert2::assert,
-    krabka_broker::{Broker, BrokerConfig, metrics::PartitionLabel},
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle, metrics::PartitionLabel},
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::process::Output,
+    tempfile::TempDir,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance cli compaction: jvm kafka console consumer sees compacted topic end to end"
-)]
-async fn bdd_verify_jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
-    const TOPIC: &str = "compacted-jvm";
-    /// Segment size the broker boots with, and so the size the topic
-    /// inherits: small enough that a handful of records seal a segment the
-    /// cleaner can then work on.
-    ///
-    /// It is a broker default rather than a topic override because Kafka's
-    /// topic-level `segment.bytes` has a 1 MiB floor, which krabka matches,
-    /// and the one topic config that goes below it — Kafka 4.x's
-    /// `internal.segment.bytes` — is rejected client-side by the
-    /// `TopicCommand` in the image this suite pins. Kafka floors its
-    /// broker-level `log.segment.bytes` at 1 MiB as well, but that validates a
-    /// parsed broker config; the harness sets the struct field directly.
-    const SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(256);
+const TOPIC: &str = "compacted-jvm";
+const SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(256);
 
+struct CompactedTopic {
+    broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    producer: Option<Output>,
+    consumer: Option<Output>,
+}
+
+#[fixture]
+fn compacted() -> CompactedTopic {
+    // Start this scenario with fresh inputs and observations.
+
+    CompactedTopic {
+        broker: None,
+        directory: None,
+        producer: None,
+        consumer: None,
+    }
+}
+
+#[given("a compacted topic inherits 256 byte segments and a three second cleaner interval")]
+async fn compacted_log(compacted: &mut CompactedTopic) {
     init_jvm_tracing("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir");
     let config = BrokerConfig {
@@ -113,6 +122,12 @@ async fn bdd_verify_jvm_kafka_console_consumer_sees_compacted_topic_end_to_end()
         cfg.segment_size
     );
 
+    compacted.broker = Some(broker);
+    compacted.directory = Some(dir);
+}
+
+#[when("the console producer appends repeated keys and enough padding to seal their segments")]
+fn write_updates(compacted: &mut CompactedTopic) {
     // 2. Produce 5 records under 3 keys — k1 has three values (v1, v2, v4);
     //    only v4 should survive compaction.
     let mut child_command = jvm_docker_command()
@@ -153,13 +168,25 @@ async fn bdd_verify_jvm_kafka_console_consumer_sees_compacted_topic_end_to_end()
               __pad__:p0\n__pad__:p1\n__pad__:p2\n__pad__:p3\n\
               __pad__:p4\n__pad__:p5\n__pad__:p6\n__pad__:p7\n",
     );
-    assert!(
-        producer_out.status.success(),
-        "producer failed: {}",
-        String::from_utf8_lossy(&producer_out.stderr)
-    );
-    eprintln!("KRABKA[test] produced 5 records; waiting for cleaner to compact...");
+    compacted.producer = Some(producer_out);
+}
 
+#[then("all updates were acknowledged")]
+fn acknowledged(compacted: &CompactedTopic) {
+    let output = compacted.producer.as_ref().expect("producer completed");
+    assert!(
+        output.status.success(),
+        "producer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[when("two cleaner sweeps finish and the console consumer reads from the beginning")]
+async fn read_cleaned(compacted: &mut CompactedTopic) {
+    let broker = compacted
+        .broker
+        .as_ref()
+        .expect("running compaction broker");
     // 3. Wait for two whole cleaner sweeps to finish after the produce did.
     //
     //    One pass is all Kafka's cleaner owes a settled log: it rewrites every
@@ -194,6 +221,16 @@ async fn bdd_verify_jvm_kafka_console_consumer_sees_compacted_topic_end_to_end()
         "--timeout-ms",
         "5000",
     ]);
+    compacted.consumer = Some(consumer_out);
+}
+
+#[then("only the latest value of every workload key remains and the cleaner reports a compaction")]
+fn latest_values(compacted: &CompactedTopic) {
+    let broker = compacted
+        .broker
+        .as_ref()
+        .expect("running compaction broker");
+    let consumer_out = compacted.consumer.as_ref().expect("consumer completed");
     let stdout = String::from_utf8_lossy(&consumer_out.stdout);
     eprintln!("KRABKA[test] consumer stdout: {stdout:?}");
 
@@ -226,33 +263,14 @@ async fn bdd_verify_jvm_kafka_console_consumer_sees_compacted_topic_end_to_end()
             > 0,
         "the cleaner never compacted this partition"
     );
-
-    broker.shutdown().await;
 }
 
-/// `kafka-console-consumer` sees a compacted topic with only
-/// the latest value per key.
-///
-/// 1. Spin up a single-broker cluster with a fast cleaner interval (3s).
-/// 2. `kafka-topics --create --topic compacted-jvm --config cleanup.policy=compact
-///    --partitions 1 --replication-factor 1`, on a broker whose default
-///    segment size is `SEGMENT_SIZE`
-/// 3. `kafka-console-producer --property parse.key=true --property key.separator=:`
-///    with this stdin:
-///      k1:v1
-///      k1:v2
-///      k2:v3
-///      k1:v4
-///      k3:v5
-/// 4. Sleep 8s to let the 3s cleaner tick and the segment rolls happen.
-/// 5. `kafka-console-consumer --topic compacted-jvm --from-beginning --timeout-ms 5000`
-/// 6. Assert stdout contains `v4`, `v3`, `v5` (latest per-key values).
-/// 7. Assert stdout does NOT contain `v1` or `v2` (stale values compacted away).
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/jvm_acceptance_cli/compaction.feature",
-    name = "jvm kafka console consumer sees compacted topic end to end"
+    name = "Console consumers observe the latest values after compaction"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {}
+async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end(compacted: CompactedTopic) {
+    compacted.broker.expect("running broker").shutdown().await;
+}

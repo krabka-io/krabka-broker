@@ -33,11 +33,15 @@ use {
         client::connect_owned, discovery::topic_metadata_request, topics::creatable_topic,
     },
     assert2::{assert, check},
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    support::InProcess,
+    tempfile::{TempDir, tempdir},
 };
 mod support;
 
 use {
-    krabka_broker::{Broker, BrokerConfig},
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
     krabka_protocol::{
         owned::{
             create_topics_request::CreateTopicsRequest,
@@ -67,83 +71,6 @@ const TOPIC_FULL_MASK: i32 = (1 << 3)  // Read
     | (1 << 10) // DescribeConfigs
     | (1 << 11); // AlterConfigs
 
-/// A topic name, and whether the broker reports it as internal.
-struct TopicName {
-    name: &'static str,
-    is_internal: bool,
-}
-
-/// Every topic the broker owns, plus the three names that prove the flag reads
-/// a set of names rather than the `__` prefix.
-const TOPICS: [TopicName; 9] = [
-    TopicName {
-        name: "__consumer_offsets",
-        is_internal: true,
-    },
-    TopicName {
-        name: "__transaction_state",
-        is_internal: true,
-    },
-    TopicName {
-        name: "__share_group_state",
-        is_internal: true,
-    },
-    TopicName {
-        name: "__krabka_audit",
-        is_internal: true,
-    },
-    TopicName {
-        name: "__barrier_state",
-        is_internal: true,
-    },
-    TopicName {
-        name: "__diskless_wal_index",
-        is_internal: true,
-    },
-    TopicName {
-        name: "__remote_log_metadata",
-        is_internal: false,
-    },
-    TopicName {
-        name: "__user_topic",
-        is_internal: false,
-    },
-    TopicName {
-        name: "orders",
-        is_internal: false,
-    },
-];
-
-/// Create every name in [`TOPICS`], so one metadata sweep sees them all.
-///
-/// A broker-owned topic is normally created by the subsystem that owns it, on
-/// the first request that needs it. Driving `CreateTopics` instead puts all of
-/// them in the image without booting six subsystems, and the flag is a
-/// property of the name rather than of who wrote the record.
-async fn create_every_topic(p: &support::InProcess) {
-    let resp = p
-        .client
-        .send(CreateTopicsRequest {
-            topics: TOPICS
-                .iter()
-                .map(|topic| creatable_topic().name(topic.name.into()).call())
-                .collect(),
-            timeout_ms: 10_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    for row in &resp.topics {
-        // `__consumer_offsets` is bootstrapped with 50 partitions before the
-        // first client request, so its row comes back as already-existing.
-        check!(
-            row.error_code == 0 || row.error_code == TOPIC_ALREADY_EXISTS,
-            "create {:?}: {row:?}",
-            row.name,
-        );
-    }
-}
-
 /// The row as it arrives minus its partitions, so one comparison covers every
 /// other field at once.
 ///
@@ -157,69 +84,119 @@ fn without_partitions(row: &MetadataResponseTopic) -> MetadataResponseTopic {
     }
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("internal topics: metadata marks every broker owned topic internal")]
-async fn bdd_verify_metadata_marks_every_broker_owned_topic_internal() {
-    let p = support::start().await;
-    create_every_topic(&p).await;
-
-    let resp = p
-        .client
-        .send(topic_metadata_request(None))
-        .await
-        .expect("Metadata");
-
-    for TopicName { name, is_internal } in TOPICS {
-        assert!(
-            let Some(row) = resp.topics.iter().find(|t| t.name.as_deref() == Some(name)),
-            "no metadata row for {name}"
-        );
-        // A default topic id would make the whole-row comparison below pass on
-        // a row the broker never filled in.
-        check!(
-            row.topic_id != WireUuid::default(),
-            "{name} has no topic id"
-        );
-        check!(
-            without_partitions(row)
-                == MetadataResponseTopic {
-                    error_code: 0,
-                    name: Some(name.to_owned()),
-                    topic_id: row.topic_id,
-                    is_internal,
-                    partitions: Vec::new(),
-                    // The request did not opt in to KIP-430, so the bitfield
-                    // keeps its sentinel.
-                    topic_authorized_operations: i32::MIN,
-                    ..Default::default()
-                },
-            "{name}"
-        );
-    }
-
-    p.broker.shutdown().await;
+struct TopicClassification {
+    process: Option<InProcess>,
+    configured: Option<BrokerConfig>,
+    custom_broker: Option<BrokerHandle>,
+    directory: Option<TempDir>,
+    audit_topic: String,
+    metadata: Vec<MetadataResponseTopic>,
+    described: Vec<DescribeTopicPartitionsResponseTopic>,
+    startup_error: Option<String>,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/internal_topics.feature",
-    name = "metadata marks every broker owned topic internal"
-)]
-#[tokio::test]
-async fn metadata_marks_every_broker_owned_topic_internal() {}
+#[fixture]
+fn classification() -> TopicClassification {
+    // Start this scenario with fresh inputs and observations.
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("internal topics: describe topic partitions agrees with metadata")]
-async fn bdd_verify_describe_topic_partitions_agrees_with_metadata() {
-    let p = support::start().await;
-    create_every_topic(&p).await;
+    TopicClassification {
+        process: None,
+        configured: None,
+        custom_broker: None,
+        directory: None,
+        audit_topic: String::new(),
+        metadata: Vec::new(),
+        described: Vec::new(),
+        startup_error: None,
+    }
+}
 
-    let metadata = p
+#[given("a broker hosts these topic names")]
+async fn hosted_topics(classification: &mut TopicClassification, datatable: Vec<Vec<String>>) {
+    let process = support::start().await;
+    let topics = datatable
+        .into_iter()
+        .skip(1)
+        .map(|row| {
+            let [name]: [String; 1] = row.try_into().expect("one topic name");
+            creatable_topic().name(name).call()
+        })
+        .collect();
+    let response = process
         .client
+        .send(CreateTopicsRequest {
+            topics,
+            timeout_ms: 10_000,
+            ..Default::default()
+        })
+        .await
+        .expect("CreateTopics");
+    for row in &response.topics {
+        check!(
+            row.error_code == 0 || row.error_code == TOPIC_ALREADY_EXISTS,
+            "create {:?}: {row:?}",
+            row.name
+        );
+    }
+    classification.process = Some(process);
+}
+
+#[given("a broker configuration names its audit topic {name}")]
+fn configured_audit(classification: &mut TopicClassification, name: String) {
+    let directory = tempdir().expect("tempdir");
+    let mut config = BrokerConfig::for_tests(directory.path().to_path_buf());
+    config.audit_topic.clone_from(&name);
+    classification.audit_topic = name;
+    classification.configured = Some(config);
+    classification.directory = Some(directory);
+}
+
+#[when("the configured audit broker starts")]
+async fn start_audit_broker(classification: &mut TopicClassification) {
+    let config = classification
+        .configured
+        .take()
+        .expect("an audit configuration was supplied");
+    match Broker::start(config).await {
+        Ok(broker) => classification.custom_broker = Some(broker),
+        Err(error) => classification.startup_error = Some(error.to_string()),
+    }
+}
+
+#[when("all topic metadata is requested")]
+async fn request_metadata(classification: &mut TopicClassification) {
+    let client = if let Some(process) = &classification.process {
+        process.client.clone()
+    } else {
+        let broker = classification
+            .custom_broker
+            .as_ref()
+            .expect("the audit broker started");
+        broker
+            .wait_until_partition_present(&classification.audit_topic, 0)
+            .await;
+        connect_owned(
+            broker.listen_addr().to_string(),
+            "krabka-broker-test-renamed-audit",
+            "client build",
+        )
+        .await
+    };
+    classification.metadata = client
         .send(topic_metadata_request(None))
         .await
-        .expect("Metadata");
-    let described = p
+        .expect("Metadata")
+        .topics;
+}
+
+#[when("all topic metadata and partition descriptions are requested")]
+async fn request_both_descriptions(classification: &mut TopicClassification) {
+    request_metadata(classification).await;
+    let process = classification
+        .process
+        .as_ref()
+        .expect("the topic fixture was started");
+    classification.described = process
         .client
         .send(DescribeTopicPartitionsRequest {
             topics: Vec::new(),
@@ -228,31 +205,58 @@ async fn bdd_verify_describe_topic_partitions_agrees_with_metadata() {
             ..Default::default()
         })
         .await
-        .expect("DescribeTopicPartitions");
+        .expect("DescribeTopicPartitions")
+        .topics;
+}
 
-    for TopicName { name, is_internal } in TOPICS {
-        assert!(
-            let Some(row) = described
-                .topics
-                .iter()
-                .find(|t| t.name.as_deref() == Some(name)),
-            "no describe row for {name}"
+fn expected_internal_flags(rows: Vec<Vec<String>>) -> Vec<(String, bool)> {
+    rows.into_iter()
+        .skip(1)
+        .map(|row| {
+            let [name, internal]: [String; 2] =
+                row.try_into().expect("topic name and internal flag");
+            (name, internal.parse().expect("internal boolean"))
+        })
+        .collect()
+}
+
+#[then("metadata reports these topic classifications")]
+fn metadata_flags(classification: &TopicClassification, datatable: Vec<Vec<String>>) {
+    for (name, is_internal) in expected_internal_flags(datatable) {
+        assert!(let Some(row) = classification.metadata.iter().find(|topic| topic.name.as_deref() == Some(name.as_str())), "no metadata row for {name}");
+        check!(
+            row.topic_id != WireUuid::default(),
+            "{name} has no topic id"
         );
-        assert!(
-            let Some(metadata_row) = metadata
-                .topics
-                .iter()
-                .find(|t| t.name.as_deref() == Some(name)),
-            "no metadata row for {name}"
+        check!(
+            without_partitions(row)
+                == MetadataResponseTopic {
+                    error_code: 0,
+                    name: Some(name.clone()),
+                    topic_id: row.topic_id,
+                    is_internal,
+                    partitions: Vec::new(),
+                    topic_authorized_operations: i32::MIN,
+                    ..Default::default()
+                },
+            "{name}"
         );
+    }
+}
+
+#[then("partition descriptions agree with metadata on these classifications")]
+fn partition_flags(classification: &TopicClassification, datatable: Vec<Vec<String>>) {
+    for (name, is_internal) in expected_internal_flags(datatable) {
+        assert!(let Some(row) = classification.described.iter().find(|topic| topic.name.as_deref() == Some(name.as_str())), "no describe row for {name}");
+        assert!(let Some(metadata) = classification.metadata.iter().find(|topic| topic.name.as_deref() == Some(name.as_str())), "no metadata row for {name}");
         check!(
             DescribeTopicPartitionsResponseTopic {
                 partitions: Vec::new(),
                 ..row.clone()
             } == DescribeTopicPartitionsResponseTopic {
                 error_code: 0,
-                name: Some(name.to_owned()),
-                topic_id: metadata_row.topic_id,
+                name: Some(name.clone()),
+                topic_id: metadata.topic_id,
                 is_internal,
                 partitions: Vec::new(),
                 topic_authorized_operations: TOPIC_FULL_MASK,
@@ -261,87 +265,75 @@ async fn bdd_verify_describe_topic_partitions_agrees_with_metadata() {
             "{name}"
         );
     }
-
-    p.broker.shutdown().await;
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/internal_topics.feature",
-    name = "describe topic partitions agrees with metadata"
-)]
-#[tokio::test]
-async fn describe_topic_partitions_agrees_with_metadata() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("internal topics: a renamed audit topic is the internal one")]
-async fn bdd_verify_a_renamed_audit_topic_is_the_internal_one() {
-    const RENAMED: &str = "__house_audit";
-
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
-    config.audit_topic = RENAMED.to_owned();
-    let broker = Broker::start(config).await.expect("broker start");
-    let client = connect_owned(
-        broker.listen_addr().to_string(),
-        "krabka-broker-test-renamed-audit",
-        "client build",
-    )
-    .await;
-
-    broker.wait_until_partition_present(RENAMED, 0).await;
-    let resp = client
-        .send(topic_metadata_request(None))
-        .await
-        .expect("Metadata");
-
-    let internal: Vec<&str> = resp
-        .topics
+#[then("the renamed audit topic is internal and the default audit name is not")]
+fn renamed_audit_flag(classification: &TopicClassification) {
+    let internal = classification
+        .metadata
         .iter()
-        .filter(|t| t.is_internal)
-        .filter_map(|t| t.name.as_deref())
-        .collect();
-    check!(internal.contains(&RENAMED), "{internal:?}");
+        .filter(|topic| topic.is_internal)
+        .filter_map(|topic| topic.name.as_deref())
+        .collect::<Vec<_>>();
+    check!(
+        internal.contains(&classification.audit_topic.as_str()),
+        "{internal:?}"
+    );
     check!(
         !internal.contains(&"__krabka_audit"),
         "the default name is not the audit log on this broker: {internal:?}"
     );
-
-    broker.shutdown().await;
 }
 
-/// The audit log is the one broker-owned topic an operator can rename, so the
-/// flag has to follow `krabka.audit.topic` rather than the default name.
-/// Renaming it and still having a `.*` subscription pick it up is the exact
-/// leak the flag exists to prevent.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/internal_topics.feature",
-    name = "a renamed audit topic is the internal one"
-)]
-#[tokio::test]
-async fn a_renamed_audit_topic_is_the_internal_one() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "internal topics: a broker refuses an audit topic outside the convention"
-)]
-async fn bdd_verify_a_broker_refuses_an_audit_topic_outside_the_convention() {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
-    config.audit_topic = "house_audit".to_owned();
-    let failure = Broker::start(config).await.err();
-    assert!(let Some(error) = failure);
-    check!(error.to_string().contains("audit_topic"), "{error}");
+#[then("startup refuses the invalid audit_topic configuration")]
+fn audit_startup_refusal(classification: &TopicClassification) {
+    assert!(let Some(error) = &classification.startup_error);
+    check!(error.contains("audit_topic"), "{error}");
 }
 
-/// An audit topic named outside the `__` convention would be internal to
-/// `Metadata` and freezable at the same time, so the broker refuses to start
-/// on one rather than carrying the inconsistency.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+async fn stop_classification(classification: TopicClassification) {
+    if let Some(process) = classification.process {
+        process.broker.shutdown().await;
+    }
+    if let Some(broker) = classification.custom_broker {
+        broker.shutdown().await;
+    }
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/internal_topics.feature",
-    name = "a broker refuses an audit topic outside the convention"
+    name = "Metadata classifies broker-owned topics without relying on their prefix alone"
 )]
 #[tokio::test]
-async fn a_broker_refuses_an_audit_topic_outside_the_convention() {}
+async fn metadata_marks_every_broker_owned_topic_internal(classification: TopicClassification) {
+    stop_classification(classification).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/internal_topics.feature",
+    name = "Partition descriptions preserve the same topic classification and identity"
+)]
+#[tokio::test]
+async fn describe_topic_partitions_agrees_with_metadata(classification: TopicClassification) {
+    stop_classification(classification).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/internal_topics.feature",
+    name = "Renaming the audit topic moves its internal classification to the configured name"
+)]
+#[tokio::test]
+async fn a_renamed_audit_topic_is_the_internal_one(classification: TopicClassification) {
+    stop_classification(classification).await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/internal_topics.feature",
+    name = "An audit topic outside the internal naming convention prevents startup"
+)]
+#[tokio::test]
+async fn a_broker_refuses_an_audit_topic_outside_the_convention(
+    classification: TopicClassification,
+) {
+    stop_classification(classification).await;
+}

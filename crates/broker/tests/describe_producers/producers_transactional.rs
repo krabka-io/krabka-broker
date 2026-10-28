@@ -5,11 +5,10 @@
 use {
     crate::{
         producers_harness::{
-            batch, create_topic, init_transactional_producer, topic_id_for, transactional,
+            ProducerSnapshot, batch, init_transactional_producer, snapshot, topic_id_for,
+            transactional,
         },
         support::{
-            self,
-            admin::describe_producers_request,
             produce::{SinglePartitionProduceSetup, batch_request},
             records::{ProducerSequence, ProducerValuesSetup},
             transactions,
@@ -23,121 +22,6 @@ use {
         primitives::uuid::Uuid,
     },
 };
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "describe producers producers transactional: transactional fields follow open and completed transactions"
-)]
-async fn bdd_verify_transactional_fields_follow_open_and_completed_transactions() {
-    let p = support::start().await;
-    create_topic(&p.client, "transactions").await;
-    let topic_id = topic_id_for(&p.client, "transactions").await;
-    let producer = init_transactional_producer(&p, "describe-producers-tid").await;
-
-    let produce_response = p
-        .client
-        .send(transaction_values_request(topic_id, ProducerValuesSetup {
-            pid: producer.id,
-            epoch: producer.epoch,
-            values: &["first"],
-            ..Default::default()
-        }))
-        .await
-        .expect("transactional Produce");
-    assert!(produce_response.responses[0].partition_responses[0].error_code == 0);
-
-    check_transaction_state(
-        &p.client,
-        "DescribeProducers during first transaction",
-        TransactionState {
-            current_txn_start_offset: 0,
-            coordinator_epoch: -1,
-        },
-    )
-    .await;
-
-    let marker = p
-        .client
-        .send(WriteTxnMarkersRequest {
-            markers: vec![
-                transactions::transaction_marker()
-                    .producer(producer)
-                    .coordinator_epoch(17)
-                    .transaction_version(1)
-                    .topics(vec![transactions::marker_topic(
-                        "transactions".into(),
-                        vec![0],
-                    )])
-                    .call(),
-            ],
-            ..Default::default()
-        })
-        .await
-        .expect("WriteTxnMarkers");
-    assert!(marker.markers[0].topics[0].partitions[0].error_code == 0);
-
-    check_transaction_state(
-        &p.client,
-        "DescribeProducers after marker",
-        TransactionState {
-            current_txn_start_offset: -1,
-            coordinator_epoch: 17,
-        },
-    )
-    .await;
-
-    let produce_response = p
-        .client
-        .send(transaction_values_request(topic_id, ProducerValuesSetup {
-            pid: producer.id,
-            epoch: producer.epoch,
-            base_seq: ProducerSequence(1),
-            values: &["second"],
-        }))
-        .await
-        .expect("second transactional Produce");
-    assert!(produce_response.responses[0].partition_responses[0].error_code == 0);
-
-    check_transaction_state(
-        &p.client,
-        "DescribeProducers during second transaction",
-        TransactionState {
-            current_txn_start_offset: 2,
-            coordinator_epoch: 17,
-        },
-    )
-    .await;
-
-    p.broker.shutdown().await;
-}
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/describe_producers/producers_transactional.feature",
-    name = "transactional fields follow open and completed transactions"
-)]
-#[tokio::test]
-async fn transactional_fields_follow_open_and_completed_transactions() {}
-
-/// The transaction fields one active producer reports.
-struct TransactionState {
-    current_txn_start_offset: i64,
-    coordinator_epoch: i32,
-}
-
-async fn check_transaction_state(
-    client: &krabka_client_core::Client,
-    context: &str,
-    expected: TransactionState,
-) {
-    let describe = client
-        .send(describe_producers_request("transactions".into(), vec![0]))
-        .await
-        .expect(context);
-    let producer_row = &describe.topics[0].partitions[0].active_producers[0];
-    check!(producer_row.current_txn_start_offset == expected.current_txn_start_offset);
-    check!(producer_row.coordinator_epoch == expected.coordinator_epoch);
-}
 
 fn transaction_values_request(topic_id: Uuid, values: ProducerValuesSetup<'_>) -> ProduceRequest {
     ProduceRequest {
@@ -158,4 +42,107 @@ fn transaction_values_request(topic_id: Uuid, values: ProducerValuesSetup<'_>) -
             },
         )
     }
+}
+
+#[rstest_bdd_macros::given(
+    "a transactional producer describe-producers-tid is initialized for transactions"
+)]
+async fn transaction_snapshot_identity(snapshot: &mut ProducerSnapshot) {
+    let process = snapshot
+        .process
+        .as_ref()
+        .expect("standalone broker started");
+    snapshot.topic_id = Some(topic_id_for(&process.client, "transactions").await);
+    snapshot.transactional =
+        Some(init_transactional_producer(process, "describe-producers-tid").await);
+}
+#[rstest_bdd_macros::when("the transactional producer appends {value} at base sequence {sequence}")]
+async fn transaction_snapshot_append(
+    snapshot: &mut ProducerSnapshot,
+    value: String,
+    sequence: i32,
+) {
+    let producer = snapshot
+        .transactional
+        .expect("transactional producer initialized");
+    snapshot.produced = Some(
+        snapshot
+            .client()
+            .send(transaction_values_request(
+                snapshot.topic_id.expect("topic id known"),
+                ProducerValuesSetup {
+                    pid: producer.id,
+                    epoch: producer.epoch,
+                    base_seq: ProducerSequence(sequence),
+                    values: &[value.as_str()],
+                },
+            ))
+            .await
+            .expect("transactional Produce"),
+    );
+}
+#[rstest_bdd_macros::then("the transactional append succeeds")]
+fn transaction_snapshot_appended(snapshot: &ProducerSnapshot) {
+    assert!(
+        snapshot
+            .produced
+            .as_ref()
+            .expect("transactional append attempted")
+            .responses[0]
+            .partition_responses[0]
+            .error_code
+            == 0
+    );
+}
+#[rstest_bdd_macros::when(
+    "a version 1 transaction marker completes the transaction at coordinator epoch 17"
+)]
+async fn transaction_snapshot_marker(snapshot: &mut ProducerSnapshot) {
+    let producer = snapshot
+        .transactional
+        .expect("transactional producer initialized");
+    let marker = snapshot
+        .client()
+        .send(WriteTxnMarkersRequest {
+            markers: vec![
+                transactions::transaction_marker()
+                    .producer(producer)
+                    .coordinator_epoch(17)
+                    .transaction_version(1)
+                    .topics(vec![transactions::marker_topic(
+                        "transactions".into(),
+                        vec![0],
+                    )])
+                    .call(),
+            ],
+            ..Default::default()
+        })
+        .await
+        .expect("WriteTxnMarkers");
+    snapshot.marker = Some(marker);
+}
+#[rstest_bdd_macros::then("the transaction marker succeeds")]
+fn transaction_snapshot_marker_written(snapshot: &ProducerSnapshot) {
+    assert!(
+        snapshot.marker.as_ref().expect("marker attempted").markers[0].topics[0].partitions[0]
+            .error_code
+            == 0
+    );
+}
+#[rstest_bdd_macros::then(
+    "the active producer reports transaction start {start} and coordinator epoch {coordinator}"
+)]
+fn transaction_snapshot_fields(snapshot: &ProducerSnapshot, start: i64, coordinator: i32) {
+    let describe = snapshot.response.as_ref().expect("producers described");
+    let row = &describe.topics[0].partitions[0].active_producers[0];
+    check!(row.current_txn_start_offset == start);
+    check!(row.coordinator_epoch == coordinator);
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/describe_producers/producers_transactional.feature",
+    name = "transactional fields follow open and completed transactions"
+)]
+#[tokio::test]
+async fn transactional_fields_follow_open_and_completed_transactions(snapshot: ProducerSnapshot) {
+    snapshot.shutdown().await;
 }

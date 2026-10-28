@@ -183,14 +183,18 @@ pub fn topic_configs(path: &LoadPath, min_insync_replicas: i16) -> Vec<(&'static
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use {
         super::{REMOTE_TIER, diskless, node_toml, topic_configs, unsupported},
         crate::support::{configs::apply_node_file, manifest_dir},
         assert2::check,
-        krabka_bench_driver::soak::contract::{Contract, Semantics, Storage},
+        krabka_bench_driver::soak::contract::{Contract, LoadPath, Semantics, Storage},
         krabka_broker::config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
         krabka_units::prelude::*,
+        rstest::fixture,
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::{DataTableRow, given, scenario, scenarios, then, when},
         std::{fs, path::Path},
     };
 
@@ -209,8 +213,6 @@ mod tests {
         contract
     }
 
-    fn with_tiered_path(contract: Contract) -> Contract { with_path(contract, Storage::Tiered) }
-
     /// The node file the fixture writes, with the parts the fixture owns kept
     /// to the minimum that parses.
     fn applied(contract: &Contract) -> BrokerConfig {
@@ -222,83 +224,148 @@ mod tests {
         apply_node_file(&text)
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract plan tests: every checked in contract is runnable for {example}"
-    )]
-    fn bdd_verify_every_checked_in_contract_is_runnable(example: String) {
-        type Example<'a> = (&'a str,);
-        let (file,): Example<'_> = match example.as_str() {
-            "self check" => ("self-check.yaml",),
-            "soak" => ("rf3-72h.yaml",),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let reasons = unsupported(&checked_in(file));
-        check!(reasons.is_empty(), "{reasons:?}");
+    #[derive(Default)]
+    struct ContractPlan {
+        contracts: Vec<Contract>,
+        reasons: Vec<Vec<String>>,
+        wal_quorums: Vec<bool>,
+        configurations: Vec<BrokerConfig>,
+        path: Option<LoadPath>,
+        topic_configuration: Vec<(&'static str, String)>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/plan.feature",
-        name = "tests: every checked in contract is runnable"
-    )]
-    fn every_checked_in_contract_is_runnable(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract plan tests: a drill is left to the qualification drill"
-    )]
-    fn bdd_verify_a_drill_is_left_to_the_qualification_drill() {
-        check!(
-            unsupported(&checked_in("dr-secured.yaml"))
-                == [
-                    "a disaster_recovery contract runs in the qualification drill, under \
-             krabka-soak-drill, against its secured cluster"
-                ]
-        );
+    #[derive(DataTableRow)]
+    struct TopicConfigRow {
+        name: String,
+        value: String,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/plan.feature",
-        name = "tests: a drill is left to the qualification drill"
-    )]
-    fn a_drill_is_left_to_the_qualification_drill() {}
+    #[fixture]
+    fn plan() -> ContractPlan {
+        // Contract documents and rendered plans are fresh for every example.
+        ContractPlan {
+            path: None,
+            ..Default::default()
+        }
+    }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("soak contract plan tests: a compacted tiered path is refused")]
-    fn bdd_verify_a_compacted_tiered_path_is_refused() {
-        let mut contract = with_tiered_path(checked_in("self-check.yaml"));
+    fn storage_kind(storage: &str) -> Storage {
+        match storage {
+            "classic" => Storage::Classic,
+            "tiered" => Storage::Tiered,
+            "diskless" => Storage::Diskless,
+            _ => panic!("unknown contract storage {storage}"),
+        }
+    }
+
+    #[given("soak contract documents {files} are loaded")]
+    fn loaded_contracts(plan: &mut ContractPlan, files: String) {
+        plan.contracts = files.split(',').map(checked_in).collect();
+    }
+
+    #[given("the self-check contract adds compacted tiered-idempotent with key space eight")]
+    fn compacted_tiered_contract(plan: &mut ContractPlan) {
+        let mut contract = with_path(checked_in("self-check.yaml"), Storage::Tiered);
         let last = contract.paths.len() - 1;
         contract.paths[last].semantics = Semantics::Compacted;
         contract.paths[last].key_space = Some(8);
+        plan.contracts = vec![contract];
+    }
+
+    #[given("the self-check contract adds an idempotent {storage} path")]
+    fn object_store_contract(plan: &mut ContractPlan, storage: String) {
+        plan.contracts = vec![with_path(
+            checked_in("self-check.yaml"),
+            storage_kind(&storage),
+        )];
+    }
+
+    #[given("the self-check {semantics} path uses {storage} storage")]
+    fn selected_topic_path(plan: &mut ContractPlan, semantics: String, storage: String) {
+        let contract = checked_in("self-check.yaml");
+        let index = match semantics.as_str() {
+            "idempotent" => 0,
+            "compacted" => 2,
+            _ => panic!("unknown load path {semantics}"),
+        };
+        let mut path = contract.paths[index].clone();
+        path.storage = storage_kind(&storage);
+        plan.path = Some(path);
+        plan.contracts = vec![contract];
+    }
+
+    #[when("the executor checks whether each soak contract can run")]
+    fn check_contract_support(plan: &mut ContractPlan) {
+        plan.reasons = plan.contracts.iter().map(unsupported).collect();
+    }
+
+    #[then("the soak executor reports no unsupported contract requirements")]
+    fn supported_contract(plan: &ContractPlan) {
+        check!(!plan.reasons.is_empty());
+        for reasons in &plan.reasons {
+            check!(reasons.is_empty(), "{reasons:?}");
+        }
+    }
+
+    #[then("the disaster-recovery contract is directed to its secured qualification drill")]
+    fn qualification_owns_drill(plan: &ContractPlan) {
         check!(
-            unsupported(&contract)
+            plan.reasons[0]
                 == [
-                    "path `tiered-idempotent` is compacted and tiered: Kafka refuses remote.storage.enable \
-             on a compacted topic"
+                    "a disaster_recovery contract runs in the qualification drill, under krabka-soak-drill, against its secured cluster"
                 ]
         );
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/plan.feature",
-        name = "tests: a compacted tiered path is refused"
+    #[then(
+        "the compacted tiered path is refused because Kafka forbids remote storage on compacted topics"
     )]
-    fn a_compacted_tiered_path_is_refused() {}
+    fn compacted_tiered_refused(plan: &ContractPlan) {
+        check!(
+            plan.reasons[0]
+                == [
+                    "path `tiered-idempotent` is compacted and tiered: Kafka refuses remote.storage.enable on a compacted topic"
+                ]
+        );
+    }
 
-    // `OpaAuthorizer::new` captures the current tokio runtime handle, so the
-    // apply step runs inside one, as it does in the binary.
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract plan tests: the node file carries the contracts cluster limits"
-    )]
-    async fn bdd_verify_the_node_file_carries_the_contracts_cluster_limits() {
-        for file in ["self-check.yaml", "rf3-72h.yaml"] {
-            let contract = checked_in(file);
-            let config = applied(&contract);
+    #[when("the executor identifies which contracts require a diskless WAL quorum")]
+    fn identify_wal_quorum(plan: &mut ContractPlan) {
+        plan.wal_quorums = plan.contracts.iter().map(diskless).collect();
+    }
+
+    #[then("a WAL quorum is required: {quorum}")]
+    fn diskless_wal_requirement(plan: &ContractPlan, quorum: bool) {
+        check!(plan.wal_quorums == [quorum]);
+    }
+
+    #[when("the executor renders topic configuration for the selected load path")]
+    fn render_topic_plan(plan: &mut ContractPlan) {
+        plan.topic_configuration = topic_configs(
+            plan.path.as_ref().expect("a load path was selected"),
+            plan.contracts[0].cluster.min_insync_replicas,
+        );
+    }
+
+    #[then("the complete ordered topic configuration is:")]
+    fn topic_plan_fields(plan: &ContractPlan, #[datatable] rows: Rows<TopicConfigRow>) {
+        let expected: Vec<_> = rows.into_iter().map(|row| (row.name, row.value)).collect();
+        let actual: Vec<_> = plan
+            .topic_configuration
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), value.clone()))
+            .collect();
+        check!(actual == expected);
+    }
+
+    #[when("the executor writes and applies the contract node configuration")]
+    fn apply_node_plan(plan: &mut ContractPlan) {
+        plan.configurations = plan.contracts.iter().map(applied).collect();
+    }
+
+    #[then("each node configuration retains its contract's timeouts replication and minimum ISR")]
+    fn configured_cluster_limits(plan: &ContractPlan) {
+        for (contract, config) in plan.contracts.iter().zip(&plan.configurations) {
             check!(config.controller_fetch_timeout == contract.cluster.check_quorum_window);
             check!(
                 config.heartbeat_timeout
@@ -310,38 +377,17 @@ mod tests {
             check!(config.offsets_topic_replication_factor == 3);
             check!(config.transaction_state_replication_factor == 3);
         }
-        check!(
-            applied(&checked_in("self-check.yaml"))
-                .remote_storage_backend
-                .is_none()
-        );
+        check!(plan.configurations[0].remote_storage_backend.is_none());
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/plan.feature",
-        name = "tests: the node file carries the contracts cluster limits"
+    #[then(
+        "object-store paths share the configured local tier with a three-replica topic-backed RLMM"
     )]
-    #[tokio::test]
-    async fn the_node_file_carries_the_contracts_cluster_limits() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract plan tests: an object store contract shares one local store for {example}"
-    )]
-    async fn bdd_verify_an_object_store_contract_shares_one_local_store(example: String) {
-        type Example = (Storage,);
-        let (storage,): Example = match example.as_str() {
-            "tiered" => (Storage::Tiered,),
-            "diskless" => (Storage::Diskless,),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let config = applied(&with_path(checked_in("self-check.yaml"), storage));
-        check!(matches!(
-            &config.remote_storage_backend,
-            Some(RemoteStorageBackend::Local { dir }) if dir.as_path() == Path::new(REMOTE_TIER)
-        ));
+    fn shared_local_remote_store(plan: &ContractPlan) {
+        let config = &plan.configurations[0];
+        check!(
+            matches!(&config.remote_storage_backend, Some(RemoteStorageBackend::Local { dir }) if dir.as_path() == Path::new(REMOTE_TIER))
+        );
         check!(config.remote_log_manager_interval == secs(1));
         let RlmmKind::TopicBacked(rlmm) = &config.remote_log_metadata else {
             panic!(
@@ -353,110 +399,39 @@ mod tests {
         check!(rlmm.num_partitions == 3);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/plan.feature",
+    #[then("every one of the three brokers is a local WAL replica")]
+    fn local_wal_replicas(plan: &ContractPlan) {
+        check!(plan.configurations[0].diskless_wal_local_replica_count == 3);
+    }
+
+    scenarios!("tests/features/migrated/tests/soak_contract/plan.feature", fixtures = [plan: ContractPlan]);
+
+    // Applying a node file captures Tokio's runtime for OpaAuthorizer.
+    #[scenario(
+        path = "tests/features/migrated/tests/soak_contract/plan_runtime.feature",
+        name = "tests: the node file carries the contracts cluster limits"
+    )]
+    #[tokio::test]
+    async fn the_node_file_carries_the_contracts_cluster_limits(plan: ContractPlan) { drop(plan); }
+
+    #[scenario(
+        path = "tests/features/migrated/tests/soak_contract/plan_runtime.feature",
         name = "tests: an object store contract shares one local store"
     )]
     #[tokio::test]
-    async fn an_object_store_contract_shares_one_local_store(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract plan tests: only a diskless contract runs a wal quorum for {example}"
-    )]
-    fn bdd_verify_only_a_diskless_contract_runs_a_wal_quorum(example: String) {
-        type Example<'a> = (&'a str, bool);
-        let (file, quorum): Example<'_> = match example.as_str() {
-            "classic" => ("self-check.yaml", false),
-            "soak" => ("rf3-72h.yaml", true),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(diskless(&checked_in(file)) == quorum);
+    async fn an_object_store_contract_shares_one_local_store(
+        plan: ContractPlan,
+        example: String,
+        storage: String,
+    ) {
+        let _ = (example, storage);
+        drop(plan);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/plan.feature",
-        name = "tests: only a diskless contract runs a wal quorum"
-    )]
-    fn only_a_diskless_contract_runs_a_wal_quorum(example: String) { let _ = example; }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract plan tests: a diskless contract votes every broker into the wal"
-    )]
-    async fn bdd_verify_a_diskless_contract_votes_every_broker_into_the_wal() {
-        let contract = checked_in("rf3-72h.yaml");
-        let config = applied(&contract);
-        check!(config.diskless_wal_local_replica_count == 3);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/plan.feature",
+    #[scenario(
+        path = "tests/features/migrated/tests/soak_contract/plan_runtime.feature",
         name = "tests: a diskless contract votes every broker into the wal"
     )]
     #[tokio::test]
-    async fn a_diskless_contract_votes_every_broker_into_the_wal() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "soak contract plan tests: each path gets the topic its semantics need for {example}"
-    )]
-    fn bdd_verify_each_path_gets_the_topic_its_semantics_need(example: String) {
-        type Example<'a> = (usize, Storage, &'a [(&'a str, &'a str)]);
-        let (index, storage, expected): Example<'_> = match example.as_str() {
-            "idempotent" => (0, Storage::Classic, &[
-                ("min.insync.replicas", "2"),
-                ("cleanup.policy", "delete"),
-                ("retention.ms", "-1"),
-                ("retention.bytes", "-1"),
-            ]),
-            "compacted" => (2, Storage::Classic, &[
-                ("min.insync.replicas", "2"),
-                ("cleanup.policy", "compact"),
-                ("internal.segment.bytes", "65536"),
-                ("segment.ms", "5000"),
-                ("min.cleanable.dirty.ratio", "0.01"),
-                ("min.compaction.lag.ms", "0"),
-            ]),
-            "tiered" => (0, Storage::Tiered, &[
-                ("min.insync.replicas", "2"),
-                ("cleanup.policy", "delete"),
-                ("retention.ms", "-1"),
-                ("retention.bytes", "-1"),
-                ("remote.storage.enable", "true"),
-                ("internal.segment.bytes", "4194304"),
-                ("segment.ms", "15000"),
-                ("local.retention.bytes", "1"),
-            ]),
-            "diskless" => (0, Storage::Diskless, &[
-                ("min.insync.replicas", "2"),
-                ("cleanup.policy", "delete"),
-                ("retention.ms", "-1"),
-                ("retention.bytes", "-1"),
-                ("krabka.diskless", "true"),
-            ]),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        let contract = checked_in("self-check.yaml");
-        let mut path = contract.paths[index].clone();
-        path.storage = storage;
-        let configs = topic_configs(&path, contract.cluster.min_insync_replicas);
-        let configs: Vec<(&str, &str)> = configs
-            .iter()
-            .map(|(name, value)| (*name, value.as_str()))
-            .collect();
-        check!(configs == expected);
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/tests/soak_contract/plan.feature",
-        name = "tests: each path gets the topic its semantics need"
-    )]
-    fn each_path_gets_the_topic_its_semantics_need(example: String) { let _ = example; }
+    async fn a_diskless_contract_votes_every_broker_into_the_wal(plan: ContractPlan) { drop(plan); }
 }

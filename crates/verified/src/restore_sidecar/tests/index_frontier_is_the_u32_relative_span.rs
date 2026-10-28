@@ -72,45 +72,66 @@ fn offset_and_time_index_entries_are_strict_and_bounded() {
     check!(!restore_time_index_entry_valid(None, 10, 5, 4));
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "restore sidecar tests index frontier is the u32 relative span: transaction index follows kafka marker order for {example}"
-)]
-fn bdd_verify_transaction_index_follows_kafka_marker_order(example: String) {
-    type Example = (Vec<RestoreAbortedTxn>, RestoreSegmentExtent, bool);
-    let (entries, segment, expected): Example = match example.as_str() {
-        "one abort" => (vec![txn(7, 100, 102)], SEGMENT, true),
-        "sequential aborts" => (vec![txn(7, 100, 102), txn(8, 103, 104)], SEGMENT, true),
-        "interleaved abort marker order" => {
-            (vec![txn(2, 105, 108), txn(1, 100, 110)], SEGMENT, true)
-        }
-        "transaction spans segment roll" => (
-            vec![txn(1_000, 0, 3)],
-            RestoreSegmentExtent {
-                base_offset: 3,
-                last_offset: 4,
-            },
-            true,
-        ),
-        "marker order regresses" => (vec![txn(1, 100, 110), txn(2, 105, 108)], SEGMENT, false),
-        "repeated marker" => (vec![txn(1, 100, 104), txn(2, 101, 104)], SEGMENT, false),
-        "marker before segment" => (vec![txn(7, 90, 99)], SEGMENT, false),
-        "marker past segment" => (vec![txn(7, 100, 111)], SEGMENT, false),
-        "start after marker" => (vec![txn(7, 105, 104)], SEGMENT, false),
-        "negative start" => (vec![txn(7, -1, 104)], SEGMENT, false),
-        "negative producer" => (vec![txn(-1, 100, 102)], SEGMENT, false),
-        _ => panic!("unknown BDD example: {example}"),
-    };
+use {
+    rstest::fixture,
+    rstest_bdd::datatable::Rows,
+    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+};
 
-    check!(txn_index_valid(&entries, segment) == expected);
+struct RestoredTransactions {
+    segment: RestoreSegmentExtent,
+    entries: Vec<RestoreAbortedTxn>,
+    valid: Option<bool>,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/restore_sidecar/tests/index_frontier_is_the_u32_relative_span.feature",
-    name = "transaction index follows kafka marker order"
-)]
-fn transaction_index_follows_kafka_marker_order(example: String) { let _ = example; }
+#[fixture]
+fn index() -> RestoredTransactions {
+    // Start this scenario with fresh inputs and observations.
+
+    RestoredTransactions {
+        segment: SEGMENT,
+        entries: Vec::new(),
+        valid: None,
+    }
+}
+
+#[given("the restored segment spans offsets {base} through {last}")]
+fn restored_segment(index: &mut RestoredTransactions, base: i64, last: i64) {
+    index.segment = RestoreSegmentExtent {
+        base_offset: base,
+        last_offset: last,
+    };
+}
+
+#[derive(DataTableRow)]
+struct AbortedTransactionRow {
+    producer_id: i64,
+    transaction_start: i64,
+    abort_marker: i64,
+}
+
+#[given("the archived transaction index contains these entries in order:")]
+fn archived_transactions(
+    index: &mut RestoredTransactions,
+    #[datatable] rows: Rows<AbortedTransactionRow>,
+) {
+    index.entries = rows
+        .into_iter()
+        .map(|row| txn(row.producer_id, row.transaction_start, row.abort_marker))
+        .collect();
+}
+
+#[when("the restored transaction index is validated in marker order")]
+fn validate_transaction_index(index: &mut RestoredTransactions) {
+    index.valid = Some(txn_index_valid(&index.entries, index.segment));
+}
+
+#[then("the restored transaction index is valid: {valid}")]
+fn transaction_index_validity(index: &RestoredTransactions, valid: bool) {
+    check!(index.valid == Some(valid));
+}
+
+scenarios!("tests/features/migrated/src/restore_sidecar/tests/index_frontier_is_the_u32_relative_span.feature", fixtures = [index: RestoredTransactions]);
 
 #[test]
 fn leader_epoch_entries_are_strict_and_bounded() {

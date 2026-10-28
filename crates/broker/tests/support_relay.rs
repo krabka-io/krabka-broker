@@ -14,7 +14,9 @@
 
 use {
     assert2::{assert, check},
-    std::{future::Future, io, net::SocketAddr, sync::Arc, time::Duration},
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+    std::{collections::BTreeMap, future::Future, io, net::SocketAddr, sync::Arc, time::Duration},
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt, copy},
         net::{TcpListener, TcpStream},
@@ -72,218 +74,317 @@ async fn probe(addr: SocketAddr, payload: &[u8]) -> io::Result<Vec<u8>> {
     round_trip(&mut stream, payload).await
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("support relay: relay forwards bytes to the upstream")]
-async fn bdd_verify_relay_forwards_bytes_to_the_upstream() {
-    let upstream = start_echo().await;
-    let relay = Relay::start(upstream).await;
-
-    check!(
-        relay.addr() != upstream,
-        "the relay binds a port of its own"
-    );
-    let echoed = within("round trip", probe(relay.addr(), b"ping")).await;
-    check!(echoed.expect("round trip through a healthy relay") == b"ping".to_vec());
-
-    relay.shutdown().await;
+#[derive(Default)]
+struct RelayScenario {
+    upstream: Option<SocketAddr>,
+    address: Option<SocketAddr>,
+    relay: Option<Arc<Relay>>,
+    open: Option<TcpStream>,
+    reply: Option<io::Result<Vec<u8>>>,
+    site: Option<SiteLink>,
+    controller: Option<SocketAddr>,
+    data: Option<SocketAddr>,
+    site_replies: BTreeMap<&'static str, io::Result<Vec<u8>>>,
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+impl RelayScenario {
+    fn relay(&self) -> &Relay { self.relay.as_ref().expect("the relay is running") }
+
+    fn address(&self) -> SocketAddr { self.address.expect("the relay bound its address") }
+
+    async fn shutdown(&mut self) {
+        if let Some(relay) = self.relay.take() {
+            Arc::into_inner(relay)
+                .expect("sole owner of the relay")
+                .shutdown()
+                .await;
+        }
+        if let Some(site) = self.site.take() {
+            site.shutdown().await;
+        }
+    }
+}
+
+#[fixture]
+fn relay_case() -> RelayScenario {
+    // Each link generation and captured reply belongs to one fault scenario.
+    RelayScenario {
+        relay: None,
+        ..Default::default()
+    }
+}
+
+#[given("a loopback echo server is reachable through a relay")]
+async fn echo_relay(relay_case: &mut RelayScenario) {
+    let upstream = start_echo().await;
+    let relay = Arc::new(Relay::start(upstream).await);
+    relay_case.upstream = Some(upstream);
+    relay_case.address = Some(relay.addr());
+    relay_case.relay = Some(relay);
+}
+
+#[when("a fresh connection sends {payload} through the relay")]
+async fn fresh_relay_probe(relay_case: &mut RelayScenario, payload: String) {
+    relay_case.reply = Some(
+        within(
+            "fresh connection round trip",
+            probe(relay_case.address(), payload.as_bytes()),
+        )
+        .await,
+    );
+}
+
+#[when("a connection opens and sends {payload} through the relay")]
+async fn open_relay_connection(relay_case: &mut RelayScenario, payload: String) {
+    let mut stream = within("connect", TcpStream::connect(relay_case.address()))
+        .await
+        .expect("connect through a healthy relay");
+    relay_case.reply = Some(
+        within(
+            "open connection round trip",
+            round_trip(&mut stream, payload.as_bytes()),
+        )
+        .await,
+    );
+    relay_case.open = Some(stream);
+}
+
+#[when("the already open connection sends {payload}")]
+async fn existing_relay_probe(relay_case: &mut RelayScenario, payload: String) {
+    relay_case.reply = Some(
+        within(
+            "existing connection round trip",
+            round_trip(
+                relay_case.open.as_mut().expect("a connection was opened"),
+                payload.as_bytes(),
+            ),
+        )
+        .await,
+    );
+}
+
+#[then("the relay echoes exactly {payload}")]
+fn relay_echoed(relay_case: &RelayScenario, payload: String) {
+    check!(
+        relay_case
+            .reply
+            .as_ref()
+            .expect("a round trip was attempted")
+            .as_ref()
+            .expect("the relay carries the connection")
+            .as_slice()
+            == payload.as_bytes()
+    );
+}
+
+#[then("the relay refuses to carry the connection")]
+fn relay_does_not_carry_data(relay_case: &RelayScenario) {
+    assert!(let Err(_) = relay_case.reply.as_ref().expect("a round trip was attempted"), "a cut or stopped link must not carry data");
+}
+
+#[then("the relay binds a separate port from its upstream")]
+fn separate_relay_port(relay_case: &RelayScenario) {
+    check!(
+        Some(relay_case.address()) != relay_case.upstream,
+        "the relay binds a port of its own"
+    );
+}
+
+#[when("the relay link is cut")]
+fn cut_relay_link(relay_case: &RelayScenario) { relay_case.relay().cut(); }
+
+#[when("the relay link heals")]
+fn heal_relay_link(relay_case: &RelayScenario) { relay_case.relay().heal(); }
+
+#[then("the healed relay retains its original listener address")]
+fn relay_listener_unchanged(relay_case: &RelayScenario) {
+    check!(relay_case.relay().addr() == relay_case.address());
+}
+
+#[when("the relay shuts down while its connection remains open")]
+async fn shut_down_live_relay(relay_case: &mut RelayScenario) {
+    let relay = Arc::into_inner(relay_case.relay.take().expect("the relay is running"))
+        .expect("sole owner of the relay");
+    within("shutdown", relay.shutdown()).await;
+}
+
+#[when("another task cuts the shared relay")]
+async fn shared_relay_cut(relay_case: &RelayScenario) {
+    let other = Arc::clone(
+        relay_case
+            .relay
+            .as_ref()
+            .expect("the shared relay is running"),
+    );
+    tokio::spawn(async move { other.cut() })
+        .await
+        .expect("cut from another task");
+}
+
+#[when("another task heals the shared relay")]
+async fn shared_relay_heal(relay_case: &RelayScenario) {
+    let other = Arc::clone(
+        relay_case
+            .relay
+            .as_ref()
+            .expect("the shared relay is running"),
+    );
+    tokio::spawn(async move { other.heal() })
+        .await
+        .expect("heal from another task");
+}
+
+#[given("a site link connects separate controller and client echo servers")]
+async fn two_listener_site(relay_case: &mut RelayScenario) {
+    let controller = start_echo().await;
+    let client = start_echo().await;
+    let site = SiteLink::start(controller, client).await;
+    relay_case.controller = Some(site.controller_addr());
+    relay_case.data = Some(site.client_addr());
+    relay_case.site = Some(site);
+}
+
+#[when("the controller sends ctrl and the client sends data through the site")]
+async fn site_healthy_probes(relay_case: &mut RelayScenario) {
+    relay_case.site_replies.insert(
+        "controller",
+        within(
+            "controller round trip",
+            probe(
+                relay_case.controller.expect("a controller listener exists"),
+                b"ctrl",
+            ),
+        )
+        .await,
+    );
+    relay_case.site_replies.insert(
+        "client",
+        within(
+            "client round trip",
+            probe(relay_case.data.expect("a client listener exists"), b"data"),
+        )
+        .await,
+    );
+}
+
+#[then("the distinct site listeners echo ctrl and data respectively")]
+fn site_echoed_on_both_planes(relay_case: &RelayScenario) {
+    check!(relay_case.controller != relay_case.data);
+    check!(
+        relay_case.site_replies["controller"]
+            .as_ref()
+            .expect("controller round trip")
+            .as_slice()
+            == b"ctrl"
+    );
+    check!(
+        relay_case.site_replies["client"]
+            .as_ref()
+            .expect("client round trip")
+            .as_slice()
+            == b"data"
+    );
+}
+
+#[when("the whole site link is cut")]
+fn cut_site(relay_case: &RelayScenario) {
+    relay_case.site.as_ref().expect("the site is running").cut();
+}
+
+#[when("both site listeners receive an attempted x round trip")]
+async fn site_cut_probes(relay_case: &mut RelayScenario) {
+    relay_case.site_replies.insert(
+        "controller",
+        within(
+            "controller while cut",
+            probe(
+                relay_case.controller.expect("a controller listener exists"),
+                b"x",
+            ),
+        )
+        .await,
+    );
+    relay_case.site_replies.insert(
+        "client",
+        within(
+            "client while cut",
+            probe(relay_case.data.expect("a client listener exists"), b"x"),
+        )
+        .await,
+    );
+}
+
+#[then("neither site listener carries the attempted round trip")]
+fn site_refuses_both_planes(relay_case: &RelayScenario) {
+    assert!(let Err(_) = &relay_case.site_replies["controller"]);
+    assert!(let Err(_) = &relay_case.site_replies["client"]);
+}
+
+#[when("the whole site link heals")]
+fn heal_site(relay_case: &RelayScenario) {
+    relay_case
+        .site
+        .as_ref()
+        .expect("the site is running")
+        .heal();
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/support_relay.feature",
     name = "relay forwards bytes to the upstream"
 )]
 #[tokio::test]
-async fn relay_forwards_bytes_to_the_upstream() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("support relay: cut tears down an open connection and stops new ones")]
-async fn bdd_verify_cut_tears_down_an_open_connection_and_stops_new_ones() {
-    let upstream = start_echo().await;
-    let relay = Relay::start(upstream).await;
-
-    let mut open = within("connect", TcpStream::connect(relay.addr()))
-        .await
-        .expect("connect through a healthy relay");
-    let before = within(
-        "round trip before the cut",
-        round_trip(&mut open, b"before"),
-    )
-    .await;
-    check!(before.expect("round trip before the cut") == b"before".to_vec());
-
-    relay.cut();
-
-    // The connection that was already open must die too. A cut that only
-    // blocked new connections would leave a broker replicating over the socket
-    // it already had, and the test would prove nothing.
-    let after_cut = within("open connection after the cut", round_trip(&mut open, b"x")).await;
-    assert!(let Err(_) = &after_cut, "cut must tear down connections already open");
-
-    // And a fresh connection must fail rather than hang.
-    let while_cut = within("fresh connection while cut", probe(relay.addr(), b"x")).await;
-    assert!(let Err(_) = &while_cut, "cut must not carry a new connection");
-
-    relay.shutdown().await;
+async fn relay_forwards_bytes_to_the_upstream(relay_case: RelayScenario) {
+    relay_case.shutdown().await;
+    drop(relay_case);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/support_relay.feature",
     name = "cut tears down an open connection and stops new ones"
 )]
 #[tokio::test]
-async fn cut_tears_down_an_open_connection_and_stops_new_ones() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("support relay: heal restores forwarding without a restart")]
-async fn bdd_verify_heal_restores_forwarding_without_a_restart() {
-    let upstream = start_echo().await;
-    let relay = Relay::start(upstream).await;
-    let addr = relay.addr();
-
-    relay.cut();
-    let while_cut = within("fresh connection while cut", probe(addr, b"x")).await;
-    assert!(let Err(_) = &while_cut);
-
-    relay.heal();
-
-    // Same address, no restart: healing installs a new link generation rather
-    // than rebinding, so nothing the brokers were told changes.
-    check!(relay.addr() == addr);
-    let healed = within("round trip after the heal", probe(addr, b"after")).await;
-    check!(healed.expect("round trip after the heal") == b"after".to_vec());
-
-    relay.shutdown().await;
+async fn cut_tears_down_an_open_connection_and_stops_new_ones(relay_case: RelayScenario) {
+    relay_case.shutdown().await;
+    drop(relay_case);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/support_relay.feature",
     name = "heal restores forwarding without a restart"
 )]
 #[tokio::test]
-async fn heal_restores_forwarding_without_a_restart() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("support relay: shutdown ends the relay with a connection still open")]
-async fn bdd_verify_shutdown_ends_the_relay_with_a_connection_still_open() {
-    let upstream = start_echo().await;
-    let relay = Relay::start(upstream).await;
-    let addr = relay.addr();
-
-    // Hold a live forwarded connection across the shutdown: it is the case that
-    // would hang if `shutdown` awaited a copy task nothing had cancelled.
-    let mut open = within("connect", TcpStream::connect(addr))
-        .await
-        .expect("connect through a healthy relay");
-    let before = within("round trip", round_trip(&mut open, b"open")).await;
-    check!(before.expect("round trip before the shutdown") == b"open".to_vec());
-
-    within("shutdown", relay.shutdown()).await;
-
-    let after = within("read after the shutdown", round_trip(&mut open, b"x")).await;
-    assert!(let Err(_) = &after, "shutdown must tear down open connections");
-    let reconnect = within("connect after the shutdown", probe(addr, b"x")).await;
-    assert!(let Err(_) = &reconnect, "the listener must be gone once shutdown returns");
+async fn heal_restores_forwarding_without_a_restart(relay_case: RelayScenario) {
+    relay_case.shutdown().await;
+    drop(relay_case);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/support_relay.feature",
     name = "shutdown ends the relay with a connection still open"
 )]
 #[tokio::test]
-async fn shutdown_ends_the_relay_with_a_connection_still_open() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("support relay: cut and heal work through a shared relay")]
-async fn bdd_verify_cut_and_heal_work_through_a_shared_relay() {
-    // The partition tests hold the relay behind an `Arc` and cut it from a task
-    // that is not the one that built it, which is why `cut`/`heal` take `&self`.
-    let upstream = start_echo().await;
-    let relay = Arc::new(Relay::start(upstream).await);
-    let addr = relay.addr();
-
-    let other = Arc::clone(&relay);
-    tokio::spawn(async move { other.cut() })
-        .await
-        .expect("cut from another task");
-    let while_cut = within("fresh connection while cut", probe(addr, b"x")).await;
-    assert!(let Err(_) = &while_cut);
-
-    let other = Arc::clone(&relay);
-    tokio::spawn(async move { other.heal() })
-        .await
-        .expect("heal from another task");
-    let healed = within("round trip after the heal", probe(addr, b"after")).await;
-    check!(healed.expect("round trip after the heal") == b"after".to_vec());
-
-    Arc::into_inner(relay)
-        .expect("sole owner of the relay")
-        .shutdown()
-        .await;
+async fn shutdown_ends_the_relay_with_a_connection_still_open(relay_case: RelayScenario) {
+    relay_case.shutdown().await;
+    drop(relay_case);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/support_relay.feature",
     name = "cut and heal work through a shared relay"
 )]
 #[tokio::test]
-async fn cut_and_heal_work_through_a_shared_relay() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("support relay: site link cuts and heals both listeners together")]
-async fn bdd_verify_site_link_cuts_and_heals_both_listeners_together() {
-    let controller_upstream = start_echo().await;
-    let client_upstream = start_echo().await;
-    let site = SiteLink::start(controller_upstream, client_upstream).await;
-
-    check!(site.controller_addr() != site.client_addr());
-    let controller = site.controller_addr();
-    let client = site.client_addr();
-
-    check!(
-        within("controller round trip", probe(controller, b"ctrl"))
-            .await
-            .expect("controller round trip")
-            == b"ctrl".to_vec()
-    );
-    check!(
-        within("client round trip", probe(client, b"data"))
-            .await
-            .expect("client round trip")
-            == b"data".to_vec()
-    );
-
-    // A site is partitioned whole: a node that kept its data plane while losing
-    // its controller plane is not a failure any deployment produces.
-    site.cut();
-    assert!(let Err(_) = &within("controller while cut", probe(controller, b"x")).await);
-    assert!(let Err(_) = &within("client while cut", probe(client, b"x")).await);
-
-    site.heal();
-    check!(
-        within("controller after the heal", probe(controller, b"ctrl"))
-            .await
-            .expect("controller round trip after the heal")
-            == b"ctrl".to_vec()
-    );
-    check!(
-        within("client after the heal", probe(client, b"data"))
-            .await
-            .expect("client round trip after the heal")
-            == b"data".to_vec()
-    );
-
-    site.shutdown().await;
+async fn cut_and_heal_work_through_a_shared_relay(relay_case: RelayScenario) {
+    relay_case.shutdown().await;
+    drop(relay_case);
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/support_relay.feature",
     name = "site link cuts and heals both listeners together"
 )]
 #[tokio::test]
-async fn site_link_cuts_and_heals_both_listeners_together() {}
+async fn site_link_cuts_and_heals_both_listeners_together(relay_case: RelayScenario) {
+    relay_case.shutdown().await;
+    drop(relay_case);
+}

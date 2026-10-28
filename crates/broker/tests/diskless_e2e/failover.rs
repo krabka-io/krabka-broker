@@ -21,161 +21,212 @@
 
 use {
     crate::{
-        RECORDS, TOPIC,
-        cluster::{start_diskless_cluster, wait_for},
+        TOPIC,
+        cluster::{DisklessCluster, start_diskless_cluster, wait_for},
         topic::seed_workload,
         voter_dir::{DurableRange, durable_bytes, durable_range, voter_dir},
-        wire::{assert_matches_produced, fetch_log},
+        wire::{FetchedLog, assert_matches_produced, fetch_log},
     },
     assert2::assert,
+    bytes::Bytes,
+    krabka_broker::NodeId,
+    krabka_client_core::Client,
+    krabka_protocol::primitives::uuid::Uuid as WireUuid,
     std::time::Duration,
 };
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "diskless e2e failover: diskless acks all append survives the acking broker"
+#[derive(Default)]
+struct DisklessFailover {
+    cluster: Option<DisklessCluster>,
+    admin: Option<Client>,
+    producer: Option<Client>,
+    topic: Option<WireUuid>,
+    leader: Option<NodeId>,
+    followers: Vec<NodeId>,
+    ranges: Vec<DurableRange>,
+    voter_bytes: Vec<Bytes>,
+    leader_log: Option<FetchedLog>,
+    canonical_ends: Vec<Option<i64>>,
+    promoted: Option<NodeId>,
+    promoted_log: Option<FetchedLog>,
+}
+#[rstest::fixture]
+fn diskless_failover() -> DisklessFailover {
+    // Independent WAL and canonical logs expose exactly which copy survives.
+    DisklessFailover::default()
+}
+#[rstest_bdd_macros::given(
+    "a three-voter diskless quorum with 24 acknowledged records and object flushing parked for one hour"
 )]
-async fn bdd_verify_diskless_acks_all_append_survives_the_acking_broker() {
-    // Park the object flusher for the length of the case. A flush would trim
-    // the committed prefix out of both the leader's log and the voters', and
-    // this case is about what the *WAL quorum* holds, not about what the
-    // object store holds. `cold_read` covers that half.
-    let mut cluster = start_diskless_cluster(|config| {
+async fn durable_failover_prefix(diskless_failover: &mut DisklessFailover) {
+    let cluster = start_diskless_cluster(|config| {
         config.diskless_wal_flush_interval = krabka_units::hours(1);
     })
     .await;
     cluster.await_ready().await;
-
-    let (admin, topic_id, leader, _values, producer) = seed_workload(&cluster).await;
-    let topic_uuid = uuid::Uuid::from_bytes(topic_id.0);
-
-    let committed = i64::try_from(RECORDS).expect("small count");
-    let followers: Vec<_> = cluster
+    let (admin, topic, leader, _values, producer) = seed_workload(&cluster).await;
+    diskless_failover.followers = cluster
         .node_ids()
         .into_iter()
         .filter(|node| *node != leader)
         .collect();
-
-    // (1) Every other voter fsynced the acked prefix and said so on disk.
-    for node in &followers {
-        let dir = voter_dir(cluster.log_dir_for_node(*node), topic_uuid, 0, *node);
+    diskless_failover.cluster = Some(cluster);
+    diskless_failover.admin = Some(admin);
+    diskless_failover.producer = Some(producer);
+    diskless_failover.topic = Some(topic);
+    diskless_failover.leader = Some(leader);
+}
+#[rstest_bdd_macros::when(
+    "every follower checkpoints the acknowledged range through offset {committed} within one minute"
+)]
+async fn observe_failover_wal(diskless_failover: &mut DisklessFailover, committed: i64) {
+    let cluster = diskless_failover.cluster.as_ref().expect("cluster");
+    let topic = uuid::Uuid::from_bytes(diskless_failover.topic.expect("topic").0);
+    for node in &diskless_failover.followers {
+        let dir = voter_dir(cluster.log_dir_for_node(*node), topic, 0, *node);
         wait_for(
-            &format!(
-                "broker {}'s WAL checkpoint to reach offset {committed}",
-                node.0
-            ),
+            &format!("broker {} WAL checkpoint", node.0),
             Duration::from_mins(1),
             || async { durable_range(&dir).is_some_and(|range| range.end >= committed) },
         )
         .await;
-        let range = durable_range(&dir).expect("checkpoint written");
-        assert!(
-            range
-                == DurableRange {
-                    start: 0,
-                    end: committed
-                },
-            "broker {} checkpointed {range:?}",
-            node.0
-        );
+        diskless_failover
+            .ranges
+            .push(durable_range(&dir).expect("checkpoint written"));
+        diskless_failover
+            .voter_bytes
+            .push(durable_bytes(&dir, DurableRange {
+                start: 0,
+                end: committed,
+            }));
     }
-
-    // The leader's own view of the committed log, over the wire.
-    let from_leader = fetch_log(
-        &cluster.bootstrap_for_node(leader),
-        topic_id,
-        0,
-        RECORDS,
-        Duration::from_mins(1),
-    )
-    .await;
-    assert_matches_produced(&from_leader, 0, RECORDS);
-
-    // (2) Each other voter's WAL directory holds exactly those bytes. The
-    // voters are quiescent: every record is acked, no more are coming, and the
-    // flusher is parked, so nothing is writing into these directories now.
-    for node in &followers {
-        let dir = voter_dir(cluster.log_dir_for_node(*node), topic_uuid, 0, *node);
-        let bytes = durable_bytes(&dir, DurableRange {
-            start: 0,
-            end: committed,
-        });
-        assert!(
-            bytes == from_leader.bytes,
-            "broker {}'s WAL replica does not hold the leader's bytes",
-            node.0
-        );
+}
+#[rstest_bdd_macros::then("every follower's durable WAL range is exactly {start} through {end}")]
+fn durable_failover_ranges(diskless_failover: &DisklessFailover, start: i64, end: i64) {
+    assert!(diskless_failover.ranges.len() == diskless_failover.followers.len());
+    for range in &diskless_failover.ranges {
+        assert!(*range == DurableRange { start, end });
     }
-
-    // Empty both survivors' *canonical* partition logs before killing the
-    // leader.
-    //
-    // Without this the case proves less than it looks like it does. The topic
-    // is rf=3, and `desired_follower_set` does not exclude diskless topics, so
-    // every non-leader replica also runs an ordinary follower replicator and
-    // already holds these batches in its normal partition log. The promoted
-    // broker could then serve the post-crash fetch out of that copy even if
-    // WAL hydration adopted nothing, and the WAL directory assertions above
-    // would not notice. Truncating both candidates away leaves the WAL replica
-    // as the only place the prefix can come from.
-    //
-    // The ordinary replicator could in principle refill a truncated log in the
-    // moment before its leader dies, which would put the case back where it
-    // was -- it can never turn a real failure into a pass. In practice it does
-    // not: both logs are still empty when `crash` returns.
-    for node in &followers {
-        cluster
-            .handle_for_node(*node)
-            .expect("a survivor is up")
+}
+#[rstest_bdd_macros::when(
+    "the accepting leader serves {count} acknowledged records within one minute"
+)]
+async fn fetch_accepting_leader(diskless_failover: &mut DisklessFailover, count: usize) {
+    let cluster = diskless_failover.cluster.as_ref().expect("cluster");
+    diskless_failover.leader_log = Some(
+        fetch_log(
+            &cluster.bootstrap_for_node(diskless_failover.leader.expect("leader")),
+            diskless_failover.topic.expect("topic"),
+            0,
+            count,
+            Duration::from_mins(1),
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "the leader serves the produced {count} payloads and each voter's WAL holds identical batch bytes"
+)]
+fn durable_failover_bytes(diskless_failover: &DisklessFailover, count: usize) {
+    let leader = diskless_failover.leader_log.as_ref().expect("leader fetch");
+    assert_matches_produced(leader, 0, count);
+    assert!(diskless_failover.voter_bytes.len() == diskless_failover.followers.len());
+    for bytes in &diskless_failover.voter_bytes {
+        assert!(*bytes == leader.bytes);
+    }
+}
+#[rstest_bdd_macros::when(
+    "both surviving candidates' canonical partition logs are truncated to offset zero"
+)]
+async fn erase_failover_canonical_logs(diskless_failover: &mut DisklessFailover) {
+    let cluster = diskless_failover.cluster.as_ref().expect("cluster");
+    for node in &diskless_failover.followers {
+        let broker = cluster.handle_for_node(*node).expect("survivor up");
+        broker
             .test_truncate_local_log(TOPIC, 0, 0)
             .await
-            .expect("truncate the survivor's canonical partition log");
-        assert!(
-            cluster
-                .handle_for_node(*node)
-                .expect("a survivor is up")
-                .local_log_end_offset(TOPIC, 0)
-                == Some(0),
-            "broker {}'s canonical log still holds the prefix",
-            node.0
-        );
+            .expect("truncate canonical log");
+        diskless_failover
+            .canonical_ends
+            .push(broker.local_log_end_offset(TOPIC, 0));
     }
-
-    // Kill the broker that acknowledged every one of those writes. Drop the
-    // clients first so no open connection holds its listener shutdown.
-    drop(producer);
-    drop(admin);
-    cluster.crash(leader).await;
-
-    // The surviving two of three are still a majority, so the controller can
-    // commit a new partition-leader record.
-    let survivor = *followers.first().expect("a surviving voter");
-    let promoted = cluster.promoted_leader(survivor, leader).await;
-    assert!(promoted != leader);
-
-    // (3) The promoted broker serves the same offsets, byte for byte.
-    let from_promoted = fetch_log(
-        &cluster.bootstrap_for_node(promoted),
-        topic_id,
-        0,
-        RECORDS,
-        Duration::from_mins(2),
-    )
-    .await;
-    assert_matches_produced(&from_promoted, 0, RECORDS);
-    assert!(
-        from_promoted.bytes == from_leader.bytes,
-        "broker {} serves different bytes than the broker that acked them",
-        promoted.0
-    );
-
-    cluster.shutdown().await;
 }
-
-#[cfg(test)]
+#[rstest_bdd_macros::then(
+    "every candidate's canonical log end is zero before the accepting broker crashes"
+)]
+fn empty_failover_canonical_logs(diskless_failover: &DisklessFailover) {
+    assert!(diskless_failover.canonical_ends.len() == diskless_failover.followers.len());
+    for end in &diskless_failover.canonical_ends {
+        assert!(*end == Some(0));
+    }
+}
+#[rstest_bdd_macros::when(
+    "the accepting broker crashes and the surviving majority promotes a new partition leader"
+)]
+async fn crash_accepting_leader(diskless_failover: &mut DisklessFailover) {
+    drop(diskless_failover.producer.take());
+    drop(diskless_failover.admin.take());
+    let leader = diskless_failover.leader.expect("accepting leader");
+    let cluster = diskless_failover.cluster.as_mut().expect("cluster");
+    cluster.crash(leader).await;
+    diskless_failover.promoted = Some(
+        cluster
+            .promoted_leader(diskless_failover.followers[0], leader)
+            .await,
+    );
+}
+#[rstest_bdd_macros::then("the promoted partition leader differs from the accepting broker")]
+fn new_failover_leader(diskless_failover: &DisklessFailover) {
+    assert!(
+        diskless_failover.promoted.expect("promoted leader")
+            != diskless_failover.leader.expect("accepting leader")
+    );
+}
+#[rstest_bdd_macros::when("the promoted leader serves {count} records within two minutes")]
+async fn fetch_promoted_leader(diskless_failover: &mut DisklessFailover, count: usize) {
+    let cluster = diskless_failover.cluster.as_ref().expect("cluster");
+    diskless_failover.promoted_log = Some(
+        fetch_log(
+            &cluster.bootstrap_for_node(diskless_failover.promoted.expect("promoted leader")),
+            diskless_failover.topic.expect("topic"),
+            0,
+            count,
+            Duration::from_mins(2),
+        )
+        .await,
+    );
+}
+#[rstest_bdd_macros::then(
+    "the promoted leader serves all {count} produced records in the accepting leader's exact batch bytes"
+)]
+fn recovered_failover_bytes(diskless_failover: &DisklessFailover, count: usize) {
+    let log = diskless_failover
+        .promoted_log
+        .as_ref()
+        .expect("promoted fetch");
+    assert_matches_produced(log, 0, count);
+    assert!(
+        log.bytes
+            == diskless_failover
+                .leader_log
+                .as_ref()
+                .expect("accepting leader fetch")
+                .bytes
+    );
+}
+#[rstest_bdd_macros::then("the diskless failover cluster is shut down")]
+async fn finish_diskless_failover(diskless_failover: &mut DisklessFailover) {
+    diskless_failover
+        .cluster
+        .take()
+        .expect("cluster")
+        .shutdown()
+        .await;
+}
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/diskless_e2e/failover.feature",
     name = "diskless acks all append survives the acking broker"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn diskless_acks_all_append_survives_the_acking_broker() {}
+async fn diskless_acks_all_append_survives_the_acking_broker(diskless_failover: DisklessFailover) {
+    let _ = diskless_failover;
+}

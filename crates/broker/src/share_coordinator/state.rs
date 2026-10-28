@@ -278,218 +278,95 @@ mod tests {
             DeliveryAttemptCount, FixtureDeliveryState, state_batch as batch,
         },
         assert2::{assert, check},
+        rstest_bdd::datatable::Rows,
+        std::{fmt::Debug, str::FromStr},
     };
 
-    struct CombinerRow {
-        name: &'static str,
-        so_far: Vec<StateBatch>,
-        new: Vec<StateBatch>,
+    #[derive(Default)]
+    struct ShareBatchCombination {
+        stored: Vec<StateBatch>,
+        received: Vec<StateBatch>,
         start: Offset,
-        expected: Vec<StateBatch>,
+        combined: Option<Vec<StateBatch>>,
     }
 
-    #[bon::builder]
-    fn acknowledged_batch(start: i64, end: i64) -> StateBatch {
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct DeliveryRange {
+        first: i64,
+        last: i64,
+        delivery: String,
+        attempts: i16,
+    }
+
+    fn delivery_range(row: &DeliveryRange) -> StateBatch {
+        let delivery = match row.delivery.as_str() {
+            "available" => FixtureDeliveryState::Available,
+            "acknowledged" => FixtureDeliveryState::Acknowledged,
+            "archived" => FixtureDeliveryState::Archived,
+            other => panic!("unknown delivery state: {other}"),
+        };
         batch()
-            .bounds(Offset(start)..=Offset(end))
-            .delivery(FixtureDeliveryState::Acknowledged)
+            .bounds(Offset(row.first)..=Offset(row.last))
+            .delivery(delivery)
+            .attempts(DeliveryAttemptCount(row.attempts))
             .call()
     }
 
-    struct CombinerBatches {
-        available_first_ten: StateBatch,
-        available_at_100: StateBatch,
-        acknowledged_first_ten: StateBatch,
+    fn delivery_ranges(rows: Rows<DeliveryRange>) -> Vec<StateBatch> {
+        rows.into_iter().map(|row| delivery_range(&row)).collect()
     }
 
-    impl Default for CombinerBatches {
-        fn default() -> Self {
-            Self {
-                available_first_ten: batch().call(),
-                available_at_100: batch().bounds(Offset(100)..=Offset(109)).call(),
-                acknowledged_first_ten: acknowledged_batch().start(0).end(9).call(),
-            }
-        }
+    #[rstest::fixture]
+    fn share_batches() -> ShareBatchCombination {
+        // Keep share batches inputs and observations fresh for each scenario.
+        ShareBatchCombination::default()
     }
 
-    fn initial_combiner_rows(batches: &CombinerBatches) -> Vec<CombinerRow> {
-        vec![
-            CombinerRow {
-                name: "both empty",
-                so_far: vec![],
-                new: vec![],
-                start: Offset(0),
-                expected: vec![],
-            },
-            CombinerRow {
-                name: "one batch passes through",
-                so_far: vec![],
-                new: vec![batches.available_at_100.clone()],
-                start: Offset(-1),
-                expected: vec![batches.available_at_100.clone()],
-            },
-            CombinerRow {
-                name: "disjoint batches stay apart and sort",
-                so_far: vec![batch().bounds(Offset(110)..=Offset(119)).call()],
-                new: vec![acknowledged_batch().start(100).end(104).call()],
-                start: Offset(-1),
-                expected: vec![
-                    acknowledged_batch().start(100).end(104).call(),
-                    batch().bounds(Offset(110)..=Offset(119)).call(),
-                ],
-            },
-            CombinerRow {
-                name: "adjacent equal batches coalesce",
-                so_far: vec![batch().bounds(Offset(100)..=Offset(104)).call()],
-                new: vec![batch().bounds(Offset(105)..=Offset(109)).call()],
-                start: Offset(-1),
-                expected: vec![batches.available_at_100.clone()],
-            },
-            CombinerRow {
-                name: "the higher delivery count wins an overlap",
-                so_far: vec![batches.available_at_100.clone()],
-                new: vec![
-                    batch()
-                        .bounds(Offset(103)..=Offset(105))
-                        .attempts(DeliveryAttemptCount(2))
-                        .call(),
-                ],
-                start: Offset(-1),
-                expected: vec![
-                    batch().bounds(Offset(100)..=Offset(102)).call(),
-                    batch()
-                        .bounds(Offset(103)..=Offset(105))
-                        .attempts(DeliveryAttemptCount(2))
-                        .call(),
-                    batch().bounds(Offset(106)..=Offset(109)).call(),
-                ],
-            },
-            CombinerRow {
-                name: "the higher state wins at an equal count",
-                so_far: vec![acknowledged_batch().start(100).end(109).call()],
-                new: vec![batches.available_at_100.clone()],
-                start: Offset(-1),
-                expected: vec![acknowledged_batch().start(100).end(109).call()],
-            },
-            CombinerRow {
-                name: "the start offset drops and clips",
-                so_far: vec![
-                    batch().bounds(Offset(90)..=Offset(99)).call(),
-                    batches.available_at_100.clone(),
-                ],
-                new: vec![acknowledged_batch().start(95).end(104).call()],
-                start: Offset(103),
-                expected: vec![
-                    acknowledged_batch().start(103).end(104).call(),
-                    batch().bounds(Offset(105)..=Offset(109)).call(),
-                ],
-            },
-        ]
+    #[rstest_bdd_macros::given("the stored share-delivery ranges are:")]
+    fn stored_delivery_ranges(
+        share_batches: &mut ShareBatchCombination,
+        #[datatable] rows: Rows<DeliveryRange>,
+    ) {
+        share_batches.stored = delivery_ranges(rows);
     }
 
-    fn regression_combiner_rows(batches: &CombinerBatches) -> Vec<CombinerRow> {
-        vec![
-            // The rows of issue #935.
-            CombinerRow {
-                name: "a later batch splits the stored one",
-                so_far: vec![batches.available_first_ten.clone()],
-                new: vec![acknowledged_batch().start(5).end(9).call()],
-                start: Offset(0),
-                expected: vec![
-                    batch().bounds(Offset(0)..=Offset(4)).call(),
-                    acknowledged_batch().start(5).end(9).call(),
-                ],
-            },
-            CombinerRow {
-                name: "a lower delivery count loses",
-                so_far: vec![batch().attempts(DeliveryAttemptCount(2)).call()],
-                new: vec![batches.acknowledged_first_ten.clone()],
-                start: Offset(0),
-                expected: vec![batch().attempts(DeliveryAttemptCount(2)).call()],
-            },
-            CombinerRow {
-                name: "a higher state wins over the stored batch",
-                so_far: vec![batches.available_first_ten.clone()],
-                new: vec![batches.acknowledged_first_ten.clone()],
-                start: Offset(0),
-                expected: vec![batches.acknowledged_first_ten.clone()],
-            },
-            CombinerRow {
-                name: "a lone batch is clipped at the start offset",
-                so_far: vec![batches.available_first_ten.clone()],
-                new: vec![],
-                start: Offset(5),
-                expected: vec![batch().bounds(Offset(5)..=Offset(9)).call()],
-            },
-            CombinerRow {
-                name: "adjacent equal batches coalesce at start offset 0",
-                so_far: vec![acknowledged_batch().start(0).end(4).call()],
-                new: vec![acknowledged_batch().start(5).end(9).call()],
-                start: Offset(0),
-                expected: vec![batches.acknowledged_first_ten.clone()],
-            },
-            CombinerRow {
-                name: "an inner batch splits the stored one in three",
-                so_far: vec![batches.available_first_ten.clone()],
-                new: vec![
-                    batch()
-                        .bounds(Offset(3)..=Offset(5))
-                        .delivery(FixtureDeliveryState::Archived)
-                        .attempts(DeliveryAttemptCount(3))
-                        .call(),
-                ],
-                start: Offset(-1),
-                expected: vec![
-                    batch().bounds(Offset(0)..=Offset(2)).call(),
-                    batch()
-                        .bounds(Offset(3)..=Offset(5))
-                        .delivery(FixtureDeliveryState::Archived)
-                        .attempts(DeliveryAttemptCount(3))
-                        .call(),
-                    batch().bounds(Offset(6)..=Offset(9)).call(),
-                ],
-            },
-            CombinerRow {
-                name: "a batch wholly below the start offset is dropped",
-                so_far: vec![],
-                new: vec![
-                    batches.available_first_ten.clone(),
-                    batch().bounds(Offset(20)..=Offset(29)).call(),
-                ],
-                start: Offset(20),
-                expected: vec![batch().bounds(Offset(20)..=Offset(29)).call()],
-            },
-        ]
+    #[rstest_bdd_macros::given("the incoming share-delivery ranges are:")]
+    fn incoming_delivery_ranges(
+        share_batches: &mut ShareBatchCombination,
+        #[datatable] rows: Rows<DeliveryRange>,
+    ) {
+        share_batches.received = delivery_ranges(rows);
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("share coordinator state tests: combine matches kafka combiner")]
-    fn bdd_verify_combine_matches_kafka_combiner() {
-        let batches = CombinerBatches::default();
-        for CombinerRow {
-            name,
-            so_far,
-            new,
-            start,
-            expected,
-        } in initial_combiner_rows(&batches)
-            .into_iter()
-            .chain(regression_combiner_rows(&batches))
-        {
-            check!(
-                combine_state_batches(&so_far, &new, start) == expected,
-                "{name}"
-            );
-        }
+    #[rstest_bdd_macros::given("the retained share-delivery log starts at offset {start}")]
+    fn retained_delivery_start(share_batches: &mut ShareBatchCombination, start: i64) {
+        share_batches.start = Offset(start);
     }
 
-    /// Cases of Kafka's `PersisterStateBatchCombinerTest`, including issue #935.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/share_coordinator/state.feature",
-        name = "tests: combine matches kafka combiner"
+    #[rstest_bdd_macros::when(
+        "the share coordinator combines the stored and incoming delivery ranges"
     )]
-    fn combine_matches_kafka_combiner() {}
+    fn combine_delivery_ranges(share_batches: &mut ShareBatchCombination) {
+        share_batches.combined = Some(combine_state_batches(
+            &share_batches.stored,
+            &share_batches.received,
+            share_batches.start,
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the resulting share-delivery ranges are:")]
+    fn combined_delivery_ranges(
+        share_batches: &ShareBatchCombination,
+        #[datatable] rows: Rows<DeliveryRange>,
+    ) {
+        let expected = delivery_ranges(rows);
+        check!(share_batches.combined.as_ref() == Some(&expected));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/share_coordinator/state/combiner.feature",
+        fixtures = [share_batches: ShareBatchCombination]
+    );
 
     fn snapshot(start: i64, batches: Vec<StateBatch>) -> ShareSnapshotValue {
         ShareSnapshotValue {
@@ -504,50 +381,181 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "share coordinator state tests: snapshot then update merges as kafka"
-    )]
-    fn bdd_verify_snapshot_then_update_merges_as_kafka() {
-        let mut s = SharePartitionState::from_snapshot(
-            &snapshot(0, vec![
-                batch().call(),
-                batch().bounds(Offset(10)..=Offset(19)).call(),
-                batch().bounds(Offset(20)..=Offset(29)).call(),
-            ]),
-            Offset(7),
-        );
-        s.apply_update(&ShareUpdateValue {
-            snapshot_epoch: 1,
-            leader_epoch: 4,
-            start_offset: Offset(20),
-            delivery_complete_count: 7,
-            state_batches: vec![batch().bounds(Offset(30)..=Offset(39)).call()],
-        });
-
-        let expected = SharePartitionState {
-            state_epoch: 2,
-            leader_epoch: 4,
-            start_offset: Offset(20),
-            delivery_complete_count: 7,
-            state_batches: vec![batch().bounds(Offset(20)..=Offset(39)).call()],
-            snapshot_epoch: 1,
-            create_timestamp: 10,
-            write_timestamp: 20,
-            last_snapshot_offset: Offset(7),
-            updates_since_snapshot: 1,
-            fence_leader_epoch: 4,
-            fence_state_epoch: 2,
-        };
-        assert!(s == expected);
+    #[derive(Default)]
+    struct ShareReplayScenario {
+        snapshot: Option<ShareSnapshotValue>,
+        record_offset: Offset,
+        update: Option<ShareUpdateValue>,
+        replayed: Option<SharePartitionState>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/share_coordinator/state.feature",
-        name = "tests: snapshot then update merges as kafka"
+    #[derive(rstest_bdd_macros::DataTableRow)]
+    struct ReplayField {
+        field: String,
+        value: String,
+    }
+
+    #[rstest::fixture]
+    fn share_replay() -> ShareReplayScenario {
+        // Keep share replay inputs and observations fresh for each scenario.
+        ShareReplayScenario::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "a replay snapshot has snapshot epoch {snapshot}, state epoch {state}, leader epoch {leader}, and record offset {offset}"
     )]
-    fn snapshot_then_update_merges_as_kafka() {}
+    fn replay_snapshot_epochs(
+        share_replay: &mut ShareReplayScenario,
+        snapshot: i32,
+        state: i32,
+        leader: i32,
+        offset: i64,
+    ) {
+        share_replay.snapshot = Some(ShareSnapshotValue {
+            snapshot_epoch: snapshot,
+            state_epoch: state,
+            leader_epoch: leader,
+            start_offset: Offset(0),
+            delivery_complete_count: 0,
+            create_timestamp: 0,
+            write_timestamp: 0,
+            state_batches: Vec::new(),
+        });
+        share_replay.record_offset = Offset(offset);
+    }
+
+    #[rstest_bdd_macros::given(
+        "the replay snapshot starts at {start} with completed count {complete}, creation time {created}, and write time {written}"
+    )]
+    fn replay_snapshot_metadata(
+        share_replay: &mut ShareReplayScenario,
+        start: i64,
+        complete: i32,
+        created: i64,
+        written: i64,
+    ) {
+        let snapshot = share_replay
+            .snapshot
+            .as_mut()
+            .expect("a replay snapshot was given");
+        snapshot.start_offset = Offset(start);
+        snapshot.delivery_complete_count = complete;
+        snapshot.create_timestamp = created;
+        snapshot.write_timestamp = written;
+    }
+
+    #[rstest_bdd_macros::given("the replay snapshot delivery ranges are:")]
+    fn replay_snapshot_ranges(
+        share_replay: &mut ShareReplayScenario,
+        #[datatable] rows: Rows<DeliveryRange>,
+    ) {
+        share_replay
+            .snapshot
+            .as_mut()
+            .expect("a replay snapshot was given")
+            .state_batches = delivery_ranges(rows);
+    }
+
+    #[rstest_bdd_macros::given(
+        "the replay update has snapshot epoch {snapshot}, leader epoch {leader}, start offset {start}, and completed count {complete}"
+    )]
+    fn replay_update_metadata(
+        share_replay: &mut ShareReplayScenario,
+        snapshot: i32,
+        leader: i32,
+        start: i64,
+        complete: i32,
+    ) {
+        share_replay.update = Some(ShareUpdateValue {
+            snapshot_epoch: snapshot,
+            leader_epoch: leader,
+            start_offset: Offset(start),
+            delivery_complete_count: complete,
+            state_batches: Vec::new(),
+        });
+    }
+
+    #[rstest_bdd_macros::given("the replay update delivery ranges are:")]
+    fn replay_update_ranges(
+        share_replay: &mut ShareReplayScenario,
+        #[datatable] rows: Rows<DeliveryRange>,
+    ) {
+        share_replay
+            .update
+            .as_mut()
+            .expect("a replay update was given")
+            .state_batches = delivery_ranges(rows);
+    }
+
+    #[rstest_bdd_macros::when("the coordinator replays the snapshot followed by the update")]
+    fn replay_snapshot_and_update(share_replay: &mut ShareReplayScenario) {
+        let snapshot = share_replay
+            .snapshot
+            .as_ref()
+            .expect("a replay snapshot was given");
+        let update = share_replay
+            .update
+            .as_ref()
+            .expect("a replay update was given");
+        let mut state = SharePartitionState::from_snapshot(snapshot, share_replay.record_offset);
+        state.apply_update(update);
+        share_replay.replayed = Some(state);
+    }
+
+    fn replay_field<T: FromStr>(fields: &BTreeMap<String, String>, name: &str) -> T
+    where
+        T::Err: Debug,
+    {
+        fields
+            .get(name)
+            .unwrap_or_else(|| panic!("missing replay-state field {name}"))
+            .parse()
+            .unwrap_or_else(|error| panic!("invalid replay-state field {name}: {error:?}"))
+    }
+
+    #[rstest_bdd_macros::then("the complete replayed share state is:")]
+    fn complete_replayed_state(
+        share_replay: &ShareReplayScenario,
+        #[datatable] rows: Rows<ReplayField>,
+    ) {
+        let fields: BTreeMap<_, _> = rows.into_iter().map(|row| (row.field, row.value)).collect();
+        let raw_batches: Vec<(i64, i64, String, i16)> = serde_json::from_str(
+            fields
+                .get("state_batches")
+                .expect("expected delivery ranges were specified"),
+        )
+        .expect("delivery ranges are first/last/state/attempt tuples");
+        let expected = SharePartitionState {
+            state_epoch: replay_field(&fields, "state_epoch"),
+            leader_epoch: replay_field(&fields, "leader_epoch"),
+            start_offset: Offset(replay_field(&fields, "start_offset")),
+            delivery_complete_count: replay_field(&fields, "delivery_complete_count"),
+            state_batches: raw_batches
+                .into_iter()
+                .map(|(first, last, delivery, attempts)| {
+                    delivery_range(&DeliveryRange {
+                        first,
+                        last,
+                        delivery,
+                        attempts,
+                    })
+                })
+                .collect(),
+            snapshot_epoch: replay_field(&fields, "snapshot_epoch"),
+            create_timestamp: replay_field(&fields, "create_timestamp"),
+            write_timestamp: replay_field(&fields, "write_timestamp"),
+            last_snapshot_offset: Offset(replay_field(&fields, "last_snapshot_offset")),
+            updates_since_snapshot: replay_field(&fields, "updates_since_snapshot"),
+            fence_leader_epoch: replay_field(&fields, "fence_leader_epoch"),
+            fence_state_epoch: replay_field(&fields, "fence_state_epoch"),
+        };
+        assert!(share_replay.replayed.as_ref() == Some(&expected));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/share_coordinator/state/replay.feature",
+        fixtures = [share_replay: ShareReplayScenario]
+    );
 
     /// An update with `-1` keeps the stored start offset and leader epoch.
     #[test]

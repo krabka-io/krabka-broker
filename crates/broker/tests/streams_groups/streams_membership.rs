@@ -7,117 +7,83 @@
 
 use {
     crate::streams_harness::{
-        active_partition_count, active_partitions_for, boot, connect, create_topic, describe,
-        finalize_streams_version, follow_up, join_and_converge, topology,
+        StreamsGroupScenario, active_partition_count, active_partitions_for, follow_up,
+        streams_group,
     },
     assert2::{assert, check},
+    rstest_bdd_macros::{scenario, then, when},
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("streams groups streams membership: stateless single member converges")]
-async fn bdd_verify_stateless_single_member_converges() {
-    let (_b, bootstrap, _dir) = boot().await;
-    let client = connect(&bootstrap).await;
-    finalize_streams_version(&client).await;
-    create_topic(&client, "streams-input", 2).await;
-
-    let (member_id, resp) = join_and_converge(
-        &client,
-        "streams-app-1",
-        topology("streams-input", vec![]),
-        2,
-        10,
-    )
-    .await;
-
-    check!(resp.error_code == 0, "heartbeat error: {resp:?}");
-    check!(!member_id.is_empty(), "broker must mint a member id");
+#[then("the stateless streams member owns both partitions of subtopology zero")]
+fn stateless_streams_assignment(streams_group: &StreamsGroupScenario) {
+    let response = streams_group
+        .heartbeat
+        .as_ref()
+        .expect("streams join answered");
     check!(
-        resp.member_epoch >= 1,
-        "first join advances the member epoch, got {}",
-        resp.member_epoch
+        active_partition_count(response) == 2,
+        "{:?}",
+        response.active_tasks
     );
-    // The single member owns both partitions of subtopology "0".
-    check!(
-        active_partition_count(&resp) == 2,
-        "lone member must own both input partitions, got {:?}",
-        resp.active_tasks
-    );
-    check!(
-        active_partitions_for(&resp, "0") == vec![0, 1],
-        "subtopology 0 must be assigned partitions [0, 1], got {:?}",
-        resp.active_tasks
+    check!(active_partitions_for(response, "0") == vec![0, 1]);
+}
+
+#[when("the joined streams member leaves at epoch minus one")]
+async fn leave_stateless_streams_group(streams_group: &mut StreamsGroupScenario) {
+    streams_group.heartbeat = Some(
+        streams_group
+            .client()
+            .send(
+                follow_up()
+                    .group(&streams_group.group)
+                    .member_id(&streams_group.member)
+                    .epoch(-1)
+                    .call(),
+            )
+            .await
+            .expect("leave heartbeat"),
     );
 }
 
-/// A lone stateless member joins a 2-partition topic and is assigned both tasks
-/// for the single subtopology.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[then("the streams leave heartbeat succeeds")]
+fn streams_member_left(streams_group: &StreamsGroupScenario) {
+    let response = streams_group.heartbeat.as_ref().expect("leave answered");
+    assert!(response.error_code == 0, "{response:?}");
+}
+
+#[then("the retained streams group no longer contains the departed member")]
+fn departed_streams_member_absent(streams_group: &StreamsGroupScenario) {
+    let described = streams_group
+        .described
+        .as_ref()
+        .expect("streams group described");
+    assert!(described.groups.len() == 1);
+    let group = &described.groups[0];
+    assert!(group.error_code == 0, "{group:?}");
+    assert!(
+        !group
+            .members
+            .iter()
+            .any(|member| member.member_id == streams_group.member)
+    );
+}
+
+#[scenario(
     path = "tests/features/migrated/tests/streams_groups/streams_membership.feature",
     name = "stateless single member converges"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stateless_single_member_converges() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then("streams groups streams membership: leave removes member")]
-async fn bdd_verify_leave_removes_member() {
-    let (_b, bootstrap, _dir) = boot().await;
-    let client = connect(&bootstrap).await;
-    finalize_streams_version(&client).await;
-    create_topic(&client, "leave-input", 2).await;
-
-    let (member_id, resp) = join_and_converge(
-        &client,
-        "streams-app-4",
-        topology("leave-input", vec![]),
-        2,
-        10,
-    )
-    .await;
-    assert!(resp.error_code == 0, "join error: {resp:?}");
-    assert!(!member_id.is_empty());
-
-    // Leave: member_epoch == -1.
-    let leave = client
-        .send(
-            follow_up()
-                .group("streams-app-4")
-                .member_id(&member_id)
-                .epoch(-1)
-                .call(),
-        )
-        .await
-        .expect("leave heartbeat");
-    assert!(leave.error_code == 0, "leave failed: {leave:?}");
-
-    // The group is retained (Empty) but the member is gone.
-    let desc = describe(&client, "streams-app-4").await;
-    assert!(
-        desc.groups.len() == 1,
-        "group row still present after leave, got {}",
-        desc.groups.len()
-    );
-    let g = &desc.groups[0];
-    assert!(
-        g.error_code == 0,
-        "retained group describe error: {:?}",
-        g.error_code
-    );
-    assert!(
-        !g.members.iter().any(|m| m.member_id == member_id),
-        "left member {member_id} must be gone, got {:?}",
-        g.members.iter().map(|m| &m.member_id).collect::<Vec<_>>()
-    );
+async fn stateless_single_member_converges(streams_group: StreamsGroupScenario) {
+    streams_group.shutdown().await;
+    drop(streams_group);
 }
 
-/// A member that has joined can leave with `member_epoch == -1`. The leave
-/// succeeds, and a later Describe shows the group without that member.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/streams_groups/streams_membership.feature",
     name = "leave removes member"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn leave_removes_member() {}
+async fn leave_removes_member(streams_group: StreamsGroupScenario) {
+    streams_group.shutdown().await;
+    drop(streams_group);
+}

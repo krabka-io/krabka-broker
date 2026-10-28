@@ -262,106 +262,95 @@ fn kafka_records_from(engine: &Engine, start: Offset) -> Vec<KafkaRecord> {
         .collect()
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "kraft controller tests broker registration: registration transitions are written as kafkas records"
-)]
-fn bdd_verify_registration_transitions_are_written_as_kafkas_records() {
-    use {
-        krabka_metadata::{
-            BrokerRegistrationChangeRecord, FencingChange, MetadataRecord, UnregisterBrokerRecord,
-        },
-        krabka_protocol::{
-            owned::{
-                broker_registration_change_record::BrokerRegistrationChangeRecord as KChange,
-                unregister_broker_record::UnregisterBrokerRecord as KUnregister,
-            },
-            records::metadata::KraftMetadataRecord,
-        },
-    };
+use rstest_bdd_macros::{given, scenarios, then, when};
 
-    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
-    let submit = |engine: &mut Engine, record: MetadataRecord| {
-        let start = engine.log.log_end_offset();
-        let mut rx = super::test_support::submit_on_engine(engine, &[record]);
-        assert!(matches!(rx.try_recv(), Ok(Ok(_))));
-        (
-            kafka_records_from(engine, start),
-            engine.image.broker(NodeId(7)).cloned(),
-        )
-    };
+struct RegistrationHistory {
+    engine: Engine,
+    _directory: tempfile::TempDir,
+    records: Vec<KafkaRecord>,
+    registration: Option<krabka_metadata::BrokerRegistrationRecord>,
+    registered: Option<krabka_metadata::BrokerRegistrationRecord>,
+}
 
-    let (registered_records, registered) = submit(
-        &mut engine,
-        MetadataRecord::V1BrokerRegistration(new_registration()),
+#[rstest::fixture]
+fn registration_history() -> RegistrationHistory {
+    let (engine, directory) = super::test_support::single_voter_leader_engine();
+    RegistrationHistory {
+        engine,
+        _directory: directory,
+        records: vec![],
+        registration: None,
+        registered: None,
+    }
+}
+
+#[given("a single voter controller leads the broker registration log")]
+fn registration_leader(registration_history: &RegistrationHistory) {
+    check!(
+        registration_history
+            .engine
+            .image
+            .broker(NodeId(7))
+            .is_none()
     );
-    let registered = registered.expect("broker 7 registered");
-    let epoch = registered.broker_epoch;
-    let change = |fenced: FencingChange, in_controlled_shutdown: bool| {
-        MetadataRecord::V1BrokerRegistrationChange(BrokerRegistrationChangeRecord {
-            fenced,
-            in_controlled_shutdown,
-            ..BrokerRegistrationChangeRecord::no_change(NodeId(7), epoch)
-        })
-    };
-    let kafka_change = |fenced: i8, in_controlled_shutdown: i8, version: i16| {
-        vec![KafkaRecord {
-            record: KraftMetadataRecord::BrokerRegistrationChange(KChange {
-                broker_id: 7,
-                broker_epoch: epoch,
-                fenced,
-                in_controlled_shutdown,
-                ..KChange::default()
-            }),
-            version,
-        }]
-    };
-    let with = |fenced: bool, in_controlled_shutdown: bool| {
-        Some(krabka_metadata::BrokerRegistrationRecord {
-            fenced,
-            in_controlled_shutdown,
-            ..registered.clone()
-        })
-    };
+}
 
-    let steps = [
-        (
-            "unfence",
-            change(FencingChange::Unfence, false),
-            kafka_change(-1, 0, 0),
-            with(false, false),
-        ),
-        (
-            "enter controlled shutdown",
-            change(FencingChange::None, true),
-            kafka_change(0, 1, 1),
-            with(false, true),
-        ),
-        (
-            "fence",
-            change(FencingChange::Fence, false),
-            kafka_change(1, 0, 0),
-            with(true, true),
-        ),
-        (
-            "unregister",
+#[when("broker 7 performs registration transition {transition}")]
+fn registration_transition(registration_history: &mut RegistrationHistory, transition: String) {
+    use krabka_metadata::{
+        BrokerRegistrationChangeRecord, FencingChange, MetadataRecord, UnregisterBrokerRecord,
+    };
+    let record = if transition == "register" {
+        MetadataRecord::V1BrokerRegistration(new_registration())
+    } else {
+        let epoch = registration_history
+            .registered
+            .as_ref()
+            .expect("broker registered")
+            .broker_epoch;
+        if transition == "unregister" {
             MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord {
                 node_id: NodeId(7),
                 broker_epoch: epoch,
-            }),
-            vec![KafkaRecord {
-                record: KraftMetadataRecord::UnregisterBroker(KUnregister {
-                    broker_id: 7,
-                    broker_epoch: epoch,
-                    ..KUnregister::default()
-                }),
-                version: 0,
-            }],
-            None,
-        ),
-    ];
+            })
+        } else {
+            let (fenced, in_controlled_shutdown) = match transition.as_str() {
+                "unfence" => (FencingChange::Unfence, false),
+                "shutdown" => (FencingChange::None, true),
+                "fence" => (FencingChange::Fence, false),
+                _ => panic!("unknown registration transition {transition}"),
+            };
+            MetadataRecord::V1BrokerRegistrationChange(BrokerRegistrationChangeRecord {
+                fenced,
+                in_controlled_shutdown,
+                ..BrokerRegistrationChangeRecord::no_change(NodeId(7), epoch)
+            })
+        }
+    };
+    let start = registration_history.engine.log.log_end_offset();
+    let mut receiver =
+        super::test_support::submit_on_engine(&mut registration_history.engine, &[record]);
+    receiver
+        .try_recv()
+        .expect("submission completed")
+        .expect("registration transition committed");
+    registration_history.records = kafka_records_from(&registration_history.engine, start);
+    registration_history.registration =
+        registration_history.engine.image.broker(NodeId(7)).cloned();
+    if transition == "register" {
+        registration_history.registered = registration_history.registration.clone();
+    }
+}
 
-    assert!(let [KafkaRecord { record: KraftMetadataRecord::RegisterBroker(written), .. }] = registered_records.as_slice());
+#[then("Kafka records a newly fenced broker with its assigned epoch")]
+fn registered_kafka_record(registration_history: &RegistrationHistory) {
+    use krabka_protocol::records::metadata::KraftMetadataRecord;
+    let epoch = registration_history
+        .registered
+        .as_ref()
+        .expect("broker registered")
+        .broker_epoch;
+    assert!(let [KafkaRecord { record: KraftMetadataRecord::RegisterBroker(written), .. }] = registration_history.records.as_slice());
     check!(
         (
             written.broker_epoch,
@@ -369,29 +358,78 @@ fn bdd_verify_registration_transitions_are_written_as_kafkas_records() {
             written.in_controlled_shutdown
         ) == (epoch, true, false)
     );
-    for (what, record, want_records, want_registration) in steps {
-        let (records, registration) = submit(&mut engine, record);
-        check!(records == want_records, "{what}");
-        check!(registration == want_registration, "{what}");
-    }
 }
 
-/// krabka-io/krabka-broker#1009: the controller writes a broker's
-/// registration and its fence, unfence, controlled shutdown and
-/// unregistration in Kafka's record shapes, as
-/// `ClusterControlManager.registerBroker` (`RegisterBrokerRecord`, `Fenced`
-/// true), `ReplicationControlManager.handleBrokerUnfenced`,
-/// `handleBrokerInControlledShutdown` and `handleBrokerFenced`
-/// (`BrokerRegistrationChangeRecord` v0, v1 and v0) and `unregisterBroker`
-/// (`UnregisterBrokerRecord` with the registration's epoch) write them. A
-/// replica that replays each record arrives at the registration the leader
-/// holds.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_broker_registration.feature",
-    name = "registration transitions are written as kafkas records"
+#[then(
+    "Kafka records fencing {fencing} shutdown {shutdown} at schema version {version} and the broker is fenced {fenced} shutting down {shutting_down}"
 )]
-fn registration_transitions_are_written_as_kafkas_records() {}
+fn registration_change_record(
+    registration_history: &RegistrationHistory,
+    fencing: i8,
+    shutdown: i8,
+    version: i16,
+    fenced: bool,
+    shutting_down: bool,
+) {
+    use krabka_protocol::{
+        owned::broker_registration_change_record::BrokerRegistrationChangeRecord,
+        records::metadata::KraftMetadataRecord,
+    };
+    let registered = registration_history
+        .registered
+        .as_ref()
+        .expect("broker registered");
+    check!(
+        registration_history.records
+            == vec![KafkaRecord {
+                record: KraftMetadataRecord::BrokerRegistrationChange(
+                    BrokerRegistrationChangeRecord {
+                        broker_id: 7,
+                        broker_epoch: registered.broker_epoch,
+                        fenced: fencing,
+                        in_controlled_shutdown: shutdown,
+                        ..BrokerRegistrationChangeRecord::default()
+                    }
+                ),
+                version,
+            }]
+    );
+    check!(
+        registration_history.registration
+            == Some(krabka_metadata::BrokerRegistrationRecord {
+                fenced,
+                in_controlled_shutdown: shutting_down,
+                ..registered.clone()
+            })
+    );
+}
+
+#[then("Kafka records unregistration at the assigned epoch and removes broker 7")]
+fn unregistered_kafka_record(registration_history: &RegistrationHistory) {
+    use krabka_protocol::{
+        owned::unregister_broker_record::UnregisterBrokerRecord,
+        records::metadata::KraftMetadataRecord,
+    };
+    let epoch = registration_history
+        .registered
+        .as_ref()
+        .expect("broker registered")
+        .broker_epoch;
+    check!(
+        registration_history.records
+            == vec![KafkaRecord {
+                record: KraftMetadataRecord::UnregisterBroker(UnregisterBrokerRecord {
+                    broker_id: 7,
+                    broker_epoch: epoch,
+                    ..UnregisterBrokerRecord::default()
+                }),
+                version: 0,
+            }]
+    );
+    check!(registration_history.registration.is_none());
+}
+
+scenarios!("tests/features/migrated/src/kraft/controller/tests_broker_registration.feature", fixtures = [registration_history: RegistrationHistory]);
 
 /// krabka-io/krabka-broker#1009: a `BrokerRegistrationChangeRecord` built
 /// before the broker registered again names an epoch the broker is no longer

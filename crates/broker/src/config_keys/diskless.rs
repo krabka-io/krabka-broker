@@ -137,48 +137,55 @@ mod tests {
             .collect()
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "config keys diskless tests: resolve diskless reads a kafka boolean for {example}"
-    )]
-    fn bdd_verify_resolve_diskless_reads_a_kafka_boolean(example: String) {
-        type Example = (Option<BTreeMap<String, String>>, bool);
-        let (config, expected): Example = match example.as_str() {
-            "no override map" => (None, false),
-            "missing key" => (Some(map(&[])), false),
-            "false value" => (
-                Some(map(&[ConfigPair {
-                    key: DISKLESS,
-                    value: "false",
-                }])),
-                false,
-            ),
-            "uppercase true" => (
-                Some(map(&[ConfigPair {
-                    key: DISKLESS,
-                    value: " TRUE ",
-                }])),
-                true,
-            ),
-            "true value" => (
-                Some(map(&[ConfigPair {
-                    key: DISKLESS,
-                    value: "true",
-                }])),
-                true,
-            ),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        check!(resolve_diskless(config.as_ref()) == expected);
+    #[derive(Default)]
+    struct DisklessOverride {
+        config: Option<BTreeMap<String, String>>,
+        enabled: Option<bool>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/config_keys/diskless.feature",
-        name = "tests: resolve diskless reads a kafka boolean"
-    )]
-    fn resolve_diskless_reads_a_kafka_boolean(example: String) { let _ = example; }
+    #[rstest::fixture]
+    fn diskless_override() -> DisklessOverride {
+        // Keep diskless override inputs and observations fresh for each scenario.
+        DisklessOverride::default()
+    }
+
+    #[rstest_bdd_macros::given("the topic has no override map")]
+    fn absent_topic_overrides(diskless_override: &mut DisklessOverride) {
+        diskless_override.config = None;
+    }
+
+    #[rstest_bdd_macros::given("the topic override map has no diskless key")]
+    fn missing_diskless_key(diskless_override: &mut DisklessOverride) {
+        diskless_override.config = Some(BTreeMap::new());
+    }
+
+    #[rstest_bdd_macros::given("the diskless topic override is the literal {value}")]
+    fn diskless_value(diskless_override: &mut DisklessOverride, value: String) {
+        diskless_override.config = Some(map(&[ConfigPair {
+            key: DISKLESS,
+            value: &value,
+        }]));
+    }
+
+    #[rstest_bdd_macros::given("the diskless topic override is uppercase TRUE padded with spaces")]
+    fn padded_diskless_value(diskless_override: &mut DisklessOverride) {
+        diskless_value(diskless_override, " TRUE ".to_owned());
+    }
+
+    #[rstest_bdd_macros::when("the broker resolves the topic's diskless mode")]
+    fn resolve_diskless_mode(diskless_override: &mut DisklessOverride) {
+        diskless_override.enabled = Some(resolve_diskless(diskless_override.config.as_ref()));
+    }
+
+    #[rstest_bdd_macros::then("diskless mode is enabled {enabled}")]
+    fn diskless_mode(diskless_override: &DisklessOverride, enabled: bool) {
+        check!(diskless_override.enabled == Some(enabled));
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/config_keys/diskless",
+        fixtures = [diskless_override: DisklessOverride]
+    );
 
     #[test]
     fn the_key_is_whitelisted_and_takes_only_booleans() {

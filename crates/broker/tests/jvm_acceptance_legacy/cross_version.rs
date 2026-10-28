@@ -1,70 +1,25 @@
-//! The two mixed-vintage paths, in which one side of the round trip is a Kafka
-//! 0.10.1 tool and the other is a Kafka 2.6 tool.
-//!
-//! Together they pin the two conversions separately: a modern consumer proves
-//! the up-converted v2 `RecordBatch` on disk is well formed, and a 0.10.1
-//! consumer proves the down-converted v0/v1 `MessageSet` is.
-
-use crate::{
-    jvm_acceptance::{KAFKA_IMAGE, KAFKA_IMAGE_LEGACY},
-    legacy_round_trip::run_round_trip,
+//! Mixed stock client vintages observe records across format conversions.
+use {
+    crate::legacy_round_trip::{RecordExchange, exchange, shutdown},
+    rstest_bdd_macros::scenario,
 };
 
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance legacy cross version: jvm legacy 010 produce modern consume"
-)]
-async fn bdd_verify_jvm_legacy_010_produce_modern_consume() {
-    run_round_trip(
-        "legacy-010-produce-modern-consume",
-        KAFKA_IMAGE_LEGACY,
-        KAFKA_IMAGE,
-    )
-    .await;
-}
-
-/// Test 2: legacy producer, modern consumer.
-///
-/// A Kafka 0.10.1 console-producer sends 3 records. A Kafka 2.6
-/// console-consumer (cp-kafka:6.1.1) reads them back with Fetch v11+.
-/// The test validates that the up-conversion writes a well-formed v2
-/// `RecordBatch` to the log that a modern client can decode, and not
-/// only bytes that a Krabka broker accepts on its own.
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_legacy/cross_version.feature",
-    name = "jvm legacy 010 produce modern consume"
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_legacy_record_exchange.feature",
+    name = "A modern consumer decodes records from the legacy producer"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn jvm_legacy_010_produce_modern_consume() {}
-
-#[cfg(test)]
-#[rstest_bdd_macros::then(
-    "jvm acceptance legacy cross version: jvm modern produce legacy 010 consume"
-)]
-async fn bdd_verify_jvm_modern_produce_legacy_010_consume() {
-    run_round_trip(
-        "modern-produce-legacy-010-consume",
-        KAFKA_IMAGE,
-        KAFKA_IMAGE_LEGACY,
-    )
-    .await;
+async fn jvm_legacy_010_produce_modern_consume(exchange: RecordExchange) {
+    shutdown(exchange).await;
 }
 
-/// Test 3: modern producer, legacy consumer.
-///
-/// A Kafka 2.6 console-producer (cp-kafka:6.1.1) sends 3 records with
-/// Produce v9. A Kafka 0.10.1 console-consumer (cp-kafka:3.1.2) reads
-/// them with Fetch v0–3. The test validates that a real Kafka 0.10.x
-/// client can parse the bytes `down_convert_for_fetch` emits as a v0/v1
-/// `MessageSet`. That is the load-bearing concern for down-conversion
-/// correctness.
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_legacy/cross_version.feature",
-    name = "jvm modern produce legacy 010 consume"
+#[scenario(
+    path = "tests/features/migrated/tests/jvm_legacy_record_exchange.feature",
+    name = "A legacy consumer decodes records from the modern producer"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn jvm_modern_produce_legacy_010_consume() {}
+async fn jvm_modern_produce_legacy_010_consume(exchange: RecordExchange) {
+    shutdown(exchange).await;
+}

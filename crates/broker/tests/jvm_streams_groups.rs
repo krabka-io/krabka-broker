@@ -172,128 +172,126 @@ const TOOL_DEBUG_PREAMBLE: &str = concat!(
     "export KAFKA_LOG4J_OPTS='-Dlog4j2.configurationFile=/tmp/d.yaml'\n",
 );
 
-#[cfg(test)]
-#[rstest_bdd_macros::then("jvm streams groups: jvm streams groups admin round trips krabka")]
-async fn bdd_verify_jvm_streams_groups_admin_round_trips_krabka() {
-    let bootstrap = bootstrap_addr();
-    let StartedBroker { broker, dir: _dir } = start_host_broker().await;
-    let topic = "streams-input";
-    let group = "jvm-streams-g";
+use {
+    rstest::fixture,
+    rstest_bdd_macros::{given, scenario, then, when},
+};
+struct StreamsAdministration {
+    broker: Option<StartedBroker>,
+    client: Option<Client>,
+    topic: String,
+    group: String,
+    member: String,
+    heartbeat: Option<StreamsGroupHeartbeatResponse>,
+    wire: Option<Output>,
+}
+#[fixture]
+fn streams() -> StreamsAdministration {
+    // Start this scenario with fresh inputs and observations.
 
+    StreamsAdministration {
+        broker: None,
+        client: None,
+        topic: String::new(),
+        group: String::new(),
+        member: String::new(),
+        heartbeat: None,
+        wire: None,
+    }
+}
+#[given(
+    "a broker finalizes streams version one and hosts topic {topic} with {partitions} partitions"
+)]
+async fn ready(streams: &mut StreamsAdministration, topic: String, partitions: i32) {
+    let started = start_host_broker().await;
     let client = connect().await;
     finalize_streams_version(&client).await;
-    create_topic(&broker, &client, topic, 2).await;
-
-    // Make a streams group EXIST on Krabka: a lone member owns both partitions
-    // of the single subtopology over `streams-input` (native StreamsGroupHeartbeat
-    // / api 88). The broker runs Kafka's 3 s initial rebalance delay, so the
-    // bound allows 10 s of 200 ms heartbeats.
-    let (member_id, resp) = join_and_converge(&client, group, topology(topic), 2, 50).await;
+    create_topic(&started.broker, &client, &topic, partitions).await;
+    streams.broker = Some(started);
+    streams.client = Some(client);
+    streams.topic = topic;
+}
+#[when("a sole native Streams member joins group {group} and converges on both input partitions")]
+async fn join(streams: &mut StreamsAdministration, group: String) {
+    let (member, response) = join_and_converge(
+        streams.client.as_ref().expect("Streams client connected"),
+        &group,
+        topology(&streams.topic),
+        2,
+        50,
+    )
+    .await;
+    streams.group = group;
+    streams.member = member;
+    streams.heartbeat = Some(response);
+}
+#[then("the join succeeds with a broker minted member identity and {partitions} active partitions")]
+fn assigned(streams: &StreamsAdministration, partitions: usize) {
+    let response = streams.heartbeat.as_ref().expect("Streams join completed");
     check!(
-        resp.error_code == 0,
-        "lone member must join cleanly, got member_id={member_id:?}, {resp:?}"
+        response.error_code == 0,
+        "lone member must join cleanly: {response:?}"
     );
     check!(
-        !member_id.is_empty(),
-        "lone member must get a broker-minted member id, got member_id={member_id:?}, {resp:?}"
+        !streams.member.is_empty(),
+        "lone member must receive an identity"
     );
     check!(
-        active_partition_count(&resp) == 2,
-        "lone member must own both input partitions, got member_id={member_id:?}, {resp:?}"
+        active_partition_count(response) == partitions,
+        "lone member must own all input partitions: {response:?}"
     );
-    let epoch = resp.member_epoch;
-    keepalive(&client, group, &member_id, epoch).await;
-
-    // Drive the JVM tool with DEBUG wire logging so we can read the actual
-    // request/response frames it exchanges with Krabka. `--describe` exercises
-    // the full KIP-1071 admin flow: ApiVersions (18) -> Metadata (13) ->
-    // ListGroups (16, typesFilter=[Streams]) -> [StreamsGroupDescribe (89)].
-    let described = docker_run(&[
+}
+#[when(
+    "the member heartbeats and the stock Streams group tool describes the live group with wire logging"
+)]
+async fn describe(streams: &mut StreamsAdministration) {
+    keepalive(
+        streams.client.as_ref().expect("Streams client connected"),
+        &streams.group,
+        &streams.member,
+        streams
+            .heartbeat
+            .as_ref()
+            .expect("member joined")
+            .member_epoch,
+    )
+    .await;
+    let bootstrap = bootstrap_addr();
+    let group = &streams.group;
+    streams.wire = Some(docker_run(&[
         "bash",
         "-c",
         &format!(
-            "{TOOL_DEBUG_PREAMBLE}\
-             {STREAMS_GROUPS} --bootstrap-server {bootstrap} --describe --group {group} 2>&1; \
-             echo EXIT=$?"
+            "{TOOL_DEBUG_PREAMBLE}{STREAMS_GROUPS} --bootstrap-server {bootstrap} --describe --group {group} 2>&1; echo EXIT=$?"
         ),
-    ]);
-    // With `2>&1` the DEBUG wire log lands on the container's stdout.
-    let wire = String::from_utf8_lossy(&described.stdout);
-    eprintln!("KRABKA[test] streams-groups --describe (DEBUG wire log):\n{wire}");
-
-    // Checkpoint 1: the ApiVersions handshake with Krabka advertised the
-    // KIP-1071 StreamsGroupDescribe API (apiKey=89) and the finalized
-    // streams.version feature — the streams-group admin surface is visible to a
-    // real Apache Kafka 4.1.0 AdminClient.
-    //
-    // Checkpoint 2: the tool issued the KIP-1071 streams-group LIST_GROUPS
-    // request (typesFilter=[Streams]) and Krabka answered it cleanly. This is
-    // the real JVM streams-group admin client round-tripping against Krabka.
-    //
-    // Checkpoint 3: the streams group now surfaces in Krabka's ListGroups reply,
-    // so `StreamsGroupCommand.describeGroups()` proceeds past `listStreamsGroups()`,
-    // resolves the coordinator, and issues the KIP-1071 `StreamsGroupDescribe`
-    // (api 89). Krabka answers with the full group — topology + member + active
-    // task assignment — completing the JVM admin round-trip end to end. The
-    // describe response must carry the resolved topology ("missing the topology
-    // information" must NOT appear) — the real JVM `DescribeStreamsGroupsHandler`
-    // logs an ERROR and rejects a describe whose topology is absent.
-    let group_needle = format!("groupId='{group}'");
-    // (needle, expected presence in the DEBUG wire log)
-    let cases = [
-        // Checkpoint 1.
-        ("Received API_VERSIONS response", true),
-        ("apiKey=89", true),
-        ("FinalizedFeatureKey(name='streams.version'", true),
-        // Checkpoint 2.
-        ("Sending LIST_GROUPS request", true),
-        ("typesFilter=[Streams]", true),
-        ("Received LIST_GROUPS response", true),
-        ("errorCode=0", true),
-        // Checkpoint 3. The describe response must carry the resolved topology,
-        // so "missing the topology information" must NOT appear.
-        ("Received STREAMS_GROUP_DESCRIBE response", true),
-        ("missing the topology information", false),
-        ("subtopologyId='0'", true),
-        (group_needle.as_str(), true),
-    ];
-    for (needle, expected) in cases {
+    ]));
+}
+#[then("the stock admin wire log has these required and forbidden protocol observations")]
+fn observed(streams: &StreamsAdministration, datatable: Vec<Vec<String>>) {
+    let output = streams
+        .wire
+        .as_ref()
+        .expect("stock Streams admin completed");
+    let wire = String::from_utf8_lossy(&output.stdout);
+    for row in datatable.into_iter().skip(1) {
+        let [needle, presence]: [String; 2] = row
+            .try_into()
+            .expect("wire observation and required presence");
+        let expected: bool = presence.parse().expect("boolean observation expectation");
         assert!(
-            wire.contains(needle) == expected,
-            "JVM streams-group admin round-trip checkpoint failed: wire log must {} \
-             {needle:?}; wire log:\n{wire}",
-            if expected { "contain" } else { "not contain" },
+            wire.contains(&needle) == expected,
+            "wire observation {needle:?} expected presence{expected}: {wire}"
         );
     }
 }
-
-/// The headline differential test: make a KIP-1071 streams group live on Krabka
-/// with the native `krabka-client-core` client (`StreamsGroupHeartbeat`, api
-/// 88). Then drive the REAL Apache Kafka 4.1.0 `kafka-streams-groups.sh` admin
-/// tool against Krabka and prove it round-trips the streams-group admin wire
-/// path. That tool is the JVM `StreamsGroupCommand` that wraps `AdminClient`.
-///
-/// We assert these checkpoints, read from the JVM tool's own DEBUG wire logs:
-///
-///  1. The JVM `AdminClient` negotiated `ApiVersions` with Krabka. The response
-///     advertised `StreamsGroupDescribe (apiKey=89)` plus the finalized
-///     `streams.version` feature, so the KIP-1071 admin surface is visible to
-///     the real client.
-///  2. The tool issued `LIST_GROUPS apiVersion=5` with `typesFilter=[Streams]`,
-///     the KIP-1071 `ListGroupsOptions.forStreamsGroups()` filter. Krabka
-///     answered with the live streams group (`errorCode=0`).
-///  3. `StreamsGroupCommand.describeGroups()` then resolved the coordinator and
-///     issued `StreamsGroupDescribe` (api 89). Krabka returned the full group,
-///     which the JVM `DescribeStreamsGroupsHandler` accepts. That group holds
-///     the state and epochs, the resolved topology, and the member with its
-///     active task assignment. The handler rejects a describe whose topology is
-///     absent, so the topology must be populated. Checkpoint 3 guards against a
-///     regression there.
 #[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
+#[scenario(
     path = "tests/features/migrated/tests/jvm_streams_groups.feature",
-    name = "jvm streams groups admin round trips krabka"
+    name = "A stock Streams administrator negotiates lists and describes the full live group"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_streams_groups_admin_round_trips_krabka() {}
+async fn jvm_streams_groups_admin_round_trips_krabka(streams: StreamsAdministration) {
+    let StartedBroker { broker, dir } = streams.broker.expect("Streams admin broker started");
+    broker.shutdown().await;
+    drop(dir);
+}

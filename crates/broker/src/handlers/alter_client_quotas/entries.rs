@@ -317,26 +317,44 @@ fn validate_quota_key_value(keys: &[QuotaKey], key: &str, value: f64) -> Result<
 mod tests {
     use {
         super::*,
-        crate::handlers::alter_client_quotas::test_support::{
-            EntityPart, QuotaOp, entry, op, op_remove, part,
-        },
+        crate::handlers::alter_client_quotas::test_support::{EntityPart, entry, part},
         assert2::check,
         std::net::IpAddr,
     };
 
-    type Entity = Vec<EntityPart<'static>>;
-    type Ops = Vec<QuotaOp>;
-
-    /// One entry of a request: the entity it names and the operations on it.
-    struct EntryCase {
-        entity: Entity,
-        ops: Ops,
+    #[derive(Default)]
+    struct ClientQuotaEntryScenario {
+        entries: Vec<EntryData>,
+        current: HashMap<EntityKey, BTreeMap<String, f64>>,
+        outcome: Option<Alteration>,
     }
-
-    fn key(parts: &[EntityPart<'_>]) -> EntityKey {
+    #[rstest::fixture]
+    fn client_quota_entries() -> ClientQuotaEntryScenario {
+        let entries = Vec::new();
+        ClientQuotaEntryScenario {
+            entries,
+            ..Default::default()
+        }
+    }
+    fn quota_entity_parts(text: &str) -> Vec<EntityPart<'_>> {
+        if text == "none" {
+            return Vec::new();
+        }
+        text.split('+')
+            .map(|field| {
+                let (kind, name) = field.split_once('=').unwrap();
+                part(kind, match name {
+                    "null" => None,
+                    "empty" => Some(""),
+                    _ => Some(name),
+                })
+            })
+            .collect()
+    }
+    fn quota_entity_key(text: &str) -> EntityKey {
         krabka_metadata::canonicalize_entity(
-            parts
-                .iter()
+            quota_entity_parts(text)
+                .into_iter()
                 .map(|part| {
                     (
                         part.entity_type.to_owned(),
@@ -346,387 +364,101 @@ mod tests {
                 .collect(),
         )
     }
-
-    fn set(entity: &[EntityPart<'_>], quota: &str, value: f64) -> MetadataRecord {
-        record(&key(entity), quota, Some(value))
-    }
-
-    fn remove(entity: &[EntityPart<'_>], quota: &str) -> MetadataRecord {
-        record(&key(entity), quota, None)
-    }
-
-    fn err(message: &str) -> Result<(), EntityError> { Err((INVALID_REQUEST, message.to_owned())) }
-
-    fn rejected(entity: &[EntityPart<'_>], message: &str) -> Alteration {
-        Alteration {
-            results: vec![(key(entity), err(message))],
-            records: vec![],
-        }
-    }
-
-    /// Resolves IP literals and the name `localhost`, as the handler's
-    /// resolver would.
-    fn resolver(name: &str) -> bool { name.parse::<IpAddr>().is_ok() || name == "localhost" }
-
-    /// A case name, the request entries, and the whole expected outcome.
-    struct CaseRow {
-        name: &'static str,
-        entries: Vec<EntryCase>,
-        expected: Alteration,
-    }
-
-    /// Runs each row against a quota state where `user=carol` has
-    /// `producer_byte_rate` 1024.
-    fn run(rows: Vec<CaseRow>) {
-        let existing: HashMap<EntityKey, BTreeMap<String, f64>> = HashMap::from([(
-            key(&[part("user", Some("carol"))]),
-            BTreeMap::from([("producer_byte_rate".to_owned(), 1024.0)]),
+    #[rstest_bdd_macros::given("user carol currently has producer byte rate 1024")]
+    fn existing_carol_quota(client_quota_entries: &mut ClientQuotaEntryScenario) {
+        client_quota_entries.current = HashMap::from([(
+            quota_entity_key("user=carol"),
+            BTreeMap::from([("producer_byte_rate".into(), 1024.0)]),
         )]);
-        for CaseRow {
-            name,
-            entries,
-            expected,
-        } in rows
-        {
-            let entries: Vec<EntryData> = entries
-                .into_iter()
-                .map(|EntryCase { entity, ops }| entry(entity, ops))
-                .collect();
-            let got = alter_client_quotas(&entries, &existing, &resolver);
-            check!(got == expected, "row {name}");
-        }
     }
-
-    /// Rows for setting, unknown keys and removals.
-    fn key_rules_set_and_remove_rows() -> Vec<CaseRow> {
-        let alice: Entity = vec![part("user", Some("alice"))];
-        vec![
-            CaseRow {
-                name: "valid set",
-                entries: vec![EntryCase {
-                    entity: alice.clone(),
-                    ops: vec![op("producer_byte_rate", 1024.0)],
-                }],
-                expected: Alteration {
-                    results: vec![(key(&alice), Ok(()))],
-                    records: vec![set(&alice, "producer_byte_rate", 1024.0)],
-                },
-            },
-            CaseRow {
-                name: "unknown key, set",
-                entries: vec![EntryCase {
-                    entity: alice.clone(),
-                    ops: vec![op("foo", 1.0)],
-                }],
-                expected: rejected(&alice, "Invalid configuration key foo"),
-            },
-            CaseRow {
-                name: "unknown key, removed, is not validated and writes nothing",
-                entries: vec![EntryCase {
-                    entity: alice.clone(),
-                    ops: vec![op_remove("foo", 0.0)],
-                }],
-                expected: Alteration {
-                    results: vec![(key(&alice), Ok(()))],
-                    records: vec![],
-                },
-            },
-            CaseRow {
-                name: "removal of a set key writes a removal",
-                entries: vec![EntryCase {
-                    entity: vec![part("user", Some("carol"))],
-                    ops: vec![op_remove("producer_byte_rate", 0.0)],
-                }],
-                expected: Alteration {
-                    results: vec![(key(&[part("user", Some("carol"))]), Ok(()))],
-                    records: vec![remove(&[part("user", Some("carol"))], "producer_byte_rate")],
-                },
-            },
-            CaseRow {
-                name: "an unchanged value writes nothing",
-                entries: vec![EntryCase {
-                    entity: vec![part("user", Some("carol"))],
-                    ops: vec![op("producer_byte_rate", 1024.0)],
-                }],
-                expected: Alteration {
-                    results: vec![(key(&[part("user", Some("carol"))]), Ok(()))],
-                    records: vec![],
-                },
-            },
-        ]
+    #[rstest_bdd_macros::given(
+        "quota entries name entities {entities} with operations {operations}"
+    )]
+    fn requested_quota_entries(
+        client_quota_entries: &mut ClientQuotaEntryScenario,
+        entities: String,
+        operations: String,
+    ) {
+        let entities: Vec<_> = entities.split(';').collect();
+        let operations: Vec<_> = operations.split(';').collect();
+        assert2::assert!(entities.len() == operations.len());
+        use krabka_protocol::owned::alter_client_quotas_request::OpData;
+        client_quota_entries.entries = entities
+            .into_iter()
+            .zip(operations)
+            .map(|(entity, operations)| {
+                let mut request = entry(quota_entity_parts(entity), Vec::new());
+                request.ops = operations
+                    .split(',')
+                    .map(|operation| {
+                        let (action, assignment) = operation.split_once(':').unwrap();
+                        let (key, value) = assignment.split_once('=').unwrap();
+                        let remove = match action {
+                            "set" => false,
+                            "remove" => true,
+                            _ => panic!("unknown quota action: {action}"),
+                        };
+                        OpData {
+                            key: key.into(),
+                            value: value.parse::<f64>().unwrap(),
+                            remove,
+                            ..Default::default()
+                        }
+                    })
+                    .collect();
+                request
+            })
+            .collect();
     }
-
-    /// Rows for the value and key-scope rules.
-    fn key_rules_value_rows() -> Vec<CaseRow> {
-        let alice: Entity = vec![part("user", Some("alice"))];
-        let ip: Entity = vec![part("ip", Some("10.0.0.1"))];
-        vec![
-            CaseRow {
-                name: "zero",
-                entries: vec![EntryCase {
-                    entity: alice.clone(),
-                    ops: vec![op("producer_byte_rate", 0.0)],
-                }],
-                expected: rejected(&alice, "Quota producer_byte_rate must be greater than 0"),
-            },
-            CaseRow {
-                name: "negative",
-                entries: vec![EntryCase {
-                    entity: alice.clone(),
-                    ops: vec![op("request_percentage", -1.0)],
-                }],
-                expected: rejected(&alice, "Quota request_percentage must be greater than 0"),
-            },
-            CaseRow {
-                name: "fractional LONG",
-                entries: vec![EntryCase {
-                    entity: alice.clone(),
-                    ops: vec![op("producer_byte_rate", 1024.5)],
-                }],
-                expected: rejected(&alice, "producer_byte_rate cannot be a fractional value."),
-            },
-            CaseRow {
-                name: "LONG past Long.MAX_VALUE",
-                entries: vec![EntryCase {
-                    entity: alice.clone(),
-                    ops: vec![op("consumer_byte_rate", f64::INFINITY)],
-                }],
-                expected: rejected(
-                    &alice,
-                    "Proposed value for consumer_byte_rate is too large for a LONG.",
-                ),
-            },
-            CaseRow {
-                name: "fractional INT",
-                entries: vec![EntryCase {
-                    entity: ip.clone(),
-                    ops: vec![op("connection_creation_rate", 1.5)],
-                }],
-                expected: rejected(
-                    &ip,
-                    "connection_creation_rate cannot be a fractional value.",
-                ),
-            },
-            CaseRow {
-                name: "INT past Integer.MAX_VALUE",
-                entries: vec![EntryCase {
-                    entity: ip.clone(),
-                    ops: vec![op("connection_creation_rate", 3.0e9)],
-                }],
-                expected: rejected(
-                    &ip,
-                    "Proposed value for connection_creation_rate is too large for an INT.",
-                ),
-            },
-            CaseRow {
-                name: "DOUBLE has no upper bound",
-                entries: vec![EntryCase {
-                    entity: alice.clone(),
-                    ops: vec![op("request_percentage", 250.0)],
-                }],
-                expected: Alteration {
-                    results: vec![(key(&alice), Ok(()))],
-                    records: vec![set(&alice, "request_percentage", 250.0)],
-                },
-            },
-            CaseRow {
-                name: "infinity on a DOUBLE key",
-                entries: vec![EntryCase {
-                    entity: alice.clone(),
-                    ops: vec![op("controller_mutation_rate", f64::INFINITY)],
-                }],
-                expected: Alteration {
-                    results: vec![(key(&alice), Ok(()))],
-                    records: vec![set(&alice, "controller_mutation_rate", f64::INFINITY)],
-                },
-            },
-            CaseRow {
-                name: "ip key on a user entity",
-                entries: vec![EntryCase {
-                    entity: alice.clone(),
-                    ops: vec![op("connection_creation_rate", 1.0)],
-                }],
-                expected: rejected(&alice, "Invalid configuration key connection_creation_rate"),
-            },
-            CaseRow {
-                name: "user key on an ip entity",
-                entries: vec![EntryCase {
-                    entity: ip.clone(),
-                    ops: vec![op("producer_byte_rate", 1.0)],
-                }],
-                expected: rejected(&ip, "Invalid configuration key producer_byte_rate"),
-            },
-        ]
+    #[rstest_bdd_macros::when(
+        "the quota controller validates entries with IP literals and localhost resolvable"
+    )]
+    fn alter_requested_quotas(client_quota_entries: &mut ClientQuotaEntryScenario) {
+        client_quota_entries.outcome = Some(alter_client_quotas(
+            &client_quota_entries.entries,
+            &client_quota_entries.current,
+            &|name| name.parse::<IpAddr>().is_ok() || name == "localhost",
+        ));
     }
-
-    /// Rows for the entity types and names.
-    fn entity_rules_name_rows() -> Vec<CaseRow> {
-        vec![
-            CaseRow {
-                name: "ip combined with user",
-                entries: vec![EntryCase {
-                    entity: vec![part("ip", Some("10.0.0.1")), part("user", Some("alice"))],
-                    ops: vec![op("connection_creation_rate", 1.0)],
-                }],
-                expected: rejected(
-                    &[part("ip", Some("10.0.0.1")), part("user", Some("alice"))],
-                    "Invalid quota entity combination, IP entity shouldnot be combined \
-                     with User or ClientId",
-                ),
-            },
-            CaseRow {
-                name: "IPv6 and a resolvable host name are valid ip names",
-                entries: vec![
-                    EntryCase {
-                        entity: vec![part("ip", Some("::1"))],
-                        ops: vec![op("connection_creation_rate", 5.0)],
-                    },
-                    EntryCase {
-                        entity: vec![part("ip", Some("localhost"))],
-                        ops: vec![op("connection_creation_rate", 6.0)],
-                    },
-                ],
-                expected: Alteration {
-                    results: vec![
-                        (key(&[part("ip", Some("::1"))]), Ok(())),
-                        (key(&[part("ip", Some("localhost"))]), Ok(())),
-                    ],
-                    records: vec![
-                        set(&[part("ip", Some("::1"))], "connection_creation_rate", 5.0),
-                        set(
-                            &[part("ip", Some("localhost"))],
-                            "connection_creation_rate",
-                            6.0,
-                        ),
-                    ],
-                },
-            },
-            CaseRow {
-                name: "unresolvable ip name",
-                entries: vec![EntryCase {
-                    entity: vec![part("ip", Some("not-an-ip"))],
-                    ops: vec![op("connection_creation_rate", 1.0)],
-                }],
-                expected: rejected(
-                    &[part("ip", Some("not-an-ip"))],
-                    "not-an-ip is not a valid IP or resolvable host.",
-                ),
-            },
-            CaseRow {
-                name: "empty user name",
-                entries: vec![EntryCase {
-                    entity: vec![part("user", Some(""))],
-                    ops: vec![op("producer_byte_rate", 1.0)],
-                }],
-                expected: rejected(&[part("user", Some(""))], "Empty user not supported"),
-            },
-        ]
-    }
-
-    /// Rows for repeated keys, entities and types.
-    fn entity_rules_duplicate_rows() -> Vec<CaseRow> {
-        let alice: Entity = vec![part("user", Some("alice"))];
-        vec![
-            CaseRow {
-                name: "unknown entity type",
-                entries: vec![EntryCase {
-                    entity: vec![part("group", Some("g1"))],
-                    ops: vec![op("producer_byte_rate", 1.0)],
-                }],
-                expected: rejected(
-                    &[part("group", Some("g1"))],
-                    "Unhandled client quota entity type: group",
-                ),
-            },
-            CaseRow {
-                name: "empty entity",
-                entries: vec![EntryCase {
-                    entity: vec![],
-                    ops: vec![op("producer_byte_rate", 1.0)],
-                }],
-                expected: rejected(&[], "Invalid empty client quota entity"),
-            },
-            CaseRow {
-                name: "the same key twice",
-                entries: vec![EntryCase {
-                    entity: vec![part("client-id", None), part("user", Some("alice"))],
-                    ops: vec![op("producer_byte_rate", 1.0), op("producer_byte_rate", 2.0)],
-                }],
-                expected: rejected(
-                    &[part("client-id", None), part("user", Some("alice"))],
-                    "Ignoring duplicate entity ClientQuotaEntity(entries={client-id=null, \
-                     user=alice})",
-                ),
-            },
-            CaseRow {
-                name: "the same entity twice keeps the first records and answers one row",
-                entries: vec![
-                    EntryCase {
-                        entity: alice.clone(),
-                        ops: vec![op("producer_byte_rate", 1.0)],
-                    },
-                    EntryCase {
-                        entity: alice.clone(),
-                        ops: vec![op("consumer_byte_rate", 2.0)],
-                    },
-                ],
-                expected: Alteration {
-                    results: vec![(
-                        key(&alice),
-                        err("Ignoring duplicate entity ClientQuotaEntity(entries={user=alice})"),
-                    )],
-                    records: vec![set(&alice, "producer_byte_rate", 1.0)],
-                },
-            },
-            CaseRow {
-                name: "a repeated entity type keeps the last name",
-                entries: vec![EntryCase {
-                    entity: vec![part("user", Some("a")), part("user", Some("b"))],
-                    ops: vec![op("producer_byte_rate", 1.0)],
-                }],
-                expected: Alteration {
-                    results: vec![(key(&[part("user", Some("b"))]), Ok(()))],
-                    records: vec![set(&[part("user", Some("b"))], "producer_byte_rate", 1.0)],
-                },
-            },
-        ]
-    }
-
-    #[cfg(test)]
     #[rstest_bdd_macros::then(
-        "handlers alter client quotas entries tests: key and value rules match kafkas client quota control manager"
+        "the quota results name entities {entities} with outcome {outcome} and records {records}"
     )]
-    fn bdd_verify_key_and_value_rules_match_kafkas_client_quota_control_manager() {
-        let mut rows = key_rules_set_and_remove_rows();
-        rows.extend(key_rules_value_rows());
-        run(rows);
+    fn check_client_quota_entries(
+        client_quota_entries: &ClientQuotaEntryScenario,
+        entities: String,
+        outcome: String,
+        records: String,
+    ) {
+        let result = if outcome == "accepted" {
+            Ok(())
+        } else {
+            Err((INVALID_REQUEST, outcome))
+        };
+        let results = entities
+            .split(';')
+            .map(|entity| (quota_entity_key(entity), result.clone()))
+            .collect();
+        let records = if records == "none" {
+            Vec::new()
+        } else {
+            records
+                .split(';')
+                .map(|spec| {
+                    let (entity, assignment) = spec.split_once('/').unwrap();
+                    let (key, value) = assignment.split_once('=').unwrap();
+                    record(
+                        &quota_entity_key(entity),
+                        key,
+                        if value == "null" {
+                            None
+                        } else {
+                            Some(value.parse::<f64>().unwrap())
+                        },
+                    )
+                })
+                .collect()
+        };
+        check!(client_quota_entries.outcome.as_ref().unwrap() == &Alteration { results, records });
     }
-
-    /// The key and value rules of Kafka's `ClientQuotaControlManager`
-    /// (#675), one row per rule.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/alter_client_quotas/entries.feature",
-        name = "tests: key and value rules match kafkas client quota control manager"
-    )]
-    fn key_and_value_rules_match_kafkas_client_quota_control_manager() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers alter client quotas entries tests: entity rules match kafkas client quota control manager"
-    )]
-    fn bdd_verify_entity_rules_match_kafkas_client_quota_control_manager() {
-        let mut rows = entity_rules_name_rows();
-        rows.extend(entity_rules_duplicate_rows());
-        run(rows);
-    }
-
-    /// The entity rules of Kafka's `ClientQuotaControlManager` (#675): the
-    /// allowed types and names, and how a repeated key, entity or type ends.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/alter_client_quotas/entries.feature",
-        name = "tests: entity rules match kafkas client quota control manager"
-    )]
-    fn entity_rules_match_kafkas_client_quota_control_manager() {}
+    rstest_bdd_macros::scenarios!("tests/features/handler_client_quota_entries",fixtures=[client_quota_entries:ClientQuotaEntryScenario]);
 }

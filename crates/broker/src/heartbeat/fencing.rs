@@ -200,92 +200,109 @@ mod tests {
         })
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "heartbeat fencing tests: a registration change is kafkas change record"
-    )]
-    fn bdd_verify_a_registration_change_is_kafkas_change_record() {
-        let shutting_down = BrokerRegistrationRecord {
-            in_controlled_shutdown: true,
-            ..registration(1, false)
-        };
-        let cases = [
-            (
-                "fence an unfenced broker",
-                registration(1, false),
-                RegistrationChange::FENCE,
-                Some(change(1, FencingChange::Fence, false)),
-                registration(1, true),
-            ),
-            (
-                "fence a fenced broker",
-                registration(1, true),
-                RegistrationChange::FENCE,
-                None,
-                registration(1, true),
-            ),
-            (
-                "unfence a fenced broker",
-                registration(1, true),
-                RegistrationChange::UNFENCE,
-                Some(change(1, FencingChange::Unfence, false)),
-                registration(1, false),
-            ),
-            (
-                "unfence an unfenced broker",
-                registration(1, false),
-                RegistrationChange::UNFENCE,
-                None,
-                registration(1, false),
-            ),
-            (
-                "enter controlled shutdown",
-                registration(1, false),
-                RegistrationChange::CONTROLLED_SHUTDOWN,
-                Some(change(1, FencingChange::None, true)),
-                shutting_down.clone(),
-            ),
-            (
-                "enter controlled shutdown twice",
-                shutting_down.clone(),
-                RegistrationChange::CONTROLLED_SHUTDOWN,
-                None,
-                shutting_down.clone(),
-            ),
-            (
-                "fencing keeps controlled shutdown",
-                shutting_down.clone(),
-                RegistrationChange::FENCE,
-                Some(change(1, FencingChange::Fence, false)),
-                BrokerRegistrationRecord {
-                    fenced: true,
-                    ..shutting_down
-                },
-            ),
-        ];
-        for (name, current, transition, want, after) in cases {
-            let mut image = MetadataImage::new(uuid::Uuid::nil());
-            image.apply(&MetadataRecord::V1BrokerRegistration(current));
-            let record = registration_change(&image, NodeId(1), transition);
-            assert!(record == want, "{name}");
-            if let Some(record) = &record {
-                image.apply(record);
-            }
-            assert!(image.broker(NodeId(1)) == Some(&after), "{name}");
-        }
+    #[derive(Default)]
+    struct RegistrationTransition {
+        image: Option<MetadataImage>,
+        record: rstest_bdd::Slot<Option<MetadataRecord>>,
     }
 
-    /// Each transition writes the `BrokerRegistrationChangeRecord` Kafka's
-    /// `handleBrokerFenced`, `handleBrokerUnfenced` or
-    /// `handleBrokerInControlledShutdown` writes, at the registration's epoch
-    /// and with only its own field set, and nothing when the registration
-    /// already agrees. Replaying the record moves only that flag.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/heartbeat/fencing.feature",
-        name = "tests: a registration change is kafkas change record"
+    #[rstest::fixture]
+    fn registration_transition() -> RegistrationTransition {
+        // Each controller transition starts from an independently replayed registration.
+        RegistrationTransition::default()
+    }
+
+    #[rstest_bdd_macros::given(
+        "broker 1 is registered with fenced {fenced} and controlled shutdown {shutdown}"
     )]
-    fn a_registration_change_is_kafkas_change_record() {}
+    fn supplied_registration_flags(
+        registration_transition: &mut RegistrationTransition,
+        fenced: bool,
+        shutdown: bool,
+    ) {
+        use uuid::Uuid;
+        let mut image = MetadataImage::new(Uuid::nil());
+        image.apply(&MetadataRecord::V1BrokerRegistration(
+            BrokerRegistrationRecord {
+                in_controlled_shutdown: shutdown,
+                ..registration(1, fenced)
+            },
+        ));
+        registration_transition.image = Some(image);
+    }
+
+    #[rstest_bdd_macros::when(
+        "the controller requests {operation} and replays any resulting registration change"
+    )]
+    fn apply_registration_transition(
+        registration_transition: &mut RegistrationTransition,
+        operation: String,
+    ) {
+        let transition = match operation.as_str() {
+            "fence" => RegistrationChange::FENCE,
+            "unfence" => RegistrationChange::UNFENCE,
+            "controlled shutdown" => RegistrationChange::CONTROLLED_SHUTDOWN,
+            _ => panic!("unknown controller registration operation {operation}"),
+        };
+        let image = registration_transition
+            .image
+            .as_mut()
+            .expect("registration was given");
+        let record = registration_change(image, NodeId(1), transition);
+        if let Some(record) = &record {
+            image.apply(record);
+        }
+        registration_transition.record.set(record);
+    }
+
+    #[rstest_bdd_macros::then(
+        "the registration change has fencing {fencing} and controlled shutdown flag {shutdown}"
+    )]
+    fn expected_registration_change(
+        registration_transition: &RegistrationTransition,
+        fencing: String,
+        shutdown: bool,
+    ) {
+        let fencing = match fencing.as_str() {
+            "Fence" => FencingChange::Fence,
+            "Unfence" => FencingChange::Unfence,
+            "None" => FencingChange::None,
+            _ => panic!("unknown expected fencing change {fencing}"),
+        };
+        assert!(registration_transition.record.get() == Some(Some(change(1, fencing, shutdown))));
+    }
+
+    #[rstest_bdd_macros::then("the controller writes no redundant registration change")]
+    fn redundant_registration_change(registration_transition: &RegistrationTransition) {
+        assert!(registration_transition.record.get() == Some(None));
+    }
+
+    #[rstest_bdd_macros::then(
+        "broker 1 retains its identity with fenced {fenced} and controlled shutdown {shutdown}"
+    )]
+    fn replayed_registration_flags(
+        registration_transition: &RegistrationTransition,
+        fenced: bool,
+        shutdown: bool,
+    ) {
+        let expected = BrokerRegistrationRecord {
+            in_controlled_shutdown: shutdown,
+            ..registration(1, fenced)
+        };
+        assert!(
+            registration_transition
+                .image
+                .as_ref()
+                .expect("registration was given")
+                .broker(NodeId(1))
+                == Some(&expected)
+        );
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/heartbeat/fencing.feature",
+        fixtures = [registration_transition: RegistrationTransition]
+    );
 
     /// Kafka's `ClusterControlManager.replayRegistrationChange` refuses a
     /// change for any epoch but the registration's: a change built before the

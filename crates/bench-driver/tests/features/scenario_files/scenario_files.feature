@@ -1,79 +1,29 @@
-Feature: Operator benchmark scenarios
-
-  Scenario: Load datarate-512k.yaml
-    Given benchmark scenario datarate-512k.yaml
+Feature: Operator benchmark scenario documents
+  Scenario Outline: A shipped scenario describes a runnable benchmark
+    Given benchmark scenario <filename>
     When the benchmark YAML is loaded
+    And every loaded benchmark is serialized and reparsed
     Then every benchmark is runnable
     And every benchmark round trips through YAML
 
-  Scenario: Load endurance.yaml
-    Given benchmark scenario endurance.yaml
-    When the benchmark YAML is loaded
-    Then every benchmark is runnable
-    And every benchmark round trips through YAML
+    Examples:
+      | filename |
+      | datarate-512k.yaml |
+      | endurance.yaml |
+      | failover.yaml |
+      | fan-out.yaml |
+      | firehose.yaml |
+      | fixed-rate-latency.yaml |
+      | high-partition-fanout.yaml |
+      | high-partition-latency.yaml |
+      | high-partition-saturate.yaml |
+      | large-msg.yaml |
+      | mixed-acks.yaml |
+      | small-msg-saturate.yaml |
 
-  Scenario: Load failover.yaml
-    Given benchmark scenario failover.yaml
-    When the benchmark YAML is loaded
-    Then every benchmark is runnable
-    And every benchmark round trips through YAML
-
-  Scenario: Load fan-out.yaml
-    Given benchmark scenario fan-out.yaml
-    When the benchmark YAML is loaded
-    Then every benchmark is runnable
-    And every benchmark round trips through YAML
-
-  Scenario: Load firehose.yaml
-    Given benchmark scenario firehose.yaml
-    When the benchmark YAML is loaded
-    Then every benchmark is runnable
-    And every benchmark round trips through YAML
-
-  Scenario: Load fixed-rate-latency.yaml
-    Given benchmark scenario fixed-rate-latency.yaml
-    When the benchmark YAML is loaded
-    Then every benchmark is runnable
-    And every benchmark round trips through YAML
-
-  Scenario: Load high-partition-fanout.yaml
-    Given benchmark scenario high-partition-fanout.yaml
-    When the benchmark YAML is loaded
-    Then every benchmark is runnable
-    And every benchmark round trips through YAML
-
-  Scenario: Load high-partition-latency.yaml
-    Given benchmark scenario high-partition-latency.yaml
-    When the benchmark YAML is loaded
-    Then every benchmark is runnable
-    And every benchmark round trips through YAML
-
-  Scenario: Load high-partition-saturate.yaml
-    Given benchmark scenario high-partition-saturate.yaml
-    When the benchmark YAML is loaded
-    Then every benchmark is runnable
-    And every benchmark round trips through YAML
-
-  Scenario: Load large-msg.yaml
-    Given benchmark scenario large-msg.yaml
-    When the benchmark YAML is loaded
-    Then every benchmark is runnable
-    And every benchmark round trips through YAML
-
-  Scenario: Load mixed-acks.yaml
-    Given benchmark scenario mixed-acks.yaml
-    When the benchmark YAML is loaded
-    Then every benchmark is runnable
-    And every benchmark round trips through YAML
-
-  Scenario: Load small-msg-saturate.yaml
-    Given benchmark scenario small-msg-saturate.yaml
-    When the benchmark YAML is loaded
-    Then every benchmark is runnable
-    And every benchmark round trips through YAML
-
-  Scenario: Every checked in scenario remains covered
+  Scenario: Newly checked in scenarios join the validated corpus automatically
     Given all checked in benchmark scenarios
     When the benchmark YAML is loaded
+    And every loaded benchmark is serialized and reparsed
     Then every benchmark is runnable
     And every benchmark round trips through YAML

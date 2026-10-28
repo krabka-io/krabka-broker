@@ -401,7 +401,11 @@ mod tests {
         assert2::{assert, check},
         krabka_metadata::ScramCredentialRecord,
         krabka_security::SaslMechanism,
-        std::{collections::HashSet, iter},
+        std::{
+            collections::{BTreeMap, HashSet},
+            iter,
+        },
+        uuid::Uuid,
     };
 
     /// The metadata partition may sit in the metadata log directory, whether
@@ -539,15 +543,6 @@ mod tests {
         assert!(initial_voters(&recs).is_empty());
     }
 
-    /// The file `kafka-storage format` writes for node 2 on Java 21 and
-    /// later, byte for byte: `Properties.store` puts an empty comment, the
-    /// date, and the keys in their natural order.
-    const KAFKA_WRITTEN: &str = "#\n#Thu Feb 29 12:34:56 UTC 2024\n\
-                                 cluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n\
-                                 directory.id=U-hCdTzaSPyFB3swwc7Qdw\n\
-                                 node.id=2\n\
-                                 version=1\n";
-
     const CLUSTER: &str = "AQIDBAUGBwgJCgsMDQ4PEA";
 
     fn kafka_meta(node_id: i32, directory_id: Option<&str>) -> MetaProperties {
@@ -557,49 +552,6 @@ mod tests {
             directory_id: directory_id.map(|id| id.parse().unwrap()),
         }
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("bootstrap tests: reads the file kafka writes")]
-    fn bdd_verify_reads_the_file_kafka_writes() {
-        let cases = [
-            ("Java 21 and later", KAFKA_WRITTEN),
-            (
-                "Java 17, in hash order",
-                "#\n#Thu Feb 29 12:34:56 UTC 2024\nnode.id=2\nversion=1\n\
-                 directory.id=U-hCdTzaSPyFB3swwc7Qdw\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
-            ),
-            (
-                "hand-written, no comments",
-                "version=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\nnode.id=2\n\
-                 directory.id=U-hCdTzaSPyFB3swwc7Qdw\n",
-            ),
-        ];
-        for (what, text) in cases {
-            let dir = tempfile::tempdir().unwrap();
-            fs::write(dir.path().join(META_PROPERTIES), text).unwrap();
-            check!(
-                read_meta_properties(dir.path()).ok()
-                    == Some(kafka_meta(2, Some("U-hCdTzaSPyFB3swwc7Qdw"))),
-                "{what}"
-            );
-            check!(
-                read_directory_id(dir.path()).ok()
-                    == Some(uuid::Uuid::from_u128(
-                        0x53e8_4275_3cda_48fc_8507_7b30_c1ce_d077
-                    )),
-                "{what}"
-            );
-        }
-    }
-
-    /// The broker reads the `meta.properties` that Kafka writes, in the form
-    /// of each Java version, and the hand-written form of a test fixture.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/bootstrap.feature",
-        name = "tests: reads the file kafka writes"
-    )]
-    fn reads_the_file_kafka_writes() {}
 
     /// A directory without the file, or a file without a directory id, has
     /// no directory id to read.
@@ -618,210 +570,6 @@ mod tests {
             without.path().display()
         )));
     }
-
-    /// What a directory of [`initialize_log_dirs`] holds before the call.
-    #[derive(Clone, Copy)]
-    enum Holds {
-        /// Nothing.
-        Nothing,
-        /// This `meta.properties`.
-        File(&'static str),
-        /// A file and a `__cluster_metadata-0` directory.
-        FileAndMetadataLog(&'static str),
-    }
-
-    /// One `initialize_log_dirs` case.
-    struct InitCase {
-        what: &'static str,
-        /// What the metadata log directory holds.
-        metadata: Holds,
-        /// What each of the two data directories holds.
-        data: [Holds; 2],
-        /// The configured cluster id.
-        configured: Option<uuid::Uuid>,
-        /// The error, or `None` for a start.
-        refusal: Option<&'static str>,
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then("bootstrap tests: initialize log dirs applies kafkas checks")]
-    fn bdd_verify_initialize_log_dirs_applies_kafkas_checks() {
-        const NODE_2: &str = "version=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\nnode.id=2\n\
-                              directory.id=AAAAAAAAAAAAAAAAAAABAA\n";
-        const NODE_2_DATA: &str = "version=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\nnode.id=2\n\
-                                   directory.id=AAAAAAAAAAAAAAAAAAACAA\n";
-        const NODE_3: &str = "version=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\nnode.id=3\n\
-                              directory.id=AAAAAAAAAAAAAAAAAAADAA\n";
-        const NO_DIRECTORY_ID: &str = "version=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\nnode.id=2\n";
-        const UNREADABLE: &str = "version=one\n";
-        let cases: [InitCase; 9] = [
-            InitCase {
-                what: "a formatted node",
-                metadata: Holds::File(NODE_2),
-                data: [Holds::File(NODE_2_DATA), Holds::Nothing],
-                configured: Some(uuid::Uuid::from_u128(
-                    0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10,
-                )),
-                refusal: None,
-            },
-            InitCase {
-                what: "a data directory added after the format",
-                metadata: Holds::File(NODE_2),
-                data: [Holds::Nothing, Holds::Nothing],
-                configured: None,
-                refusal: None,
-            },
-            InitCase {
-                what: "a file without a directory id",
-                metadata: Holds::File(NO_DIRECTORY_ID),
-                data: [Holds::File(NODE_2_DATA), Holds::Nothing],
-                configured: None,
-                refusal: None,
-            },
-            InitCase {
-                what: "the directory of another node",
-                metadata: Holds::File(NODE_2),
-                data: [Holds::File(NODE_3), Holds::Nothing],
-                configured: None,
-                refusal: Some(
-                    "startup failed: Stored node id 3 doesn't match previous node id 2 in \
-                     {data-a}/meta.properties. If you moved your data, make sure your \
-                     configured node id matches. If you intend to create a new node, you should \
-                     remove all data in your data directories.",
-                ),
-            },
-            InitCase {
-                what: "nothing formatted",
-                metadata: Holds::Nothing,
-                data: [Holds::Nothing, Holds::Nothing],
-                configured: None,
-                refusal: Some("startup failed: No readable meta.properties files found."),
-            },
-            InitCase {
-                what: "an unreadable metadata log directory",
-                metadata: Holds::File(UNREADABLE),
-                data: [Holds::File(NODE_2_DATA), Holds::Nothing],
-                configured: None,
-                refusal: Some(
-                    "startup failed: Encountered I/O error in metadata log directory {meta}. \
-                     Cannot continue.",
-                ),
-            },
-            InitCase {
-                what: "an unformatted metadata log directory",
-                metadata: Holds::Nothing,
-                data: [Holds::File(NODE_2_DATA), Holds::Nothing],
-                configured: None,
-                refusal: Some(
-                    "startup failed: No `meta.properties` found in {meta} (have you run \
-                     `krabka-format` to format the directory?)",
-                ),
-            },
-            InitCase {
-                what: "another configured cluster id",
-                metadata: Holds::File(NODE_2),
-                data: [Holds::Nothing, Holds::Nothing],
-                configured: Some(uuid::Uuid::from_u128(0xc2)),
-                refusal: Some(
-                    "bootstrap file \"{meta}/meta.properties\": INCONSISTENT_CLUSTER_ID: \
-                     configured cluster id AAAAAAAAAAAAAAAAAAAAwg does not match \
-                     AQIDBAUGBwgJCgsMDQ4PEA",
-                ),
-            },
-            InitCase {
-                what: "a stale metadata log in a data directory",
-                metadata: Holds::File(NODE_2),
-                data: [Holds::FileAndMetadataLog(NODE_2_DATA), Holds::Nothing],
-                configured: None,
-                refusal: Some(
-                    "startup failed: Found unexpected metadata location in data directory \
-                     `{data-a}/__cluster_metadata-0` (the configured metadata directory is \
-                     {meta}).",
-                ),
-            },
-        ];
-        for InitCase {
-            what,
-            metadata,
-            data,
-            configured,
-            refusal,
-        } in cases
-        {
-            let root = tempfile::tempdir().unwrap();
-            let meta_dir = root.path().join("meta");
-            let data_dirs = vec![root.path().join("data-a"), root.path().join("data-b")];
-            for (dir, holds) in iter::once((&meta_dir, metadata)).chain(data_dirs.iter().zip(data))
-            {
-                match holds {
-                    Holds::Nothing => {}
-                    Holds::File(text) => {
-                        fs::create_dir_all(dir).unwrap();
-                        fs::write(dir.join(META_PROPERTIES), text).unwrap();
-                    }
-                    Holds::FileAndMetadataLog(text) => {
-                        fs::create_dir_all(krabka_raft::metadata_partition_dir(dir)).unwrap();
-                        fs::write(dir.join(META_PROPERTIES), text).unwrap();
-                    }
-                }
-            }
-            let got = initialize_log_dirs(&meta_dir, &data_dirs, NodeId(2), configured);
-
-            let Some(refusal) = refusal else {
-                // Every directory now records this node and an id of its own,
-                // and the metadata log directory's id is the one returned.
-                let identity = got.unwrap_or_else(|e| panic!("{what}: {e}"));
-                let metas: Vec<MetaProperties> = iter::once(&meta_dir)
-                    .chain(&data_dirs)
-                    .map(|dir| read_meta_properties(dir).unwrap())
-                    .collect();
-                let ids: HashSet<DirectoryId> =
-                    metas.iter().filter_map(|meta| meta.directory_id).collect();
-                check!(ids.len() == metas.len(), "{what}: {metas:?}");
-                check!(
-                    metas
-                        .iter()
-                        .map(|meta| MetaProperties {
-                            directory_id: None,
-                            ..*meta
-                        })
-                        .collect::<Vec<_>>()
-                        == vec![kafka_meta(2, None); 3],
-                    "{what}"
-                );
-                check!(
-                    identity
-                        == LocalIdentity {
-                            cluster_id: CLUSTER.parse::<ClusterId>().unwrap().0,
-                            directory_id: metas[0].directory_id.unwrap().into(),
-                        },
-                    "{what}"
-                );
-                if let Holds::File(text) = metadata
-                    && text == NODE_2
-                {
-                    check!(
-                        fs::read_to_string(meta_dir.join(META_PROPERTIES)).unwrap() == text,
-                        "{what}: a file with a directory id is left alone"
-                    );
-                }
-                continue;
-            };
-            let want = refusal
-                .replace("{meta}", &meta_dir.display().to_string())
-                .replace("{data-a}", &data_dirs[0].display().to_string());
-            check!(got.map_err(|e| e.to_string()) == Err(want), "{what}");
-        }
-    }
-
-    /// Kafka's `initializeLogDirs` checks, with krabka's two additions: a
-    /// configured cluster id, and a data directory added after the format.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/bootstrap.feature",
-        name = "tests: initialize log dirs applies kafkas checks"
-    )]
-    fn initialize_log_dirs_applies_kafkas_checks() {}
 
     fn write_records_file(dir: &Path, bytes: &[u8]) {
         fs::write(dir.join(BOOTSTRAP_RECORDS_FILE), bytes).unwrap();
@@ -981,4 +729,193 @@ mod tests {
             check!(source.to_string().starts_with(want), "{what}: {source}");
         }
     }
+
+    #[derive(Default)]
+    struct BootstrapStorage {
+        root: Option<tempfile::TempDir>,
+        supplied_files: BTreeMap<String, String>,
+        configured_cluster: Option<Uuid>,
+        initialized: Option<Result<LocalIdentity, BrokerError>>,
+        properties: Option<Result<MetaProperties, BrokerError>>,
+        directory_id: Option<Result<Uuid, BrokerError>>,
+    }
+
+    impl BootstrapStorage {
+        fn directory(&self, role: &str) -> PathBuf {
+            match role {
+                "meta" | "data-a" | "data-b" => self
+                    .root
+                    .as_ref()
+                    .expect("storage root was given")
+                    .path()
+                    .join(role),
+                _ => panic!("unknown log directory role {role}"),
+            }
+        }
+    }
+
+    #[rstest::fixture]
+    fn bootstrap_storage() -> BootstrapStorage {
+        // Each storage layout starts without files or initialization observations.
+        BootstrapStorage::default()
+    }
+
+    #[rstest_bdd_macros::given("a fresh unformatted broker storage root")]
+    fn fresh_bootstrap_storage(bootstrap_storage: &mut BootstrapStorage) {
+        bootstrap_storage.root = Some(tempfile::tempdir().expect("fresh broker log root"));
+    }
+
+    #[rstest_bdd_macros::given("the {directory} log directory contains meta.properties:")]
+    fn supplied_bootstrap_properties(
+        bootstrap_storage: &mut BootstrapStorage,
+        directory: String,
+        docstring: String,
+    ) {
+        let path = bootstrap_storage.directory(&directory);
+        fs::create_dir_all(&path).expect("create supplied log directory");
+        let text = format!("{}\n", docstring.trim_matches('\n'));
+        fs::write(path.join(META_PROPERTIES), &text).expect("write supplied Kafka properties");
+        bootstrap_storage.supplied_files.insert(directory, text);
+    }
+
+    #[rstest_bdd_macros::given(
+        "the {directory} data directory also contains a cluster metadata log"
+    )]
+    fn misplaced_bootstrap_metadata_log(bootstrap_storage: &BootstrapStorage, directory: String) {
+        fs::create_dir_all(krabka_raft::metadata_partition_dir(
+            &bootstrap_storage.directory(&directory),
+        ))
+        .expect("create misplaced metadata partition");
+    }
+
+    #[rstest_bdd_macros::given("the broker configured cluster UUID {cluster}")]
+    fn configured_bootstrap_cluster(bootstrap_storage: &mut BootstrapStorage, cluster: String) {
+        bootstrap_storage.configured_cluster =
+            Some(cluster.parse().expect("configured cluster UUID"));
+    }
+
+    #[rstest_bdd_macros::when("node 2 initializes its metadata and two data log directories")]
+    fn initialize_supplied_log_directories(bootstrap_storage: &mut BootstrapStorage) {
+        bootstrap_storage.initialized = Some(initialize_log_dirs(
+            &bootstrap_storage.directory("meta"),
+            &[
+                bootstrap_storage.directory("data-a"),
+                bootstrap_storage.directory("data-b"),
+            ],
+            NodeId(2),
+            bootstrap_storage.configured_cluster,
+        ));
+    }
+
+    #[rstest_bdd_macros::when("the broker reads the metadata properties and directory UUID")]
+    fn read_supplied_bootstrap_properties(bootstrap_storage: &mut BootstrapStorage) {
+        bootstrap_storage.properties =
+            Some(read_meta_properties(&bootstrap_storage.directory("meta")));
+        bootstrap_storage.directory_id =
+            Some(read_directory_id(&bootstrap_storage.directory("meta")));
+    }
+
+    #[rstest_bdd_macros::then(
+        "the Kafka properties identify node 2, cluster AQIDBAUGBwgJCgsMDQ4PEA and directory U-hCdTzaSPyFB3swwc7Qdw"
+    )]
+    fn kafka_bootstrap_properties(bootstrap_storage: &BootstrapStorage) {
+        check!(
+            bootstrap_storage
+                .properties
+                .as_ref()
+                .expect("properties were read")
+                .as_ref()
+                .ok()
+                == Some(&kafka_meta(2, Some("U-hCdTzaSPyFB3swwc7Qdw")))
+        );
+        check!(
+            bootstrap_storage
+                .directory_id
+                .as_ref()
+                .expect("directory id was read")
+                .as_ref()
+                .ok()
+                == Some(&Uuid::from_u128(0x53e8_4275_3cda_48fc_8507_7b30_c1ce_d077))
+        );
+    }
+
+    #[rstest_bdd_macros::then(
+        "all three directories identify node 2 and the same cluster with distinct directory IDs"
+    )]
+    fn initialized_bootstrap_identity(bootstrap_storage: &BootstrapStorage) {
+        let identity = bootstrap_storage
+            .initialized
+            .as_ref()
+            .expect("directories were initialized")
+            .as_ref()
+            .expect("valid storage starts");
+        let meta_dir = bootstrap_storage.directory("meta");
+        let data_dirs = [
+            bootstrap_storage.directory("data-a"),
+            bootstrap_storage.directory("data-b"),
+        ];
+        let metas: Vec<MetaProperties> = iter::once(&meta_dir)
+            .chain(&data_dirs)
+            .map(|dir| read_meta_properties(dir).expect("initialized directory properties"))
+            .collect();
+        let ids: HashSet<DirectoryId> = metas.iter().filter_map(|meta| meta.directory_id).collect();
+        check!(ids.len() == metas.len());
+        check!(
+            metas
+                .iter()
+                .map(|meta| MetaProperties {
+                    directory_id: None,
+                    ..*meta
+                })
+                .collect::<Vec<_>>()
+                == vec![kafka_meta(2, None); 3]
+        );
+        check!(
+            *identity
+                == LocalIdentity {
+                    cluster_id: CLUSTER.parse::<ClusterId>().expect("Kafka cluster id").0,
+                    directory_id: metas[0].directory_id.expect("metadata directory id").into()
+                }
+        );
+    }
+
+    #[rstest_bdd_macros::then("the existing metadata properties file is preserved byte for byte")]
+    fn preserved_bootstrap_properties(bootstrap_storage: &BootstrapStorage) {
+        let expected = bootstrap_storage
+            .supplied_files
+            .get("meta")
+            .expect("existing metadata properties were given");
+        check!(
+            fs::read_to_string(bootstrap_storage.directory("meta").join(META_PROPERTIES))
+                .expect("read initialized metadata properties")
+                == *expected
+        );
+    }
+
+    #[rstest_bdd_macros::then("log directory initialization fails with {message}")]
+    fn refused_bootstrap_directories(bootstrap_storage: &BootstrapStorage, message: String) {
+        let expected = message
+            .replace(
+                "{meta}",
+                &bootstrap_storage.directory("meta").display().to_string(),
+            )
+            .replace(
+                "{data-a}",
+                &bootstrap_storage.directory("data-a").display().to_string(),
+            );
+        check!(
+            bootstrap_storage
+                .initialized
+                .as_ref()
+                .expect("directories were initialized")
+                .as_ref()
+                .map_err(ToString::to_string)
+                == Err(expected)
+        );
+    }
+
+    rstest_bdd_macros::scenarios!(
+        "tests/features/migrated/src/bootstrap",
+        fixtures = [bootstrap_storage: BootstrapStorage]
+    );
 }

@@ -130,318 +130,64 @@ fn push_row(out: &mut Vec<OffsetDeleteResponseTopic>, name: &str, index: i32, co
 mod tests {
     use {
         super::*,
-        crate::handlers::offset_delete::test_support::{
-            RequestTopic, expected_row, expected_topic, req_with_topics,
-        },
+        crate::handlers::offset_delete::test_support::{expected_row, expected_topic},
         assert2::check,
         std::collections::HashSet,
     };
 
-    type Request<'a> = &'a [RequestTopic<'a>];
-    type TopicRows<'a> = &'a [ExpectedTopicRows<'a>];
-
-    /// An expected partition row: its index and error code.
-    #[derive(Clone, Copy)]
-    struct PartitionCode {
-        partition_index: i32,
-        error_code: i16,
+    struct OffsetDeletionRowsScenario {
+        requests: Vec<OffsetDeleteRequestTopic>,
+        subscription: SubscribedTopics,
+        rows: Option<Rows>,
     }
-
-    /// The expected rows of one topic.
-    #[derive(Clone, Copy)]
-    struct ExpectedTopicRows<'a> {
-        name: &'a str,
-        partitions: &'a [PartitionCode],
+    #[rstest::fixture]
+    fn offset_deletion_rows() -> OffsetDeletionRowsScenario {
+        let subscription = SubscribedTopics::Named(HashSet::new());
+        OffsetDeletionRowsScenario {
+            requests: Vec::new(),
+            subscription,
+            rows: None,
+        }
     }
-
-    /// A key that a case asks the group actor to delete.
-    #[derive(Debug, PartialEq, Eq)]
-    struct RemovedKey<'a> {
-        topic: &'a str,
-        partition: i32,
-    }
-
-    /// A `build_rows` case: name, request, subscription, expected rows, and
-    /// the keys it deletes.
-    struct Case<'a> {
-        name: &'a str,
-        request: Request<'a>,
-        subscribed: SubscribedTopics,
-        want: TopicRows<'a>,
-        want_removed: Vec<RemovedKey<'a>>,
-    }
-
-    fn expected(rows: TopicRows<'_>) -> Vec<OffsetDeleteResponseTopic> {
-        rows.iter()
-            .map(|ExpectedTopicRows { name, partitions }| {
-                expected_topic(
-                    name,
-                    partitions
-                        .iter()
-                        .map(|row| expected_row(row.partition_index, row.error_code))
+    #[rstest_bdd_macros::given("offset deletion requests topic partitions {requests}")]
+    fn offset_deletion_partitions(
+        offset_deletion_rows: &mut OffsetDeletionRowsScenario,
+        requests: String,
+    ) {
+        use krabka_protocol::owned::offset_delete_request::OffsetDeleteRequestPartition;
+        offset_deletion_rows.requests = requests
+            .split(';')
+            .map(|entry| {
+                let (name, partitions) = entry.split_once(':').unwrap();
+                OffsetDeleteRequestTopic {
+                    name: name.into(),
+                    partitions: partitions
+                        .split(',')
+                        .map(|partition| OffsetDeleteRequestPartition {
+                            partition_index: partition.parse().unwrap(),
+                            ..Default::default()
+                        })
                         .collect(),
-                )
+                    ..Default::default()
+                }
             })
-            .collect()
+            .collect();
     }
-
-    fn named(topics: &[&str]) -> SubscribedTopics {
-        SubscribedTopics::Named(
-            topics
-                .iter()
-                .map(|s| (*s).to_owned())
-                .collect::<HashSet<_>>(),
-        )
+    #[rstest_bdd_macros::given("the group subscribes to {subscription}")]
+    fn offset_deletion_subscription(
+        offset_deletion_rows: &mut OffsetDeletionRowsScenario,
+        subscription: String,
+    ) {
+        offset_deletion_rows.subscription = match subscription.as_str() {
+            "all topics" => SubscribedTopics::All,
+            "no topics" => SubscribedTopics::Named(HashSet::new()),
+            _ => SubscribedTopics::Named(subscription.split(',').map(str::to_owned).collect()),
+        };
     }
-
-    /// The `build_rows` case table. Topics: `t1` (4 partitions), `t2` (8
-    /// partitions), `denied` (Read denied, 4 partitions), `ghost` (not in the
-    /// metadata).
-    fn cases() -> Vec<Case<'static>> {
-        let none = named(&[]);
-        [
-            Case {
-                name: "deletes every valid partition",
-                request: &[
-                    RequestTopic {
-                        name: "t1",
-                        partitions: &[0, 2],
-                    },
-                    RequestTopic {
-                        name: "t2",
-                        partitions: &[7],
-                    },
-                ],
-                subscribed: none.clone(),
-                want: &[
-                    ExpectedTopicRows {
-                        name: "t1",
-                        partitions: &[
-                            PartitionCode {
-                                partition_index: 0,
-                                error_code: codes::NONE,
-                            },
-                            PartitionCode {
-                                partition_index: 2,
-                                error_code: codes::NONE,
-                            },
-                        ],
-                    },
-                    ExpectedTopicRows {
-                        name: "t2",
-                        partitions: &[PartitionCode {
-                            partition_index: 7,
-                            error_code: codes::NONE,
-                        }],
-                    },
-                ],
-                want_removed: vec![
-                    RemovedKey {
-                        topic: "t1",
-                        partition: 0,
-                    },
-                    RemovedKey {
-                        topic: "t1",
-                        partition: 2,
-                    },
-                    RemovedKey {
-                        topic: "t2",
-                        partition: 7,
-                    },
-                ],
-            },
-            Case {
-                name: "denied topic",
-                request: &[RequestTopic {
-                    name: "denied",
-                    partitions: &[0, 1],
-                }],
-                subscribed: none,
-                want: &[ExpectedTopicRows {
-                    name: "denied",
-                    partitions: &[
-                        PartitionCode {
-                            partition_index: 0,
-                            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                        },
-                        PartitionCode {
-                            partition_index: 1,
-                            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                        },
-                    ],
-                }],
-                want_removed: vec![],
-            },
-            Case {
-                name: "denied wins over subscribed",
-                request: &[RequestTopic {
-                    name: "denied",
-                    partitions: &[0],
-                }],
-                subscribed: named(&["denied"]),
-                want: &[ExpectedTopicRows {
-                    name: "denied",
-                    partitions: &[PartitionCode {
-                        partition_index: 0,
-                        error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    }],
-                }],
-                want_removed: vec![],
-            },
-        ]
-        .into_iter()
-        .chain(more_cases())
-        .collect()
-    }
-
-    /// The remaining `build_rows` cases, see [`cases`].
-    fn more_cases() -> [Case<'static>; 5] {
-        let none = named(&[]);
-        [
-            Case {
-                name: "#734: existence is checked before the subscription",
-                request: &[RequestTopic {
-                    name: "ghost",
-                    partitions: &[0],
-                }],
-                subscribed: named(&["ghost"]),
-                want: &[ExpectedTopicRows {
-                    name: "ghost",
-                    partitions: &[PartitionCode {
-                        partition_index: 0,
-                        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    }],
-                }],
-                want_removed: vec![],
-            },
-            Case {
-                name: "subscribed topic that exists",
-                request: &[RequestTopic {
-                    name: "t1",
-                    partitions: &[0],
-                }],
-                subscribed: named(&["t1"]),
-                want: &[ExpectedTopicRows {
-                    name: "t1",
-                    partitions: &[PartitionCode {
-                        partition_index: 0,
-                        error_code: codes::GROUP_SUBSCRIBED_TO_TOPIC,
-                    }],
-                }],
-                want_removed: vec![],
-            },
-            Case {
-                name: "subscribed to every topic",
-                request: &[
-                    RequestTopic {
-                        name: "t1",
-                        partitions: &[0],
-                    },
-                    RequestTopic {
-                        name: "t2",
-                        partitions: &[1],
-                    },
-                ],
-                subscribed: SubscribedTopics::All,
-                want: &[
-                    ExpectedTopicRows {
-                        name: "t1",
-                        partitions: &[PartitionCode {
-                            partition_index: 0,
-                            error_code: codes::GROUP_SUBSCRIBED_TO_TOPIC,
-                        }],
-                    },
-                    ExpectedTopicRows {
-                        name: "t2",
-                        partitions: &[PartitionCode {
-                            partition_index: 1,
-                            error_code: codes::GROUP_SUBSCRIBED_TO_TOPIC,
-                        }],
-                    },
-                ],
-                want_removed: vec![],
-            },
-            Case {
-                name: "out-of-range partitions come first, then the coordinator's",
-                request: &[RequestTopic {
-                    name: "t1",
-                    partitions: &[0, 99, -1, 3],
-                }],
-                subscribed: named(&["t2"]),
-                want: &[ExpectedTopicRows {
-                    name: "t1",
-                    partitions: &[
-                        PartitionCode {
-                            partition_index: 99,
-                            error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                        },
-                        PartitionCode {
-                            partition_index: -1,
-                            error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                        },
-                        PartitionCode {
-                            partition_index: 0,
-                            error_code: codes::NONE,
-                        },
-                        PartitionCode {
-                            partition_index: 3,
-                            error_code: codes::NONE,
-                        },
-                    ],
-                }],
-                want_removed: vec![
-                    RemovedKey {
-                        topic: "t1",
-                        partition: 0,
-                    },
-                    RemovedKey {
-                        topic: "t1",
-                        partition: 3,
-                    },
-                ],
-            },
-            Case {
-                name: "the coordinator's topics follow the broker's",
-                request: &[
-                    RequestTopic {
-                        name: "t1",
-                        partitions: &[0],
-                    },
-                    RequestTopic {
-                        name: "denied",
-                        partitions: &[0],
-                    },
-                ],
-                subscribed: none,
-                want: &[
-                    ExpectedTopicRows {
-                        name: "denied",
-                        partitions: &[PartitionCode {
-                            partition_index: 0,
-                            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                        }],
-                    },
-                    ExpectedTopicRows {
-                        name: "t1",
-                        partitions: &[PartitionCode {
-                            partition_index: 0,
-                            error_code: codes::NONE,
-                        }],
-                    },
-                ],
-                want_removed: vec![RemovedKey {
-                    topic: "t1",
-                    partition: 0,
-                }],
-            },
-        ]
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers offset delete rows tests: build rows follows kafka order and codes"
+    #[rstest_bdd_macros::when(
+        "offset deletion validates topics t1 with 4 partitions t2 with 8 denied with 4 and absent ghost"
     )]
-    fn bdd_verify_build_rows_follows_kafka_order_and_codes() {
+    fn build_offset_deletion_rows(offset_deletion_rows: &mut OffsetDeletionRowsScenario) {
         let decisions = HashMap::from([
             ("t1", AuthorizationResult::Allow),
             ("t2", AuthorizationResult::Allow),
@@ -449,40 +195,53 @@ mod tests {
             ("denied", AuthorizationResult::Deny),
         ]);
         let counts = HashMap::from([("t1", 4), ("t2", 8), ("denied", 4)]);
-        let rows = cases();
-
-        for Case {
-            name,
-            request,
-            subscribed,
-            want,
-            want_removed,
-        } in rows
-        {
-            let req = req_with_topics(request);
-
-            let got = build_response_rows(&req.topics, &decisions, &subscribed, &counts);
-
-            check!(got.topics == expected(want), "{name}");
-            let removed: Vec<RemovedKey<'_>> = got
-                .to_delete
-                .iter()
-                .map(|(topic, partition)| RemovedKey {
-                    topic: topic.as_str(),
-                    partition: *partition,
-                })
-                .collect();
-            check!(removed == want_removed, "{name}");
-        }
+        offset_deletion_rows.rows = Some(build_response_rows(
+            &offset_deletion_rows.requests,
+            &decisions,
+            &offset_deletion_rows.subscription,
+            &counts,
+        ));
     }
-
-    /// Every branch of the two-step decision, with the whole row list and the
-    /// keys it deletes. Topics: `t1` (4 partitions), `t2` (8 partitions),
-    /// `denied` (Read denied, 4 partitions), `ghost` (not in the metadata).
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/offset_delete/rows.feature",
-        name = "tests: build rows follows kafka order and codes"
-    )]
-    fn build_rows_follows_kafka_order_and_codes() {}
+    #[rstest_bdd_macros::then("the ordered offset deletion rows are {expected}")]
+    fn check_offset_deletion_rows(
+        offset_deletion_rows: &OffsetDeletionRowsScenario,
+        expected: String,
+    ) {
+        let want: Vec<_> = expected
+            .split(';')
+            .map(|entry| {
+                let (topic, partitions) = entry.split_once(':').unwrap();
+                expected_topic(
+                    topic,
+                    partitions
+                        .split(',')
+                        .map(|part| {
+                            let (partition, code) = part.split_once('=').unwrap();
+                            expected_row(partition.parse().unwrap(), code.parse().unwrap())
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        check!(offset_deletion_rows.rows.as_ref().unwrap().topics == want);
+    }
+    #[rstest_bdd_macros::then("the only offset keys eligible for tombstones are {expected}")]
+    fn check_deletable_offset_keys(
+        offset_deletion_rows: &OffsetDeletionRowsScenario,
+        expected: String,
+    ) {
+        let want: Vec<(String, i32)> = if expected == "none" {
+            Vec::new()
+        } else {
+            expected
+                .split(';')
+                .map(|entry| {
+                    let (topic, partition) = entry.split_once(':').unwrap();
+                    (topic.to_owned(), partition.parse().unwrap())
+                })
+                .collect()
+        };
+        check!(offset_deletion_rows.rows.as_ref().unwrap().to_delete == want);
+    }
+    rstest_bdd_macros::scenarios!("tests/features/handler_offset_deletion_rows",fixtures=[offset_deletion_rows:OffsetDeletionRowsScenario]);
 }

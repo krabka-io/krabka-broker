@@ -176,6 +176,7 @@ mod tests {
         assert2::assert,
         krabka_metadata::{AclEntry, MetadataRecord, PermissionType, ResourceType},
         krabka_security::Principal,
+        serde_json::Value,
         std::{collections::HashSet, net::SocketAddr},
         uuid::Uuid,
     };
@@ -266,93 +267,77 @@ mod tests {
         });
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers authorized operations tests: supported operations topic matches kafka"
-    )]
-    fn bdd_verify_supported_operations_topic_matches_kafka() {
-        let ops = supported_operations(ResourceType::Topic);
-        // Order doesn't matter for callers but the set must match.
-        let got: HashSet<_> = ops.iter().copied().collect();
-        let want: HashSet<_> = [
-            AclOperation::Read,
-            AclOperation::Write,
-            AclOperation::Create,
-            AclOperation::Delete,
-            AclOperation::Alter,
-            AclOperation::Describe,
-            AclOperation::DescribeConfigs,
-            AclOperation::AlterConfigs,
-        ]
-        .into_iter()
-        .collect();
-        assert!(got == want);
+    #[derive(Default)]
+    struct AuthorizationContract {
+        resource: Option<ResourceType>,
+        operation: Option<AclOperation>,
+        supported: Option<HashSet<AclOperation>>,
+        mask: Option<i32>,
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/authorized_operations.feature",
-        name = "tests: supported operations topic matches kafka"
-    )]
-    fn supported_operations_topic_matches_kafka() {}
+    #[rstest::fixture]
+    fn authorization_contract() -> AuthorizationContract {
+        // Start this scenario with fresh inputs and observations.
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers authorized operations tests: supported operations group matches kafka"
-    )]
-    fn bdd_verify_supported_operations_group_matches_kafka() {
-        let got: HashSet<_> = supported_operations(ResourceType::Group)
-            .iter()
-            .copied()
-            .collect();
-        let want: HashSet<_> = [
-            AclOperation::Read,
-            AclOperation::Describe,
-            AclOperation::Delete,
-            AclOperation::DescribeConfigs,
-            AclOperation::AlterConfigs,
-        ]
-        .into_iter()
-        .collect();
-        assert!(got == want);
+        AuthorizationContract {
+            resource: None,
+            operation: None,
+            supported: None,
+            mask: None,
+        }
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/authorized_operations.feature",
-        name = "tests: supported operations group matches kafka"
-    )]
-    fn supported_operations_group_matches_kafka() {}
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers authorized operations tests: supported operations cluster matches kafka"
-    )]
-    fn bdd_verify_supported_operations_cluster_matches_kafka() {
-        let got: HashSet<_> = supported_operations(ResourceType::Cluster)
-            .iter()
-            .copied()
-            .collect();
-        let want: HashSet<_> = [
-            AclOperation::Create,
-            AclOperation::Alter,
-            AclOperation::Describe,
-            AclOperation::ClusterAction,
-            AclOperation::AlterConfigs,
-            AclOperation::DescribeConfigs,
-            AclOperation::IdempotentWrite,
-        ]
-        .into_iter()
-        .collect();
-        assert!(got == want);
+    fn named_operation(name: &str) -> AclOperation {
+        serde_json::from_value(Value::String(name.to_owned())).expect("a named ACL operation")
     }
 
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/authorized_operations.feature",
-        name = "tests: supported operations cluster matches kafka"
-    )]
-    fn supported_operations_cluster_matches_kafka() {}
+    #[rstest_bdd_macros::given("an authorization query concerns a {resource} resource")]
+    fn authorization_resource(
+        authorization_contract: &mut AuthorizationContract,
+        resource: String,
+    ) {
+        authorization_contract.resource = Some(match resource.as_str() {
+            "topic" => ResourceType::Topic,
+            "group" => ResourceType::Group,
+            "cluster" => ResourceType::Cluster,
+            _ => panic!("unknown resource {resource}"),
+        });
+    }
+
+    #[rstest_bdd_macros::given("the authorized operation is {operation}")]
+    fn authorization_operation(
+        authorization_contract: &mut AuthorizationContract,
+        operation: String,
+    ) {
+        authorization_contract.operation = Some(named_operation(&operation));
+    }
+
+    #[rstest_bdd_macros::when("the broker lists the resource's supported permissions")]
+    fn query_supported_permissions(authorization_contract: &mut AuthorizationContract) {
+        let resource = authorization_contract
+            .resource
+            .expect("a resource type was given");
+        authorization_contract.supported =
+            Some(supported_operations(resource).iter().copied().collect());
+    }
+
+    #[rstest_bdd_macros::when("the operation is encoded in the authorized-operations bitfield")]
+    fn encode_authorized_operation(authorization_contract: &mut AuthorizationContract) {
+        authorization_contract.mask = Some(bit(authorization_contract
+            .operation
+            .expect("an operation was given")));
+    }
+
+    #[rstest_bdd_macros::then("the supported permissions are exactly {permissions}")]
+    fn supported_permissions(authorization_contract: &AuthorizationContract, permissions: String) {
+        let expected: HashSet<_> = permissions.split(',').map(named_operation).collect();
+        assert!(authorization_contract.supported.as_ref() == Some(&expected));
+    }
+
+    #[rstest_bdd_macros::then("the operation contributes mask {mask}")]
+    fn operation_mask(authorization_contract: &AuthorizationContract, mask: i32) {
+        assert!(authorization_contract.mask == Some(mask));
+    }
 
     #[test]
     fn allow_all_authorizer_sets_every_supported_bit_for_each_resource() {
@@ -541,38 +526,5 @@ mod tests {
             assert!(got == want, "include = {include}");
         }
     }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::then(
-        "handlers authorized operations tests: bit values match kafka int8 codes for {example}"
-    )]
-    fn bdd_verify_bit_values_match_kafka_int8_codes(example: String) {
-        type Example = (AclOperation, i32);
-        let (op, want): Example = match example.as_str() {
-            "read" => (AclOperation::Read, 1 << 3),
-            "write" => (AclOperation::Write, 1 << 4),
-            "create" => (AclOperation::Create, 1 << 5),
-            "delete" => (AclOperation::Delete, 1 << 6),
-            "alter" => (AclOperation::Alter, 1 << 7),
-            "describe" => (AclOperation::Describe, 1 << 8),
-            "cluster action" => (AclOperation::ClusterAction, 1 << 9),
-            "describe configs" => (AclOperation::DescribeConfigs, 1 << 10),
-            "alter configs" => (AclOperation::AlterConfigs, 1 << 11),
-            "idempotent write" => (AclOperation::IdempotentWrite, 1 << 12),
-            _ => panic!("unknown BDD example: {example}"),
-        };
-
-        // Sanity: spot-check that the bit positions equal Kafka's wire
-        // discriminants. If `operation_to_wire` ever drifts from
-        // Kafka's `AclOperation.code()`, the wire field would become
-        // unintelligible to JVM clients.
-        assert2::assert!(bit(op) == want, "{op:?}");
-    }
-
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/authorized_operations.feature",
-        name = "tests: bit values match kafka int8 codes"
-    )]
-    fn bit_values_match_kafka_int8_codes(example: String) { let _ = example; }
+    rstest_bdd_macros::scenarios!("tests/features/migrated/src/handlers/authorized_operations.feature", fixtures = [authorization_contract: AuthorizationContract]);
 }

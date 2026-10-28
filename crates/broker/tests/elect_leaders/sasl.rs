@@ -11,7 +11,7 @@ use {
         kafka_wire::{self, PlainAuthenticationSetup},
         support::admin::{ElectionSetup, election_partition_errors, election_request},
     },
-    std::net::SocketAddr,
+    SocketAddr,
 };
 
 /// Drives `ElectLeaders` over a SASL/PLAIN authenticated connection.
@@ -38,3 +38,5 @@ pub async fn drive_elect_leaders_sasl_plain(
 
     election_partition_errors(resp, &topic)
 }
+
+use std::net::SocketAddr;
