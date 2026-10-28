@@ -662,13 +662,22 @@ fn appended_through_page_cache(
     budget: Option<u32>,
     appends: usize,
 ) -> (Log, Arc<CountingIo>) {
-    let mut log = Log::open(dir, LogConfig {
-        writeback_window: bytes(window),
-        page_cache_budget: budget.map(bytes),
-        retention: None,
-        ..LogConfig::default()
-    })
-    .unwrap();
+    appended_with(
+        dir,
+        LogConfig {
+            writeback_window: bytes(window),
+            page_cache_budget: budget.map(bytes),
+            retention: None,
+            ..LogConfig::default()
+        },
+        appends,
+    )
+}
+
+/// A log opened with `config`, a counting I/O and a private flush pool,
+/// after `appends` appends of one 1 KiB record each.
+fn appended_with(dir: &Path, config: LogConfig, appends: usize) -> (Log, Arc<CountingIo>) {
+    let mut log = Log::open(dir, config).unwrap();
     let io = Arc::new(CountingIo::default());
     log.test_set_io(Arc::<CountingIo>::clone(&io));
     log.rollover_flusher.executor =
@@ -747,6 +756,16 @@ fn a_page_cache_budget_drops_the_oldest_synced_pages() {
 /// The drops recorded so far, cleared for the next step.
 fn take_drops(io: &CountingIo) -> Vec<(u64, u64)> { mem::take(&mut *io.drops.lock().unwrap()) }
 
+/// 64 appends of one 1 KiB record through 4 KiB windows under an 8 KiB
+/// budget, synced: every handed-over page but the newest two has been
+/// dropped, and the drops so far are cleared.
+fn cold_log(dir: &Path) -> (Log, Arc<CountingIo>) {
+    let (log, io) = appended_through_page_cache(dir, 4096, Some(8192), 64);
+    log.rollover_flusher.finish().unwrap();
+    take_drops(&io);
+    (log, io)
+}
+
 /// A fetch of bytes the budget has dropped drops the pages behind it, where
 /// its reader's previous fetch was, and a byte-copy fetch its own pages too,
 /// so a consumer reading an old backlog leaves no page cache in its wake. A
@@ -754,11 +773,7 @@ fn take_drops(io: &CountingIo) -> Vec<(u64, u64)> { mem::take(&mut *io.drops.loc
 #[test]
 fn a_cold_fetch_drops_the_pages_behind_it() {
     let dir = tempdir().unwrap();
-    // 64 appends of one 1 KiB record through 4 KiB windows under an 8 KiB
-    // budget: every handed-over page but the newest two has been dropped.
-    let (log, io) = appended_through_page_cache(dir.path(), 4096, Some(8192), 64);
-    log.rollover_flusher.finish().unwrap();
-    take_drops(&io);
+    let (log, io) = cold_log(dir.path());
     let active = log.active.as_ref().unwrap();
     let cold_before = log
         .rollover_flusher
@@ -800,9 +815,7 @@ fn a_cold_fetch_drops_the_pages_behind_it() {
 #[test]
 fn a_cold_sendfile_fetch_drops_the_pages_behind_its_region() {
     let dir = tempdir().unwrap();
-    let (log, io) = appended_through_page_cache(dir.path(), 4096, Some(8192), 64);
-    log.rollover_flusher.finish().unwrap();
-    take_drops(&io);
+    let (log, io) = cold_log(dir.path());
     let desc = log
         .read_raw_desc(Offset(16), Offset(64), bytes(4096))
         .unwrap();
@@ -840,28 +853,18 @@ fn fetches_without_a_budget_or_before_a_handover_drop_nothing() {
 #[test]
 fn a_fetch_of_a_sealed_segment_the_ledger_forgot_is_cold() {
     let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig {
-        writeback_window: bytes(4096),
-        page_cache_budget: Some(bytes(8192)),
-        segment_size: bytes(8 * 1024),
-        retention: None,
-        ..LogConfig::default()
-    })
-    .unwrap();
-    let io = Arc::new(CountingIo::default());
-    log.test_set_io(Arc::<CountingIo>::clone(&io));
-    log.rollover_flusher.executor =
-        Some(super::executor::Executor::new(2, 256, 64 * 1024 * 1024).unwrap());
-    for _ in 0..64 {
-        let mut batch = RecordBatch {
-            records: vec![Record {
-                value: Some(Bytes::from(vec![7u8; 1024])),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        log.append(&mut batch).unwrap();
-    }
+    // 8 KiB segments: the 64 appends roll seven times or more.
+    let (log, io) = appended_with(
+        dir.path(),
+        LogConfig {
+            writeback_window: bytes(4096),
+            page_cache_budget: Some(bytes(8192)),
+            segment_size: bytes(8 * 1024),
+            retention: None,
+            ..LogConfig::default()
+        },
+        64,
+    );
     log.rollover_flusher.finish().unwrap();
     assert!(
         log.segments.len() >= 4,

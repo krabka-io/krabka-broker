@@ -339,14 +339,6 @@ impl Log {
         })
     }
 
-    /// WASI has no flush pool, no page-cache ledger and no fetch that is cold.
-    #[cfg(target_os = "wasi")]
-    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
-    fn cold_before(&self, segment: &Segment, budget: Option<ByteSize>) -> Option<u64> {
-        let _ = (segment, budget);
-        None
-    }
-
     /// Drop from the page cache what a fetch of `range` of `segment`'s `.log`
     /// file leaves there, when the range is cold: see [`Self::cold_before`].
     /// A `sendfile` fetch sends its bytes after this returns, so it drops the
@@ -358,6 +350,7 @@ impl Log {
     /// A consumer catching up on a backlog thus leaves at most a fetch or two
     /// of pages behind, instead of filling the cgroup to its limit and making
     /// every append reclaim: see [`page_cache`].
+    #[cfg(not(target_os = "wasi"))]
     fn drop_cold(
         &self,
         segment: &Segment,
@@ -381,6 +374,20 @@ impl Log {
         if to > from {
             segment.drop_cached(from, to - from);
         }
+    }
+
+    /// WASI has no flush pool, no page-cache ledger and no fetch that is cold.
+    #[cfg(target_os = "wasi")]
+    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
+    fn drop_cold(
+        &self,
+        segment: &Segment,
+        budget: Option<ByteSize>,
+        range: Range<u64>,
+        lookback: u64,
+        held: bool,
+    ) {
+        let _ = (segment, budget, range, lookback, held);
     }
 
     /// Reject an offset no local segment can answer.
