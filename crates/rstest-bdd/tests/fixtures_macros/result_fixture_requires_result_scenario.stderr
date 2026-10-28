@@ -1,0 +1,15 @@
+error: scenarios with fallible fixtures (`Result<T, E>` or `StepResult<T, E>`) must return `Result<(), E>` or `StepResult<(), E>` to propagate fixture initialization errors
+ --> tests/fixtures_macros/result_fixture_requires_result_scenario.rs:6:1
+  |
+6 | #[scenario(path = "basic.feature")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `scenario` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: scenarios with fallible fixtures (`Result<T, E>` or `StepResult<T, E>`) must return `Result<(), E>` or `StepResult<(), E>` to propagate fixture initialization errors
+ --> tests/fixtures_macros/result_fixture_requires_result_scenario.rs:9:1
+  |
+9 | #[scenario(path = "basic.feature")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `scenario` (in Nightly builds, run with -Z macro-backtrace for more info)

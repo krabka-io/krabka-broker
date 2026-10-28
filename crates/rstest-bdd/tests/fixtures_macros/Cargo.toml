@@ -1,0 +1,11 @@
+[package]
+name = "rstest-bdd-macros-fixtures"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+rstest-bdd = { version = "0.1.0-alpha4", path = "../../../rstest-bdd" }
+rstest-bdd-macros = { version = "0.1.0-alpha4", path = "../../../rstest-bdd-macros" }
+rstest-bdd-policy = { version = "0.1.0-alpha4", path = "../../../rstest-bdd-policy" }

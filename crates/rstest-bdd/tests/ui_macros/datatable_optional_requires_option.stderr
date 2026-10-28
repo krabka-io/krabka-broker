@@ -1,0 +1,5 @@
+error: #[datatable(optional)] requires an Option<T> field
+ --> tests/ui_macros/datatable_optional_requires_option.rs:7:5
+  |
+7 |     #[datatable(optional)]
+  |     ^

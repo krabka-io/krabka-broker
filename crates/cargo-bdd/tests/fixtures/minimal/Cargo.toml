@@ -1,0 +1,15 @@
+[package]
+name = "rstest-bdd-cli-fixture"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+
+[dependencies]
+inventory = "0.3"
+serial_test = "3"
+rstest-bdd = { path = "../../../../../crates/rstest-bdd", features = ["diagnostics", "test-support"] }
+
+[dev-dependencies]
+rstest-bdd-macros = { path = "../../../../../crates/rstest-bdd-macros" }
+
+[workspace]

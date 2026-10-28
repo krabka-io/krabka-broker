@@ -1,0 +1,33 @@
+step-error-missing-fixture = 缺少步驟函式「{ $step }」所需型別為「{ $ty }」的治具「{ $name }」
+step-error-execution = 透過函式「{ $function }」執行步驟「{ $pattern }」時發生錯誤：{ $message }
+step-error-panic = 步驟「{ $pattern }」中的函式「{ $function }」發生 panic：{ $message }
+step-keyword-parse-error = 無效的步驟關鍵字：{ $keyword }
+unsupported-step-type = 不支援的步驟型別：{ $step_type }
+placeholder-pattern-mismatch = 樣式不相符
+placeholder-invalid-placeholder = 無效的參數語法：{ $details }
+placeholder-invalid-pattern = 無效的步驟樣式：{ $pattern }
+placeholder-syntax = 無效的參數語法：{ $details }
+placeholder-syntax-detail = { $reason } 位於位元組 { $position }（從零開始）{ $suffix }
+placeholder-syntax-suffix = 針對參數「{ $placeholder }」
+step-context-ambiguous-override = 治具覆寫有歧義：多個治具符合 type_id { $type_id }。已忽略覆寫。
+panic-message-opaque-payload = <型別為 { $type } 的不可除錯 panic 載荷>
+assert-step-ok-panic = 步驟回傳錯誤：{ $error }
+assert-step-err-success = 步驟意外成功
+assert-step-err-missing-substring = 錯誤「{ $display }」不包含「{ $expected }」
+
+assert-skip-not-skipped = 預期 { $target } 記錄為已略過的結果
+assert-skip-missing-message = 預期 { $target } 提供包含「{ $expected }」的略過訊息
+assert-skip-missing-substring = 略過訊息「{ $actual }」不包含「{ $expected }」
+assert-skip-unexpected-message = 預期 { $target } 不會提供略過訊息
+assert-skip-flag-mismatch = 預期 { $target } 的旗標「{ $flag }」為 { $expected }，但實際為 { $actual }
+
+execution-error-skip = 步驟已略過{ $has_message ->
+    *[no] {""}
+    [yes] ：{ $message }
+}
+execution-error-step-not-found = 在索引 { $index } 找不到步驟：{ $keyword } { $text }（功能：{ $feature_path }，情境：{ $scenario_name }）
+execution-error-missing-fixtures = 步驟「{ $step_pattern }」（定義於 { $step_location }）需要治具 { $required }，但以下治具缺失：{ $missing }。請求的治具詳情：{ $missing_requirements }。情境中可用的治具：{ $available }{ $has_suggestion ->
+    [yes] 選擇由 harness 支援的情境，以便插入 rstest_bdd_harness_context。
+   *[no] {""}
+}（功能：{ $feature_path }，情境：{ $scenario_name }）
+execution-error-handler-failed = 步驟在索引 { $index } 失敗：{ $keyword } { $text } - { $error }（功能：{ $feature_path }，情境：{ $scenario_name }）

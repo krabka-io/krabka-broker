@@ -1,0 +1,58 @@
+[package]
+name = "rstest-bdd-server"
+version = "0.6.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Language server for rstest-bdd BDD testing framework"
+readme = "README.md"
+homepage.workspace = true
+repository.workspace = true
+keywords = ["lsp", "language-server", "bdd", "gherkin", "rstest"]
+categories = ["development-tools", "development-tools::testing"]
+rust-version.workspace = true
+
+[[bin]]
+name = "rstest-bdd-lsp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+test-support = ["dep:tempfile"]
+
+[dependencies]
+async-lsp.workspace = true
+camino.workspace = true
+cap-std.workspace = true
+metrics.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+cargo_metadata.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+tower.workspace = true
+tokio-util.workspace = true
+gherkin.workspace = true
+syn.workspace = true
+proc-macro2 = { version = "1", features = ["span-locations"] }
+regex.workspace = true
+rstest-bdd-patterns.workspace = true
+tempfile = { workspace = true, optional = true }
+
+[dev-dependencies]
+insta = { workspace = true, features = ["filters"] }
+proptest.workspace = true
+rstest.workspace = true
+rstest-bdd-test-macros.workspace = true
+rstest-bdd-server = { path = ".", features = ["test-support"] }
+tempfile.workspace = true
+trybuild.workspace = true
+# `io-util` supplies `duplex`/`empty`/`AsyncReadExt` for the in-process
+# transport-backed diagnostic-publishing test.
+tokio = { workspace = true, features = ["io-util"] }

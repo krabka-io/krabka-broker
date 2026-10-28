@@ -1,0 +1,76 @@
+[package]
+name = "rstest-bdd"
+version = "0.6.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rstest-bdd-patterns.workspace = true
+rstest-bdd-policy.workspace = true
+gherkin.workspace = true
+inventory.workspace = true
+regex.workspace = true
+thiserror.workspace = true
+hashbrown = "0.17"
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+ctor.workspace = true
+# Warnings are emitted through `tracing`; `log` is retained only to detect
+# whether a `log` listener is installed. See ADR-020.
+log.workspace = true
+tracing = { workspace = true, features = ["log"] }
+derive_more.workspace = true
+i18n-embed.workspace = true
+rust-embed.workspace = true
+fluent.workspace = true
+unic-langid.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+anyhow = "1.0.104"
+camino.workspace = true
+cap-std.workspace = true
+cargo_metadata.workspace = true
+insta.workspace = true
+rstest.workspace = true
+rstest-bdd-test-macros.workspace = true
+rstest-bdd-macros = { workspace = true, features = ["compile-time-validation"] }
+rstest-bdd-harness = { workspace = true, features = ["testing"] }
+rustversion.workspace = true
+trybuild.workspace = true
+proptest.workspace = true
+serial_test.workspace = true
+googletest.workspace = true
+pretty_assertions.workspace = true
+eyre.workspace = true
+temp-env.workspace = true
+the-newtype = "0.1.1"
+tempfile.workspace = true
+toml = "1.1"
+tracing.workspace = true
+
+[features]
+default = ["diagnostics"]
+diagnostics = ["serde", "serde_json"]
+# Temporary guard for the rustc ICE affecting macro-driven mutable fixtures.
+# Remove once the upstream compiler issue is fixed and the test can run
+# without gating.
+mutable_world_macro = []
+# Test support helpers for async step testing across crates.
+test-support = []
+
+[[test]]
+name = "dump_registry"
+path = "tests/dump_registry.rs"
+required-features = ["diagnostics"]

@@ -1,0 +1,5 @@
+error: forced failure
+  --> tests/fixtures_macros/scenario_missing_step_warning.rs:10:1
+   |
+10 | compile_error!("forced failure");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

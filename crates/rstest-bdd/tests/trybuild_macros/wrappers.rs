@@ -1,0 +1,183 @@
+//! Wrapper newtypes used by the trybuild macro fixtures and normalizer helpers.
+//! They centralize UTF-8 conversions so tests can work with camino paths and
+//! expose standard-path views when talking to trybuild.
+use std::{env, path::Path as StdPath};
+
+use camino::{Utf8Path, Utf8PathBuf};
+use the_newtype::Newtype;
+
+macro_rules! owned_str_newtype {
+    ($name:ident) => {
+        #[derive(Clone, Debug, Eq, Hash, Newtype, PartialEq)]
+        pub(crate) struct $name(pub(crate) String);
+
+        impl ::std::ops::Deref for $name {
+            type Target = str;
+
+            fn deref(&self) -> &Self::Target { self.0.as_str() }
+        }
+
+        impl ::std::convert::AsRef<str> for $name {
+            fn as_ref(&self) -> &str { self.0.as_str() }
+        }
+
+        impl<'a> ::std::convert::From<&'a str> for $name {
+            fn from(value: &'a str) -> Self { Self(value.to_owned()) }
+        }
+    };
+}
+
+macro_rules! borrowed_str_newtype {
+    ($name:ident) => {
+        #[derive(Clone, Copy, Debug, Eq, Hash, Newtype, PartialEq)]
+        pub(crate) struct $name<'a>(pub(crate) &'a str);
+
+        impl<'a> ::std::ops::Deref for $name<'a> {
+            type Target = str;
+
+            fn deref(&self) -> &Self::Target { self.0 }
+        }
+
+        impl<'a> ::std::convert::AsRef<str> for $name<'a> {
+            fn as_ref(&self) -> &str { self.0 }
+        }
+
+        impl<'a> ::std::convert::From<&'a str> for $name<'a> {
+            fn from(value: &'a str) -> Self { Self(value) }
+        }
+    };
+}
+
+owned_str_newtype!(MacroFixtureCase);
+
+impl From<MacroFixtureCase> for Utf8PathBuf {
+    fn from(value: MacroFixtureCase) -> Self { Self::from(value.0) }
+}
+
+impl AsRef<StdPath> for MacroFixtureCase {
+    fn as_ref(&self) -> &StdPath { Utf8Path::new(self.0.as_str()).as_std_path() }
+}
+
+owned_str_newtype!(UiFixtureCase);
+
+impl From<UiFixtureCase> for Utf8PathBuf {
+    fn from(value: UiFixtureCase) -> Self { Self::from(value.0) }
+}
+
+impl AsRef<StdPath> for UiFixtureCase {
+    fn as_ref(&self) -> &StdPath { Utf8Path::new(self.0.as_str()).as_std_path() }
+}
+
+borrowed_str_newtype!(NormalizerInput);
+
+borrowed_str_newtype!(FixturePathLine);
+
+borrowed_str_newtype!(FixtureTestPath);
+
+borrowed_str_newtype!(FixtureStderr);
+
+/// Normalizes fixture paths in trybuild error output by stripping directory
+/// prefixes, making assertions platform-independent.
+pub(crate) fn normalize_fixture_paths(input: NormalizerInput<'_>) -> String {
+    let text = normalize_target_dir(input.as_ref());
+    let mut normalized = text
+        .lines()
+        .map(|line| normalize_fixture_path_line(FixturePathLine::from(line)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.ends_with('\n') {
+        normalized.push('\n');
+    }
+    normalized
+}
+
+fn normalize_target_dir(text: &str) -> String {
+    env::var_os("CARGO_TARGET_DIR")
+        .and_then(|value| value.into_string().ok())
+        .map_or_else(
+            || text.to_owned(),
+            |target_dir| text.replace(target_dir.as_str(), "$WORKSPACE/target"),
+        )
+}
+
+fn normalize_fixture_path_line(line: FixturePathLine<'_>) -> String {
+    const ARROW: &str = "-->";
+    let value = line.as_ref();
+    let Some((prefix, remainder)) = value.split_once(ARROW) else {
+        return value.to_owned();
+    };
+    let trimmed = remainder.trim_start();
+    if trimmed.is_empty() || !trimmed.contains(".rs") {
+        return value.to_owned();
+    }
+    let mut parts = trimmed.splitn(2, ':');
+    let path = parts.next().unwrap_or(trimmed);
+    let suffix = parts.next();
+    let file_name = Utf8Path::new(path).file_name().unwrap_or(path);
+    let mut rebuilt = format!("{prefix}{ARROW} ");
+    rebuilt.push('$');
+    rebuilt.push_str("DIR/");
+    rebuilt.push_str(file_name);
+    if let Some(rest) = suffix
+        && !rest.is_empty()
+    {
+        rebuilt.push(':');
+        rebuilt.push_str(rest);
+    }
+    rebuilt
+}
+
+/// Strips nightly-only macro backtrace hints from compiler output.
+pub(crate) fn strip_nightly_macro_backtrace_hint(input: NormalizerInput<'_>) -> String {
+    input.as_ref().replace(
+        " (in Nightly builds, run with -Z macro-backtrace for more info)",
+        "",
+    )
+}
+
+/// Normalizes stable compiler wording for conditional trait implementations.
+pub(crate) fn normalize_conditional_trait_help(input: NormalizerInput<'_>) -> String {
+    let text = input.as_ref();
+    let mut lines = text.lines().peekable();
+    let mut normalized = Vec::new();
+    while let Some(line) = lines.next() {
+        if should_discard_conditional_trait_help_line(line, lines.peek().copied()) {
+            continue;
+        }
+        normalized.push(normalize_conditional_trait_help_line(line));
+    }
+    let mut normalized = normalized.join("\n");
+    if text.ends_with('\n') {
+        normalized.push('\n');
+    }
+    normalized
+}
+
+fn should_discard_conditional_trait_help_line(line: &str, next_line: Option<&str>) -> bool {
+    line_contains_stable_requirement(line)
+        || (is_requirement_connector(line)
+            && next_line.is_some_and(line_contains_stable_requirement))
+}
+
+fn line_contains_stable_requirement(line: &str) -> bool {
+    line.contains("unsatisfied requirement introduced here:")
+}
+
+fn is_requirement_connector(line: &str) -> bool {
+    line.trim()
+        .strip_prefix('|')
+        .and_then(|line| line.strip_suffix('|'))
+        .is_some_and(|contents| contents.trim().is_empty())
+}
+
+fn normalize_conditional_trait_help_line(line: &str) -> String {
+    let normalized = line.replace(
+        "StepReturnNormalize<Result<T, E>>` is conditionally implemented for",
+        "StepReturnNormalize<Result<T, E>>` is implemented for",
+    );
+    if normalized.contains("^^^^^^^^") && normalized.contains("--------") {
+        normalized.replace('-', "^")
+    } else {
+        normalized
+    }
+}

@@ -1,0 +1,48 @@
+//! Validation helpers for datatable field types and Option detection.
+use syn::{GenericArgument, PathArguments, Type, TypePath, spanned::Spanned};
+
+/// Provides the internal `option_inner_type` operation.
+pub(crate) fn option_inner_type(ty: &Type) -> syn::Result<(bool, Type)> {
+    let Type::Path(TypePath { path, .. }) = ty else {
+        return Ok((false, ty.clone()));
+    };
+    let Some(segment) = path.segments.last() else {
+        return Ok((false, ty.clone()));
+    };
+    if segment.ident != "Option" {
+        return Ok((false, ty.clone()));
+    }
+    let PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return Err(syn::Error::new(
+            ty.span(),
+            "Option<T> must specify an inner type",
+        ));
+    };
+    let Some(GenericArgument::Type(inner)) = args.args.first() else {
+        return Err(syn::Error::new(
+            ty.span(),
+            "Option<T> must specify an inner type",
+        ));
+    };
+    Ok((true, inner.clone()))
+}
+
+/// Provides the internal `is_string_type` operation.
+pub(crate) fn is_string_type(ty: &Type) -> bool {
+    if let Type::Path(path) = ty
+        && let Some(segment) = path.path.segments.last()
+    {
+        return segment.ident == "String" && matches!(segment.arguments, PathArguments::None);
+    }
+    false
+}
+
+/// Provides the internal `is_bool_type` operation.
+pub(crate) fn is_bool_type(ty: &Type) -> bool {
+    if let Type::Path(path) = ty
+        && let Some(segment) = path.path.segments.last()
+    {
+        return segment.ident == "bool" && matches!(segment.arguments, PathArguments::None);
+    }
+    false
+}

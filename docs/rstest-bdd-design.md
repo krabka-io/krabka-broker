@@ -1,0 +1,3485 @@
+# Proposed design for `rstest-bdd`: a behaviour-driven development (BDD) framework for Rust
+
+## Part 1: Vision and user-facing design
+
+This part of the report details the user-facing aspects of the proposed
+`rstest-bdd` framework. It outlines the core philosophy, provides a
+comprehensive usage example, and explores advanced features, focusing on
+creating an ergonomic and powerful BDD experience that is idiomatic to the Rust
+ecosystem.
+
+### 1.1 Introduction: A synergistic approach to BDD in Rust
+
+Behaviour-Driven Development (BDD) is a software development process that
+encourages collaboration between developers, quality assurance experts, and
+non-technical business participants. It achieves this by using a natural,
+domain-specific language to describe an application's behaviour from the user's
+perspective.[^1] The proposed
+
+`rstest-bdd` framework is designed to bring this collaborative power to Rust by
+deeply integrating BDD principles with the `rstest` testing crate.
+
+The core philosophy of `rstest-bdd` is to fuse the human-readable,
+requirement-driven specifications of Gherkin 3 with the powerful,
+developer-centric features of
+
+`rstest`.[^2] The primary value proposition is the unification of high-level
+functional and acceptance tests with low-level unit tests. Both test types
+coexist within the same project, use the same fixture model for dependency
+injection, and are executed by the standard `cargo test` command. This approach
+eliminates the need for a separate test runner, reducing continuous integration
+(CI) and continuous delivery (CD) configuration complexity and lowering the
+barrier to adoption for teams already invested in the Rust testing ecosystem.[
+^3]
+
+The design is heavily modelled on `pytest-bdd`, a successful plugin for Python's
+`pytest` framework.[^4]
+
+`pytest-bdd`'s success stems from its ability to leverage the full power of its
+host framework—including fixtures, parameterization, and a vast plugin
+ecosystem—rather than replacing it.[^1] By emulating this model,
+
+`rstest-bdd` will provide a familiar and robust BDD experience that feels
+native to Rust developers who appreciate the capabilities of `rstest`.
+
+### 1.2 A complete usage example: The "Web search" scenario
+
+To illustrate the intended workflow, this section presents a complete,
+narrative example of testing a web search feature. This walkthrough mirrors the
+structure of typical `pytest-bdd` tutorials, demonstrating the journey from a
+plain-language specification to an executable test.[^1]
+
+#### 1.2.1 Step 1: The feature file
+
+The process begins with a `.feature` file written in Gherkin. This file
+describes the desired functionality in a way that can be understood and
+validated by non-technical stakeholders.[^1]
+
+**File:** `tests/features/web_search.feature`
+
+```gherkin
+Feature: Web Search
+  In order to find information, a user performs a web search.
+
+  Scenario: Simple web search
+    Given the DuckDuckGo home page is displayed
+    When a user searches for "Rust programming language"
+    Then the search results page is displayed
+    And the results contain "Rust Programming Language"
+```
+
+#### 1.2.2 Step 2: The step definition file
+
+Next, developers create a corresponding Rust test file to implement the logic
+for each step defined in the Gherkin scenario. This is where the core
+`rstest-bdd` macros come into play.
+
+A key design choice, inherited from `pytest-bdd`, is that the Rust test module
+is the primary entry point, not the feature file.[^5] A test function is
+explicitly bound to a Gherkin scenario using the
+
+`#[scenario]` attribute macro, which is a direct parallel to `pytest-bdd`'s
+`@scenario` decorator.[^3]
+
+State is managed and passed between steps using `rstest`'s native fixture
+system, a cornerstone of this design. This contrasts with other BDD frameworks
+that often rely on a monolithic `World` object.[^6] By using fixtures,
+
+`rstest-bdd` allows for the reuse of setup and teardown logic already written
+for unit tests, promoting a Don't Repeat Yourself (DRY) approach.[^1]
+
+**File:** `tests/test_web_search.rs`
+
+> **Note:** This example demonstrates the async API using `async fn` test
+> functions with `#[tokio::test]`. Async scenario execution is now implemented
+> for Tokio current-thread mode; see §2.5 and the users guide for details.
+> Step definitions may be `async fn` and are awaited sequentially under the
+> async scenario runtime. ADR-005 introduces harness adapters and attribute
+> policies so Tokio (or GPUI) test attributes are supplied by opt-in plugin
+> crates rather than core features.
+
+```rust,no_run
+use rstest::fixture;
+use rstest_bdd::{scenario, given, when, then};
+// Assume 'thirtyfour' or another WebDriver crate is used for browser automation.
+use thirtyfour::prelude::*;
+
+// An rstest fixture that provides the WebDriver instance for the test.
+// This is standard rstest functionality.[4, 12]
+#[fixture]
+async fn browser() -> WebDriverResult<WebDriver> {
+    let caps = DesiredCapabilities::firefox();
+    // The fixture yields the browser to the test, and will handle cleanup after.
+    Ok(WebDriver::new("http://localhost:4444", caps).await?)
+}
+
+// The #[scenario] macro binds this test function to a specific scenario.
+// It will generate the necessary code to run the Gherkin steps.
+// The test attribute (e.g., #[tokio::test]) is supplied by the selected
+// harness adapter or attribute policy plugin, keeping core crates lean.
+#[tokio::test]
+async fn test_simple_search(#[future] browser: WebDriver) {
+    // The body of this function runs *after* all Gherkin steps have passed.
+    // It can be used for final assertions or complex cleanup.[6]
+    // The example assumes the browser closes implicitly when the 'browser'
+    // fixture goes out of scope.
+}
+
+// Step definitions are just decorated functions.
+// The fixture is injected when the parameter name matches the fixture.
+#[given("the DuckDuckGo home page is displayed")]
+async fn go_to_home(browser: &mut WebDriver) -> WebDriverResult<()> {
+    browser.goto("https://duckduckgo.com/").await?;
+    Ok(())
+}
+
+// The framework will parse the quoted string and pass it as an argument.
+#[when("I search for \"{phrase}\"")]
+async fn search_for_phrase(browser: &mut WebDriver, phrase: String) -> WebDriverResult<()> {
+    let form = browser.find(By::Id("search_form_input_homepage")).await?;
+    form.send_keys(&phrase).await?;
+    form.submit().await?;
+    Ok(())
+}
+
+#[then("the search results page is displayed")]
+async fn results_page_is_displayed(browser: &mut WebDriver) -> WebDriverResult<()> {
+    browser.find(By::Id("links")).await?;
+    Ok(())
+}
+
+#[then("the results contain \"(.*)\"")]
+async fn results_contain_text(browser: &mut WebDriver, text: String) -> WebDriverResult<()> {
+    let content = browser.source().await?;
+    if content.contains(&text) { Ok(()) }
+    else { Err(thirtyfour::error::WebDriverError::CustomError(
+        format!("Result text not found: expected substring '{text}'")
+    )) }
+}
+```
+
+#### 1.2.3 Step 3: Running the tests
+
+With the feature and step definition files in place, the user simply runs the
+standard Rust test command:
+
+```bash
+cargo test
+```
+
+`rstest-bdd` ensures that `test_simple_search` is executed as a regular test.
+`rstest` handles the `browser` fixture setup, and the code generated by
+`#[scenario]` orchestrates the execution of the `given`, `when`, and `then`
+steps in the correct order. This seamless integration means all standard
+`cargo` and `rstest` features, such as test filtering and parallel execution,
+work out of the box.[^7]
+
+### 1.3 Advanced usage patterns
+
+Beyond the basic workflow, `rstest-bdd` is designed to support the advanced
+Gherkin features necessary for comprehensive testing.
+
+#### 1.3.1 Parameterization with `Scenario Outline`
+
+Gherkin's `Scenario Outline` allows a single scenario to be run with multiple
+sets of data from an `Examples` table.[^8]
+
+`rstest-bdd` will map this concept directly to `rstest`'s powerful
+parameterization capabilities. The `#[scenario]` macro will detect a
+`Scenario Outline` and generate code equivalent to a standard `rstest`
+parameterized test using multiple `#[case]` attributes.[^9]
+
+**Feature File (**`login.feature`**):**
+
+```gherkin
+Feature: User Login
+
+  Scenario Outline: Login with different credentials
+  Given the login page is displayed
+  When a user enters username "<username>" and password "<password>"
+  Then the message "<message>" is shown
+
+    Examples:
+
+   | username | password | message |
+   | user | correctpass | "Welcome, user!" |
+   | user | wrongpass | "Invalid credentials" |
+   | admin | adminpass | "Welcome, administrator!" |
+```
+
+**Step Definition (**`test_login.rs`**):**
+
+> **Note:** This example shows async scenario execution. The test function uses
+> `async fn` with `#[tokio::test]`. Step definitions may also be `async fn` and
+> are awaited sequentially under the scenario runtime. See §2.5 for design
+> details. In the harness adapter architecture (ADR-005), this attribute comes
+> from the selected attribute policy plugin rather than core macros.
+
+```rust,no_run
+//...
+#[scenario(path = "features/login.feature", index = 0)]
+#[tokio::test]
+async fn test_login_scenarios(#[future] browser: WebDriver) {}
+
+// Placeholders from the 'Examples' table are passed as typed arguments to the step functions.
+#[when("A user enters username {username} and password {password}")]
+async fn enter_credentials(
+    browser: &mut WebDriver,
+    username: String,
+    password: String,
+) -> WebDriverResult<()> {
+    //... implementation...
+    Ok(())
+}
+
+#[then("The message {message} is shown")]
+async fn see_message(browser: &mut WebDriver, message: String) -> WebDriverResult<()> {
+    //... assert message is visible...
+    Ok(())
+}
+```
+
+#### 1.3.2 Step argument parsing
+
+To provide an ergonomic and type-safe way of extracting parameters from step
+strings, `rstest-bdd` will support a `format!`-like syntax. This avoids the
+need for raw regular expressions in most cases and leverages Rust's existing
+`FromStr` trait for "magic conversion", a core feature of `rstest`.[^2] This is
+directly analogous to the `parsers` module in `pytest-bdd`.1.
+
+**Example:**
+
+```rust,no_run
+// Step in.feature file:
+// When 50 dollars are deposited
+
+// Step definition in.rs file:
+#[when("a user deposits {amount:u32} dollars")]
+fn deposit_amount(#[from(account)] acc: &mut Account, amount: u32) {
+    acc.deposit(amount);
+}
+```
+
+The framework will parse the string "50", use `u32::from_str("50")` to convert
+it, and pass the resulting `u32` value to the `deposit_amount` function.
+
+#### 1.3.3 Using `Background`, data tables, and Doc strings
+
+To achieve feature parity with modern BDD tools, the framework supports other
+essential Gherkin constructs.
+
+- Background: Steps defined in a `Background` section run before each
+  `Scenario` in a feature file.[^10] The parser prepends these steps to each
+  scenario's step list so the `#[scenario]` macro runs them first.
+
+- Data Tables: A Gherkin data table provides a way to pass a structured block
+  of data to a single step. The step function declares a single optional
+  parameter annotated with `#[datatable]` or named `datatable`. Legacy code may
+  keep using `Vec<Vec<String>>`, while the runtime `rstest_bdd::datatable`
+  module offers typed parsing utilities.
+
+  - `datatable::Rows<T>` wraps a `Vec<T>` and derives `Deref<Target = [T]>`,
+    `From<Vec<T>>`, and `IntoIterator` via `derive_more`, letting steps consume
+    parsed rows ergonomically. Steps that must regain ownership call
+    `Rows::into_vec()` to retrieve the backing vector. The blanket
+    `TryFrom<Vec<Vec<String>>>` implementation inspects the
+    `T::REQUIRES_HEADER` flag: when true the first row is parsed into a
+    `HeaderSpec`; otherwise the table is treated as headerless. Each remaining
+    row is converted into a `RowSpec` and handed to `T::parse_row`.
+  - `datatable::DataTableRow` defines the parsing contract. Implementors
+    receive ownership of each row, can remove cells via `take_cell` /
+    `take_column`, and can parse values with the `parse_*` helpers. Until the
+    derive macros are implemented consumers must write these impls manually.
+  - `DataTableError` (via `thiserror`) surfaces header mismatches, missing
+    columns, uneven rows, and row or cell parsing failures. Step wrappers
+    format the error into `StepError` so behaviour test output includes precise
+    diagnostics.
+- `RowSpec` and `HeaderSpec` provide indexed and named cell access, exposing
+  row numbers (1-based including headers) to keep user-defined error messages
+  consistent. `HeaderSpec::require` powers name lookups while the
+  `RowSpec::parse_*` helpers attach column metadata to downstream errors.
+- Convenience helpers such as `truthy_bool` and `trimmed<T: FromStr>` support
+  tolerant boolean parsing and whitespace handling without bespoke loops.
+- The runtime surfaces the primary datatable types described above. The class
+  diagram below illustrates the relationships between the error hierarchy, row
+  parsing trait, and collection wrapper.
+
+```mermaid
+classDiagram
+    class DataTableRow {
+        <<trait>>
+        +const REQUIRES_HEADER: bool
+        +parse_row(row: RowSpec) Result<Self, DataTableError>
+    }
+    class Rows {
+        +into_vec() -> Vec<T>
+    }
+    class DataTableError {
+        <<enum>>
+        +MissingHeader
+        +DuplicateHeader
+        +UnevenRow
+        +MissingColumn
+        +MissingCell
+        +RowParse
+        +CellParse
+    }
+    class HeaderSpec {
+        +new(header_row: Vec<String>) Result<Self, DataTableError>
+        +len() usize
+        +require(name: &str) Result<usize, DataTableError>
+    }
+    class RowSpec {
+        +new(header, row_number, index, row) Result<Self, DataTableError>
+        +take_column(name) Result<String, DataTableError>
+        +parse_column_with(name, parser) Result<T, DataTableError>
+    }
+    class TruthyBoolError {
+        +value(&self) -> &str
+    }
+    class TrimmedParseError {
+        +source: E
+        +original_input: String
+    }
+    DataTableRow <|.. Rows : T implements
+    Rows o-- DataTableRow : T
+    Rows o-- DataTableError
+    Rows o-- HeaderSpec
+    Rows o-- RowSpec
+    RowSpec o-- HeaderSpec
+    RowSpec o-- DataTableError
+    DataTableError <|-- TruthyBoolError
+    DataTableError <|-- TrimmedParseError
+```
+
+- `#[derive(DataTableRow)]` will generate `DataTableRow` implementations for
+  structs and tuple structs. Field attributes like
+  `#[datatable(column = "Task name")]`, `#[datatable(optional)]`,
+  `#[datatable(parse_with = "path::to_fn")]`, and struct-level
+  `#[datatable(rename_all = "...")]` will cover column mapping, optional cells,
+  trimming, and custom parsers. The derive will set `REQUIRES_HEADER` when any
+  field depends on header lookup.
+  - `#[derive(DataTable)]` will target tuple structs that wrap collections. It
+    will compose parsed rows with optional `map` or `convert` hooks, so steps
+    can expose domain-specific containers without manual loops.
+
+  The implementation uses `convert_case` to provide familiar serde-style rename
+  rules (`lowercase`, `PascalCase`, `kebab-case`, and screaming variants).
+  Field attributes support header overrides (`column`), tolerant booleans (
+  `truthy`), whitespace normalization (`trim`), optional cells (`optional` on
+  `Option<T>`), and defaults (`default` or `default = path`). Absent a custom
+  parser, the derive falls back to `FromStr` with error types constrained to
+  `std::error::Error`. Custom parsers are functions of the form
+  `fn(&str) -> Result<T, E>` where `E: Error + Send + Sync + 'static`. The
+  generated code matches `DataTableError::MissingColumn` and
+  `DataTableError::MissingCell` to drive optional and default behaviour while
+  propagating all other failures unchanged. The `truthy` attribute is limited to
+  `bool` fields to maintain clear semantics.
+
+  Trybuild fixtures lock down these invariants. Dedicated compile-fail cases
+  assert that `#[datatable(optional)]` only applies to `Option<T>` fields,
+  reject defaults on optional fields, and flag mutually exclusive combinations
+  such as `optional` with `default` or `truthy` with `parse_with`. The fixtures
+  act as regression tests for the derive validation logic, mirroring the
+  user-facing compiler messages expected from the macros.
+
+  `#[derive(DataTable)]` recognizes tuple structs that wrap either `Rows<T>` or
+  `Vec<T>`, defaulting to `Rows::try_from` and `Rows::into_vec` conversions.
+  When consumers need bespoke containers, `map` hooks transform `Rows<T>`
+  directly, while `try_map` surfaces fallible aggregation returning
+  `DataTableError`. Both hooks consume the parsed `Rows<T>`, keeping ownership
+  transfer explicit and predictable.
+
+  Existing custom `TryFrom<Vec<Vec<String>>>` implementations continue to work,
+  letting projects adopt typed tables gradually. The decision to gate header
+  detection behind `REQUIRES_HEADER` keeps the runtime predictable and avoids
+  heuristics that might silently strip legitimate first rows from headerless
+  tables.
+
+  **Feature File:**
+
+```gherkin
+  Given the following users exist:
+
+  | name  | email              | active |
+  | Alice | alice@example.com | yes    |
+  | Bob   | bob@example.com   | no     |
+```
+
+**Step definition (`tests/steps/create_users.rs`):**
+
+```rust,no_run
+use rstest_bdd::datatable::{self, Rows};
+use rstest_bdd_macros::DataTableRow;
+
+#[derive(DataTableRow)]
+#[datatable(rename_all = "kebab-case")]
+struct UserRow {
+    name: String,
+    #[datatable(parse_with = "datatable::truthy_bool")]
+    active: bool,
+    #[datatable(column = "email")]
+    email: String,
+}
+
+#[given("the following users exist:")]
+fn create_users(
+    #[from(db)] conn: &mut DbConnection,
+    #[datatable] users: Rows<UserRow>,
+) {
+    for row in users {
+        conn.insert_user(&row.name, &row.email, row.active);
+    }
+}
+```
+
+- Doc strings: A Gherkin docstring allows a larger block of multi-line text
+  to be passed to a step. This will be provided as a `String` argument to the
+  step function, again mirroring `pytest-bdd`.[^11]
+
+#### 1.3.4 Filtering scenarios with tags
+
+Tags provide a convenient way to organize scenarios and control which tests
+run. The `#[scenario]` macro will accept an optional `tags` argument containing
+an expression such as `"@fast and not @wip"`. Only scenarios whose tags satisfy
+this expression will expand into test functions. Filtering occurs at
+macro-expansion time; unmatched scenarios do not generate tests (no runtime
+skipping). The `scenarios!` macro will offer the same argument to filter an
+entire directory of feature files.
+
+Tag scope:
+
+- Scenario tags inherit all tags declared at the `Feature:` level.
+- For `Scenario Outline`, tags on the outline and on each `Examples:` block
+  apply to the expanded cases produced from that block.
+- Tag composition uses set union; duplicates are ignored. There is no implicit
+  removal or override of inherited tags.
+
+**Example:**
+
+```rust,no_run
+#[scenario(path = "search.feature", tags = "@fast and not @wip")]
+fn search_fast() {}
+```
+
+The macro emits a test only when the matched scenario carries the `@fast` tag
+and lacks the `@wip` tag.
+
+Grammar and semantics:
+
+- Tokens:
+- Tags are identifiers prefixed with `@` and match `[A-Za-z0-9_-]+`.
+  - Operators: `and`, `or`, `not`.
+  - Parentheses `(` `)` group sub-expressions.
+- Precedence: `not` > `and` > `or`. Parentheses override precedence.
+- Associativity: `and` and `or` are left-associative; `not` is unary-prefix.
+- Whitespace is ignored between tokens.
+- Tag matching is case-sensitive; operator keywords are case-insensitive.
+- Invalid expressions cause a `compile_error!` with a message that includes the
+  byte offset of the failure and a short reason.
+- Omitting the `tags` argument applies no filter; an explicit `""` or unknown
+  tokens (e.g., `&&`, `||`, `!`) are invalid and emit `compile_error!`.
+- Empty parentheses `()` and dangling operators (`@a and`, `or @b`, leading
+  `and`/`or`) are invalid.
+- Matching is set-membership only; tags do not carry values.
+
+Both macros delegate tag-expression parsing to a shared module so that
+`#[scenario]` and `scenarios!` share identical grammar and diagnostics.
+
+Extended Backus–Naur Form (EBNF):
+
+```ebnf
+expr      ::= or_expr
+or_expr   ::= and_expr { "or" and_expr }
+and_expr  ::= not_expr { "and" not_expr }
+not_expr  ::= [ "not" ] primary
+primary   ::= TAG | "(" expr ")"
+TAG       ::= "@" IDENT
+IDENT     ::= { A..Z | a..z | 0..9 | "_" | "-" }+
+```
+
+Implementation stores the parsed expression as an abstract syntax tree (AST)
+shared by both macros so they emit identical diagnostics. `#[scenario]`
+continues to default to the first matching scenario but emits a compile error
+when a supplied `name` or `index` refers to a scenario that fails the tag
+filter. Scenario outlines prune unmatched example rows at expansion, ensuring
+the generated `rstest` only contains relevant cases.
+
+Example diagnostic:
+
+```text
+error: invalid tag expression at byte 7: expected tag or '(' after 'and'
+```
+
+`scenarios!` usage:
+
+```rust,no_run
+// Include smoke OR (critical AND not wip):
+scenarios!("tests/features/", tags = "@smoke or (@critical and not @wip)");
+
+// Exclude slow:
+scenarios!("tests/features/", tags = "not @slow");
+
+// Operator keywords are case-insensitive:
+scenarios!("tests/features/", tags = "@SMOKE Or Not @Wip");
+```
+
+## Part 2: Architectural and API specification
+
+This part transitions from the user's perspective to the technical
+implementation, detailing the procedural macro API, the core architectural
+challenges and solutions, and the end-to-end code generation process.
+
+### 2.1 Procedural macro API design
+
+The user-facing functionality is enabled by a suite of procedural macros. Each
+macro has a distinct role in the compile-time orchestration of the BDD tests.
+
+- `#[scenario("…")]` or `#[scenario(path = "…", index = N)]` – the primary
+  entry point and orchestrator.
+
+  - Arguments:
+
+    - `path: &str`: A mandatory, relative path from the crate root to the
+      `.feature` file containing the scenario. The path can be provided as a
+      bare string literal or with the explicit `path =` form when other
+      arguments are used.
+
+    - `index: usize` (optional): Selects which scenario in the feature file to
+      execute. Defaults to `0` when omitted.
+
+  - Functionality: This macro is responsible for the heavy lifting. At
+    compile time, it reads and parses the specified feature file, finds the
+    matching scenario, and generates a complete, new test function annotated
+    with `#[rstest]`. This generated function contains the runtime logic to
+    execute the Gherkin steps.
+
+- `#[given("...")]`, `#[when("...")]`, `#[then("...")]` - these macros attach to
+  the step implementation functions.
+
+- Argument: An optional string literal representing the Gherkin step text. If
+  omitted or containing only whitespace, the pattern is inferred from the
+  function name by replacing underscores with spaces. A literal `""` registers
+  an empty pattern. Inference preserves whitespace semantics: leading and
+  trailing underscores become spaces, consecutive underscores become multiple
+  spaces, and letter case is preserved. This avoids duplicating names while
+  keeping the macros simple.
+
+  - Functionality: These macros have a single, critical purpose: to
+    register the decorated function and its associated metadata (the pattern
+    string, keyword, and source location) into a global, discoverable registry.
+    They do not generate any executable code on their own.
+
+  The initial implementation delegates registration to the runtime crate's
+  `step!` helper. Each macro expands to the original function followed by a
+  call to `rstest_bdd::step!`, which internally uses `inventory::submit!` to
+  add a `Step` to the registry.
+
+- Data Tables: Step functions may include a single optional parameter declared
+  either by annotating it with `#[datatable]` or by naming it `datatable`.
+  Legacy consumers can continue to request a `Vec<Vec<String>>`. A future
+  `datatable::Rows<T>` newtype will be supported. When implemented, the wrapper
+  will materialize the runtime `&[&[&str]]` payload into `Vec<Vec<String>>` and
+  invoke `TryFrom<Vec<Vec<String>>>`. The planned implementation will cover
+  `Rows<T>` where `T: DataTableRow`. Conversion failures will yield a
+  `DataTableError`, and the generated wrapper will format the error's `Display`
+  output into the resulting `StepError`, preserving row and column diagnostics.
+  The data table parameter must precede any Doc String argument, must not be
+  combined with `#[from]`, and a missing table triggers a runtime error.
+
+- Doc strings: A multi-line text block immediately following a step is
+  exposed to the step function through an optional `docstring` parameter of type
+  `String`. The runner passes the raw block to the wrapper as `Option<&str>`,
+  and the wrapper clones it into an owned `String` before calling the step
+  function. As with data tables, the parameter must use this exact name and
+  concrete type for detection. The wrapper fails at runtime if the docstring is
+  absent. A data table must precede any docstring parameter, and feature files
+  may delimit the block using either triple double-quotes or triple backticks.
+
+Macro attribute expansion relies on `rstest-bdd-macros::MacroPattern` to
+compile and cache regular expressions during macro execution. The helper
+delegates to the shared `rstest-bdd-patterns` crate so that compile-time and
+runtime code paths agree on placeholder semantics. The cached `Regex` is
+exposed to the macro via a `OnceLock`, avoiding repeated compilation when the
+same pattern is referenced multiple times within a single expansion.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Dev
+  participant Macros as rstest-bdd-macros::MacroPattern
+  participant Patterns as rstest-bdd-patterns
+  participant Regex as regex::Regex
+
+  Dev->>Macros: MacroPattern::new("Given {n:i32}")
+  Dev->>Macros: MacroPattern::regex(span)
+  Macros->>Patterns: build_regex_from_pattern(text)
+  alt compiled OK
+    Patterns-->>Macros: regex source
+    Macros->>Regex: Regex::new(source)
+    Regex-->>Macros: compiled Regex
+    Macros-->>Dev: &Regex (cached via OnceLock)
+  else compile error
+    Patterns-->>Macros: PatternError
+    Macros->>Dev: proc_macro_error3::abort(span, error)
+  end
+```
+
+Figure: Procedural macros compile patterns through the shared parser and cache
+successful results to avoid redundant work within a single expansion.
+
+### 2.2 The core architectural challenge: Stateless step discovery
+
+The most significant technical hurdle in this design is the inherent nature of
+Rust's procedural macros. Each macro invocation is executed by the compiler in
+an isolated, stateless environment.[^12] This means that when the
+
+`#[scenario]` macro is expanding, it has no direct way to discover the
+functions that have been decorated with `#[given]`, `#[when]`, or `#[then]`. It
+cannot scan the project's source code, reflect on other modules, or access a
+shared compile-time state to build a map of available steps.[^13] This stands
+in stark contrast to
+
+`pytest`, which provides a rich runtime plugin system that `pytest-bdd` hooks
+into to discover tests and steps dynamically during a collection phase.[^7]
+
+This fundamental constraint of the Rust compiler forces a specific
+architectural choice. Several potential solutions exist, but only one aligns
+with the project's core goals:
+
+1. **Custom Test Runner:** The framework could provide its own test runner
+   binary, similar to the `cucumber` crate which requires a `main` function to
+   invoke `World::run(...)`.[^6] This runner would be responsible for
+   discovering feature files and step definitions. However, this approach would
+   completely bypass
+
+   `rstest` and `cargo test`, violating the primary design goal of seamless
+   integration. It would effectively be a reimplementation of `cucumber-rs`, not
+    `rstest-bdd`.
+2. `build.rs` **Code Generation:** A build script (`build.rs`) could be used to
+   parse all `.rs` files in the `tests` directory before the main compilation.
+   It could find all the step-definition attributes and generate a single,
+   monolithic `steps.rs` file containing a registry of all steps. The
+   `#[scenario]` macro could then `include!` this generated file. This approach
+   is technically feasible but suffers from major drawbacks: it is complex to
+   implement robustly, significantly slows down compilation, is notoriously
+   brittle, and often provides a poor experience with IDE tools like
+   `rust-analyzer` which may not be aware of the generated code.
+3. **Link-Time Collection:** The ideal solution is a mechanism that allows each
+   step-definition macro to emit metadata independently, with this metadata
+   being collected into a single registry *after* all macros have run. This can
+   be achieved by placing the metadata in a specific linker section of the
+   compiled object file. At runtime, the application can read this linker
+   section to discover all the registered items.
+
+The third option, link-time collection, is the only one that satisfies all
+design constraints. It preserves the standard `cargo test` workflow, avoids the
+fragility of build scripts, and allows for fully decoupled step definitions.
+
+To surface missing steps earlier, the macros crate maintains a small,
+compile‑time registry, and each `#[given]`, `#[when]`, and `#[then]` invocation
+records its keyword and pattern there. When `#[scenario]` expands, it consults
+this registry and emits a `compile_error!` for any Gherkin step that lacks a
+unique definition. Because the registry only sees steps from the current
+compilation unit, each entry stores the originating crate’s identifier to avoid
+false positives from unrelated crates compiled in the same process. Scenarios
+that reference steps in other crates would otherwise fail to compile, so the
+crate defaults to a permissive mode that prints warnings for unknown steps.
+Enabling the `strict-compile-time-validation` feature turns those warnings into
+errors. The registry simply records metadata but reuses the runtime crate’s
+pattern‑matching logic during validation, introducing a build-time dependency.
+`inventory` is employed later for runtime, cross‑crate discovery and does not
+power this compile‑time registry.
+
+Step definitions are recorded per crate and grouped by keyword, enabling direct
+lookups without scanning unrelated patterns. When the current crate has no
+registered steps, non-strict validation emits a warning and continues, so that
+definitions from other crates can satisfy the scenario.
+
+The following sequence diagram illustrates the feature-gated step registration
+and scenario validation flow:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Dev as Developer
+  participant Attr as Step attribute macro
+  participant Reg as validation::steps (gated)
+  participant Scen as Scenario macro
+
+  rect rgba(240,248,255,0.6)
+    note over Attr: Step attribute expansion
+    Dev->>Attr: define step fn(pattern)
+    alt feature compile-time-validation
+      Attr->>Reg: register_step(keyword, pattern)
+      Reg-->>Attr: Ok
+    else no feature
+      Attr--xReg: registration code not compiled
+    end
+  end
+
+  rect rgba(240,255,240,0.6)
+    note over Scen: Scenario macro expansion & validation
+    Dev->>Scen: #[scenario(...)]
+    Scen->>Scen: parse steps → ParsedStep{keyword,text,docstring,table, span?}
+    alt strict-compile-time-validation
+      Scen->>Reg: validate(steps, strict=true)
+      Reg-->>Scen: Err(missing with spans)
+      Scen-->>Dev: compile_error at missing span
+    else compile-time-validation only
+      Scen->>Reg: validate(steps, strict=false)
+      Reg-->>Scen: warnings (per-span)
+      Scen-->>Dev: expanded scenario (with warnings)
+    else no validation features
+      Scen-->>Dev: expanded scenario (no validation)
+    end
+  end
+```
+
+Continuous integration verifies Rust and Markdown formatting and diagram
+rendering. The tools lane installs the pinned `nightly-2026-08-07` `rustfmt`
+toolchain and runs `make check-fmt`; contributors use `make fmt` with the same
+`FMT_TOOLCHAIN` rather than stable `cargo fmt`. Every workspace member,
+including examples, declares `[lints] workspace = true` so the root Clippy,
+Rust, and Rustdoc policy applies consistently. The remaining documentation
+checks run `make markdownlint` and `make nixie`; the job fails if any
+formatting or Mermaid rendering check fails. See
+[ADR-016](adr-016-pinned-nightly-rustfmt.md) for the accepted toolchain and
+lint-inheritance decision.
+
+Because registration occurs as the compiler encounters each attribute, step
+definitions must appear earlier in a module than any `#[scenario]` that uses
+them. Declaring a scenario first would trigger validation before the step is
+registered, producing a spurious "No matching step definition" error. A UI test
+(`scenario_out_of_order`) documents this requirement.
+
+### 2.3 The `inventory` solution: A global step registry
+
+The `inventory` crate provides a clean and powerful abstraction over the
+link-time collection mechanism described above. It offers "typed distributed
+plugin registration," allowing different parts of a program to submit items
+into a collection that can be iterated over at runtime.[^14]
+
+For `rstest-bdd`, this pattern is used to create a global registry of all step
+definitions. First, a struct is defined to hold the metadata for each step.
+This struct will contain a type-erased function pointer to the user's
+implementation, the pattern string to match against Gherkin text, and source
+location information for generating clear error messages.
+
+**Definition of the** `Step` **struct (within the** `rstest-bdd` **crate):**
+
+```rust,no_run
+// A simplified representation of the step metadata.
+#[derive(Debug)]
+pub struct Step {
+    pub keyword: StepKeyword, // e.g., Given, When, Then, And or But
+    pub pattern: &'static StepPattern, // The pattern string from the attribute,
+                                       // e.g., "A user has {count} cucumbers"
+    // A type-erased function pointer. Arguments will be wired up by the
+    // scenario orchestrator in later phases.
+    pub run: fn(),
+    // Location info for better error messages.
+    pub file: &'static str,
+    pub line: u32,
+}
+
+// This macro call creates the global collection for 'Step' structs.
+inventory::collect!(Step);
+```
+
+The [`StepKeyword`](../crates/rstest-bdd/src/types/mod.rs) enum implements
+`FromStr`. Parsing failures return a `StepKeywordParseError` to ensure invalid
+step keywords are surfaced early. Matching ignores case and surrounding
+whitespace. All five Gherkin keywords are recognized and `And`/`But` are
+resolved to the preceding primary keyword during parsing.
+
+The [`StepPattern`](../crates/rstest-bdd/src/pattern.rs) wrapper encapsulates
+the pattern text so that step lookups cannot accidentally mix arbitrary strings
+with registered patterns. Each pattern is compiled into a regular expression
+when the step registry is initialized, surfacing invalid syntax immediately.
+Equality and hashing rely solely on the pattern text. Transient fields like the
+cached `Regex` are ignored to preserve identity-by-source-text semantics. The
+global registry stores `(StepKeyword, &'static StepPattern)` keys in a
+`hashbrown::HashMap` and uses the raw-entry API for constant-time lookups by
+hashing the pattern text directly.
+
+Placeholder parsing follows a two-stage pipeline that first tokenizes the
+pattern and then translates the resulting tokens into an anchored regular
+expression. This architecture keeps the lexing responsibilities focused and
+isolated from the regex synthesis step, making it easier to extend placeholder
+semantics without touching the compiler.
+
+The lexer (`pattern::lexer::lex_pattern`) walks the pattern once and produces a
+sequence of semantic tokens:
+
+- `Token::Literal(String)` — runs of literal text copied verbatim into the
+  regex after escaping.
+- `Token::Placeholder { start, name, hint }` — captures placeholder metadata;
+  the `start` index feeds error reporting while the optional `hint` maps to a
+  type-aware sub-pattern.
+- `Token::OpenBrace { index }` / `Token::CloseBrace { index }` — unmatched
+  braces preserved in the output so literal braces still require doubling.
+
+Escaped braces (`\{`, `\}`) and doubled braces (`{{`, `}}`) remain purely
+lexical concerns. Nested placeholders are handled by delegating to
+`pattern::placeholder::parse_placeholder`, which understands balanced brace
+pairs within a placeholder body. The compiler module applies
+`build_regex_from_pattern` to iterate over the tokens, escape literal runs,
+replace placeholders with capturing groups, and surface structural mistakes
+such as unbalanced braces.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Dev as Developer
+  participant SP as StepPattern
+  participant LX as lex_pattern (pub(crate))
+  participant PP as parse_placeholder (pub(crate))
+  participant CP as build_regex_from_pattern (pub(crate))
+  participant RX as regex::Regex
+
+  Dev->>SP: compile()
+  SP->>CP: build_regex_from_pattern(text)
+  CP->>LX: lex_pattern(text)
+  loop over pattern bytes
+    alt doubled brace or escape
+      LX-->>CP: Token::Literal("{" | "}")
+    else placeholder start
+      LX->>PP: parse_placeholder(bytes, index)
+      alt OK
+        PP-->>LX: PlaceholderSpec
+        LX-->>CP: Token::Placeholder
+      else malformed
+        PP-->>LX: PatternError
+        LX-->>CP: Err(PatternError)
+        CP-->>SP: Err(PatternError)
+        SP-->>Dev: Err
+      end
+    else unmatched brace
+      LX-->>CP: Token::OpenBrace / Token::CloseBrace
+    else literal
+      LX-->>CP: Token::Literal
+    end
+  end
+  alt stray depth != 0
+    CP-->>SP: Err(PatternError)
+    SP-->>Dev: Err
+  else balanced
+    CP-->>SP: Ok(src)
+    SP->>RX: Regex::new(src)
+    RX-->>SP: Ok(Regex)
+    SP-->>Dev: Ok(())
+  end
+```
+
+Figure: `compile` delegates to the lexer–compiler pipeline. At compile time,
+`StepPattern::compile` returns a `Result<(), regex::Error>`, and
+`extract_placeholders` wraps any compile error as
+`PlaceholderError::InvalidPattern` at runtime.
+
+Runtime placeholder extraction reuses the same parser. The sequence below
+summarizes the call path when placeholders are resolved at runtime.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Runtime as rstest-bdd::extract_placeholders
+  participant Patterns as rstest-bdd-patterns
+
+  Runtime->>Patterns: build_regex_from_pattern(pattern_text)
+  Patterns->>Patterns: Regex::new(src)
+  Patterns->>Patterns: extract_captured_values(&regex, input)
+  alt match
+    Patterns-->>Runtime: Some(Vec<String>)
+    Runtime-->>Caller: Ok(Vec)
+  else no match
+    Patterns-->>Runtime: None
+    Runtime-->>Caller: Err(PlaceholderError::PatternMismatch)
+  end
+```
+
+Figure: Runtime placeholder extraction delegates to `rstest-bdd-patterns` to
+compile a regex and report matches or errors to the caller.
+
+Duplicate step definitions are rejected when the registry is built. Attempting
+to register the same keyword and pattern combination twice results in a panic
+that points to the conflicting definition so that errors surface early during
+test startup.
+
+Placing the `Step` struct in the runtime crate avoids a circular dependency
+between the procedural macros and the library. The macros will simply re-export
+the type when they begin submitting steps to the registry.
+
+A small convenience macro, `step!`, wraps `inventory::submit!` and directly
+constructs a `Step`. It captures the file and line number automatically so that
+users only provide the keyword, pattern, and handler when registering a step.
+
+The `#[given]`, `#[when]`, and `#[then]` macros will expand into an
+`inventory::submit!` block. This macro call constructs an instance of the
+`Step` struct at compile time and registers it for collection.[^14]
+
+At runtime, the code generated by the `#[scenario]` macro can retrieve a
+complete list of all step definitions across the entire application simply by
+calling `inventory::iter::<Step>()`. This provides an iterator over all
+registered `Step` instances, regardless of the file, module, or crate in which
+they were defined.
+
+For screen readers: The following class diagram shows the relationships among
+the core step types. The `Step` struct references `StepKeyword`, `StepPattern`,
+and either `StepFn` (synchronous) or `AsyncStepFn` (asynchronous, see §2.5).
+
+```mermaid
+classDiagram
+    class Step {
+        + keyword: StepKeyword
+        + pattern: &'static StepPattern
+        + run: StepFn
+        + run_async: AsyncStepFn
+    }
+    class StepKeyword
+    class StepFn
+    class AsyncStepFn
+    class StepFuture~'a~
+    class StepContext
+    Step --> StepPattern : pattern
+    Step --> StepKeyword : keyword
+    Step --> StepFn : run (sync)
+    Step --> AsyncStepFn : run_async (async)
+    AsyncStepFn --> StepFuture~'a~ : returns
+    class STEP_MAP {
+        + (StepKeyword, &'static StepPattern) => Step
+    }
+    StepPattern : +as_str(&self) -> &'static str
+    STEP_MAP --> Step : maps to
+    StepContext --> Step : uses
+```
+
+*Figure: Core step types showing both synchronous and asynchronous execution
+paths.*
+
+For screen readers: The following class diagram shows the step wrapper
+architecture for both synchronous and asynchronous execution modes.
+
+```mermaid
+classDiagram
+    class StepContext {
+    }
+    class StepArg {
+        pat: Ident
+        ty: Type
+    }
+    class FixtureArg {
+        pat: Ident
+        name: Ident
+        ty: Type
+    }
+    class Step {
+        keyword: StepKeyword
+        pattern: StepPattern
+        run: StepFn
+        run_async: AsyncStepFn
+    }
+    class StepFn
+    class AsyncStepFn
+    class StepWrapper
+    class AsyncStepWrapper
+    StepWrapper : extract_placeholders(pattern, text)
+    StepWrapper : parse captures with FromStr
+    StepWrapper : call StepFunction
+    AsyncStepWrapper : extract_placeholders(pattern, text)
+    AsyncStepWrapper : parse captures with FromStr
+    AsyncStepWrapper : call async StepFunction
+    AsyncStepWrapper : returns StepFuture<'a>
+    StepFn <|-- StepWrapper
+    AsyncStepFn <|-- AsyncStepWrapper
+    StepContext <.. StepWrapper
+    StepContext <.. AsyncStepWrapper
+    StepArg <.. StepWrapper
+    StepArg <.. AsyncStepWrapper
+    FixtureArg <.. StepWrapper
+    FixtureArg <.. AsyncStepWrapper
+    Step o-- StepFn
+    Step o-- AsyncStepFn
+```
+
+*Figure: Step wrapper architecture for sync and async execution.*
+
+#### Registry interaction diagrams
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Dev as Macro User
+  participant V as validate_steps_exist
+  participant RS as Registry State
+  participant VA as Validators
+  participant D as Diagnostics
+
+  Dev->>V: validate_steps_exist(steps, strict)
+  V->>RS: validate_registry_state(defs, crate_id, strict)
+  alt Definitions present
+    V->>VA: validate_individual_steps(steps, defs)
+    loop each step
+      VA->>VA: find_step_matches(step, patterns)
+      VA->>VA: validate_single_step(step, kw, matches)
+      VA-->>D: Optional (span, message)
+    end
+    V-->>Dev: Emit per-step diagnostics (if any)
+  else No definitions
+    RS-->>D: Warning/Errors per strict mode
+    V-->>Dev: Report outcome
+  end
+```
+
+Figure: `validate_steps_exist` drives step validation and diagnostics.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as Caller
+  participant RSO as register_step
+  participant RSI as register_step_inner
+  participant REG as Registry
+
+  U->>RSO: register_step(pattern, handler)
+  RSO->>RSI: register_step_inner(current_crate_id(), ...)
+  RSI->>RSI: normalize_crate_id -> Box<str>
+  RSI->>REG: Insert step pattern under crate key
+  REG-->>U: Registered
+```
+
+Figure: Step registration flows through a thin wrapper to the registry.
+
+```mermaid
+classDiagram
+    class StepKeyword
+    class StepPattern {
+        +new(pattern: &str)
+        +compile()
+        +as_str()
+    }
+    class CrateDefs {
+        +patterns(keyword: StepKeyword): &[StepPattern]
+        +is_empty()
+    }
+    class ParsedStep {
+        +text: String
+    }
+    class StepRegistry {
+        +REGISTERED: Mutex<HashMap<String, CrateDefs>>
+        +register_step_inner(keyword: StepKeyword, pattern: &syn::LitStr, crate_id: impl Into<String>)
+        +register_step(keyword: StepKeyword, pattern: &syn::LitStr)
+        +register_step_for_crate(keyword: StepKeyword, literal: &str, crate_id: &str)
+        +validate_steps_exist(steps: &[ParsedStep], strict: bool): Result<(), syn::Error>
+    }
+    StepRegistry --> CrateDefs
+    CrateDefs --> StepPattern
+    StepRegistry --> ParsedStep
+    StepRegistry --> StepKeyword
+```
+
+Figure: Core types involved in registration and validation.
+
+### 2.4 The macro expansion process: A compile-time to runtime journey
+
+The interaction between the user's code, the `rstest-bdd` macros, and the final
+test execution can be broken down into a sequence of compile-time and runtime
+events.
+
+**1.** `#[given]` **Expansion (Compile-Time)**
+
+- **Input Code:**
+
+```rust,no_run
+
+#[given("a user exists")]
+fn given_i_am_a_user(mut user_context: UserContext) { /\*... \*/ }
+```
+
+- **Macro Action:** The `#[given]` proc-macro parses its attribute string
+  (`"a user exists"`) and the function it's attached to. It then generates an
+  `inventory::submit!` block. This block contains the static definition of a
+  `Step` struct, where the `run` field is a type-erased pointer to a wrapper
+  around the `given_i_am_a_user` function.
+
+**2.** `#[scenario]` **Expansion (Compile-Time)**
+
+- **Input Code:**
+
+```rust,no_run
+fn test_sample_scenario(my_fixture: MyFixture) { /\* final assertion \*/ }
+```
+
+- **Macro Action:**
+
+1. The `#[scenario]` proc-macro performs file reads to load the contents of
+   `f.feature`.
+2. It uses a Gherkin parser crate (such as `gherkin` [^15]) to parse the feature
+   file content into an abstract syntax tree (AST).
+3. It traverses the AST to find the `Scenario` with the name "Sample Scenario".
+4. During compilation, the macro validates that each Gherkin step has a
+   matching definition recorded by the step macros and emits `compile_error!`
+   when one is missing. At runtime, the generated test still performs lookup via
+    `inventory::iter::<Step>()` to resolve the concrete function and to perform
+   placeholder matching and argument extraction.
+5. Using the `quote!` macro [^16], it generates a completely new Rust function.
+   This generated function replaces the original
+
+   `test_sample_scenario` function.
+6. The generated function is annotated with `#[rstest]`, and it preserves the
+   original function's signature, including the `my_fixture: MyFixture`
+   argument. This is critical for ensuring `rstest`'s dependency injection
+   continues to work.
+7. The body of this new, generated function contains the runtime logic for the
+   BDD test:
+
+   - It initializes a context or state object for the scenario.
+
+   - It iterates through the steps of "Sample Scenario" as defined in the
+     Gherkin AST.
+
+   - For each Gherkin step, it iterates through the global step registry again
+     (this time at runtime) by calling `inventory::iter::<Step>()`.
+
+   - It finds the correct registered `Step` by matching the Gherkin step's text
+     against the `pattern` field of each registered `Step`.
+
+   - If a match is found, it parses any arguments from the Gherkin text.
+
+   - It invokes the `run` function pointer from the matched `Step` struct,
+     passing it the necessary context (which includes access to fixtures and
+     step arguments).
+
+   - After the step-execution loop, it includes the user's original code from
+     the body of `test_my_scenario`.
+
+### 3. Test execution (runtime)
+
+1. The user runs `cargo test`.
+2. The `rstest` test runner discovers the generated `test_my_scenario` function.
+3. `rstest` first resolves and provides the `my_fixture` dependency.
+4. `rstest` then executes the body of the generated function.
+5. The generated code looks up each step using a map built from the global step
+   registry. This map is initialized once via `LazyLock`, avoiding repeated
+   iteration over `inventory::iter`. Fixtures like `my_fixture` are made
+   available to the step functions through the context object passed to the
+   call site.
+6. If all steps pass, the original code from the user's `test_my_scenario`
+   function body is executed.
+
+This architecture successfully bridges the gap between the stateless
+compile-time world of procedural macros and the stateful, ordered execution
+required for a BDD scenario, all while remaining fully compatible with the
+`rstest` framework.
+
+### 2.5 Async step execution
+
+The step execution model described in §2.4 is synchronous: step wrappers are
+function pointers that execute immediately and return a `Result`. This section
+describes the asynchronous execution model that enables async scenario tests
+under Tokio. For the full architectural decision record, see
+[ADR-001](adr-001-async-fixtures-and-test.md).
+
+> **Implementation status:** Async scenario execution is now implemented for
+> Tokio current-thread mode. The `scenarios!` macro accepts
+> `runtime = "tokio-current-thread"`, and `#[scenario]` detects `async fn` test
+> signatures. Step definitions may be `async fn` and are awaited sequentially
+> via the registered async wrapper (`AsyncStepFn`). ADR-005 moves runtime
+> selection into harness adapters and attribute policy plugins, and
+> `scenarios!` now treats `runtime = "tokio-current-thread"` as a
+> compatibility alias for Tokio harness selection.
+
+#### 2.5.1 Motivation
+
+Many Rust applications use Tokio for asynchronous I/O, and their integration
+tests naturally involve async operations such as HTTP requests, database
+queries, and message queue interactions. Without native async support, step
+definitions must resort to blocking the runtime with `block_on` calls or
+restructuring tests to avoid async fixtures entirely.
+
+The async execution model addresses this by:
+
+- Supporting `async fn` step definitions that are awaited sequentially.
+- Preserving compatibility with `rstest` asynchronous fixtures.
+- Maintaining the existing `skip!` and panic interception behaviour.
+
+#### 2.5.2 Step future type
+
+Async step wrappers return a boxed future tied to the lifetime of the borrowed
+`StepContext`. The returned future cannot be `'static` because it may hold
+references to fixtures stored in the context.
+
+For screen readers: The following Rust snippet shows the type aliases for async
+step execution.
+
+```rust,no_run
+use std::future::Future;
+use std::pin::Pin;
+
+/// The future returned by an async step wrapper.
+type StepFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<StepExecution, StepError>> + 'a>>;
+
+/// An async step function pointer.
+type AsyncStepFn = for<'ctx, 'fixtures> fn(
+    &'ctx mut StepContext<'fixtures>,
+    &'ctx str,                          // step text
+    Option<&'ctx str>,                  // docstring
+    Option<&'ctx [&'ctx [&'ctx str]]>,  // datatable
+) -> StepFuture<'ctx>;
+```
+
+*Figure: Type aliases for async step wrappers.*
+
+#### 2.5.3 Dual execution model
+
+Async support coexists with the synchronous implementation. The execution model
+is selected per scenario or per `scenarios!` invocation:
+
+- **Synchronous pipeline (default):** Step wrappers are called and return
+  immediately. This is the existing behaviour and remains the default for
+  backwards compatibility.
+- **Async pipeline (opt-in):** Step wrappers return futures that the scenario
+  runner awaits sequentially. This mode is activated when a scenario test uses
+  `#[tokio::test]` annotation with an explicit `async fn` scenario.
+
+The legacy `runtime = "tokio-current-thread"` argument to `scenarios!` is a
+compatibility alias (per ADR-005) that resolves to
+`harness = rstest_bdd_harness_tokio::TokioHarness`. This generates synchronous
+(not `async fn`) scenario test functions executed via `TokioHarness`, which
+provides the Tokio current-thread runtime. Async step functions are not
+supported under this alias; use explicit `async fn` scenarios with
+`#[tokio::test]` or the explicit harness form for async step support.
+
+Sync step definitions are normalized into the async interface by wrapping their
+result in an immediately ready future. This allows mixed sync and async step
+definitions within a single scenario when async mode is enabled.
+
+For screen readers: The following sequence diagram shows how a synchronous step
+definition executes through the async pathway, including the registry lookup
+and the immediate resolution of the wrapped future.
+
+```mermaid
+sequenceDiagram
+    actor TestCode
+    participant Registry
+    participant Step
+    participant SyncWrapper
+    participant AsyncWrapper
+    participant TokioRuntime
+
+    TestCode->>Registry: find_step_async(keyword, text)
+    Registry->>Registry: resolve_step(keyword, text)
+    Registry-->>TestCode: AsyncStepFn (Step.run_async)
+
+    TestCode->>TokioRuntime: spawn(async move { call AsyncStepFn })
+
+    Note over TestCode,AsyncWrapper: Async execution of a sync-defined step
+
+    TokioRuntime->>AsyncWrapper: async_fn(&mut ctx, text, doc, table)
+    AsyncWrapper->>SyncWrapper: call sync_wrapper(&mut ctx, text, doc, table)
+    SyncWrapper-->>AsyncWrapper: Result~StepExecution, StepError~
+    AsyncWrapper-->>TokioRuntime: StepFuture (ready(Result))
+    TokioRuntime-->>TestCode: await StepFuture => Result
+```
+
+*Figure: Async execution of a sync-defined step via the normalized async
+wrapper.*
+
+When a scenario runs in synchronous mode but references an `async fn` step
+definition, the framework rejects this at compile time. The step wrapper
+generated for synchronous execution cannot await a future, so the macro emits a
+`compile_error!` diagnostic indicating that the step requires async mode. This
+fail-fast behaviour prevents silent runtime issues.
+
+#### 2.5.4 Tokio current-thread mode
+
+The initial implementation targets Tokio current-thread mode (
+`#[tokio::test(flavor = "current_thread")]`). This mode aligns with the existing
+`RefCell`-backed fixture model:
+
+- Step futures may be `!Send` because they execute on a single thread.
+- Steps can hold `RefMut` guards or `&mut T` borrows across `.await` points.
+- No additional synchronization primitives are required for mutable fixtures.
+
+Multi-thread mode (`#[tokio::test(flavor = "multi_thread")]`) requires step
+futures to be `Send`, which would necessitate redesigning the fixture storage
+model. This is deferred to a follow-on ADR.
+
+For screen readers: The following diagram shows the async step execution flow.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Test as Scenario Test
+    participant Runner as ScenarioRunner
+    participant Registry as StepRegistry
+    participant Wrapper as AsyncStepWrapper
+
+    Test->>Runner: execute_async(scenario)
+    loop for each Gherkin step
+        Runner->>Registry: lookup(keyword, text)
+        Registry-->>Runner: AsyncStepFn
+        Runner->>Wrapper: call(ctx, text, docstring, table)
+        Wrapper-->>Runner: StepFuture<'a>
+        Runner->>Runner: .await StepFuture
+        alt step panics or skips
+            Runner->>Runner: catch_unwind / intercept skip
+        end
+    end
+    Runner-->>Test: scenario result
+```
+
+*Figure: Sequence diagram for async step execution.*
+
+#### 2.5.5 Macro integration
+
+Manual scenario tests can opt into async execution by annotating the test
+function with `#[tokio::test]` and declaring it `async fn`.
+
+For auto-generated tests, ADR-005 introduces a harness adapter selection path.
+The legacy `runtime = "tokio-current-thread"` argument is retained as
+compatibility syntax and now resolves to
+`rstest_bdd_harness_tokio::TokioHarness` (activated in roadmap item 9.2.4). The
+macro emits a deprecation warning when this legacy syntax is used, recommending
+migration to the explicit form
+`harness = rstest_bdd_harness_tokio::TokioHarness`.
+
+When the runtime compatibility alias is activated, the generated scenario test
+function is synchronous (not `async fn`), and the `TokioHarness` provides the
+Tokio current-thread runtime for step execution. Async step definitions are not
+supported under this mode; they will be rejected at runtime by the synchronous
+step wrapper's runtime detection check. Users requiring async step functions
+should use explicit `async fn` scenario tests with manual `#[tokio::test]`
+annotation instead.
+
+#### 2.5.6 Unwind and skip handling
+
+The synchronous runner uses `std::panic::catch_unwind` to intercept panics and
+`skip!` requests. For async steps, the implementation must use a `Future`-aware
+catch mechanism (for example, `futures::FutureExt::catch_unwind` or an
+equivalent).
+
+Key behaviours preserved in async mode:
+
+- Panics are captured with step index, keyword, and text context.
+- `skip!` continues to halt execution and record a skipped outcome.
+- Feature and scenario metadata remain available in failure reports.
+
+#### 2.5.7 Current-thread limitations
+
+Tokio current-thread mode has documented limitations that affect step authoring:
+
+- **Blocking operations:** Calls to `std::thread::sleep`, synchronous I/O, or
+  CPU-intensive work block the runtime thread and can stall the scenario. Move
+  blocking work to `tokio::task::spawn_blocking`.
+- **`tokio::spawn` with `!Send` futures:** Code that spawns tasks with
+  `tokio::spawn` will fail if the captured future is `!Send`. Use `spawn_local`
+  with a `LocalSet` instead, or select multi-thread mode when available.
+- **Nested runtimes:** Creating a new Tokio runtime inside a step will panic.
+  Avoid `Runtime::block_on` within step definitions.
+
+These constraints are inherent to the current-thread execution model and should
+be considered when designing step implementations.
+
+### 2.6 Runtime execution module
+
+The `rstest_bdd::execution` module provides the runtime infrastructure for step
+execution, centralizing policy decisions that were previously embedded in the
+codegen layer. This separation keeps macro-generated code lightweight and makes
+runtime behaviour easier to test independently.
+
+ADR 018 records the accepted future direction for parser-neutral plans and a
+canonical structured scenario runner built on this module. That direction is
+future roadmap work; this section describes the current execution module and
+does not claim that the parser-neutral plan or runner has been implemented.
+
+#### 2.6.1 Design rationale
+
+Prior to this refactoring, the macro crate generated inline helper functions
+for fixture validation, skip message encoding/decoding, and step execution.
+This embedded policy decisions (sync vs async, error handling) within the code
+generation layer, creating architectural drift between the lightweight codegen
+principle and actual implementation.
+
+The solution moves these helpers to a dedicated runtime module:
+
+- **`execute_step`**: Core step execution logic (registry lookup, fixture
+  validation, handler invocation, result handling). Returns
+  `Result<Option<Box<dyn Any>>, ExecutionError>` with structured error variants.
+- **`ExecutionError`**: Enum capturing all execution failure modes:
+  - `Skip { message }`: Control flow signal for skipping scenarios
+  - `StepNotFound { index, keyword, text, ... }`: Unregistered step pattern
+  - `MissingFixtures(Arc<MissingFixturesDetails>)`: Required fixtures
+    unavailable
+  - `HandlerFailed { index, keyword, text, error, ... }`: Step handler returned
+    error
+- **`validate_required_fixtures`**: Fixture availability checking that returns
+  `Result<(), ExecutionError>`. When fixtures are unavailable, returns
+  `Err(ExecutionError::MissingFixtures(Arc<MissingFixturesDetails>))` instead
+  of panicking. Callers (primarily `execute_step`) propagate this Result
+  through the structured error flow
+
+#### 2.6.2 RuntimeMode and TestAttributeHint
+
+The `RuntimeMode` enum defines available execution strategies:
+
+```rust
+pub enum RuntimeMode {
+    Sync,              // Default synchronous execution
+    TokioCurrentThread, // Tokio current-thread runtime
+}
+```
+
+The `TestAttributeHint` enum provides compile-time guidance for attribute
+generation:
+
+```rust
+pub enum TestAttributeHint {
+    RstestOnly,                    // Generate #[rstest::rstest] only
+    RstestWithTokioCurrentThread,  // Add #[tokio::test(flavor = "current_thread")]
+}
+```
+
+These enums now live in `rstest-bdd-policy`, which acts as the shared source of
+truth for both the runtime crate and the proc-macro crate. The runtime module
+re-exports them from `rstest_bdd::execution` to preserve the public API, while
+the macro crate imports them directly from `rstest-bdd-policy`. That eliminates
+the manual synchronization risk that existed when each crate kept its own copy.
+
+ADR-005 supersedes these enums with harness adapters and attribute policy
+plugins. The harness adapter selects the execution strategy (sync, Tokio, GPUI,
+etc.), while an attribute policy plugin supplies the test attributes that must
+decorate generated scenario functions. This avoids embedding Tokio or GPUI
+knowledge in the core runtime and macro crates, keeping dependencies opt-in.
+
+#### 2.6.3 Generated code structure
+
+With this architecture, macro-generated step executors become thin wrappers:
+
+```rust
+fn __rstest_bdd_execute_single_step(...) -> Result<Option<Box<dyn Any>>, ExecutionError> {
+    rstest_bdd::execution::execute_step(...)
+}
+
+fn __rstest_bdd_extract_skip_message(error: &ExecutionError) -> Option<Option<String>> {
+    // Returns Some(Some(msg)) for skip with message,
+    //         Some(None) for skip without message,
+    //         None for non-skip errors
+    if error.is_skip() {
+        Some(error.skip_message().map(String::from))
+    } else {
+        None
+    }
+}
+```
+
+This reduces generated code size and centralizes policy logic where it can be
+tested and modified without regenerating macro output.
+
+### 2.7 Harness adapters and attribute policy plugins (ADR-005, ADR-007)
+
+Framework-specific test harnesses (Tokio, GPUI, Bevy, and others) should not
+inflate the default dependency graph of the core runtime or macros. ADR-005
+introduces a harness adapter layer and a small attribute policy plugin
+interface so those integrations live in opt-in crates.
+
+#### 2.7.1 Harness adapter core (`rstest-bdd-harness`)
+
+The harness adapter layer isolates runtime execution from framework details.
+The core crate defines:
+
+- A small harness adapter trait that executes a scenario runner closure inside
+  a harness-specific environment.
+- Shared types describing the scenario runner entry point and harness-provided
+  fixtures (for example, GPUI's `TestAppContext`).
+- A default `StdHarness` implementation that runs the synchronous pipeline
+  without an async runtime or UI harness.
+
+The `#[scenario]` and `scenarios!` macros accept `harness = path::ToHarness`,
+defaulting to `StdHarness` when omitted. The generated test body delegates to
+the chosen harness adapter, which controls runtime setup, teardown, and any
+framework-specific fixture injection. For recognized first-party harness paths,
+the macro also infers the matching default attribute policy when
+`attributes = ...` is omitted.
+
+Phase 9.1 implements the core crate with the following interfaces:
+
+```rust,no_run
+use rstest_bdd_harness::{
+    HarnessAdapter, ScenarioMetadata, ScenarioRunRequest, ScenarioRunner,
+    StdHarness,
+};
+
+let request = ScenarioRunRequest::new(
+    ScenarioMetadata::new(
+        "tests/features/login.feature",
+        "Successful login",
+        12,
+        vec!["@smoke".to_string()],
+    ),
+    ScenarioRunner::new(|()| "ok"),
+);
+
+let harness = StdHarness::new();
+assert_eq!(harness.run(request).expect("std harness should not fail"), "ok");
+```
+
+`ScenarioMetadata`, `ScenarioRunner<'a, C, T>`, and
+`ScenarioRunRequest<'a, C, T>` are the shared runner primitives for first-party
+and third-party harness crates. ADR-007 introduces `HarnessAdapter::Context` so
+harnesses can inject typed, framework-specific resources at the runner boundary
+without thread-local conventions.
+
+Phase 9.3.6 adds dedicated `StdHarness` behavioural coverage for parity with
+the Tokio harness test surface. The behavioural suite validates three baseline
+guarantees: request metadata remains available on the harness boundary, the
+runner closure executes exactly once and returns its value, and panics raised
+inside the runner propagate through `StdHarness::run` without being swallowed.
+
+#### 2.7.2 Attribute policy plugins
+
+Harnesses frequently require a specific test attribute (for example,
+`#[tokio::test]` or a GPUI test attribute). To avoid hard-coding those
+attributes in `rstest-bdd-macros`, attribute policy plugins provide a simple
+opt-in layer:
+
+- `rstest-bdd-harness` defines a minimal attribute policy interface that
+  supplies a list of test attributes to apply during macro expansion.
+- The `#[scenario]` and `scenarios!` macros accept
+  `attributes = path::ToPolicy` or infer a policy from the chosen harness.
+- Policies live in separate crates so additional attributes can be introduced
+  without adding framework dependencies to the core runtime or macros.
+
+Phase 9.1 provides this interface in `rstest-bdd-harness`:
+
+```rust,no_run
+use rstest_bdd_harness::{AttributePolicy, DefaultAttributePolicy};
+
+let attrs = DefaultAttributePolicy::test_attributes();
+assert_eq!(attrs.len(), 1);
+assert_eq!(attrs[0].render(), "#[rstest::rstest]");
+```
+
+The default policy intentionally emits only `#[rstest::rstest]`, preserving a
+framework-agnostic baseline while Tokio and GPUI policies move to opt-in
+adapter crates.
+
+#### 2.7.3 Macro integration (Phase 9.2)
+
+The `#[scenario]` and `scenarios!` macros accept two new optional parameters:
+
+- `harness = path::ToHarness` — a type implementing `HarnessAdapter` and
+  `Default`.
+- `attributes = path::ToPolicy` — a type implementing `AttributePolicy`.
+
+Both accept `syn::Path` values so users can reference types from any crate.
+Omitting both preserves exact backward compatibility.
+
+**Compile-time trait-bound assertions (Phase 9.2.1).** Rust procedural macros
+cannot call user-defined trait methods at expansion time. The macro cannot
+evaluate `AttributePolicy::test_attributes()` for an arbitrary user-provided
+type during expansion. Instead, the macro emits compile-time const trait-bound
+assertions:
+
+```rust
+const _: () = {
+    fn __assert_harness<T: rstest_bdd_harness::HarnessAdapter + Default>() {}
+    fn __call() { __assert_harness::<UserHarness>(); }
+};
+```
+
+These assertions validate the type at compile time and produce clear errors
+when the type does not implement the required trait.
+
+**Execution delegation (Phase 9.2.2).** When `harness` is specified, the
+generated test body delegates scenario execution through the harness adapter.
+The macro wraps the runtime portion of the test (context setup, step executor
+loop, skip handler, context postlude, and user block) in a
+`ScenarioRunner<'_, T>` closure. Item definitions (constants, inner `fn` and
+`struct`) remain outside the closure because they are Rust items visible by
+name resolution, not captured variables.
+
+The generated delegation code:
+
+1. Constructs a `ScenarioMetadata` from compile-time constants (feature path,
+   scenario name, line number, tags).
+2. Wraps the runtime execution in `ScenarioRunner::new(move |ctx| { ... })`,
+   where `ctx` has type `<HarnessType as HarnessAdapter>::Context`.
+3. Bundles metadata and runner into `ScenarioRunRequest::new(metadata, runner)`.
+4. Instantiates the harness via `<HarnessType as Default>::default()`.
+5. Calls `<HarnessType as HarnessAdapter>::run(&harness, request)`
+   (UFCS avoids requiring the trait to be in scope).
+
+The `Default` requirement enables zero-config harness instantiation from
+proc-macro generated code without needing to evaluate arbitrary user
+expressions at expansion time. `StdHarness` derives `Default`; third-party
+harness types must also implement `Default`.
+
+For fallible scenarios (`Result<(), E>` return type), the closure's return type
+is `Result<(), E>`. `HarnessAdapter::run` now returns `HarnessResult<T>`, so
+`T = Result<(), E>` composes naturally as `HarnessResult<Result<(), E>>`.
+Macro-generated tests call `unwrap_or_else(|err| panic!(...))` at the harness
+boundary, preserving scenario-level `Result<(), E>` behaviour while surfacing
+harness initialization failures as fatal test infrastructure errors with the
+underlying `HarnessError` detail.
+
+A gauss migration on v0.6.0-beta3 showed that the outer generated GPUI test
+body did not consume a fallible scenario's `Result`, producing
+`unused_must_use` under `-D warnings`. This is a generated-wrapper defect, not
+a reason to weaken the fallible-scenario contract: every harness path must
+consume or propagate the scenario result. Unit-returning scenario functions
+already propagate fallible step errors and remain the simpler shape when the
+user body does not itself need `?` (ADR-006; roadmap 11.3.2).
+
+**Context handoff (Phase 9.4.1 / ADR-007).** The harness contract now includes
+an associated context type:
+
+```rust,no_run
+pub trait HarnessAdapter {
+    type Context;
+
+    fn run<T>(
+        &self,
+        request: ScenarioRunRequest<'_, Self::Context, T>,
+    ) -> HarnessResult<T>;
+}
+```
+
+This keeps context injection explicit and typed for GPUI and Bevy adapters.
+`StdHarness` and `TokioHarness` use `Context = ()`.
+
+**Async rejection.** Combining `harness` with `async fn` scenario signatures
+produces a `compile_error!` (`scenario.rs`). Two cases govern how async step
+definitions interact with the runtime:
+
+1. **Async steps in async scenarios (no harness):** supported. The macro calls
+   the async step wrapper directly within the async scenario context. No sync
+   wrapper is involved.
+2. **Async steps in synchronous scenarios under `TokioHarness`:**
+   conditionally supported. The sync wrapper generated by
+   `generate_sync_wrapper_from_async` (`emit.rs`) checks whether a Tokio
+   runtime is already active. When it is, the wrapper polls the async step once
+   and succeeds only if the step is immediately ready. If the step yields
+   `Pending`, execution fails with a runtime error rather than silently
+   blocking. The fix is either to keep the harness and convert the step to a
+   synchronous function that drives async work via `tokio::spawn` /
+   `tokio::spawn_local`, or to move the scenario to an explicit async test
+   without harness delegation.
+
+The `TokioHarness` wraps synchronous scenario closures inside a Tokio runtime
+with a `LocalSet`, making `tokio::runtime::Handle::current()` and
+`tokio::task::spawn_local` available in step functions without requiring
+`async fn` scenario signatures.
+
+**Runtime compatibility alias (Phases 9.2.3, 9.2.4).** For `scenarios!`,
+`runtime = "tokio-current-thread"` is treated as compatibility syntax for Tokio
+harness selection. The macro records this as a
+`RuntimeCompatibilityAlias::TokioHarnessAdapter` during argument resolution and
+resolves it to `rstest_bdd_harness_tokio::TokioHarness` (activated in phase
+9.2.4). When the alias is activated, the generated scenario test function is
+synchronous (not `async fn`), and the `TokioHarness` provides the Tokio
+current-thread runtime for step execution. The macro emits a deprecation
+warning recommending migration to the explicit form
+`harness = rstest_bdd_harness_tokio::TokioHarness`. Immediate-ready async step
+definitions remain available under the activated alias because they share the
+same one-poll wrapper contract as explicit `TokioHarness` usage. Steps that
+yield `Pending` still fail at runtime; users requiring multi-poll async
+coordination should use synchronous harness-driven steps plus external async
+validation or move the scenario to an explicit `async fn` test.
+
+**Attribute policy trust model (updated in 9.3.4).** The macro resolves an
+attribute policy and emits its test attributes during code generation. Because
+procedural macros still cannot evaluate arbitrary user-defined trait methods at
+expansion time, this resolution is currently path-based:
+
+- `rstest_bdd_harness_tokio::TokioAttributePolicy` resolves to
+  `#[rstest::rstest]` plus `#[tokio::test(flavor = "current_thread")]` for
+  async scenario signatures. Matching is constrained to that canonical path to
+  avoid false positives from unrelated `TokioAttributePolicy` type names.
+- `rstest_bdd_harness_gpui::GpuiAttributePolicy` resolves to
+  `#[rstest::rstest]` plus `#[gpui::test]` for both sync and async scenario
+  signatures. Matching is constrained to that canonical path to avoid false
+  positives from unrelated `GpuiAttributePolicy` type names.
+- `DefaultAttributePolicy` and unknown third-party policy paths resolve to
+  `#[rstest::rstest]` only.
+
+The canonical path-to-hint mapping lives in `rstest-bdd-policy`, so adding
+first-party policy mappings no longer requires editing macro-local resolution
+tables.
+
+Attribute resolution follows the ADR-008 precedence order:
+
+1. explicit `attributes = ...`
+2. known first-party `harness = ...` mapping
+3. deprecated `runtime = "tokio-current-thread"` compatibility alias
+4. existing runtime-mode or synchronous fallback
+
+The first-party harness mappings also live in `rstest-bdd-policy` and the macro
+layer recognizes both canonical crate-root paths and imported single-segment
+adapter type names:
+
+- `rstest_bdd_harness::StdHarness` -> rstest-only
+- `rstest_bdd_harness_tokio::TokioHarness` -> Tokio current-thread
+- `rstest_bdd_harness_gpui::GpuiHarness` -> GPUI test
+
+Imported single-segment recognition only applies to unaliased adapter type
+names. Renamed or aliased imports, such as
+`use rstest_bdd_harness_tokio::TokioHarness as MyHarness`, are not recognized
+by the macro; callers must use the full canonical crate-root path used in
+`rstest-bdd-policy`, add an explicit `rstest-bdd-harness` dependency, or expose
+the adapter under its original name for the macro to resolve it.
+
+Unknown harness paths still fall back to runtime compatibility behaviour
+because procedural macros do not evaluate arbitrary third-party
+`AttributePolicy::test_attributes()` implementations during expansion.
+`#[tokio::test]` is omitted for synchronous test signatures because Tokio
+requires `async fn`.
+
+When an unresolved path retains the canonical Tokio or GPUI crate identifier
+immediately before the adapter type, the macro emits a fallback warning that
+recommends the canonical crate-root path or a direct `rstest-bdd-harness`
+development dependency under the canonical crate resolution name
+`rstest_bdd_harness`. A renamed dependency key cannot satisfy the generated
+fallback paths. For example, `alias::rstest_bdd_harness_tokio::TokioHarness`
+supplies this evidence. `custom::TokioHarness` does not: unrelated third-party
+adapters remain valid fallback paths without the diagnostic even when the
+first-party adapter crate is present.
+
+The accepted warning-channel and emission-ownership decision is recorded in
+[ADR-017](adr-017-toolchain-aware-adapter-fallback-diagnostics.md).
+
+The `codegen::adapter_fallback` module owns this diagnostic. Resolution is a
+pure decision that returns the selected base API crate path and optional
+qualifying fallback metadata. Each macro expansion resolves each supplied
+`harness` or `attributes` path once at its boundary and reuses the decision for
+runtime code, trait assertions, and one diagnostic. The two paths remain
+independent.
+
+`#[scenario]` and `scenarios!` each own a boundary. `scenarios!` resolves both
+supplied paths before it iterates the discovered scenarios and shares the
+result with every generated test, so the contract is one diagnostic per
+distinct qualifying supplied path regardless of how many scenarios the feature
+directory yields. Supplying an aliased `harness` and an aliased `attributes`
+together therefore yields exactly two diagnostics.
+
+On nightly, the macro-expansion boundary passes that metadata to
+`proc_macro::Diagnostic::spanned` with `proc_macro::Level::Warning` and calls
+`.emit()`. Stable toolchains instead use a generated deprecated-item reference
+carrying the same message. The stable diagnostic is a warning by default, while
+`#![deny(deprecated)]` escalates it to an error. The two implementations are
+mutually exclusive, so a qualifying fallback emits exactly one diagnostic.
+
+`crates/rstest-bdd-macros/build.rs` uses `rustc_version::version_meta()` and
+`rustc_version::Channel::Nightly` to set `rstest_bdd_nightly`.
+`crates/rstest-bdd-macros/src/lib.rs` enables `proc_macro_diagnostic` only for
+non-test nightly builds. The `rustversion` attributes in
+`crates/rstest-bdd-harness-tokio/tests/macro_compile.rs` register stable and
+nightly `trybuild` cases separately. This direct adapter-fallback path is
+distinct from `utils::warnings::emit_warning`, which handles runtime and
+registry warnings. `proc-macro-error3` supports other macro errors only.
+
+The user-facing guidance for this feature should lead with harness-only
+first-party configuration, with explicit `attributes = ...` documented as the
+override and third-party escape hatch. The deprecated
+`runtime = "tokio-current-thread"` form remains compatibility syntax for
+`scenarios!`, not the primary configuration surface.
+
+**`rstest::rstest` is always emitted.** The `#[rstest::rstest]` attribute is
+unconditional because the framework fundamentally relies on rstest for fixture
+injection, regardless of the harness or attribute policy in use.
+
+**Dependency addition.** The macro crate (`rstest-bdd-macros`) gains a
+compile-time dependency on `rstest-bdd-harness` so it can emit fully-qualified
+trait paths in const assertions and harness delegation code. This is acceptable
+because `rstest-bdd-harness` is dependency-light per ADR-005.
+
+#### 2.7.4 ADR-008 codegen refactoring: harness-led attribute defaults
+
+ADR-008 did not only change user-facing precedence; it also refactored the
+macro codegen path so that the implementation could express that precedence
+without further stretching the `scenario` module. In
+`crates/rstest-bdd-macros/src/codegen/scenario/test_attrs.rs`,
+`generate_test_attrs` now takes a `TestAttrPolicy<'a>` parameter object with
+`pub(super)` visibility, keeping it internal to the `scenario` codegen module
+while giving the grouping a name that matches ADR-008 terminology. The struct
+contains three policy-resolution inputs: `runtime: RuntimeMode`, which is the
+field that governs attribute-resolution fallback semantics when no harness or
+explicit attribute path is supplied, populated from
+`ScenarioConfig.attribute_runtime`; execution behaviour belongs to
+`ScenarioConfig.runtime` and the async pipeline described in §2.7.3 Macro
+integration; `harness: Option<&'a syn::Path>`, which carries the user-provided
+harness type path such as `rstest_bdd_harness_tokio::TokioHarness`; and
+`attributes: Option<&'a syn::Path>`, which carries the explicit attribute
+policy path and therefore has the highest precedence. This replaced the older
+five-argument `generate_test_attrs` signature with a three-parameter interface,
+bringing the function back under the project's four-argument cohesion threshold
+while making the policy inputs explicit as one coherent object.
+
+The resulting resolution logic in `resolve_attribute_policy` now mirrors the
+precedence described in §2.7.3 Macro integration and builds on the
+`RuntimeMode` and `TestAttributeHint` model from §2.6.2 RuntimeMode and
+TestAttributeHint. The waterfall has four levels. First, an explicit
+`attributes = ...` path is resolved through
+`resolve_attribute_hint_from_policy_path` and overrides everything else.
+Second, when `attributes` is `None`, a known first-party harness path is
+resolved via `resolve_test_attribute_hint_for_harness_path` in
+`rstest-bdd-policy`. Third, if no explicit path or known harness mapping is
+present, the deprecated `runtime = "tokio-current-thread"` alias still reaches
+Tokio behaviour through `RuntimeMode::test_attribute_hint()` when the runtime is
+`TokioCurrentThread`. Fourth, all remaining cases fall back to the sync or
+generic-async baseline, which emits `#[rstest::rstest]` only. This preserves
+ADR-008's "explicit policy beats harness default beats compatibility alias
+beats fallback" ordering while still producing `TokenStream2` output from one
+macro-local code path.
+
+Diagram: Attribute policy resolution flow for `TestAttrPolicy` calling
+`resolve_attribute_policy` and ending at `generate_test_attrs`.
+
+```mermaid
+flowchart TD
+    A[TestAttrPolicy input] --> B[resolve_attribute_policy]
+    B --> C{attributes are set?}
+    C -- yes --> D[use explicit attributes]
+    C -- no --> E{known first-party harness?}
+    E -- yes --> F[resolve_test_attribute_hint_for_harness_path]
+    E -- no --> G{runtime is tokio-current-thread?}
+    G -- yes --> H[use runtime compatibility alias]
+    G -- no --> I[use attribute_runtime or synchronous fallback]
+
+    D --> J[generate_test_attrs]
+    F --> J
+    H --> J
+    I --> J
+
+    J --> K[emit framework test attributes with de-duplication]
+```
+
+*Figure 2: Attribute policy resolution starts from `TestAttrPolicy`, gives
+explicit `attributes = ...` first refusal, then checks known first-party
+harness defaults, then the Tokio compatibility runtime alias, and finally the
+attribute-runtime or synchronous fallback before `generate_test_attrs` emits
+de-duplicated framework test attributes.*
+
+ADR-008 also introduced a deliberate split inside `ScenarioConfig` between
+`runtime: RuntimeMode` and `attribute_runtime: RuntimeMode`. The `runtime`
+field governs execution: whether the generated test body is `async fn`, which
+executor drives the body, and how the surrounding scenario machinery treats the
+function. The `attribute_runtime` field governs emitted test attributes:
+whether the generated function receives rstest-only, Tokio current-thread, or
+GPUI annotations. The two values are usually identical, but they may diverge
+when execution and attribute selection are intentionally decoupled, such as
+when a synchronous attribute policy is paired with an async execution harness
+or when `scenarios!` receives the deprecated `runtime = "tokio-current-thread"`
+token and must still emit Tokio attributes without changing the execution model
+selected elsewhere. Accordingly, `generate_test_attrs` receives
+`config.attribute_runtime` through `TestAttrPolicy.runtime`, while
+`config.runtime.is_async()` is still passed separately as the `is_async`
+boolean. That split keeps attribute selection from accidentally collapsing back
+into execution scheduling.
+
+The harness-side lookup that makes the second precedence level work lives in
+`crates/rstest-bdd-policy/src/lib.rs` as
+`resolve_test_attribute_hint_for_harness_path`. It accepts a `&[&str]` of path
+segments and returns `Option<TestAttributeHint>`, with the canonical mappings
+held in the `KNOWN_HARNESS_HINTS` table: `STD_HARNESS_PATH` (
+`["rstest_bdd_harness", "StdHarness"]`) maps to `TestAttributeHint::RstestOnly`,
+`TOKIO_HARNESS_PATH` (`["rstest_bdd_harness_tokio", "TokioHarness"]`) maps to
+`TestAttributeHint::RstestWithTokioCurrentThread`, and `GPUI_HARNESS_PATH` (
+`["rstest_bdd_harness_gpui", "GpuiHarness"]`) maps to
+`TestAttributeHint::RstestWithGpuiTest`. Unknown third-party paths return
+`None`, causing `resolve_attribute_policy` to continue down to the runtime
+fallback. The helper is annotated `#[must_use]` because discarding a `Some`
+result would silently bypass the harness default. Keeping this mapping in
+`rstest-bdd-policy`, rather than in the macros crate, also keeps the policy
+layer independent of `syn` and `proc-macro2` and leaves the same
+`TestAttributeHint` lookup reusable for future non-macro consumers.
+
+#### 2.7.5 First-party plugin targets
+
+The first official adapters and policies are:
+
+- `rstest-bdd-harness-tokio` (implemented, phase 9.3): provides `TokioHarness`
+  and `TokioAttributePolicy`. `TokioHarness` implements `HarnessAdapter` by
+  building a `tokio::runtime::Builder::new_current_thread().enable_all()`
+  runtime with a `tokio::task::LocalSet`, then calling
+  `local_set.block_on(&runtime, async { ... })`. This establishes a Tokio
+  runtime and `LocalSet` context on the current thread so that
+  `tokio::runtime::Handle::current()` and `tokio::task::spawn_local` are
+  available inside step functions. `TokioAttributePolicy` implements
+  `AttributePolicy` and emits `#[rstest::rstest]` followed by
+  `#[tokio::test(flavor = "current_thread")]`. The crate depends only on
+  `rstest-bdd-harness` (workspace) and `tokio` (version "1", features = ["
+  rt"]), keeping the dependency footprint minimal per ADR-005. Immediate-ready
+  async step *definitions* (`async fn` steps) do work inside `TokioHarness`,
+  but the generated sync wrapper only polls them once when a harness-provided
+  Tokio runtime is already active. If such a step yields `Pending`, execution
+  fails with an informative runtime error rather than silently blocking. Users
+  should therefore reserve harness-driven async steps for one-poll operations
+  and prefer synchronous steps plus external async validation when a scenario
+  needs multi-poll coordination. `TokioHarness::run` currently performs one
+  `tokio::task::yield_now()` tick after `request.run(())` returns; this
+  advances simple queued local tasks but does not guarantee full `LocalSet`
+  drain for multi-poll futures such as timer-driven work. The user-facing
+  demonstration crate under `examples/tokio-reminders` models a local reminder
+  queue whose BDD suite exercises `TokioHarness` with harness-led default
+  attributes end-to-end, while the crate's unit tests cover the explicit
+  `flush().await` coordination pattern. User-facing examples should therefore
+  lead with `harness = rstest_bdd_harness_tokio::TokioHarness` alone and reserve
+  `attributes = ...` for explicit overrides or attributes-only cases.
+- `rstest-bdd-harness-gpui` (implemented, phase 9.4): provides `GpuiHarness`
+  and `GpuiAttributePolicy`. `GpuiHarness` implements `HarnessAdapter` by
+  running each `ScenarioRunRequest` inside `gpui::run_test`, building a
+  `gpui::TestAppContext`, and passing that context through `request.run(...)`
+  so steps can access it via `#[from(rstest_bdd_harness_context)]`.
+  `GpuiAttributePolicy` implements `AttributePolicy` and emits
+  `#[rstest::rstest]` followed by `#[gpui::test]`. The workspace uses a
+  `version` plus `path` dependency for local GPUI test support so the harness
+  keeps the stable-compatible `run_test`/`TestAppContext`/`#[gpui::test]`
+  surface without reintroducing `async-trait` or a root patch table.
+  Publish-check automation synthesizes a standalone package artefact for
+  `rstest-bdd-harness-gpui` and compiles a generated validator crate against
+  upstream `gpui`; GPUI behavioural and integration tests remain feature-gated
+  behind `native-gpui-tests` as an explicit opt-in suite. A user-facing
+  demonstration crate under `examples/gpui-counter` models a simple counter
+  application whose BDD suite exercises `GpuiHarness` with harness-led default
+  attributes end-to-end, with step definitions that access injected
+  `TestAppContext` through `rstest_bdd_harness_context`. Focused `rstest-bdd`
+  integration coverage also verifies canonical GPUI policy resolution for
+  `scenarios!`, canonical and absolute first-party GPUI policy paths for
+  `#[scenario]`, harness-led defaults for both `#[scenario]` and `scenarios!`,
+  and deduplication when a generated `#[scenario]` test already has
+  `#[gpui::test]`. When a GPUI step panics, `GpuiHarness` augments the resumed
+  panic payload, `tracing::error!`, and stderr with the feature path, scenario
+  name, and feature-file line number without changing the public harness
+  contract. The example requires no native-library setup beyond the workspace
+  GPUI shim.
+
+Future adapters (for example, Bevy) are planned to follow the same pattern
+without requiring new dependencies in `rstest-bdd` or `rstest-bdd-macros`.
+
+Validation for the delivered model is intentionally split across layers:
+
+- unit tests in `rstest-bdd-policy`, `rstest-bdd-harness`,
+  `rstest-bdd-harness-tokio`, `rstest-bdd-harness-gpui`, and
+  `rstest-bdd-macros` verify policy resolution, emitted attributes, and
+  harness-runner contracts;
+- behavioural and integration tests in `rstest-bdd` verify custom harness
+  delegation, `rstest_bdd_harness_context` injection, Tokio runtime
+  compatibility, GPUI integration, GPUI attribute-policy resolution through both
+  `#[scenario]` and `scenarios!`, and the deprecated runtime alias path.
+
+#### 2.7.6 First-cut beta feedback and adoption implications
+
+The first downstream beta migration against `rstest-bdd` 0.6.0 exposed a gap
+between the delivered harness architecture and stateful user-interface tests.
+The typed `HarnessAdapter::Context` handoff works, but the step-facing API
+still makes complex GPUI scenarios harder than the counter example suggests.
+
+##### 2.7.6.1 Borrow constraint exposed by GPUI adoption
+
+The important constraint is `StepContext::borrow_mut`. Its current signature
+takes `&mut self` and returns a guard whose lifetime is tied to that borrow.
+Generated step wrappers therefore cannot comfortably borrow two mutable
+fixtures from the same `StepContext` at once. A step that requests both
+`#[from(rstest_bdd_harness_context)] cx: &mut gpui::TestAppContext` and
+`world: &mut UiWorld` can fail with `E0499` or `E0502`, even when the fixtures
+are logically distinct. This is a design limitation of the current context API,
+not a GPUI-only behaviour.
+
+The problematic shape is ordinary-looking step code:
+
+```rust
+#[given("the shell is open")]
+fn given_shell_open(
+    #[from(rstest_bdd_harness_context)] cx: &mut gpui::TestAppContext,
+    world: &mut UiWorld,
+) -> StepResult<()> {
+    let (shell, visual_cx) = cx.add_window_view(|_context| Shell::default());
+    world.shell = Some(shell);
+    world.window = Some(visual_cx.window_handle());
+    Ok(())
+}
+```
+
+Generated wrappers must borrow mutable harness context and mutable world state
+from the same `StepContext` before calling that function. The current
+`borrow_mut(&mut self, ...)` contract makes that pair the troublesome part, not
+the step body itself. The snippet already stores only the durable window
+handle, as §2.7.6.2 requires, so the rejection turns solely on the two mutable
+fixture parameters.
+
+##### 2.7.6.2 Interim GPUI state pattern
+
+Until the borrow API is redesigned, GPUI guidance should recommend one of two
+state patterns:
+
+- keep ordinary domain state in regular `rstest` fixtures when steps do not
+  also need mutable harness context; or
+- use interior-mutable or thread-local scenario state with an explicit reset
+  protocol when a step must also borrow mutable harness context.
+
+Thread-local scenario state is an adoption workaround, not a replacement for
+the typed harness-context architecture selected by ADR-007. Any thread-local
+world must be reset before assigning scenario state, so failed or skipped
+scenarios cannot leak handles into a later scenario on the same test thread.
+
+The same downstream migration also clarified a reusable GPUI pattern:
+`VisualTestContext` should not be treated as durable world state. Stateful GPUI
+BDD tests should store durable handles such as `Entity<T>` and
+`AnyWindowHandle`, then reconstruct `VisualTestContext` from the window handle
+and the harness-provided `TestAppContext` inside each step that needs visual
+interaction.
+
+> **Which gpui does this section target?** The code snippets below, and the
+> companion regression suite at
+> `crates/rstest-bdd-harness-gpui/tests/stateful_window.rs`, are written
+> against the *vendored* gpui under `vendor/gpui` (the `path` dependency in
+> `Cargo.toml`). Downstream crates that depend on the *published* `gpui 0.2.2`
+> on crates.io encounter a different test API. The four shapes that differ are
+> documented in the mapping table below; adapt snippets accordingly when
+> consuming the published crate.
+>
+> | Operation | Vendored gpui | Published `gpui 0.2.2` |
+> | --- | --- | --- |
+> | `add_window_view` | one-argument closure; returns `(Entity<T>, VisualTestContext)` | two-argument closure; returns `(Entity<V>, &mut VisualTestContext)` |
+> | obtain window handle | `visual_cx.window_handle()` (inherent method on `VisualTestContext`) | `vcx.window_handle()` (same call, but `window_handle` is a `VisualContext` trait method, so add `use gpui::VisualContext;`) |
+> | `from_window` | `Option<VisualTestContext>` | `VisualTestContext` |
+> | read/update | `Option`/`Result` wrappers | direct `R` |
+>
+> *Table: Vendored-to-published gpui 0.2.2 API shape differences.*
+>
+> Beyond those four shapes, published `gpui 0.2.2` returns
+> `(Entity<V>, &mut VisualTestContext)` from `add_window_view`, while the
+> vendored fork returns `(Entity<T>, VisualTestContext)` by value. Adopters
+> bind the visual context by mutable reference rather than owning it.
+>
+> The vendored fork also gives `update_entity` a typed
+> `Result<(), EntityError>` missing-entity path and wraps `read_entity` in
+> `Option<R>`. Published `gpui` returns `R` directly, so adopters cannot depend
+> on that typed error channel.
+>
+> The playbook's primary accessor form avoids `shadow_reuse` and
+> `unwrap_or_else(|| panic!(…))`. ADR-013 records the `make lint` Whitaker gate
+> that enforces `no_unwrap_or_else_panic`, and the user guide carries the
+> executable `let … else { panic!(…) }` shape mirrored by the regression suite.
+
+The mapping table is necessary but not sufficient for downstream adoption. The
+gauss v0.6.0-beta3 trial confirmed that the harness and published `gpui 0.2.2`
+share one compatible `TestAppContext` type, while translating the vendored-only
+`given` and `when` snippets still imposed avoidable work. Roadmap 10.2.8
+therefore adds compile-checked published variants for those steps. It also
+records that Clippy treats step functions and helpers as ordinary functions, so
+`allow-expect-in-tests` does not exempt them from `expect_used`; the lint-clean
+invariant form remains `let … else { panic!(…) }`.
+
+The recommended v0.6-compatible shape keeps only durable handles in resettable
+scenario state. In schematic form (vendored gpui API):
+
+```rust
+thread_local! {
+    static WORLD: RefCell<UiWorld> = RefCell::new(UiWorld::default());
+}
+
+fn reset_world() {
+    WORLD.with(|world| *world.borrow_mut() = UiWorld::default());
+}
+
+#[given("the shell is open")]
+fn given_shell_open(
+    #[from(rstest_bdd_harness_context)] cx: &mut gpui::TestAppContext,
+) -> StepResult<()> {
+    reset_world();
+
+    let (shell, visual_cx) = cx.add_window_view(|_context| Shell::default());
+    let window = visual_cx.window_handle();
+
+    WORLD.with(|world| {
+        let mut world_guard = world.borrow_mut();
+        world_guard.shell = Some(shell);
+        world_guard.window = Some(window);
+    });
+
+    Ok(())
+}
+
+#[when("the user presses Tab")]
+fn press_tab(
+    #[from(rstest_bdd_harness_context)] cx: &mut gpui::TestAppContext,
+) -> StepResult<()> {
+    let window = WORLD.with(|world| world.borrow().window.ok_or("missing window"))?;
+    let Some(mut visual_cx) = gpui::VisualTestContext::from_window(window, cx) else {
+        panic!("stored window handle should reconstruct visual context");
+    };
+
+    visual_cx.simulate_keystrokes("tab");
+    Ok(())
+}
+```
+
+The reset must run before assigning new scenario state. The world stores the
+window handle, not `VisualTestContext`, so later steps can rebuild the visual
+context from the handle and the current harness context. The schematic uses a
+fresh `world_guard` binding and `let … else { panic!(…) }` for infrastructure
+invariants so it passes `clippy::shadow_reuse`, `clippy::expect_used`,
+`clippy::unwrap_used`, and Whitaker `no_unwrap_or_else_panic`.
+
+The feature-gated GPUI harness regression suite under
+`crates/rstest-bdd-harness-gpui/tests/stateful_window.rs` exercises this
+interim pattern. It creates a window, stores durable `Entity<T>` and
+`AnyWindowHandle` values in resettable scenario state, reconstructs
+`VisualTestContext` from the window handle in later steps, and comments the
+reset-before-assignment protocol beside the reset helper.
+
+For teams migrating a large suite, the recommended bulk-migration shape is to
+place the whole durable-handle *step library* — the `#[given]`/`#[when]`/
+`#[then]` steps together with the state scaffolding and cleanup fixture — in
+one shared module per consuming crate, included by each `#[scenario]` binding
+through a `#[path]` module. Because steps register per binary through
+`inventory`, one shared module serves many scenarios across many feature files
+with no per-scenario copy; the binding files carry no step definitions of their
+own. This sharing mechanism is harness-agnostic, so it is proven by a
+harness-agnostic runtime reference,
+`crates/rstest-bdd/tests/bulk_migration_cookbook_a.rs` and `_b.rs` sharing
+`crates/rstest-bdd/tests/common/bulk_migration_steps.rs`, plus a trybuild
+compile-pass mirror,
+`crates/rstest-bdd/tests/fixtures_macros/scenario_bulk_migration_cookbook.rs`;
+the GPUI durable-handle specialization remains proven by `stateful_window.rs`.
+The user guide's "Bulk-migration cookbook" subsection documents the shape and
+bridges its GPUI snippets to published `gpui 0.2.2` through the vendored-to-
+published mapping table. This handwritten shared block is superseded by the
+v0.7.0 guard-based model (ADR-012); `ScenarioStore<T>` and the cleanup-guard
+fixture macro were proposed under ADR-011 (roadmap 10.3.1 and 10.3.2) but never
+shipped.
+
+##### 2.7.6.3 v0.6.0-beta2 quick wins
+
+The release strategy is therefore split by compatibility risk:
+
+- **v0.6.0-beta2 quick wins:** improve adoption diagnostics and examples
+  without changing public contracts. The highest-value items are a dependency
+  matrix for harness crates, clearer missing-fixture diagnostics that include
+  `StepContext::available_fixtures()`, a realistic GPUI smoke test that stores
+  entity/window handles and resets world state, and migration-guide coverage
+  for feature-gated downstream tests such as `cargo test --all-features`.
+  Missing-fixture diagnostics are backed by typed fixture requirement metadata
+  emitted by generated step wrappers. The public `Step::fixtures` field remains
+  the compatibility surface for name-only fixture consumers; generated wrappers
+  publish `FixtureRequirement { name, ty }` records through a hidden inventory
+  sidecar so execution-time validation can report requested fixture names,
+  requested Rust types, available fixture keys, and a harness-context hint
+  without requiring a breaking `Step` layout change.
+
+  The first dependency-matrix quick win keeps the public harness traits in
+  `rstest-bdd-harness`, but lets first-party adapter users depend only on the
+  selected adapter crate. `rstest-bdd-harness-tokio` and
+  `rstest-bdd-harness-gpui` re-export the base API used by generated tests, and
+  the macro targets that adapter crate root when it can prove that the selected
+  harness or attribute policy is the canonical Tokio or GPUI first-party type.
+  Custom harnesses and explicit base API imports still require a direct
+  `rstest-bdd-harness` dependency.
+
+##### 2.7.6.4 v0.6.1 early-life support helpers
+
+- **v0.6.1 early-life support:** add semver-compatible helper APIs. Delivered:
+  the explicit harness-context parameter marker `#[harness_context]` (roadmap
+  11.2.1). It desugars to the reserved fixture key `rstest_bdd_harness_context`
+  internally, and the legacy `#[from(rstest_bdd_harness_context)]` form is
+  retained without deprecation. See the
+  [ADR-007 addendum](adr-007-harness-context-injection.md). Remaining
+  candidates, not yet shipped: a prelude for common integration imports, a
+  typed borrow-error enum, and generated-wrapper coverage for mutable harness
+  context plus scenario state. A first-party scenario-state helper
+  (`ScenarioStore<T>` in `rstest-bdd`, `GpuiScenarioStore` in
+  `rstest-bdd-harness-gpui`) and a cleanup-guard fixture macro were proposed
+  under [ADR-011](adr-011-first-party-scenario-state-and-cleanup.md) but were
+  superseded by ADR-012 before implementation and never shipped.
+
+##### 2.7.6.5 v0.7.0 pre-1.0.0 redesign
+
+- **Historical v0.6 guidance:** sections 2.7.6.1 and 2.7.6.2 record the former
+  borrow constraint and its thread-local interim pattern for readers
+  maintaining 0.6.x suites. They do not describe the current architecture.
+  ADR-012's implemented v0.7 contract uses `&self` borrow methods, `try_borrow`/
+  `try_borrow_mut` with typed `FixtureBorrowError` values, opaque guards that
+  permit concurrent borrows of distinct mutable fixtures, and
+  framework-guaranteed scenario-boundary cleanup. That contract supersedes both
+  the interim pattern and the proposed `ScenarioStore<T>` helper. The remaining
+  candidates are typed harness-context extractors that hide the reserved
+  fixture key, configurable harness construction without a `Default`
+  requirement, a declarative attribute-policy extension model, first-class
+  world lifecycle hooks, and a unified generated-test model for scenarios and
+  outline rows.
+
+##### 2.7.6.6 Feature-file rebuild invalidation
+
+Since v0.6.0, `#[scenario]` and `scenarios!` register every bound `.feature`
+file as a Cargo rebuild dependency. Cargo decides whether to recompile from
+dep-info, and rustc only records a file there when it was pulled in through
+`include_str!`, `include_bytes!`, `include!`, or a build-script
+`cargo::rerun-if-changed` directive; a procedural macro that opens a file with
+ordinary filesystem calls is invisible to that machinery.
+
+The shipping mechanism (ADR-010, accepted) is the **tracking binding**: each
+macro emits, once per bound feature file and at item scope, an anonymous
+`const` whose value is
+`include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/", <relative literal>))`.
+Item scope matters because `scenarios!` can parse a file and generate zero
+tests from it under a `tags =` filter, and because the harness-led path
+replaces the generated function body entirely — a binding inside the generated
+body would track nothing for a filtered-out file. The deferred path
+construction keeps the emitted token stream free of absolute paths; rustc
+registers the file in dep-info; and the unused `const` is elided, so neither
+the path nor the file contents land in a binary (the `rlib` retains them in
+metadata, which is why the no-absolute-path guarantee is scoped to binary and
+test targets). `include_bytes!` rather than `include_str!` because the former
+does not hard-error on a non-UTF-8 `.feature` file yet registers dep-info
+identically. The relative literal follows the normalization table in the
+ExecPlan: `.` segments are dropped, `..` segments are retained (collapsing them
+could name a different file through a symlink), the backslash rule is
+Windows-only, and an absolute path outside `CARGO_MANIFEST_DIR`'s subtree
+becomes a component-wise `..` offset. Only a genuinely unrelatable root — a
+different Windows drive, a UNC prefix, a non-UTF-8 path, an empty path —
+hard-errors with a `compile_error!` naming the file.
+
+The embedded `__RSTEST_BDD_FEATURE_PATH` constant is manifest-relative to the
+consuming crate when the file lies within its manifest directory and absolute
+otherwise (ExecPlan Decision D3); the change is a breaking one for JUnit
+`classname` and the JSON/DumpSteps `feature_path` value, documented in the
+v0.6.0 migration guide.
+
+Per-file tracking covers *edits* to files that existed when the macro ran. It
+cannot see a file *added* afterwards, because nothing references a file that
+did not exist at expansion time. That residual gap is closed by a tested
+`build.rs` recipe — a single `cargo::rerun-if-changed` directory line, which
+Cargo scans recursively (rust-lang/cargo#8973) — carried as *executed* living
+documentation in the users' guide (ExecPlan Decision D2): the test suite
+extracts the recipe and proves a newly added `.feature` file is compiled and
+run.
+
+OUT_DIR AST caching (noted in `§3.2.2` below) is a *performance* optimization,
+not an invalidation mechanism; it does not close this gap.
+
+##### 2.7.6.7 Test-runner parallelism and scenario state
+
+Stateful GPUI scenarios carry `#[serial]` from the
+[`serial_test`](https://docs.rs/serial_test/) crate to prevent concurrent
+execution from corrupting thread-local state. The effect of `#[serial]` differs
+significantly between the two common test runners:
+
+**Under `cargo test`** (the default): all integration tests in a binary run in
+a single process using multiple threads. `#[serial]` serializes tests that
+carry the same `name` argument (or all `#[serial]` tests when no name is given)
+using an in-process mutex, ensuring that only one scenario runs at a time and
+the thread-local reset protocol is respected. `#[serial]` is **required** for
+stateful GPUI scenarios under `cargo test`.
+
+**Under cargo-nextest** (`cargo nextest run`, which `make test` uses): each
+test is run in its own process. Every `#[serial]` test therefore runs in
+isolation by default; the in-process mutex serializes nothing across the
+process boundary. `#[serial]` is **redundant-but-harmless** under nextest
+because process-per-test already isolates per-process thread-local state.
+
+**Cross-binary and cross-process serialization:** if two scenario binaries must
+not run concurrently (for example, both share a locked hardware resource or a
+single-process GPUI session), `#[serial]` is insufficient under both runners.
+Use `#[file_serial]` (a file-lock-backed variant in `serial_test`) or configure
+a [nextest test-group](https://nexte.st/docs/configuration/test-groups/) with
+`max-threads = 1`.
+
+| Runner                     | `#[serial]` effect         | Cross-process exclusivity      |
+| -------------------------- | -------------------------- | ------------------------------ |
+| `cargo test`               | In-process mutex; required | Not provided by `#[serial]`    |
+| nextest (process-per-test) | Redundant-but-harmless     | `#[file_serial]` or test-group |
+
+*Table: `#[serial]` behaviour by test runner.*
+
+The `make test` target in this repository uses nextest. Adopters whose
+consuming crates also use nextest will find `#[serial]` is still a safe
+annotation but provides no within-binary serialization benefit. The
+recommendation is to keep `#[serial]` annotations so that `cargo test`
+continues to work correctly, and to rely on nextest's process isolation for the
+default safe-execution guarantee.
+
+Use a nextest test-group when nextest-managed tests must not overlap across
+processes or binaries. Test-groups are available in cargo-nextest 0.9.48 and
+later, and a `max-threads = 1` group acts as a logical mutex across the whole
+nextest run:
+
+```toml
+[test-groups]
+stateful-gpui = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(stateful_gpui::)'
+test-group = 'stateful-gpui'
+```
+
+Use `#[file_serial]` when the same cross-process exclusion should live in the
+Rust test annotation rather than the nextest configuration. The attribute is
+available only when the `serial_test` crate's `file_locks` feature is enabled:
+
+```toml
+[dev-dependencies]
+serial_test = { version = "...", features = ["file_locks"] }
+```
+
+The `file_locks` feature is the load-bearing part of the manifest fragment;
+choose the major version already used by the consuming workspace. The file lock
+defaults to a file under the operating system's temporary directory, and can be
+customized with `path` and key arguments. `#[file_serial]` does not mutually
+exclude tests annotated with `#[serial]`, because the two attributes lock using
+different mechanisms.
+
+## Part 3: Implementation and strategic analysis
+
+This final part outlines a practical implementation strategy for `rstest-bdd`
+and provides a critical analysis of the proposed design, including its
+strengths, weaknesses, limitations, and a comparison to the existing `cucumber`
+crate.
+
+### 3.1 Phased implementation strategy
+
+A phased approach is recommended to manage complexity and deliver value
+incrementally.
+
+- **Phase 1: Core Mechanics & Proof of Concept**
+
+- Establish the two-crate workspace: `rstest-bdd` (the runtime library) and
+  `rstest-bdd-macros` (the proc-macro implementation).
+
+- Implement the `inventory`-based step registry. Define the `Step` struct and
+  the `#[given]`, `#[when]`, and `#[then]` macros to populate the registry using
+  `inventory::submit!`.
+
+- Implement a basic `#[scenario]` macro. This includes compile-time Gherkin
+  file parsing and a lookup map built at runtime from the step registry.
+  Initially, this map supports exact string matching with no argument parsing.
+  only exact string matching with no argument parsing.
+
+- The goal of this phase is to validate the core architectural choice: that a
+  `#[scenario]` macro can successfully find and execute steps registered by
+  other macros at runtime.
+
+- **Phase 2: Fixtures and Parameterization**
+
+- Enhance the macro system to inspect the signatures of step functions and
+  integrate with `rstest`'s fixture system. This allows steps to request
+  fixtures directly.
+
+- Implement support for `Scenario Outline`. The `#[scenario]` macro detects this
+  Gherkin construct and generates the corresponding `#[rstest]` `#[case(…)]`
+  attributes on the test function. This behaviour is implemented and verified
+  by the test suite.
+- Introduced lightweight `ExampleTable` and `ScenarioData` structs in the
+  macros crate. They encapsulate outline table rows and scenario metadata,
+  replacing a complex tuple return and enabling clearer helper functions.
+- Improved diagnostics when a `Scenario Outline` column does not match a test
+  parameter. The macro lists available parameters, so mismatches can be
+  resolved quickly.
+- Errors for missing outline parameters use `syn::Error::new_spanned` for more
+  precise diagnostics.
+
+- Introduce the `{name:Type}` step argument parser, leveraging the `FromStr`
+  trait for type conversion.
+
+- **Phase 3: Advanced Gherkin Features & Ergonomics**
+
+- Add support for Data Tables and Doc strings, passing them as special
+  arguments to step functions.
+
+- Implement robust compile-time error handling. The `#[scenario]` macro should
+  emit clear compiler errors if a feature file cannot be parsed or if no
+  matching step definition can be found for a Gherkin step. The macro validates
+  that the referenced feature file exists before invoking the Gherkin parser.
+  Missing or malformed files cause `compile_error!` to be emitted, failing fast
+  during compilation.
+
+- Develop a `scenarios!` helper macro, analogous to the one in `pytest-bdd` 9,
+  which can automatically bind all scenarios within one or more feature files,
+  reducing boilerplate for the user.
+
+  - Increase the minimum supported Rust version (MSRV) to 1.85 and remove the
+    `async_trait` dependency from `World` and writer traits to simplify
+    implementations and match Cucumber v0.21. Set `rust-version = "1.85"` in
+    all Cargo manifests, remove `async-trait` from dependencies and imports,
+    and add a CI check that fails if it reappears.
+
+    The project advertises Rust 1.85 as the baseline across every crate in the
+    workspace and standardizes on the Rust 2024 edition. The development
+    toolchain is pinned via `rust-toolchain.toml` so contributors share the
+    same formatter and lint behaviour. Step registration continues to rely on
+    synchronous function pointers (`StepFn`), so no trait requires async method
+    sugar and `async-trait` stays absent from the dependency graph. A small CI
+    guard (`make forbid-async-trait`) scans Rust and Cargo sources and fails the
+    workflow should the crate reappear. Asynchronous step execution under Tokio
+    is planned; see §2.5 for the design and the roadmap for implementation
+    status.
+
+- Introduce a `skip!` macro that step or hook functions can invoke to record a
+  `Skipped` outcome and halt the remaining steps. The macro accepts an optional
+  message and integrates with the scenario orchestrator, so the scenario is
+  marked as skipped rather than failed. The concrete implementation mirrors
+  familiar formatting macros: additional arguments invoke `format!`, so callers
+  may interpolate contextual state without constructing the message manually.
+  Using `panic::resume_unwind` maintains the existing panic-based plumbing,
+  allowing step wrappers to intercept the payload and convert it into
+  `StepExecution::Skipped` without changing the surrounding control flow.
+
+  Subsequent ergonomic work replaced the macro helper with a thread-local scope
+  stack. Attribute macros still inject a guard, but `skip!` discovers the
+  innermost scope at runtime, so helper functions can call it transparently.
+  When no scope is active the macro panics with
+  `rstest_bdd::skip! may only be used inside a step or hook generated by rstest-bdd`,
+  which surfaces misuse without breaking helper-based flows. The guard records
+  the originating file, function, and thread id; `skip!` verifies that the
+  calling thread matches the one that entered the guard and panics with a
+  descriptive message if another thread attempts to short-circuit execution.
+  This makes thread hopping bugs explicit instead of silently losing the panic
+  payload.
+
+- Extend tag filtering to recognize an `@allow_skipped` tag and provide a
+  `fail_on_skipped` setting (cargo-bdd flag: `--fail-on-skipped`, env:
+  `RSTEST_BDD_FAIL_ON_SKIPPED=1`). Precedence: CLI flag > env var > default
+  (false). Scenarios tagged `@allow_skipped` never cause a failure when
+  `fail_on_skipped` is enabled.
+
+  The initial implementation recognizes `@allow_skipped` on the feature or
+  scenario itself. Example-level tags are currently ignored because the runner
+  does not yet have case indices from `rstest`; once that metadata is available
+  the per-example override can be reinstated without altering public APIs.
+
+  The runtime exposes a small `config` module so callers (and the CLI) can
+  override the `fail_on_skipped` flag programmatically before falling back to
+  the `RSTEST_BDD_FAIL_ON_SKIPPED` environment variable. Step wrappers return a
+  `StepExecution` enum that distinguishes between a successful step and one
+  that requested a skip. The new `skip!` macro raises a `SkipRequest` panic
+  payload; wrapper code intercepts that payload, records the skipped outcome,
+  and allows the scenario loop to stop executing further steps.
+
+  - Skip outcomes flow through the `cargo-bdd` CLI and dedicated writers in
+    the runtime crate. The `reporting::json` module serializes the collector
+    snapshot into a stable schema that records lowercase status labels and skip
+    metadata (`message`, `allow_skipped`, `forced_failure`). The companion
+    `reporting::junit` module renders a single `<testsuite>` document and emits
+    a `<skipped>` child for each skipped scenario, including the original
+    message when present. When `fail_on_skipped` escalates a skip into a panic
+    the writer adds a `<failure>` element so CI systems surface the failure
+    alongside the skip reason.
+
+- Document the `skip!` macro, the `@allow_skipped` tag and the Rust 1.85 /
+  edition 2024 migration with examples illustrating `fail_on_skipped` behaviour.
+
+Subsequent phases refine these capabilities: Phase 5 will streamline the
+macro’s syntax and add compile-time diagnostics, while Phase 6 will surface
+skip details in diagnostic tooling and IDE integrations.
+
+- 2025-12-10: Diagnostic tooling now records scenario line numbers and tag
+  sets alongside skip reasons, and tracks bypassed step definitions when
+  execution halts early. `cargo bdd skipped` and `cargo bdd steps --skipped`
+  surface this data (with JSON fields `feature`, `scenario`, `line`, `tags`, and
+  `reason`) to support IDE integrations and CLI consumers.
+- 2025-12-12: Bypassed-step recording is gated at codegen time with
+  `cfg(feature = "diagnostics")` to keep non-diagnostic builds linkable. The
+  runtime reuses the scenario tag vector for reporting to avoid repeated
+  allocations, and the registry deduplicates bypassed steps with a `HashSet` to
+  avoid quadratic scans in large suites.
+
+- 2026-07-30: Bypassed-step recording now takes a `BypassedScenario` descriptor
+  containing the feature path, scenario name, one-based line, tags, and
+  optional skip reason. `record_bypassed_steps` accepts that descriptor plus
+  the bypassed step iterator. This replaces the former six-argument call and
+  the separate `record_bypassed_steps_with_tags` entry point, keeping scenario
+  metadata together while preserving the no-op, non-diagnostic build path.
+
+### 3.2 Strengths and weaknesses of the proposed architecture
+
+The proposed design has a distinct set of advantages and disadvantages rooted
+in its tight integration with the Rust compiler and `rstest`.
+
+#### 3.2.1 Advantages
+
+- **Seamless Ecosystem Integration:** The framework uses `cargo test` as its
+  runner and `rstest` as its foundation. This means it works out-of-the-box
+  with the entire Rust ecosystem, including CI/CD pipelines, code coverage
+  tools, and test filtering mechanisms, without requiring a separate runner or
+  special configuration.[^3]
+
+- **Powerful Fixture Reuse:** By leveraging `rstest` fixtures for state
+  management, developers can reuse existing setup/teardown logic from their
+  unit tests for BDD scenarios. This promotes code reuse and consistency across
+  the entire test suite.[^1]
+
+- **Compile-Time Safety:** By validating that every Gherkin step has a
+  corresponding implementation at compile time, the framework can fail fast
+  with a clear `compile_error!`, preventing difficult-to-debug runtime panics
+  from missing steps.
+
+- **High Performance:** The test code is fully compiled Rust. While there is a
+  small runtime overhead for matching Gherkin steps to functions, the core
+  logic executes at native speed.
+
+- **Decoupled and Reusable Steps:** Thanks to the `inventory`-based discovery,
+  step definitions can be placed in any module (e.g., a central
+  `tests/steps/common.rs` file, akin to `conftest.py` 9) and will be
+  automatically available to any scenario, promoting modular and maintainable
+  test code.
+
+#### 3.2.2 Disadvantages
+
+- **High Macro Complexity:** The implementation of the `#[scenario]` macro is
+  non-trivial. It involves compile-time file reads and writes, parsing, and
+  extensive code generation via `quote!`. Debugging and maintaining this macro
+  will be a significant challenge.[^17]
+
+- **Reliance on "Magic" and Portability:** The `inventory` crate's use of
+  linker sections is powerful but potentially "magic." It abstracts away
+  complex system-level behaviour that may be a conceptual hurdle for some users
+  and has platform-specific considerations that may not be suitable for all
+  targets, such as some embedded systems or Windows/portable executable (PE)
+  environments.[^14]
+
+**Mitigation:** For niche targets, a `no-inventory` feature flag could be
+provided. This would trigger a fallback mechanism using a `build.rs` script to
+scan for step definitions and generate a central registry file (e.g.,
+`OUT_DIR/steps.rs`), which is then included via `include!` by the `#[scenario]`
+macro.
+
+- **Compile-Time Overhead:** The `#[scenario]` macro performs file reads and
+  parsing during compilation. For projects with many feature files, this could
+  introduce a noticeable overhead to compile times. **Mitigation
+  (performance):** This can be significantly optimized by caching the parsed
+  Gherkin ASTs in `OUT_DIR`. The macro would only re-parse a `.feature` file if
+  its modification time has changed, similar to how tools like `prost-build`
+  handle `.proto` files. **Note:** OUT_DIR caching is a *performance*
+  optimization and is orthogonal to *rebuild invalidation* (making Cargo aware
+  that a `.feature`-only edit requires recompilation). The invalidation problem
+  is separate and addressed by `§2.7.6.6` and
+  [ADR-010](adr-010-feature-file-change-detection.md). Confusing the two leads
+  to a plausible-sounding but ineffective mitigation: a cache that checks
+  `mtime` still does not tell Cargo to re-run the compiler.
+
+- **Runtime Step Matching:** The connection between a Gherkin step and its
+  implementing function is resolved at the beginning of each scenario's
+  execution. This is a deliberate trade-off that enables decoupled steps, but
+  it carries a minor performance cost compared to a fully pre-compiled approach
+  where function calls are resolved at compile time.
+
+### 3.3 Framework limitations
+
+The design choices lead to several inherent limitations that users should be
+aware of.
+
+- **Static Gherkin Files:** Feature files are dependencies that are read and
+  processed at compile time. The framework cannot load or select `.feature`
+  files dynamically at runtime.
+
+- **Static Step Definitions:** All step definitions must be known at compile
+  time, so they can be registered. It is not possible to dynamically generate
+  or register new step definitions at runtime.
+
+- **IDE Support Challenges:** While test execution via `cargo test` will
+  integrate perfectly with IDEs, more advanced features like "Go to Definition"
+  (navigating from a Gherkin step in a `.feature` file directly to the
+  implementing Rust function) will not work out-of-the-box. **Mitigation:**
+  This functionality would require a dedicated IDE extension. Potential
+  solutions include shipping a `rust-analyzer` proc-macro server stub that can
+  surface the pattern-to-function mapping, or publishing a dedicated VS Code
+  extension that generates virtual documents to bridge the gap between
+  `.feature` files and Rust code.
+
+### 3.4 Comparative analysis: `rstest-bdd` vs. `cucumber`
+
+The primary existing BDD framework in the Rust ecosystem is `cucumber`. A
+comparison highlights the fundamental philosophical differences between the two
+approaches.
+
+The core distinction lies in their integration philosophy. `cucumber-rs`
+provides a *Cucumber implementation in Rust*. It brings the established,
+cross-language Cucumber ecosystem's concepts—such as a dedicated test runner, a
+mandatory `World` state object, and built-in concurrency management—into a Rust
+project.[^6] It aims for consistency with
+
+`cucumber-jvm`, `cucumber-js`, etc.
+
+In contrast, the proposed `rstest-bdd` provides a *BDD layer for the native
+Rust testing ecosystem*. It adapts BDD principles to be idiomatic within the
+existing paradigms of `cargo test` and `rstest`.[^18] This leads to a different
+developer experience. A
+
+`cucumber-rs` users often ask how to manage state in a `World` struct, whereas
+`rstest-bdd` users focus on which `rstest` fixture should provide that state.
+This makes `rstest-bdd` a potentially more natural fit for teams already
+heavily invested in `rstest`, as they can leverage their existing knowledge and
+fixtures directly. `cucumber-rs` is better suited for teams seeking strict
+adherence to the global Cucumber standard or those who prefer a hard separation
+between their BDD acceptance tests and their other unit/integration tests.
+
+The following table summarizes the key differences:
+
+| Feature          | rstest-bdd (Proposed)                                                                                                                     | cucumber                                                                        |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Test Runner      | Standard cargo test (via rstest expansion)                                                                                                | Custom runner invoked from a main function (World::run(…)) [^19]                |
+| State Management | rstest fixtures; dependency injection model [^1]                                                                                          | Mandatory World struct; a central state object per scenario [^11]               |
+| Step Discovery   | Automatic via compile-time registration (inventory) and runtime matching                                                                  | Explicit collection in the test runner setup (World::cucumber().steps(…)) [^20] |
+| Parameterization | Gherkin Scenario Outline maps to rstest's #[case] parameterization [^21]                                                                  | Handled internally by the cucumber runner                                       |
+| Async Support    | Tokio current-thread mode delivered via `TokioHarness`; multi-thread runtimes future work ([ADR-001](adr-001-async-fixtures-and-test.md)) | Built-in; requires specifying an async runtime [^11]                            |
+| Ecosystem        | Seamless integration with rstest and cargo features                                                                                       | Self-contained framework; can use any Rust library within steps                 |
+| Ergonomics       | pytest-bdd-like; explicit #[scenario] binding links test code to features [^6]                                                            | cucumber-jvm/js-like; feature-driven, with a central test runner                |
+| Core Philosophy  | BDD as an extension of the existing rstest framework                                                                                      | A native Rust implementation of the Cucumber framework standard                 |
+
+### 3.5 Potential extensions
+
+Based on the successful patterns of `pytest-bdd` and the needs of a growing
+Rust testing ecosystem, several extensions could be considered after the core
+functionality is implemented:
+
+- `scenarios!` **Macro:** Implemented to reduce boilerplate. The macro walks a
+  directory recursively using the `walkdir` crate, discovers `.feature` files,
+  and generates a module containing a test for each `Scenario`. Function names
+  derive from the feature file stem and scenario title, sanitized and
+  deduplicated. Generated tests do not currently accept fixtures.
+
+  The following diagram summarizes the relationships between the macro and its
+  helper modules:
+
+  ```mermaid
+  classDiagram
+      class scenarios {
+          +scenarios(input: TokenStream) TokenStream
+      }
+      class ScenarioConfig {
+          +attrs: &Vec<syn::Attribute>
+          +vis: &syn::Visibility
+          +sig: &syn::Signature
+          +block: &syn::Block
+          +feature_path: String
+          +scenario_name: String
+          +steps: Vec<Step>
+          +examples: Vec<Example>
+      }
+      class scenario {
+          +generate_scenario_code(config: ScenarioConfig, iter: Iterator) proc_macro::TokenStream
+      }
+      class feature {
+          +extract_scenario_steps(feature, idx: Option<usize>) -> Result<Data, Error>
+          +parse_and_load_feature(path: &Path) -> Result<Feature, Error>
+      }
+      class errors {
+          +error_to_tokens(err: &syn::Error) -> TokenStream
+      }
+      scenarios --> scenario : uses
+      scenarios --> feature : uses
+      scenarios --> errors : uses
+      scenario <.. ScenarioConfig : uses
+      feature <.. Step
+      ScenarioConfig <.. Step
+      ScenarioConfig <.. Example
+  ```
+
+  The following sequence diagram captures macro expansion and test execution:
+
+  ```mermaid
+  sequenceDiagram
+      actor Dev as Developer
+      participant RustC as Rust Compiler
+      participant Macro as scenarios! (proc-macro)
+      participant FS as Filesystem
+      participant Parser as feature parser
+      participant Gen as scenario::generate_scenario_code
+      participant TestRunner as Test Runner
+
+      Dev->>RustC: cargo test (compile)
+      RustC->>Macro: expand scenarios!("path")
+      Macro->>FS: list *.feature recursively
+      loop per feature file
+          Macro->>Parser: parse_and_load_feature(path)
+          Parser-->>Macro: Feature with Scenarios
+          loop per scenario
+              Macro->>Parser: extract_scenario_steps(feature, idx)
+              Macro->>Gen: generate_scenario_code(config)
+              Gen-->>Macro: test item tokens
+          end
+      end
+      Macro-->>RustC: emit module with generated tests
+      RustC->>Dev: build complete
+      Dev->>TestRunner: run tests
+      TestRunner->>GeneratedTests: execute steps -> step functions
+  ```
+
+- **Diagnostic CLI:** A small helper utility, perhaps integrated as a cargo
+  subcommand (`cargo bdd`), could provide diagnostic information. For example,
+  `cargo bdd list-steps` could dump the entire registered step registry,
+  helping developers find available steps and detect unused or duplicate
+  definitions.
+
+  The implemented tool lives in a standalone `cargo-bdd` crate that acts as a
+  cargo subcommand. It queries the runtime step registry and exposes three
+  commands: `steps`, `unused`, and `duplicates`. Step usage is tracked in
+  memory and appended to `<target-dir>/.rstest-bdd-usage.json`, allowing
+  diagnostics to persist across binaries. Because `inventory` operates per
+  binary, the subcommand compiles each test target and executes it with
+  `RSTEST_BDD_DUMP_STEPS=1` and a private `--dump-steps` flag to stream the
+  registry as JSON. The tool merges these dumps so diagnostics cover the entire
+  workspace.
+
+  The sequence below illustrates the diagnostic workflow:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Dev as Developer
+  participant CB as cargo-bdd
+  participant CM as cargo (metadata/build)
+  participant TB as Test Binaries
+  participant FS as target/.rstest-bdd-usage.json
+
+  Dev->>CB: cargo bdd [steps|unused|duplicates]
+  CB->>CM: cargo metadata (detect test targets)
+  alt targets found
+    CB->>CM: cargo test --no-run --message-format=json
+    CM-->>CB: compiler-artifact JSON (paths to test binaries)
+    loop per test binary
+      CB->>TB: exec test-binary --dump-steps
+      TB->>FS: append usage (on step lookups)
+      TB-->>CB: stdout JSON (registered steps + usage flags)
+    end
+    CB->>CB: merge/aggregate steps
+    opt unused
+      CB->>CB: filter used==false
+    end
+    opt duplicates
+      CB->>CB: group by (keyword, pattern) size>1
+    end
+    CB-->>Dev: print diagnostics
+  else no targets
+    CB-->>Dev: no output / empty
+  end
+```
+
+  The usage file lives under the Cargo target directory and honours the
+  `CARGO_TARGET_DIR` environment variable.
+
+- **Teardown Hooks:** While `rstest` fixtures handle teardown via `Drop`, more
+  explicit post-scenario cleanup, especially in the case of a step panic, could
+  be valuable. A feature like `#[fixture(after)]` could be explored, either
+  within `rstest-bdd` or as a proposal to `rstest` itself, to attach teardown
+  logic that is guaranteed to run after a scenario completes, regardless of its
+  outcome.
+
+In conclusion, `rstest-bdd` is designed not to replace `cucumber` but to offer
+a compelling alternative for a different audience: developers who prioritize
+deep integration with Rust's native testing tools and want to unify their BDD
+and unit testing workflows under the powerful `rstest` umbrella.
+
+### 3.6 Workspace layout decisions
+
+The project uses a Cargo workspace to keep runtime, macro, tooling, and
+extension crates separate. The core Behaviour-Driven Development (BDD) members
+now include:
+
+- `rstest-bdd` — the runtime library.
+- `rstest-bdd-macros` — the crate providing attribute macros.
+- `rstest-bdd-policy` — shared execution policy enums.
+- `rstest-bdd-harness` — framework-agnostic harness adapter traits and
+  attribute policy interfaces.
+- `rstest-bdd-harness-tokio` — Tokio runtime harness adapter; owns Tokio
+  scenario and compile tests.
+- `rstest-bdd-harness-gpui` — GPUI test harness adapter; owns GPUI scenario
+  and compile tests (feature-gated behind `native-gpui-tests`).
+
+This layout allows each crate to evolve independently while sharing common
+configuration and lints at the workspace level.
+
+### 3.7 Initial scenario macro implementation
+
+The first implementation of the `#[scenario]` macro kept the scope narrow to
+validate the overall approach. It accepted only a `path` argument pointing to a
+`*.feature` file and always executed the first `Scenario` found. The macro also
+accepts an optional `index` argument. When provided, the macro selects the
+scenario at that zero-based position. If omitted, it defaults to `0`, matching
+the behaviour of the earlier version. The `path` argument may be provided as a
+bare string literal for convenience (e.g.
+`#[scenario("tests/example.feature")]`) or using the explicit `path =` form
+when combined with `index`. The generated test is annotated with `#[rstest]`
+and at runtime iterates over the selected scenario's steps, finding matching
+step definitions by exact string comparison. Argument parsing and fixture
+handling remain unimplemented to minimize complexity while proving the
+orchestration works.
+
+#### 3.7.1 Scenario selection by title
+
+Binding scenarios by zero-based index is brittle in active feature files,
+because inserting a new scenario silently retargets existing tests. The macro
+therefore accepts an alternative `name` argument, so call sites can reference a
+scenario by its title. The string literal is matched case-sensitively against
+every `Scenario` and `Scenario Outline` heading in the parsed feature. Phase 3
+tightens the supporting diagnostics so title-based bindings stay deterministic.
+
+- The argument parser enforces mutual exclusion between `name` and `index`.
+  When both are present the macro emits paired spans explaining that callers
+  must choose a single selector.
+- When a unique title matches, the macro resolves the corresponding index and
+  reuses the existing code generation path, so downstream behaviour remains
+  unchanged.
+- When no title matches, the macro emits a `compile_error!` that quotes the
+  requested title and lists all available scenario headings, or clarifies that
+  the feature contains no scenarios at all. This keeps bindings resilient to
+  feature refactors.
+- When multiple scenarios share a title, the macro reports the ambiguity,
+  enumerates matching indexes and 1-based line numbers, and instructs callers
+  to drop the `name` selector in favour of the explicit `index` fallback. This
+  preserves deterministic bindings for teams that intentionally reuse titles.
+
+This implementation relies on a single pass over the parsed feature to collect
+matching scenarios. Unit and trybuild tests cover the happy path, missing
+title, and ambiguous cases, so the diagnostics remain stable as the macro
+evolves.
+
+### 3.8 Fixture integration implementation
+
+The second phase extends the macro system to support fixtures. Step definition
+macros parse the pattern's `{name}` placeholders up front and inspect the
+parameters of the attached function. Parameters that match a placeholder become
+step arguments; any remaining parameters are treated as fixture requests, with
+an optional `#[from(name)]` attribute allowing the argument name to differ from
+the fixture's. The macro generates a wrapper function taking a `StepContext`
+and registers this wrapper in the step registry. The wrapper retrieves the
+required fixtures from the context and calls the original step function.
+
+```mermaid
+sequenceDiagram
+    participant MacroExpander
+    participant StepFunction
+    participant PatternParser
+    participant ArgExtractor
+    participant ErrorReporter
+    MacroExpander->>PatternParser: Extract placeholder names from pattern
+    PatternParser-->>MacroExpander: Return set of placeholders
+    MacroExpander->>ArgExtractor: Pass function signature and placeholders
+    ArgExtractor->>StepFunction: Inspect parameters
+    ArgExtractor->>ArgExtractor: Classify parameters
+    Note over ArgExtractor: If parameter matches placeholder, classify as step arg
+    Note over ArgExtractor: If parameter does not match placeholder, classify as fixture
+    ArgExtractor->>ErrorReporter: Report missing placeholders or fixture errors
+    ErrorReporter-->>MacroExpander: Emit compile-time error if needed
+    ArgExtractor-->>MacroExpander: Return argument classification
+    MacroExpander->>StepFunction: Generate wrapper code with inferred fixtures
+```
+
+The `#[scenario]` macro populates a `StepContext` at runtime. It gathers all
+fixtures provided to the generated test function and inserts references into
+the context before executing each step via the registered wrapper. This
+preserves `rstest`'s fixture injection semantics while enabling steps to share
+state.
+
+For harness-backed scenarios, code generation inserts `HarnessAdapter::Context`
+into `StepContext` under the reserved fixture key `rstest_bdd_harness_context`.
+Step functions request that fixture with `#[from(rstest_bdd_harness_context)]`
+and then use a domain-specific parameter name and type in the function
+signature. This keeps extraction type-safe via the same fixture borrowing path
+used by ordinary scenario fixtures.
+
+Phase 2 adopts `StepContext` helper APIs (`insert_harness_context` and
+`insert_owned_harness_context`) instead of adding a separate extension trait.
+The helper approach keeps harness context injection on the existing context API
+surface while avoiding extra trait indirection in generated code.
+
+To support more functional flows, steps may return a value. The scenario runner
+inspects the registered fixtures for matching `TypeId`s and, when exactly one
+fixture uses that type, records the override under that fixture’s name (last
+write wins). Ambiguous matches or missing fixtures leave the map untouched so
+steps cannot silently target multiple fixtures. Although `#[when]` steps are
+the intended producers, wrappers accept returns from any step kind.
+
+Errors return through wrapper code generated by the step macros. The macros
+still recognize literal unit returns and explicit `result` or `value` hints.
+For other non-unit returns, the generated wrapper asks the hidden runtime
+bridge to select between a concrete `Result<T, E>` and an ordinary value. This
+makes a local alias behave as its underlying type without treating wrappers
+such as `Box<Result<..>>` or `Option<Result<..>>` as fallible.
+
+Syntactic classification previously turned a fallible step into a false green.
+The gauss v0.6.0-beta3 trial demonstrated the unsafe case: a local
+`TestSupportResult<()>` alias returned `Err`, the macro classified it as a
+value, and the scenario passed after boxing the error as an unused payload.
+Spelling `Result<(), E>` or using `StepResult` failed correctly, independent of
+whether the scenario function returned `()` or `Result<(), E>`. Because a named
+return type can also be a legitimate value alias, the macro cannot simply
+classify every unresolved path as a result. ADR-019 therefore selects through
+inherent-method precedence at the concrete type, with regression coverage for
+both fallible and genuine-value aliases.
+
+The following diagrams illustrate how the wrapper captures step outputs and how
+later steps consume overrides from the context.
+
+For screen readers: The following sequence diagram shows a scenario runner
+calling a step wrapper. Unit steps take a macro-generated unit path. Other
+returns are tagged by the runtime dispatch bridge before the selected tag
+normalizes either a payload or a scenario failure.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Test as Test Function
+  participant Scenario as Scenario Runner
+  participant Ctx as StepContext
+  participant Wrap as Step Wrapper
+  participant Step as Step Function
+  participant Dispatch as Runtime Dispatch
+
+  Test->>Scenario: run()
+  Scenario->>Ctx: build(fixtures)
+  loop For each step
+    Scenario->>Wrap: call(ctx, text, doc, table)
+    Wrap->>Step: invoke(...)
+    Step-->>Wrap: returns value
+    alt macro-classified unit
+      Wrap-->>Scenario: Ok(None)
+    else type-directed return
+      Wrap->>Dispatch: probe returned value
+      Dispatch-->>Wrap: Result tag or value tag
+      Wrap->>Dispatch: normalize tag and value
+      Dispatch-->>Wrap: payload or error
+    end
+    alt Ok(Some(payload))
+      Wrap-->>Scenario: Ok(Some(Box<dyn Any>))
+      Scenario->>Ctx: insert_value(payload)
+      Ctx-->>Scenario: InsertOutcome — Inserted, NoMatch or AmbiguousIgnored
+    else Ok(None)
+      Wrap-->>Scenario: Ok(None)
+      Scenario->>Scenario: no context change
+    else Err(err)
+      Wrap-->>Scenario: Err(StepError)
+      Scenario->>Scenario: panic with step details
+    end
+  end
+```
+
+Figure: Macro-generated unit handling and type-directed runtime dispatch
+normalize each return value so successful payloads override fixtures and errors
+abort the scenario. Offering a payload does not guarantee it is recorded:
+`insert_value` returns an `InsertOutcome` naming whether the override took
+effect, or was dropped because no fixture had that type (`NoMatch`) or several
+did (`AmbiguousIgnored`). See
+[ADR-015](adr-015-insert-outcome-for-step-return-overrides.md). Once recorded,
+an override is visible through `try_borrow` and `try_borrow_mut` and takes
+precedence over the original fixture. `get::<T>` deliberately ignores override
+storage and serves shared fixtures only.
+
+For screen readers: The following sequence diagram shows the Then step
+requesting a typed fixture from `StepContext`. The context returns a shared
+reference only when a shared fixture with the requested name and type exists;
+otherwise it returns `None`.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Then as Then Step
+  participant Ctx as StepContext
+
+  Note over Ctx: fixtures: {name->(&Any, TypeId)}<br/>values: ignored by get
+  Then->>Ctx: get::<T>("name")
+  alt shared fixture exists and type matches
+    Ctx-->>Then: &T from fixture
+  else missing, owned, or type mismatch
+    Ctx-->>Then: None
+  end
+```
+
+Figure: `get::<T>` reads shared fixture storage only. It ignores step-return
+overrides and returns `None` for missing, owned, or type-mismatched fixtures;
+guard-based borrowing is the override-aware access path.
+
+Every wrapper function is given a unique symbol name derived from the source
+function and an atomic counter. This avoids collisions when similarly named
+steps appear in different modules. The macro also emits a compile-time array
+length assertion to ensure the generated fixture list matches the wrapper
+signature. Any mismatch is reported during compilation rather than at runtime.
+
+### 3.9 Step-argument parsing implementation
+
+The third phase introduces typed placeholders to step patterns. The runtime
+library exposes an `extract_placeholders` helper that converts a pattern with
+`{name:Type}` segments into a regular expression and returns the captured
+strings or a `PlaceholderError` detailing why extraction failed. This error
+covers pattern mismatches and placeholder or regex compilation failures.
+
+PlaceholderError: API shape and examples
+
+- Purpose: human‑readable diagnostics surfaced to callers and test failures.
+- Stability: message text is intended for human display, not machine parsing.
+  Programs should branch on the enum variant rather than parsing strings.
+- Shape: a Rust enum with the following variants and display formats:
+
+```rust,no_run
+enum PlaceholderError {
+  // Display: "pattern mismatch"
+  PatternMismatch,
+
+  // Display: "invalid placeholder syntax: <reason>"
+  InvalidPlaceholder(String),
+
+  // Display: "invalid step pattern: <regex_error>"
+  InvalidPattern(String),
+}
+```
+
+- Fields and metadata:
+  - PatternMismatch: no fields; indicates the text did not satisfy the
+    pattern. There is no separate “missing capture” error; a missing or extra
+    capture manifests as a mismatch because the entire text must match the
+    compiled regular expression for the pattern.
+  - InvalidPlaceholder(String): the pattern contained malformed placeholder
+    syntax and could not be parsed. The message includes the zero-based byte
+    offset and, when available, the offending placeholder name.
+  - InvalidPattern(String): carries the underlying `regex::Error` string coming
+    from the regular expression engine during compilation of the pattern. No
+    additional metadata (placeholder name, position, or line info) is captured.
+
+- Example error strings (exact `Display` output):
+  - Pattern mismatch: `"pattern mismatch"`
+  - Invalid placeholder:
+
+    ```text
+    "invalid placeholder syntax: invalid placeholder in step pattern at byte 6 (zero-based) for placeholder 'n'"
+    ```
+
+  - Invalid pattern: `"invalid step pattern: regex parse error: error message"`
+
+  The localized display strings wrap interpolated arguments with Unicode
+  directional isolate markers (`U+2066`–`U+2069`) to ensure values render
+  correctly in right-to-left locales. Consumers comparing the text should
+  normalize messages by removing these control characters.
+
+  - Example JSON mapping (for consumers that serialize errors). Note: this is
+    not emitted by the library; it suggests a shape for mapping the enum to
+    JSON at an API boundary:
+
+```json
+{
+  "code": "pattern_mismatch",
+  "message": "pattern mismatch"
+}
+
+{
+  "code": "invalid_placeholder",
+  "message": "invalid placeholder syntax: invalid placeholder in step pattern at byte 6 (zero-based) for placeholder 'n'"
+}
+
+{
+  "code": "invalid_pattern",
+  "message": "invalid step pattern: <regex_error>"
+}
+```
+
+Note: `code` values are stable identifiers intended for programmatic use.
+
+Step wrapper functions parse the returned strings and convert them with
+`FromStr` before calling the original step. Scenario execution searches the
+step registry using `find_step`, which falls back to placeholder matching when
+no exact pattern is present. This approach keeps the macros lightweight while
+supporting type‑safe parameters in steps. The parser handles escaped braces,
+nested brace pairs, and treats other backslash escapes literally, preventing
+greedy captures while still requiring well‑formed placeholders.
+
+When available, if a table parameter implements `TryFrom<Vec<Vec<String>>>`,
+the wrapper will run the conversion after materializing the nested vectors. The
+`datatable::Rows<T>` path will map any `DataTableError` into `StepError`,
+preserving formatted row and column context.
+
+The runner forwards the raw doc string as `Option<&str>` and the wrapper
+converts it into an owned `String` before invoking the step function. The
+sequence below summarizes how the runner locates and executes steps when
+placeholders are present:
+
+```mermaid
+sequenceDiagram
+    participant ScenarioRunner
+    participant StepRegistry
+    participant StepWrapper
+    participant StepFunction
+
+    ScenarioRunner->>StepRegistry: find_step(keyword, text)
+    alt exact match
+        StepRegistry-->>ScenarioRunner: StepFn
+    else placeholder match
+        StepRegistry->>StepRegistry: extract_placeholders(pattern, text)
+        StepRegistry-->>ScenarioRunner: StepFn
+    end
+    ScenarioRunner->>StepWrapper: call StepFn(ctx, text, docstring: Option<&str>, table: Option<&[&[&str]]>)
+    StepWrapper->>StepWrapper: extract_placeholders(pattern, text)
+    StepWrapper->>StepWrapper: parse captures with FromStr
+    StepWrapper->>StepFunction: call with typed args (docstring: String, datatable: T)
+    StepFunction-->>StepWrapper: returns
+    StepWrapper-->>ScenarioRunner: returns
+```
+
+### 3.10 Implicit fixture injection implementation
+
+To streamline step definitions, the macro system infers fixtures by analysing
+the step pattern during expansion. Placeholder names are extracted from the
+pattern string, and any function parameter whose identifier matches a
+placeholder is treated as a typed step argument. Remaining parameters are
+assumed to be fixtures and are looked up in the [`StepContext`] at runtime.
+
+When a scenario or step parameter name is converted into an implicit fixture
+key, macro expansion applies the same single-leading-underscore normalization
+rule used by placeholder matching. That keeps `_world` aligned with `world`
+while preserving `__world` as `_world`. Explicit `#[from(...)]` names remain
+authoritative and are not normalized.
+
+Generated step registrations also publish typed fixture requirement metadata
+for runtime diagnostics. Name-only fixture requirements remain in
+`Step::fixtures` for compatibility, while generated wrappers submit
+`FixtureRequirement { name, ty }` records through a hidden inventory sidecar.
+Manual `step!` registrations that provide only fixture names continue to work;
+when no typed sidecar exists, diagnostics render the requested type as
+`<unknown>`.
+
+For screen readers: The following sequence diagram shows how step execution
+validates required fixtures, queries the typed requirement sidecar registry,
+and builds a structured missing-fixtures error.
+
+```mermaid
+sequenceDiagram
+    participant Client as execute_step
+    participant Validator as validate_required_fixtures
+    participant Registry as fixture_requirements_for_step
+    participant Error as ExecutionError::MissingFixtures
+    Client->>Validator: validate_required_fixtures(step, ctx, request)
+    Validator->>Registry: lookup typed FixtureRequirement sidecar
+    Registry-->>Validator: &'static [FixtureRequirement] or None
+    Validator->>Error: build MissingFixturesDetails
+    Validator-->>Client: return ExecutionError::MissingFixtures
+```
+
+*Figure: Missing-fixture diagnostics use typed sidecar metadata when generated
+requirements are available.*
+
+For early feedback, each inferred fixture name is referenced in the generated
+wrapper. If no fixture with that name is in scope, the wrapper fails to
+compile, surfacing the missing dependency before tests run. Conversely, if the
+pattern declares placeholders without matching parameters, macro expansion
+aborts with a clear diagnostic listing the missing arguments.
+
+### 3.11 Runtime module layout (for contributors)
+
+To keep responsibilities cohesive, the runtime is split into focused modules.
+Public APIs are re‑exported from `lib.rs`, so consumers continue to import from
+`rstest_bdd::*` as before.
+
+- `types.rs` — Core types and errors:
+  - `PatternStr`
+  - `StepText`
+  - `StepKeyword`
+  - `StepKeywordParseError`
+  - `PlaceholderError`
+  - `StepFn`
+
+- `pattern.rs` — Step pattern wrapper and re-exports:
+  - `StepPattern::new`
+  - `compile`
+  - `regex`
+
+- `pattern::compiler` — Token-to-regex translation:
+  - `build_regex_from_pattern`
+
+- `pattern::lexer` — Token stream generation:
+  - `Token`
+  - `lex_pattern`
+
+- `pattern::placeholder` — Placeholder parsing helpers:
+  - `PlaceholderSpec`
+  - `parse_placeholder`
+
+- `context.rs` — Fixture context:
+  - `StepContext`
+
+- `state.rs` — Scenario state helpers:
+  - `Slot<T>`
+  - `ScenarioState`
+
+- `registry.rs` — Registration and lookup:
+  - `step!` macro
+  - global registry map
+  - `lookup_step`
+  - `find_step`.
+
+- `lib.rs` — Public API facade:
+  - Re-exports public items
+  - `greet` example function
+
+All modules use en‑GB spelling and include `//!` module‑level documentation.
+
+### 3.12 Harness adapters and attribute plugins (ADR-005)
+
+The harness adapter architecture is now delivered as a small core harness
+crate, macro integration for selecting harnesses and attribute policies, and
+opt-in adapter crates for Tokio and GPUI.
+
+Delivered behaviour:
+
+- `rstest-bdd-harness` owns the shared `HarnessAdapter`,
+  `ScenarioRunner<'a, C, T>`, `ScenarioRunRequest<'a, C, T>`,
+  `AttributePolicy`, and `DefaultAttributePolicy` contracts.
+- `HarnessAdapter::Context` provides the typed fixture-injection boundary
+  selected by ADR-007. Harness-backed scenarios store that context in
+  `StepContext` under the reserved fixture key `rstest_bdd_harness_context`.
+- `rstest-bdd-macros` resolves first-party attribute policies by canonical
+  path. Tokio and GPUI integrations therefore stay in opt-in crates while the
+  core macros remain dependency-light.
+- `runtime = "tokio-current-thread"` remains supported as deprecated
+  compatibility syntax for `scenarios!`, but explicit harness-led configuration
+  is the canonical user-facing model. First-party Tokio and GPUI scenarios
+  should lead with `harness = ...` alone. Explicit `attributes = ...` remains
+  the override and third-party escape hatch.
+
+The [v0.6.0 migration guide](v0-6-0-migration-guide.md) is the canonical
+user-facing upgrade path for these delivered changes. It translates the
+fallible scenario, fixture-name normalization, harness adapter, and harness
+context decisions into concrete migration checks.
+
+The roadmap continues to track follow-on work such as additional cookbook
+material and harness-led attribute-policy defaults; see
+[Phase 9](roadmap.md#9-harness-adapters-and-attribute-plugins) for the
+remaining items and acceptance criteria.
+
+### Scenario state management design (2025-03-16)
+
+- Added a dedicated `state` module exposing `Slot<T>` to encapsulate shared
+  mutable values without repeating `RefCell<Option<T>>` boilerplate. The type
+  offers focused helpers (`set`, `replace`, `take`, `get_or_insert_with`,
+  `with_ref`, `with_mut`) plus predicates to inspect whether a slot currently
+  holds a value.
+- Introduced the `ScenarioState` trait, so state containers can declare a
+  canonical reset operation. The trait requires `Default`, aligning with the
+  fixture story in `rstest`.
+- Implemented a `#[derive(ScenarioState)]` macro in `rstest-bdd-macros`. The
+  derive validates that every field is a `Slot<T>` and emits a `reset` method
+  delegating to `Slot::clear`. Structs therefore act as ordinary fixtures while
+  exposing a deterministic cleanup hook for scenarios that need to reuse the
+  state within the same test body.
+
+  **Warning:** The derive *always* synthesizes a `Default` implementation that
+  initializes each slot as empty. Adding a manual `Default` derive or `impl`
+  alongside the macro triggers a duplicate-implementation error, so callers
+  must not do so unless they first disable the generated impl. A future
+  `#[scenario_state(no_default)]` flag (or equivalent) will opt out of the
+  auto-generated `Default`, so bespoke initialization logic can be supplied
+  when required.
+- Rejected a single global “world” object to keep the API congruent with
+  `rstest` fixtures and avoid obscuring data flow. `Slot<T>` composes naturally
+  with existing fixtures and keeps ownership explicit.
+
+## Assertion helper macros
+
+To streamline tests for step functions returning `Result`, the crate exposes
+two helper macros:
+
+- `assert_step_ok!(expr)` unwraps an `Ok` value and panics with the error when
+  `expr` yields `Err`.
+- `assert_step_err!(expr, msg?)` unwraps the error and optionally checks that
+  its display contains `msg`.
+
+These macros keep test code succinct while still surfacing detailed diagnostics.
+
+### Skipped outcome assertions (2025-11-15)
+
+- Added `assert_step_skipped!(expr, message = ..?)`, so unit tests can unwrap a
+  `StepExecution::Skipped` outcome without handwritten `match` expressions. An
+  optional `message_absent = true` guard asserts that no skip reason was
+  provided, whilst the string forms accept any type implementing `Into<String>`
+  and check for substring matches.
+- Added
+  `assert_scenario_skipped!(status, message/allow_skipped/forced_failure = ..)`
+  to assert that `ScenarioStatus` or `&ScenarioStatus` values represent skips.
+  The macro clones and returns the `SkippedScenario` payload, so tests may make
+  stronger assertions after the helper validates message and flag invariants.
+- Both macros share diagnostic helpers that emit localized error messages for
+  missing messages or mismatched flags, ensuring failure output mirrors the
+  `assert_step_ok!` ergonomics.
+
+## Part 4: Internationalization and localization roadmap
+
+### 4.1 Phase 1: foundational Gherkin internationalization (target v0.4)
+
+- **Language detection:** Update the macro parser to honour the optional
+  `# language: <lang>` declaration in feature files. The parser creates a
+  language‑aware `gherkin::GherkinEnv` and defaults to English when the
+  declaration is absent to preserve backwards compatibility.
+- **Language‑aware keyword parsing:** Refactor `StepKeyword` parsing to rely on
+  `gherkin::StepType`, allowing localized keywords such as `Étant donné` and
+  `Gegeben sei` to map to the correct step types.
+- **Testing and validation:** Introduce multilingual feature files, including
+  French, German, and Spanish, to validate that `Given`, `When`, `Then`, `And`,
+  and `But` are correctly recognized in each language. These scenarios will run
+  in CI to maintain coverage as new languages are added.
+
+#### Implemented multilingual regression suite (2025-09-19)
+
+- Added dedicated feature files for French, German, Spanish, Russian,
+  Japanese, and Arabic under `tests/features/i18n/` to exercise the
+  localization catalogue shipped with `gherkin`.
+- Reused a shared `RefCell<i32>` accumulator fixture so Given/And/When steps
+  manipulate the same state without introducing asynchronous complexity.
+- Asserted both positive and negative outcomes to verify that conjunction
+  keywords normalize onto the preceding semantic keyword and continue to
+  dispatch correctly.
+
+#### Japanese household ledger example crate (2025-10-11)
+
+- Created the `examples/japanese-ledger` crate to document an end-to-end BDD
+  workflow in Japanese, covering feature files, step definitions, and fixtures.
+- Modelled the domain with a `HouseholdLedger` wrapper that uses `Cell<i32>`,
+  so steps can borrow the ledger immutably, keeping the example idiomatic and
+  avoiding mutable references in feature modules.
+- Demonstrated language-specific keywords and Unicode step patterns in
+  `tests/features/household_ledger.feature`, ensuring the example doubles as a
+  regression test for non-American Standard Code for Information Interchange
+  (ASCII) step text.
+
+### 4.2 Phase 2: Localization of library messages with Fluent (target v0.5)
+
+- **Dependency integration:** Add `i18n-embed`, `rust-embed`, and `fluent` as
+  dependencies to supply localization infrastructure.
+
+  ```toml
+  [dependencies]
+  i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
+  rust-embed = "8"
+  fluent = "0.17"
+  ```
+
+- **Localization resource creation:** Create an `i18n/<locale>/` hierarchy in
+  the `rstest-bdd` crate containing Fluent translation files with identifiers
+  such as `error-missing-step`. If the macros crate also emits messages,
+  maintain a separate `i18n/` in `rstest-bdd-macros` or introduce a shared
+  `rstest-bdd-i18n` crate to host common assets.
+- **Resource embedding and loading:** Embed the `i18n` directory using
+  `rust-embed` and expose it through a `Localizations` struct implementing
+  `I18nAssets`, so the Fluent loader can discover translations. Missing keys or
+  unsupported locales fall back to English.
+- **Refactor diagnostic messages:** Keep proc‑macro diagnostics stable and in
+  English for deterministic builds. Localize user‑facing runtime messages in the
+  `rstest-bdd` crate using `FluentLanguageLoader` and `i18n-embed`'s locale
+  requesters. Avoid compile‑time locale switches in macros.
+
+#### Implemented localization harness
+
+- Added an `i18n.toml` describing the Fluent domain and bundled the
+  `i18n/<locale>/rstest-bdd.ftl` catalogue via `rust-embed`. The derived
+  `Localizations` struct implements `I18nAssets`, allowing applications to load
+  the crate’s messages into their own `FluentLanguageLoader` or reuse the
+  built-in loader.
+- Exposed `select_localizations` and `current_languages` helpers around the
+  shared loader, so applications can request locales at runtime whilst
+  retaining the caller-supplied preference order. The loader initializes with
+  English and falls back to it when a requested language is unavailable.
+- Added a thread-local `ScopedLocalization` guard, so unit and behaviour tests
+  can swap locales without serializing the entire test suite. When active, the
+  guard shadows the global loader, ensuring concurrent tests remain isolated.
+- Introduced helper macros for mapping `StepError` variants to Fluent messages
+  and for emitting localized panic strings, eliminating duplicated argument
+  plumbing across assertion macros and display implementations.
+- Updated `StepError`, `PlaceholderSyntaxError`, `PlaceholderError`, and the
+  step assertion macros to source their display strings from Fluent entries,
+  ensuring runtime diagnostics respect the active locale while proc-macro
+  messages remain deterministic.
+
+### Struct-based step arguments
+
+- Added a `StepArgs` trait plus `StepArgsError` type in the runtime crate.
+  The derive macro (`#[derive(StepArgs)]`) implements both the trait and
+  `TryFrom<Vec<String>>`, ensuring each field declares the necessary `FromStr`
+  bound.
+- The wrapper honours a `#[step_args]` marker on exactly one parameter.
+  The attribute is required because procedural macros cannot discover whether
+  an arbitrary type derives `StepArgs` without extra user input.[^12][^13] The
+  marker is stripped from the signature before compilation, so the final code
+  does not depend on unstable custom attributes.
+- All placeholders defined in the step pattern are parsed into the derived
+  struct. A const assertion binds `<T as StepArgs>::FIELD_COUNT` to the number
+  of placeholders, producing a clear compile-time error when the struct and
+  pattern diverge. The wrapper falls back to ordinary argument parsing when no
+  `#[step_args]` attribute is present.
+- Safety checks: references and `#[from]` annotations are rejected on
+  `#[step_args]` parameters, and only one such parameter may appear in a step.
+  Parse failures surface as `StepArgsError` values that bubble up as
+  `StepError::ExecutionError` at runtime.
+
+### 4.3 Phase 3: Documentation and user guidance (target v0.6)
+
+- **Update user documentation:** Extend `README.md` and `docs/users-guide.md`
+  with guidance on writing non‑English feature files and selecting locales for
+  runtime diagnostics.
+- **Provide multilingual examples:** Add a new example test suite under
+  `/examples` showcasing a non‑English Gherkin file and its localized
+  diagnostics.
+- **Update contributor guidelines:** Amend `CONTRIBUTING.md` with instructions
+  for updating translations when new user‑facing messages are introduced.
+
+## **Works cited**
+
+[^1]: A Complete Guide to Behaviour-Driven Testing With Pytest BDD, accessed on
+    20 July 2025, <https://pytest-with-eric.com/bdd/pytest-bdd/>.
+[^2]: rstest - [crates.io](http://crates.io): Rust Package Registry, accessed on
+    20 July 2025, <https://crates.io/crates/rstest/0.12.0>.
+[^3]: Pytest-BDD: the BDD framework for pytest — pytest-bdd 8.1.0 documentation,
+    accessed on 20 July 2025, <https://pytest-bdd.readthedocs.io/>.
+[^4]: Behaviour-Driven Python with pytest-bdd - Test Automation University -
+    Applitools, accessed on 20 July 2025,
+    <https://testautomationu.applitools.com/behaviour-driven-python-with-pytest-bdd/>.
+[^5]: Python Testing 101: pytest-bdd - Automation Panda, accessed on 20 July
+    2025,
+    <https://automationpanda.com/2018/10/22/python-testing-101-pytest-bdd/>.
+[^6]: Introduction - Cucumber Rust Book, accessed on 20 July 2025,
+    <https://cucumber-rs.github.io/cucumber/main/>.
+[^7]: Behaviour-Driven Development: Python with Pytest BDD -
+    [Testomat.io](http://Testomat.io), accessed on 20 July 2025,
+    <https://testomat.io/blog/pytest-bdd/>.
+[^8]: Scenario Outline in PyTest – BDD - QA Automation Expert, accessed on
+    20 July 2025,
+    <https://qaautomation.expert/2024/04/11/scenario-outline-in-pytest-bdd/>.
+    See also chapter 5 of Behaviour-Driven Python with pytest-bdd,
+    <https://testautomationu.applitools.com/behaviour-driven-python-with-pytest-bdd/chapter5.html>.
+[^9]: How can developers create parameterized tests in Rust? - Stack Overflow,
+    accessed on 20 July 2025,
+    <https://stackoverflow.com/questions/34662713/how-can-i-create-parameterised-tests-in-rust>.
+[^10]: pytest-bdd - Read the Docs, accessed on 20 July 2025,
+    <https://readthedocs.org/projects/pytest-bdd/downloads/pdf/latest/>.
+[^11]: pytest-bdd - PyPI, accessed on 20 July 2025,
+    <https://pypi.org/project/pytest-bdd/>. Discussion on sharing state between
+    tests,
+    <https://www.reddit.com/r/rust/comments/1hwx3tn/what_is_a_good_pattern_to_share_state_between/>.
+     Rust issue tracking shared state,
+    <https://github.com/rust-lang/rust/issues/44034>.
+[^12]: Rust Reference: procedural macros operate without shared state, accessed
+    on 20 July 2025,
+    <https://doc.rust-lang.org/reference/procedural-macros.html>.
+[^13]: Why macros cannot discover other macros, discussion on
+    users.rust-lang.org, accessed on 20 July 2025,
+    <https://users.rust-lang.org/t/why-cant-macros-discover-other-macros/3574>.
+[^14]: inventory - Rust - [Docs.rs](http://Docs.rs), accessed on 20 July 2025,
+    <https://docs.rs/inventory>. Shared steps and hooks with pytest-bdd,
+    <https://www.luizdeaguiar.com.br/2022/08/shared-steps-and-hooks-with-pytest-bdd/>.
+[^15]: gherkin crate on crates.io, accessed on 20 July 2025,
+    <https://crates.io/crates/gherkin>.
+[^16]: quote crate macros, accessed on 20 July 2025,
+    <https://docs.rs/quote>.
+[^17]: Guide to Rust procedural macros | [developerlife.com], accessed on 20
+    July 2025, <https://developerlife.com/2022/03/30/rust-proc-macro/>. The
+    Rust macro system part 1, accessed on 20 July 2025,
+    <https://medium.com/@alfred.weirich/the-rust-macro-system-part-1-an-introduction-to-attribute-macros-73c963fd63ea>.
+     cucumber-rs repository, <https://github.com/cucumber-rs/cucumber>.
+    Cucumber in Rust beginner's tutorial,
+    <https://www.florianreinhard.de/cucumber-in-rust-beginners-tutorial/>.
+[^18]: la10736/rstest: Fixture-based test framework for Rust - GitHub, accessed
+    on 20 July 2025, <https://github.com/la10736/rstest>.
+
+[^19]: cucumber crate documentation for `World::run`, accessed on 20 July 2025,
+    <https://docs.rs/cucumber>.
+[^20]: cucumber crate step collection API, accessed on 20 July 2025,
+    <https://docs.rs/cucumber/latest/cucumber/struct.World.html#method.steps>.
+[^21]: rstest crate documentation for `#[case]` parameterization, accessed on
+    20 July 2025, <https://docs.rs/rstest/latest/rstest/attr.case.html>.

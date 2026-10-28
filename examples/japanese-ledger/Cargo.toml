@@ -1,0 +1,17 @@
+[package]
+name = "japanese-ledger"
+version = "0.6.0"
+edition.workspace = true
+publish = false
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+rstest = { workspace = true }
+rstest-bdd-test-macros.workspace = true
+rstest-bdd.workspace = true
+rstest-bdd-macros.workspace = true

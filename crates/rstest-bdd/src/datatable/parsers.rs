@@ -1,0 +1,137 @@
+//! Helper parsers that support the datatable runtime.
+
+use std::error::Error as StdError;
+
+use thiserror::Error;
+
+/// Checks whether the input matches any candidate string while ignoring ASCII
+/// case.
+///
+/// # Parameters
+/// - `s`: The input string to compare.
+/// - `candidates`: Slice of candidate strings to match against.
+///
+/// # Returns
+/// `true` when `s` matches any candidate, otherwise `false`.
+///
+/// # Examples
+/// ```rust,ignore
+/// # use rstest_bdd::datatable::parsers::matches_any_case_insensitive;
+/// assert!(matches_any_case_insensitive("YES", &["yes", "y"]));
+/// assert!(!matches_any_case_insensitive("maybe", &["yes", "no"]));
+/// ```
+fn matches_any_case_insensitive(s: &str, candidates: &[&str]) -> bool {
+    candidates
+        .iter()
+        .any(|candidate| s.eq_ignore_ascii_case(candidate))
+}
+
+/// Parses boolean values in a tolerant, human-friendly fashion.
+///
+/// `truthy_bool` recognizes common affirmative and negative forms, returning a
+/// [`TruthyBoolError`] when the value cannot be classified.
+///
+/// # Examples
+/// ```
+/// # use rstest_bdd::datatable::truthy_bool;
+/// assert!(truthy_bool("yes").unwrap());
+/// assert!(!truthy_bool("no").unwrap());
+/// ```
+///
+/// # Errors
+///
+/// Returns [`TruthyBoolError`] when the input does not match a recognized form.
+pub fn truthy_bool(value: &str) -> Result<bool, TruthyBoolError> {
+    const TRUTHY_VALUES: &[&str] = &["yes", "y", "true"];
+    const FALSY_VALUES: &[&str] = &["no", "n", "false"];
+    let trimmed = value.trim();
+    if trimmed == "1" || matches_any_case_insensitive(trimmed, TRUTHY_VALUES) {
+        Ok(true)
+    } else if trimmed == "0" || matches_any_case_insensitive(trimmed, FALSY_VALUES) {
+        Ok(false)
+    } else {
+        Err(TruthyBoolError {
+            value: trimmed.to_owned(),
+        })
+    }
+}
+
+/// Error returned when [`truthy_bool`] fails to classify a value.
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("unrecognised boolean value '{value}' (expected yes/y/true/1 or no/n/false/0)")]
+pub struct TruthyBoolError {
+    /// Trimmed input that could not be classified as Boolean.
+    value: String,
+}
+
+impl TruthyBoolError {
+    /// Returns the original, unclassified input.
+    #[must_use]
+    pub fn value(&self) -> &str { &self.value }
+}
+
+/// Trims leading and trailing whitespace before parsing a value.
+///
+/// `trimmed` delegates to [`std::str::FromStr`] implementations after
+/// normalizing the input. Errors from the inner parser are preserved.
+///
+/// # Examples
+/// ```
+/// # use rstest_bdd::datatable::trimmed;
+/// let value: i32 = trimmed(" 42 ").unwrap();
+/// assert_eq!(value, 42);
+/// ```
+///
+/// # Errors
+///
+/// Returns [`TrimmedParseError`] when parsing the trimmed value fails.
+pub fn trimmed<T>(value: &str) -> Result<T, TrimmedParseError<T::Err>>
+where
+    T: std::str::FromStr,
+    T::Err: StdError + Send + Sync + 'static,
+{
+    let trimmed = value.trim();
+    trimmed
+        .parse()
+        .map_err(|source| TrimmedParseError::new(value.to_owned(), source))
+}
+
+/// Error returned when [`trimmed`] fails to parse the value.
+
+#[derive(Debug, Error)]
+#[error("failed to parse trimmed value from input '{original_input}': {source}")]
+pub struct TrimmedParseError<E>
+where
+    E: StdError + Send + Sync + 'static,
+{
+    /// Original input before whitespace trimming.
+    original_input: String,
+    #[source]
+    /// Error returned by the underlying parser.
+    source: E,
+}
+
+impl<E> TrimmedParseError<E>
+where
+    E: StdError + Send + Sync + 'static,
+{
+    /// Construct an error preserving the original input and parser error.
+    pub(crate) fn new(original_input: String, source: E) -> Self {
+        Self {
+            original_input,
+            source,
+        }
+    }
+
+    /// Return the original, untrimmed string that failed to parse.
+    ///
+    /// # Examples
+    /// ```
+    /// # use rstest_bdd::datatable::{trimmed, TrimmedParseError};
+    /// let err: TrimmedParseError<_> = trimmed::<u8>(" not a number ").unwrap_err();
+    /// assert_eq!(err.original_input(), " not a number ");
+    /// ```
+    #[must_use]
+    pub fn original_input(&self) -> &str { &self.original_input }
+}

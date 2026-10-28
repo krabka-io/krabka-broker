@@ -1,0 +1,33 @@
+step-error-missing-fixture = Falta a fixture '{ $name }' do tipo '{ $ty }' para a função de etapa '{ $step }'
+step-error-execution = Erro ao executar a etapa '{ $pattern }' por meio da função '{ $function }': { $message }
+step-error-panic = Pânico na etapa '{ $pattern }', função '{ $function }': { $message }
+step-keyword-parse-error = palavra-chave de etapa inválida: { $keyword }
+unsupported-step-type = tipo de etapa não suportado: { $step_type }
+placeholder-pattern-mismatch = o padrão não corresponde
+placeholder-invalid-placeholder = sintaxe de marcador inválida: { $details }
+placeholder-invalid-pattern = padrão de etapa inválido: { $pattern }
+placeholder-syntax = sintaxe de marcador inválida: { $details }
+placeholder-syntax-detail = { $reason } no byte { $position } (indexação iniciada em zero){ $suffix }
+placeholder-syntax-suffix = para o marcador '{ $placeholder }'
+step-context-ambiguous-override = Substituição de fixture ambígua: mais de uma fixture corresponde ao type_id { $type_id }. Substituição ignorada.
+panic-message-opaque-payload = <carga opaca de pânico do tipo { $type }>
+assert-step-ok-panic = a etapa retornou erro: { $error }
+assert-step-err-success = a etapa foi bem-sucedida de forma inesperada
+assert-step-err-missing-substring = o erro '{ $display }' não contém '{ $expected }'
+
+assert-skip-not-skipped = esperava-se que { $target } registrasse um resultado ignorado
+assert-skip-missing-message = esperava-se que { $target } fornecesse uma mensagem de ignorado contendo '{ $expected }'
+assert-skip-missing-substring = a mensagem de ignorado '{ $actual }' não contém '{ $expected }'
+assert-skip-unexpected-message = esperava-se que { $target } não fornecesse uma mensagem de ignorado
+assert-skip-flag-mismatch = esperava-se que o sinalizador '{ $flag }' de { $target } fosse { $expected }, mas era { $actual }
+
+execution-error-skip = Etapa ignorada{ $has_message ->
+    *[no] {""}
+    [yes] : { $message }
+}
+execution-error-step-not-found = Etapa não encontrada no índice { $index }: { $keyword } { $text } (feature: { $feature_path }, cenário: { $scenario_name })
+execution-error-missing-fixtures = A etapa '{ $step_pattern }' (definida em { $step_location }) requer fixtures { $required }, mas as seguintes estão faltando: { $missing }. Detalhes dos fixtures solicitados: { $missing_requirements }. Fixtures disponíveis do cenário: { $available } { $has_suggestion ->
+    [yes] Selecione um cenário compatível com harness para que rstest_bdd_harness_context seja inserido.
+   *[no] {""}
+} (feature: { $feature_path }, cenário: { $scenario_name })
+execution-error-handler-failed = Etapa falhou no índice { $index }: { $keyword } { $text } - { $error } (feature: { $feature_path }, cenário: { $scenario_name })

@@ -1,0 +1,383 @@
+"""Contract tests for the Dependabot fixture-lockfile refresh workflow.
+
+The workflow has permission to write only because Cargo manifests changed by
+Dependabot can alter the dependency resolution of the standalone fixture
+crates.  These tests constrain that authority to Dependabot pull requests, the
+checked-out pull request head, and the lockfiles regenerated through the
+authoritative ``make update-fixture-lockfiles`` target.  They also keep the
+workflow limited to its lock-refresh targets. The standard ``make test``
+target and a named CI step both use the shared ``make check-fixture-lockfiles``
+gate, so local and hosted test runs validate the refreshed set.  The push
+target is a caller-controlled ref name, so it reaches the shell through the
+environment as quoted data rather than as interpolated script text.  Running
+that fragment, rather than reading it, is
+:mod:`lockfile_refresh_support`; this module owns the assertions.
+
+Run via ``make test-workflow-contracts``.
+"""
+
+import datetime as dt
+import re
+from pathlib import Path
+
+import hypothesis
+import pytest
+import yaml
+from lockfile_refresh_support import (
+    HOSTILE_HEAD_REF,
+    HOSTILE_HEAD_REF_STRATEGY,
+    INJECTION_ARTEFACT,
+    INVOCATION_LOG_NAME,
+    read_invocation_log,
+    resolve_fragment,
+    run_fragment,
+    run_fragment_through_posix_shell,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOW_PATH = ROOT / ".github" / "workflows" / "refresh-derived-fixture-lockfiles.yml"
+CI_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "ci.yml"
+MAKEFILE_PATH = ROOT / "Makefile"
+MANIFEST_PATHS = [
+    "Cargo.toml",
+    "crates/**/Cargo.toml",
+    "tests/fixtures/published-gpui-0-2-2/Cargo.toml",
+    "tests/fixtures/published-gpui-e2e/Cargo.toml",
+]
+
+
+def _load(path: Path) -> dict[str, object]:
+    """Parse a GitHub Actions workflow, including PyYAML's ``on`` quirk."""
+    workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert isinstance(workflow, dict), f"{path.name} must contain a mapping"
+    return workflow
+
+
+def _triggers(workflow: dict[str, object]) -> dict[str, object]:
+    """Return a workflow's trigger mapping."""
+    triggers = workflow.get("on", workflow.get(True))
+    assert isinstance(triggers, dict), "the workflow must declare an on: mapping"
+    return triggers
+
+
+def _job(workflow: dict[str, object]) -> dict[str, object]:
+    """Return the sole lockfile-refresh job."""
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict), "the workflow must declare jobs"
+    assert list(jobs) == ["refresh-lockfiles"], (
+        "the workflow must declare only the Dependabot lockfile refresh job"
+    )
+    job = jobs["refresh-lockfiles"]
+    assert isinstance(job, dict), "jobs.refresh-lockfiles must be a mapping"
+    return job
+
+
+def _named_step(job: dict[str, object], name: str) -> dict[str, object]:
+    """Return the uniquely named step from *job*."""
+    steps = job.get("steps")
+    assert isinstance(steps, list), "jobs.refresh-lockfiles.steps must be a list"
+    matches = [
+        step for step in steps if isinstance(step, dict) and step.get("name") == name
+    ]
+    assert len(matches) == 1, f"expected one {name!r} step, found {len(matches)}"
+    return matches[0]
+
+
+def _ci_setup_rust_uses(workflow: dict[str, object]) -> str:
+    """Return CI's Rust setup action reference."""
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict), "CI must declare jobs"
+    build_test = jobs.get("build-test")
+    assert isinstance(build_test, dict), "CI must declare jobs.build-test"
+    setup = _named_step(build_test, "Setup Rust")
+    uses = setup.get("uses")
+    assert isinstance(uses, str), "CI's Setup Rust step must use an action"
+    return uses
+
+
+@pytest.fixture(scope="module")
+def workflow() -> dict[str, object]:
+    """Parse the lockfile-refresh workflow once for this module."""
+    return _load(WORKFLOW_PATH)
+
+
+@pytest.fixture(scope="module")
+def refresh_job(workflow: dict[str, object]) -> dict[str, object]:
+    """Return the single refresh job once for this module."""
+    return _job(workflow)
+
+
+def test_dependabot_pr_trigger_is_narrow_and_manifest_scoped(
+    workflow: dict[str, object],
+) -> None:
+    """The workflow reacts only to manifest changes on lifecycle PR events."""
+    triggers = _triggers(workflow)
+    assert list(triggers) == ["pull_request_target"], (
+        "the write-enabled workflow must have only a pull_request_target trigger"
+    )
+    pull_request_target = triggers["pull_request_target"]
+    assert isinstance(pull_request_target, dict), (
+        "pull_request_target must be a mapping"
+    )
+    assert pull_request_target.get("types") == ["opened", "reopened", "synchronize"], (
+        "pull_request_target must cover the complete pull-request lifecycle"
+    )
+    assert pull_request_target.get("paths") == MANIFEST_PATHS, (
+        "pull_request_target must be limited to manifest changes"
+    )
+
+
+def test_write_permission_is_gated_to_dependabot(
+    refresh_job: dict[str, object],
+) -> None:
+    """Only Dependabot can schedule the job that inherits write permission."""
+    assert refresh_job.get("if") == "${{ github.actor == 'dependabot[bot]' }}", (
+        "jobs.refresh-lockfiles must block every non-Dependabot pull request"
+    )
+
+
+def test_permissions_are_only_contents_write(workflow: dict[str, object]) -> None:
+    """The job token has the minimum scope required to push regenerated locks."""
+    assert workflow.get("permissions") == {"contents": "write"}, (
+        "the workflow must grant only contents write permission"
+    )
+
+
+def test_checkout_uses_the_dependabot_head_with_credentials(
+    refresh_job: dict[str, object],
+) -> None:
+    """The lockfiles derive from, and push back to, the Dependabot head."""
+    checkout = _named_step(refresh_job, "Checkout Dependabot pull request head")
+    assert (
+        checkout.get("uses")
+        == "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+    ), "checkout must use the pinned actions/checkout release"
+    assert checkout.get("with") == {
+        "ref": "${{ github.event.pull_request.head.sha }}",
+        "persist-credentials": True,
+    }, "checkout must use the pull-request head with credentials"
+
+
+def test_setup_rust_matches_ci(refresh_job: dict[str, object]) -> None:
+    """Lock resolution uses the same Rust setup action as normal CI."""
+    setup = _named_step(refresh_job, "Setup Rust")
+    assert setup.get("uses") == _ci_setup_rust_uses(_load(CI_WORKFLOW_PATH)), (
+        "the refresh workflow must use the CI Rust setup action"
+    )
+
+
+def test_refresh_commit_and_push_touch_only_generated_lockfiles(
+    refresh_job: dict[str, object],
+) -> None:
+    """The job runs only refresh targets then commits and pushes their output."""
+    refresh = _named_step(refresh_job, "Refresh standalone fixture lockfiles")
+    assert refresh.get("run") == ("make update-fixture-lockfiles\n"), (
+        "the refresh step must regenerate every standalone fixture lockfile"
+    )
+
+    author = _named_step(refresh_job, "Configure Git author")
+    assert author.get("run") == (
+        "git config user.name 'github-actions[bot]'\n"
+        "git config user.email "
+        "'41898282+github-actions[bot]@users.noreply.github.com'\n"
+    ), "the author step must configure the GitHub Actions bot identity"
+
+    commit = _named_step(refresh_job, "Commit refreshed lockfiles")
+    commit_script = commit.get("run")
+    expected_commit_script = (
+        "if git diff --exit-code -- '**/Cargo.lock'; then\n"
+        "  echo 'changed=false' >> \"$GITHUB_OUTPUT\"\n"
+        "  exit 0\n"
+        "fi\n"
+        "git add -- '**/Cargo.lock'\n"
+        "git commit -m 'chore(deps): refresh standalone fixture lockfiles'\n"
+        "echo 'changed=true' >> \"$GITHUB_OUTPUT\"\n"
+    )
+    assert commit_script == expected_commit_script, (
+        "the commit step must stage and commit only the generated lockfiles"
+    )
+
+    push = _named_step(refresh_job, "Push refreshed lockfiles")
+    assert push.get("if") == "${{ steps.commit.outputs.changed == 'true' }}", (
+        "the push step must run only when lockfiles changed"
+    )
+    assert push.get("env") == {
+        "HEAD_REF": "${{ github.event.pull_request.head.ref }}",
+    }, (
+        "the push step must bind the pull-request head ref in the environment "
+        "so the shell receives it as data"
+    )
+    assert push.get("run") == 'git push origin "HEAD:$HEAD_REF"', (
+        "the push step must push the refreshed lockfiles to the pull-request "
+        "head branch named by HEAD_REF"
+    )
+
+
+# Context values the shell must never parse as script.  The trailing ``\b``
+# keeps ``github.event_name``, a fixed event label, out of the match.
+_UNTRUSTED_INLINE_EXPRESSION = re.compile(
+    r"\$\{\{[^}]*github\.(?:event\b|head_ref\b)[^}]*\}\}"
+)
+
+
+def test_push_step_never_interpolates_untrusted_refs_inline(
+    refresh_job: dict[str, object],
+) -> None:
+    """A caller-controlled ref name must not reach the shell as script text."""
+    push = _named_step(refresh_job, "Push refreshed lockfiles")
+    match push.get("run"):
+        case str() as script:
+            pass
+        case script:
+            assert isinstance(script, str), "the push step must declare a shell script"
+    offending = _UNTRUSTED_INLINE_EXPRESSION.findall(script)
+    assert not offending, (
+        f"the push step script must not interpolate {offending} inline: bind "
+        'each untrusted value in env: and reference it as "$VAR" so the shell '
+        "parses it as quoted data instead of as script"
+    )
+
+
+def _push_fragment(
+    push: dict[str, object], head_ref: str
+) -> tuple[str, dict[str, str]]:
+    """Return the push step's script and environment as the runner resolves them.
+
+    A step that declares no environment is run as it stands, so the injection
+    the hostile-ref contract exists to catch still happens and is reported as
+    an executed command rather than as a shape complaint.  The env binding
+    itself is pinned exactly by the sibling shape contracts.
+
+    Parameters
+    ----------
+    push : dict[str, object]
+        The parsed push step.
+    head_ref : str
+        The ref name to stand in for the one a pull request supplies.
+
+    Returns
+    -------
+    tuple[str, dict[str, str]]
+        The resolved script, and the environment to run it with.
+    """
+    match push.get("run"):
+        case str() as script:
+            pass
+        case script:
+            assert isinstance(script, str), "the push step must declare a shell script"
+    declared = push.get("env", {})
+    assert isinstance(declared, dict), "the push step's environment must be a mapping"
+    return resolve_fragment(script, declared, head_ref)
+
+
+def _example_working_dir(tmp_path: Path, example_index: int) -> Path:
+    """Return a fresh per-example scratch directory inside *tmp_path*.
+
+    Hypothesis reruns a ``@given`` test body once per generated example while
+    pytest's function-scoped ``tmp_path`` stays put, so the examples would
+    otherwise share one directory.  A fresh subdirectory per example keeps one
+    example's recording-git log and injection sentinel from leaking into the
+    next, and the index is unique across the examples of one run.
+
+    Returns
+    -------
+    pathlib.Path
+        The created scratch directory for one generated example.
+    """
+    working_dir = tmp_path / f"example-{example_index}"
+    working_dir.mkdir()
+    return working_dir
+
+
+# Counts the property test's invocations so each generated example gets a
+# fresh scratch directory inside the one function-scoped ``tmp_path``.
+_EXAMPLE_SEQUENCE = 0
+
+
+@hypothesis.given(head_ref=HOSTILE_HEAD_REF_STRATEGY)
+@hypothesis.settings(
+    max_examples=25,
+    deadline=dt.timedelta(seconds=5),
+    suppress_health_check=[hypothesis.HealthCheck.function_scoped_fixture],
+)
+def test_push_step_treats_any_generated_head_ref_as_inert_data(
+    refresh_job: dict[str, object], tmp_path: Path, head_ref: str
+) -> None:
+    """Any ref value reaches git as one argument, whatever it carries."""
+    global _EXAMPLE_SEQUENCE
+    _EXAMPLE_SEQUENCE += 1
+    push = _named_step(refresh_job, "Push refreshed lockfiles")
+    script, environment = _push_fragment(push, head_ref)
+
+    working_dir = _example_working_dir(tmp_path, _EXAMPLE_SEQUENCE)
+    result = run_fragment_through_posix_shell(script, environment, working_dir)
+
+    invocation_log = working_dir / INVOCATION_LOG_NAME
+    recorded = read_invocation_log(invocation_log)
+    assert recorded == [["push", "origin", f"HEAD:{head_ref}"]], (
+        f"the push step must hand git the whole generated ref {head_ref!r} as "
+        f"one argument, got {recorded}: a ref the shell parsed would arrive "
+        "split, substituted, or run"
+    )
+    assert not (working_dir / INJECTION_ARTEFACT).exists(), (
+        f"the generated ref {head_ref!r} must reach the shell as data: the "
+        f"sentinel {INJECTION_ARTEFACT!r} appeared, so the shell parsed the "
+        "ref as syntax"
+    )
+    assert result.returncode == 0, (
+        f"the push step must survive the generated ref {head_ref!r}, exit "
+        f"{result.returncode}, stderr {result.stderr!r}"
+    )
+
+
+def test_push_step_delivers_a_hostile_head_ref_as_one_inert_argument(
+    refresh_job: dict[str, object], tmp_path: Path
+) -> None:
+    """A ref the runner supplies reaches git whole and never reaches a shell."""
+    push = _named_step(refresh_job, "Push refreshed lockfiles")
+    script, environment = _push_fragment(push, HOSTILE_HEAD_REF)
+
+    working_dir = tmp_path / "workdir"
+    working_dir.mkdir()
+    result = run_fragment(script, environment, working_dir)
+
+    invocation_log = working_dir / INVOCATION_LOG_NAME
+    recorded = read_invocation_log(invocation_log)
+    assert recorded == [["push", "origin", f"HEAD:{HOSTILE_HEAD_REF}"]], (
+        "the push step must hand git the whole ref as one argument, got "
+        f"{recorded}: a ref the shell parsed would arrive split, substituted, "
+        "or run"
+    )
+    assert not (working_dir / INJECTION_ARTEFACT).exists(), (
+        "the head ref must reach the shell as data: the hostile ref created "
+        f"{INJECTION_ARTEFACT!r}, so the shell parsed it as syntax"
+    )
+    assert result.returncode == 0, (
+        "the push step must survive a ref name carrying shell metacharacters, "
+        f"exit {result.returncode}, stderr {result.stderr!r}"
+    )
+
+
+def test_validation_runs_when_refresh_changes_nothing(
+    refresh_job: dict[str, object],
+) -> None:
+    """A no-op refresh still proves the committed lockfiles resolve."""
+    validate = _named_step(refresh_job, "Validate refreshed fixture lockfiles")
+    assert validate.get("if") == "${{ steps.commit.outputs.changed != 'true' }}", (
+        "validation must run exactly when the refresh step changed nothing"
+    )
+    assert validate.get("run") == "make check-fixture-lockfiles", (
+        "validation must use the shared standalone-fixture lockfile gate"
+    )
+
+
+def test_standard_test_target_validates_fixture_lockfiles() -> None:
+    """The local test target rejects stale standalone fixture lockfiles."""
+    makefile = MAKEFILE_PATH.read_text(encoding="utf-8")
+    test_target_start = makefile.index("test: build-python")
+    next_target_start = makefile.index("\ntarget/%", test_target_start)
+    test_target = makefile[test_target_start:next_target_start]
+
+    assert "\t$(MAKE) check-fixture-lockfiles\n" in test_target, (
+        "make test must validate standalone fixture lockfiles"
+    )

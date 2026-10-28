@@ -1,0 +1,33 @@
+step-error-missing-fixture = 스텝 함수 '{ $step }'에 필요한 타입 '{ $ty }'의 픽스처 '{ $name }'가 없습니다
+step-error-execution = 함수 '{ $function }'로 스텝 '{ $pattern }'을 실행하는 동안 오류가 발생했습니다: { $message }
+step-error-panic = 스텝 '{ $pattern }', 함수 '{ $function }'에서 패닉이 발생했습니다: { $message }
+step-keyword-parse-error = 잘못된 스텝 키워드입니다: { $keyword }
+unsupported-step-type = 지원되지 않는 스텝 유형입니다: { $step_type }
+placeholder-pattern-mismatch = 패턴이 일치하지 않습니다
+placeholder-invalid-placeholder = 잘못된 플레이스홀더 구문입니다: { $details }
+placeholder-invalid-pattern = 잘못된 스텝 패턴입니다: { $pattern }
+placeholder-syntax = 잘못된 플레이스홀더 구문입니다: { $details }
+placeholder-syntax-detail = { $reason } (0부터 시작) 바이트 { $position }에서 발생했습니다{ $suffix }
+placeholder-syntax-suffix = 플레이스홀더 '{ $placeholder }'에 대해
+step-context-ambiguous-override = 픽스처 재정의가 모호합니다. 둘 이상의 픽스처가 type_id { $type_id }와 일치합니다. 재정의를 무시했습니다.
+panic-message-opaque-payload = <타입 { $type }의 디버그할 수 없는 패닉 페이로드>
+assert-step-ok-panic = 스텝이 오류를 반환했습니다: { $error }
+assert-step-err-success = 스텝이 예기치 않게 성공했습니다
+assert-step-err-missing-substring = 오류 '{ $display }'에 '{ $expected }'가 포함되어 있지 않습니다
+
+assert-skip-not-skipped = { $target } 이(가) 건너뛴 결과를 기록할 것으로 예상했습니다
+assert-skip-missing-message = { $target } 이(가) '{ $expected }' 를 포함하는 건너뛰기 메시지를 제공할 것으로 예상했습니다
+assert-skip-missing-substring = 건너뛰기 메시지 '{ $actual }' 에 '{ $expected }' 가 포함되어 있지 않습니다
+assert-skip-unexpected-message = { $target } 이(가) 건너뛰기 메시지를 제공하지 않을 것으로 예상했습니다
+assert-skip-flag-mismatch = { $target } 의 플래그 '{ $flag }' 이(가) { $expected } 일 것으로 예상했지만 실제로는 { $actual }였습니다
+
+execution-error-skip = 스텝 건너뜀{ $has_message ->
+    *[no] {""}
+    [yes] : { $message }
+}
+execution-error-step-not-found = 인덱스 { $index }에서 스텝을 찾을 수 없습니다: { $keyword } { $text } (기능: { $feature_path }, 시나리오: { $scenario_name })
+execution-error-missing-fixtures = 스텝 '{ $step_pattern }' ({ $step_location }에서 정의됨)은 픽스처 { $required }가 필요하지만 다음이 누락되었습니다: { $missing }. 요청된 픽스처 세부 정보: { $missing_requirements }. 시나리오에서 사용 가능한 픽스처: { $available } { $has_suggestion ->
+    [yes] rstest_bdd_harness_context가 삽입되도록 harness 지원 시나리오를 선택하세요.
+   *[no] {""}
+} (기능: { $feature_path }, 시나리오: { $scenario_name })
+execution-error-handler-failed = 인덱스 { $index }에서 스텝 실패: { $keyword } { $text } - { $error } (기능: { $feature_path }, 시나리오: { $scenario_name })

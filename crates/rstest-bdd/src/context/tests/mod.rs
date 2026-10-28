@@ -1,0 +1,342 @@
+//! Tests for step context and fixture management.
+
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
+use tracing::{
+    Event,
+    Level,
+    Metadata,
+    Subscriber,
+    span::{Attributes, Id, Record},
+    subscriber::DefaultGuard,
+};
+
+use crate::context::*;
+
+mod guard_borrowing;
+mod warning_delivery;
+
+/// Subscriber that counts recorded events and answers `enabled` from a fixed
+/// maximum level.
+///
+/// Modelling both a listening and a filtering consumer in one type lets the
+/// warning tests cover each delivery route without installing a process-global
+/// subscriber, which cannot be undone once set.
+pub(super) struct CountingSubscriber {
+    max_level: Level,
+    events: Arc<AtomicUsize>,
+}
+
+impl Subscriber for CountingSubscriber {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool { *metadata.level() <= self.max_level }
+
+    fn new_span(&self, _: &Attributes<'_>) -> Id { Id::from_u64(1) }
+
+    fn record(&self, _: &Id, _: &Record<'_>) {}
+
+    fn record_follows_from(&self, _: &Id, _: &Id) {}
+
+    fn event(&self, _: &Event<'_>) { self.events.fetch_add(1, Ordering::Relaxed); }
+
+    fn enter(&self, _: &Id) {}
+
+    fn exit(&self, _: &Id) {}
+}
+
+/// Install a [`CountingSubscriber`] for the current thread, returning the
+/// event counter alongside the guard that keeps it active.
+///
+/// The subscriber is scoped rather than global so tests remain independent
+/// under both `cargo test` and cargo-nextest.
+pub(super) fn scoped_subscriber(max_level: Level) -> (Arc<AtomicUsize>, DefaultGuard) {
+    let events = Arc::new(AtomicUsize::new(0));
+    let subscriber = CountingSubscriber {
+        max_level,
+        events: Arc::clone(&events),
+    };
+    (events, tracing::subscriber::set_default(subscriber))
+}
+
+/// Fixture that keeps a warning listener installed for the duration of a test.
+///
+/// Inject it into tests that trigger step-context warnings so the mirrored
+/// `eprintln!` stays quiet and the test output remains readable.
+#[rstest::fixture]
+fn warning_listener() -> DefaultGuard {
+    let (_events, guard) = scoped_subscriber(Level::WARN);
+    guard
+}
+
+#[test]
+fn borrow_mut_returns_mutable_fixture() {
+    let cell: RefCell<Box<dyn Any>> = RefCell::new(Box::new(String::from("seed")));
+    let mut ctx = StepContext::default();
+    ctx.insert_owned::<String>("text", &cell);
+
+    {
+        let Some(mut value) = ctx.borrow_mut::<String>("text") else {
+            panic!("mutable fixture should exist");
+        };
+        value.as_mut().push_str("ing");
+    }
+    drop(ctx);
+    let value = cell
+        .into_inner()
+        .downcast::<String>()
+        .expect("fixture should downcast to String");
+    assert_eq!(*value, "seeding");
+}
+
+#[test]
+fn borrow_mut_returns_none_for_shared_fixture() {
+    let fixture = 5;
+    let mut ctx = StepContext::default();
+    ctx.insert("number", &fixture);
+    assert!(ctx.borrow_mut::<i32>("number").is_none());
+}
+
+/// Assert that a unique fixture override can be replaced twice.
+/// The first call returns None; the second returns the previous, correct value.
+///
+/// A macro rather than a helper function so that panic line numbers point at
+/// the calling test.
+macro_rules! assert_unique_fixture_can_be_overridden_twice {
+    ($ctx:expr) => {{
+        let first = $ctx.insert_value(Box::new(5u32));
+        assert!(
+            first.is_inserted(),
+            "a recorded override should report is_inserted"
+        );
+        assert!(
+            matches!(&first, InsertOutcome::Inserted(None)),
+            "first override should insert with no previous value"
+        );
+        assert!(
+            first.into_previous().is_none(),
+            "an insert that displaced nothing should yield no previous override"
+        );
+
+        let second = $ctx.insert_value(Box::new(7u32));
+        assert!(
+            second.is_inserted(),
+            "an override that displaced an earlier one should report is_inserted"
+        );
+        assert!(
+            matches!(&second, InsertOutcome::Inserted(Some(_))),
+            "second override should insert and carry the displaced value"
+        );
+        let Some(displaced) = second.into_previous() else {
+            panic!("expected previous override to be returned");
+        };
+        let Ok(previous) = displaced.downcast::<u32>() else {
+            panic!("override should downcast to u32");
+        };
+        assert_eq!(*previous, 5);
+
+        let Ok(current) = $ctx.try_borrow::<u32>("number") else {
+            panic!("retrieved override should exist");
+        };
+        assert_eq!(*current, 7);
+    }};
+}
+
+#[test]
+fn get_ignores_step_return_override() {
+    let fixture = 1_u32;
+    let mut ctx = StepContext::default();
+    ctx.insert("number", &fixture);
+    let _ = ctx.insert_value(Box::new(7_u32));
+    let Ok(guard) = ctx.try_borrow::<u32>("number") else {
+        panic!("inserted override should be readable");
+    };
+    assert_eq!(*guard, 7);
+    drop(guard);
+    assert_eq!(ctx.get::<u32>("number"), Some(&1));
+}
+
+/// Assert a step return can override a uniquely matching fixture twice.
+///
+/// The first insert records the override with no previous value; the second
+/// displaces it and reports the displaced override. No warning can fire
+/// because a single matching fixture never reaches the ambiguity path, so no
+/// warning listener is needed.
+#[test]
+fn insert_value_overrides_a_unique_fixture() {
+    // Storage for fixtures must outlive the context
+    let fixture: u32 = 1;
+
+    let mut ctx = StepContext::default();
+    ctx.insert("number", &fixture);
+    assert_unique_fixture_can_be_overridden_twice!(ctx);
+}
+
+/// Assert an ambiguous fixture type drops the step return and warns.
+///
+/// Two fixtures of the returned type make the override ambiguous; the value
+/// is dropped, both fixtures stay untouched, and the ambiguity warning fires.
+/// The listener fixture keeps the mirrored `eprintln!` out of test output.
+#[rstest::rstest]
+#[expect(
+    clippy::used_underscore_binding,
+    reason = "rstest fixture injection requires the parameter"
+)]
+fn insert_value_reports_an_ambiguous_fixture_type(_warning_listener: DefaultGuard) {
+    // Storage for fixtures must outlive the context
+    let fixture_one: u32 = 1;
+    let fixture_two: u32 = 2;
+
+    let mut ctx = StepContext::default();
+    ctx.insert("one", &fixture_one);
+    ctx.insert("two", &fixture_two);
+
+    let result = ctx.insert_value(Box::new(5u32));
+    assert!(
+        matches!(&result, InsertOutcome::AmbiguousIgnored),
+        "ambiguous overrides must be reported as AmbiguousIgnored"
+    );
+    assert!(
+        !result.is_inserted(),
+        "a dropped value must not report is_inserted"
+    );
+    assert!(
+        result.into_previous().is_none(),
+        "a dropped value must not yield a previous override"
+    );
+    let Ok(one) = ctx.try_borrow::<u32>("one") else {
+        panic!("first fixture should remain borrowable");
+    };
+    let Ok(two) = ctx.try_borrow::<u32>("two") else {
+        panic!("second fixture should remain borrowable");
+    };
+    assert_eq!(*one, 1);
+    assert_eq!(*two, 2);
+}
+
+/// Assert a step return with no matching fixture type is dropped silently.
+///
+/// No fixture matches the returned type, so the value is dropped without a
+/// warning and the mismatched fixture stays readable under its own type. The
+/// `NoMatch` path returns before the warning site, so no listener is needed.
+#[test]
+fn insert_value_reports_a_missing_fixture_type() {
+    // Storage for fixtures must outlive the context
+    let fixture_text: &str = "fixture";
+
+    let mut ctx = StepContext::default();
+    ctx.insert("text", &fixture_text);
+
+    let result = ctx.insert_value(Box::new(5u32));
+    assert!(
+        matches!(&result, InsertOutcome::NoMatch),
+        "missing fixture type must be reported as NoMatch"
+    );
+    assert!(
+        !result.is_inserted(),
+        "a dropped value must not report is_inserted"
+    );
+    assert!(
+        result.into_previous().is_none(),
+        "a dropped value must not yield a previous override"
+    );
+    let Err(mismatch) = ctx.try_borrow::<u32>("text") else {
+        panic!("borrowing the fixture as u32 should report a type mismatch");
+    };
+    assert_eq!(
+        mismatch,
+        FixtureBorrowError::TypeMismatch {
+            name: "text".into()
+        }
+    );
+}
+
+/// Describes which `available_fixtures` scenario to test.
+#[derive(Debug, Clone, Copy)]
+enum AvailableFixturesScenario {
+    /// Two shared fixtures only.
+    SharedOnly,
+    /// One shared and one owned fixture.
+    SharedAndOwned,
+    /// No fixtures at all.
+    Empty,
+}
+
+#[rstest::rstest]
+#[case::shared_only(AvailableFixturesScenario::SharedOnly, &["fixture_a", "fixture_b"])]
+#[case::shared_and_owned(AvailableFixturesScenario::SharedAndOwned, &["shared", "owned"])]
+#[case::empty(AvailableFixturesScenario::Empty, &[])]
+fn available_fixtures_behaviour(
+    #[case] scenario: AvailableFixturesScenario,
+    #[case] expected: &[&str],
+) {
+    // Storage for fixtures must outlive the context
+    let value_a: u32 = 1;
+    let value_b: &str = "text";
+    let shared_value: u32 = 42;
+    let cell: RefCell<Box<dyn Any>> = RefCell::new(Box::new(String::from("owned")));
+
+    let mut ctx = StepContext::default();
+
+    match scenario {
+        AvailableFixturesScenario::SharedOnly => {
+            ctx.insert("fixture_a", &value_a);
+            ctx.insert("fixture_b", &value_b);
+        }
+        AvailableFixturesScenario::SharedAndOwned => {
+            ctx.insert("shared", &shared_value);
+            ctx.insert_owned::<String>("owned", &cell);
+        }
+        AvailableFixturesScenario::Empty => {
+            // No fixtures inserted
+        }
+    }
+
+    let names: Vec<_> = ctx.available_fixtures().collect();
+    assert_eq!(names.len(), expected.len());
+    for name in expected {
+        assert!(names.contains(name));
+    }
+}
+
+#[test]
+fn insert_harness_context_exposes_shared_reference() {
+    let context_value = 13usize;
+    let mut ctx = StepContext::default();
+    ctx.insert_harness_context(&context_value);
+
+    assert_eq!(ctx.harness_context::<usize>(), Some(&13));
+    assert_eq!(
+        ctx.get::<usize>(RSTEST_BDD_HARNESS_CONTEXT_FIXTURE),
+        Some(&13)
+    );
+}
+
+#[test]
+fn insert_owned_harness_context_supports_mutation() {
+    let harness_cell: RefCell<Box<dyn Any>> = RefCell::new(Box::new(String::from("harness")));
+    let mut ctx = StepContext::default();
+    ctx.insert_owned_harness_context::<String>(&harness_cell);
+
+    {
+        let Some(mut value) = ctx.borrow_harness_context_mut::<String>() else {
+            panic!("mutable harness context should exist");
+        };
+        value.as_mut().push_str("-updated");
+    }
+
+    {
+        let Some(value) = ctx.borrow_harness_context::<String>() else {
+            panic!("harness context should be borrowable");
+        };
+        assert_eq!(value.value(), "harness-updated");
+    }
+
+    drop(ctx);
+    let stored = harness_cell
+        .into_inner()
+        .downcast::<String>()
+        .expect("harness context should downcast to String");
+    assert_eq!(*stored, "harness-updated");
+}

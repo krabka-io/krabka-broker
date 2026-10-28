@@ -1,0 +1,346 @@
+//! Unit tests for scenario test generation helpers.
+
+use std::collections::HashSet;
+#[cfg(windows)]
+use std::path::Path;
+
+use proc_macro2::TokenStream as TokenStream2;
+use quote::quote;
+use rstest::rstest;
+
+use super::{
+    super::macro_args::{
+        FixtureSpec,
+        RuntimeCompatibilityAlias,
+        RuntimeMode,
+        runtime_compatibility_alias,
+    },
+    build_fixture_params,
+    build_lint_attributes,
+    build_test_signature,
+    dedupe_name,
+    resolve_effective_runtime,
+    resolve_fixture_error_type,
+    resolve_harness_path,
+};
+#[cfg(windows)]
+use super::{ScenarioTestContext, generate_scenario_test};
+#[cfg(windows)]
+use crate::{codegen::SharedAdapterResolutions, parsing::feature::ScenarioData};
+
+#[test]
+fn deduplicates_duplicate_titles() {
+    let mut used = HashSet::new();
+    let first = dedupe_name("dup_same_name", &mut used);
+    let second = dedupe_name("dup_same_name", &mut used);
+    assert_eq!(first, "dup_same_name");
+    assert_eq!(second, "dup_same_name_1");
+}
+
+#[cfg(windows)]
+#[test]
+fn generated_scenario_metadata_uses_portable_feature_separators() {
+    let rel_path = Path::new(r"tests\x.feature");
+    let resolutions = SharedAdapterResolutions {
+        harness: None,
+        attributes: None,
+    };
+    let ctx = ScenarioTestContext {
+        feature_stem: "x",
+        rel_path,
+        tag_filter: None,
+        fixtures: &[],
+        runtime: RuntimeMode::Sync,
+        harness: None,
+        attributes: None,
+        effective_harness: None,
+        resolutions: &resolutions,
+    };
+    let data = ScenarioData {
+        name: "scenario".to_owned(),
+        steps: vec![],
+        examples: None,
+        tags: vec![],
+        line: 1,
+    };
+
+    let generated = generate_scenario_test(&ctx, &mut HashSet::new(), data).to_string();
+    assert!(generated.contains("tests/x.feature"), "{generated}");
+    assert!(!generated.contains(r"tests\x.feature"), "{generated}");
+}
+
+/// Build a `FixtureSpec` from string literals.
+///
+/// A macro rather than a helper function so that panic line numbers point at
+/// the calling test.
+macro_rules! make_fixture_spec {
+    ($name:expr, $ty:expr) => {{
+        let name = match syn::parse_str($name) {
+            Ok(name) => name,
+            Err(err) => panic!("fixture name should parse: {err}"),
+        };
+        let ty = match syn::parse_str($ty) {
+            Ok(ty) => ty,
+            Err(err) => panic!("fixture type should parse: {err}"),
+        };
+        FixtureSpec { name, ty }
+    }};
+}
+
+/// Assert fixture parameters precede example parameters in a generated
+/// signature, returning the rendered signature for further checks.
+///
+/// A macro rather than a helper function so that panic line numbers point at
+/// the calling test.
+macro_rules! assert_fixtures_before_examples {
+    ($is_async:expr) => {{
+    let fn_ident = syn::Ident::new("test_name", proc_macro2::Span::call_site());
+    let fixture_params: Vec<TokenStream2> = vec![quote!(world: TestWorld)];
+    let example_params: Vec<TokenStream2> = vec![
+        quote!(#[case] col1: &'static str),
+        quote!(#[case] col2: &'static str),
+    ];
+
+    let sig = build_test_signature(&fn_ident, &fixture_params, &example_params, $is_async);
+    let sig_str = sig_to_string(&sig);
+
+    let Some(world_pos) = sig_str.find("world") else {
+        panic!("should contain world: {sig_str}");
+    };
+    let Some(col1_pos) = sig_str.find("col1") else {
+        panic!("should contain col1: {sig_str}");
+    };
+    assert!(
+        world_pos < col1_pos,
+        "fixture 'world' should appear before example 'col1'"
+    );
+    sig_str
+    }};
+}
+
+fn sig_to_string(sig: &syn::Signature) -> String { quote!(#sig).to_string() }
+
+#[test]
+fn build_lint_attributes_empty_fixtures_produces_no_attributes() {
+    let attrs = build_lint_attributes(&[]);
+    assert!(attrs.is_empty());
+}
+
+#[test]
+fn build_lint_attributes_with_fixtures_produces_expect_attribute() {
+    let fixtures = vec![make_fixture_spec!("world", "TestWorld")];
+    let attrs = build_lint_attributes(&fixtures);
+
+    assert_eq!(attrs.len(), 1);
+    let attr = &attrs[0];
+    assert!(attr.path().is_ident("expect"));
+
+    let attr_str = quote!(#attr).to_string();
+    assert!(
+        attr_str.contains("unused_variables"),
+        "attribute should contain unused_variables: {attr_str}"
+    );
+    assert!(
+        attr_str.contains("reason"),
+        "attribute should contain reason: {attr_str}"
+    );
+    assert!(
+        attr_str.contains("StepContext"),
+        "reason should mention StepContext: {attr_str}"
+    );
+}
+
+#[test]
+fn build_lint_attributes_multiple_fixtures_still_produces_single_attribute() {
+    let fixtures = vec![
+        make_fixture_spec!("world", "TestWorld"),
+        make_fixture_spec!("db", "Database"),
+    ];
+    let attrs = build_lint_attributes(&fixtures);
+    assert_eq!(attrs.len(), 1);
+}
+
+#[rstest::rstest]
+#[case::sync(false, "fn test_name ()")]
+#[case::async_variant(true, "async fn test_name ()")]
+fn build_test_signature_no_fixtures_no_examples(#[case] is_async: bool, #[case] expected: &str) {
+    let fn_ident = syn::Ident::new("test_name", proc_macro2::Span::call_site());
+    let sig = build_test_signature(&fn_ident, &[], &[], is_async);
+    assert_eq!(sig_to_string(&sig), expected);
+}
+
+#[rstest::rstest]
+#[case::sync(false, "fn")]
+#[case::async_variant(true, "async fn")]
+fn build_test_signature_fixtures_only(#[case] is_async: bool, #[case] prefix: &str) {
+    let fn_ident = syn::Ident::new("test_name", proc_macro2::Span::call_site());
+    let fixture_params: Vec<TokenStream2> = vec![quote!(f1: T1), quote!(f2: T2)];
+
+    let sig = build_test_signature(&fn_ident, &fixture_params, &[], is_async);
+    let sig_str = sig_to_string(&sig);
+
+    assert!(sig_str.starts_with(prefix), "should start with {prefix}");
+    assert!(sig_str.contains("f1 : T1"), "should contain f1: T1");
+    assert!(sig_str.contains("f2 : T2"), "should contain f2: T2");
+}
+
+#[test]
+fn build_test_signature_examples_only() {
+    let fn_ident = syn::Ident::new("test_name", proc_macro2::Span::call_site());
+    let example_params: Vec<TokenStream2> = vec![
+        quote!(#[case] col1: &'static str),
+        quote!(#[case] col2: &'static str),
+    ];
+
+    let sig = build_test_signature(&fn_ident, &[], &example_params, false);
+    let sig_str = sig_to_string(&sig);
+
+    assert!(sig_str.contains("# [case]"), "should contain #[case]");
+    assert!(sig_str.contains("col1"), "should contain col1");
+    assert!(sig_str.contains("col2"), "should contain col2");
+}
+
+#[test]
+fn build_test_signature_fixtures_then_examples() {
+    assert_fixtures_before_examples!(false);
+}
+
+#[test]
+fn build_test_signature_async_fixtures_then_examples() {
+    let sig_str = assert_fixtures_before_examples!(true);
+    assert!(sig_str.starts_with("async fn"), "should be async fn");
+}
+
+#[test]
+fn build_fixture_params_empty() {
+    let params = build_fixture_params(&[]);
+    assert!(params.is_empty());
+}
+
+#[test]
+fn build_fixture_params_single() {
+    let fixtures = vec![make_fixture_spec!("world", "TestWorld")];
+    let params = build_fixture_params(&fixtures);
+
+    assert_eq!(params.len(), 1);
+    let param_str = params[0].to_string();
+    assert!(param_str.contains("world"));
+    assert!(param_str.contains("TestWorld"));
+}
+
+#[test]
+fn build_fixture_params_multiple() {
+    let fixtures = vec![
+        make_fixture_spec!("world", "TestWorld"),
+        make_fixture_spec!("db", "Database"),
+    ];
+    let params = build_fixture_params(&fixtures);
+
+    assert_eq!(params.len(), 2);
+}
+
+#[test]
+fn resolve_harness_path_prefers_explicit_harness() {
+    let harness_path: syn::Path = syn::parse_str("my::Harness").expect("valid harness path");
+    let resolved = resolve_harness_path(
+        Some(&harness_path),
+        Some(RuntimeCompatibilityAlias::TokioHarnessAdapter),
+    );
+    assert!(resolved.is_some(), "explicit harness should be preserved");
+    let path_str = quote!(#resolved).to_string();
+    assert!(path_str.contains("my") && path_str.contains("Harness"));
+}
+
+#[test]
+fn resolve_harness_path_runtime_alias_resolves_to_tokio_harness() {
+    let resolved = resolve_harness_path(None, Some(RuntimeCompatibilityAlias::TokioHarnessAdapter));
+    assert!(
+        resolved.is_some(),
+        "tokio compatibility alias should resolve to TokioHarness path"
+    );
+    let path_str = quote!(#resolved).to_string();
+    assert!(
+        path_str.contains("rstest_bdd_harness_tokio") && path_str.contains("TokioHarness"),
+        "resolved path should be rstest_bdd_harness_tokio::TokioHarness, got: {path_str}"
+    );
+}
+
+// -- Tests for the effective_runtime / harness / signature pipeline ---
+//
+// These tests verify the combined behaviour of resolve_harness_path,
+// resolve_effective_runtime, and build_test_signature, mirroring the
+// pipeline inside generate_scenario_test without crossing the
+// proc-macro API boundary.
+
+#[rstest::rstest]
+#[case::alias_without_explicit_harness(
+    RuntimeMode::TokioCurrentThread,
+    None,
+    RuntimeMode::Sync,
+    &["rstest_bdd_harness_tokio", "TokioHarness"],
+    &[],
+    "fn "
+)]
+#[case::alias_with_explicit_harness(
+    RuntimeMode::TokioCurrentThread,
+    Some("my::ExplicitHarness"),
+    RuntimeMode::TokioCurrentThread,
+    &["ExplicitHarness"],
+    &["rstest_bdd_harness_tokio"],
+    "async fn"
+)]
+#[case::sync_without_alias(RuntimeMode::Sync, None, RuntimeMode::Sync, &[], &[], "fn ")]
+fn runtime_harness_signature_pipeline(
+    #[case] runtime: RuntimeMode,
+    #[case] explicit_harness_str: Option<&str>,
+    #[case] expected_runtime: RuntimeMode,
+    #[case] required_fragments: &[&str],
+    #[case] forbidden_fragments: &[&str],
+    #[case] expected_sig_prefix: &str,
+) {
+    // Given: runtime and optional explicit harness
+    let alias = runtime_compatibility_alias(runtime);
+    let explicit_path: Option<syn::Path> =
+        explicit_harness_str.map(|s| syn::parse_str(s).expect("valid path"));
+    let explicit_harness = explicit_path.as_ref();
+
+    // When: we resolve the harness and effective runtime
+    let resolved_harness = resolve_harness_path(explicit_harness, alias);
+    let effective_runtime = resolve_effective_runtime(runtime, alias, explicit_harness);
+
+    // Then: effective runtime matches expected
+    assert_eq!(effective_runtime, expected_runtime);
+
+    // And: resolved harness matches expected presence/contents
+    if required_fragments.is_empty() {
+        assert!(resolved_harness.is_none(), "expected no harness");
+    } else {
+        let harness = resolved_harness
+            .as_ref()
+            .expect("harness should be present");
+        let harness_str = quote!(#harness).to_string();
+        for fragment in required_fragments {
+            assert!(
+                harness_str.contains(fragment),
+                "harness should contain {fragment}, got: {harness_str}"
+            );
+        }
+        for fragment in forbidden_fragments {
+            assert!(
+                !harness_str.contains(fragment),
+                "harness should not contain {fragment}, got: {harness_str}"
+            );
+        }
+    }
+
+    // And: the generated test signature starts with expected prefix
+    let fn_ident = syn::Ident::new("test_scenario", proc_macro2::Span::call_site());
+    let sig = build_test_signature(&fn_ident, &[], &[], effective_runtime.is_async());
+    let sig_str = sig_to_string(&sig);
+    assert!(
+        sig_str.starts_with(expected_sig_prefix),
+        "expected signature starting with {expected_sig_prefix}, got: {sig_str}"
+    );
+}
+
+mod fixture_error_type;

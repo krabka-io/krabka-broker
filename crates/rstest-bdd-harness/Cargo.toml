@@ -1,0 +1,37 @@
+[package]
+name = "rstest-bdd-harness"
+version = "0.6.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Harness adapter traits and attribute policy interfaces for rstest-bdd."
+homepage.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+testing = []
+test-support = []
+
+[dependencies]
+cargo_metadata.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# Self dev-dependency so this crate's own test targets always see the
+# `testing`-gated helpers (notably `FailingHarness`) without relying on the
+# caller passing `--all-features`.
+rstest-bdd-harness = { path = ".", features = ["testing"] }
+insta.workspace = true
+proptest.workspace = true
+rstest.workspace = true
+rstest-bdd-test-macros.workspace = true
+temp-env.workspace = true
+tempfile.workspace = true

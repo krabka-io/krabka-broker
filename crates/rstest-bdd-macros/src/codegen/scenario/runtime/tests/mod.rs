@@ -1,0 +1,294 @@
+//! Tests for runtime scaffolding code generation.
+
+use rstest::rstest;
+
+use super::{
+    ScenarioLiteralsInput,
+    create_scenario_literals,
+    generators::{generate_async_step_executor, generate_skip_extractor, generate_step_executor},
+};
+use crate::codegen::scenario::ScenarioReturnKind;
+
+mod support;
+
+use support::*;
+
+#[derive(Clone, Copy, Debug)]
+enum RuntimeFunction {
+    ExecuteStep,
+    ExecuteStepAsync,
+}
+
+impl RuntimeFunction {
+    fn call_name(self) -> &'static str {
+        match self {
+            Self::ExecuteStep => "execute_step",
+            Self::ExecuteStepAsync => "execute_step_async",
+        }
+    }
+}
+
+impl std::fmt::Display for RuntimeFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.call_name())
+    }
+}
+
+/// Encapsulates expected properties when verifying step executor delegation.
+#[derive(Clone, Copy)]
+struct StepExecutorExpectation<'a> {
+    function_name: &'a str,
+    description: &'a str,
+    runtime_function: RuntimeFunction,
+    should_be_async: bool,
+}
+
+impl<'a> StepExecutorExpectation<'a> {
+    /// Constructs an expectation from the provided parameters for use in step
+    /// executor delegation tests.
+    fn new(
+        function_name: &'a str,
+        description: &'a str,
+        runtime_function: RuntimeFunction,
+        should_be_async: bool,
+    ) -> Self {
+        Self {
+            function_name,
+            description,
+            runtime_function,
+            should_be_async,
+        }
+    }
+}
+/// Assert that generated step executor code delegates to `rstest_bdd::execution::execute_step`.
+///
+/// This helper validates the architecture where generated code is a thin wrapper
+/// that delegates to runtime functions, rather than containing inline implementation.
+///
+/// # Arguments
+///
+/// * `tokens` - The generated token stream to parse.
+/// * `expectation` - The expected runtime delegation; it provides the function name to find and a
+///   human-readable description for error messages.
+fn assert_step_executor_delegates_to_runtime(
+    tokens: proc_macro2::TokenStream,
+    expectation: StepExecutorExpectation<'_>,
+) {
+    let file: syn::File = match syn::parse2(tokens) {
+        Ok(file) => file,
+        Err(e) => panic!("{}: failed to parse tokens: {e}", expectation.description),
+    };
+
+    let item = find_function_by_name(&file, expectation.function_name);
+
+    if expectation.should_be_async {
+        assert!(
+            item.sig.asyncness.is_some(),
+            "{}: expected {} to be async",
+            expectation.description,
+            expectation.function_name
+        );
+    } else {
+        assert!(
+            item.sig.asyncness.is_none(),
+            "{}: expected {} to be non-async",
+            expectation.description,
+            expectation.function_name
+        );
+    }
+
+    let Some(execute_step_call) = find_call_in_block(&item.block, expectation.runtime_function)
+    else {
+        panic!(
+            "{}: expected call to {}",
+            expectation.description, expectation.runtime_function
+        );
+    };
+
+    let func_path = extract_path(execute_step_call.func.as_ref());
+    match expectation.runtime_function {
+        RuntimeFunction::ExecuteStep => assert_path_is_execution_execute_step(func_path),
+        RuntimeFunction::ExecuteStepAsync => assert_path_is_execution_execute_step_async(func_path),
+    }
+
+    assert_eq!(
+        execute_step_call.args.len(),
+        2,
+        "{}: {} should receive StepExecutionRequest reference and ctx",
+        expectation.description,
+        expectation.runtime_function
+    );
+}
+
+/// Whether to generate and validate sync or async executor code.
+#[derive(Debug, Clone, Copy)]
+enum ExecutorType {
+    Sync,
+    Async,
+}
+
+impl ExecutorType {
+    fn generate(self) -> proc_macro2::TokenStream {
+        match self {
+            Self::Sync => generate_step_executor(),
+            Self::Async => generate_async_step_executor(),
+        }
+    }
+
+    fn expectation(self) -> StepExecutorExpectation<'static> {
+        match self {
+            Self::Sync => StepExecutorExpectation::new(
+                "__rstest_bdd_execute_single_step",
+                "sync step executor",
+                RuntimeFunction::ExecuteStep,
+                false,
+            ),
+            Self::Async => StepExecutorExpectation::new(
+                "__rstest_bdd_process_async_step",
+                "async step executor",
+                RuntimeFunction::ExecuteStepAsync,
+                true,
+            ),
+        }
+    }
+}
+
+/// Verify that generated step executors remain thin wrappers over the runtime.
+///
+/// This parameterized test covers both synchronous and asynchronous executor
+/// variants, ensuring they delegate to the appropriate `rstest_bdd::execution`
+/// function without embedding inline implementation details.
+#[rstest]
+#[case(ExecutorType::Sync)]
+#[case(ExecutorType::Async)]
+fn step_executor_delegates_to_runtime(#[case] executor_type: ExecutorType) {
+    assert_step_executor_delegates_to_runtime(
+        executor_type.generate(),
+        executor_type.expectation(),
+    );
+}
+
+/// Verify that the skip extractor references `rstest_bdd::execution::ExecutionError`.
+///
+/// The generated `__rstest_bdd_extract_skip_message` function accepts an
+/// `ExecutionError` reference and calls its `is_skip()` and `skip_message()`
+/// methods to extract skip information.
+#[test]
+fn skip_extractor_references_execution_error() {
+    let file: syn::File =
+        syn::parse2(generate_skip_extractor()).expect("generate_skip_extractor parses as a file");
+
+    let item = find_function_by_name(&file, "__rstest_bdd_extract_skip_message");
+
+    // Verify the function signature references ExecutionError
+    // The function takes a reference to ExecutionError as its parameter
+    let inputs = &item.sig.inputs;
+    assert_eq!(inputs.len(), 1, "expected single parameter");
+
+    let param = inputs.first().expect("expected first parameter");
+    if let syn::FnArg::Typed(pat_type) = param {
+        // The type should be a reference to a path ending in ExecutionError
+        if let syn::Type::Reference(type_ref) = pat_type.ty.as_ref() {
+            if let syn::Type::Path(type_path) = type_ref.elem.as_ref() {
+                assert_path_is_execution_error(&type_path.path);
+            } else {
+                panic!("expected path type inside reference");
+            }
+        } else {
+            panic!("expected reference type for parameter");
+        }
+    } else {
+        panic!("expected typed parameter");
+    }
+
+    // Verify the function body calls is_skip() and skip_message() on the error parameter
+    let is_skip_calls = count_method_calls_in_block(&item.block, "is_skip");
+    assert!(
+        is_skip_calls >= 1,
+        "expected at least one call to is_skip(), found {is_skip_calls}"
+    );
+
+    let skip_message_calls = count_method_calls_in_block(&item.block, "skip_message");
+    assert!(
+        skip_message_calls >= 1,
+        "expected at least one call to skip_message(), found {skip_message_calls}"
+    );
+}
+
+#[track_caller]
+fn assert_skip_handler_returns(
+    return_kind: ScenarioReturnKind,
+    empty_message: &str,
+    predicate: impl Fn(&syn::ExprReturn) -> bool,
+    predicate_message: &str,
+) {
+    let if_expr = parse_skip_handler(return_kind);
+    let returns = collect_returns(&if_expr.then_branch);
+    assert!(!returns.is_empty(), "{empty_message}");
+    assert!(
+        returns.iter().all(|ret| predicate(ret)),
+        "{predicate_message}"
+    );
+}
+
+#[test]
+fn skip_handler_returns_unit_for_unit_scenarios() {
+    assert_skip_handler_returns(
+        ScenarioReturnKind::Unit,
+        "expected skip handler to include a return for unit scenarios",
+        |ret| ret.expr.is_none(),
+        "unit skip handler should only use a bare return",
+    );
+}
+
+#[test]
+fn skip_handler_returns_ok_for_fallible_scenarios() {
+    assert_skip_handler_returns(
+        ScenarioReturnKind::ResultUnit,
+        "expected skip handler to include a return for fallible scenarios",
+        |ret| ret.expr.as_ref().is_some_and(|expr| is_ok_unit_expr(expr)),
+        "fallible skip handler should only return Ok(())",
+    );
+}
+
+#[test]
+fn feature_path_literal_is_manifest_relative_in_the_generated_metadata() {
+    // ExecPlan Milestone 6: the value embedded in `__RSTEST_BDD_FEATURE_PATH`
+    // flows in through `ScenarioConfig.feature_path` → `create_scenario_literals`
+    // → `feature_literal`. A whole-scenario `to_string()` cannot be produced
+    // in unit tests (the codegen entry returns `proc_macro::TokenStream`,
+    // which panics outside the bridge), so the contract is pinned at its two
+    // TokenStream2 producers instead: the feature-path value the call sites
+    // compute (unit-tested in `paths`) and the literal this factory builds
+    // from it. Together with the tracking binding's token-shape tests they
+    // cover every token the macro emits.
+    let feature_path = crate::codegen::scenario::FeaturePath::new(
+        "tests/features/whole_expansion.feature".to_owned(),
+    );
+    let scenario_name = crate::codegen::scenario::ScenarioName::new("whole expansion".to_owned());
+    let input = ScenarioLiteralsInput {
+        feature_path: &feature_path,
+        scenario_name: &scenario_name,
+        scenario_line: 1,
+        allow_skipped: false,
+        tags: &[],
+    };
+    let literals = create_scenario_literals(input);
+    assert_eq!(
+        literals.feature_literal.value(),
+        "tests/features/whole_expansion.feature",
+        "the embedded feature path must stay manifest-relative"
+    );
+    let absolute_path =
+        crate::codegen::scenario::FeaturePath::new("/elsewhere/x.feature".to_owned());
+    let absolute = ScenarioLiteralsInput {
+        feature_path: &absolute_path,
+        ..input
+    };
+    let absolute_literals = create_scenario_literals(absolute);
+    assert_eq!(
+        absolute_literals.feature_literal.value(),
+        "/elsewhere/x.feature",
+        "a path outside the manifest stays absolute per Decision D3"
+    );
+}

@@ -1,0 +1,33 @@
+step-error-missing-fixture = فیکسچر «{ $name }» از نوع «{ $ty }» برای تابع گام «{ $step }» وجود ندارد
+step-error-execution = خطا هنگام اجرای گام «{ $pattern }» با تابع «{ $function }»: { $message }
+step-error-panic = پانیک در گام «{ $pattern }»، تابع «{ $function }»: { $message }
+step-keyword-parse-error = کلیدواژه گام نامعتبر است: { $keyword }
+unsupported-step-type = نوع گام پشتیبانی نمی‌شود: { $step_type }
+placeholder-pattern-mismatch = الگو مطابق نیست
+placeholder-invalid-placeholder = نحو جای‌نگهدار نامعتبر است: { $details }
+placeholder-invalid-pattern = الگوی گام نامعتبر است: { $pattern }
+placeholder-syntax = نحو جای‌نگهدار نامعتبر است: { $details }
+placeholder-syntax-detail = { $reason } در بایت { $position } (شمارش از صفر){ $suffix }
+placeholder-syntax-suffix = برای جای‌نگهدار «{ $placeholder }»
+step-context-ambiguous-override = بازنویسی فیکسچر مبهم است: بیش از یک فیکسچر با type_id { $type_id } مطابقت دارد. بازنویسی نادیده گرفته شد.
+panic-message-opaque-payload = <بار پانیک غیرقابل اشکال‌زدایی از نوع { $type }>
+assert-step-ok-panic = گام خطایی برگرداند: { $error }
+assert-step-err-success = گام به‌طور غیرمنتظره موفق شد
+assert-step-err-missing-substring = خطای «{ $display }» شامل «{ $expected }» نیست
+
+assert-skip-not-skipped = انتظار می‌رفت { $target } یک نتیجهٔ ردشده را ثبت کند
+assert-skip-missing-message = انتظار می‌رفت { $target } پیام رد کردنی ارائه کند که شامل «{ $expected }» باشد
+assert-skip-missing-substring = پیام رد کردن «{ $actual }» شامل «{ $expected }» نیست
+assert-skip-unexpected-message = انتظار می‌رفت { $target } پیام رد کردنی ارائه ندهد
+assert-skip-flag-mismatch = انتظار می‌رفت پرچم '{ $flag }' در { $target } برابر با { $expected } باشد، اما { $actual } بود
+
+execution-error-skip = گام رد شد{ $has_message ->
+    *[no] {""}
+    [yes] : { $message }
+}
+execution-error-step-not-found = گام در شاخص { $index } یافت نشد: { $keyword } { $text } (feature: { $feature_path }، سناریو: { $scenario_name })
+execution-error-missing-fixtures = گام «{ $step_pattern }» (تعریف‌شده در { $step_location }) به فیکسچرهای { $required } نیاز دارد، اما موارد زیر وجود ندارند: { $missing }. جزئیات فیکسچر درخواست‌شده: { $missing_requirements }. فیکسچرهای موجود از سناریو: { $available } { $has_suggestion ->
+    [yes] یک سناریوی پشتیبانی‌شده توسط harness را انتخاب کنید تا rstest_bdd_harness_context درج شود.
+   *[no] {""}
+} (feature: { $feature_path }، سناریو: { $scenario_name })
+execution-error-handler-failed = گام در شاخص { $index } ناموفق بود: { $keyword } { $text } - { $error } (feature: { $feature_path }، سناریو: { $scenario_name })

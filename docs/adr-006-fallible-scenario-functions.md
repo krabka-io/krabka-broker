@@ -1,0 +1,161 @@
+# Architectural decision record (ADR) 006: fallible scenario functions
+
+## Status
+
+Accepted (2026-01-28): Allow fallible scenario bodies returning `Result<(), E>`
+or `StepResult<(), E>`, return `Ok(())` for skipped scenarios, and ensure `Err`
+outcomes do not record a passed scenario.
+
+## Date
+
+2026-01-28.
+
+## Context and problem statement
+
+Scenario bodies currently return `()` while steps already support fallible
+return types via the shared `ReturnKind` classification. See
+[ADR 002](adr-002-stable-step-return-classification.md) for the return-kind
+design and [Users guide §Step return values](users-guide.md#step-return-values)
+for macro classification details. During the fallible scenario experiment, the
+macro could not express a fallible scenario signature without breaking the skip
+path or misreporting the scenario outcome. The framework needs a way to let
+scenario bodies use `?` while keeping status recording accurate and compiler
+diagnostics clear.
+
+## Decision drivers
+
+- Support fallible scenario bodies without additional boilerplate.
+- Preserve accurate pass/fail reporting when a scenario returns `Err`.
+- Keep the skip short-circuit path type-correct for fallible signatures.
+- Keep scenario handling on the existing `ReturnKind` logic; step aliases use
+  the separate type-directed dispatch introduced by ADR-019.
+- Avoid introducing unused payload values in scenario results.
+
+## Requirements
+
+### Functional requirements
+
+- Allow scenario bodies to return `Result<(), E>` or `StepResult<(), E>`.
+- When a scenario is skipped, return `Ok(())` to satisfy the fallible
+  signature.
+- When a scenario returns `Err`, mark the scenario as recorded so it is not
+  reported as passed and propagate the error to the test harness.
+- When a GPUI attribute policy supplies the outer test boundary, consume a
+  fallible scenario result inside the generated function. Published GPUI
+  versions may otherwise discard the result and trigger `unused_must_use`.
+
+### Technical requirements
+
+- Reuse the existing return-type classification logic used by steps.
+- Provide a clear compile-time error for `Result<T, E>` where `T != ()`.
+
+## Options considered
+
+### Option A: Keep scenario bodies infallible
+
+Continue to require `fn scenario() -> ()`, and force fallible work into steps
+or helper functions. This avoids API changes but keeps fallible scenario bodies
+out of reach and complicates scenarios that only need a small fallible setup.
+
+### Option B: Allow any `Result<T, E>` and discard payloads
+
+Accept `Result<T, E>` for scenario bodies and ignore `T`. This introduces a
+footgun: the payload is silently discarded, and it is not obvious where to use
+it, making the API misleading.
+
+### Option C: Allow only `Result<(), E>` or `StepResult<(), E>` (selected)
+
+Extend the macro to accept fallible unit results only. The skip path returns
+`Ok(())`, and the runtime wrapper marks the scenario as recorded before
+returning an `Err`, ensuring the test fails without being reported as passed.
+
+| Topic                     | Option A | Option B  | Option C |
+| ------------------------- | -------- | --------- | -------- |
+| Fallible ergonomics       | Poor     | Mixed     | Good     |
+| Type clarity              | High     | Low       | High     |
+| Result payload semantics  | N/A      | Confusing | Clear    |
+| Implementation complexity | Low      | Medium    | Medium   |
+
+_Table 1: Trade-offs between the options._
+
+## Decision outcome / proposed direction
+
+Adopt Option C. The `#[scenario]` macro classifies scenario return types using
+`ReturnKind` and permits `Result<(), E>` and `StepResult<(), E>` only. The skip
+handler returns `Ok(())` for fallible scenarios, and the fallible body wrapper
+marks the scenario as recorded before propagating `Err` to the test harness.
+Returning `Result<T, E>` where `T != ()` produces a compile-time error:
+"`#[scenario]` bodies must return () or a unit Result/StepResult".
+
+Std and Tokio test boundaries preserve the fallible function signature and
+propagate its result through Rust's test `Termination` support. GPUI boundaries
+instead expose a unit-returning function and consume the result in a generated
+closure or async block. An `Err` still marks the scenario as recorded, then
+panics with the fixed message `scenario returned an error`, so the test fails
+without leaving a `Result` unbound in GPUI's generated wrapper. The error value
+is neither inspected nor formatted, so its type does not need to implement
+`Debug`.
+
+For screen readers: The following snippet shows a fallible scenario body using
+`Result<(), E>`.
+
+```rust,no_run
+#[scenario(path = "tests/features/example.feature")]
+fn my_scenario() -> Result<(), MyError> {
+    do_something_fallible()?;
+    Ok(())
+}
+```
+
+## Goals and non-goals
+
+### Goals
+
+- Enable scenario bodies to be fallible without extra wrappers.
+- Keep skip handling type-correct for fallible scenarios.
+- Ensure `Err` results fail the test without being recorded as passed.
+
+### Non-goals
+
+- Support `Result<T, E>` payloads from scenario bodies.
+- Change step fallibility semantics or step return handling.
+- Introduce additional scenario outcome variants beyond existing recording.
+
+## Architectural rationale
+
+- Reuses existing return-type classification to keep macro behaviour
+  consistent across steps and scenarios.
+- Preserves the recorder drop-guard semantics by explicitly marking an `Err`
+  scenario as recorded before returning.
+- Keeps GPUI compatibility handling at the generated test boundary, shared by
+  regular scenarios and outlines, without changing std or Tokio semantics.
+- Keeps API surface small while enabling a common fallible use case.
+
+## Known risks and limitations
+
+- Scenarios that previously returned `Result<T, E>` with a payload will now
+  fail to compile and must move payloads into fixtures or state.
+- The error message is fixed to unit-return expectations; any future need for
+  payloads would require a new ADR and API design.
+- In v0.6.0-beta3, a harness-generated test can leave the fallible scenario's
+  outer `Result` unconsumed. The scenario behaves correctly at runtime, but
+  rustc emits `unused_must_use`, which becomes a hard error under
+  `-D warnings`. Roadmap item 11.3.2 tracks consuming or propagating this
+  result across the standard, Tokio, and GPUI generated-test paths.
+- A unit-returning scenario still propagates `Err` from fallible steps. Users
+  only need a fallible scenario signature when the scenario body itself needs
+  to use `?`; this distinction should remain explicit in migration guidance.
+
+## Delivery addendum (2026-08-25)
+
+Roadmap item 11.3.2 is delivered. Standard and Tokio generated test boundaries
+preserve the fallible scenario's native `Result` return, allowing the test
+harness to consume it through Rust's `Termination` support. The GPUI boundary
+is intentionally unit-returning: its generated wrapper consumes the scenario
+`Result`, records an error outcome, and panics with the fixed message
+`scenario returned an error` when the result is `Err`.
+
+This addendum supersedes the v0.6.0-beta3 pending-risk statement above. The
+statement remains as historical context for the failure that motivated this
+work; generated standard, Tokio, and GPUI paths now consume the fallible
+scenario result without an `unused_must_use` warning under `-D warnings`.

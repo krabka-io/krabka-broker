@@ -1,0 +1,14 @@
+[package]
+name = "rstest-bdd-ui-lints"
+version = "0.0.0"
+edition = "2024"
+publish = false
+rust-version = "1.88"
+
+[dependencies]
+anyhow = "1.0.104"
+rstest = "0.26.1"
+rstest-bdd = { path = "../../../rstest-bdd" }
+rstest-bdd-macros = { path = "../../../rstest-bdd-macros" }
+
+[workspace]

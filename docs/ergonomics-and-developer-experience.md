@@ -1,0 +1,431 @@
+# Design document: Phase 4 ergonomics and developer experience
+
+## 1. Introduction
+
+With the core mechanics of `rstest-bdd` established in Phases 1-3, Phase 4
+transitions the focus towards enhancing developer experience and reducing
+boilerplate. The features outlined in this document are designed to make
+writing and maintaining behaviour tests more intuitive, less verbose, and
+better integrated into the development workflow. This document synthesizes user
+feedback and the high-level goals of the project roadmap into a concrete
+technical design for implementation.
+
+The guiding principles for this phase are:
+
+- **Reduce ceremony:** Eliminate repetitive attributes and patterns where
+  intent can be clearly inferred.
+- **Improve data flow:** Provide more natural ways to share state and pass data
+  between steps.
+- **Enhance tooling:** Automate common, repetitive tasks to accelerate the
+  test-writing process.
+
+## 2. Reducing boilerplate in step definitions
+
+A significant portion of the feedback centres on the verbosity of step
+definitions. The following proposals aim to address this by making the
+framework's macros more intelligent and context-aware.
+
+### 2.1. Implicit fixture and step argument injection
+
+**Goal:** Eliminate the need for `#[from(fixture_name)]` on every fixture and
+reduce noise in step function signatures. The current implementation requires
+explicit annotation for every fixture, which is verbose, especially when a
+fixture is used across many steps.
+
+Proposed Design:
+
+The argument classification logic in
+crates/rstest-bdd-macros/src/codegen/wrapper/args.rs will be updated to
+automatically distinguish between fixtures and step arguments based on the
+context provided by the step pattern.
+
+1. **Pattern-First Analysis:** When a step macro (`#[given]`, `#[when]`, etc.)
+   is expanded, it will first parse its pattern string to identify all
+   placeholders (e.g., `{count:u32}`).
+2. **Argument Classification:** It will then iterate through the step
+   function's parameters:
+
+    - If a parameter's name matches a placeholder in the pattern, it will be
+  classified as a **step argument**.
+    - If a parameter's name does _not_ match any placeholder, it will be
+      classified as a **fixture**.
+
+3. **Conflict Resolution:**
+
+    - The explicit `#[from(name)]` attribute will be retained to handle cases
+      where a parameter name must differ from the fixture name.
+    - If a parameter is not found in the pattern's placeholders and is not
+  explicitly marked with `#[from]`, a compile-time error will be emitted if no
+  fixture with that name is in scope, preventing ambiguity.
+
+**User Experience:**
+
+- **Before:**
+
+```rust,no_run
+#[when("I add {count:u32} pumpkins to the basket")]
+fn add_pumpkins(#[from(basket)] b: &mut Basket, count: u32) {
+    // ...
+}
+```
+
+- **After:**
+
+```rust,no_run
+#[when("I add {count:u32} pumpkins to the basket")]
+fn add_pumpkins(basket: &mut Basket, count: u32) {
+    // `basket` is implicitly a fixture, `count` is a step argument.
+}
+```
+
+Implicit fixtures such as `basket` must already be in scope in the test module;
+`#[from(name)]` only renames a fixture and does not create one.
+
+### 2.2. Inferred step patterns
+
+**Goal:** Remove the need for an explicit pattern string in the step attribute
+when the function name clearly describes the step. This reduces duplication
+where the pattern and function name are nearly identical.
+
+Proposed Design:
+
+The step attribute macros (#[given], #[when], #[then]) in
+crates/rstest-bdd-macros/src/macros/mod.rs will be modified to make the pattern
+string argument optional.
+
+1. **Optional Argument:** The macros will be updated to accept `#[given]`,
+   `#[given("a pattern")]`, `#[when]`, etc.
+2. **Inference Logic:** If the pattern string is omitted:
+
+    - The macro will take the identifier of the function it decorates.
+    - It will convert the identifier from `snake_case` to a sentence-case string
+  (e.g., `the_user_logs_in` becomes `"the user logs in"`).
+    - Treat parameter-like identifiers as placeholders and emit `{name}` in the
+      inferred pattern (e.g., `_var` or `var` -> `{var}`).
+
+3. **Doc Comment Fallback:** As a secondary mechanism, if no pattern is
+   provided and the function name is ambiguous, the macro could fall back to
+   using the function's Rustdoc summary line. However, inferring from the
+   function name is more direct and less prone to parsing errors. The primary
+   implementation will focus on name inference.
+
+**User Experience:**
+
+- **Before:**
+
+```rust,no_run
+#[given("the user is logged in")]
+fn the_user_is_logged_in(user_session: &mut Session) {
+    // ...
+}
+```
+
+- **After:**
+
+```rust,no_run
+#[given]
+fn the_user_is_logged_in(user_session: &mut Session) {
+    // Pattern "the user is logged in" is inferred.
+}
+```
+
+### 2.3. Struct-based step arguments
+
+**Goal:** Condense step function signatures that have many placeholders by
+binding them to the fields of a single struct. This improves readability and
+centralizes parsing logic.
+
+Proposed Design:
+
+A new derive macro, StepArgs, will be introduced in rstest-bdd-macros.
+
+1. **`#[derive(StepArgs)]` Macro:**
+
+    - This macro will be applied to a user-defined struct.
+    - It will generate `TryFrom<Vec<String>>` for the struct. The implementation
+      expects a vector of captured strings from the step pattern and parses
+      each string into the corresponding field using `FromStr`. Field order
+      maps to capture order. A field/count mismatch is a compile-time error
+      emitted by the macro with the missing or excess placeholder names and
+      span highlights.
+
+      ```text
+      error: StepArgs fields do not match placeholders: missing {age}, extra field `role`
+       --> tests/steps.rs:27:10
+      27 | struct NewUser { name: String, role: String }
+         |          ^^^^^
+      ```
+
+2. **Step Macro Integration:**
+
+    - The `extract_args` function will be updated to detect a single parameter
+  whose type derives `StepArgs`.
+    - If such a parameter is found, it will consume all available placeholders
+      from the pattern. No other step arguments will be permitted. Fixture
+      arguments will still be allowed.
+    - The generated step wrapper will capture all placeholders into a
+      `Vec<String>` and then call `try_into()` to populate the struct.
+
+Implementation note: procedural macros cannot reliably detect whether an
+arbitrary type derives `StepArgs`. The final design therefore uses a lightweight
+`#[step_args]` marker on the relevant parameter to signal that all
+placeholders should be routed into the derived struct. The derive macro still
+produces the `TryFrom<Vec<String>>` implementation and records the field names,
+so the wrapper can validate the capture count at compile time.
+
+**User Experience:**
+
+- **Before:**
+
+```rust,no_run
+#[when("a user named {name} with age {age:u32} and role {role} is created")]
+fn create_user(name: String, age: u32, role: String) {
+    // ...
+}
+```
+
+- **After:**
+
+```rust,no_run
+use rstest_bdd_macros::StepArgs;
+
+#[derive(StepArgs)]
+struct NewUser {
+    name: String,
+    age: u32,
+    role: String,
+}
+
+#[when("a user named {name} with age {age:u32} and role {role} is created")]
+fn create_user(user_data: NewUser) {
+    // access via user_data.name, user_data.age, etc.
+}
+```
+
+## 3. Improving data flow and state management
+
+These features focus on making state management across steps more robust and
+idiomatic, moving away from manual `RefCell` patterns towards
+framework-provided solutions.
+
+### 3.1. Passing values between steps via return types
+
+**Goal:** Allow a step (typically `#[when]`) to return a value that can be used
+by a subsequent step (typically `#[then]`), promoting a more functional data
+flow and reducing reliance on shared mutable state for simple value passing.
+
+Proposed Design:
+
+This requires changes to both the runtime and macro crates.
+
+1. `StoreInContext` **Trait** (in `crates/rstest-bdd/src/types/mod.rs`): A new
+   trait will be defined to associate a return type with a unique key for
+   storage in the `StepContext`. The key will align with the fixture whose type
+   matches the returned value.
+
+    ```rust,no_run
+    pub trait StoreInContext: 'static {
+        // Provides a way to store and retrieve the value.
+        // The StepContext will handle the implementation details.
+    }
+    
+    impl<T: 'static> StoreInContext for T {}
+    ```
+
+2. `StepContext` **Enhancement** (in `crates/rstest-bdd/src/context.rs`): The
+   `StepContext` will match returned values against fixture types at runtime
+   and store them under the fixture name when the type is unique.
+3. **Wrapper Codegen Update (in
+   **`crates/rstest-bdd-macros/src/codegen/wrapper/emit.rs`**):**
+
+    - The generated wrapper normalizes the returned value. Literal unit returns
+      take the unit path; other unhinted types, apart from classifier-rejected
+      nested `Result` and `impl Trait` shapes, use the runtime dispatch bridge
+      to distinguish a concrete `Result<T, E>` from a value alias.
+      - `Ok(value)` is captured and `Err(error)` is propagated without storing
+        a value. Genuine value aliases and result-containing wrappers remain
+        values.
+      - The wrapper then inserts the successful value into `StepContext`, keyed
+        by the matching fixture name when the `TypeId` is unambiguous.
+
+4. **Implicit Injection:** A parameter in a subsequent step that is not a
+   fixture and not a step argument, but whose type matches a value stored in
+   the context, will be implicitly injected.
+
+**User Experience:**
+
+```rust,no_run
+#[when("the user searches for an item")]
+fn search_for_item(api_client: &ApiClient) -> Result<Vec<SearchResult>, ApiError> {
+    // This function now returns the search results directly.
+    Ok(api_client.search("pumpkin"))
+}
+
+#[then("the results are displayed")]
+fn results_are_displayed(results: Vec<SearchResult>) {
+    // The `results` are injected directly from the previous step's return value.
+    assert!(!results.is_empty());
+}
+```
+
+### 3.2. Ergonomic scenario state
+
+**Goal:** Provide a structured and type-safe alternative to manually crafting
+state objects with `RefCell<Option<T>>`. This is the most requested ergonomic
+feature aimed at creating a single "world" or "state" object with less ceremony.
+`rstest-bdd` now registers fixtures provided by `#[scenario]` tests with
+exclusive access, so step functions can request `&mut World` and mutate the
+shared state directly when that is all they need. The `Slot<T>` helper still
+serves as the ergonomic option for optional fields or when steps must stash
+data lazily without replacing the entire struct.
+
+Proposed Design:
+
+The design will adopt a balanced approach, providing an ergonomic `Slot<T>`
+type and a helper derive macro, rather than a fully "magical" #[world]
+attribute that hides the fixture mechanism. This aligns with rstest-bdd's
+philosophy of augmenting, not obscuring, rstest.
+
+1. `Slot<T>` **Type** (in `crates/rstest-bdd/src/state.rs`): A new public type
+   will be introduced. It will be a thin wrapper around `RefCell<Option<T>>`,
+   providing a clean API for state manipulation.
+
+    ```rust,no_run
+    pub struct Slot<T>(RefCell<Option<T>>);
+    
+    impl<T> Slot<T> {
+      pub fn set(&self, value: T);
+      pub fn get(&self) -> Option<T> where T: Clone; // Or returns a Ref<'_, T>
+      pub fn take(&self) -> Option<T>;
+      // ... and other helpers
+    }
+    ```
+
+2. `#[derive(ScenarioState)]` **Macro** (in `rstest-bdd-macros`):
+
+    - This derive macro will be applied to a user-defined state struct whose
+      fields are of type `Slot<T>`.
+    - It will automatically generate a `Default` implementation for the struct,
+  which initializes each `Slot` to its empty state.
+    - This encourages a pattern where the user defines their state struct,
+      derives `ScenarioState`, and then provides it as a regular `rstest`
+      fixture.
+
+**User Experience:**
+
+```rust,no_run
+use rstest_bdd::{macros::{given, scenario, ScenarioState}, state::Slot};
+use rstest::fixture;
+
+// 1. Define the state struct with Slots
+#[derive(ScenarioState, Default)]
+struct CliState {
+    command_output: Slot<String>,
+    exit_code: Slot<i32>,
+}
+
+// 2. Provide it as a standard fixture
+#[fixture]
+fn cli_state() -> CliState {
+    CliState::default()
+}
+
+// 3. Use it in steps
+#[when("I run the command")]
+fn run_command(cli_state: &CliState) {
+    // No more RefCell<Option<...>> boilerplate
+    cli_state.command_output.set("Success".to_string());
+    cli_state.exit_code.set(0);
+}
+
+#[then("the exit code should be {int}")]
+fn check_exit_code(cli_state: &CliState, code: i32) {
+    assert_eq!(cli_state.exit_code.take(), Some(code));
+}
+
+// 4. The scenario ties it all together
+#[scenario(path = "...")]
+fn test_cli_command(cli_state: CliState) {
+    // The fixture is injected here, making it available to all steps.
+}
+```
+
+## 4. Developer tooling and utilities
+
+### 4.1. Streamlined `Result` assertions
+
+**Goal:** Simplify the common pattern of asserting that a step returning a
+`Result` is either `Ok` or `Err`.
+
+Two helper macros are provided by the `rstest-bdd` crate and re-exported:
+
+- `assert_step_ok!(result)`: unwraps a `Result` value, panicking with a
+  formatted message when the value is `Err(e)`.
+- `assert_step_err!(result, expected_msg)`: asserts that the `Result` is an
+  `Err` and optionally checks that the error message contains a specific
+  substring.
+
+These simple declarative macros (`macro_rules!`) live in
+`crates/rstest-bdd/src/lib.rs`.
+
+### 4.3. Skipped outcome assertions
+
+**Goal:** Remove the repetitive `match` statements that tests used to assert
+`StepExecution::Skipped` or `ScenarioStatus::Skipped` outcomes.
+
+Two helpers address the common cases:
+
+- `assert_step_skipped!(outcome, message = ..? / message_absent = true)` unwraps
+  the skip payload and optionally asserts that a reason is present or absent.
+- `assert_scenario_skipped!(status, allow_skipped = .., forced_failure = ..)`
+  clones the stored `SkippedScenario` metadata, so tests can continue making
+  ad-hoc assertions after the helper verifies message and flag invariants.
+
+Both macros emit localized error messages when expectations are not met,
+mirroring the ergonomics of `assert_step_ok!` and `assert_step_err!`.
+
+### 4.4. Step scaffolding
+
+**Goal:** Automate the creation of skeleton step definition files from a
+`.feature` file to reduce manual boilerplate.
+
+Proposed Design:
+
+A new binary crate, cargo-bdd, will be created.
+
+1. **Command:** It will provide the subcommand
+   `cargo bdd scaffold <path_to_feature>`.
+2. **Functionality:**
+
+    - The command will parse the specified `.feature` file, reusing the Gherkin
+  parsing logic already present in `rstest-bdd-macros`.
+    - It will iterate through all unique step strings in the feature.
+    - It will generate a new Rust file (e.g., `tests/steps/my_feature_steps.rs`)
+  containing skeleton step functions for each unique step.
+    - Placeholders in step strings will be converted into function parameters
+      with `String` types as a default.
+    - Generated functions contain a `todo!()` macro, requiring the developer to
+      implement them.
+
+**Example Output:**
+
+```rust,no_run
+// Generated from: When I add {count:u32} pumpkins
+
+use rstest_bdd_macros::when;
+
+#[when("I add {count:u32} pumpkins")]
+fn i_add_count_pumpkins(count: u32) {
+    todo!("Implement this step");
+}
+```
+
+## 5. Conclusion
+
+The enhancements planned for Phase 4 represent a significant leap forward in
+the usability and ergonomics of `rstest-bdd`. By focusing on reducing
+boilerplate, improving state management, and providing intelligent tooling,
+these changes will make the framework not only more powerful but also more
+pleasant to use, encouraging the adoption of Behaviour-Driven Development (BDD)
+practices by lowering the barrier to writing clear, maintainable, and effective
+behaviour tests in Rust.

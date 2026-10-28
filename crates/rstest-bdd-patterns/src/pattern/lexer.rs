@@ -1,0 +1,291 @@
+//! Pattern lexer converting pattern strings into semantic tokens.
+
+use std::{iter::Peekable, str::CharIndices};
+
+use super::placeholder::{PlaceholderSpec, parse_placeholder};
+use crate::errors::PatternError;
+
+/// Token produced by the pattern lexer.
+///
+/// Patterns are tokenized into a sequence of literal text segments and
+/// placeholder markers. Stray braces that do not form valid placeholders
+/// are preserved as separate tokens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Token {
+    /// Literal text segment (e.g., `"Given "` from `"Given {value}"`).
+    Literal(String),
+    /// A valid placeholder with an optional type hint.
+    Placeholder {
+        /// Byte offset of the opening brace in the original pattern.
+        start: usize,
+        /// Placeholder identifier (e.g., `"value"` from `{value:u32}`).
+        name: String,
+        /// Optional type hint (e.g., `Some("u32")` from `{value:u32}`).
+        hint: Option<String>,
+    },
+    /// An unmatched opening brace that does not start a valid placeholder.
+    OpenBrace {
+        /// Byte offset of the brace in the original pattern.
+        index: usize,
+    },
+    /// An unmatched closing brace.
+    CloseBrace {
+        /// Byte offset of the brace in the original pattern.
+        index: usize,
+    },
+}
+
+/// Opening-brace delimiter recognized by the pattern lexer.
+const OPEN_BRACE: char = '{';
+/// Closing-brace delimiter recognized by the pattern lexer.
+const CLOSE_BRACE: char = '}';
+
+/// Peekable iterator yielding byte offsets and characters from a pattern.
+type CharIter<'pattern> = Peekable<CharIndices<'pattern>>;
+
+/// Mutable state used while converting a pattern into lexer tokens.
+struct LexerContext<'pattern> {
+    /// Remaining pattern characters and their byte offsets.
+    iter: CharIter<'pattern>,
+    /// Literal text accumulated since the last emitted token.
+    literal: String,
+    /// Tokens emitted while processing the pattern.
+    tokens: Vec<Token>,
+}
+
+impl<'pattern> LexerContext<'pattern> {
+    /// Initialize lexer state from the supplied pattern.
+    fn new(pattern: &'pattern str) -> Self {
+        Self {
+            iter: pattern.char_indices().peekable(),
+            literal: String::new(),
+            tokens: Vec::new(),
+        }
+    }
+
+    /// Emit accumulated literal text as a token when it is non-empty.
+    fn flush_literal(&mut self) {
+        if self.literal.is_empty() {
+            return;
+        }
+
+        self.tokens
+            .push(Token::Literal(std::mem::take(&mut self.literal)));
+    }
+
+    /// Consume characters until the iterator reaches the supplied byte offset.
+    fn advance_to(&mut self, end: usize) {
+        while let Some(&(next_index, _)) = self.iter.peek() {
+            if next_index < end {
+                self.iter.next();
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Return the tokens accumulated by this lexer context.
+    fn into_tokens(self) -> Vec<Token> { self.tokens }
+}
+
+/// Tokenize a step pattern into literals and placeholders.
+///
+/// # Errors
+///
+/// Returns [`PatternError`] if the pattern contains invalid placeholder syntax.
+///
+/// # Examples
+///
+/// ```
+/// use rstest_bdd_patterns::pattern::lexer::{Token, lex_pattern};
+///
+/// let tokens = lex_pattern("Given {value:u32}").expect("valid pattern syntax");
+/// assert_eq!(tokens.len(), 2);
+/// ```
+pub fn lex_pattern(pattern: &str) -> Result<Vec<Token>, PatternError> {
+    let bytes = pattern.as_bytes();
+    let mut context = LexerContext::new(pattern);
+
+    while let Some((index, ch)) = context.iter.next() {
+        match ch {
+            '\\' => handle_backslash(&mut context),
+            OPEN_BRACE => handle_open_brace(bytes, index, &mut context)?,
+            CLOSE_BRACE => handle_close_brace(index, &mut context),
+            other => context.literal.push(other),
+        }
+    }
+
+    context.flush_literal();
+    Ok(context.into_tokens())
+}
+
+/// Preserve the escaped character as literal text, including a trailing backslash.
+fn handle_backslash(context: &mut LexerContext<'_>) {
+    if let Some((_, next)) = context.iter.next() {
+        context.literal.push(next);
+    } else {
+        context.literal.push('\\');
+    }
+}
+
+/// Handle a doubled, placeholder-opening, or unmatched opening brace.
+fn handle_open_brace(
+    bytes: &[u8],
+    index: usize,
+    context: &mut LexerContext<'_>,
+) -> Result<(), PatternError> {
+    match context.iter.peek().copied().map(|(_, c)| c) {
+        Some(OPEN_BRACE) => {
+            context.iter.next();
+            context.literal.push(OPEN_BRACE);
+            Ok(())
+        }
+        Some(next) if is_placeholder_start(next) => {
+            context.flush_literal();
+            parse_and_consume_placeholder(bytes, index, context)
+        }
+        _ => {
+            context.flush_literal();
+            context.tokens.push(Token::OpenBrace { index });
+            Ok(())
+        }
+    }
+}
+
+/// Handle a doubled closing brace as text or emit an unmatched-brace token.
+fn handle_close_brace(index: usize, context: &mut LexerContext<'_>) {
+    if matches!(context.iter.peek().map(|&(_, c)| c), Some(CLOSE_BRACE)) {
+        context.iter.next();
+        context.literal.push(CLOSE_BRACE);
+    } else {
+        context.flush_literal();
+        context.tokens.push(Token::CloseBrace { index });
+    }
+}
+
+/// Return whether a character may begin a placeholder name.
+fn is_placeholder_start(ch: char) -> bool { is_valid_placeholder_start(ch) }
+
+/// Return whether a character is an ASCII letter or underscore.
+fn is_valid_placeholder_start(ch: char) -> bool { ch.is_ascii_alphabetic() || ch == '_' }
+
+/// Parse a placeholder, emit its token, and advance past its source span.
+fn parse_and_consume_placeholder(
+    bytes: &[u8],
+    index: usize,
+    context: &mut LexerContext<'_>,
+) -> Result<(), PatternError> {
+    let (
+        end,
+        PlaceholderSpec {
+            start, name, hint, ..
+        },
+    ) = parse_placeholder(bytes, index)?;
+    context
+        .tokens
+        .push(Token::Placeholder { start, name, hint });
+    context.advance_to(end);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests exercising the pattern lexer behaviour.
+
+    use super::*;
+
+    fn assert_tokens(pattern: &str, expected: &[Token]) {
+        match lex_pattern(pattern) {
+            Ok(tokens) => {
+                assert_eq!(
+                    tokens, expected,
+                    "pattern {pattern:?} produced unexpected tokens",
+                );
+            }
+            Err(err) => panic!("pattern {pattern:?} should lex successfully but failed: {err}"),
+        }
+    }
+
+    macro_rules! lex_test {
+        ($name:ident, $pattern:expr, [$($tok:expr),* $(,)?]) => {
+            #[test]
+            fn $name() {
+                let expected = vec![$($tok),*];
+                assert_tokens($pattern, &expected);
+            }
+        };
+    }
+
+    lex_test!(
+        tokenizes_literals_and_placeholders,
+        "Given {value:u32}",
+        [
+            Token::Literal("Given ".into()),
+            Token::Placeholder {
+                start: 6,
+                name: "value".into(),
+                hint: Some("u32".into()),
+            },
+        ]
+    );
+
+    lex_test!(
+        recognizes_doubled_braces_as_literals,
+        "{{outer}} {inner}",
+        [
+            Token::Literal("{outer} ".into()),
+            Token::Placeholder {
+                start: 10,
+                name: "inner".into(),
+                hint: None,
+            },
+        ]
+    );
+
+    lex_test!(
+        treats_nested_braces_as_placeholder,
+        "before {outer {inner}} after",
+        [
+            Token::Literal("before ".into()),
+            Token::Placeholder {
+                start: 7,
+                name: "outer".into(),
+                hint: None,
+            },
+            Token::Literal(" after".into()),
+        ]
+    );
+
+    lex_test!(
+        records_stray_braces,
+        "{ literal }",
+        [
+            Token::OpenBrace { index: 0 },
+            Token::Literal(" literal ".into()),
+            Token::CloseBrace { index: 10 },
+        ]
+    );
+
+    lex_test!(
+        tokenizes_invalid_placeholder_start_as_braces_and_literal,
+        "{  value}",
+        [
+            Token::OpenBrace { index: 0 },
+            Token::Literal("  value".into()),
+            Token::CloseBrace { index: 8 },
+        ]
+    );
+
+    lex_test!(
+        preserves_multibyte_literal_segments,
+        "Given café {value}",
+        [
+            Token::Literal("Given café ".into()),
+            Token::Placeholder {
+                start: 12,
+                name: "value".into(),
+                hint: None,
+            },
+        ]
+    );
+}

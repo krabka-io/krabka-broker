@@ -1,0 +1,126 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rstest-bdd",
+    "crates/rstest-bdd-harness",
+    "crates/rstest-bdd-harness-gpui",
+    "crates/rstest-bdd-harness-tokio",
+    "crates/rstest-bdd-macros",
+    "crates/rstest-bdd-policy",
+    "crates/rstest-bdd-patterns",
+    "crates/rstest-bdd-server",
+    "crates/rstest-bdd-test-macros",
+    "crates/cargo-bdd",
+    "examples/todo-cli",
+    "examples/japanese-ledger",
+    "examples/gpui-counter",
+    "examples/tokio-reminders",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.6.0"
+rust-version = "1.88"
+license = "ISC"
+authors = ["Payton McIntosh <pmcintosh@df12.net>"]
+description = "A BDD testing framework for Rust, built on rstest."
+homepage = "https://github.com/leynos/rstest-bdd"
+repository = "https://github.com/leynos/rstest-bdd"
+keywords = ["test", "bdd", "rstest", "gherkin", "cucumber"]
+categories = ["development-tools::testing"]
+
+[workspace.dependencies]
+camino = "1.1.12"
+cap-std = { version = "4.0.2", features = ["fs_utf8"] }
+gherkin = { version = "0.16", default-features = false, features = ["parser"] }
+inventory = "0.3"
+regex = "1.12.2"
+thiserror = "2.0"
+derive_more = { version = "2.1", features = ["deref", "from", "into_iterator"] }
+quote = "1"
+syn = { version = "3", features = ["full", "extra-traits", "visit"] }
+cfg-if = "^1.0.4"
+convert_case = "0.12"
+rstest = "0.26.1"
+insta = "1.47.2"
+macrotest = "1"
+metrics = "0.24.2"
+prettyplease = "0.3"
+googletest = { version = "0.14.3", features = ["proptest"] }
+pretty_assertions = "1.4.1"
+trybuild = "1"
+serial_test = "4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+cargo_metadata = "0.23"
+eyre = "0.6"
+ctor = "1.0.13"
+newt-hype = "0.2.0"
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
+rstest-bdd = { version = "0.6.0", path = "crates/rstest-bdd" }
+rstest-bdd-harness = { version = "0.6.0", path = "crates/rstest-bdd-harness" }
+rstest-bdd-harness-gpui = { version = "0.6.0", path = "crates/rstest-bdd-harness-gpui" }
+rstest-bdd-harness-tokio = { version = "0.6.0", path = "crates/rstest-bdd-harness-tokio" }
+rstest-bdd-macros = { version = "0.6.0", path = "crates/rstest-bdd-macros" }
+rstest-bdd-policy = { version = "0.6.0", path = "crates/rstest-bdd-policy" }
+rstest-bdd-patterns = { version = "0.6.0", path = "crates/rstest-bdd-patterns" }
+rstest-bdd-test-macros = { path = "crates/rstest-bdd-test-macros" }
+log = "0.4"
+temp-env = "0.3.6"
+tempfile = "3.23"
+i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
+rust-embed = "8.5.0"
+rustversion = "1"
+fluent = "0.17"
+unic-langid = { version = "0.9", features = ["macros"] }
+async-lsp = { version = "0.2", features = ["tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "sync"] }
+gpui = { version = "0.2.2", path = "vendor/gpui", default-features = false, features = ["test-support"] }
+gpui-macros = { version = "0.6.0-beta3", path = "vendor/gpui-macros" }
+tracing = { version = "0.1", optional = false }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4.5", features = ["derive"] }
+tower = "0.5"
+tokio-util = { version = "0.7", features = ["compat"] }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+blanket_clippy_restriction_lints = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+integer_division = "deny"
+integer_division_remainder_used = "deny"
+host_endian_bytes = "deny"
+little_endian_bytes = "deny"
+big_endian_bytes = "deny"
+or_fun_call = "deny"
+option_if_let_else = "deny"
+use_self = "deny"
+string_lit_as_bytes = "deny"
+float_arithmetic = "deny"
+missing_panics_doc = "deny"
+missing_docs_in_private_items = "deny"
+
+[workspace.lints.rust]
+# Workspace-authored unsafe code remains denied. `deny`, rather than `forbid`,
+# lets the audited `ctor` macro scope its linker-level unsafe implementation
+# with `#[allow(unsafe_code)]`; the diagnostics binary protocol requires this
+# constructor to handle `--dump-steps` before libtest starts.
+unsafe_code = "deny"
+missing_docs = "deny"
+
+[workspace.lints.rustdoc]
+missing_crate_level_docs = "deny"
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
+bare_urls = "deny"
+invalid_html_tags = "deny"
+invalid_codeblock_attributes = "deny"
+unescaped_backticks = "deny"

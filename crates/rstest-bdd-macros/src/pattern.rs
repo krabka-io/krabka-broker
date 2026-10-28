@@ -1,0 +1,95 @@
+//! Compile-time pattern helpers shared across the macros crate.
+
+#[cfg(feature = "compile-time-validation")]
+mod validation {
+    //! Lazily compiled step patterns used for compile-time validation.
+
+    use std::sync::OnceLock;
+
+    use proc_macro_error3::abort;
+    use proc_macro2::Span;
+    use regex::Regex;
+    use rstest_bdd_patterns::{build_regex_from_pattern, extract_captured_values};
+
+    /// A lazily compiled pattern used by compile-time macro validation.
+    pub(crate) struct MacroPattern {
+        /// The source pattern supplied by the macro author.
+        text: &'static str,
+        /// The compiled regular expression, initialized on first use.
+        regex: OnceLock<Regex>,
+    }
+
+    /// Abort macro expansion with a diagnostic for an invalid pattern.
+    fn abort_invalid_pattern(span: Span, pattern: &str, err: impl std::fmt::Display) -> ! {
+        abort!(
+            span,
+            "rstest-bdd-macros: invalid step pattern `{}`: {}",
+            pattern,
+            err
+        )
+    }
+
+    impl MacroPattern {
+        /// Create a pattern that will compile its regular expression lazily.
+        pub(crate) const fn new(value: &'static str) -> Self {
+            Self {
+                text: value,
+                regex: OnceLock::new(),
+            }
+        }
+
+        /// Return the original pattern source.
+        pub(crate) const fn as_str(&self) -> &'static str { self.text }
+
+        /// Return the compiled regular expression, reporting invalid syntax at `span`.
+        pub(crate) fn regex(&self, span: Span) -> &Regex {
+            self.regex.get_or_init(|| {
+                let source = build_regex_from_pattern(self.text)
+                    .unwrap_or_else(|err| abort_invalid_pattern(span, self.text, err));
+
+                Regex::new(&source)
+                    .unwrap_or_else(|err| abort_invalid_pattern(span, self.text, err))
+            })
+        }
+
+        /// Extract captured values from `text` using this pattern.
+        pub(crate) fn captures(&self, span: Span, text: &str) -> Option<Vec<String>> {
+            extract_captured_values(self.regex(span), text)
+        }
+    }
+
+    impl From<&'static str> for MacroPattern {
+        fn from(value: &'static str) -> Self { Self::new(value) }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        //! Unit tests for compile-time pattern helpers.
+
+        use proc_macro2::Span;
+
+        use super::MacroPattern;
+
+        #[test]
+        fn compiles_pattern_once() {
+            let pattern = MacroPattern::new("a literal step");
+            let span = Span::call_site();
+            let first = pattern.regex(span);
+            let second = pattern.regex(span);
+            assert!(std::ptr::eq(first, second));
+        }
+
+        #[test]
+        fn captures_step_values() {
+            let pattern = MacroPattern::new("I have {count:u32}");
+            let span = Span::call_site();
+            let Some(values) = pattern.captures(span, "I have 3") else {
+                panic!("expected captures");
+            };
+            assert_eq!(values, vec!["3".to_owned()]);
+        }
+    }
+}
+
+#[cfg(feature = "compile-time-validation")]
+pub(crate) use validation::MacroPattern;

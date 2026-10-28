@@ -1,0 +1,18 @@
+[package]
+name = "gpui-macros"
+version = "0.2.2"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+description = "Stable-compatible GPUI test macro shim for rstest-bdd."
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

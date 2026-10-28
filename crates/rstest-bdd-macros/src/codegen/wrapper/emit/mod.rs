@@ -1,0 +1,284 @@
+//! Code emission helpers for wrapper generation.
+
+use proc_macro2::TokenStream as TokenStream2;
+use quote::{format_ident, quote};
+
+use super::args::ExtractedArgs;
+use crate::return_classifier::StepReturnStrategy;
+
+mod assembly;
+mod call_expr;
+mod datatable_cache;
+mod errors;
+mod identifiers;
+
+use assembly::{generate_async_wrapper_body, generate_wrapper_body};
+#[cfg(test)]
+pub(crate) use identifiers::reset_wrapper_counter_for_tests;
+use identifiers::{WrapperIdents, generate_wrapper_identifiers, next_wrapper_id};
+
+/// Configuration required to generate a wrapper.
+pub(crate) struct WrapperConfig<'a> {
+    /// Stores the internal `ident` value.
+    pub(crate) ident: &'a syn::Ident,
+    /// Stores the internal `is_async_step` value.
+    pub(crate) is_async_step: bool,
+    /// Stores the internal `args` value.
+    pub(crate) args: &'a ExtractedArgs,
+    /// Stores the internal `pattern` value.
+    pub(crate) pattern: &'a syn::LitStr,
+    /// Stores the internal `keyword` value.
+    pub(crate) keyword: crate::StepKeyword,
+    /// Stores the internal `placeholder_names` value.
+    pub(crate) placeholder_names: &'a [syn::LitStr],
+    /// Optional type hints for each placeholder, parallel to `placeholder_names`.
+    pub(crate) placeholder_hints: &'a [Option<String>],
+    /// Stores the internal `capture_count` value.
+    pub(crate) capture_count: usize,
+    /// Stores the internal `strategy` value.
+    pub(crate) strategy: StepReturnStrategy,
+}
+
+/// Generate an async wrapper that wraps a sync step in an immediately-ready future.
+///
+/// This function produces a thin shim that calls the synchronous wrapper and wraps
+/// its result using `std::future::ready`. The async wrapper enables sync step
+/// definitions to participate in async scenario execution without modification.
+fn generate_async_wrapper_from_sync(
+    sync_wrapper_ident: &proc_macro2::Ident,
+    async_wrapper_ident: &proc_macro2::Ident,
+) -> TokenStream2 {
+    let path = crate::codegen::rstest_bdd_path();
+    quote! {
+        fn #async_wrapper_ident<'ctx, 'fixtures>(
+            __rstest_bdd_ctx: &'ctx mut #path::StepContext<'fixtures>,
+            __rstest_bdd_text: &'ctx str,
+            __rstest_bdd_docstring: Option<&'ctx str>,
+            __rstest_bdd_table: Option<&'ctx [&'ctx [&'ctx str]]>,
+        ) -> #path::StepFuture<'ctx> {
+            Box::pin(::std::future::ready(
+                #sync_wrapper_ident(
+                    __rstest_bdd_ctx,
+                    __rstest_bdd_text,
+                    __rstest_bdd_docstring,
+                    __rstest_bdd_table,
+                )
+            ))
+        }
+    }
+}
+
+/// Generate a sync wrapper for an async step by blocking on the async wrapper.
+///
+/// This supports executing async-only steps from synchronous scenarios.
+/// When a Tokio runtime is already active (e.g. provided by `TokioHarness`),
+/// the wrapper polls the future once — most async steps complete immediately
+/// without yielding. Multi-poll futures return an informative error.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let tokens = generate_sync_wrapper_from_async(
+///     &config,
+///     &sync_ident,
+///     &async_ident,
+/// );
+/// assert!(!tokens.is_empty());
+/// ```
+fn generate_sync_wrapper_from_async(
+    config: &WrapperConfig<'_>,
+    sync_wrapper_ident: &proc_macro2::Ident,
+    async_wrapper_ident: &proc_macro2::Ident,
+) -> TokenStream2 {
+    let path = crate::codegen::rstest_bdd_path();
+    let pattern = config.pattern;
+    let ident = config.ident;
+    quote! {
+        fn #sync_wrapper_ident(
+            __rstest_bdd_ctx: &mut #path::StepContext<'_>,
+            __rstest_bdd_text: &str,
+            __rstest_bdd_docstring: Option<&str>,
+            __rstest_bdd_table: Option<&[&[&str]]>,
+        ) -> Result<#path::StepExecution, #path::StepError> {
+            if #path::__rstest_bdd_tokio::runtime::Handle::try_current().is_ok() {
+                // A Tokio runtime is already active (e.g. a harness provides
+                // one). Poll the future once — most async steps complete
+                // immediately without yielding Pending.
+                let future = #async_wrapper_ident(
+                    __rstest_bdd_ctx,
+                    __rstest_bdd_text,
+                    __rstest_bdd_docstring,
+                    __rstest_bdd_table,
+                );
+                let mut future = ::std::pin::pin!(future);
+                let waker = ::std::task::Waker::noop();
+                let mut cx = ::std::task::Context::from_waker(&waker);
+                return match ::core::future::Future::poll(future.as_mut(), &mut cx) {
+                    ::std::task::Poll::Ready(result) => result,
+                    ::std::task::Poll::Pending => {
+                        Err(#path::StepError::ExecutionError {
+                            pattern: #pattern.to_string(),
+                            function: stringify!(#ident).to_string(),
+                            message: concat!(
+                                "async step yielded Pending inside a ",
+                                "harness-provided runtime; multi-poll async ",
+                                "steps are not supported under a harness \u{2014} use ",
+                                "`runtime = \"tokio-current-thread\"` or an ",
+                                "`async fn` scenario signature instead",
+                            ).to_string(),
+                        })
+                    }
+                };
+            }
+
+            let runtime = #path::__rstest_bdd_tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| #path::StepError::ExecutionError {
+                    pattern: #pattern.to_string(),
+                    function: stringify!(#ident).to_string(),
+                    message: format!("failed to construct Tokio current-thread runtime: {e}"),
+                })?;
+
+            let local_set = #path::__rstest_bdd_tokio::task::LocalSet::new();
+            local_set.block_on(
+                &runtime,
+                #async_wrapper_ident(
+                    __rstest_bdd_ctx,
+                    __rstest_bdd_text,
+                    __rstest_bdd_docstring,
+                    __rstest_bdd_table,
+                ),
+            )
+        }
+    }
+}
+
+/// Generate fixture registration and inventory code for the wrapper.
+fn generate_registration_code(
+    config: &WrapperConfig<'_>,
+    wrapper_idents: &WrapperIdents,
+) -> TokenStream2 {
+    let path = crate::codegen::rstest_bdd_path();
+    let fixture_names: Vec<_> = config
+        .args
+        .fixtures()
+        .map(|fixture| {
+            let rendered = fixture.name.to_string();
+            quote! { #rendered }
+        })
+        .collect();
+    let fixture_metadata: Vec<_> = config
+        .args
+        .fixtures()
+        .map(|fixture| {
+            let fixture_name = fixture.name.to_string();
+            let fixture_ty = effective_fixture_type(fixture.ty);
+            quote! {
+                #path::FixtureRequirement {
+                    name: #fixture_name,
+                    ty: stringify!(#fixture_ty),
+                }
+            }
+        })
+        .collect();
+    let fixture_len = fixture_metadata.len();
+    let keyword = config.keyword;
+    let pattern_ident = &wrapper_idents.pattern_ident;
+    let sync_wrapper_ident = &wrapper_idents.sync_wrapper;
+    let async_wrapper_ident = &wrapper_idents.async_wrapper;
+    let const_ident = &wrapper_idents.const_ident;
+    let fixture_names_ident = format_ident!("{const_ident}_NAMES");
+    let execution_mode = if config.is_async_step {
+        quote! { #path::StepExecutionMode::Async }
+    } else {
+        quote! { #path::StepExecutionMode::Both }
+    };
+    quote! {
+        const #const_ident: [#path::FixtureRequirement; #fixture_len] = [#(#fixture_metadata),*];
+        const _: [(); #fixture_len] = [(); #const_ident.len()];
+        const #fixture_names_ident: [&'static str; #fixture_len] = [#(#fixture_names),*];
+
+        #path::step!(
+            @pattern #keyword,
+            &#pattern_ident,
+            #sync_wrapper_ident,
+            #async_wrapper_ident,
+            &#fixture_names_ident,
+            #execution_mode
+        );
+        #path::submit! {
+            #path::StepFixtureRequirements {
+                keyword: #keyword,
+                pattern: &#pattern_ident,
+                requirements: &#const_ident,
+            }
+        }
+    }
+}
+
+/// Provides the internal `effective_fixture_type` operation.
+fn effective_fixture_type(ty: &syn::Type) -> &syn::Type {
+    match ty {
+        syn::Type::Reference(reference) if !is_unsized_reference_target(&reference.elem) => {
+            &reference.elem
+        }
+        _ => ty,
+    }
+}
+
+/// Provides the internal `is_unsized_reference_target` operation.
+fn is_unsized_reference_target(ty: &syn::Type) -> bool {
+    matches!(
+        ty,
+        syn::Type::Slice(_) | syn::Type::TraitObject(_) | syn::Type::ImplTrait(_)
+    ) || matches!(
+        ty,
+        syn::Type::Path(path) if path.qself.is_none() && path.path.is_ident("str")
+    )
+}
+
+/// Generate the wrapper function and inventory registration.
+///
+/// This function generates both a synchronous wrapper and an async wrapper. The
+/// async wrapper delegates to the sync wrapper, wrapping its result in an
+/// immediately-ready future via `std::future::ready`.
+pub(crate) fn generate_wrapper_code(config: &WrapperConfig<'_>) -> TokenStream2 {
+    let id = next_wrapper_id();
+    let wrapper_idents = generate_wrapper_identifiers(config.ident, id);
+    let body = if config.is_async_step {
+        generate_async_wrapper_body(
+            config,
+            &wrapper_idents.async_wrapper,
+            &wrapper_idents.pattern_ident,
+        )
+    } else {
+        generate_wrapper_body(
+            config,
+            &wrapper_idents.sync_wrapper,
+            &wrapper_idents.pattern_ident,
+        )
+    };
+    let async_wrapper_fn = if config.is_async_step {
+        generate_sync_wrapper_from_async(
+            config,
+            &wrapper_idents.sync_wrapper,
+            &wrapper_idents.async_wrapper,
+        )
+    } else {
+        generate_async_wrapper_from_sync(
+            &wrapper_idents.sync_wrapper,
+            &wrapper_idents.async_wrapper,
+        )
+    };
+    let registration = generate_registration_code(config, &wrapper_idents);
+
+    quote! {
+        #body
+        #async_wrapper_fn
+        #registration
+    }
+}
+
+#[cfg(test)]
+mod tests;

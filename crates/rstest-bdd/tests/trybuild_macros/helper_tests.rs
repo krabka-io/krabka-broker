@@ -1,0 +1,362 @@
+//! Unit tests for normalizer and path helpers used by trybuild macro tests.
+use std::{borrow::Cow, panic};
+
+use camino::{Utf8Path, Utf8PathBuf};
+use cap_std::{ambient_authority, fs::Dir};
+use rstest::rstest;
+
+use super::{
+    Normalizer,
+    NormalizerInput,
+    wrappers::{FixtureStderr, FixtureTestPath, normalize_conditional_trait_help},
+    *,
+};
+
+#[path = "helper_tests/fixture_write.rs"]
+mod fixture_write;
+#[path = "helper_tests/wip_paths.rs"]
+mod wip_paths;
+
+fn write_fixture_file(crate_dir: &Dir, path: &Utf8Path, bytes: &[u8], label: &str) {
+    if let Some(parent) = path.parent()
+        && let Err(error) = crate_dir.create_dir_all(parent.as_std_path())
+    {
+        panic!("failed to create directory for {label}: {error}");
+    }
+    if let Err(error) = crate_dir.write(path.as_std_path(), bytes) {
+        panic!("failed to write {label}: {error}");
+    }
+}
+struct NormalizerFixture {
+    expected_path: Utf8PathBuf,
+    actual_path: Utf8PathBuf,
+}
+
+impl NormalizerFixture {
+    fn new(
+        test_path: FixtureTestPath<'_>,
+        expected: FixtureStderr<'_>,
+        actual: FixtureStderr<'_>,
+    ) -> Self {
+        let test_path = Utf8Path::new(test_path.as_ref());
+        let crate_dir = match Dir::open_ambient_dir(
+            Utf8Path::new(env!("CARGO_MANIFEST_DIR")),
+            ambient_authority(),
+        ) {
+            Ok(crate_dir) => crate_dir,
+            Err(error) => panic!("failed to open crate directory: {error}"),
+        };
+
+        let expected_path = expected_stderr_path(test_path.as_std_path());
+        write_fixture_file(
+            &crate_dir,
+            &expected_path,
+            expected.as_ref().as_bytes(),
+            "expected stderr fixture",
+        );
+
+        let actual_path = wip_stderr_path(test_path.as_std_path());
+        write_fixture_file(
+            &crate_dir,
+            &actual_path,
+            actual.as_ref().as_bytes(),
+            "wip stderr fixture",
+        );
+
+        Self {
+            expected_path,
+            actual_path,
+        }
+    }
+}
+
+impl Drop for NormalizerFixture {
+    fn drop(&mut self) {
+        if let Ok(crate_dir) = Dir::open_ambient_dir(
+            Utf8Path::new(env!("CARGO_MANIFEST_DIR")),
+            ambient_authority(),
+        ) {
+            let _ = crate_dir.remove_file(self.expected_path.as_std_path());
+            let _ = crate_dir.remove_file(self.actual_path.as_std_path());
+        }
+    }
+}
+
+#[test]
+fn wip_stderr_path_builds_crate_wip_location() {
+    let path =
+        wip_stderr_path(Utf8Path::new("tests/fixtures_macros/__helper_case.rs").as_std_path());
+    assert_eq!(path, Utf8Path::new("wip/__helper_case.stderr"));
+}
+
+#[test]
+#[should_panic(expected = "trybuild test path must include file name")]
+fn wip_stderr_path_panics_without_file_name() { wip_stderr_path(Utf8Path::new("").as_std_path()); }
+
+#[test]
+fn expected_stderr_path_replaces_extension() {
+    let path = expected_stderr_path(Utf8Path::new("tests/ui_macros/example.output").as_std_path());
+    assert_eq!(path, Utf8Path::new("tests/ui_macros/example.stderr"));
+}
+
+#[test]
+fn expected_stderr_path_handles_multiple_extensions() {
+    let path =
+        expected_stderr_path(Utf8Path::new("tests/ui_macros/example.feature.rs").as_std_path());
+    assert_eq!(
+        path,
+        Utf8Path::new("tests/ui_macros/example.feature.stderr")
+    );
+}
+
+#[test]
+fn apply_normalizers_returns_borrowed_when_empty() {
+    let result = apply_normalizers(NormalizerInput::from("message"), &[]);
+    assert!(matches!(result, Cow::Borrowed("message")));
+}
+
+#[test]
+fn apply_normalizers_respects_normalizer_order() {
+    let add_prefix: Normalizer = |input| format!("prefix-{}", input.as_ref());
+    let add_suffix: Normalizer = |input| format!("{}-suffix", input.as_ref());
+    let result = apply_normalizers(NormalizerInput::from("value"), &[add_prefix, add_suffix]);
+    assert_eq!(result, "prefix-value-suffix");
+}
+
+#[test]
+fn apply_normalizers_handles_empty_string() {
+    let trim_whitespace: Normalizer = |input| input.as_ref().trim().to_owned();
+    let result = apply_normalizers(NormalizerInput::from(""), &[trim_whitespace]);
+    assert_eq!(result, "");
+}
+
+#[test]
+fn apply_normalizers_handles_whitespace_only_string() {
+    let trim_whitespace: Normalizer = |input| input.as_ref().trim().to_owned();
+    let mut whitespace = String::from("   ");
+    whitespace.push('\n');
+    let result = apply_normalizers(
+        NormalizerInput::from(whitespace.as_str()),
+        &[trim_whitespace],
+    );
+    assert_eq!(result, "");
+}
+
+#[test]
+fn strip_nightly_macro_backtrace_hint_removes_multiple_hints() {
+    let hint = " (in Nightly builds, run with -Z macro-backtrace for more info)";
+    let text = format!("error: failure{hint} more context{hint}");
+    let expected = "error: failure more context";
+    assert_eq!(
+        strip_nightly_macro_backtrace_hint(NormalizerInput::from(text.as_str())),
+        expected
+    );
+}
+
+#[test]
+fn strip_nightly_macro_backtrace_hint_leaves_text_without_hint() {
+    let text = "error: failure";
+    assert_eq!(
+        strip_nightly_macro_backtrace_hint(NormalizerInput::from(text)),
+        text
+    );
+}
+
+#[test]
+fn normalize_conditional_trait_help_removes_stable_wording_difference() {
+    let input = "help: the trait `StepReturnNormalize<Result<T, E>>` is conditionally implemented \
+                 for `StepReturnResultTag`\n       | ^^^^^^^^^^^^^^^^----------------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n       |                 unsatisfied requirement introduced here: `NotDisplay: rstest_bdd::step_return::StepErrorDisplay`\n";
+    let expected = "help: the trait `StepReturnNormalize<Result<T, E>>` is implemented for \
+                    `StepReturnResultTag`\n       | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n";
+    assert_eq!(
+        normalize_conditional_trait_help(NormalizerInput::from(input)),
+        expected
+    );
+}
+
+#[test]
+fn normalize_conditional_trait_help_removes_requirement_connector() {
+    let input = concat!(
+        "       |                 |\n",
+        "       |                 unsatisfied requirement introduced here: `NotDisplay`\n",
+    );
+    assert_eq!(
+        normalize_conditional_trait_help(NormalizerInput::from(input)),
+        "\n"
+    );
+}
+
+#[test]
+fn normalize_fixture_paths_rewrites_relative_fixture_paths() {
+    let dollar = '$';
+    let input = "Warning:  --> tests/fixtures_macros/example.rs:3:1";
+    let expected = format!("Warning:  --> {dollar}DIR/example.rs:3:1");
+    assert_eq!(
+        normalize_fixture_paths(NormalizerInput::from(input)),
+        expected
+    );
+}
+
+#[test]
+fn normalize_fixture_paths_rewrites_absolute_fixture_paths() {
+    let dollar = '$';
+    let newline = '\n';
+    let input = format!(
+        " --> /tmp/workspace/crates/rstest-bdd/tests/fixtures_macros/example.rs:4:2{newline}"
+    );
+    let expected = format!(" --> {dollar}DIR/example.rs:4:2{newline}");
+    assert_eq!(
+        normalize_fixture_paths(NormalizerInput::from(input.as_ref())),
+        expected
+    );
+}
+
+#[test]
+fn normalize_fixture_paths_is_idempotent_for_normalized_input() {
+    let dollar = '$';
+    let input = format!(" --> {dollar}DIR/example.rs:4:2");
+    assert_eq!(
+        normalize_fixture_paths(NormalizerInput::from(input.as_ref())),
+        input
+    );
+}
+
+#[test]
+fn run_compile_fail_with_normalized_output_handles_multiple_normalizers() {
+    const TEST_PATH: &str = "tests/fixtures_macros/__normaliser_multiple.rs";
+    let mut expected = String::from("error: missing step (hint-one)");
+    expected.push('\n');
+    expected.push_str("help: review scenario (hint-two)");
+    expected.push('\n');
+    let mut actual = String::from("error: missing step");
+    actual.push('\n');
+    actual.push_str("help: review scenario");
+    actual.push('\n');
+    let fixture = NormalizerFixture::new(
+        FixtureTestPath(TEST_PATH),
+        FixtureStderr(expected.as_ref()),
+        FixtureStderr(actual.as_ref()),
+    );
+    let strip_hint_one: Normalizer = |input| input.as_ref().replace(" (hint-one)", "");
+    let strip_hint_two: Normalizer = |input| input.as_ref().replace(" (hint-two)", "");
+    let result = panic::catch_unwind(|| {
+        run_compile_fail_with_normalized_output(
+            || panic!("expected failure"),
+            || Ok(()),
+            Utf8Path::new(TEST_PATH),
+            &[strip_hint_one, strip_hint_two],
+        )
+        .expect("normalized outputs should be readable");
+    });
+    assert!(result.is_ok(), "normalized outputs should match");
+    assert!(
+        !fixture.actual_path.exists(),
+        "successful normalization should delete the wip stderr file",
+    );
+}
+
+#[test]
+fn run_compile_fail_with_normalized_output_accepts_empty_output() {
+    const TEST_PATH: &str = "tests/fixtures_macros/__normaliser_empty.rs";
+    let fixture = NormalizerFixture::new(
+        FixtureTestPath(TEST_PATH),
+        FixtureStderr(""),
+        FixtureStderr(""),
+    );
+    let result = panic::catch_unwind(|| {
+        run_compile_fail_with_normalized_output(
+            || panic!("expected failure"),
+            || Ok(()),
+            Utf8Path::new(TEST_PATH),
+            &[],
+        )
+        .expect("normalized outputs should be readable");
+    });
+    assert!(result.is_ok(), "identical empty outputs should be accepted");
+    assert!(
+        !fixture.actual_path.exists(),
+        "matching outputs should delete the wip stderr file",
+    );
+}
+
+#[test]
+fn run_compile_fail_with_normalized_output_detects_mismatch() {
+    const TEST_PATH: &str = "tests/fixtures_macros/__normaliser_unexpected_detect.rs";
+    let fixture = NormalizerFixture::new(
+        FixtureTestPath(TEST_PATH),
+        FixtureStderr("expected output"),
+        FixtureStderr("actual output"),
+    );
+    let trim_trailing: Normalizer = |input| input.as_ref().trim_end().to_owned();
+    let result = panic::catch_unwind(|| {
+        run_compile_fail_with_normalized_output(
+            || panic!("expected failure"),
+            || Ok(()),
+            Utf8Path::new(TEST_PATH),
+            &[trim_trailing],
+        )
+        .expect("normalized outputs should be readable");
+    });
+    assert!(
+        result.is_err(),
+        "mismatched outputs must propagate the panic"
+    );
+    assert!(
+        fixture.actual_path.exists(),
+        "mismatched outputs should retain the wip stderr file for inspection",
+    );
+}
+
+#[rstest]
+#[case(
+    "tests/fixtures_macros/__normaliser_whitespace.rs",
+    "warning: trailing space",
+    "warning: trailing space   ",
+    true,
+    "whitespace differences should be normalized",
+    "matching outputs should delete the wip stderr file"
+)]
+#[case(
+    "tests/fixtures_macros/__normaliser_unexpected_case.rs",
+    "error: expected formatting",
+    "error: unexpected formatting",
+    false,
+    "mismatched outputs must propagate the panic",
+    "mismatched outputs should retain the wip stderr file for inspection"
+)]
+fn run_compile_fail_with_normalized_output_test_cases(
+    #[case] test_path: &str,
+    #[case] expected_content: &str,
+    #[case] actual_content: &str,
+    #[case] should_succeed: bool,
+    #[case] result_message: &str,
+    #[case] file_message: &str,
+) {
+    let mut expected = String::from(expected_content);
+    expected.push('\n');
+    let mut actual = String::from(actual_content);
+    actual.push('\n');
+    let fixture = NormalizerFixture::new(
+        FixtureTestPath(test_path),
+        FixtureStderr(expected.as_ref()),
+        FixtureStderr(actual.as_ref()),
+    );
+    let trim_trailing: Normalizer = |input| input.as_ref().trim_end().to_owned();
+    let result = panic::catch_unwind(|| {
+        run_compile_fail_with_normalized_output(
+            || panic!("expected failure"),
+            || Ok(()),
+            Utf8Path::new(test_path),
+            &[trim_trailing],
+        )
+        .expect("normalized outputs should be readable");
+    });
+
+    if should_succeed {
+        assert!(result.is_ok(), "{}", result_message);
+        assert!(!fixture.actual_path.exists(), "{}", file_message);
+    } else {
+        assert!(result.is_err(), "{}", result_message);
+        assert!(fixture.actual_path.exists(), "{}", file_message);
+    }
+}

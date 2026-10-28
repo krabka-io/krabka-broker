@@ -1,0 +1,232 @@
+//! Argument extraction primitives shared by the wrapper generator.
+//!
+//! Arguments are stored as a single [`Arg`] enum so later stages can iterate
+//! over the original function signature without juggling parallel vectors for
+//! fixtures, captures, and Gherkin-specific parameters.
+
+use std::{collections::HashSet, fmt};
+
+pub(crate) mod classify;
+mod extract;
+pub use extract::extract_args;
+
+// Re-export `normalize_param_name` for internal use by `classify`. When this
+// module is included via `#[path]` in tests, `crate::utils` is unavailable, so
+// we provide a standalone implementation here that matches the canonical one in
+// `crate::utils::pattern`.
+#[cfg(not(test))]
+pub(super) use crate::utils::pattern::normalize_param_name;
+
+#[cfg(test)]
+pub(super) fn normalize_param_name(name: &str) -> &str { name.strip_prefix('_').unwrap_or(name) }
+
+/// Everything required to describe a single step-function argument.
+#[derive(Clone, PartialEq)]
+pub enum Arg {
+    /// Represents the internal validation outcome.
+    Fixture {
+        /// Stores the internal `pat` value.
+        pat: syn::Ident,
+        /// Stores the internal `name` value.
+        name: syn::Ident,
+        /// Stores the internal `ty` value.
+        ty: syn::Type,
+    },
+    /// Represents the internal validation outcome.
+    Step {
+        /// Stores the internal `pat` value.
+        pat: syn::Ident,
+        /// Stores the internal `ty` value.
+        ty: syn::Type,
+    },
+    /// Represents the internal validation outcome.
+    StepStruct {
+        /// Stores the internal `pat` value.
+        pat: syn::Ident,
+        /// Stores the internal `ty` value.
+        ty: syn::Type,
+    },
+    /// Represents the internal validation outcome.
+    DataTable {
+        /// Stores the internal `pat` value.
+        pat: syn::Ident,
+        /// Stores the internal `ty` value.
+        ty: syn::Type,
+    },
+    /// Represents the internal validation outcome.
+    DocString {
+        /// Stores the internal `pat` value.
+        pat: syn::Ident,
+    },
+}
+
+/// Borrowed view of an [`Arg::Fixture`], so callers never re-match the variant.
+#[derive(Clone, Copy)]
+pub struct FixtureArg<'a> {
+    /// Stores the internal `name` value.
+    pub name: &'a syn::Ident,
+    /// Stores the internal `ty` value.
+    pub ty: &'a syn::Type,
+}
+
+/// Borrowed view of an [`Arg::Step`], so callers never re-match the variant.
+#[derive(Clone, Copy)]
+pub struct StepArg<'a> {
+    /// Stores the internal `pat` value.
+    pub pat: &'a syn::Ident,
+    /// Stores the internal `ty` value.
+    pub ty: &'a syn::Type,
+}
+
+#[derive(Clone, Copy)]
+/// Internal data used by the macros implementation.
+pub struct StepStructArg<'a> {
+    /// Stores the internal `pat` value.
+    pub pat: &'a syn::Ident,
+    /// Stores the internal `ty` value.
+    pub ty: &'a syn::Type,
+}
+
+#[derive(Clone, Copy)]
+/// Internal data used by the macros implementation.
+pub struct DataTableArg<'a> {
+    /// Stores the internal `ty` value.
+    pub ty: &'a syn::Type,
+}
+
+impl Arg {
+    /// Provides the internal `fn` operation.
+    pub const fn as_fixture(&self) -> Option<FixtureArg<'_>> {
+        match self {
+            Self::Fixture { name, ty, .. } => Some(FixtureArg { name, ty }),
+            _ => None,
+        }
+    }
+
+    /// Provides the internal `fn` operation.
+    pub const fn as_step(&self) -> Option<StepArg<'_>> {
+        match self {
+            Self::Step { pat, ty } => Some(StepArg { pat, ty }),
+            _ => None,
+        }
+    }
+
+    /// Provides the internal `fn` operation.
+    pub const fn as_step_struct(&self) -> Option<StepStructArg<'_>> {
+        match self {
+            Self::StepStruct { pat, ty } => Some(StepStructArg { pat, ty }),
+            _ => None,
+        }
+    }
+
+    /// Provides the internal `fn` operation.
+    pub const fn as_datatable(&self) -> Option<DataTableArg<'_>> {
+        match self {
+            Self::DataTable { ty, .. } => Some(DataTableArg { ty }),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Debug for Arg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Fixture { pat, name, ty } => f
+                .debug_struct("Fixture")
+                .field("pat", pat)
+                .field("name", name)
+                .field("ty", ty)
+                .finish(),
+            Self::Step { pat, ty } => f
+                .debug_struct("Step")
+                .field("pat", pat)
+                .field("ty", ty)
+                .finish(),
+            Self::StepStruct { pat, ty } => f
+                .debug_struct("StepStruct")
+                .field("pat", pat)
+                .field("ty", ty)
+                .finish(),
+            Self::DataTable { pat, ty } => f
+                .debug_struct("DataTable")
+                .field("pat", pat)
+                .field("ty", ty)
+                .finish(),
+            Self::DocString { pat } => f.debug_struct("DocString").field("pat", pat).finish(),
+        }
+    }
+}
+
+/// Ordered arguments plus quick-look indexes for unique variants.
+#[derive(Clone, Default)]
+pub struct ExtractedArgs {
+    /// Stores the internal `args` value.
+    pub args: Vec<Arg>,
+    /// Stores the internal `step_struct_idx` value.
+    pub(super) step_struct_idx: Option<usize>,
+    /// Stores the internal `datatable_idx` value.
+    pub(super) datatable_idx: Option<usize>,
+    /// Stores the internal `docstring_idx` value.
+    pub(super) docstring_idx: Option<usize>,
+    /// Stores the internal `blocked_placeholders` value.
+    pub(super) blocked_placeholders: HashSet<String>,
+}
+
+impl ExtractedArgs {
+    /// Provides the internal `push` operation.
+    pub fn push(&mut self, arg: Arg) -> usize {
+        let idx = self.args.len();
+        self.args.push(arg);
+        idx
+    }
+
+    /// Provides the internal `fixtures` operation.
+    pub fn fixtures(&self) -> impl Iterator<Item = FixtureArg<'_>> {
+        self.args.iter().filter_map(Arg::as_fixture)
+    }
+
+    /// Provides the internal `step_args` operation.
+    pub fn step_args(&self) -> impl Iterator<Item = StepArg<'_>> {
+        self.args.iter().filter_map(Arg::as_step)
+    }
+
+    /// Provides the internal `step_struct` operation.
+    pub fn step_struct(&self) -> Option<StepStructArg<'_>> {
+        self.step_struct_idx
+            .and_then(|idx| self.args.get(idx))
+            .and_then(Arg::as_step_struct)
+    }
+
+    /// Provides the internal `datatable` operation.
+    pub fn datatable(&self) -> Option<DataTableArg<'_>> {
+        self.datatable_idx
+            .and_then(|idx| self.args.get(idx))
+            .and_then(Arg::as_datatable)
+    }
+}
+
+impl fmt::Debug for ExtractedArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut dbg = f.debug_struct("ExtractedArgs");
+        dbg.field("count", &self.args.len());
+        if !self.args.is_empty() {
+            let labels: Vec<_> = self
+                .args
+                .iter()
+                .map(|arg| match arg {
+                    Arg::Fixture { pat, .. } => format!("fixture {pat}"),
+                    Arg::Step { pat, .. } => format!("step {pat}"),
+                    Arg::StepStruct { pat, .. } => format!("step_struct {pat}"),
+                    Arg::DataTable { pat, .. } => format!("datatable {pat}"),
+                    Arg::DocString { pat } => format!("docstring {pat}"),
+                })
+                .collect();
+            dbg.field("args", &labels);
+        }
+        dbg.field("step_struct_idx", &self.step_struct_idx)
+            .field("datatable_idx", &self.datatable_idx)
+            .field("docstring_idx", &self.docstring_idx)
+            .field("blocked_placeholders", &self.blocked_placeholders)
+            .finish()
+    }
+}

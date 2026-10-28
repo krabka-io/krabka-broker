@@ -1,0 +1,296 @@
+//! Feature file loading and scenario extraction.
+
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{LazyLock, RwLock},
+};
+
+use gherkin::{Feature, GherkinEnv, Scenario, Step};
+
+use crate::{
+    parsing::{
+        examples::ExampleTable,
+        tags::{self, TagExpression},
+    },
+    utils::errors::error_to_tokens,
+};
+cfg_if::cfg_if! {
+    if #[cfg(feature = "compile-time-validation")] {
+        use crate::validation::examples::{validate_examples_in_feature_text, FeatureText};
+    }
+}
+
+/// Step extracted from a scenario with optional arguments (data table and doc string).
+#[derive(Debug, Clone)]
+pub(crate) struct ParsedStep {
+    /// Stores the internal `keyword` value.
+    pub keyword: crate::StepKeyword,
+    /// Stores the internal `text` value.
+    pub text: String,
+    /// Stores the internal `docstring` value.
+    pub docstring: Option<String>,
+    /// Stores the internal `table` value.
+    pub table: Option<Vec<Vec<String>>>,
+    #[cfg(feature = "compile-time-validation")]
+    /// Approximate span for diagnostics.
+    pub(crate) span: proc_macro2::Span,
+}
+
+// Equality intentionally ignores `span` as spans vary between compilations.
+// Compare only semantic fields to keep tests stable; update if new fields are added.
+impl PartialEq for ParsedStep {
+    fn eq(&self, other: &Self) -> bool {
+        self.keyword == other.keyword
+            && self.text == other.text
+            && self.docstring == other.docstring
+            && self.table == other.table
+    }
+}
+
+impl Eq for ParsedStep {}
+
+/// Name, steps, and optional examples extracted from a Gherkin scenario.
+#[derive(Debug)]
+pub(crate) struct ScenarioData {
+    /// Stores the internal `name` value.
+    pub name: String,
+    /// Stores the internal `steps` value.
+    pub steps: Vec<ParsedStep>,
+    /// Stores the internal `examples` value.
+    pub(crate) examples: Option<ExampleTable>,
+    /// Stores the internal `tags` value.
+    pub(crate) tags: Vec<String>,
+    /// 1-based source line number of the scenario declaration in the feature
+    /// file.
+    pub(crate) line: u32,
+}
+
+/// Cache parsed features to avoid repeated filesystem IO.
+static FEATURE_CACHE: LazyLock<RwLock<HashMap<PathBuf, Feature>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Convert a Gherkin step to a `ParsedStep`.
+///
+/// Uses the textual keyword when present to honour conjunctions
+/// (And/But). Falls back to the typed step when not a conjunction.
+impl TryFrom<&Step> for ParsedStep {
+    type Error = syn::Error;
+
+    fn try_from(step: &Step) -> Result<Self, Self::Error> {
+        // The Gherkin parser exposes both a textual keyword (e.g. "And") and a
+        // typed variant (Given/When/Then). We prioritize the textual value so
+        // that conjunctions are preserved and can be used to improve
+        // diagnostics. Trimming avoids surprises from trailing spaces in
+        // .feature files.
+        let keyword = crate::StepKeyword::try_from(step).map_err(|err| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("unsupported step keyword in feature file: {err}"),
+            )
+        })?;
+        let table = step.table.as_ref().map(|t| t.rows.clone());
+        let docstring = step.docstring.clone();
+        Ok(Self {
+            keyword,
+            text: step.value.clone(),
+            docstring,
+            table,
+            #[cfg(feature = "compile-time-validation")]
+            span: proc_macro2::Span::call_site(),
+        })
+    }
+}
+/// Validate that the feature path exists and points to a file.
+fn validate_feature_file_exists(feature_path: &Path) -> Result<(), syn::Error> {
+    match std::fs::metadata(feature_path) {
+        Ok(meta) if meta.is_file() => Ok(()),
+        Ok(_) => {
+            let msg = format!("feature path is not a file: {}", feature_path.display());
+            Err(syn::Error::new(proc_macro2::Span::call_site(), msg))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let msg = format!("feature file not found: {}", feature_path.display());
+            Err(syn::Error::new(proc_macro2::Span::call_site(), msg))
+        }
+        Err(e) => {
+            let msg = format!(
+                "failed to access feature file ({}): {}",
+                feature_path.display(),
+                e
+            );
+            Err(syn::Error::new(proc_macro2::Span::call_site(), msg))
+        }
+    }
+}
+
+/// Parse and load a feature file from the given path.
+///
+/// Emits a compile-time error (as tokens) when the feature path does not exist
+/// or is not a regular file.
+///
+/// On parse errors, attempts to surface validation diagnostics for Examples
+/// tables where possible.
+pub(crate) fn parse_and_load_feature(path: &Path) -> Result<Feature, proc_macro2::TokenStream> {
+    let feature_path = std::env::var("CARGO_MANIFEST_DIR")
+        .map_or_else(|_| PathBuf::from(path), |dir| PathBuf::from(dir).join(path));
+
+    // Canonicalize for stable cache keys; missing files fall back to the joined path.
+    let canonical = std::fs::canonicalize(&feature_path).ok();
+    if let Some(feature) = {
+        // Recover from a poisoned lock: the cache only holds parsed features,
+        // so a writer panicking mid-insert cannot leave it logically invalid.
+        let cache = FEATURE_CACHE
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        canonical
+            .as_ref()
+            .into_iter()
+            .chain(std::iter::once(&feature_path))
+            .find_map(|p| cache.get(p).cloned())
+    } {
+        return Ok(feature);
+    }
+
+    if let Err(err) = validate_feature_file_exists(&feature_path) {
+        return Err(error_to_tokens(&err));
+    }
+
+    let feature = Feature::parse_path(&feature_path, GherkinEnv::default()).map_err(|err| {
+        #[cfg(feature = "compile-time-validation")]
+        {
+            if let Ok(text) = std::fs::read_to_string(&feature_path)
+                && let Err(validation_err) =
+                    validate_examples_in_feature_text(FeatureText::new(&text))
+            {
+                return validation_err;
+            }
+        }
+        let msg = format!("failed to parse feature file: {err}");
+        error_to_tokens(&syn::Error::new(proc_macro2::Span::call_site(), msg))
+    })?;
+
+    let key = canonical.unwrap_or_else(|| feature_path.clone());
+    // Recover from a poisoned lock: the cache only holds parsed features,
+    // so a writer panicking mid-insert cannot leave it logically invalid.
+    let mut cache = FEATURE_CACHE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.insert(key.clone(), feature.clone());
+    if key != feature_path {
+        cache.insert(feature_path.clone(), feature.clone());
+    }
+
+    Ok(feature)
+}
+
+#[cfg(test)]
+pub(crate) fn clear_feature_cache() {
+    // Recover from a poisoned lock: clearing discards the contents anyway.
+    let mut guard = FEATURE_CACHE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.clear();
+}
+
+/// Extract the scenario data for the given feature and optional index.
+pub(crate) fn extract_scenario_steps(
+    feature: &Feature,
+    index: Option<usize>,
+) -> Result<ScenarioData, proc_macro2::TokenStream> {
+    let idx = index.unwrap_or(0);
+    let Some(scenario) = feature.scenarios.get(idx) else {
+        let msg = format!(
+            "scenario index out of range: {} (available: {})",
+            idx,
+            feature.scenarios.len()
+        );
+        let err = syn::Error::new(proc_macro2::Span::call_site(), msg);
+        return Err(error_to_tokens(&err));
+    };
+
+    let scenario_name = scenario.name.clone();
+    let scenario_line = u32::try_from(scenario.position.line).map_err(|_| {
+        let msg = format!(
+            "scenario line number out of range: {} (maximum supported: u32::MAX = 4,294,967,295)",
+            scenario.position.line,
+        );
+        error_to_tokens(&syn::Error::new(proc_macro2::Span::call_site(), msg))
+    })?;
+
+    let steps = iter_parsed_steps_with_background(feature, scenario)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| error_to_tokens(&err))?;
+
+    let base_tags = collect_base_tags(feature, scenario);
+    let examples = crate::parsing::examples::extract_examples(scenario, &base_tags)?;
+
+    Ok(ScenarioData {
+        name: scenario_name,
+        steps,
+        examples,
+        tags: base_tags,
+        line: scenario_line,
+    })
+}
+
+#[cfg(test)]
+mod tests;
+
+/// Return scenario steps, prefixing any feature `Background` steps.
+///
+/// Keeping this logic in a dedicated helper keeps `extract_scenario_steps`
+/// focused on scenario selection, tagging, and examples extraction, whilst
+/// letting callers decide how to collect or extend the resulting iterator.
+fn iter_parsed_steps_with_background<'a>(
+    feature: &'a Feature,
+    scenario: &'a Scenario,
+) -> impl Iterator<Item = Result<ParsedStep, syn::Error>> + 'a {
+    feature
+        .background
+        .as_ref()
+        .into_iter()
+        .flat_map(|background| background.steps.iter())
+        .chain(scenario.steps.iter())
+        .map(ParsedStep::try_from)
+}
+
+/// Provides the internal `collect_base_tags` operation.
+fn collect_base_tags(feature: &Feature, scenario: &Scenario) -> Vec<String> {
+    let mut tags = Vec::new();
+    tags::extend_tag_set(&mut tags, &feature.tags);
+    tags::extend_tag_set(&mut tags, &scenario.tags);
+    tags
+}
+
+impl ScenarioData {
+    /// Provides the internal `filter_by_tags` operation.
+    pub(crate) fn filter_by_tags(&mut self, expr: &TagExpression) -> bool {
+        match &mut self.examples {
+            Some(examples) => {
+                let mut retained_rows = Vec::new();
+                let mut retained_tags = Vec::new();
+                for (row, tags) in examples
+                    .rows
+                    .iter()
+                    .cloned()
+                    .zip(examples.row_tags.iter().cloned())
+                {
+                    if expr.evaluate(tags.iter().map(String::as_str)) {
+                        retained_rows.push(row);
+                        retained_tags.push(tags);
+                    }
+                }
+
+                if retained_rows.is_empty() {
+                    false
+                } else {
+                    examples.rows = retained_rows;
+                    examples.row_tags = retained_tags;
+                    true
+                }
+            }
+            None => expr.evaluate(self.tags.iter().map(String::as_str)),
+        }
+    }
+}

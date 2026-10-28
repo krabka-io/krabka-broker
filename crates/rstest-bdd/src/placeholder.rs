@@ -1,0 +1,28 @@
+//! Placeholder extraction and pattern-to-regex compilation.
+//! This module re-exports the shared pattern engine and exposes the
+//! runtime-facing helper for capturing placeholders from steps.
+
+use rstest_bdd_patterns::extract_captured_values;
+
+use crate::{
+    pattern::StepPattern,
+    types::{PlaceholderError, StepText},
+};
+
+/// Extract placeholder values from a step string using a pattern.
+///
+/// The runtime uses this helper to materialize step arguments before
+/// invoking the registered implementation. The pattern is compiled on first
+/// use and cached for subsequent calls.
+///
+/// # Errors
+/// - [`PlaceholderError::PatternMismatch`]: the provided text does not match the pattern.
+/// - [`PlaceholderError::InvalidPlaceholder`]: pattern contains malformed placeholders.
+/// - [`PlaceholderError::InvalidPattern`]: generated regular expression failed to compile.
+pub fn extract_placeholders(
+    pattern: &StepPattern,
+    text: StepText<'_>,
+) -> Result<Vec<String>, PlaceholderError> {
+    let re = pattern.compiled_regex()?;
+    extract_captured_values(re, text.as_str()).ok_or(PlaceholderError::PatternMismatch)
+}

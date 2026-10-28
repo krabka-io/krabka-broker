@@ -1,0 +1,82 @@
+//! Column renaming strategies mirroring serde's `rename_all` semantics,
+//! with an additional `Title Case` extension.
+//!
+//! The derive macros rely on these rules to translate struct field identifiers
+//! into the column names that should be matched at runtime.
+
+use convert_case::{Case, Casing};
+use syn::LitStr;
+
+/// Supported rename rules for datatable headers.
+///
+/// - `lowercase`: all letters are lowercase.
+/// - `UPPERCASE`: all letters are uppercase.
+/// - `snake_case`: words are separated by underscores.
+/// - `SCREAMING_SNAKE_CASE`: words are separated by underscores and all letters are uppercase.
+/// - `kebab-case`: words are separated by hyphens.
+/// - `SCREAMING-KEBAB-CASE`: words are separated by hyphens and all letters are uppercase.
+/// - `camelCase`: the first word is lowercase and subsequent words are capitalized.
+/// - `PascalCase`: each word is capitalized with no separators.
+/// - `Title Case`: each word is capitalized and separated by spaces. This is distinct from
+///   `PascalCase`, which concatenates words, and mirrors the human-readable headers often used in
+///   Gherkin scenarios (for example `Given Name`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RenameRule {
+    /// Convert names to lowercase without separators.
+    Lower,
+    /// Convert names to uppercase without separators.
+    Upper,
+    /// Convert names to `snake_case`.
+    Snake,
+    /// Convert names to `SCREAMING_SNAKE_CASE`.
+    ScreamingSnake,
+    /// Convert names to `kebab-case`.
+    Kebab,
+    /// Convert names to `SCREAMING-KEBAB-CASE`.
+    ScreamingKebab,
+    /// Convert names to `camelCase`.
+    Camel,
+    /// Convert names to `PascalCase`.
+    Pascal,
+    /// Convert names to title case.
+    Title,
+}
+
+impl RenameRule {
+    /// Applies this naming rule to a field identifier.
+    pub(crate) fn apply(self, ident: &str) -> String {
+        match self {
+            Self::Lower => ident.to_case(Case::Flat),
+            Self::Upper => ident.to_case(Case::UpperFlat),
+            Self::Snake => ident.to_case(Case::Snake),
+            Self::ScreamingSnake => ident.to_case(Case::UpperSnake),
+            Self::Kebab => ident.to_case(Case::Kebab),
+            Self::ScreamingKebab => ident.to_case(Case::UpperKebab),
+            Self::Camel => ident.to_case(Case::Camel),
+            Self::Pascal => ident.to_case(Case::Pascal),
+            Self::Title => ident.to_case(Case::Title),
+        }
+    }
+}
+
+impl TryFrom<&LitStr> for RenameRule {
+    type Error = syn::Error;
+
+    fn try_from(value: &LitStr) -> Result<Self, Self::Error> {
+        match value.value().as_str() {
+            "lowercase" => Ok(Self::Lower),
+            "UPPERCASE" => Ok(Self::Upper),
+            "snake_case" => Ok(Self::Snake),
+            "SCREAMING_SNAKE_CASE" => Ok(Self::ScreamingSnake),
+            "kebab-case" => Ok(Self::Kebab),
+            "SCREAMING-KEBAB-CASE" => Ok(Self::ScreamingKebab),
+            "camelCase" => Ok(Self::Camel),
+            "PascalCase" => Ok(Self::Pascal),
+            "Title Case" => Ok(Self::Title),
+            other => Err(syn::Error::new(
+                value.span(),
+                format!("unsupported rename rule '{other}'"),
+            )),
+        }
+    }
+}
