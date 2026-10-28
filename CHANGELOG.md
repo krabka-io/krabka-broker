@@ -23,6 +23,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-28
+
 ### Added
 
 - Backup library operations return structured reports with capture notes, unreadable manifests, verification progress, and offset commit summaries. The CLI renders the existing text from these reports (#1710).
@@ -88,6 +90,38 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   than the budget reads from the disk, as it did once the kernel had evicted
   the range. Set the budget above the machine's memory to leave eviction to
   the kernel, as before.
+- A fetch of bytes the budget has already dropped, which is what a consumer
+  catching up on a backlog reads, no longer refills the page cache with
+  them: the pages it brings in are dropped again behind it. Before, the
+  cgroup filled to its memory limit within seconds of the consumer resuming,
+  and the kernel reclaimed every page inside the brokers' own system calls:
+  on the OMB 100 GB backlog workload at RF3 (100K 1 KiB records/s, 10 GiB
+  containers), 7 to 14 million pages scanned per two minutes and 2 to 3.6 s
+  of memory stall while the consumer drained, none before or after. With the
+  drop there is none during the drain either, and the publish p99 of the
+  single-partition RF3 cell while the consumer drained fell from 139 to
+  25 ms in the A/B of this change alone (#1823).
+- A `sendfile` with 1 MiB or more left to send, and the TLS fallback's read
+  of such a region, run on the blocking pool, so a connection draining a
+  large cold fetch gives up the runtime worker, its queued tasks and its turn
+  at the I/O driver for the length of the system call. Smaller transfers
+  stay on the worker, as before (#1824).
+- A read of a partition's log is planned under the partition's lock and run
+  without it. The plan is the index lookups and the file handles the read
+  needs; the header walk, the readahead hint, the page-cache probe and the
+  copy or `sendfile` descriptor then run with no lock held, so an append
+  arriving meanwhile no longer waits for them. Before, a cold fetch held the
+  lock for its whole read, about 5 ms per 10 MiB fetch on an e2-standard-16,
+  and the producer paid for it: on the OMB 100 GB backlog workloads, while
+  the consumer drained, the publish p99 was 11 to 13 ms at RF1 with one
+  partition and 970 ms at RF3 with 16 partitions on a lane whose disk was
+  saturated, against 2.3 to 2.4 ms before and after the drain; it is 2.5 ms
+  and 13 ms with the change, at the same drain rate, and the build and
+  steady phases are unchanged. A `read_committed` fetch takes its aborted
+  transactions with the plan, a read that a truncation ran under serves
+  nothing and the next fetch plans against the log as it is, and a fetch
+  that starts in pages the budget dropped from the active segment is treated
+  as a read that may block (#1825, #1829).
 - A consumer fetch parked below `fetch.min.bytes` is answered early, with no
   records, when a partition its fetch session forgot in the last 100 ms
   receives records. The Java consumer leaves a partition out of its next fetch
@@ -2578,7 +2612,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.0.8...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.0
 [1.0.8]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.8
 [1.0.7]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.7
 [1.0.6]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.6
