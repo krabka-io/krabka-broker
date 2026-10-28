@@ -10,7 +10,10 @@ use {
     crate::{
         control_plane::freeze_scope,
         support,
-        wire::{CONTROL, accepted, controlled_fixture, create_topic, produce_outcome, refused},
+        wire::{
+            CONTROL, accepted, assert_control_accepts, controlled_fixture, create_topic,
+            produce_outcome, refused,
+        },
     },
     assert2::check,
     krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
@@ -24,7 +27,7 @@ async fn bdd_verify_a_literal_freeze_refuses_produce_and_the_control_topic_still
     let (p, frozen, control) = Box::pin(controlled_fixture("orders")).await;
 
     check!(produce_outcome(&p.broker, &p.client, "orders", frozen).await == accepted(1));
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
+    assert_control_accepts(&p, control, 1).await;
 
     freeze_scope(&p.client, PATTERN_TYPE_LITERAL, "orders", "DR cutover").await;
 
@@ -32,25 +35,10 @@ async fn bdd_verify_a_literal_freeze_refuses_produce_and_the_control_topic_still
         produce_outcome(&p.broker, &p.client, "orders", frozen).await
             == refused("literal", "orders", "DR cutover", 1)
     );
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(2));
+    assert_control_accepts(&p, control, 2).await;
 
     p.broker.shutdown().await;
 }
-
-/// A literal freeze stops writes to the topic it names, and to nothing else.
-///
-/// This is the feature in one case. Both topics take a write before the freeze
-/// lands, so the refusal afterwards is the registry entry rather than a produce
-/// path that stopped working; and the control topic keeps taking writes after
-/// it, so the refusal is scoped rather than global. Delete this case and
-/// nothing proves that `POLICY_VIOLATION` ever reaches a producer.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/topic_freeze/produce_gate.feature",
-    name = "a literal freeze refuses produce and the control topic still accepts"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_literal_freeze_refuses_produce_and_the_control_topic_still_accepts() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::then(
@@ -73,26 +61,10 @@ async fn bdd_verify_a_prefix_freeze_refuses_produce_to_every_topic_it_covers() {
     check!(
         produce_outcome(&p.broker, &p.client, "tenant-b.orders", neighbour).await == accepted(1)
     );
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
+    assert_control_accepts(&p, control, 1).await;
 
     p.broker.shutdown().await;
 }
-
-/// A prefixed freeze stops writes to every topic in the namespace, and stops at
-/// the namespace boundary.
-///
-/// The namespace scope is the half an ACL cannot express atomically, and it is
-/// the reason this feature exists rather than a deny binding per topic. The
-/// case runs two controls on purpose: `CONTROL` shows the produce path works at
-/// all, and `tenant-b.orders` shows the prefix walk stops where the scope stops
-/// rather than matching every topic once the registry is non-empty.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/topic_freeze/produce_gate.feature",
-    name = "a prefix freeze refuses produce to every topic it covers"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_prefix_freeze_refuses_produce_to_every_topic_it_covers() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::then(
@@ -109,10 +81,42 @@ async fn bdd_verify_a_topic_created_after_a_covering_prefix_freeze_is_frozen_on_
         produce_outcome(&p.broker, &p.client, "tenant-a.late", late).await
             == refused("prefixed", "tenant-a.", "pre-restore", 0)
     );
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
+    assert_control_accepts(&p, control, 1).await;
 
     p.broker.shutdown().await;
 }
+
+// BDD scenario entry points; acceptance steps are defined above.
+/// A literal freeze stops writes to the topic it names, and to nothing else.
+///
+/// This is the feature in one case. Both topics take a write before the freeze
+/// lands, so the refusal afterwards is the registry entry rather than a produce
+/// path that stopped working; and the control topic keeps taking writes after
+/// it, so the refusal is scoped rather than global. Delete this case and
+/// nothing proves that `POLICY_VIOLATION` ever reaches a producer.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/produce_gate.feature",
+    name = "a literal freeze refuses produce and the control topic still accepts"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_literal_freeze_refuses_produce_and_the_control_topic_still_accepts() {}
+
+/// A prefixed freeze stops writes to every topic in the namespace, and stops at
+/// the namespace boundary.
+///
+/// The namespace scope is the half an ACL cannot express atomically, and it is
+/// the reason this feature exists rather than a deny binding per topic. The
+/// case runs two controls on purpose: `CONTROL` shows the produce path works at
+/// all, and `tenant-b.orders` shows the prefix walk stops where the scope stops
+/// rather than matching every topic once the registry is non-empty.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/topic_freeze/produce_gate.feature",
+    name = "a prefix freeze refuses produce to every topic it covers"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_prefix_freeze_refuses_produce_to_every_topic_it_covers() {}
 
 /// A topic created after a covering prefix freeze is frozen the moment it
 /// exists.

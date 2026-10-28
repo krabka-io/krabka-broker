@@ -19,7 +19,7 @@ use {
             topics::CreateTopicSetup,
         },
     },
-    assert2::assert,
+    assert2::{assert, check},
     krabka_broker::{BrokerHandle, NodeId},
     krabka_client_core::Client,
     krabka_protocol::{
@@ -192,4 +192,12 @@ pub async fn wait_until_visible(
         );
         time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// Compare both the delivery watermark and the records available below it.
+pub async fn assert_visible(client: &Client, topic: &str, topic_id: Uuid, expected: Visible) {
+    check!(
+        visible(client, topic, topic_id).await == expected,
+        "{topic}"
+    );
 }

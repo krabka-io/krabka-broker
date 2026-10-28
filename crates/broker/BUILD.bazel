@@ -17,6 +17,7 @@ crate_library(name = "broker")
 # The broker server. `bazel run //crates/broker:krabka-broker -- --help`.
 crate_binary(
     name = "krabka-broker",
+    compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]),
     crate_root = "src/bin/broker.rs",
     lib = ":broker",
 )

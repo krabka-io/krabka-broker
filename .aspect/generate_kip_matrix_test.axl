@@ -720,6 +720,9 @@ def _test_suite_functions(_ctx):
         functions[1].body.find('"{}"') >= 0,
         "a brace inside a format string does not close the body",
     )
+    inline = suite_functions("async fn first() {}\nfn second() {\n    run();\n}\nfn last() {}")
+    check_eq("empty BDD wrappers do not consume the next function", [f.name for f in inline], ["first", "second", "last"])
+    check_eq("empty wrappers have empty bodies", [f.body for f in inline], ["", "    run();", ""])
 
 def _test_direct_client_cases(_ctx):
     check_eq("an indexed row", direct_client_cases("    &CLIENTS[1]", 2), [1])
@@ -746,6 +749,22 @@ def _test_calls_function(_ctx):
     )
 
 def _test_client_cases_by_function(_ctx):
+    bdd = "\n".join([
+        "fn librdkafka_2x() {",
+        "    &CLIENTS[1]",
+        "}",
+        "async fn bdd_verify_round_trip() {",
+        "    for case in CLIENTS.iter() {}",
+        "}",
+        "async fn round_trip() {}",
+        "async fn bdd_verify_modern_client() {",
+        "    librdkafka_2x();",
+        "}",
+        "async fn modern_client() {}",
+    ])
+    bdd_driven = client_cases_by_function(bdd, 2)
+    check_eq("BDD scenarios retain table-wide evidence", bdd_driven["round_trip"], [0, 1])
+    check_eq("BDD scenarios retain evidence through a client helper", bdd_driven["modern_client"], [1])
     driven = client_cases_by_function(_SUITE, 2)
     check_eq(
         "the shared loop drives every client",

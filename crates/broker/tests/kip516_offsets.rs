@@ -104,14 +104,6 @@ async fn bdd_verify_offset_commit_and_fetch_by_topic_id_round_trip(example: Stri
 }
 
 #[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip516_offsets.feature",
-    name = "offset commit and fetch by topic id round trip"
-)]
-#[tokio::test]
-async fn offset_commit_and_fetch_by_topic_id_round_trip(example: String) { let _ = example; }
-
-#[cfg(test)]
 #[rstest_bdd_macros::then(
     "kip516 offsets: offset fetch unresolved topic id returns unknown topic id"
 )]
@@ -156,17 +148,6 @@ async fn bdd_verify_offset_fetch_unresolved_topic_id_returns_unknown_topic_id() 
     }
     assert!(actual == expected);
 }
-
-/// `OffsetFetch` v10 with a `topic_id` that does not resolve answers
-/// `UNKNOWN_TOPIC_ID` with offset -1 and the id echoed. The zero id is such an
-/// id.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kip516_offsets.feature",
-    name = "offset fetch unresolved topic id returns unknown topic id"
-)]
-#[tokio::test]
-async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::then(
@@ -228,6 +209,26 @@ async fn bdd_verify_offset_commit_unresolved_topic_id_returns_unknown_topic_id()
     }
     assert!(actual == expected);
 }
+
+// BDD scenario entry points; acceptance steps are defined above.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip516_offsets.feature",
+    name = "offset commit and fetch by topic id round trip"
+)]
+#[tokio::test]
+async fn offset_commit_and_fetch_by_topic_id_round_trip(example: String) { let _ = example; }
+
+/// `OffsetFetch` v10 with a `topic_id` that does not resolve answers
+/// `UNKNOWN_TOPIC_ID` with offset -1 and the id echoed. The zero id is such an
+/// id.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/kip516_offsets.feature",
+    name = "offset fetch unresolved topic id returns unknown topic id"
+)]
+#[tokio::test]
+async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {}
 
 /// `OffsetCommit` v10 with a known `topic_id` and a `topic_id` that does not
 /// resolve. The known topic commits and answers 0. The other row commits

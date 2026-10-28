@@ -13,7 +13,10 @@ use {
             fetch::{FetchLimits, RequestWaitMillis, single_partition_fetch},
             producer::{default_producer, enqueue_string_values, transactional_producer},
             topics::metadata_topic,
-            transaction_wire::{committed_values, observed_values, read_committed_at_least},
+            transaction_wire::{
+                close_transaction_clients, committed_values, observed_values,
+                read_committed_at_least,
+            },
         },
         txn_harness::{boot_single, create_topic, create_topic_with_segment_bytes, rec, send_ok},
     },
@@ -31,7 +34,7 @@ async fn bdd_verify_commit_then_read_committed_sees_records() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&bootstrap, "t").await;
 
-    let consumer = {
+    {
         let producer = transactional_producer(bootstrap.clone(), "my-tid").await;
         let txn = producer.begin_transaction().await.unwrap();
         enqueue_string_values(&producer, "t", &["a", "b", "c"]).await;
@@ -40,22 +43,10 @@ async fn bdd_verify_commit_then_read_committed_sees_records() {
         let (consumer, seen) = committed_values(bootstrap, "g1", "t", None).await;
         assert!(seen == vec!["a", "b", "c"]);
 
-        producer.close().await.map(|()| consumer)
+        close_transaction_clients(producer, consumer).await;
     }
-    .unwrap();
-    consumer.close().await.unwrap();
     broker.shutdown().await;
 }
-
-/// Commits a transaction, after which a `read_committed` consumer sees all 3
-/// records.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/transactions/txn_isolation.feature",
-    name = "commit then read committed sees records"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn commit_then_read_committed_sees_records() {}
 
 // ── test 2 ────────────────────────────────────────────────────────────────────
 
@@ -161,16 +152,6 @@ async fn bdd_verify_abort_then_read_committed_skips_records() {
     broker.shutdown().await;
 }
 
-/// Aborts a transaction. `read_committed` then sees 0 records, and
-/// `read_uncommitted` sees 3.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/transactions/txn_isolation.feature",
-    name = "abort then read committed skips records"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn abort_then_read_committed_skips_records() {}
-
 // ── test 3 ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -179,7 +160,7 @@ async fn bdd_verify_interleaved_commit_and_abort() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&bootstrap, "ti").await;
 
-    let consumer = {
+    {
         let producer = transactional_producer(bootstrap.clone(), "interleave-tid").await;
 
         // First txn: commit ["a", "b", "c"].
@@ -204,12 +185,31 @@ async fn bdd_verify_interleaved_commit_and_abort() {
         let (consumer, seen) = read_committed_at_least(bootstrap, "g-interleave", "ti", 7).await;
         assert!(seen == vec!["a", "b", "c", "d", "e", "f", "g"]);
 
-        producer.close().await.map(|()| consumer)
+        close_transaction_clients(producer, consumer).await;
     }
-    .unwrap();
-    consumer.close().await.unwrap();
     broker.shutdown().await;
 }
+
+// BDD scenario entry points; acceptance steps are defined above.
+/// Commits a transaction, after which a `read_committed` consumer sees all 3
+/// records.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_isolation.feature",
+    name = "commit then read committed sees records"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn commit_then_read_committed_sees_records() {}
+
+/// Aborts a transaction. `read_committed` then sees 0 records, and
+/// `read_uncommitted` sees 3.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/transactions/txn_isolation.feature",
+    name = "abort then read committed skips records"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abort_then_read_committed_skips_records() {}
 
 /// commit("a","b","c"), abort("X","Y"), commit("d","e","f","g"):
 /// `read_committed` sees exactly \["a","b","c","d","e","f","g"\].

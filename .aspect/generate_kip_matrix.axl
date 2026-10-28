@@ -769,7 +769,8 @@ def suite_functions(text, source = _LIBRDKAFKA):
     """Every free function of a Rust suite, as `struct(name, body)`.
 
     The suite is rustfmt output, so a free function opens at column zero and
-    closes on a line that is exactly `}`. Reading a body that way rather than
+    closes on a line that is exactly `}`, or has an empty `{}` body on its
+    declaration line. Reading a body that way rather than
     by matching braces keeps a `{}` inside a format string -- which these
     suites are full of -- from being read as one.
     """
@@ -783,7 +784,10 @@ def suite_functions(text, source = _LIBRDKAFKA):
             found = function_name(line)
             if found:
                 name = found
-                opened = index + 1
+                if line.endswith("{}"):
+                    functions.append(struct(name = name, body = ""))
+                else:
+                    opened = index + 1
         elif line == "}":
             functions.append(struct(name = name, body = "\n".join(lines[opened:index])))
             opened = -1
@@ -886,6 +890,14 @@ def client_cases_by_function(suite, count, source = _LIBRDKAFKA):
                 for index in direct[other.name]:
                     cases[index] = True
         resolved[found.name] = sorted(cases)
+
+    # Migrated BDD scenarios keep their acceptance body in a Then helper.
+    # Credit the scenario's public test name with the clients that helper drives.
+    for found in functions:
+        if found.name.startswith("bdd_verify_"):
+            scenario = found.name[len("bdd_verify_"):]
+            if scenario in resolved:
+                resolved[scenario] = sorted({index: True for index in resolved[scenario] + resolved[found.name]})
     return resolved
 
 def citations(note):

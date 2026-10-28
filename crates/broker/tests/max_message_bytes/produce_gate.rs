@@ -48,22 +48,6 @@ async fn bdd_verify_a_batch_at_the_cap_appends_and_one_byte_over_it_is_refused()
     p.broker.shutdown().await;
 }
 
-/// The cap is exact, and a refusal costs the log nothing.
-///
-/// This is the feature in one case. The batch at the cap goes first, so the
-/// refusal that follows is the size and not a produce path that never worked;
-/// and the batch at the cap after it lands at offset 1, which is the assertion
-/// that matters most. A broker that answered `MESSAGE_TOO_LARGE` *and*
-/// appended would pass on the error code alone and have written the very
-/// 100-MiB batch the cap exists to keep out of the partition.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
-    name = "a batch at the cap appends and one byte over it is refused"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_batch_at_the_cap_appends_and_one_byte_over_it_is_refused() {}
-
 #[cfg(test)]
 #[rstest_bdd_macros::then(
     "max message bytes produce gate: a recompressed batch is held to the cap at its stored size exactly"
@@ -109,24 +93,6 @@ async fn bdd_verify_a_recompressed_batch_is_held_to_the_cap_at_its_stored_size_e
     p.broker.shutdown().await;
 }
 
-/// A topic that forces a codec the producer did not use holds the batch to
-/// `max.message.bytes` at its stored size, to the byte.
-///
-/// The producer sends gzip and the topic stores lz4, which shrinks repeated
-/// bytes far less, so the stored batch is the larger of the two and the gate
-/// on the stored form is the one that binds. The broker encodes the stored
-/// form once and measures it against the cap, then against `segment.bytes`,
-/// then appends it: a batch of exactly the cap appends and a cap one byte
-/// smaller refuses it, so whatever the gates measured is what the writer
-/// would store.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
-    name = "a recompressed batch is held to the cap at its stored size exactly"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_recompressed_batch_is_held_to_the_cap_at_its_stored_size_exactly() {}
-
 #[cfg(test)]
 #[rstest_bdd_macros::then(
     "max message bytes produce gate: a batch larger than segment bytes is refused even when the message cap allows it"
@@ -148,27 +114,6 @@ async fn bdd_verify_a_batch_larger_than_segment_bytes_is_refused_even_when_the_m
     p.broker.shutdown().await;
 }
 
-/// A record set larger than `segment.bytes` is refused with
-/// `RECORD_LIST_TOO_LARGE` (18) even when `max.message.bytes` would take it.
-///
-/// Kafka's floor for `segment.bytes` is 1 MiB and the default
-/// `max.message.bytes` is a little over it, so the two meet in the default
-/// configuration: `UnifiedLog.append` throws `RecordBatchTooLargeException`
-/// for a set larger than the segment (`apache/kafka:4.3.1`, and trunk keeps it
-/// for client appends). A batch is never split across segments, so without the
-/// refusal it would land whole in a segment of its own, bigger than the size
-/// the operator configured.
-///
-/// The batch of exactly `segment.bytes` goes first and goes again after the
-/// refusal: the limit is strict, and the refusal costs the log nothing.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
-    name = "a batch larger than segment bytes is refused even when the message cap allows it"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_batch_larger_than_segment_bytes_is_refused_even_when_the_message_cap_allows_it() {}
-
 #[cfg(test)]
 #[rstest_bdd_macros::then(
     "max message bytes produce gate: a topic with no override inherits the brokers message max bytes"
@@ -189,22 +134,6 @@ async fn bdd_verify_a_topic_with_no_override_inherits_the_brokers_message_max_by
 
     p.broker.shutdown().await;
 }
-
-/// A topic that sets no `max.message.bytes` inherits the broker's
-/// `message.max.bytes`.
-///
-/// Kafka reports exactly this as the `DEFAULT_CONFIG` synonym of an unset
-/// `max.message.bytes`, and the number is the same 1048588 on both keys. The
-/// case exists because the per-topic override is the easy half: a broker that
-/// enforced the cap only where an operator had spelled one out would leave
-/// every default topic accepting the 100-MiB batch.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
-    name = "a topic with no override inherits the brokers message max bytes"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_topic_with_no_override_inherits_the_brokers_message_max_bytes() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::then(
@@ -232,20 +161,6 @@ async fn bdd_verify_a_topic_override_binds_below_and_above_the_broker_default() 
 
     p.broker.shutdown().await;
 }
-
-/// A per-topic override overrides the broker default in both directions.
-///
-/// The tightened topic refuses a batch the broker default would have taken,
-/// and the loosened topic takes one the broker default would have refused.
-/// Together they say the produce path reads the topic's value rather than a
-/// constant that happens to agree with it.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
-    name = "a topic override binds below and above the broker default"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_topic_override_binds_below_and_above_the_broker_default() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::then(
@@ -279,6 +194,92 @@ async fn bdd_verify_a_batch_the_topic_expands_is_measured_after_the_broker_re_en
 
     p.broker.shutdown().await;
 }
+
+// BDD scenario entry points; acceptance steps are defined above.
+/// The cap is exact, and a refusal costs the log nothing.
+///
+/// This is the feature in one case. The batch at the cap goes first, so the
+/// refusal that follows is the size and not a produce path that never worked;
+/// and the batch at the cap after it lands at offset 1, which is the assertion
+/// that matters most. A broker that answered `MESSAGE_TOO_LARGE` *and*
+/// appended would pass on the error code alone and have written the very
+/// 100-MiB batch the cap exists to keep out of the partition.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
+    name = "a batch at the cap appends and one byte over it is refused"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_batch_at_the_cap_appends_and_one_byte_over_it_is_refused() {}
+
+/// A topic that forces a codec the producer did not use holds the batch to
+/// `max.message.bytes` at its stored size, to the byte.
+///
+/// The producer sends gzip and the topic stores lz4, which shrinks repeated
+/// bytes far less, so the stored batch is the larger of the two and the gate
+/// on the stored form is the one that binds. The broker encodes the stored
+/// form once and measures it against the cap, then against `segment.bytes`,
+/// then appends it: a batch of exactly the cap appends and a cap one byte
+/// smaller refuses it, so whatever the gates measured is what the writer
+/// would store.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
+    name = "a recompressed batch is held to the cap at its stored size exactly"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_recompressed_batch_is_held_to_the_cap_at_its_stored_size_exactly() {}
+
+/// A record set larger than `segment.bytes` is refused with
+/// `RECORD_LIST_TOO_LARGE` (18) even when `max.message.bytes` would take it.
+///
+/// Kafka's floor for `segment.bytes` is 1 MiB and the default
+/// `max.message.bytes` is a little over it, so the two meet in the default
+/// configuration: `UnifiedLog.append` throws `RecordBatchTooLargeException`
+/// for a set larger than the segment (`apache/kafka:4.3.1`, and trunk keeps it
+/// for client appends). A batch is never split across segments, so without the
+/// refusal it would land whole in a segment of its own, bigger than the size
+/// the operator configured.
+///
+/// The batch of exactly `segment.bytes` goes first and goes again after the
+/// refusal: the limit is strict, and the refusal costs the log nothing.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
+    name = "a batch larger than segment bytes is refused even when the message cap allows it"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_batch_larger_than_segment_bytes_is_refused_even_when_the_message_cap_allows_it() {}
+
+/// A topic that sets no `max.message.bytes` inherits the broker's
+/// `message.max.bytes`.
+///
+/// Kafka reports exactly this as the `DEFAULT_CONFIG` synonym of an unset
+/// `max.message.bytes`, and the number is the same 1048588 on both keys. The
+/// case exists because the per-topic override is the easy half: a broker that
+/// enforced the cap only where an operator had spelled one out would leave
+/// every default topic accepting the 100-MiB batch.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
+    name = "a topic with no override inherits the brokers message max bytes"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_topic_with_no_override_inherits_the_brokers_message_max_bytes() {}
+
+/// A per-topic override overrides the broker default in both directions.
+///
+/// The tightened topic refuses a batch the broker default would have taken,
+/// and the loosened topic takes one the broker default would have refused.
+/// Together they say the produce path reads the topic's value rather than a
+/// constant that happens to agree with it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/max_message_bytes/produce_gate.feature",
+    name = "a topic override binds below and above the broker default"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_topic_override_binds_below_and_above_the_broker_default() {}
 
 /// A topic that forces `compression.type=uncompressed` measures the batch it
 /// stores, not the batch that arrived.

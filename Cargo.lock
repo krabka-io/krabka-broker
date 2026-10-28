@@ -616,15 +616,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
-name = "basic-toml"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba62675e8242a4c4e806d12f11d136e626e6c8361d6b829310732241652a178a"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "beef"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2947,14 +2938,12 @@ dependencies = [
 [[package]]
 name = "i18n-config"
 version = "0.4.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e06b90c8a0d252e203c94344b21e35a30f3a3a85dc7db5af8f8df9f3e0c63ef"
+source = "git+https://github.com/kellpossible/cargo-i18n?rev=2ce7b1dfe9a8cc224288bf50cbc2a67a6de863c4#2ce7b1dfe9a8cc224288bf50cbc2a67a6de863c4"
 dependencies = [
- "basic-toml",
  "log",
  "serde",
- "serde_derive",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
+ "toml 1.1.8+spec-1.1.0",
  "unic-langid",
 ]
 

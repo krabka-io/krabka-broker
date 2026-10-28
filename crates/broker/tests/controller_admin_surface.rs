@@ -331,14 +331,6 @@ async fn bdd_verify_controller_api_versions_advertises_the_kafka_controller_admi
 }
 
 #[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_admin_surface.feature",
-    name = "controller api versions advertises the kafka controller admin surface"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_api_versions_advertises_the_kafka_controller_admin_surface() {}
-
-#[cfg(test)]
 #[rstest_bdd_macros::then(
     "controller admin surface: controller listener advertises no key kafka does not"
 )]
@@ -364,22 +356,6 @@ async fn bdd_verify_controller_listener_advertises_no_key_kafka_does_not() {
         broker.shutdown().await;
     }
 }
-
-/// The whole key set the controller listener advertises, measured against the
-/// Kafka oracle rather than against krabka's own tables.
-///
-/// [`controller_api_versions_advertises_the_kafka_controller_admin_surface`]
-/// only inspects the keys the Admin bridge routes, so it cannot see a key
-/// krabka offers that no Kafka controller does, or a key of Kafka's that the
-/// listener does not offer. This case pins both directions: the advertised set
-/// is exactly [`KAFKA_CONTROLLER_LISTENER_KEYS`].
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_admin_surface.feature",
-    name = "controller listener advertises no key kafka does not"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_advertises_no_key_kafka_does_not() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::then(
@@ -492,14 +468,6 @@ async fn bdd_verify_controller_listener_serves_the_topic_lifecycle() {
 }
 
 #[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_admin_surface.feature",
-    name = "controller listener serves the topic lifecycle"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_serves_the_topic_lifecycle() {}
-
-#[cfg(test)]
 #[rstest_bdd_macros::then(
     "controller admin surface: controller listener serves the writing delegation token apis"
 )]
@@ -569,14 +537,6 @@ async fn bdd_verify_controller_listener_serves_the_writing_delegation_token_apis
 }
 
 #[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_admin_surface.feature",
-    name = "controller listener serves the writing delegation token apis"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_serves_the_writing_delegation_token_apis() {}
-
-#[cfg(test)]
 #[rstest_bdd_macros::then(
     "controller admin surface: controller listener serves the scram write path"
 )]
@@ -628,17 +588,6 @@ async fn bdd_verify_controller_listener_serves_the_scram_write_path() {
     check!(described == alice_scram_credentials());
     broker.shutdown().await;
 }
-
-/// `kafka-configs --bootstrap-controller --entity-type users --alter` is the
-/// KIP-919 flow this covers: the SCRAM write lands through the controller
-/// listener and the matching read on the same connection sees it.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_admin_surface.feature",
-    name = "controller listener serves the scram write path"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_serves_the_scram_write_path() {}
 
 /// Independent expected stored SCRAM response, including each empty tag collection.
 fn alice_scram_credentials() -> DescribeUserScramCredentialsResponse {
@@ -732,17 +681,6 @@ async fn bdd_verify_controller_listener_serves_assign_replicas_to_dirs() {
     broker.shutdown().await;
 }
 
-/// `AssignReplicasToDirs` is a context dispatch, so it also covers the
-/// bridge's `ClusterAction`-authorized inter-broker arm; the default
-/// `AllowAllAuthorizer` admits the connection's `ANONYMOUS` principal.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_admin_surface.feature",
-    name = "controller listener serves assign replicas to dirs"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_serves_assign_replicas_to_dirs() {}
-
 #[cfg(test)]
 #[rstest_bdd_macros::then(
     "controller admin surface: controller listener serves unregister controller"
@@ -796,20 +734,6 @@ async fn bdd_verify_controller_listener_serves_unregister_controller() {
     broker.shutdown().await;
 }
 
-/// Kafka trunk's `UnregisterController` (94) over the controller listener: a
-/// registered controller id is dropped from the image, and an unknown one is
-/// `CONTROLLER_ID_NOT_REGISTERED`. The cluster is first moved to trunk's
-/// 4.4-IV2 (33), the level the RPC needs, through `UpdateFeatures` on the
-/// same listener. Both are trunk's, so the node runs with Kafka's two
-/// `unstable.*.enable` settings on.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_admin_surface.feature",
-    name = "controller listener serves unregister controller"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_serves_unregister_controller() {}
-
 #[cfg(test)]
 #[rstest_bdd_macros::then(
     "controller admin surface: controller only node places no replica on itself"
@@ -854,25 +778,6 @@ async fn bdd_verify_controller_only_node_places_no_replica_on_itself() {
     );
     broker.shutdown().await;
 }
-
-/// KIP-919 puts `CreateTopics` and `CreatePartitions` on the controller
-/// listener, so a controller-only node answers both -- and it hosts no
-/// replicas. `process.roles` without `broker` means `register_broker` skips it,
-/// so its image holds no broker at all, and placement has nowhere to put a
-/// replica.
-///
-/// Kafka answers that with `INVALID_REPLICATION_FACTOR`: its
-/// `StripedReplicaPlacer` finds no unfenced broker before it counts the
-/// registered ones. Substituting the local node instead would create a topic
-/// whose only replica lives on a node that serves no partition, leaving
-/// metadata nothing can ever serve.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_admin_surface.feature",
-    name = "controller only node places no replica on itself"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_only_node_places_no_replica_on_itself() {}
 
 /// Kafka's `DUPLICATE_BROKER_REGISTRATION`.
 const DUPLICATE_BROKER_REGISTRATION: i16 = 101;
@@ -1139,25 +1044,6 @@ async fn bdd_verify_controller_listener_registers_a_restarted_broker_as_kafka_do
     check!(outcomes == expected);
 }
 
-/// krabka-io/krabka-broker#822: a Kafka broker that restarts rejoins over the
-/// controller listener.
-///
-/// A Kafka broker picks a new incarnation id in every process. Kafka's
-/// `ClusterControlManager.registerBroker` refuses that id with
-/// `DUPLICATE_BROKER_REGISTRATION` only while the previous incarnation still
-/// holds a heartbeat session, and registers it with a new broker epoch once
-/// the session expires. A new registration is fenced (`RegisterBrokerRecord`
-/// defaults `Fenced` to true). It rewrites the record for the same incarnation
-/// and keeps the epoch and the fence, and it validates `metadata.version` and
-/// the log directories. Each step runs against the image the steps before it left.
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/controller_admin_surface.feature",
-    name = "controller listener registers a restarted broker as kafka does"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {}
-
 /// Kafka's `UNKNOWN_TOPIC_ID`.
 const UNKNOWN_TOPIC_ID: i16 = 100;
 
@@ -1277,6 +1163,121 @@ async fn bdd_verify_controller_listener_serves_the_inter_broker_and_sasl_apis() 
     connection.close();
     broker.shutdown().await;
 }
+
+// BDD scenario entry points; acceptance steps are defined above.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_admin_surface.feature",
+    name = "controller api versions advertises the kafka controller admin surface"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_api_versions_advertises_the_kafka_controller_admin_surface() {}
+
+/// The whole key set the controller listener advertises, measured against the
+/// Kafka oracle rather than against krabka's own tables.
+///
+/// [`controller_api_versions_advertises_the_kafka_controller_admin_surface`]
+/// only inspects the keys the Admin bridge routes, so it cannot see a key
+/// krabka offers that no Kafka controller does, or a key of Kafka's that the
+/// listener does not offer. This case pins both directions: the advertised set
+/// is exactly [`KAFKA_CONTROLLER_LISTENER_KEYS`].
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_admin_surface.feature",
+    name = "controller listener advertises no key kafka does not"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_advertises_no_key_kafka_does_not() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_admin_surface.feature",
+    name = "controller listener serves the topic lifecycle"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_the_topic_lifecycle() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_admin_surface.feature",
+    name = "controller listener serves the writing delegation token apis"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_the_writing_delegation_token_apis() {}
+
+/// `kafka-configs --bootstrap-controller --entity-type users --alter` is the
+/// KIP-919 flow this covers: the SCRAM write lands through the controller
+/// listener and the matching read on the same connection sees it.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_admin_surface.feature",
+    name = "controller listener serves the scram write path"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_the_scram_write_path() {}
+
+/// `AssignReplicasToDirs` is a context dispatch, so it also covers the
+/// bridge's `ClusterAction`-authorized inter-broker arm; the default
+/// `AllowAllAuthorizer` admits the connection's `ANONYMOUS` principal.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_admin_surface.feature",
+    name = "controller listener serves assign replicas to dirs"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_assign_replicas_to_dirs() {}
+
+/// Kafka trunk's `UnregisterController` (94) over the controller listener: a
+/// registered controller id is dropped from the image, and an unknown one is
+/// `CONTROLLER_ID_NOT_REGISTERED`. The cluster is first moved to trunk's
+/// 4.4-IV2 (33), the level the RPC needs, through `UpdateFeatures` on the
+/// same listener. Both are trunk's, so the node runs with Kafka's two
+/// `unstable.*.enable` settings on.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_admin_surface.feature",
+    name = "controller listener serves unregister controller"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_unregister_controller() {}
+
+/// KIP-919 puts `CreateTopics` and `CreatePartitions` on the controller
+/// listener, so a controller-only node answers both -- and it hosts no
+/// replicas. `process.roles` without `broker` means `register_broker` skips it,
+/// so its image holds no broker at all, and placement has nowhere to put a
+/// replica.
+///
+/// Kafka answers that with `INVALID_REPLICATION_FACTOR`: its
+/// `StripedReplicaPlacer` finds no unfenced broker before it counts the
+/// registered ones. Substituting the local node instead would create a topic
+/// whose only replica lives on a node that serves no partition, leaving
+/// metadata nothing can ever serve.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_admin_surface.feature",
+    name = "controller only node places no replica on itself"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_only_node_places_no_replica_on_itself() {}
+
+/// krabka-io/krabka-broker#822: a Kafka broker that restarts rejoins over the
+/// controller listener.
+///
+/// A Kafka broker picks a new incarnation id in every process. Kafka's
+/// `ClusterControlManager.registerBroker` refuses that id with
+/// `DUPLICATE_BROKER_REGISTRATION` only while the previous incarnation still
+/// holds a heartbeat session, and registers it with a new broker epoch once
+/// the session expires. A new registration is fenced (`RegisterBrokerRecord`
+/// defaults `Fenced` to true). It rewrites the record for the same incarnation
+/// and keeps the epoch and the fence, and it validates `metadata.version` and
+/// the log directories. Each step runs against the image the steps before it left.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/controller_admin_surface.feature",
+    name = "controller listener registers a restarted broker as kafka does"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {}
 
 /// A Kafka broker sends `AlterPartition` and `AllocateProducerIds` to the
 /// active controller over its controller listener, and `ControllerApis`

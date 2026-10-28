@@ -7,7 +7,10 @@
 
 use {
     crate::{
-        support::{producer::enqueue_string_values, transaction_wire::committed_values},
+        support::{
+            producer::enqueue_string_values,
+            transaction_wire::{close_transaction_clients, committed_values},
+        },
         txn_harness::{boot_single_sasl, create_topic_sasl, sasl_plain_security},
     },
     assert2::assert,
@@ -26,7 +29,7 @@ async fn bdd_verify_sasl_authenticated_transactional_flow_commits() {
     )
     .await;
 
-    let consumer = {
+    {
         let producer = Producer::builder()
             .bootstrap(bootstrap.clone())
             .transactional_id("sasl-tid")
@@ -74,13 +77,12 @@ async fn bdd_verify_sasl_authenticated_transactional_flow_commits() {
         .await;
         assert!(seen == vec!["a", "b", "c"], "seen={seen:?}");
 
-        producer.close().await.map(|()| consumer)
+        close_transaction_clients(producer, consumer).await;
     }
-    .unwrap();
-    consumer.close().await.unwrap();
     broker.shutdown().await;
 }
 
+// BDD scenario entry points; acceptance steps are defined above.
 /// Full transactional flow over a `SASL_PLAINTEXT`/`PLAIN` listener.
 ///
 /// Regression test for a producer-side coordinator-connection credential

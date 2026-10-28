@@ -6,16 +6,12 @@
 //! its log and nothing past the first pending record — so they are written
 //! against the same immediate-topic control.
 
-use {
-    crate::{
-        dat_fixtures::{
-            ALREADY_DUE_MS, IMMEDIATE, Mode, PENDING_HORIZON_MS, SCHEDULED, Visible, batch_at,
-            now_ms,
-        },
-        dat_wire::{produce, ready_topic, visible},
-        support,
+use crate::{
+    dat_fixtures::{
+        ALREADY_DUE_MS, IMMEDIATE, Mode, PENDING_HORIZON_MS, SCHEDULED, Visible, batch_at, now_ms,
     },
-    assert2::check,
+    dat_wire::{assert_visible, produce, ready_topic},
+    support,
 };
 
 #[cfg(test)]
@@ -63,22 +59,11 @@ async fn bdd_verify_list_offsets_latest_lands_a_seek_to_end_on_the_first_pending
         // On a scheduled topic LATEST is the delivery watermark, so a consumer
         // that seeks to end lands on offset 2 and receives the pending record
         // when it activates. On an immediate topic it is the log end offset.
-        check!(
-            visible(&p.client, &topic, topic_id).await == case.expected,
-            "{topic}"
-        );
+        assert_visible(&p.client, &topic, topic_id, case.expected).await;
     }
 
     p.broker.shutdown().await;
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/deliver_at_time/dat_watermark.feature",
-    name = "list offsets latest lands a seek to end on the first pending record"
-)]
-#[tokio::test]
-async fn list_offsets_latest_lands_a_seek_to_end_on_the_first_pending_record() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::then(
@@ -121,14 +106,20 @@ async fn bdd_verify_a_batch_scheduled_far_out_holds_back_a_later_batch_that_is_a
         // nothing: a classic group's position is one offset per partition, so
         // delivering offset 1 first would put offset 0 permanently behind that
         // position. Head-of-line order is the contract, not a defect.
-        check!(
-            visible(&p.client, &topic, topic_id).await == case.expected,
-            "{topic}"
-        );
+        assert_visible(&p.client, &topic, topic_id, case.expected).await;
     }
 
     p.broker.shutdown().await;
 }
+
+// BDD scenario entry points; acceptance steps are defined above.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/deliver_at_time/dat_watermark.feature",
+    name = "list offsets latest lands a seek to end on the first pending record"
+)]
+#[tokio::test]
+async fn list_offsets_latest_lands_a_seek_to_end_on_the_first_pending_record() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::scenario(

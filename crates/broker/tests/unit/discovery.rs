@@ -10,7 +10,7 @@ use {
         self,
         discovery::{
             api_versions, expected_coordinator, expected_coordinator_response,
-            topic_metadata_request,
+            expected_local_coordinator, topic_metadata_request,
         },
         topics::{creatable_topic, create_topic_request},
     },
@@ -28,14 +28,6 @@ async fn bdd_verify_api_versions_round_trip() {
     assert!(resp.api_keys.iter().any(|k| k.api_key == 18));
     p.broker.shutdown().await;
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/unit/discovery.feature",
-    name = "api versions round trip"
-)]
-#[tokio::test]
-async fn api_versions_round_trip() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::then("unit discovery: metadata returns this broker and listed topics")]
@@ -68,14 +60,6 @@ async fn bdd_verify_metadata_returns_this_broker_and_listed_topics() {
 }
 
 #[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/unit/discovery.feature",
-    name = "metadata returns this broker and listed topics"
-)]
-#[tokio::test]
-async fn metadata_returns_this_broker_and_listed_topics() {}
-
-#[cfg(test)]
 #[rstest_bdd_macros::then(
     "unit discovery: find coordinator creates the offsets topic then returns self"
 )]
@@ -100,19 +84,26 @@ async fn bdd_verify_find_coordinator_creates_the_offsets_topic_then_returns_self
 
     let retried = support::find_coordinator(&p.client, support::KEY_TYPE_GROUP, "any-group").await;
     let listen = p.broker.listen_addr();
-    check!(
-        retried
-            == expected_coordinator(
-                "any-group",
-                1,
-                listen.ip().to_string(),
-                i32::from(listen.port()),
-                0,
-                None
-            )
-    );
+    check!(retried == expected_local_coordinator("any-group", listen));
     p.broker.shutdown().await;
 }
+
+// BDD scenario entry points; acceptance steps are defined above.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/discovery.feature",
+    name = "api versions round trip"
+)]
+#[tokio::test]
+async fn api_versions_round_trip() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/discovery.feature",
+    name = "metadata returns this broker and listed topics"
+)]
+#[tokio::test]
+async fn metadata_returns_this_broker_and_listed_topics() {}
 
 /// Kafka's `KafkaApis.getCoordinator`: the first group lookup finds no
 /// `__consumer_offsets`, asks for it, and answers `COORDINATOR_NOT_AVAILABLE`

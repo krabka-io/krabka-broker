@@ -201,3 +201,8 @@ pub async fn frozen_topic_with_record(
     );
     (frozen, control)
 }
+
+/// An unfrozen control topic must keep accepting writes beside the target.
+pub async fn assert_control_accepts(p: &support::InProcess, control: WireUuid, offset: i64) {
+    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(offset));
+}

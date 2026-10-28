@@ -351,14 +351,6 @@ async fn bdd_verify_offline_log_dir_is_reported_as_an_offline_replica() {
     handle.shutdown().await;
 }
 
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/offline_replicas.feature",
-    name = "offline log dir is reported as an offline replica"
-)]
-#[tokio::test]
-async fn offline_log_dir_is_reported_as_an_offline_replica() {}
-
 /// The three-node suite below drives the fencing half of the projection.
 mod support;
 
@@ -450,6 +442,15 @@ async fn bdd_verify_a_follower_reports_the_replicas_of_a_fenced_broker_offline()
 
     shutdown_cluster(cluster).await;
 }
+
+// BDD scenario entry points; acceptance steps are defined above.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/offline_replicas.feature",
+    name = "offline log dir is reported as an offline replica"
+)]
+#[tokio::test]
+async fn offline_log_dir_is_reported_as_an_offline_replica() {}
 
 /// A `Metadata` response served by a broker that is not the controller must
 /// report the replicas of a dead broker offline. The fencing state lives in

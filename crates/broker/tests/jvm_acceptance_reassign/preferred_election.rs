@@ -156,35 +156,6 @@ async fn bdd_verify_jvm_kafka_leader_election_preferred() {
     cluster.h3.shutdown().await;
 }
 
-/// JVM acceptance test for `kafka-leader-election --election-type preferred`.
-///
-/// The cluster has three brokers because `controllerId` rotates over the
-/// unfenced brokers rather than naming the quorum leader, so the
-/// `AdminClient` inside the tool may send `ElectLeaders` to any of them. A
-/// two-broker cluster would hide an election that only one node answers
-/// correctly, which is the regression this case exists to catch.
-///
-/// Scenario:
-/// 1. Boot a 3-broker `SASL_PLAINTEXT` cluster and create an rf=2 topic.
-/// 2. Wait for the cluster to assign a leader. Expect broker 1, the
-///    preferred replica.
-/// 3. Move leadership to broker 2 by injecting a `PartitionRecord`, keeping
-///    broker 1 in the ISR. The comment at the injection says why the test
-///    does not kill a broker to get there.
-/// 4. Wait until every broker would let an operator elect broker 1.
-/// 5. Run `kafka-leader-election --election-type preferred` from the JVM CLI
-///    image cp-kafka:7.5.0. Older images do not ship this tool.
-/// 6. Assert Docker exits 0.
-/// 7. Poll until broker 1 is leader again.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_reassign/preferred_election.feature",
-    name = "jvm kafka leader election preferred"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_kafka_leader_election_preferred() {}
-
 // ── the two partition selectors, and the two per-partition codes ────────────
 //
 // The case above drives `--election-type preferred --topic --partition`, which
@@ -305,24 +276,6 @@ async fn bdd_verify_election_selectors_report_election_not_needed_as_apache_kafk
     comparison.broker.shutdown().await;
 }
 
-/// `--all-topic-partitions` and `--path-to-json-file` over a cluster where
-/// every partition already sits on its preferred leader, compared with Apache
-/// Kafka.
-///
-/// A topic at replication factor one is preferred-elected by construction: its
-/// only replica is `replicas[0]` and it leads. So both selectors are asked a
-/// question whose answer is `ELECTION_NOT_NEEDED` for every partition, which
-/// is the one per-partition code an operator meets on a healthy cluster and
-/// the one this suite could not otherwise reach.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_reassign/preferred_election.feature",
-    name = "election selectors report election not needed as apache kafka does"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn election_selectors_report_election_not_needed_as_apache_kafka_does() {}
-
 #[cfg(test)]
 #[rstest_bdd_macros::then(
     "jvm acceptance reassign preferred election: a preferred replica outside the isr reports code 80"
@@ -429,6 +382,54 @@ async fn bdd_verify_a_preferred_replica_outside_the_isr_reports_code_80() {
         handle.shutdown().await;
     }
 }
+
+// BDD scenario entry points; acceptance steps are defined above.
+/// JVM acceptance test for `kafka-leader-election --election-type preferred`.
+///
+/// The cluster has three brokers because `controllerId` rotates over the
+/// unfenced brokers rather than naming the quorum leader, so the
+/// `AdminClient` inside the tool may send `ElectLeaders` to any of them. A
+/// two-broker cluster would hide an election that only one node answers
+/// correctly, which is the regression this case exists to catch.
+///
+/// Scenario:
+/// 1. Boot a 3-broker `SASL_PLAINTEXT` cluster and create an rf=2 topic.
+/// 2. Wait for the cluster to assign a leader. Expect broker 1, the
+///    preferred replica.
+/// 3. Move leadership to broker 2 by injecting a `PartitionRecord`, keeping
+///    broker 1 in the ISR. The comment at the injection says why the test
+///    does not kill a broker to get there.
+/// 4. Wait until every broker would let an operator elect broker 1.
+/// 5. Run `kafka-leader-election --election-type preferred` from the JVM CLI
+///    image cp-kafka:7.5.0. Older images do not ship this tool.
+/// 6. Assert Docker exits 0.
+/// 7. Poll until broker 1 is leader again.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/preferred_election.feature",
+    name = "jvm kafka leader election preferred"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_leader_election_preferred() {}
+
+/// `--all-topic-partitions` and `--path-to-json-file` over a cluster where
+/// every partition already sits on its preferred leader, compared with Apache
+/// Kafka.
+///
+/// A topic at replication factor one is preferred-elected by construction: its
+/// only replica is `replicas[0]` and it leads. So both selectors are asked a
+/// question whose answer is `ELECTION_NOT_NEEDED` for every partition, which
+/// is the one per-partition code an operator meets on a healthy cluster and
+/// the one this suite could not otherwise reach.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/preferred_election.feature",
+    name = "election selectors report election not needed as apache kafka does"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn election_selectors_report_election_not_needed_as_apache_kafka_does() {}
 
 /// A partition whose preferred replica is out of the ISR reports
 /// `PREFERRED_LEADER_NOT_AVAILABLE` (80), and the tool builds Kafka's own

@@ -63,15 +63,6 @@ async fn bdd_verify_jvm_kafka_reassign_partitions_end_to_end() {
     cluster.h3.shutdown().await;
 }
 
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_reassign/reassign_execute.feature",
-    name = "jvm kafka reassign partitions end to end"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn jvm_kafka_reassign_partitions_end_to_end() {}
-
 /// Write one record into `topic` with `kafka-console-producer`.
 fn produce_one_record(admin_mount: &str, topic: &str) {
     let mut producer = jvm_docker_command()
@@ -310,23 +301,6 @@ async fn bdd_verify_reassign_partitions_generate_produces_a_usable_plan_on_both(
     comparison.broker.shutdown().await;
 }
 
-/// `--generate` produces a usable plan on krabka and on Apache Kafka.
-///
-/// The tool builds the proposal itself, out of `DescribeTopics` and
-/// `DescribeCluster`; what a broker contributes is the current assignment and
-/// the broker set. So the rule the two sides share is that the plan is
-/// *usable* -- it covers the topic's partitions, and every replica in it is a
-/// broker the operator named -- and a broker that mis-reported either would
-/// hand the operator a document that `--execute` then refuses.
-#[ignore = "requires Docker"]
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/jvm_acceptance_reassign/reassign_execute.feature",
-    name = "reassign partitions generate produces a usable plan on both"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn reassign_partitions_generate_produces_a_usable_plan_on_both() {}
-
 #[cfg(test)]
 #[rstest_bdd_macros::then(
     "jvm acceptance reassign reassign execute: reassign partitions additional keeps the reassignment already running"
@@ -422,6 +396,33 @@ async fn bdd_verify_reassign_partitions_additional_keeps_the_reassignment_alread
         handle.shutdown().await;
     }
 }
+
+// BDD scenario entry points; acceptance steps are defined above.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/reassign_execute.feature",
+    name = "jvm kafka reassign partitions end to end"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jvm_kafka_reassign_partitions_end_to_end() {}
+
+/// `--generate` produces a usable plan on krabka and on Apache Kafka.
+///
+/// The tool builds the proposal itself, out of `DescribeTopics` and
+/// `DescribeCluster`; what a broker contributes is the current assignment and
+/// the broker set. So the rule the two sides share is that the plan is
+/// *usable* -- it covers the topic's partitions, and every replica in it is a
+/// broker the operator named -- and a broker that mis-reported either would
+/// hand the operator a document that `--execute` then refuses.
+#[ignore = "requires Docker"]
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/jvm_acceptance_reassign/reassign_execute.feature",
+    name = "reassign partitions generate produces a usable plan on both"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reassign_partitions_generate_produces_a_usable_plan_on_both() {}
 
 /// A second `--execute --additional` leaves the first reassignment running.
 ///

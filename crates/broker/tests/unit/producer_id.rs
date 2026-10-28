@@ -9,7 +9,9 @@
 use {
     crate::support::{
         self,
-        discovery::{expected_coordinator, expected_coordinator_response},
+        discovery::{
+            expected_coordinator, expected_coordinator_response, expected_local_coordinator,
+        },
         transactions::{claim_idempotent_producer, init_producer_request},
     },
     assert2::{assert, check},
@@ -27,14 +29,6 @@ async fn bdd_verify_init_producer_id_returns_fresh_pid() {
     check!(r.producer_epoch == 0);
     p.broker.shutdown().await;
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/unit/producer_id.feature",
-    name = "init producer id returns fresh pid"
-)]
-#[tokio::test]
-async fn init_producer_id_returns_fresh_pid() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::then(
@@ -62,14 +56,6 @@ async fn bdd_verify_init_producer_id_without_coordinator_bootstrap_returns_not_c
     assert!(r.error_code == 16); // NOT_COORDINATOR
     p.broker.shutdown().await;
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/unit/producer_id.feature",
-    name = "init producer id without coordinator bootstrap returns not coordinator"
-)]
-#[tokio::test]
-async fn init_producer_id_without_coordinator_bootstrap_returns_not_coordinator() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::then(
@@ -108,27 +94,9 @@ async fn bdd_verify_find_coordinator_txn_creates_topic_then_returns_local_broker
     let retried =
         support::find_coordinator(&p.client, support::KEY_TYPE_TRANSACTION, "my-tid").await;
     let listen = p.broker.listen_addr();
-    check!(
-        retried
-            == expected_coordinator(
-                "my-tid",
-                1,
-                listen.ip().to_string(),
-                i32::from(listen.port()),
-                0,
-                None
-            )
-    );
+    check!(retried == expected_local_coordinator("my-tid", listen));
     p.broker.shutdown().await;
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/unit/producer_id.feature",
-    name = "find coordinator txn creates topic then returns local broker"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn find_coordinator_txn_creates_topic_then_returns_local_broker() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::then(
@@ -157,14 +125,6 @@ async fn bdd_verify_init_producer_id_with_transactional_id_returns_real_pid() {
     check!(r.producer_epoch == 0, "first allocation → epoch 0");
     p.broker.shutdown().await;
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/unit/producer_id.feature",
-    name = "init producer id with transactional id returns real pid"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_producer_id_with_transactional_id_returns_real_pid() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::then("unit producer id: init producer id with same tid bumps epoch")]
@@ -202,6 +162,39 @@ async fn bdd_verify_init_producer_id_with_same_tid_bumps_epoch() {
     );
     p.broker.shutdown().await;
 }
+
+// BDD scenario entry points; acceptance steps are defined above.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/producer_id.feature",
+    name = "init producer id returns fresh pid"
+)]
+#[tokio::test]
+async fn init_producer_id_returns_fresh_pid() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/producer_id.feature",
+    name = "init producer id without coordinator bootstrap returns not coordinator"
+)]
+#[tokio::test]
+async fn init_producer_id_without_coordinator_bootstrap_returns_not_coordinator() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/producer_id.feature",
+    name = "find coordinator txn creates topic then returns local broker"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn find_coordinator_txn_creates_topic_then_returns_local_broker() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/unit/producer_id.feature",
+    name = "init producer id with transactional id returns real pid"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_producer_id_with_transactional_id_returns_real_pid() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::scenario(

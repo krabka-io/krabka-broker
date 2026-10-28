@@ -345,14 +345,6 @@ async fn bdd_verify_controller_listener_sasl_plaintext_two_broker_quorum() {
 }
 
 #[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/raft_sasl.feature",
-    name = "controller listener sasl plaintext two broker quorum"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_sasl_plaintext_two_broker_quorum() {}
-
-#[cfg(test)]
 #[rstest_bdd_macros::then("raft sasl: controller listener oauthbearer two broker quorum")]
 async fn bdd_verify_controller_listener_oauthbearer_two_broker_quorum() {
     init_tracing();
@@ -425,14 +417,6 @@ async fn bdd_verify_controller_listener_oauthbearer_two_broker_quorum() {
 }
 
 #[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/raft_sasl.feature",
-    name = "controller listener oauthbearer two broker quorum"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_oauthbearer_two_broker_quorum() {}
-
-#[cfg(test)]
 #[rstest_bdd_macros::then("raft sasl: controller listener sasl plaintext rejects mismatched creds")]
 async fn bdd_verify_controller_listener_sasl_plaintext_rejects_mismatched_creds() {
     // Neither broker has the other's password, so authentication fails both ways.
@@ -452,14 +436,6 @@ async fn bdd_verify_controller_listener_sasl_plaintext_rejects_mismatched_creds(
     ))
     .await;
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/raft_sasl.feature",
-    name = "controller listener sasl plaintext rejects mismatched creds"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_sasl_plaintext_rejects_mismatched_creds() {}
 
 // H-1: authentication is not authorization. Here both brokers present
 // *valid, matching* SASL credentials (so the SASL handshake succeeds), but
@@ -483,14 +459,6 @@ async fn bdd_verify_controller_listener_sasl_denies_unauthorized_principal() {
     ))
     .await;
 }
-
-#[cfg(test)]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/raft_sasl.feature",
-    name = "controller listener sasl denies unauthorized principal"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn controller_listener_sasl_denies_unauthorized_principal() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::then("raft sasl: controller listener plaintext legacy path unchanged")]
@@ -545,6 +513,39 @@ async fn bdd_verify_controller_listener_plaintext_legacy_path_unchanged() {
     b1.shutdown().await;
     b2.shutdown().await;
 }
+
+// BDD scenario entry points; acceptance steps are defined above.
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener sasl plaintext two broker quorum"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_listener_sasl_plaintext_two_broker_quorum() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener oauthbearer two broker quorum"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_listener_oauthbearer_two_broker_quorum() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener sasl plaintext rejects mismatched creds"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_listener_sasl_plaintext_rejects_mismatched_creds() {}
+
+#[cfg(test)]
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/raft_sasl.feature",
+    name = "controller listener sasl denies unauthorized principal"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_listener_sasl_denies_unauthorized_principal() {}
 
 #[cfg(test)]
 #[rstest_bdd_macros::scenario(

@@ -16,6 +16,7 @@ use {
     assert2::assert,
     bytes::Bytes,
     krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel},
+    krabka_client_producer::Producer,
     krabka_protocol::{
         owned::{
             add_partitions_to_txn_request::{
@@ -565,4 +566,10 @@ pub async fn read_committed_at_least(
         None,
     )
     .await
+}
+
+/// Close the producer before its read-back consumer, surfacing either error.
+pub async fn close_transaction_clients(producer: Producer, consumer: Consumer) {
+    producer.close().await.unwrap();
+    consumer.close().await.unwrap();
 }

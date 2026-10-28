@@ -519,15 +519,6 @@ mod tests {
         check_broker_record_cases(cases, BrokerConfigMutationSetup::default());
     }
 
-    /// Each row is a resource name, the stored state, the operations, and the
-    /// whole expected outcome: the staged records, or the error.
-    #[cfg(test)]
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/handlers/incremental_alter_configs/broker_scope.feature",
-        name = "tests: broker resources follow kafkas dynamic config rules"
-    )]
-    fn broker_resources_follow_kafkas_dynamic_config_rules() {}
-
     /// Kafka stores the string the client sent
     /// (`ConfigurationControlManager.incrementalAlterConfigResource` takes the
     /// operation's value as it is, and `DynamicConfig.Broker.validate` drops
@@ -700,6 +691,16 @@ mod tests {
             ..Default::default()
         });
     }
+
+    // BDD scenario entry points; acceptance steps are defined above.
+    /// Each row is a resource name, the stored state, the operations, and the
+    /// whole expected outcome: the staged records, or the error.
+    #[cfg(test)]
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/migrated/src/handlers/incremental_alter_configs/broker_scope.feature",
+        name = "tests: broker resources follow kafkas dynamic config rules"
+    )]
+    fn broker_resources_follow_kafkas_dynamic_config_rules() {}
 
     /// KIP-1066 `cordoned.log.dirs`, with each refusal a live
     /// `apache/kafka:4.3.1` gave `kafka-configs --alter` on a broker with
