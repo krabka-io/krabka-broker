@@ -25,7 +25,7 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
-- The release job vets dependencies and validates the SBOM over the graph rules_rs resolves for the image, every feature, platform and dev-dependency unified, instead of the x86_64 non-dev graph of a `cargo build`. The 1.1.0 release run refused its SBOM over two crates only that union reaches, compio-buf's `arrayvec` and miniz_oxide's `simd-adler32`, so no 1.1.0 image or GitHub release exists; 1.1.1 is the same code. `ci.yml`'s `delivery` job now runs the same check on every push to `main`.
+- The release job vets dependencies and validates the SBOM over the graph rules_rs resolves for the image, every feature, platform and dev-dependency unified, instead of the x86_64 non-dev graph of a `cargo build`. The 1.1.0 release run refused its SBOM over two crates only that union reaches, compio-buf's `arrayvec` and miniz_oxide's `simd-adler32`, so no 1.1.0 image or GitHub release exists; 1.1.1 is the same code. `ci.yml`'s `delivery` job now runs the same check on every push to `main` (#1834).
 
 ## [1.1.0] - 2026-10-28
 
