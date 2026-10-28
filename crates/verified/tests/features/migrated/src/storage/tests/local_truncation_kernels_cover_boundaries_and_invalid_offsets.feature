@@ -17,7 +17,7 @@ Feature: Kafka remote storage lifecycle progression
     When every remote partition deletion transition is validated
     Then remote partition deletion transitions are permitted by this matrix:
       | source       | marked | started | finished |
-      | unregistered | allowed   | forbidden   | forbidden    |
-      | marked       | allowed   | allowed    | forbidden    |
-      | started      | forbidden  | allowed    | allowed     |
-      | finished     | forbidden  | forbidden   | allowed     |
+      | unregistered | true   | false   | false    |
+      | marked       | true   | true    | false    |
+      | started      | false  | true    | true     |
+      | finished     | false  | false   | true     |
