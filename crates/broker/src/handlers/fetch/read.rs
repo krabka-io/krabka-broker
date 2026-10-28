@@ -1038,6 +1038,45 @@ mod tests {
         );
     }
 
+    /// A log of two aborted transactions, the second appended after the
+    /// first's abort marker, with the raw bytes of the first alone.
+    fn two_aborted_transactions() -> (LogInDir, krabka_log::RawRead) {
+        const OTHER_PID: i64 = PID + 1;
+
+        let LogInDir { dir, mut log } = aborted_transaction_log();
+        let clip_at = log.log_end_offset();
+        log.append(&mut transactional_batch(ProducerId(OTHER_PID)))
+            .expect("append the second transaction's data");
+        log.append(&mut abort_marker(ProducerId(OTHER_PID)))
+            .expect("append the second transaction's abort marker");
+        // The exact byte length of the first transaction's two batches: a
+        // budget of this many bytes serves exactly them, whatever
+        // `limit_offset` or `effective_lso` ask for beyond that.
+        let clip = log
+            .read_raw(Offset(0), clip_at, UNBOUNDED)
+            .expect("read the first transaction alone");
+        (LogInDir { log, dir }, clip)
+    }
+
+    /// A `read_committed` read over both transactions of
+    /// [`two_aborted_transactions`] whose byte budget is the first
+    /// transaction's bytes, so only the first is served.
+    fn read_clipped_to(clip: &krabka_log::RawRead, full_end: Offset) -> super::BlockingRead {
+        super::BlockingRead {
+            fetch_offset: Offset(0),
+            limit_offset: full_end,
+            // Spans both transactions; only the byte budget clips the read to
+            // the first one.
+            effective_lso: full_end,
+            read_max: krabka_units::ByteSize::from_bytes(
+                u64::try_from(clip.total).unwrap_or(u64::MAX),
+            ),
+            read_committed_aborts: true,
+            sendfile_capable: false,
+            sendfile_min_bytes: 0,
+        }
+    }
+
     /// The split read, planned under the mutex and run without it, reports
     /// the same aborted transactions as the single call under the mutex: the
     /// candidates it takes with the plan, narrowed to the bytes it served,
@@ -1045,29 +1084,8 @@ mod tests {
     /// the read to the first of two aborted transactions.
     #[test]
     fn the_split_read_reports_the_aborted_ranges_the_single_call_reports() {
-        const OTHER_PID: i64 = PID + 1;
-
-        let LogInDir { dir: _dir, mut log } = aborted_transaction_log();
-        let clip_at = log.log_end_offset();
-        log.append(&mut transactional_batch(ProducerId(OTHER_PID)))
-            .expect("append the second transaction's data");
-        log.append(&mut abort_marker(ProducerId(OTHER_PID)))
-            .expect("append the second transaction's abort marker");
-        let full_end = log.log_end_offset();
-        let clip = log
-            .read_raw(Offset(0), clip_at, UNBOUNDED)
-            .expect("read the first transaction alone");
-        let read = super::BlockingRead {
-            fetch_offset: Offset(0),
-            limit_offset: full_end,
-            effective_lso: full_end,
-            read_max: krabka_units::ByteSize::from_bytes(
-                u64::try_from(clip.total).expect("a test log fits"),
-            ),
-            read_committed_aborts: true,
-            sendfile_capable: false,
-            sendfile_min_bytes: 0,
-        };
+        let (LogInDir { dir: _dir, log }, clip) = two_aborted_transactions();
+        let read = read_clipped_to(&clip, log.log_end_offset());
         let log = Arc::new(Mutex::new(log));
 
         let single = super::read_records(&log.lock().expect("log mutex"), &read)
@@ -1089,39 +1107,13 @@ mod tests {
     /// batch can carry the aborted list of a much longer range (#874).
     #[test]
     fn read_committed_aborted_scan_stops_at_the_bytes_actually_served() {
-        const OTHER_PID: i64 = PID + 1;
-
-        let LogInDir { dir: _dir, mut log } = aborted_transaction_log();
-        let clip_at = log.log_end_offset();
-        log.append(&mut transactional_batch(ProducerId(OTHER_PID)))
-            .expect("append the second transaction's data");
-        log.append(&mut abort_marker(ProducerId(OTHER_PID)))
-            .expect("append the second transaction's abort marker");
-        let full_end = log.log_end_offset();
-
-        // The exact byte length of the first transaction's two batches: a
-        // budget of this many bytes should serve exactly them, whatever
-        // `limit_offset` or `effective_lso` ask for beyond that.
-        let clip = log
-            .read_raw(Offset(0), clip_at, UNBOUNDED)
-            .expect("read the first transaction alone");
+        let (LogInDir { dir: _dir, log }, clip) = two_aborted_transactions();
+        let read = read_clipped_to(&clip, log.log_end_offset());
 
         let log = Mutex::new(log);
         let RawServed { records, aborted } =
-            super::read_records(&log.lock().expect("log mutex"), &super::BlockingRead {
-                fetch_offset: Offset(0),
-                limit_offset: full_end,
-                // Spans both transactions; only the byte budget below clips
-                // the read to the first one.
-                effective_lso: full_end,
-                read_max: krabka_units::ByteSize::from_bytes(
-                    u64::try_from(clip.total).unwrap_or(u64::MAX),
-                ),
-                read_committed_aborts: true,
-                sendfile_capable: false,
-                sendfile_min_bytes: 0,
-            })
-            .expect("the blocking read succeeds");
+            super::read_records(&log.lock().expect("log mutex"), &read)
+                .expect("the blocking read succeeds");
 
         assert!(records == RecordsPayload::Raw(clip.bytes));
         assert!(
