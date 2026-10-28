@@ -10,7 +10,7 @@
 use rustix::fs;
 #[krabka_macros::sendfile_cfg]
 use {
-    crate::{error::BrokerError, time_util::sleep_until_opt},
+    crate::{blocking::run_in_place, error::BrokerError, time_util::sleep_until_opt},
     krabka_protocol::records::FileRegion,
     std::{
         io::{self, Error},
@@ -20,6 +20,22 @@ use {
     tokio::{io::Interest, net::TcpStream, time::Instant},
 };
 
+/// A transfer with at least this many bytes left runs its syscall through
+/// [`run_in_place`], off the worker's core.
+///
+/// One `sendfile(2)` moves what the socket takes, several MiB on a loopback
+/// or a tuned link, and waits for the disk for every page the read-ahead
+/// has not brought in yet. From this size on that is a millisecond or more
+/// of syscall on the worker, during which none of the core's other tasks
+/// runs and, when this worker is the one that last polled the I/O driver,
+/// no socket event of the runtime is served: a producer's request sits
+/// unread while a consumer's 10 MiB region drains. The hand-off costs one
+/// thread wake, tens of microseconds, so below this size the transfer stays
+/// on the worker: the response to a tailing consumer is a few hundred KiB,
+/// and its `sendfile` takes less than the hand-off would.
+#[krabka_macros::sendfile_cfg]
+pub(super) const HANDOFF_BYTES: usize = 1024 * 1024;
+
 /// `sendfile(2)` a `FileRegion` to a plaintext `TcpStream`, in a loop over
 /// partial writes and `EAGAIN`.
 ///
@@ -28,7 +44,9 @@ use {
 /// reports `EAGAIN`/`WouldBlock`. The loop then awaits `tcp.writable()`
 /// and retries. `TcpStream::try_io` clears the readiness flag correctly on
 /// `WouldBlock`, so this needs no `spawn_blocking` and no second `AsyncFd`
-/// over the fd.
+/// over the fd. An attempt with [`HANDOFF_BYTES`] or more still to send
+/// runs through [`run_in_place`], so the worker's core and its turn at the
+/// I/O driver pass to another thread for the length of the syscall.
 ///
 /// This method tracks its own `sent_total` cursor and computes the
 /// absolute file offset for each attempt as `region.offset + sent_total`.
@@ -70,7 +88,11 @@ pub(super) async fn sendfile_region(
         let offset = region.offset + sent_total as u64;
         let remaining = region.len - sent_total;
         let res = tcp.try_io(Interest::WRITABLE, || {
-            sendfile_once(out_fd, in_fd, offset, remaining)
+            if remaining >= HANDOFF_BYTES {
+                run_in_place(|| sendfile_once(out_fd, in_fd, offset, remaining))
+            } else {
+                sendfile_once(out_fd, in_fd, offset, remaining)
+            }
         });
         match res {
             Ok(0) => {
