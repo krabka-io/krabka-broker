@@ -108,8 +108,19 @@ A `perf trace` of the leader showed the cause. At this load, most of the produce
 | `/dev/cpu_dma_latency` held at 20 µs | 0.851 ms | 1.517 ms |
 | `/dev/cpu_dma_latency` held at 0, no idle states | 0.814 ms | 1.466 ms |
 
-Redpanda on the same host measured 0.78 to 0.79 ms at p50 and 1.46 to 1.48 ms at p99. With no idle states, krabka's p99 was level with Redpanda's. The depth of the idle state did not matter. The cost is that a worker sleeps at all.
+Two earlier rounds of Redpanda on the same host, run through the site's benchmark runner, measured 0.78 to 0.79 ms at p50 and 1.46 to 1.48 ms at p99. With no idle states, krabka's p99 was level with those rounds. The depth of the idle state did not matter. The cost is that a worker sleeps at all.
+
+Redpanda's figures vary between runs on the same host. A later run of the site's runner put both brokers on the same host in one session, with krabka built from the change described below. Each broker ran two 5-minute rounds:
+
+| Broker | Publish p50 | p95 | p99 | p99.9 |
+| --- | ---: | ---: | ---: | ---: |
+| Krabka, round 1 | 0.851 ms | 1.454 ms | 1.522 ms | 1.608 ms |
+| Krabka, round 2 | 0.854 ms | 1.461 ms | 1.524 ms | 1.605 ms |
+| Redpanda, round 1 | 0.769 ms | 1.329 ms | 1.400 ms | 1.481 ms |
+| Redpanda, round 2 | 0.755 ms | 1.312 ms | 1.376 ms | 1.460 ms |
+
+In that run Redpanda's publish latency was about 90 µs lower at p50 and about 130 µs lower at p99. End-to-end latency was 1 ms at p50 and 2 ms at p99 for both brokers in every round. The benchmark reports end-to-end latency in whole milliseconds.
 
 Krabka removes the wakes that have no work behind them. A parked follower fetch now wakes only on an append or a leader change. A parked consumer fetch wakes only when the high watermark or the delivery watermark moves. Before, both re-read the partition on every `acks=all` produce and found nothing. Four alternating trials measured p50 0.844 to 0.845 ms against 0.852 to 0.860 ms, and p99 1.508 to 1.509 ms against 1.523 to 1.534 ms.
 
-Krabka does not close the remaining 40 µs at p99 by polling. A worker that spins before it sleeps, or a socket that busy-polls, holds a CPU at 100% while the broker has no work. On a shared host or a cloud instance, that CPU is paid for whether or not records arrive. It is also unavailable to other processes, which includes the clients on a shared host. Krabka's workers use no CPU when idle. At 50,000 records/s the leader used about 0.47 CPU, and each follower used about 0.06 CPU. A polling design pays its idle cost at every load. It saves tens of microseconds only when the load is low enough for the workers to sleep. At higher loads the workers sleep less, and the matrix shows krabka ahead in every other cell. That is the better trade for krabka's users, and krabka keeps it.
+Krabka does not close the remaining gap by polling. A worker that spins before it sleeps, or a socket that busy-polls, holds a CPU at 100% while the broker has no work. On a shared host or a cloud instance, that CPU is paid for whether or not records arrive. It is also unavailable to other processes, which includes the clients on a shared host. Krabka's workers use no CPU when idle. At 50,000 records/s the leader used about 0.47 CPU, and each follower used about 0.06 CPU. A polling design pays its idle cost at every load. Its saving appears only when the load is low enough for the workers to sleep. At higher loads the workers sleep less, and the matrix shows krabka ahead in every other cell. That is the better trade for krabka's users, and krabka keeps it.
