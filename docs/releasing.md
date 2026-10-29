@@ -69,7 +69,9 @@ An entry that breaks the on-disk format opens with the exact marker
 the previous release has it, the smoke expects the new build to refuse the old
 data directory. Without it, the smoke expects the new build to open the
 directory and serve the old records. Other wording, such as "the on-disk format
-does not change", does not count.
+does not change", does not count. The previous release is the newest tag
+reachable from the candidate whose image the registry serves; a tag whose
+release workflow failed has no image and is skipped.
 
 Then fix the link definitions at the end of the file. Add one for the new tag,
 and move the `[Unreleased]` comparison onto that tag as well: it names the

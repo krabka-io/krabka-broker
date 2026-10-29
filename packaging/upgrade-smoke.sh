@@ -1,7 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-previous=$(git describe --tags --abbrev=0 --match 'v*')
+# The previous release is the newest tag reachable from HEAD whose image the
+# registry serves. A tag whose release workflow failed after the push has no
+# image (v1.1.0: its SBOM check failed), and the nearest tag alone would name
+# it and fail the pull below on every run until the next release.
+previous=
+for tag in $(git tag --list 'v*' --merged HEAD --sort=-version:refname); do
+  if docker manifest inspect "ghcr.io/krabka-io/krabka-broker:${tag}" >/dev/null 2>&1; then
+    previous=${tag}
+    break
+  fi
+  echo "${tag} has no published image; skipping it" >&2
+done
+if [ -z "${previous}" ]; then
+  echo "No tag reachable from HEAD has a published image" >&2
+  exit 1
+fi
 old_image=ghcr.io/krabka-io/krabka-broker:${previous}
 head_image=docker.io/krabka-io/krabka-broker:dev
 suffix="${GITHUB_RUN_ID:-$$}"
