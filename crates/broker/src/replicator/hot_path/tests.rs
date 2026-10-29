@@ -126,6 +126,7 @@ async fn shape(partition: &Partition) -> PartitionShape {
         append_notify: _append_notify,
         replica_state,
         hw_advance_notify: _hw_advance_notify,
+        leadership_notify: _leadership_notify,
         delivery,
         current_leader,
         current_leader_epoch,

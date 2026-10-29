@@ -172,6 +172,13 @@ pub struct Partition {
     pub append_notify: Arc<Notify>,
     pub(crate) replica_state: Arc<sync::Mutex<ReplicaState>>,
     pub hw_advance_notify: Arc<Notify>,
+    /// Fired when the partition's leader or leader epoch changes, after
+    /// `hw_advance_notify`. A parked follower fetch waits on this rather than
+    /// on `hw_advance_notify`: it must answer `NOT_LEADER_OR_FOLLOWER` at once
+    /// on a leader change, but a high-watermark advance has nothing for it,
+    /// and waking it on every advance re-read the partition for nothing on the
+    /// same broadcast that completes `acks=all` produces.
+    pub(crate) leadership_notify: Arc<Notify>,
     /// Deliver-at-time state: the lock-free delivery-watermark mirror, the
     /// wake a long poll parks on until a scheduled batch comes due, and the
     /// slot the broker-wide delivery scheduler installs its poke into.
@@ -266,6 +273,7 @@ impl Partition {
             append_notify,
             replica_state,
             hw_advance_notify,
+            leadership_notify: Arc::new(Notify::new()),
             current_leader: Arc::new(AtomicU64::new(0)),
             current_leader_epoch: Arc::new(AtomicI32::new(0)),
             delivery,
