@@ -23,9 +23,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-10-29
+
 ### Fixed
 
 - The upgrade smoke (`packaging/upgrade-smoke.sh`) takes as the previous release the newest tag whose image the registry serves, not the nearest tag. v1.1.0's release workflow failed after the tag was pushed, so no `ghcr.io/krabka-io/krabka-broker:v1.1.0` exists, and every full CI run since has failed the `upgrade · previous release` lane on that pull (#1839).
+- No 1.1.2 image or GitHub release exists either. Its release commit's full CI run failed that upgrade lane, which reads the tree under test, and its CI runs failed `cargo clippy · nextest` on a remote runner whose restored VM read CLOCK_MONOTONIC 225 ms apart between CPUs; the remote-runner prelude now measures the guest clock at the start of every run and switches it to kvm-clock when the CPUs disagree (#1840). 1.1.3 is the same broker as 1.1.2.
 
 ## [1.1.2] - 2026-10-28
 
@@ -2630,7 +2633,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.1.2...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.1.3...HEAD
+[1.1.3]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.3
 [1.1.2]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.2
 [1.1.1]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.1
 [1.1.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.0
