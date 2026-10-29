@@ -66,14 +66,10 @@ pub(super) fn prepare_fetch_session(
             session_id,
             partitions,
             ..
-        } => {
-            let cached: collections::HashMap<FetchSessionKey, CachedPartitionState> =
-                partitions.iter().cloned().collect();
-            SessionCommit::Incremental {
-                session_id: *session_id,
-                sent: filter_incremental_response(responses, &cached),
-            }
-        }
+        } => SessionCommit::Incremental {
+            session_id: *session_id,
+            sent: filter_incremental_response(responses, partitions),
+        },
         SessionDecision::Error { .. } => unreachable!("returned above"),
     }
 }
@@ -222,6 +218,10 @@ fn snapshot_response_state(
 
 /// The cached set, indexed by each half of a topic's identity.
 ///
+/// A session of up to [`CachedIndex::SCAN_MAX`] partitions, which is what a
+/// replica fetcher and most consumers hold, is searched in place: building two
+/// hash maps on every fetch cost more than the lookups they serve.
+///
 /// A response row carries the name the broker resolved *and* the topic id,
 /// but a cache entry created by a KIP-516 request carries only the id (Fetch
 /// v13 sends no names) -- and one created by an older request carries only the
@@ -230,9 +230,12 @@ fn snapshot_response_state(
 /// set, and `finalize_incremental` would find nothing to update. The lookup
 /// therefore matches on either half, id first, exactly as the session diff
 /// does when it merges a request row into the cached set.
-struct CachedIndex<'cache> {
-    by_id: collections::HashMap<PartitionById, CachedEntry<'cache>>,
-    by_name: collections::HashMap<PartitionByNameRef<'cache>, CachedEntry<'cache>>,
+enum CachedIndex<'cache> {
+    Scan(&'cache [(FetchSessionKey, CachedPartitionState)]),
+    Maps {
+        by_id: collections::HashMap<PartitionById, CachedEntry<'cache>>,
+        by_name: collections::HashMap<PartitionByNameRef<'cache>, CachedEntry<'cache>>,
+    },
 }
 
 type PartitionById = FetchPartitionKey<WireUuid>;
@@ -247,14 +250,19 @@ struct CachedEntry<'cache> {
 }
 
 impl<'cache> CachedIndex<'cache> {
-    fn of(cached: &'cache collections::HashMap<FetchSessionKey, CachedPartitionState>) -> Self {
-        let mut index = Self {
-            by_id: collections::HashMap::new(),
-            by_name: collections::HashMap::new(),
-        };
+    const SCAN_MAX: usize = 8;
+
+    /// The index over a session's cached partitions. A key that appears twice
+    /// resolves to its last entry, in both forms.
+    fn of(cached: &'cache [(FetchSessionKey, CachedPartitionState)]) -> Self {
+        if cached.len() <= Self::SCAN_MAX {
+            return Self::Scan(cached);
+        }
+        let mut by_id = collections::HashMap::new();
+        let mut by_name = collections::HashMap::new();
         for (key, state) in cached {
             if key.topic_id != WireUuid::ZERO {
-                index.by_id.insert(
+                by_id.insert(
                     FetchPartitionKey {
                         topic: key.topic_id,
                         partition: key.partition,
@@ -263,7 +271,7 @@ impl<'cache> CachedIndex<'cache> {
                 );
             }
             if !key.topic_name.is_empty() {
-                index.by_name.insert(
+                by_name.insert(
                     FetchPartitionKey {
                         topic: key.topic_name.as_str(),
                         partition: key.partition,
@@ -272,7 +280,7 @@ impl<'cache> CachedIndex<'cache> {
                 );
             }
         }
-        index
+        Self::Maps { by_id, by_name }
     }
 
     fn get(
@@ -281,18 +289,44 @@ impl<'cache> CachedIndex<'cache> {
         topic_name: &str,
         partition: i32,
     ) -> Option<CachedEntry<'cache>> {
-        self.by_id
-            .get(&FetchPartitionKey {
-                topic: topic_id,
-                partition,
-            })
-            .or_else(|| {
-                self.by_name.get(&FetchPartitionKey {
-                    topic: topic_name,
+        match self {
+            Self::Scan(cached) => {
+                let entry = |found: Option<&'cache (FetchSessionKey, CachedPartitionState)>| {
+                    found.map(|(key, state)| CachedEntry { key, state })
+                };
+                let by_id = (topic_id != WireUuid::ZERO)
+                    .then(|| {
+                        cached
+                            .iter()
+                            .rev()
+                            .find(|(key, _)| key.topic_id == topic_id && key.partition == partition)
+                    })
+                    .flatten();
+                entry(by_id).or_else(|| {
+                    entry(
+                        (!topic_name.is_empty())
+                            .then(|| {
+                                cached.iter().rev().find(|(key, _)| {
+                                    key.topic_name == topic_name && key.partition == partition
+                                })
+                            })
+                            .flatten(),
+                    )
+                })
+            }
+            Self::Maps { by_id, by_name } => by_id
+                .get(&FetchPartitionKey {
+                    topic: topic_id,
                     partition,
                 })
-            })
-            .copied()
+                .or_else(|| {
+                    by_name.get(&FetchPartitionKey {
+                        topic: topic_name,
+                        partition,
+                    })
+                })
+                .copied(),
+        }
     }
 }
 
@@ -308,7 +342,7 @@ impl<'cache> CachedIndex<'cache> {
 /// session's read order.
 fn filter_incremental_response(
     responses: &mut Vec<FetchableTopicResponse>,
-    cached: &collections::HashMap<FetchSessionKey, CachedPartitionState>,
+    cached: &[(FetchSessionKey, CachedPartitionState)],
 ) -> Vec<SentPartition> {
     let index = CachedIndex::of(cached);
     let mut sent: Vec<SentPartition> = Vec::new();
@@ -408,8 +442,62 @@ mod tests {
             owned::fetch_response::{EpochEndOffset, PartitionData},
             records::RecordsPayload,
         },
-        std::collections::HashMap,
     };
+
+    /// The in-place search a small session uses answers every lookup the
+    /// hash maps of a large session answer: id first, then name, and the
+    /// last of two entries under one key.
+    #[test]
+    fn a_scanned_session_finds_what_the_maps_find() {
+        let mut cached: Vec<_> = (0..u8::try_from(CachedIndex::SCAN_MAX).unwrap())
+            .map(|topic| cached_entry(&format!("t{topic}"), topic + 1, 0, i64::from(topic)))
+            .collect();
+        cached.push(cached_entry("", 40, 3, 400));
+        cached.push(cached_entry("named", 0, 5, 500));
+        cached.push(cached_entry("t1", 2, 0, 1_000));
+        let found = |index: &CachedIndex<'_>, id: u8, name: &str, partition: i32| {
+            index
+                .get(WireUuid([id; 16]), name, partition)
+                .map(|entry| entry.state.last_high_watermark)
+        };
+        let lookups = [
+            (1, "t0", 0),
+            (2, "t1", 0),
+            (2, "", 0),
+            (99, "t3", 0),
+            (40, "", 3),
+            (0, "named", 5),
+            (0, "named", 6),
+            (77, "missing", 0),
+        ];
+        let maps = CachedIndex::of(&cached);
+        assert!(matches!(maps, CachedIndex::Maps { .. }));
+        assert!(matches!(
+            CachedIndex::of(&cached[..CachedIndex::SCAN_MAX]),
+            CachedIndex::Scan(_)
+        ));
+        let scan = CachedIndex::Scan(&cached);
+        let want = [
+            Some(0),
+            Some(1_000),
+            Some(1_000),
+            Some(3),
+            Some(400),
+            Some(500),
+            None,
+            None,
+        ];
+        for ((id, name, partition), want) in lookups.into_iter().zip(want) {
+            assert!(
+                found(&maps, id, name, partition) == want,
+                "{id} {name} {partition}"
+            );
+            assert!(
+                found(&scan, id, name, partition) == want,
+                "{id} {name} {partition}"
+            );
+        }
+    }
 
     fn cached_entry(
         topic_name: &str,
@@ -478,7 +566,7 @@ mod tests {
         watermark: i64,
         response_watermark: i64,
     ) -> FilteredSingleTopic {
-        let cached = HashMap::from([cached_entry(name, id, 0, watermark)]);
+        let cached = vec![cached_entry(name, id, 0, watermark)];
         let mut responses = vec![topic_response("orders", 7, response_watermark)];
         let sent = filter_incremental_response(&mut responses, &cached);
         FilteredSingleTopic { responses, sent }
@@ -546,7 +634,7 @@ mod tests {
             topic_id: WireUuid([9; 16]),
             partition: 0,
         };
-        let cached = HashMap::from([(key.clone(), state.clone())]);
+        let cached = vec![(key.clone(), state.clone())];
         let topic = FetchableTopicResponse {
             topic: String::new(),
             topic_id: WireUuid([9; 16]),
@@ -577,7 +665,7 @@ mod tests {
     )]
     fn a_row_with_records_is_sent_and_marked(records: Option<Bytes>, expected: Option<bool>) {
         let (key, state) = cached_entry("", 7, 0, 42);
-        let cached = HashMap::from([(key.clone(), state)]);
+        let cached = vec![(key.clone(), state)];
         let mut responses = vec![FetchableTopicResponse {
             partitions: vec![PartitionData {
                 records: records.map(RecordsPayload::Legacy),
@@ -610,9 +698,7 @@ mod tests {
     /// must not answer for `b` out of `a`'s cached state.
     #[test]
     fn two_nameless_cached_topics_are_told_apart_by_id() {
-        let cached: HashMap<_, _> = [cached_entry("", 1, 0, 10), cached_entry("", 2, 0, 20)]
-            .into_iter()
-            .collect();
+        let cached = vec![cached_entry("", 1, 0, 10), cached_entry("", 2, 0, 20)];
         let mut responses = vec![topic_response("a", 1, 10), topic_response("b", 2, 99)];
 
         let sent = filter_incremental_response(&mut responses, &cached);

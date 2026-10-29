@@ -466,10 +466,15 @@ pub(super) async fn execute_pending_reads(
         // reports the high watermark from before that position counted.
         if let Some((position, leader_log_end)) = follower_update
             && read.out.error_code == codes::NONE
-        {
-            partition
+            && partition
                 .record_follower_position(position.position, read.fetch_offset, leader_log_end)
-                .await;
+                .await
+        {
+            // The high watermark moved, which woke the `acks=all` produces
+            // waiting for it, usually onto this worker's next slot. Yield so
+            // that they answer their producers now; the rest of this fetch
+            // usually has nothing to send and parks.
+            tokio::task::yield_now().await;
         }
     }
     // KIP-392: a partition that named a preferred read replica was never
