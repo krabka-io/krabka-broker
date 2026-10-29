@@ -145,21 +145,29 @@ runs:
           if [ "${UPLOAD:-false}" != "true" ]; then
             echo "build --noremote_upload_local_results" >>user.bazelrc
           fi
-          # Guest clock report. From 2026-10-28 17:20 the `cargo` lane failed
-          # four of five trusted runs in one bench-driver test whose timers
-          # fired early: a body that sleeps 200 ms and drains for up to 1 s
-          # finished in 0.00 s by its own clock, and in run 40756074639
-          # nextest timed the process at 0.066 s while the process measured
-          # itself at 1.25 s. The same test passed 80 of 80 runs on a
-          # workstation under a 32-way CPU load. That is CLOCK_MONOTONIC
-          # disagreeing between CPUs of the restored VM. Record the
-          # clocksource and the per-CPU offsets at the start of every remote
-          # run, and annotate the run when they are off, so the next failure
-          # carries its evidence.
-          echo "clocksource: $(cat /sys/devices/system/clocksource/clocksource0/current_clocksource 2>/dev/null || echo unknown)"
-          if command -v python3 >/dev/null; then
-            python3 - <<'PY' || echo "::warning::guest clock report failed"
+          # Guest clock. The VM a lane restores from its snapshot can come back
+          # with CLOCK_MONOTONIC disagreeing between its CPUs: on the `cargo`
+          # lane's VM of run 40804603478, CPU 0 read 225 ms ahead of every
+          # other CPU while a timed sleep was exact. The guest keeps `tsc` as
+          # its clocksource, which reads each CPU's own counter, and the
+          # counters were restored with different offsets. A 200 ms tokio sleep
+          # armed on one CPU then returns at once on another, a deadline
+          # passes before it starts, and an elapsed time saturates at zero;
+          # from 2026-10-28 17:20 that failed six of seven trusted nextest
+          # runs in a bench-driver test that passes 80 of 80 runs elsewhere.
+          #
+          # Measure the per-CPU offsets and a one-second sleep at the start of
+          # every remote run. When they are off, switch the clocksource to
+          # kvm-clock, whose per-CPU parameters the hypervisor keeps
+          # consistent, and measure again. Workflow commands in the output
+          # become annotations on the job.
+          clocksource_dir=/sys/devices/system/clocksource/clocksource0
+          echo "clocksource: $(cat "${clocksource_dir}/current_clocksource" 2>/dev/null || echo unknown)"
+          # Prints the offsets and the sleep; exits 3 when either is off.
+          guest_clock_report() {
+            python3 - <<'PY'
           import os
+          import sys
           import time
 
           # CLOCK_MONOTONIC on each CPU against the first CPU of the affinity
@@ -196,12 +204,25 @@ runs:
 
           if abs(worst) > 0.01 or abs(dm - dw) > 0.05 or abs(dm - 1.0) > 0.5:
               print(
-                  "::warning::guest clock skew: worst per-CPU monotonic offset %+.6f s, "
+                  "guest clock skew: worst per-CPU monotonic offset %+.6f s, "
                   "1 s sleep took %.3f s monotonic and %.3f s wall" % (worst, dm, dw)
               )
+              sys.exit(3)
           PY
-          else
-            echo "python3 absent on the runner: per-CPU clock check skipped"
+          }
+          if ! command -v python3 >/dev/null; then
+            echo "::warning::python3 absent on the runner: the guest clock check is skipped"
+          elif ! guest_clock_report; then
+            available="$(cat "${clocksource_dir}/available_clocksource" 2>/dev/null || echo unknown)"
+            echo "available clocksources: ${available}"
+            if [[ " ${available} " == *" kvm-clock "* ]] \
+              && echo kvm-clock | sudo -n tee "${clocksource_dir}/current_clocksource" >/dev/null 2>&1; then
+              echo "::warning::guest clock skewed on the restored VM; switched the clocksource from tsc to kvm-clock"
+              echo "clocksource: $(cat "${clocksource_dir}/current_clocksource")"
+              guest_clock_report || echo "::error::guest clock still skewed after switching to kvm-clock; timer-based tests will fail"
+            else
+              echo "::error::guest clock skewed and the clocksource could not be switched (uid $(id -u), available: ${available}); timer-based tests will fail"
+            fi
           fi
       run: |
         set -euo pipefail
