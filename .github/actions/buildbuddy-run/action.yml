@@ -156,11 +156,15 @@ runs:
           # from 2026-10-28 17:20 that failed six of seven trusted nextest
           # runs in a bench-driver test that passes 80 of 80 runs elsewhere.
           #
-          # Measure the per-CPU offsets and a one-second sleep at the start of
-          # every remote run. When they are off, switch the clocksource to
-          # kvm-clock, whose per-CPU parameters the hypervisor keeps
-          # consistent, and measure again. Workflow commands in the output
-          # become annotations on the job.
+          # Switch the clocksource to kvm-clock, whose per-CPU parameters the
+          # hypervisor keeps consistent, at the start of every remote run,
+          # before anything measures time. The skew varies from restore to
+          # restore and can grow after the check: run 40806464723's VM read
+          # 2 to 4 ms at the start, under any threshold worth setting, and the
+          # same bench-driver test failed with an elapsed time of zero. The
+          # per-CPU offsets and a one-second sleep are measured before and
+          # after the switch, so a run's log says what it ran on. Workflow
+          # commands in the output become annotations on the job.
           clocksource_dir=/sys/devices/system/clocksource/clocksource0
           echo "clocksource: $(cat "${clocksource_dir}/current_clocksource" 2>/dev/null || echo unknown)"
           # Prints the offsets and the sleep; exits 3 when either is off.
@@ -210,19 +214,22 @@ runs:
               sys.exit(3)
           PY
           }
-          if ! command -v python3 >/dev/null; then
-            echo "::warning::python3 absent on the runner: the guest clock check is skipped"
-          elif ! guest_clock_report; then
-            available="$(cat "${clocksource_dir}/available_clocksource" 2>/dev/null || echo unknown)"
-            echo "available clocksources: ${available}"
-            if [[ " ${available} " == *" kvm-clock "* ]] \
-              && echo kvm-clock | sudo -n tee "${clocksource_dir}/current_clocksource" >/dev/null 2>&1; then
-              echo "::warning::guest clock skewed on the restored VM; switched the clocksource from tsc to kvm-clock"
-              echo "clocksource: $(cat "${clocksource_dir}/current_clocksource")"
+          if command -v python3 >/dev/null; then
+            guest_clock_report || true
+          else
+            echo "::warning::python3 absent on the runner: the guest clock is not measured"
+          fi
+          available="$(cat "${clocksource_dir}/available_clocksource" 2>/dev/null || echo unknown)"
+          if [ "$(cat "${clocksource_dir}/current_clocksource" 2>/dev/null)" = kvm-clock ]; then
+            :
+          elif [[ " ${available} " == *" kvm-clock "* ]] \
+            && echo kvm-clock | sudo -n tee "${clocksource_dir}/current_clocksource" >/dev/null 2>&1; then
+            echo "clocksource: $(cat "${clocksource_dir}/current_clocksource")"
+            if command -v python3 >/dev/null; then
               guest_clock_report || echo "::error::guest clock still skewed after switching to kvm-clock; timer-based tests will fail"
-            else
-              echo "::error::guest clock skewed and the clocksource could not be switched (uid $(id -u), available: ${available}); timer-based tests will fail"
             fi
+          else
+            echo "::error::the clocksource could not be switched to kvm-clock (uid $(id -u), available: ${available}); timer-based tests can fail on a skewed restore"
           fi
       run: |
         set -euo pipefail
