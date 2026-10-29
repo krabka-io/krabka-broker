@@ -145,6 +145,64 @@ runs:
           if [ "${UPLOAD:-false}" != "true" ]; then
             echo "build --noremote_upload_local_results" >>user.bazelrc
           fi
+          # Guest clock report. From 2026-10-28 17:20 the `cargo` lane failed
+          # four of five trusted runs in one bench-driver test whose timers
+          # fired early: a body that sleeps 200 ms and drains for up to 1 s
+          # finished in 0.00 s by its own clock, and in run 40756074639
+          # nextest timed the process at 0.066 s while the process measured
+          # itself at 1.25 s. The same test passed 80 of 80 runs on a
+          # workstation under a 32-way CPU load. That is CLOCK_MONOTONIC
+          # disagreeing between CPUs of the restored VM. Record the
+          # clocksource and the per-CPU offsets at the start of every remote
+          # run, and annotate the run when they are off, so the next failure
+          # carries its evidence.
+          echo "clocksource: $(cat /sys/devices/system/clocksource/clocksource0/current_clocksource 2>/dev/null || echo unknown)"
+          if command -v python3 >/dev/null; then
+            python3 - <<'PY' || echo "::warning::guest clock report failed"
+          import os
+          import time
+
+          # CLOCK_MONOTONIC on each CPU against the first CPU of the affinity
+          # mask. Each sample brackets the read on the CPU under test between
+          # two reads on the reference CPU, so the migrations cancel; the
+          # tightest of five brackets is the one least disturbed by scheduling.
+          cpus = sorted(os.sched_getaffinity(0))
+          ref = cpus[0]
+          offsets = {}
+          for cpu in cpus:
+              best = None
+              for _ in range(5):
+                  os.sched_setaffinity(0, {ref})
+                  t1 = time.monotonic()
+                  os.sched_setaffinity(0, {cpu})
+                  t2 = time.monotonic()
+                  os.sched_setaffinity(0, {ref})
+                  t3 = time.monotonic()
+                  if best is None or t3 - t1 < best[0]:
+                      best = (t3 - t1, t2 - (t1 + t3) / 2)
+              offsets[cpu] = best[1]
+          os.sched_setaffinity(0, set(cpus))
+          worst = max(offsets.values(), key=abs)
+          print(
+              "monotonic offset per CPU against CPU %d (s): %s"
+              % (ref, " ".join("%d:%+.6f" % (cpu, off) for cpu, off in offsets.items()))
+          )
+
+          # One second of sleep on the monotonic and the wall clocks.
+          m0, w0 = time.monotonic(), time.time()
+          time.sleep(1.0)
+          dm, dw = time.monotonic() - m0, time.time() - w0
+          print("sleep 1 s: monotonic %.6f s, wall %.6f s" % (dm, dw))
+
+          if abs(worst) > 0.01 or abs(dm - dw) > 0.05 or abs(dm - 1.0) > 0.5:
+              print(
+                  "::warning::guest clock skew: worst per-CPU monotonic offset %+.6f s, "
+                  "1 s sleep took %.3f s monotonic and %.3f s wall" % (worst, dm, dw)
+              )
+          PY
+          else
+            echo "python3 absent on the runner: per-CPU clock check skipped"
+          fi
       run: |
         set -euo pipefail
         env_flags=(--env=UPLOAD="${UPLOAD}")
