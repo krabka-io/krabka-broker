@@ -23,6 +23,10 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+### Fixed
+
+- The upgrade smoke (`packaging/upgrade-smoke.sh`) takes as the previous release the newest tag whose image the registry serves, not the nearest tag. v1.1.0's release workflow failed after the tag was pushed, so no `ghcr.io/krabka-io/krabka-broker:v1.1.0` exists, and every full CI run since has failed the `upgrade · previous release` lane on that pull (#1839).
+
 ## [1.1.2] - 2026-10-28
 
 ### Fixed
