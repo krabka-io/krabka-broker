@@ -400,17 +400,26 @@ pub(super) async fn execute_pending_reads(
     if max_wait_ms > 0 {
         arm_forgotten_waits(forgotten, &mut waits);
     }
-    // One image for the pass: a leadership change that lands during it is
-    // still caught by the installed role each check reads, and by the epoch
-    // recheck before the fetch parks or answers.
-    let image = broker.controller.current_image();
+    // The one image every row of the pass was checked against, or `None` once
+    // two rows saw different images. The epoch recheck reuses the checks only
+    // against that image.
+    let mut pass_image: Option<Arc<krabka_metadata::MetadataImage>> = None;
+    let mut pass_image_mixed = false;
     for (index, read) in pending.iter_mut().enumerate() {
         let Some(partition) = read.partition.clone() else {
             continue;
         };
         // Check the leader again right before the first read, so a leadership
         // change after planning does not serve a follower fetch or an old
-        // consumer fetch from this replica.
+        // consumer fetch from this replica. Each row reads the image as it is
+        // now: a fetch that the first pass answers is not checked again, and
+        // the image can name a new leader before the role is installed.
+        let image = broker.controller.current_image();
+        match &pass_image {
+            Some(seen) if !Arc::ptr_eq(seen, &image) => pass_image_mixed = true,
+            Some(_) => {}
+            None => pass_image = Some(Arc::clone(&image)),
+        }
         if let Some(refused) = leader_refusal(
             &image,
             TopicPartitionRef {
@@ -487,7 +496,7 @@ pub(super) async fn execute_pending_reads(
             task::yield_now().await;
         }
     }
-    state.checked_image = Some(image);
+    state.checked_image = pass_image.filter(|_| !pass_image_mixed);
     // KIP-392: a partition that named a preferred read replica was never
     // read locally and never will be while it keeps naming one, so parking
     // on it cannot help. Kafka's `ReplicaManager.fetchMessages` folds
