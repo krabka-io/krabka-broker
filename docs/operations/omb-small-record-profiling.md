@@ -93,3 +93,36 @@ The companion `krabka-performance-evidence.tar.gz` preserves raw OMB results, na
 Rejected runs remain identified in the evidence: an adaptive RF3 trial exhausted local capacity, an early Redpanda trial hit its default storage reserve, and the first RF3 1 KiB Redpanda control reached the harness's disk guard before completing. The last control was rerun unchanged after removing completed build caches. Startup failures are also retained separately. None contributes a performance result.
 
 The retained changes address measured direct-mode costs and profiler interference. Further experiments with the record scanner, socket corking, and cache eviction produced regressions or no useful improvement, so they were removed. Normal-mode measurements on this host increasingly reflect client work, batching, and run-to-run variation. That is the observed point of diminishing returns for this investigation; stronger normal-mode capacity or Redpanda-gap claims require longer runs with separately provisioned load generators.
+
+## Idle workers and the low-load `acks=all` round trip
+
+This section records a design decision from 2026-10-29. Krabka's runtime workers sleep when they have no work, and krabka does not trade idle CPU for latency. This section gives the measurement and the reason.
+
+The v1.1.3 three-broker matrix ([site run 40844196341](https://github.com/krabka-io/krabka-io.github.io/actions/runs/40844196341)) had one fixed-rate cell where Redpanda's publish p99 was lower. The cell has one partition, 100-byte records, RF3, and 50,000 records/s. Krabka's publish p99 was 2.64 ms. Redpanda's was 2.39 ms, and Kafka's was 3.73 ms. End-to-end p99 was 3 ms for krabka and Redpanda. In the same matrix, krabka had the highest throughput in all 13 maximum-rate cells. It had the lowest publish p99 in the other 12 fixed-rate and backlog cells.
+
+A `perf trace` of the leader showed that much of the produce's remote phase is one runtime worker waking another. Each wake is a futex or an eventfd write that brings an idle thread back onto a CPU. Redpanda's shards poll their queues and do not sleep, so they do not pay this cost. Three local trials measured it on one host:
+
+| Condition | Krabka publish p50 | Krabka publish p99 |
+| --- | ---: | ---: |
+| Default idle states | 0.849 ms | 1.523 ms |
+| `/dev/cpu_dma_latency` held at 20 µs | 0.851 ms | 1.517 ms |
+| `/dev/cpu_dma_latency` held at 0, no idle states | 0.814 ms | 1.466 ms |
+
+The depth of the idle state did not matter; the cost is that a worker sleeps at all, and it is about 35 µs at p50 and 55 µs at p99. That is not the whole gap. A run of the site's runner with `/dev/cpu_dma_latency` held at 0 for both brokers, in one session on the same host, measured krabka at 0.815 to 0.816 ms at p50 and 1.465 to 1.466 ms at p99, and Redpanda at 0.736 to 0.746 ms and 1.340 to 1.355 ms. Removing idle states made both brokers faster and left krabka about 75 µs behind at p50.
+
+The rest of the gap is CPU work on the leader. A packet capture on the bridge timed each produce's hops: Redpanda sends to its followers sooner after the produce arrives, and answers the producer after the first follower replies, where krabka keeps Kafka's `acks=all` and waits for every in-sync replica. Frame-pointer profiles of the leader put about 40% of its CPU in follower fetches. A replica fetcher's session holds every partition the follower replicates from this leader, which on three brokers is about 17, most of them idle `__consumer_offsets` partitions, and the leader checks, reads and records each of them on every fetch.
+
+Redpanda's figures vary between runs on the same host. A later run of the site's runner put both brokers on the same host in one session, with krabka built from the change described below. Each broker ran two 5-minute rounds:
+
+| Broker | Publish p50 | p95 | p99 | p99.9 |
+| --- | ---: | ---: | ---: | ---: |
+| Krabka, round 1 | 0.851 ms | 1.454 ms | 1.522 ms | 1.608 ms |
+| Krabka, round 2 | 0.854 ms | 1.461 ms | 1.524 ms | 1.605 ms |
+| Redpanda, round 1 | 0.769 ms | 1.329 ms | 1.400 ms | 1.481 ms |
+| Redpanda, round 2 | 0.755 ms | 1.312 ms | 1.376 ms | 1.460 ms |
+
+In that run Redpanda's publish latency was about 90 µs lower at p50 and about 130 µs lower at p99. End-to-end latency was 1 ms at p50 and 2 ms at p99 for both brokers in every round. The benchmark reports end-to-end latency in whole milliseconds.
+
+Krabka removes the wakes that have no work behind them. A parked follower fetch now wakes only on an append or a leader change. A parked consumer fetch wakes only when the high watermark or the delivery watermark moves. Before, both re-read the partition on every `acks=all` produce and found nothing. Four alternating trials measured p50 0.844 to 0.845 ms against 0.852 to 0.860 ms, and p99 1.508 to 1.509 ms against 1.523 to 1.534 ms.
+
+Krabka does not buy back the wake cost by polling. A worker that spins before it sleeps, or a socket that busy-polls, holds a CPU at 100% while the broker has no work. On a shared host or a cloud instance, that CPU is paid for whether or not records arrive. It is also unavailable to other processes, which includes the clients on a shared host. Krabka's workers use no CPU when idle. At 50,000 records/s the leader used about 0.47 CPU, and each follower used about 0.06 CPU. A polling design pays its idle cost at every load. Its saving appears only when the load is low enough for the workers to sleep. At higher loads the workers sleep less, and the matrix shows krabka ahead in every other cell. That is the better trade for krabka's users, and krabka keeps it.

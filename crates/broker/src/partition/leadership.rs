@@ -327,6 +327,7 @@ impl Partition {
         st.current_leader_epoch = krabka_ids::LeaderEpoch(new_epoch);
         drop(st);
         self.hw_advance_notify.notify_waiters();
+        self.leadership_notify.notify_waiters();
     }
 
     /// KIP-320's leader-epoch comparison, Kafka's

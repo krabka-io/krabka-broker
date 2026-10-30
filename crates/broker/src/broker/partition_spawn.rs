@@ -362,6 +362,7 @@ pub fn try_spawn_partition_with_replication_target(
         append_notify: notify,
         replica_state,
         hw_advance_notify,
+        leadership_notify: Arc::new(Notify::new()),
         delivery,
         current_leader,
         current_leader_epoch,

@@ -204,28 +204,38 @@ fn arm_waits(pending: &[PendingRead]) -> Vec<Wait> {
     let capacity = pending
         .iter()
         .filter(|read| read.partition.is_some())
-        .map(|read| if read.is_follower_fetch { 1 } else { 3 })
+        .map(|read| if read.is_follower_fetch { 1 } else { 2 })
         .sum();
     let mut waits = Vec::with_capacity(capacity);
     for (index, read) in pending.iter().enumerate() {
         let Some(part) = read.partition.as_ref() else {
             continue;
         };
-        waits.push(Wait::new(index, Arc::clone(&part.append_notify)));
-        // KIP-392: a consumer reading from a follower becomes unblocked
-        // when the follower's HW advances (via set_follower_hw), not only
-        // on raw append. Follower (inter-broker) fetches don't need this.
-        //
+        if read.is_follower_fetch {
+            // A follower reads up to the log end, so an append is what it
+            // waits for.
+            waits.push(Wait::new(index, Arc::clone(&part.append_notify)));
+            continue;
+        }
+        // A consumer reads only up to the high watermark (the last stable
+        // offset for `read_committed`, which moves no further), so an append
+        // has nothing for it until the high watermark passes it. Every move
+        // of the high watermark fires `hw_advance_notify`: the leader's own
+        // append on a partition whose in-sync set is the leader alone, a
+        // follower's position on a replicated one, an in-sync-set install,
+        // the WAL's durable offset on a diskless partition, a transaction
+        // marker, and, KIP-392, the high watermark a follower learns from its
+        // leader. Waking a consumer on the append as well re-read the
+        // partition for nothing once per `acks=all` produce, on the broker
+        // that answers that produce.
+        waits.push(Wait::new(index, Arc::clone(&part.hw_advance_notify)));
         // KFC-1: a consumer parked exactly at the delivery watermark is
         // waiting for time to pass and not for bytes to arrive. Nothing
         // appends and the HW does not move when the batch it wants comes
         // due, so the delivery advance is its own wake. Without it the
         // consumer sleeps out its whole long poll in the one case the
         // feature exists for.
-        if !read.is_follower_fetch {
-            waits.push(Wait::new(index, Arc::clone(&part.hw_advance_notify)));
-            waits.push(Wait::new(index, Arc::clone(&part.delivery.advance_notify)));
-        }
+        waits.push(Wait::new(index, Arc::clone(&part.delivery.advance_notify)));
     }
     waits
 }
@@ -265,15 +275,20 @@ fn arm_forgotten_waits(forgotten: &[Arc<Partition>], waits: &mut Vec<Wait>) {
 /// Arms the leadership waiter of every follower read, after the first pass
 /// records the follower positions.
 ///
-/// A leadership change fires `hw_advance_notify`. A fetch that only the leader
+/// A leadership change fires `leadership_notify`. A fetch that only the leader
 /// may serve wakes on it, so a parked follower fetch answers
 /// `NOT_LEADER_OR_FOLLOWER` at once, as Kafka's `DelayedFetch` completes on a
 /// leader change.
 ///
-/// This function arms the waiter only after the first pass. The position that
-/// the pass records fires the same notifier when it moves the high watermark.
-/// A waiter armed before the pass would wake its own fetch once for each
-/// partition, and each wake revalidates every partition of the fetch. The
+/// The waiter is not `hw_advance_notify`. Every follower fetch that records a
+/// position can move the high watermark, and the broadcast that moves it is
+/// the one that completes the `acks=all` produces waiting on it. A follower
+/// fetch parked on it was woken on each of those to re-read a partition that
+/// had nothing new for it, and the extra runnable tasks made the runtime wake
+/// idle workers while the produce response waited to be written. A follower
+/// learns the new high watermark from its next answered fetch, as in Kafka.
+///
+/// This function arms the waiter only after the first pass, and the
 /// revalidation at the start of the long poll catches a leadership change
 /// that lands before this arm.
 fn arm_leadership_waits(pending: &[PendingRead]) -> Vec<Wait> {
@@ -283,7 +298,7 @@ fn arm_leadership_waits(pending: &[PendingRead]) -> Vec<Wait> {
         .filter(|(_, read)| read.is_follower_fetch && read.fetch_only_leader)
         .filter_map(|(index, read)| {
             let part = read.partition.as_ref()?;
-            Some(Wait::new(index, Arc::clone(&part.hw_advance_notify)))
+            Some(Wait::new(index, Arc::clone(&part.leadership_notify)))
         })
         .collect()
 }
@@ -295,8 +310,10 @@ fn arm_leadership_waits(pending: &[PendingRead]) -> Vec<Wait> {
 /// before the leader recorded its fetch offset, as Kafka's first read does.
 /// The leader answers a fetch that parks later, and Kafka then reads every
 /// partition again, on a wake or on expiry. This function reads the bounds
-/// after [`arm_leadership_waits`] arms its waiters. So a later move of the
-/// high watermark wakes the fetch, and the fetch reads the row again.
+/// after [`arm_leadership_waits`] arms its waiters, and again when the long
+/// poll returns. A move of the high watermark does not wake a parked follower
+/// fetch, so the second read is what puts the high watermark of the moment
+/// the fetch answers into a row that the wait left as it was.
 async fn refresh_follower_bounds(pending: &mut [PendingRead], state: &LongPollState) {
     for (index, read) in pending.iter_mut().enumerate() {
         if !read.is_follower_fetch || read.out.error_code != codes::NONE || state.cold_served(index)
@@ -488,6 +505,7 @@ pub(super) async fn execute_pending_reads(
             phases,
         )))
         .await;
+        refresh_follower_bounds(&mut pending, &state).await;
         active
     } else {
         Duration::ZERO

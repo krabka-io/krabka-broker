@@ -50,6 +50,7 @@ pub fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, tempfile::T
         append_notify: Arc::new(Notify::new()),
         replica_state: Arc::new(sync::Mutex::new(ReplicaState::new())),
         hw_advance_notify,
+        leadership_notify: Arc::new(Notify::new()),
         writer_gate: WriterGate::shared(false),
         current_leader: Arc::new(AtomicU64::new(0)),
         current_leader_epoch: Arc::new(AtomicI32::new(0)),

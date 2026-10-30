@@ -23,6 +23,10 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+### Changed
+
+- A parked fetch wakes only for what can answer it. A follower fetch waits for an append or a leader change, on a new `leadership_notify`, instead of every high-watermark advance, and a consumer fetch waits for the high watermark instead of every append, which a consumer cannot read before the high watermark passes it. Each `acks=all` produce woke both kinds for a re-read that found nothing, on the broadcast that completes the produce. With one partition, 100-byte records, three replicas and 50,000 records/s, four alternating local trials put publish p50 at 0.844–0.845 ms against 0.852–0.860 ms and p99 at 1.508–1.509 ms against 1.523–1.534 ms. A follower fetch that answers at its deadline reads the high watermark again before it answers.
+
 ## [1.1.3] - 2026-10-29
 
 ### Fixed

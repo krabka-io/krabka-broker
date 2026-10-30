@@ -221,6 +221,7 @@ pub fn partition_with_batches(
         append_notify: Arc::new(Notify::new()),
         replica_state: Arc::new(sync::Mutex::new(replica_state)),
         hw_advance_notify: Arc::new(Notify::new()),
+        leadership_notify: Arc::new(Notify::new()),
         delivery,
         current_leader: Arc::new(AtomicU64::new(leader.0)),
         current_leader_epoch: Arc::new(AtomicI32::new(0)),
