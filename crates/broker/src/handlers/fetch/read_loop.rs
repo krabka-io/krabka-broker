@@ -304,16 +304,16 @@ fn arm_leadership_waits(pending: &[PendingRead]) -> Vec<Wait> {
 }
 
 /// Reports the live bounds on every follower row the first pass read
-/// locally, right before the fetch parks.
+/// locally, once the long poll of a fetch that parked returns.
 ///
 /// A follower row that the first pass answers carries the high watermark from
 /// before the leader recorded its fetch offset, as Kafka's first read does.
 /// The leader answers a fetch that parks later, and Kafka then reads every
-/// partition again, on a wake or on expiry. This function reads the bounds
-/// after [`arm_leadership_waits`] arms its waiters, and again when the long
-/// poll returns. A move of the high watermark does not wake a parked follower
-/// fetch, so the second read is what puts the high watermark of the moment
-/// the fetch answers into a row that the wait left as it was.
+/// partition again, on a wake or on expiry. A move of the high watermark does
+/// not wake a parked follower fetch, so this read is what puts the high
+/// watermark of the moment the fetch answers into a row that the wait left as
+/// it was. Reading the bounds before the fetch parks as well would be
+/// overwritten here, and cost a lock per partition of the session.
 async fn refresh_follower_bounds(pending: &mut [PendingRead], state: &LongPollState) {
     for (index, read) in pending.iter_mut().enumerate() {
         if !read.is_follower_fetch || read.out.error_code != codes::NONE || state.cold_served(index)
@@ -498,7 +498,6 @@ pub(super) async fn execute_pending_reads(
     {
         let mut waits = waits;
         waits.extend(arm_leadership_waits(&pending));
-        refresh_follower_bounds(&mut pending, &state).await;
         // Kafka's `DelayedFetch` completes off the request-handler thread:
         // the reads after a wake or the deadline run on the thread that
         // completes it, so the handler does not charge them to the fetch.

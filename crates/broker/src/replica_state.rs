@@ -402,7 +402,14 @@ impl ReplicaState {
 
     /// Record one follower Fetch at `follower_leo` (its fetch offset),
     /// received at `now` while the leader's log ended at `leader_leo`, and
-    /// recompute the high watermark.
+    /// recompute the high watermark if the follower's log end moved.
+    ///
+    /// Kafka's `Partition.updateFollowerFetchState` calls
+    /// `maybeIncrementLeaderHW` only when the fetch changed the follower's log
+    /// end offset. A replica fetcher's session holds every partition the
+    /// follower replicates from this leader, so most of the partitions each
+    /// fetch reports are idle, and recomputing the watermark for each of them
+    /// cost the leader more than anything else in the fetch.
     ///
     /// ISR members and replicas outside the ISR are tracked alike: the
     /// former so `isr_maintenance` can shrink them out when they stop
@@ -415,7 +422,11 @@ impl ReplicaState {
         leader_leo: Offset,
         now: Instant,
     ) -> Offset {
+        let previous = self.per_follower.get(&follower).map(|stats| stats.leo);
         self.record_follower_fetch(follower, follower_leo, leader_leo, now);
+        if previous == self.per_follower.get(&follower).map(|stats| stats.leo) {
+            return self.hw;
+        }
         self.recompute_hw_at(leader_leo, now)
     }
 
