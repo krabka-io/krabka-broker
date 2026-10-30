@@ -89,6 +89,10 @@ struct LongPollState {
     /// The request's `remote.fetch.max.wait.ms` deadline, shared by every
     /// cold-tier read it makes.
     remote_wait: RemoteFetchWait,
+    /// The metadata image the latest leader check of every row read. The
+    /// image is immutable, so while the broker still holds this one, a row it
+    /// passed still passes and the next check reads only the installed role.
+    checked_image: Option<Arc<krabka_metadata::MetadataImage>>,
 }
 
 /// Bytes per pending entry, with their sum kept alongside.
@@ -382,6 +386,7 @@ pub(super) async fn execute_pending_reads(
         remaining_response_bytes: response_max_bytes,
         response_max_bytes,
         remote_wait: RemoteFetchWait::default(),
+        checked_image: None,
     };
     // Arm the long poll's waiters before the first read pass, so that an
     // append landing between a partition's read and the park cannot be lost.
@@ -395,6 +400,10 @@ pub(super) async fn execute_pending_reads(
     if max_wait_ms > 0 {
         arm_forgotten_waits(forgotten, &mut waits);
     }
+    // One image for the pass: a leadership change that lands during it is
+    // still caught by the installed role each check reads, and by the epoch
+    // recheck before the fetch parks or answers.
+    let image = broker.controller.current_image();
     for (index, read) in pending.iter_mut().enumerate() {
         let Some(partition) = read.partition.clone() else {
             continue;
@@ -403,7 +412,7 @@ pub(super) async fn execute_pending_reads(
         // change after planning does not serve a follower fetch or an old
         // consumer fetch from this replica.
         if let Some(refused) = leader_refusal(
-            &broker.controller.current_image(),
+            &image,
             TopicPartitionRef {
                 topic: &read.topic_name,
                 partition_index: read.partition_index,
@@ -478,6 +487,7 @@ pub(super) async fn execute_pending_reads(
             task::yield_now().await;
         }
     }
+    state.checked_image = Some(image);
     // KIP-392: a partition that named a preferred read replica was never
     // read locally and never will be while it keeps naming one, so parking
     // on it cannot help. Kafka's `ReplicaManager.fetchMessages` folds
@@ -546,7 +556,7 @@ async fn long_poll_then_reread(
     let deadline = time::Instant::now() + max_wait;
     let mut waits: Vec<WaitFut> = waits.into_iter().map(Wait::boxed).collect();
     loop {
-        if revalidate_epochs(broker, pending).await
+        if revalidate_epochs(broker, pending, &mut state.checked_image).await
             || has_read_error(pending)
             || state.total() >= state.min_bytes
         {
@@ -593,8 +603,15 @@ async fn long_poll_then_reread(
 /// an epoch that moved while the fetch was parked completes the fetch whatever
 /// the accumulated byte count is. A partition that still passes keeps the
 /// records its last read gave it.
-async fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool {
+async fn revalidate_epochs(
+    broker: &Broker,
+    pending: &mut [PendingRead],
+    checked_image: &mut Option<Arc<krabka_metadata::MetadataImage>>,
+) -> bool {
     let image = broker.controller.current_image();
+    let image_unchanged = checked_image
+        .as_ref()
+        .is_some_and(|checked| Arc::ptr_eq(checked, &image));
     let mut fenced = false;
     for read in pending.iter_mut() {
         let Some(part) = read.partition.clone() else {
@@ -633,6 +650,7 @@ async fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool
                 // and does not check the replica id again.
                 assigned_follower: true,
                 log_dir_offline: broker.log_dir_status.is_offline(&part.log_dir.load()),
+                image_unchanged,
             },
             &mut fresh,
         )
@@ -642,6 +660,7 @@ async fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool
             fenced = true;
         }
     }
+    *checked_image = Some(image);
     fenced
 }
 
@@ -1033,6 +1052,7 @@ mod tests {
                 remaining_response_bytes: case.response_budget,
                 response_max_bytes: case.response_budget,
                 remote_wait: super::RemoteFetchWait::default(),
+                checked_image: None,
             };
             for (i, step) in case.steps.iter().enumerate() {
                 let given = state.partition_read_budget(step.partition_max_bytes);
@@ -1227,6 +1247,7 @@ mod tests {
             remaining_response_bytes: 150 - first_bytes,
             response_max_bytes: 150,
             remote_wait: super::RemoteFetchWait::default(),
+            checked_image: None,
         };
         super::reread_woken(&broker, &mut pending, 1, &mut state, &phases).await;
         assert!(pending[1].out.records.is_none());
@@ -2086,7 +2107,7 @@ mod tests {
             ..consumer_read(TOPIC, &part, false)
         }];
 
-        assert!(super::revalidate_epochs(&broker, &mut pending).await);
+        assert!(super::revalidate_epochs(&broker, &mut pending, &mut None).await);
         assert!(
             pending[0].out
                 == super::PartitionData {
@@ -2178,6 +2199,7 @@ mod tests {
             remaining_response_bytes: usize::MAX,
             response_max_bytes: usize::MAX,
             remote_wait: super::RemoteFetchWait::default(),
+            checked_image: None,
         }
     }
 

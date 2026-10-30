@@ -275,14 +275,50 @@ pub(super) fn leader_refusal(
     required_leader: Option<krabka_metadata::NodeId>,
 ) -> Option<PartitionData> {
     let node_id = required_leader?;
-    let installed = partition.current_leader.load(atomic::Ordering::Acquire) == node_id.0;
     let committed_elsewhere = image
         .partition(topic, partition_index)
         .is_some_and(|record| record.leader != node_id);
-    (!installed || committed_elsewhere).then(|| PartitionData {
+    if committed_elsewhere {
+        return Some(not_leader_row(image, topic, partition_index));
+    }
+    installed_leader_refusal(
+        image,
+        TopicPartitionRef {
+            topic,
+            partition_index,
+        },
+        partition,
+        required_leader,
+    )
+}
+
+/// The installed-role half of [`leader_refusal`], for a row whose image half
+/// already passed against the same image.
+fn installed_leader_refusal(
+    image: &krabka_metadata::MetadataImage,
+    TopicPartitionRef {
+        topic,
+        partition_index,
+    }: TopicPartitionRef<'_>,
+    partition: &Partition,
+    required_leader: Option<krabka_metadata::NodeId>,
+) -> Option<PartitionData> {
+    let node_id = required_leader?;
+    (partition.current_leader.load(atomic::Ordering::Acquire) != node_id.0)
+        .then(|| not_leader_row(image, topic, partition_index))
+}
+
+/// The `NOT_LEADER_OR_FOLLOWER` row of a refused leader check, naming the
+/// leader the image knows (KIP-951).
+fn not_leader_row(
+    image: &krabka_metadata::MetadataImage,
+    topic: &str,
+    partition_index: i32,
+) -> PartitionData {
+    PartitionData {
         current_leader: image_leader(image, topic, partition_index),
         ..refused_read(partition_index, codes::NOT_LEADER_OR_FOLLOWER)
-    })
+    }
 }
 
 /// What a fetch may read from one local partition.
@@ -302,6 +338,10 @@ pub(super) struct ReadRole<'a> {
     /// told to reset its offset in response to what is really a storage
     /// failure would discard state it should have kept.
     pub(super) log_dir_offline: bool,
+    /// Whether an earlier check in the same fetch passed this row against the
+    /// same metadata image. The image is immutable, so the leader it names
+    /// has not moved, and the leader check reads only the installed role.
+    pub(super) image_unchanged: bool,
 }
 
 /// Kafka's order in `Partition.fetchRecords`: the leader-epoch fence, the
@@ -320,6 +360,7 @@ pub(super) async fn apply_epoch_checks(
         required_leader,
         assigned_follower,
         log_dir_offline,
+        image_unchanged,
     } = role;
     if let Some((error_code, current_epoch)) =
         partition.fetch_leader_epoch_fence(request.current_leader_epoch)
@@ -346,15 +387,16 @@ pub(super) async fn apply_epoch_checks(
         };
         return true;
     }
-    if let Some(refused) = leader_refusal(
-        image,
-        TopicPartitionRef {
-            topic,
-            partition_index,
-        },
-        partition,
-        required_leader,
-    ) {
+    let row = TopicPartitionRef {
+        topic,
+        partition_index,
+    };
+    let refused = if image_unchanged {
+        installed_leader_refusal(image, row, partition, required_leader)
+    } else {
+        leader_refusal(image, row, partition, required_leader)
+    };
+    if let Some(refused) = refused {
         *output = refused;
         return true;
     }
@@ -375,22 +417,17 @@ pub(super) async fn apply_epoch_checks(
     if request.last_fetched_epoch < 0 {
         return false;
     }
-    // The live bounds a diverging-epoch row reports: the partition's real
-    // high watermark, `min(LSO, HW)` and log start, as every Fetch row does.
-    let high_watermark = partition.high_watermark().await;
-    let (log_start_offset, established_log_start, found_epoch, end_offset, last_stable_offset) = {
-        let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+    let (log_start_offset, established_log_start, found_epoch, end_offset) = {
+        let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
         let (found_epoch, end_offset) = log.epoch_checkpoint().epoch_and_offset_for(
             LeaderEpoch(request.last_fetched_epoch),
             log.log_end_offset(),
         );
-        let last_stable_offset = log.last_stable_offset(high_watermark).min(high_watermark);
         (
             log.log_start_offset(),
             log.established_log_start(),
             found_epoch,
             end_offset,
-            last_stable_offset,
         )
     };
     // Kafka's `Partition.readRecords`: an epoch this log cannot place --
@@ -453,8 +490,17 @@ pub(super) async fn apply_epoch_checks(
     }
     // Kafka's `Partition.readRecords` fills a diverging-epoch row with the
     // partition's live bounds (`initialHighWatermark`, `initialLogStartOffset`
-    // and `initialLastStableOffset`), the same values this check already read
-    // under the log mutex above, not the zero defaults the row started from.
+    // and `initialLastStableOffset`), not the zero defaults the row started
+    // from: the real high watermark, `min(LSO, HW)` and the log start read
+    // above. Only this rare row needs the high watermark, so the check takes
+    // the replica-state lock here and not on every fetch of every partition.
+    let high_watermark = partition.high_watermark().await;
+    let last_stable_offset = partition
+        .log
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .last_stable_offset(high_watermark)
+        .min(high_watermark);
     output.error_code = codes::NONE;
     output.high_watermark = high_watermark.0;
     output.last_stable_offset = last_stable_offset.0;
@@ -678,6 +724,7 @@ pub(super) async fn plan_partition_read(
                     .broker
                     .log_dir_status
                     .is_offline(&partition.log_dir.load()),
+                image_unchanged: false,
             },
             &mut output,
         )
@@ -1285,6 +1332,7 @@ mod tests {
             required_leader: None,
             assigned_follower: true,
             log_dir_offline: false,
+            image_unchanged: false,
         }
     }
 
