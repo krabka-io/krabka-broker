@@ -23,9 +23,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-10-30
+
 ### Changed
 
 - A parked fetch wakes only for what can answer it. A follower fetch waits for an append or a leader change, on a new `leadership_notify`, instead of every high-watermark advance, and a consumer fetch waits for the high watermark instead of every append, which a consumer cannot read before the high watermark passes it. Each `acks=all` produce woke both kinds for a re-read that found nothing, on the broadcast that completes the produce. With one partition, 100-byte records, three replicas and 50,000 records/s, four alternating local trials put publish p50 at 0.844–0.845 ms against 0.852–0.860 ms and p99 at 1.508–1.509 ms against 1.523–1.534 ms. A follower fetch that answers at its deadline reads the high watermark again before it answers.
+- A leader does less work per follower fetch. A replica fetcher's session holds every partition the follower replicates from the leader, on three brokers about 17 of them, mostly idle `__consumer_offsets` partitions, and the leader went through each of them on every fetch. It now recomputes a partition's high watermark only when the follower's log end offset moved, as Kafka's `Partition.updateFollowerFetchState` does; takes the replica-state lock in the epoch check only for a diverging-epoch row; skips the metadata lookup on the recheck when the image has not changed; searches sessions of up to 32 partitions in place instead of building hash maps; and no longer reads every follower row's bounds before parking, since the read after the long poll replaces them. A follower fetch that moves the high watermark yields, so the `acks=all` produces it completes answer before the rest of its pass (#1847).
 
 ## [1.1.3] - 2026-10-29
 
@@ -2637,7 +2640,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.1.3...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.1.4...HEAD
+[1.1.4]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.4
 [1.1.3]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.3
 [1.1.2]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.2
 [1.1.1]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.1
