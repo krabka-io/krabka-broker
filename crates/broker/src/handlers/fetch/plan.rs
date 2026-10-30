@@ -842,7 +842,8 @@ pub(super) async fn build_pending_reads(
     context: &PendingPlanContext<'_>,
     topics: &[EffectiveTopic],
 ) -> Vec<PendingRead> {
-    let mut pending: Vec<PlannedRead> = Vec::new();
+    let mut pending: Vec<PlannedRead> =
+        Vec::with_capacity(topics.iter().map(|topic| topic.partitions.len()).sum());
     for topic in topics {
         // Versions 12 and earlier name the topic. A name that does not resolve
         // goes on to the `Read` gate and then to the partition gate, which

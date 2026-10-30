@@ -32,7 +32,7 @@ use {
         sync::Arc,
         time::{Duration, Instant},
     },
-    tokio::time,
+    tokio::{task, time},
 };
 
 /// The initial pass and a long-poll re-read use the same planned read inputs.
@@ -435,14 +435,15 @@ pub(super) async fn execute_pending_reads(
             &mut read.out,
         )
         .await;
+        let elapsed = started.elapsed();
         read.cpu_micros = read
             .cpu_micros
-            .saturating_add(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
+            .saturating_add(u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX));
         // The same interval, on the request's local phase. The two accounts
         // differ in what they roll up to: `cpu_micros` is per partition and
         // feeds the rebalancer, while the phase is per request and is the
         // Fetch half of `request_local_duration_seconds`.
-        phases.add_local(started.elapsed());
+        phases.add_local(elapsed);
         // `serve_from_cold_tier` reads its budget off `read.max_bytes`
         // itself, so this pass's capped budget is loaned to it here and
         // given back immediately after: the field's steady-state value stays
@@ -474,7 +475,7 @@ pub(super) async fn execute_pending_reads(
             // waiting for it, usually onto this worker's next slot. Yield so
             // that they answer their producers now; the rest of this fetch
             // usually has nothing to send and parks.
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     }
     // KIP-392: a partition that named a preferred read replica was never

@@ -218,9 +218,10 @@ fn snapshot_response_state(
 
 /// The cached set, indexed by each half of a topic's identity.
 ///
-/// A session of up to [`CachedIndex::SCAN_MAX`] partitions, which is what a
-/// replica fetcher and most consumers hold, is searched in place: building two
-/// hash maps on every fetch cost more than the lookups they serve.
+/// A session of up to [`CachedIndex::SCAN_MAX`] partitions is searched in
+/// place: building two hash maps on every fetch cost more than the lookups
+/// they serve. A replica fetcher on a small cluster holds a few dozen, most
+/// of them `__consumer_offsets` partitions.
 ///
 /// A response row carries the name the broker resolved *and* the topic id,
 /// but a cache entry created by a KIP-516 request carries only the id (Fetch
@@ -250,7 +251,7 @@ struct CachedEntry<'cache> {
 }
 
 impl<'cache> CachedIndex<'cache> {
-    const SCAN_MAX: usize = 8;
+    const SCAN_MAX: usize = 32;
 
     /// The index over a session's cached partitions. A key that appears twice
     /// resolves to its last entry, in both forms.
@@ -258,8 +259,8 @@ impl<'cache> CachedIndex<'cache> {
         if cached.len() <= Self::SCAN_MAX {
             return Self::Scan(cached);
         }
-        let mut by_id = collections::HashMap::new();
-        let mut by_name = collections::HashMap::new();
+        let mut by_id = collections::HashMap::with_capacity(cached.len());
+        let mut by_name = collections::HashMap::with_capacity(cached.len());
         for (key, state) in cached {
             if key.topic_id != WireUuid::ZERO {
                 by_id.insert(
