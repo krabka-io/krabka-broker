@@ -32,7 +32,7 @@ use {
         sync::Arc,
         time::{Duration, Instant},
     },
-    tokio::time,
+    tokio::{task, time},
 };
 
 /// The initial pass and a long-poll re-read use the same planned read inputs.
@@ -89,6 +89,10 @@ struct LongPollState {
     /// The request's `remote.fetch.max.wait.ms` deadline, shared by every
     /// cold-tier read it makes.
     remote_wait: RemoteFetchWait,
+    /// The metadata image the latest leader check of every row read. The
+    /// image is immutable, so while the broker still holds this one, a row it
+    /// passed still passes and the next check reads only the installed role.
+    checked_image: Option<Arc<krabka_metadata::MetadataImage>>,
 }
 
 /// Bytes per pending entry, with their sum kept alongside.
@@ -304,16 +308,16 @@ fn arm_leadership_waits(pending: &[PendingRead]) -> Vec<Wait> {
 }
 
 /// Reports the live bounds on every follower row the first pass read
-/// locally, right before the fetch parks.
+/// locally, once the long poll of a fetch that parked returns.
 ///
 /// A follower row that the first pass answers carries the high watermark from
 /// before the leader recorded its fetch offset, as Kafka's first read does.
 /// The leader answers a fetch that parks later, and Kafka then reads every
-/// partition again, on a wake or on expiry. This function reads the bounds
-/// after [`arm_leadership_waits`] arms its waiters, and again when the long
-/// poll returns. A move of the high watermark does not wake a parked follower
-/// fetch, so the second read is what puts the high watermark of the moment
-/// the fetch answers into a row that the wait left as it was.
+/// partition again, on a wake or on expiry. A move of the high watermark does
+/// not wake a parked follower fetch, so this read is what puts the high
+/// watermark of the moment the fetch answers into a row that the wait left as
+/// it was. Reading the bounds before the fetch parks as well would be
+/// overwritten here, and cost a lock per partition of the session.
 async fn refresh_follower_bounds(pending: &mut [PendingRead], state: &LongPollState) {
     for (index, read) in pending.iter_mut().enumerate() {
         if !read.is_follower_fetch || read.out.error_code != codes::NONE || state.cold_served(index)
@@ -382,6 +386,7 @@ pub(super) async fn execute_pending_reads(
         remaining_response_bytes: response_max_bytes,
         response_max_bytes,
         remote_wait: RemoteFetchWait::default(),
+        checked_image: None,
     };
     // Arm the long poll's waiters before the first read pass, so that an
     // append landing between a partition's read and the park cannot be lost.
@@ -395,15 +400,28 @@ pub(super) async fn execute_pending_reads(
     if max_wait_ms > 0 {
         arm_forgotten_waits(forgotten, &mut waits);
     }
+    // The one image every row of the pass was checked against, or `None` once
+    // two rows saw different images. The epoch recheck reuses the checks only
+    // against that image.
+    let mut pass_image: Option<Arc<krabka_metadata::MetadataImage>> = None;
+    let mut pass_image_mixed = false;
     for (index, read) in pending.iter_mut().enumerate() {
         let Some(partition) = read.partition.clone() else {
             continue;
         };
         // Check the leader again right before the first read, so a leadership
         // change after planning does not serve a follower fetch or an old
-        // consumer fetch from this replica.
+        // consumer fetch from this replica. Each row reads the image as it is
+        // now: a fetch that the first pass answers is not checked again, and
+        // the image can name a new leader before the role is installed.
+        let image = broker.controller.current_image();
+        match &pass_image {
+            Some(seen) if !Arc::ptr_eq(seen, &image) => pass_image_mixed = true,
+            Some(_) => {}
+            None => pass_image = Some(Arc::clone(&image)),
+        }
         if let Some(refused) = leader_refusal(
-            &broker.controller.current_image(),
+            &image,
             TopicPartitionRef {
                 topic: &read.topic_name,
                 partition_index: read.partition_index,
@@ -435,14 +453,15 @@ pub(super) async fn execute_pending_reads(
             &mut read.out,
         )
         .await;
+        let elapsed = started.elapsed();
         read.cpu_micros = read
             .cpu_micros
-            .saturating_add(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
+            .saturating_add(u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX));
         // The same interval, on the request's local phase. The two accounts
         // differ in what they roll up to: `cpu_micros` is per partition and
         // feeds the rebalancer, while the phase is per request and is the
         // Fetch half of `request_local_duration_seconds`.
-        phases.add_local(started.elapsed());
+        phases.add_local(elapsed);
         // `serve_from_cold_tier` reads its budget off `read.max_bytes`
         // itself, so this pass's capped budget is loaned to it here and
         // given back immediately after: the field's steady-state value stays
@@ -466,12 +485,18 @@ pub(super) async fn execute_pending_reads(
         // reports the high watermark from before that position counted.
         if let Some((position, leader_log_end)) = follower_update
             && read.out.error_code == codes::NONE
-        {
-            partition
+            && partition
                 .record_follower_position(position.position, read.fetch_offset, leader_log_end)
-                .await;
+                .await
+        {
+            // The high watermark moved, which woke the `acks=all` produces
+            // waiting for it, usually onto this worker's next slot. Yield so
+            // that they answer their producers now; the rest of this fetch
+            // usually has nothing to send and parks.
+            task::yield_now().await;
         }
     }
+    state.checked_image = pass_image.filter(|_| !pass_image_mixed);
     // KIP-392: a partition that named a preferred read replica was never
     // read locally and never will be while it keeps naming one, so parking
     // on it cannot help. Kafka's `ReplicaManager.fetchMessages` folds
@@ -493,7 +518,6 @@ pub(super) async fn execute_pending_reads(
     {
         let mut waits = waits;
         waits.extend(arm_leadership_waits(&pending));
-        refresh_follower_bounds(&mut pending, &state).await;
         // Kafka's `DelayedFetch` completes off the request-handler thread:
         // the reads after a wake or the deadline run on the thread that
         // completes it, so the handler does not charge them to the fetch.
@@ -541,7 +565,7 @@ async fn long_poll_then_reread(
     let deadline = time::Instant::now() + max_wait;
     let mut waits: Vec<WaitFut> = waits.into_iter().map(Wait::boxed).collect();
     loop {
-        if revalidate_epochs(broker, pending).await
+        if revalidate_epochs(broker, pending, &mut state.checked_image).await
             || has_read_error(pending)
             || state.total() >= state.min_bytes
         {
@@ -588,8 +612,15 @@ async fn long_poll_then_reread(
 /// an epoch that moved while the fetch was parked completes the fetch whatever
 /// the accumulated byte count is. A partition that still passes keeps the
 /// records its last read gave it.
-async fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool {
+async fn revalidate_epochs(
+    broker: &Broker,
+    pending: &mut [PendingRead],
+    checked_image: &mut Option<Arc<krabka_metadata::MetadataImage>>,
+) -> bool {
     let image = broker.controller.current_image();
+    let image_unchanged = checked_image
+        .as_ref()
+        .is_some_and(|checked| Arc::ptr_eq(checked, &image));
     let mut fenced = false;
     for read in pending.iter_mut() {
         let Some(part) = read.partition.clone() else {
@@ -628,6 +659,7 @@ async fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool
                 // and does not check the replica id again.
                 assigned_follower: true,
                 log_dir_offline: broker.log_dir_status.is_offline(&part.log_dir.load()),
+                image_unchanged,
             },
             &mut fresh,
         )
@@ -637,6 +669,7 @@ async fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool
             fenced = true;
         }
     }
+    *checked_image = Some(image);
     fenced
 }
 
@@ -1028,6 +1061,7 @@ mod tests {
                 remaining_response_bytes: case.response_budget,
                 response_max_bytes: case.response_budget,
                 remote_wait: super::RemoteFetchWait::default(),
+                checked_image: None,
             };
             for (i, step) in case.steps.iter().enumerate() {
                 let given = state.partition_read_budget(step.partition_max_bytes);
@@ -1222,6 +1256,7 @@ mod tests {
             remaining_response_bytes: 150 - first_bytes,
             response_max_bytes: 150,
             remote_wait: super::RemoteFetchWait::default(),
+            checked_image: None,
         };
         super::reread_woken(&broker, &mut pending, 1, &mut state, &phases).await;
         assert!(pending[1].out.records.is_none());
@@ -2081,7 +2116,7 @@ mod tests {
             ..consumer_read(TOPIC, &part, false)
         }];
 
-        assert!(super::revalidate_epochs(&broker, &mut pending).await);
+        assert!(super::revalidate_epochs(&broker, &mut pending, &mut None).await);
         assert!(
             pending[0].out
                 == super::PartitionData {
@@ -2173,6 +2208,7 @@ mod tests {
             remaining_response_bytes: usize::MAX,
             response_max_bytes: usize::MAX,
             remote_wait: super::RemoteFetchWait::default(),
+            checked_image: None,
         }
     }
 
