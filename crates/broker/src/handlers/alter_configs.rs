@@ -42,11 +42,15 @@ mod tests;
 use {
     self::resource::process_resource,
     crate::{
+        api_catalog::UnstableApiVersions,
         broker::Broker,
-        codes::{INVALID_CONFIG, INVALID_REQUEST},
+        codes::{INVALID_CONFIG, INVALID_REQUEST, POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION},
         config_keys::{
-            MIN_INSYNC_REPLICAS, broker_dynamic::BrokerConfigContext,
-            is_controller_managed_topic_config, listener_reconfig::OwnBrokerChecks,
+            self, MIN_INSYNC_REPLICAS,
+            broker_dynamic::BrokerConfigContext,
+            group::{GroupBounds, validate_group_configs},
+            is_controller_managed_topic_config,
+            listener_reconfig::OwnBrokerChecks,
         },
         handlers::{
             RequestContext, audit_resource, config_resource_refusal,
@@ -58,8 +62,9 @@ use {
             forward_to_controller::to_active_controller_or_handle,
             response_encoding::{ErrorRow as _, ResourceErrorRow},
         },
+        topic_policy::{TopicPolicy, check as check_topic_policy},
     },
-    krabka_metadata::{MetadataImage, NodeId},
+    krabka_metadata::{GroupConfigRecord, MetadataImage, MetadataRecord, NodeId},
     krabka_protocol::owned::incremental_alter_configs_request,
     std::{
         collections::{BTreeMap, BTreeSet, HashMap},
@@ -211,6 +216,60 @@ fn preprocess_resource(
         }
         .with_error(code, message),
     )
+}
+
+/// The checks both alter-config APIs run on a topic's resulting override map
+/// once its own keys have validated: the storage transitions against the
+/// stored map, then the existence check, then the operator's policy.
+pub(super) fn finish_topic_overrides(
+    image: &MetadataImage,
+    topic: &str,
+    current: Option<&BTreeMap<String, String>>,
+    overrides: &BTreeMap<String, String>,
+    policy: &TopicPolicy,
+) -> Result<(), (i16, String)> {
+    config_keys::validate_diskless_unchanged(current, overrides)
+        .map_err(|reason| (INVALID_CONFIG, reason))?;
+    config_keys::validate_remote_storage_disable(current, overrides)
+        .map_err(|reason| (INVALID_CONFIG, reason))?;
+    if image.topic(topic).is_none() {
+        return Err((
+            UNKNOWN_TOPIC_OR_PARTITION,
+            format!("The topic '{topic}' does not exist."),
+        ));
+    }
+    // KIP-133: the operator-declared policy, on the map the topic ends up
+    // with. Kafka calls `AlterConfigPolicy.validate` on the same resolved map,
+    // and its `RequestMetadata` carries no partition count and no replication
+    // factor, so neither is passed here. It runs after the built-in
+    // validators, as `ConfigAdminManager` does: a config the broker itself
+    // refuses never reaches the policy.
+    check_topic_policy(policy, topic, None, None, overrides)
+        .map_err(|reason| (POLICY_VIOLATION, reason))
+}
+
+/// The `V1GroupConfig` record both alter-config APIs stage for a GROUP
+/// resource's resulting config map, after
+/// `ControllerConfigurationValidator.validateGroupName` and Kafka's
+/// `GroupConfig.validate` against the broker's group bounds.
+pub(super) fn group_config_record_from(
+    name: &str,
+    configs: BTreeMap<String, String>,
+    bounds: &GroupBounds,
+    unstable: UnstableApiVersions,
+) -> Result<MetadataRecord, (i16, String)> {
+    if name.is_empty() {
+        return Err((
+            INVALID_REQUEST,
+            "Default group resources are not allowed.".into(),
+        ));
+    }
+    validate_group_configs(&configs, bounds, unstable)
+        .map_err(|reason| (INVALID_CONFIG, reason))?;
+    Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
+        group_id: name.to_owned(),
+        configs,
+    }))
 }
 
 /// The node a BROKER resource's checks run for: the node the client

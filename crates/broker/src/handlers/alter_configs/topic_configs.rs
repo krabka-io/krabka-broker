@@ -16,11 +16,8 @@
 //! erase it.
 
 use {
-    crate::{
-        api_catalog::UnstableApiVersions,
-        codes, config_keys,
-        topic_policy::{TopicPolicy, check},
-    },
+    super::finish_topic_overrides,
+    crate::{api_catalog::UnstableApiVersions, codes, config_keys, topic_policy::TopicPolicy},
     krabka_log::topic_name,
     krabka_metadata::{MetadataRecord, TopicConfigRecord},
     krabka_protocol::owned::alter_configs_request::AlterConfigsResource,
@@ -75,24 +72,7 @@ pub(super) fn topic_config_record(
         remote_storage_system_enabled,
     )
     .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
-    config_keys::validate_diskless_unchanged(current, &overrides)
-        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
-    config_keys::validate_remote_storage_disable(current, &overrides)
-        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
-    if image.topic(&resource.resource_name).is_none() {
-        return Err((
-            codes::UNKNOWN_TOPIC_OR_PARTITION,
-            format!("The topic '{}' does not exist.", resource.resource_name),
-        ));
-    }
-    // KIP-133: the operator-declared policy, on the map the topic ends up
-    // with. Kafka calls `AlterConfigPolicy.validate` on the same resolved map,
-    // and its `RequestMetadata` carries no partition count and no replication
-    // factor, so neither is passed here. It runs after the built-in
-    // validators, as `ConfigAdminManager` does: a config the broker itself
-    // refuses never reaches the policy.
-    check(policy, &resource.resource_name, None, None, &overrides)
-        .map_err(|reason| (codes::POLICY_VIOLATION, reason))?;
+    finish_topic_overrides(image, &resource.resource_name, current, &overrides, policy)?;
     overrides.extend(
         current
             .into_iter()

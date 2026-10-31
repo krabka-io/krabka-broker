@@ -11,13 +11,13 @@ use {
     },
     crate::{
         api_catalog::UnstableApiVersions,
-        codes,
         config_keys::{
-            group::{GroupBounds, kafka_group_key, validate_group_configs},
+            group::{GroupBounds, kafka_group_key},
             registry::ConfigType,
         },
+        handlers::alter_configs::group_config_record_from,
     },
-    krabka_metadata::{GroupConfigRecord, MetadataImage, MetadataRecord},
+    krabka_metadata::{MetadataImage, MetadataRecord},
     krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource,
 };
 
@@ -54,19 +54,7 @@ pub(super) fn group_record(
             }
         }
     }
-    // `ControllerConfigurationValidator.validateGroupName`, then the map.
-    if resource.resource_name.is_empty() {
-        return Err((
-            codes::INVALID_REQUEST,
-            "Default group resources are not allowed.".into(),
-        ));
-    }
-    validate_group_configs(&merged, bounds, unstable)
-        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
-    Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
-        group_id: resource.resource_name.clone(),
-        configs: merged,
-    }))
+    group_config_record_from(&resource.resource_name, merged, bounds, unstable)
 }
 
 #[cfg(test)]
@@ -74,7 +62,7 @@ mod tests {
     use {
         super::*,
         crate::{
-            api_catalog,
+            api_catalog, codes,
             coordinator::unified::streams::config::{
                 KEY_NUM_STANDBY_REPLICAS, KEY_SESSION_TIMEOUT_MS, KEY_SHARE_AUTO_OFFSET_RESET,
             },
@@ -84,6 +72,7 @@ mod tests {
             },
         },
         assert2::assert,
+        krabka_metadata::GroupConfigRecord,
         krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
     };
 
