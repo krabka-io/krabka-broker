@@ -136,6 +136,20 @@ mod tests {
         build_topic_config_record_with_default_policy(resource, image, super::topic_config_record)
     }
 
+    /// A diskless change answers before the existence check, so a topic that
+    /// does not exist reports the diskless refusal.
+    #[test]
+    fn a_diskless_change_on_an_unknown_topic_answers_before_existence() {
+        let resource = topic_resource("missing", &[(config_keys::DISKLESS, "true")]);
+        let diskless = maplit::btreemap! {
+            config_keys::DISKLESS.to_owned() => "true".to_owned(),
+        };
+        let expected = config_keys::validate_diskless_unchanged(None, &diskless)
+            .expect_err("turning diskless on is a change");
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        check!(topic_config_record(&resource, &image) == Err((codes::INVALID_CONFIG, expected)));
+    }
+
     #[test]
     fn topic_replacement_rejects_compaction_on_a_scheduled_topic() {
         let image = image_with_topic("orders");
