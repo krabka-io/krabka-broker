@@ -21,6 +21,27 @@ pub fn submit_failure_code(error: &RaftError, otherwise: i16) -> i16 {
     }
 }
 
+/// The error code for a controller write that failed with `error`.
+///
+/// Kafka's controller fails a write with `NotControllerException` when it is
+/// not, or is no longer, the active controller. A lost leader
+/// ([`RaftError::NotLeader`]), an unknown leader
+/// ([`RaftError::LeaderUnknown`]) and an uncommitted tail of a new leader
+/// ([`RaftError::UncommittedTail`], see [`submit_failure_code`]) are all that
+/// state, so they answer `NOT_CONTROLLER`. Every other failure answers
+/// `otherwise`.
+///
+/// Use this function for a write that the handler submits once, where any of
+/// those errors can reach it. Use [`submit_failure_code`] where the leader
+/// errors are already handled, for example by [`classify_guarded`], so that
+/// only the uncommitted tail still needs a mapping.
+pub fn controller_write_code(error: &RaftError, otherwise: i16) -> i16 {
+    match error {
+        RaftError::NotLeader { .. } | RaftError::LeaderUnknown => codes::NOT_CONTROLLER,
+        other => submit_failure_code(other, otherwise),
+    }
+}
+
 /// How a guarded controller operation failed.
 ///
 /// [`classify_guarded`] builds it from the result of
@@ -71,7 +92,7 @@ pub fn classify_guarded<T>(
 #[cfg(test)]
 mod tests {
     use {
-        super::{classify_guarded, submit_failure_code},
+        super::{classify_guarded, controller_write_code, submit_failure_code},
         crate::codes,
         assert2::check,
         krabka_raft::RaftError,
@@ -110,7 +131,9 @@ mod tests {
     }
 
     /// A guarded result: `None` stands for a passed deadline.
-    async fn guarded(outcome: Option<Result<u8, RaftError>>) -> Result<Result<u8, RaftError>, Elapsed> {
+    async fn guarded(
+        outcome: Option<Result<u8, RaftError>>,
+    ) -> Result<Result<u8, RaftError>, Elapsed> {
         match outcome {
             Some(result) => Ok(result),
             None => Err(timeout(Duration::ZERO, pending::<()>()).await.unwrap_err()),
@@ -149,5 +172,40 @@ mod tests {
     ) {
         let classified = classify_guarded(guarded(outcome).await);
         check!(classified.map_err(|failure| failure.code(otherwise)) == expected);
+    }
+
+    #[yare::parameterized(
+        not_leader = {
+            RaftError::NotLeader { current_leader: None },
+            codes::UNKNOWN_SERVER_ERROR,
+            codes::NOT_CONTROLLER,
+        },
+        unknown_leader = {
+            RaftError::LeaderUnknown,
+            codes::COORDINATOR_NOT_AVAILABLE,
+            codes::NOT_CONTROLLER,
+        },
+        uncommitted_tail = {
+            RaftError::UncommittedTail,
+            codes::UNKNOWN_SERVER_ERROR,
+            codes::NOT_CONTROLLER,
+        },
+        refusal_keeps_default = {
+            RaftError::ChangeRejected("stale".to_owned()),
+            codes::UNKNOWN_SERVER_ERROR,
+            codes::UNKNOWN_SERVER_ERROR,
+        },
+        shutdown_keeps_default = {
+            RaftError::Shutdown,
+            codes::COORDINATOR_NOT_AVAILABLE,
+            codes::COORDINATOR_NOT_AVAILABLE,
+        },
+    )]
+    fn a_failed_controller_write_answers_not_controller_for_leadership(
+        error: RaftError,
+        otherwise: i16,
+        expected: i16,
+    ) {
+        check!(controller_write_code(&error, otherwise) == expected);
     }
 }
