@@ -17,7 +17,7 @@ use {
         handlers::{
             ApiVersion, ErrorResponse as _, RequestContext,
             acl_gates::{group_protocol_refusal, subscribed_names_response},
-            coordinator_routing::group_actor_error_code,
+            coordinator_routing::{group_actor_error_code, java_blank},
             group_coordinator_error, group_version_disabled,
         },
         task_util::ask,
@@ -156,7 +156,7 @@ fn validate_request(
         ))
     };
     // `Utils.throwIfEmptyString`: a present value that trims to nothing.
-    let blank = |value: Option<&str>| value.is_some_and(|value| value.trim().is_empty());
+    let blank = |value: Option<&str>| value.is_some_and(java_blank);
 
     if (version >= CONSUMER_GENERATED_MEMBER_ID_REQUIRED_VERSION
         || req.member_epoch > 0
@@ -511,6 +511,29 @@ mod tests {
         message: String,
     ) {
         let _ = (consumer_heartbeat, epoch, group, code, message);
+    }
+
+    /// Kafka's `String.trim` blank: a control character is blank and a
+    /// no-break space is not.
+    #[rstest::rstest]
+    #[case::control_char("\u{1}", Some("MemberId can't be empty."))]
+    #[case::no_break_space("\u{A0}", None)]
+    fn member_id_blankness_follows_java_trim(
+        #[case] member_id: &str,
+        #[case] refusal: Option<&str>,
+    ) {
+        let request = subscription_request("g", member_id, 0);
+
+        let outcome = validate_request(&request, VERSION, &NextGenConfig::default());
+
+        assert!(
+            outcome.err().map(|error| *error)
+                == refusal.map(|message| ConsumerGroupHeartbeatResponse {
+                    error_code: codes::INVALID_REQUEST,
+                    error_message: Some(message.to_owned()),
+                    ..Default::default()
+                })
+        );
     }
 
     #[test]

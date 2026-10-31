@@ -126,3 +126,25 @@ pub fn group_actor_error_code(error: AskError) -> i16 {
         AskError::Dropped => UNKNOWN_SERVER_ERROR,
     }
 }
+
+/// `true` for a value that Kafka's `Utils.throwIfEmptyString` refuses: one
+/// that Java's `String.trim` reduces to nothing. Java's `trim` strips every
+/// leading and trailing character at or below U+0020, so a control character
+/// such as U+0001 is blank and a no-break space (U+00A0) is not.
+pub fn java_blank(value: &str) -> bool { value.trim_matches(|c: char| c <= ' ').is_empty() }
+
+#[cfg(test)]
+mod tests {
+    use {super::java_blank, assert2::assert, rstest::rstest};
+
+    #[rstest]
+    #[case::empty("", true)]
+    #[case::space(" ", true)]
+    #[case::control_char("\u{1}", true)]
+    #[case::no_break_space("\u{A0}", false)]
+    #[case::text("a", false)]
+    #[case::padded_text(" a\t", false)]
+    fn java_blank_matches_java_string_trim(#[case] value: &str, #[case] blank: bool) {
+        assert!(java_blank(value) == blank);
+    }
+}
