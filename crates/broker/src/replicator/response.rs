@@ -229,30 +229,25 @@ pub(super) async fn handle_partition_response(
         diverging_epoch: part_resp.diverging_epoch.epoch,
     });
 
-    if mutation == ReplicaFetchMutation::Reject {
-        warn!(
-            topic = %cfg.topic,
-            partition = cfg.partition.get(),
-            leader_node_id = cfg.leader_node_id.0,
-            leader_epoch = cfg.leader_epoch.0,
-            request_leader_epoch,
-            reported_leader_id = reported_leader.leader_id,
-            reported_leader_epoch = reported_leader.leader_epoch,
-            "replicator: discarding fenced Fetch response"
-        );
-        return RowAction::Drop;
-    }
-
     match mutation {
+        ReplicaFetchMutation::Reject => {
+            warn!(
+                topic = %cfg.topic,
+                partition = cfg.partition.get(),
+                leader_node_id = cfg.leader_node_id.0,
+                leader_epoch = cfg.leader_epoch.0,
+                request_leader_epoch,
+                reported_leader_id = reported_leader.leader_id,
+                reported_leader_epoch = reported_leader.leader_epoch,
+                "replicator: discarding fenced Fetch response"
+            );
+            RowAction::Drop
+        }
         ReplicaFetchMutation::Truncate => {
             apply_diverging_epoch(&part_resp.diverging_epoch, cfg).await
         }
-
         ReplicaFetchMutation::Append => append_records(part_resp, cfg).await,
-
         ReplicaFetchMutation::Retry => retry_after_error(part_resp.error_code, cfg).await,
-
-        ReplicaFetchMutation::Reject => unreachable!("rejected responses return above"),
     }
 }
 
