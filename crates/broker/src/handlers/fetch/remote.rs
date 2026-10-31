@@ -699,20 +699,31 @@ pub(super) async fn try_remote_read(
         }
     }
 
-    // `DelayedRemoteFetch.onComplete`: the remote records beside the bounds
-    // the local read result carried for the remote band.
+    Some(answer_served(&broker.metrics, p, live, records))
+}
+
+/// `DelayedRemoteFetch.onComplete`: answers the partition with the remote
+/// records beside the bounds the local read result carried for the remote
+/// band, and counts them as KIP-405's `RemoteFetchBytesPerSec`.
+///
+/// Returns the size of the records served.
+fn answer_served(
+    metrics: &BrokerMetrics,
+    p: &mut PendingRead,
+    live: LiveOffsets,
+    records: Bytes,
+) -> usize {
     let served = records.len();
     p.out.error_code = codes::NONE;
     live.report(&mut p.out);
     p.out.records = Some(RecordsPayload::Raw(records));
-    // KIP-405's `RemoteFetchBytesPerSec`: what the tier actually served, which
-    // is the records about to go out.
-    broker.metrics.record_remote_bytes(
+    // What the tier actually served, which is the records about to go out.
+    metrics.record_remote_bytes(
         RemoteTierPath::Fetch,
         &p.topic_name,
         u64::try_from(served).unwrap_or(u64::MAX),
     );
-    Some(served)
+    served
 }
 
 #[cfg(test)]
