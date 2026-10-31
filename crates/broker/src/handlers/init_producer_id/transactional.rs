@@ -14,7 +14,10 @@ use {
         codes,
         error::BrokerError,
         txn::{
-            coordinator::{TxnCoordinator, completion::completion_for},
+            coordinator::{
+                TxnCoordinator,
+                completion::{completion_decision, completion_for},
+            },
             handlers::end_txn::{
                 client_producer_identity, completion_producer_identity,
                 prepare_server_abort_identities,
@@ -26,7 +29,13 @@ use {
         },
     },
     krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse,
-    krabka_verified::{transaction, transaction::InitProducerIdIdentityDecision},
+    krabka_verified::{
+        transaction,
+        transaction::{
+            InitProducerIdIdentityDecision,
+            TransactionReaperCompletionDecision as CompletionDecision,
+        },
+    },
     std::sync::Arc,
 };
 
@@ -243,7 +252,30 @@ pub(super) async fn handle_transactional(
                     // Re-acquire + transition to CompleteAbort, staged on a
                     // clone so a failed append leaves PrepareAbort for the
                     // completion task.
-                    let mut completed = published.lock().await.clone();
+                    //
+                    // Every lock was released for the fan-out, so the
+                    // completion task may have finished this abort and a
+                    // later request may have written over it. As in
+                    // `complete_prepared_transaction`, take the
+                    // state-partition write lock, then the entry lock, and
+                    // write only while the live entry is still the exact
+                    // `PrepareAbort` the markers were written for. Kafka's
+                    // marker channel likewise appends the `Complete*`
+                    // transition only for the metadata it prepared, and drops
+                    // it otherwise. The fenced producer is answered
+                    // `CONCURRENT_TRANSACTIONS` either way.
+                    let state_partition_write = coord.lock_state_partition_for(tid).await;
+                    let Some(live) = coord.get(tid) else {
+                        return Ok(concurrent_transactions_response());
+                    };
+                    let live = live.lock().await;
+                    let prepared_states = (TxnState::PrepareAbort, TxnState::CompleteAbort);
+                    if completion_decision(&live, &prepared, prepared_states)
+                        != CompletionDecision::Proceed
+                    {
+                        return Ok(concurrent_transactions_response());
+                    }
+                    let mut completed = live.clone();
                     completed.state = TxnState::CompleteAbort;
                     completed.last_update_ms = now_millis();
                     let (completed_pid, completed_epoch) = completion_producer_identity(&completed);
@@ -258,7 +290,13 @@ pub(super) async fn handle_transactional(
                     // fence has now been written.
                     completed.has_failed_epoch_fence = false;
                     completed.partitions.clear();
-                    if let Err(error) = coord.put(completed, txnv).await {
+                    // The entry stays locked until the completion is written.
+                    let written = coord
+                        .put_under_state_partition_lock(completed, txnv)
+                        .await;
+                    drop(live);
+                    drop(state_partition_write);
+                    if let Err(error) = written {
                         tracing::warn!(
                             tid,
                             %error,
