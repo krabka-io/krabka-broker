@@ -136,7 +136,9 @@ fn resolve_admitted(
         KeyType::Group => keys
             .into_iter()
             .map(|key| match partition_for_group(target.image, &key) {
-                Some(partition) => resolve_partition_coordinator(target, state_topic, partition, key),
+                Some(partition) => {
+                    resolve_partition_coordinator(target, state_topic, partition, key)
+                }
                 None => unavailable_coordinator(key),
             })
             .collect(),

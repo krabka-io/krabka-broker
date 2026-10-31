@@ -883,11 +883,21 @@ async fn mixed_group_batch_answers_the_denied_key_in_its_slot() {
     broker_handle.wait_until_group_coordinator_ready().await;
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_GROUP,
-        coordinator_keys: vec!["allowed-first".into(), "denied".into(), "allowed-last".into()],
+        coordinator_keys: vec![
+            "allowed-first".into(),
+            "denied".into(),
+            "allowed-last".into(),
+        ],
         ..Default::default()
     };
 
-    let response = find(&broker, &request, find_coordinator_response::MAX_VERSION, "alice").await;
+    let response = find(
+        &broker,
+        &request,
+        find_coordinator_response::MAX_VERSION,
+        "alice",
+    )
+    .await;
 
     let resolved = |index: usize, key: &str| Coordinator {
         key: key.into(),
@@ -929,7 +939,13 @@ async fn key_type_seven_is_invalid_on_every_key() {
         ..Default::default()
     };
 
-    let response = find(&broker, &request, find_coordinator_response::MAX_VERSION, "alice").await;
+    let response = find(
+        &broker,
+        &request,
+        find_coordinator_response::MAX_VERSION,
+        "alice",
+    )
+    .await;
 
     assert!(
         response
@@ -955,9 +971,14 @@ async fn empty_batch_with_unknown_key_type_stays_empty() {
         ..Default::default()
     };
 
-    let response = handle(&broker, request, find_coordinator_response::MAX_VERSION, &context)
-        .await
-        .expect("empty batched coordinator lookup");
+    let response = handle(
+        &broker,
+        request,
+        find_coordinator_response::MAX_VERSION,
+        &context,
+    )
+    .await
+    .expect("empty batched coordinator lookup");
 
     assert!(response == FindCoordinatorResponse::default());
     broker_handle.shutdown().await;

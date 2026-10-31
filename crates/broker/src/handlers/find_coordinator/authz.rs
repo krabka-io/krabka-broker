@@ -120,8 +120,8 @@ mod tests {
     use {
         super::*,
         crate::{
-            handlers::find_coordinator::{KEY_TYPE_GROUP, KEY_TYPE_SHARE, KEY_TYPE_TRANSACTION},
             authorizer::SimpleAclAuthorizer,
+            handlers::find_coordinator::{KEY_TYPE_GROUP, KEY_TYPE_SHARE, KEY_TYPE_TRANSACTION},
         },
         assert2::assert,
         std::collections::HashSet,
