@@ -658,9 +658,23 @@ fn fail_partition(p: &mut PendingPartition, has_acks: bool, code: i16) {
 mod tests {
     use {
         super::*,
-        crate::share_partition::state::AcquisitionState,
+        crate::{
+            handlers::{
+                share_fetch::test_fetch_request,
+                test_support::{
+                    OffsetRun, StartedBroker, acquired_share_records, create_topic,
+                    produce_records, share_fetch_partition_rows, share_fetch_wire,
+                    share_topic_uuid, start_share_allow_all_no_audit,
+                },
+            },
+            share_partition::state::AcquisitionState,
+            test_support::initialize_share_state,
+        },
         assert2::{assert, check},
-        krabka_protocol::records::{RecordBatch, RecordsError},
+        krabka_protocol::{
+            owned::share_fetch_request::AcknowledgementBatch,
+            records::{RecordBatch, RecordsError},
+        },
         std::{
             io::Error,
             time::{Duration, Instant},
@@ -852,6 +866,135 @@ mod tests {
         assert!(share_read_failure.code.unwrap() == code);
     }
     rstest_bdd_macros::scenarios!("tests/features/handler_share_read_errors",fixtures=[share_read_failure:ShareReadFailureScenario]);
+
+    /// What a client and the partition cache show after a renew-ack fetch
+    /// whose ack-only row found its state write fenced.
+    #[derive(Debug, PartialEq, Eq)]
+    struct AckOnlyFencedPersist {
+        /// The acknowledge error of the ack-only row.
+        acknowledge_error: i16,
+        /// The fetch error of the ack-only row.
+        fetch_error: i16,
+        /// Whether the broker still caches the share partition.
+        cached: bool,
+        /// The offsets that the next `ShareFetch` acquires.
+        next_acquired: Vec<OffsetRun>,
+    }
+
+    /// An ack-only row (here, of a renew-ack fetch) writes a state that an
+    /// earlier pass left dirty. That write is best-effort: a fenced write
+    /// drops the cached cell, but the row keeps the acknowledge error that
+    /// the acknowledgement itself produced.
+    #[tokio::test]
+    async fn a_fenced_write_on_an_ack_only_row_keeps_the_acknowledge_error() {
+        let StartedBroker { broker, dir: _dir } = start_share_allow_all_no_audit().await;
+        let shared = broker.broker_arc_for_test();
+        let group = "ack-only-fenced";
+        let topic_id = create_topic()
+            .broker(&broker)
+            .client_id("share-acquire-test")
+            .name(group)
+            .call()
+            .await;
+        let key = share_topic_uuid(topic_id);
+        initialize_share_state(&broker, group, key, 0).await;
+        let fetch = |epoch: i32, batches: Vec<AcknowledgementBatch>, renew: bool| {
+            let request = test_fetch_request()
+                .group_id(group.into())
+                .member_id("member".into())
+                .topic_id(topic_id.0)
+                .share_session_epoch(epoch)
+                .max_bytes(if renew { 0 } else { 1 << 20 })
+                .max_records(if renew { 0 } else { 500 })
+                .acknowledgement_batches(batches)
+                .is_renew_ack(renew)
+                .call();
+            let broker = &broker;
+            async move {
+                let response = share_fetch_wire()
+                    .broker(broker)
+                    .request(&request)
+                    .call()
+                    .await;
+                share_fetch_partition_rows(response)
+                    .into_iter()
+                    .next()
+                    .unwrap_or_default()
+            }
+        };
+        fetch(0, Vec::new(), false).await;
+        produce_records()
+            .broker(&broker)
+            .topic(group)
+            .count(2)
+            .call()
+            .await;
+        let fetched = fetch(1, Vec::new(), false).await;
+        assert!(
+            acquired_share_records(&fetched) == vec![OffsetRun::new(0, 1)],
+            "{fetched:?}"
+        );
+
+        // Leave the cached state dirty, then raise the durable state epoch so
+        // the next write of that state is fenced.
+        let cell = shared
+            .share_partition_leaders
+            .peek_for_test(group, key, 0)
+            .expect("the fetch cached the share partition");
+        let state_epoch = {
+            let mut st = cell.lock().await;
+            st.dirty = true;
+            st.state_epoch
+        };
+        shared
+            .share_coordinator
+            .initialize(
+                &shared.controller.current_image(),
+                group,
+                key,
+                0,
+                state_epoch + 1,
+                Offset(0),
+            )
+            .await
+            .expect("raise the state epoch");
+
+        // Accepting offsets past the records handed out is refused with
+        // `INVALID_REQUEST` and changes no state, so the acknowledgement itself
+        // writes nothing and the row's own persist is
+        // the write that the coordinator fences.
+        let row = fetch(
+            2,
+            vec![AcknowledgementBatch {
+                first_offset: 5,
+                last_offset: 6,
+                acknowledge_types: vec![1],
+                ..Default::default()
+            }],
+            true,
+        )
+        .await;
+        let cached = shared
+            .share_partition_leaders
+            .peek_for_test(group, key, 0)
+            .is_some();
+        let next = fetch(3, Vec::new(), false).await;
+
+        assert!(
+            AckOnlyFencedPersist {
+                acknowledge_error: row.acknowledge_error_code,
+                fetch_error: row.error_code,
+                cached,
+                next_acquired: acquired_share_records(&next),
+            } == AckOnlyFencedPersist {
+                acknowledge_error: codes::INVALID_REQUEST,
+                fetch_error: codes::NONE,
+                cached: false,
+                next_acquired: vec![OffsetRun::new(0, 1)],
+            }
+        );
+        broker.shutdown().await;
+    }
 
     #[test]
     fn remaining_record_budget_is_request_wide_and_saturating() {
