@@ -141,6 +141,54 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs<'a> {
     pub(in crate::handlers::describe_configs) settings: &'a BTreeMap<&'static str, String>,
 }
 
+impl<'a> StaticBrokerConfigs<'a> {
+    /// The static broker configs `config` reports, beside the `settings`
+    /// [`static_settings`] read out of the same configuration.
+    ///
+    /// The two KIP-98 keys are `ConfigDef.Type::INT` in Kafka, and the
+    /// broker's config validation already refused a value wider than that.
+    /// The two KIP-211 keys travel as what the operator named, not as what the
+    /// broker runs: the source a key reports is provenance, so a key set to its
+    /// own default is still `STATIC_BROKER_CONFIG`.
+    pub(in crate::handlers::describe_configs) fn from_config(
+        config: &'a BrokerConfig,
+        settings: &'a BTreeMap<&'static str, String>,
+    ) -> Self {
+        let origins = &config.static_config_origins;
+        Self {
+            txn_id_expiration: StaticBrokerSetting {
+                value_ms: config.txn_id_expiration.millis_i32(),
+                supplied: origins.txn_id_expiration,
+            },
+            txn_id_expiration_cleanup_interval: StaticBrokerSetting {
+                value_ms: config.txn_id_expiration_cleanup_interval.millis_i32(),
+                supplied: origins.txn_id_expiration_cleanup_interval,
+            },
+            offsets_retention: config.offsets_retention_override,
+            offsets_retention_check_interval: config.offsets_retention_check_interval_override,
+            num_partitions: origins
+                .topic_creation
+                .num_partitions
+                .then_some(config.num_partitions),
+            default_replication_factor: origins
+                .topic_creation
+                .default_replication_factor
+                .then_some(config.default_replication_factor),
+            delete_topic_enable: origins
+                .topic_admin
+                .delete_topic_enable
+                .then_some(config.delete_topic_enable),
+            auto_create_topics_enable: origins
+                .topic_admin
+                .auto_create_topics_enable
+                .then_some(config.auto_create_topics_enable),
+            connections_max_idle: config.connections_max_idle,
+            connections_max_idle_overrides: &config.connections_max_idle_overrides,
+            settings,
+        }
+    }
+}
+
 /// The `KafkaConfig` keys krabka can state a static value of, for the
 /// `STATIC_BROKER_CONFIG` layer of a named broker resource and of a topic key's
 /// broker synonym.

@@ -50,10 +50,7 @@ mod tests;
 #[cfg(test)]
 pub(super) use self::static_broker::kafka_default_static_broker;
 pub use self::static_broker::static_settings;
-pub(super) use self::{
-    broker_logger::BrokerLoggers,
-    static_broker::{StaticBrokerConfigs, StaticBrokerSetting},
-};
+pub(super) use self::{broker_logger::BrokerLoggers, static_broker::StaticBrokerConfigs};
 use {
     self::{static_broker::static_broker_entries, write_freeze::write_freeze_override},
     krabka_log::topic_name,
