@@ -35,6 +35,7 @@ use {
         sync::{Arc, PoisonError},
         time::{Duration, Instant},
     },
+    tokio::sync::Mutex,
 };
 
 /// KFC-1: the most not-yet-due records an acquire pass leaves in one share
@@ -416,10 +417,7 @@ async fn acquire_pass(
         }
 
         if !p.fetchable {
-            // Best-effort: a failed write keeps the state dirty for a retry.
-            let _ = mgr
-                .persist_if_dirty(group, p.topic_id, p.partition_index, Some(&cell), &mut st)
-                .await;
+            persist_best_effort(mgr, group, p, &cell, &mut st).await;
             continue;
         }
 
@@ -434,10 +432,7 @@ async fn acquire_pass(
             // Lost the partition between the leadership check and here.
             p.out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
             p.leadable = false;
-            // Best-effort: a failed write keeps the state dirty for a retry.
-            let _ = mgr
-                .persist_if_dirty(group, p.topic_id, p.partition_index, Some(&cell), &mut st)
-                .await;
+            persist_best_effort(mgr, group, p, &cell, &mut st).await;
             continue;
         };
         let hwm = part.high_watermark().await;
@@ -559,10 +554,7 @@ async fn acquire_pass(
                     code,
                     "share-partition log read failed"
                 );
-                // Best-effort: a failed write keeps the state dirty for a retry.
-                let _ = mgr
-                    .persist_if_dirty(group, p.topic_id, p.partition_index, Some(&cell), &mut st)
-                    .await;
+                persist_best_effort(mgr, group, p, &cell, &mut st).await;
                 fail_partition(p, false, code);
                 continue;
             }
@@ -591,6 +583,23 @@ async fn acquire_pass(
         }
     }
     total
+}
+
+/// Writes `st` back to the share coordinator if it is dirty, and ignores the
+/// result.
+///
+/// Best-effort: a failed write keeps the state dirty for a retry, and a fenced
+/// write drops `cell` from the cache without failing the row.
+async fn persist_best_effort(
+    mgr: &SharePartitionLeaderManager,
+    group: &str,
+    p: &PendingPartition,
+    cell: &Arc<Mutex<AcquisitionState>>,
+    st: &mut AcquisitionState,
+) {
+    let _ = mgr
+        .persist_if_dirty(group, p.topic_id, p.partition_index, Some(cell), st)
+        .await;
 }
 
 /// The error code of a partition whose log read failed, as Kafka's
