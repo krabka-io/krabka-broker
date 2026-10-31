@@ -808,6 +808,15 @@ mod tests {
         image
     }
 
+    /// Runs `count` over [`partition_shapes_image`] with the brokers in `alive`
+    /// held alive.
+    fn over_partition_shapes<T>(
+        alive: &[u64],
+        count: impl FnOnce(&MetadataImage, &HashSet<u64>) -> T,
+    ) -> T {
+        count(&partition_shapes_image(), &alive.iter().copied().collect())
+    }
+
     /// One sample's inputs over `image`, with the test defaults: node 1, not
     /// the controller, audit on, and a default minimum ISR of 2.
     #[bon::builder]
@@ -928,22 +937,20 @@ mod tests {
                 },
             },
         ];
-        let image = partition_shapes_image();
         for case in cases {
-            let alive = case.alive.iter().copied().collect();
-            let inputs = gauge_inputs()
-                .image(&image)
-                .alive(&alive)
-                .node_id(NodeId(case.node_id))
-                .is_controller(case.is_controller)
-                .audit_enabled(case.audit_enabled)
-                .call();
+            let counted = over_partition_shapes(case.alive, |image, alive| {
+                LocalPartitionHealth::count(
+                    &gauge_inputs()
+                        .image(image)
+                        .alive(alive)
+                        .node_id(NodeId(case.node_id))
+                        .is_controller(case.is_controller)
+                        .audit_enabled(case.audit_enabled)
+                        .call(),
+                )
+            });
 
-            check!(
-                LocalPartitionHealth::count(&inputs) == case.expected,
-                "{}",
-                case.name
-            );
+            check!(counted == case.expected, "{}", case.name);
         }
     }
 
@@ -1000,21 +1007,19 @@ mod tests {
                 },
             },
         ];
-        let image = partition_shapes_image();
         for case in cases {
-            let alive = case.alive.iter().copied().collect();
-            let inputs = gauge_inputs()
-                .image(&image)
-                .alive(&alive)
-                .is_controller(true)
-                .default_min_insync_replicas(case.default_min_insync_replicas)
-                .call();
+            let counted = over_partition_shapes(case.alive, |image, alive| {
+                ClusterCounts::count(
+                    &gauge_inputs()
+                        .image(image)
+                        .alive(alive)
+                        .is_controller(true)
+                        .default_min_insync_replicas(case.default_min_insync_replicas)
+                        .call(),
+                )
+            });
 
-            check!(
-                ClusterCounts::count(&inputs) == case.expected,
-                "{}",
-                case.name
-            );
+            check!(counted == case.expected, "{}", case.name);
         }
     }
 
