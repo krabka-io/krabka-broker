@@ -28,8 +28,14 @@ use {
 /// network) when `auto_join` is disabled. Otherwise loops until this broker
 /// appears in the committed voter set. Each request goes to the current leader,
 /// or rotates across `bootstrap_servers` while no leader is known.
-/// Intended to be spawned as a detached background task during `Broker::start`.
+/// Intended to be spawned as a background task during `Broker::start`. It
+/// returns when `params.shutdown` is cancelled, at any point of the loop.
 pub async fn run(params: AutoJoinParams) {
+    let shutdown = params.shutdown.clone();
+    shutdown.run_until_cancelled(join(params)).await;
+}
+
+async fn join(params: AutoJoinParams) {
     if !params.auto_join {
         return;
     }

@@ -367,6 +367,9 @@ pub struct BrokerHandle {
     /// data-plane listener.
     listen_addr: Option<SocketAddr>,
     shutdown: CancellationToken,
+    /// Stops the KIP-853 auto-join and voter-update loops, so a stopped
+    /// controller does not go on advertising itself to the quorum.
+    auto_join_shutdown: CancellationToken,
     /// The task that opens and closes data-plane listeners as this node's
     /// dynamic `listeners` changes. `None` on a node without the broker role.
     /// The accept loops themselves are in `Broker::data_plane`, and

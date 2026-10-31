@@ -27,9 +27,10 @@ use {
     tokio::time::sleep,
 };
 
-/// Advertise this controller at startup and after each leader change. The
-/// leader accepts this at both `kraft.version` levels; level zero keeps the
-/// data in memory for upgrade preflight, while level one persists it.
+/// Advertise this controller at startup and after each leader change, until
+/// `params.shutdown` is cancelled. The leader accepts this at both
+/// `kraft.version` levels; level zero keeps the data in memory for upgrade
+/// preflight, while level one persists it.
 pub async fn run_voter_updates(params: AutoJoinParams) {
     let Ok(voter_id) = i32::try_from(params.node_id.0) else {
         tracing::error!(
@@ -42,10 +43,14 @@ pub async fn run_voter_updates(params: AutoJoinParams) {
         params.advertised_controller.as_deref(),
         params.controller.controller_bound_addr(),
     );
-    advertise_forever(&params, voter_id, &listener).await;
+    // A stopped broker must not go on advertising itself to the quorum.
+    params
+        .shutdown
+        .run_until_cancelled(advertise_forever(&params, voter_id, &listener))
+        .await;
 }
 
-/// The loop of [`run_voter_updates`]: it runs for as long as the task does.
+/// The loop of [`run_voter_updates`]: it runs until the broker shuts down.
 async fn advertise_forever(
     params: &AutoJoinParams,
     voter_id: i32,

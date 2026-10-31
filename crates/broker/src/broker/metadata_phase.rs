@@ -39,6 +39,7 @@ use {
         time::{Duration, Instant},
     },
     tokio::{net::TcpListener, sync::OnceCell, time},
+    tokio_util::sync::{CancellationToken, DropGuard},
 };
 
 struct RaftTransport {
@@ -186,6 +187,10 @@ pub(super) struct MetadataControlPlane {
 pub(super) struct MetadataPhase {
     pub(super) control_plane: MetadataControlPlane,
     pub(super) audit: AuditLogArc,
+    /// Stops the auto-join and voter-update loops when dropped, so a start
+    /// that fails later stops them too. The broker handle owns it once
+    /// startup succeeds.
+    pub(super) auto_join: DropGuard,
 }
 
 async fn start_metadata_source(
@@ -342,6 +347,7 @@ fn spawn_auto_join(
     config: &BrokerConfig,
     controller: &Arc<dyn MetadataSource>,
     inter_broker_client: &Arc<InterBrokerClient>,
+    shutdown: &CancellationToken,
 ) {
     if !config.is_controller() {
         return;
@@ -367,7 +373,7 @@ fn spawn_auto_join(
             .unwrap_or_else(|| config.inter_broker_server_name.clone()),
         controller: Arc::clone(controller),
         inter_broker_client: Arc::clone(inter_broker_client),
-        shutdown: tokio_util::sync::CancellationToken::new(),
+        shutdown: shutdown.clone(),
     };
     tokio::spawn(run(params.clone()));
     tokio::spawn(run_voter_updates(params));
@@ -507,7 +513,10 @@ pub(super) async fn start_metadata_phase(
         metrics,
     )
     .await?;
-    spawn_auto_join(config, &controller.source, inter_broker_client);
+    let auto_join = CancellationToken::new();
+    spawn_auto_join(config, &controller.source, inter_broker_client, &auto_join);
+    // Every early return below drops the guard, which stops both loops.
+    let auto_join = auto_join.drop_guard();
     // A controller that stops itself over a fatal fault fails every later
     // submit with a bare "controller shut down", and each submit retries under
     // backoff first. Kafka's process halts on that fault at once and with its
@@ -520,6 +529,7 @@ pub(super) async fn start_metadata_phase(
     Ok(MetadataPhase {
         control_plane: controller,
         audit: audit_cell,
+        auto_join,
     })
 }
 
