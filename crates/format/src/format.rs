@@ -49,7 +49,7 @@
 
 use {
     krabka_metadata::{
-        KRaftVersionRecord, MetadataRecord, ScramCredentialRecord, VoterSet, VotersRecord,
+        AclEntry, KRaftVersionRecord, MetadataRecord, ScramCredentialRecord, VoterSet, VotersRecord,
         metadata_version,
     },
     krabka_security::scram::{MIN_SCRAM_ITERATIONS, hash_scram_password_with_salt},
@@ -268,17 +268,17 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
     // metadata.version, group.version, etc. at their 4.0 defaults so a fresh
     // cluster engages each feature with no manual step; a level-0 feature is
     // omitted (absent = disabled), matching `kafka-storage format`.
-    let ResolvedFeatures {
-        metadata_version: bootstrap_mv,
-        overrides: feature_overrides,
-    } = resolve_format_features(
+    let features = resolve_format_features(
         args.release_version.as_deref(),
         &args.feature,
         args.unstable_feature_versions_enable,
     )
     .map_err(|e| krabka(EXIT_INVALID_FEATURE, e))?;
-    let metadata_version = metadata_version::from_feature_level(bootstrap_mv)
-        .map_or_else(|| bootstrap_mv.to_string(), |mv| mv.ivn().to_owned());
+    let metadata_version = metadata_version::from_feature_level(features.metadata_version)
+        .map_or_else(
+            || features.metadata_version.to_string(),
+            |mv| mv.ivn().to_owned(),
+        );
 
     // The `kraft.version` rules come after the release and the feature names,
     // as in `Formatter.run`: it resolves the release, then checks the names in
@@ -294,18 +294,7 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
 
     let raft_control_records = raft_control_records(dynamic_format, initial_voters);
 
-    let mut records: Vec<MetadataRecord> =
-        krabka_metadata::bootstrap_feature_records_with_overrides(bootstrap_mv, &feature_overrides);
-    // Caller-seeded records (a restore's recovered topics) follow the feature
-    // levels that decide how they are read, and precede the credential and ACL
-    // records so a seeded ACL names a topic the image already holds.
-    records.extend(extra);
-    records.extend(scram_records(&args)?);
-    records.extend(
-        args.add_acl
-            .into_iter()
-            .map(MetadataRecord::V1AccessControlEntry),
-    );
+    let records = bootstrap_records(&features, extra, &args.add_scram, args.add_acl)?;
 
     let metadata_log_dir = args
         .metadata_log_dir
@@ -480,6 +469,30 @@ fn raft_control_records(dynamic_format: bool, initial_voters: VoterSet) -> Vec<M
     records
 }
 
+/// The non-Raft bootstrap record stream: the finalized feature levels, then
+/// `extra`, then a credential per `--add-scram`, then an entry per
+/// `--add-acl`.
+///
+/// Caller-seeded records (a restore's recovered topics) follow the feature
+/// levels that decide how they are read, and precede the credential and ACL
+/// records so a seeded ACL names a topic the image already holds.
+fn bootstrap_records(
+    features: &ResolvedFeatures,
+    extra: Vec<MetadataRecord>,
+    scram: &[ScramSpec],
+    acls: Vec<AclEntry>,
+) -> Result<Vec<MetadataRecord>, Failure> {
+    let mut records: Vec<MetadataRecord> =
+        krabka_metadata::bootstrap_feature_records_with_overrides(
+            features.metadata_version,
+            &features.overrides,
+        );
+    records.extend(extra);
+    records.extend(scram_records(scram)?);
+    records.extend(acls.into_iter().map(MetadataRecord::V1AccessControlEntry));
+    Ok(records)
+}
+
 /// The directories one run formats: `metadata_log_dir` first, then every
 /// `log_dirs` entry in the order given.
 ///
@@ -518,11 +531,11 @@ fn metadata_directory_kind(
 /// formatter's side, with `hash_scram_password_with_salt` from
 /// `krabka-security`, so the record on disk carries the stretched keys and
 /// never the plain password.
-fn scram_records(args: &FormatArgs) -> Result<Vec<MetadataRecord>, Failure> {
+fn scram_records(specs: &[ScramSpec]) -> Result<Vec<MetadataRecord>, Failure> {
     // The minimum is positive, so its magnitude is the minimum itself.
     let min = MIN_SCRAM_ITERATIONS.unsigned_abs();
-    let mut records = Vec::with_capacity(args.add_scram.len());
-    for spec in &args.add_scram {
+    let mut records = Vec::with_capacity(specs.len());
+    for spec in specs {
         if spec.iterations < min {
             return Err(krabka(
                 EXIT_LOW_ITERATIONS,
