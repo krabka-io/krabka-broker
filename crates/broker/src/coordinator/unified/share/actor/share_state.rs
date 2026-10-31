@@ -339,7 +339,15 @@ async fn write_state_partition_metadata(
         state_partition_metadata: Some(state_partition_metadata_from(state)),
         ..Default::default()
     };
-    match flush_pending(state, pending, &*coordinator.offsets_log, coordinator, now_ms).await {
+    match flush_pending(
+        state,
+        pending,
+        &*coordinator.offsets_log,
+        coordinator,
+        now_ms,
+    )
+    .await
+    {
         Ok(()) => true,
         Err(e) => {
             tracing::warn!(

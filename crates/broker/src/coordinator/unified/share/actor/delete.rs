@@ -104,8 +104,14 @@ async fn delete_share_state(
         state_partition_metadata: Some(state_partition_metadata_from(state)),
         ..Default::default()
     };
-    if let Err(error) =
-        flush_pending(state, pending, &*coordinator.offsets_log, coordinator, chrono_now_ms()).await
+    if let Err(error) = flush_pending(
+        state,
+        pending,
+        &*coordinator.offsets_log,
+        coordinator,
+        chrono_now_ms(),
+    )
+    .await
     {
         tracing::warn!(
             group_id = %state.group_id,

@@ -38,8 +38,14 @@ pub(super) async fn handle_session_tick(
         let Some(pending) = fence_member(state, metadata, &member_id) else {
             return Err(BrokerError::Share("group epoch is exhausted".to_owned()));
         };
-        if let Err(e) =
-            flush_pending(state, pending, &*coordinator.offsets_log, coordinator, chrono_now_ms()).await
+        if let Err(e) = flush_pending(
+            state,
+            pending,
+            &*coordinator.offsets_log,
+            coordinator,
+            chrono_now_ms(),
+        )
+        .await
         {
             tracing::warn!(
                 group_id = %state.group_id,

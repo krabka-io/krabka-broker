@@ -45,15 +45,7 @@ pub(super) async fn handle_heartbeat(
 
     // ─── Leave path ──────────────────────────────────────────────
     if req.member_epoch == -1 {
-        return handle_leave(
-            state,
-            config,
-            metadata,
-            coordinator,
-            req,
-            now_ms,
-        )
-        .await;
+        return handle_leave(state, config, metadata, coordinator, req, now_ms).await;
     }
 
     // ─── Member lookup ───────────────────────────────────────────
@@ -105,7 +97,14 @@ pub(super) async fn handle_heartbeat(
             pending.state_partition_metadata = Some(value);
             initialize
         });
-    flush_pending(state, pending, &*coordinator.offsets_log, coordinator, now_ms).await?;
+    flush_pending(
+        state,
+        pending,
+        &*coordinator.offsets_log,
+        coordinator,
+        now_ms,
+    )
+    .await?;
     if let Some(initialize) = initialize {
         start_initialize(state, coordinator, initialize);
     }
@@ -180,7 +179,14 @@ async fn handle_leave(
     let Some(pending) = fence_member(state, metadata, &req.member_id) else {
         return Ok(error_resp(codes::INVALID_REQUEST, config));
     };
-    flush_pending(state, pending, &*coordinator.offsets_log, coordinator, now_ms).await?;
+    flush_pending(
+        state,
+        pending,
+        &*coordinator.offsets_log,
+        coordinator,
+        now_ms,
+    )
+    .await?;
     Ok(leave_resp(&req.member_id, req.member_epoch))
 }
 
