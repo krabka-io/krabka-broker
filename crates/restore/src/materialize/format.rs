@@ -312,6 +312,30 @@ struct TopicTally {
     partitions: i32,
 }
 
+/// Every topic the archive holds, in the order its first partition appears, with each one's [`TopicTally`].
+struct TopicTallies<'a> {
+    order: Vec<&'a str>,
+    by_name: HashMap<&'a str, TopicTally>,
+}
+
+/// Count each archived topic's partitions, keeping the order in which the scan first met each topic.
+fn tally_topics(inventory: &ArchiveInventory) -> TopicTallies<'_> {
+    let mut order: Vec<&str> = Vec::new();
+    let mut by_name: HashMap<&str, TopicTally> = HashMap::new();
+    for entry in &inventory.partitions {
+        let topic = entry.partition.topic.as_str();
+        let counted = by_name.entry(topic).or_insert_with(|| {
+            order.push(topic);
+            TopicTally {
+                topic_id: entry.partition.topic_id,
+                partitions: 0,
+            }
+        });
+        counted.partitions += 1;
+    }
+    TopicTallies { order, by_name }
+}
+
 /// Build the topic and partition records a restore seeds into the target formatter, from what the archive scan recovered.
 ///
 /// Every topic's [`MetadataRecord::V1Topic`] precedes every [`MetadataRecord::V1Partition`], which is the ordering `krabka_format::run_with_records`'s own doc requires: a `MetadataImage` derives a topic's partition count from the partition records that apply after it, so a partition can only follow its own topic.
@@ -327,19 +351,10 @@ fn seed_metadata_records(
     snapshot_records: Option<&[MetadataRecord]>,
     diskless_next_offsets: &[DisklessNextOffset],
 ) -> Result<SeededMetadata, RestoreError> {
-    let mut topic_order: Vec<&str> = Vec::new();
-    let mut topics: HashMap<&str, TopicTally> = HashMap::new();
-    for entry in &inventory.partitions {
-        let topic = entry.partition.topic.as_str();
-        let counted = topics.entry(topic).or_insert_with(|| {
-            topic_order.push(topic);
-            TopicTally {
-                topic_id: entry.partition.topic_id,
-                partitions: 0,
-            }
-        });
-        counted.partitions += 1;
-    }
+    let TopicTallies {
+        order: topic_order,
+        by_name: topics,
+    } = tally_topics(inventory);
 
     let mut metadata = MetadataRestoreReport {
         snapshot,
