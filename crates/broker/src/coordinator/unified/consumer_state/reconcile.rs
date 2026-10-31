@@ -47,6 +47,60 @@ impl Subscription<'_> {
             .topic_name(topic_id)
             .is_some_and(|name| self.group.member_subscribes_to(self.member, &name))
     }
+
+    /// Splits what the member holds against its `target`. A topic the member
+    /// no longer subscribes to has an empty target, so all of it is revoked.
+    fn split_against_target(&self, target: &Partitions) -> HeldVsTarget {
+        let member = self.member;
+        let mut split = HeldVsTarget {
+            kept: Partitions::new(),
+            to_revoke: Partitions::new(),
+            wanted: Partitions::new(),
+        };
+        let topic_ids: HashSet<Uuid> = target
+            .keys()
+            .chain(member.assigned_partitions.keys())
+            .copied()
+            .collect();
+        for topic_id in topic_ids {
+            let target_here: HashSet<i32> = if self.contains(&topic_id) {
+                target
+                    .get(&topic_id)
+                    .map_or_default(|parts| parts.iter().copied().collect())
+            } else {
+                HashSet::new()
+            };
+            let held: &[i32] = member
+                .assigned_partitions
+                .get(&topic_id)
+                .map_or(&[], Vec::as_slice);
+            for &partition in held {
+                let side = if target_here.contains(&partition) {
+                    &mut split.kept
+                } else {
+                    &mut split.to_revoke
+                };
+                side.entry(topic_id).or_default().push(partition);
+            }
+            let held: HashSet<i32> = held.iter().copied().collect();
+            let new: Vec<i32> = target_here.difference(&held).copied().collect();
+            if !new.is_empty() {
+                split.wanted.insert(topic_id, new);
+            }
+        }
+        split
+    }
+}
+
+/// A member's holdings split against its target, the first phase of
+/// `computeNextAssignment`.
+struct HeldVsTarget {
+    /// The held partitions that stay in the target.
+    kept: Partitions,
+    /// The held partitions that left the target.
+    to_revoke: Partitions,
+    /// The target partitions the member does not hold yet.
+    wanted: Partitions,
 }
 
 impl GroupState {
@@ -250,42 +304,11 @@ impl GroupState {
             .get(&member.member_id)
             .unwrap_or(&no_target);
 
-        let mut kept = Partitions::new();
-        let mut to_revoke = Partitions::new();
-        // The target partitions the member does not hold yet.
-        let mut wanted = Partitions::new();
-        let topic_ids: HashSet<Uuid> = target
-            .keys()
-            .chain(member.assigned_partitions.keys())
-            .copied()
-            .collect();
-        for topic_id in topic_ids {
-            // A topic the member no longer subscribes to has an empty target.
-            let target_here: HashSet<i32> = if subscription.contains(&topic_id) {
-                target
-                    .get(&topic_id)
-                    .map_or_default(|parts| parts.iter().copied().collect())
-            } else {
-                HashSet::new()
-            };
-            let held: &[i32] = member
-                .assigned_partitions
-                .get(&topic_id)
-                .map_or(&[], Vec::as_slice);
-            for &partition in held {
-                let side = if target_here.contains(&partition) {
-                    &mut kept
-                } else {
-                    &mut to_revoke
-                };
-                side.entry(topic_id).or_default().push(partition);
-            }
-            let held: HashSet<i32> = held.iter().copied().collect();
-            let new: Vec<i32> = target_here.difference(&held).copied().collect();
-            if !new.is_empty() {
-                wanted.insert(topic_id, new);
-            }
-        }
+        let HeldVsTarget {
+            mut kept,
+            to_revoke,
+            wanted,
+        } = subscription.split_against_target(target);
 
         // `currentPartitionEpoch`: what every other member still holds,
         // assigned or pending revocation. The member's own holdings need no
