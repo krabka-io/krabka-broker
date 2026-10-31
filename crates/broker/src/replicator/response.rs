@@ -248,81 +248,7 @@ pub(super) async fn handle_partition_response(
             apply_diverging_epoch(&part_resp.diverging_epoch, cfg).await
         }
 
-        ReplicaFetchMutation::Append => {
-            let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
-                warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-                    "replicator: local partition vanished between fetches");
-                return RowAction::Continue;
-            };
-            let _target_guard = krabka_macros::replication_target_guard!(
-                part,
-                cfg,
-                "replicator: discarding response for stale local target"
-            );
-            if let Some(records) = &part_resp.records {
-                restart_at_first_batch_base(&part, cfg, records).await;
-            }
-            match part_resp.records.take() {
-                Some(RecordsPayload::Raw(bytes)) => {
-                    let action = replicate_raw_batches(&part, cfg, bytes).await;
-                    if action != RowAction::Continue {
-                        return action;
-                    }
-                }
-                Some(RecordsPayload::V2(batches)) => {
-                    for batch in batches {
-                        if replication_target_changed(cfg) {
-                            return RowAction::Drop;
-                        }
-                        // Capture byte count before the move into replicate_batch
-                        // so the metrics update only fires on a successful append.
-                        // PERF — measured; decision: KEEP. `encoded_len()` is
-                        // computed here for the metric and again inside the append
-                        // path; threading a single computation through would save
-                        // the re-walk, but that changes the writer API
-                        // (cross-file). `benches/perf_deferrals.rs` times the walk
-                        // against the `replicate_batch` it precedes, over the
-                        // batch shapes a producer actually writes: 0.01% of the
-                        // append for one 100 KiB record, ~1% for 100 x 1 KiB, ~4%
-                        // for 1000 x 100 B. Even that worst shape's ~4% sits
-                        // inside the append's own run-to-run spread, so the
-                        // re-walk is not separable from noise in production.
-                        // Those three figures are what the `bench` job of the `ci`
-                        // workflow measures on the nightly schedule and prints in
-                        // its job summary; the latest scheduled `ci` run in the
-                        // Actions tab is the reproducible reading, and its
-                        // `criterion-baseline` artifact holds the samples.
-                        // Revisit only if the replicator's shape mix moves to very
-                        // wide batches of tiny records, where the walk is a
-                        // per-record cost and the append is not.
-                        let batch_bytes = batch.encoded_len();
-                        if let Err(e) = part.replicate_batch(batch).await {
-                            warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
-                            "replicator: replicate_batch failed");
-                            if let Some(offline) = offline_after_failed_append(&part, cfg) {
-                                return offline;
-                            }
-                            break;
-                        }
-                        record_replicated(cfg, u64::try_from(batch_bytes).unwrap_or(0));
-                    }
-                }
-                _ => {}
-            }
-            // KIP-392: record the leader's high watermark so consumer reads
-            // served from this follower are bounded correctly. Done on every
-            // successful response, including empty ones. Wrap the wire `i64`.
-            if replication_target_changed(cfg) {
-                return RowAction::Drop;
-            }
-            part.set_follower_hw(Offset(part_resp.high_watermark)).await;
-            // KIP-73: the lag behind the leader's high watermark decides
-            // whether the follower throttle applies to this partition.
-            cfg.lag
-                .update(part_resp.high_watermark, part.log_end_offset().0);
-            follow_leader_log_start(&part, cfg, part_resp.log_start_offset).await;
-            RowAction::Continue
-        }
+        ReplicaFetchMutation::Append => append_records(part_resp, cfg).await,
 
         ReplicaFetchMutation::Retry => match part_resp.error_code {
             codes::OFFSET_OUT_OF_RANGE => handle_offset_out_of_range(cfg).await,
@@ -437,6 +363,101 @@ async fn apply_diverging_epoch(diverging_epoch: &EpochEndOffset, cfg: &Config) -
                 "replicator: truncate_to(diverging_epoch) failed"
             ),
         }
+    }
+    RowAction::Continue
+}
+
+/// Appends the records a row carries, then records the leader's progress.
+async fn append_records(part_resp: &mut PartitionData, cfg: &Config) -> RowAction {
+    let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
+        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
+            "replicator: local partition vanished between fetches");
+        return RowAction::Continue;
+    };
+    let _target_guard = krabka_macros::replication_target_guard!(
+        part,
+        cfg,
+        "replicator: discarding response for stale local target"
+    );
+    if let Some(records) = &part_resp.records {
+        restart_at_first_batch_base(&part, cfg, records).await;
+    }
+    let action = match part_resp.records.take() {
+        Some(RecordsPayload::Raw(bytes)) => replicate_raw_batches(&part, cfg, bytes).await,
+        Some(RecordsPayload::V2(batches)) => replicate_v2_batches(&part, cfg, batches).await,
+        _ => RowAction::Continue,
+    };
+    if action != RowAction::Continue {
+        return action;
+    }
+    record_leader_progress(&part, cfg, part_resp).await
+}
+
+/// Records the leader's high watermark, this follower's lag behind it and the
+/// leader's log start, from a row whose records were appended.
+async fn record_leader_progress(
+    part: &Partition,
+    cfg: &Config,
+    part_resp: &PartitionData,
+) -> RowAction {
+    // KIP-392: record the leader's high watermark so consumer reads
+    // served from this follower are bounded correctly. Done on every
+    // successful response, including empty ones. Wrap the wire `i64`.
+    if replication_target_changed(cfg) {
+        return RowAction::Drop;
+    }
+    part.set_follower_hw(Offset(part_resp.high_watermark)).await;
+    // KIP-73: the lag behind the leader's high watermark decides
+    // whether the follower throttle applies to this partition.
+    cfg.lag
+        .update(part_resp.high_watermark, part.log_end_offset().0);
+    follow_leader_log_start(part, cfg, part_resp.log_start_offset).await;
+    RowAction::Continue
+}
+
+/// Replicates decoded V2 batches one at a time. A failed append stops the
+/// row; it stops following the partition only when its log directory went
+/// offline.
+async fn replicate_v2_batches(
+    part: &Partition,
+    cfg: &Config,
+    batches: Vec<RecordBatch>,
+) -> RowAction {
+    for batch in batches {
+        if replication_target_changed(cfg) {
+            return RowAction::Drop;
+        }
+        // Capture byte count before the move into replicate_batch
+        // so the metrics update only fires on a successful append.
+        // PERF — measured; decision: KEEP. `encoded_len()` is
+        // computed here for the metric and again inside the append
+        // path; threading a single computation through would save
+        // the re-walk, but that changes the writer API
+        // (cross-file). `benches/perf_deferrals.rs` times the walk
+        // against the `replicate_batch` it precedes, over the
+        // batch shapes a producer actually writes: 0.01% of the
+        // append for one 100 KiB record, ~1% for 100 x 1 KiB, ~4%
+        // for 1000 x 100 B. Even that worst shape's ~4% sits
+        // inside the append's own run-to-run spread, so the
+        // re-walk is not separable from noise in production.
+        // Those three figures are what the `bench` job of the `ci`
+        // workflow measures on the nightly schedule and prints in
+        // its job summary; the latest scheduled `ci` run in the
+        // Actions tab is the reproducible reading, and its
+        // `criterion-baseline` artifact holds the samples.
+        // Revisit only if the replicator's shape mix moves to very
+        // wide batches of tiny records, where the walk is a
+        // per-record cost and the append is not.
+        let batch_bytes = batch.encoded_len();
+        if let Err(e) = part.replicate_batch(batch).await {
+            warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
+            "replicator: replicate_batch failed");
+            if let Some(offline) = offline_after_failed_append(part, cfg) {
+                return offline;
+            }
+            break;
+        }
+        record_replicated(cfg, u64::try_from(batch_bytes).unwrap_or(0));
     }
     RowAction::Continue
 }
