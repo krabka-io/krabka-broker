@@ -38,7 +38,6 @@ use {
         find_coordinator_request::FindCoordinatorRequest,
         find_coordinator_response::{Coordinator, FindCoordinatorResponse},
     },
-    std::sync::Arc,
 };
 
 mod authz;
@@ -136,7 +135,9 @@ pub async fn handle(
     // to the legacy top-level `advertised_listener` when the connection
     // listener isn't among this broker's configured listeners.
     let advertised = local_advertised_for_listener(&broker.config, ctx.connection_listener_name);
-    let controller = Arc::clone(&broker.controller);
+    // One metadata snapshot answers the whole request: the ClusterAction
+    // check, every key's admission, and the coordinator lookups.
+    let image = broker.controller.current_image();
 
     // For v4+, requests carry `coordinator_keys`. For v0-v3 the single `key`
     // field is what the client cares about; it becomes a one-row list so the
@@ -163,7 +164,7 @@ pub async fn handle(
     // principal is answered 31 like the others.
     if req.key_type == KEY_TYPE_SHARE
         && version >= 6
-        && !cluster_action_allowed(broker, &controller.current_image(), ctx)
+        && !cluster_action_allowed(broker, &image, ctx)
     {
         return Ok(request_error_response(
             version,
@@ -184,14 +185,7 @@ pub async fn handle(
     // GROUP and TRANSACTION require `Describe` on their keyed resources; a
     // SHARE key must be well formed and the request v6+. Refused keys retain
     // their original response slots while admitted keys resolve normally.
-    let key_slots = authorize_keys(
-        broker,
-        &controller.current_image(),
-        ctx,
-        version,
-        req.key_type,
-        keys,
-    );
+    let key_slots = authorize_keys(broker, &image, ctx, version, req.key_type, keys);
     let keys: Vec<String> = key_slots
         .iter()
         .filter_map(|slot| match slot {
@@ -205,7 +199,6 @@ pub async fn handle(
         Vec::new()
     } else {
         let state_topic = kind.state_topic();
-        let image = controller.current_image();
         if image.topic(state_topic).is_none() {
             // Kafka asks `AutoTopicCreationManager.createTopics` for the
             // state topic without a request context, and answers
