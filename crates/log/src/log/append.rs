@@ -338,6 +338,35 @@ impl Log {
         self.log_end_offset().max(self.reconciled_frontier)
     }
 
+    /// Check a batch that keeps its offsets before anything is written for
+    /// it, and return its last offset.
+    ///
+    /// The log must be unfenced with no failed rollover flush, the interval
+    /// `base..=base + last_offset_delta` must start at or past
+    /// [`Log::append_at_expected_offset`] and must not overflow, and the
+    /// producer's sequence tail must be well formed.
+    pub(super) fn check_append_frontier(
+        &self,
+        base: Offset,
+        last_offset_delta: i32,
+        producer_id: ProducerId,
+        base_sequence: i32,
+    ) -> Result<Offset, LogError> {
+        self.ensure_unfenced()?;
+        self.rollover_flusher.check()?;
+        let Some((last_offset, _)) = krabka_verified::local_append_coordinates(
+            self.append_at_expected_offset().0,
+            base.0,
+            last_offset_delta,
+        ) else {
+            return Err(LogError::InvalidArgument(
+                "batch does not form a valid interval at the append frontier".into(),
+            ));
+        };
+        Self::data_producer_tail(producer_id, base_sequence, last_offset_delta, base)?;
+        Ok(Offset(last_offset))
+    }
+
     /// Kafka's `UnifiedLog.append` check for an append that takes its offsets
     /// as given (`appendAsFollower`): the first offset must not be below the
     /// log end offset, so a batch that starts below it is a duplicate or a
@@ -456,24 +485,12 @@ impl Log {
         transaction_stamp: Option<u64>,
         verbatim: Option<&[u8]>,
     ) -> Result<(), LogError> {
-        self.ensure_unfenced()?;
-        self.rollover_flusher.check()?;
         let base_offset = Offset(batch.base_offset);
-        let Some((last_offset, _)) = krabka_verified::local_append_coordinates(
-            self.append_at_expected_offset().0,
-            batch.base_offset,
+        let last_offset = self.check_append_frontier(
+            base_offset,
             batch.last_offset_delta,
-        ) else {
-            return Err(LogError::InvalidArgument(
-                "batch does not form a valid interval at the append frontier".into(),
-            ));
-        };
-        let last_offset = Offset(last_offset);
-        Self::data_producer_tail(
             ProducerId(batch.producer_id),
             batch.base_sequence,
-            batch.last_offset_delta,
-            Offset(batch.base_offset),
         )?;
         check_control_record_versions(batch)?;
         let stored = if let Some(bytes) = verbatim {
