@@ -214,6 +214,16 @@ fn trigger_all_dirs_offline_shutdown(cfg: &Config, reason: &str) {
     cfg.supervisor_shutdown.cancel();
 }
 
+/// Runs the KIP-112 self-shutdown, with `reason`, when every configured log
+/// dir is offline, and says whether it did.
+fn stop_if_all_dirs_offline(cfg: &Config, reason: &str) -> bool {
+    let offline = all_log_dirs_offline(cfg);
+    if offline {
+        trigger_all_dirs_offline_shutdown(cfg, reason);
+    }
+    offline
+}
+
 /// The broker epoch a heartbeat names: the newest registration of this
 /// process, as [`own_broker_epoch`] reads it from `image`.
 fn registered_epoch(cfg: &Config, image: &krabka_metadata::MetadataImage) -> i64 {
@@ -312,8 +322,7 @@ pub async fn run(mut cfg: Config) {
         }
         // KIP-112 check: even if we cannot reach the controller, self-shutdown
         // must fire as long as every log dir is offline.
-        if all_log_dirs_offline(&cfg) {
-            trigger_all_dirs_offline_shutdown(&cfg, "detected before controller resolution");
+        if stop_if_all_dirs_offline(&cfg, "detected before controller resolution") {
             return;
         }
         // Resolve the current controller leader's CONTROLLER-listener address
@@ -428,8 +437,7 @@ pub async fn run(mut cfg: Config) {
         // window where dirs went offline *during* the connect/send. The
         // top-of-tick check already handles dirs that were offline before
         // leader resolution; this one handles the same-tick race.
-        if all_log_dirs_offline(&cfg) {
-            trigger_all_dirs_offline_shutdown(&cfg, "detected after heartbeat send");
+        if stop_if_all_dirs_offline(&cfg, "detected after heartbeat send") {
             // Returning stops heartbeats; if shutdown drags, the controller's
             // session timeout fences this broker independently.
             return;
