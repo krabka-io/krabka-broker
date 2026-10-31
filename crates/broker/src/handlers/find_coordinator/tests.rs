@@ -95,11 +95,13 @@ fn legacy_coordinator_error(
 
 const KAFKA_TOPIC_ID: &str = "BQUFBQUFBQUFBQUFBQUFBQ";
 
+/// Denies `Describe` on the resource of this type named `denied`, and allows
+/// everything else.
 #[derive(Debug)]
-struct DenyOneTransaction;
+struct DenyDescribeOf(ResourceType);
 
-krabka_macros::test_authorizer!(DenyOneTransaction, request; {
-    if request.resource_type == ResourceType::TransactionalId
+krabka_macros::test_authorizer!(DenyDescribeOf, request; {
+    if request.resource_type == self.0
         && request.operation == AclOperation::Describe
         && request.resource_name == "denied"
     {
@@ -209,7 +211,7 @@ async fn mixed_rejection_and_resolution_preserve_key_order_and_errors() {
         broker: broker_handle,
         dir: _dir,
     } = start_broker_no_audit_with(|config| {
-        config.authorizer = Arc::new(DenyOneTransaction);
+        config.authorizer = Arc::new(DenyDescribeOf(ResourceType::TransactionalId));
         config.transaction_state_replication_factor = 1;
     })
     .await;
@@ -852,20 +854,6 @@ async fn a_lookup_with_too_few_brokers_creates_nothing_until_enough_register() {
     broker_handle.shutdown().await;
 }
 
-#[derive(Debug)]
-struct DenyOneGroup;
-
-krabka_macros::test_authorizer!(DenyOneGroup, request; {
-    if request.resource_type == ResourceType::Group
-        && request.operation == AclOperation::Describe
-        && request.resource_name == "denied"
-    {
-        AuthorizationResult::Deny
-    } else {
-        AuthorizationResult::Allow
-    }
-});
-
 /// A v4+ group batch with one denied key: the denied key gets its own
 /// `GROUP_AUTHORIZATION_FAILED` row with no message and no node, and the
 /// allowed key on either side of it resolves to this broker.
@@ -875,7 +863,7 @@ async fn mixed_group_batch_answers_the_denied_key_in_its_slot() {
         broker: broker_handle,
         dir: _dir,
     } = start_broker_no_audit_with(|config| {
-        config.authorizer = Arc::new(DenyOneGroup);
+        config.authorizer = Arc::new(DenyDescribeOf(ResourceType::Group));
         config.offsets_topic_replication_factor = 1;
     })
     .await;
