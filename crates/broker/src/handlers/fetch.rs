@@ -216,7 +216,7 @@ pub async fn handle(
                 broker
                     .metrics
                     .observe_request_phases(FETCH_API_KEY, &phases);
-                let (throttle_time_ms, charge) = apply_consumer_fetch_quota(
+                resp.throttle_time_ms = apply_consumer_fetch_quota(
                     broker,
                     &broker.controller.current_image(),
                     ctx,
@@ -224,10 +224,6 @@ pub async fn handle(
                     handler_clock.active(),
                     fetch_response_size(&resp, version),
                 );
-                if throttle_time_ms > 0 {
-                    charge.refund();
-                }
-                resp.throttle_time_ms = throttle_time_ms;
             }
             return Ok((resp, version));
         }
@@ -374,7 +370,7 @@ pub async fn handle(
             .observe_request_throttle_duration(FETCH_API_KEY, 0.0);
         0
     } else {
-        let (throttle_time_ms, charge) = apply_consumer_fetch_quota(
+        let throttle_time_ms = apply_consumer_fetch_quota(
             broker,
             &image,
             ctx,
@@ -383,10 +379,9 @@ pub async fn handle(
             fetch_response_size(&resp, version),
         );
         if throttle_time_ms > 0 {
-            // Kafka's throttled consumer fetch: the bytes come off the quota
+            // Kafka's throttled consumer fetch: the bytes came off the quota
             // again, the session is left as it was, and the response is
             // empty with the throttle in it.
-            charge.refund();
             refresh_fetch_session_metrics(broker);
             return Ok((
                 FetchResponse {

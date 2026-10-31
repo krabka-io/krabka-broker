@@ -159,7 +159,7 @@ pub(super) fn consumer_quota_window_bytes(
 
 /// The byte-rate charge a consumer fetch made, in bytes, which a throttled
 /// fetch gives back.
-pub struct ConsumerCharge(Option<ChargedBucket>);
+pub(super) struct ConsumerCharge(Option<ChargedBucket>);
 
 /// The bucket a consumer fetch drew from and the bytes it drew.
 struct ChargedBucket {
@@ -183,8 +183,9 @@ impl ConsumerCharge {
 /// `handler_time` to the latter, as Kafka's `KafkaApis.handleFetchRequest`
 /// records both with `fetchContext.getResponseSize` and
 /// `KafkaApis.processShareFetchResponse` with `shareFetchContext.responseSize`.
-/// Returns the throttle the `api_key` response reports, and the byte-rate
-/// charge to give back when that throttle is above zero.
+/// Returns the throttle the `api_key` response reports. A fetch whose throttle
+/// is above zero gives its byte-rate charge back, as Kafka's
+/// `quotas.fetch.unrecordQuotaSensor` does: see [`settle_consumer_throttle`].
 pub fn apply_consumer_fetch_quota(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
@@ -192,7 +193,7 @@ pub fn apply_consumer_fetch_quota(
     api_key: ApiKeyCode,
     handler_time: Duration,
     response_bytes: u64,
-) -> (i32, ConsumerCharge) {
+) -> i32 {
     let ConsumerQuotaOutcome {
         throttle: data_delay,
         charge,
@@ -211,13 +212,30 @@ pub fn apply_consumer_fetch_quota(
         (QuotaType::Fetch, data_delay).into(),
         (QuotaType::Request, request_delay).into(),
     ]);
+    settle_consumer_throttle(context, delay, charge)
+}
+
+/// Records the KIP-219 `delay` a consumer fetch earned and returns the
+/// throttle its response reports. A response that reports a throttle sends
+/// no records, so it gives `charge` back. A delay under half a millisecond
+/// is still recorded, but it reports no throttle, so the fetch keeps its
+/// charge.
+fn settle_consumer_throttle(
+    context: &RequestContext<'_>,
+    delay: Time,
+    charge: ConsumerCharge,
+) -> i32 {
     if delay <= <Time as TimeExt>::ZERO {
-        return (0, charge);
+        return 0;
     }
     // KIP-219: the window goes back to the connection loop, which mutes the
     // connection after the response is written.
     context.record_throttle(delay);
-    (throttle_time_ms(delay), charge)
+    let throttle_time_ms = throttle_time_ms(delay);
+    if throttle_time_ms > 0 {
+        charge.refund();
+    }
+    throttle_time_ms
 }
 
 /// What Kafka's `FetchContext.getResponseSize` charges a whole Fetch response
@@ -310,7 +328,7 @@ mod tests {
         },
         assert2::{assert, check},
         krabka_protocol::owned::fetch_response::FetchResponse,
-        krabka_units::{Time, convert::TimeExt, millis, secs},
+        krabka_units::{Time, convert::TimeExt, micros, millis, secs},
         std::{sync::Arc, time::Duration},
     };
 
@@ -399,6 +417,68 @@ mod tests {
         assert!(throttle > <Time as TimeExt>::ZERO, "{throttle:?}");
         assert!(after_refund == <Time as TimeExt>::ZERO, "{after_refund:?}");
         assert!(after_kept > millis(1_400), "{after_kept:?}");
+    }
+
+    /// What settling one consumer fetch's throttle did.
+    #[derive(Debug, PartialEq)]
+    struct Settled {
+        throttle_time_ms: i32,
+        recorded: Time,
+        refunded: bool,
+    }
+
+    /// A fetch reports its delay rounded to the nearest millisecond, and only
+    /// a fetch that reports a throttle gives its charge back. A delay under
+    /// half a millisecond still mutes the connection for that long, but the
+    /// response reports no throttle and carries its records, so the fetch
+    /// keeps its charge.
+    #[test]
+    fn only_a_reported_throttle_gives_the_charge_back() {
+        let img = image_with_quota().key("consumer_byte_rate").call();
+        let consume = |buckets: &QuotaBuckets, bytes| {
+            super::consume_consumer_quota(&img, buckets, "alice", Some("app"), bytes)
+        };
+        let cases = [
+            ("no delay", <Time as TimeExt>::ZERO, Settled {
+                throttle_time_ms: 0,
+                recorded: <Time as TimeExt>::ZERO,
+                refunded: false,
+            }),
+            ("sub-millisecond", micros(400), Settled {
+                throttle_time_ms: 0,
+                recorded: micros(400),
+                refunded: false,
+            }),
+            ("rounds up to a millisecond", micros(500), Settled {
+                throttle_time_ms: 1,
+                recorded: micros(500),
+                refunded: true,
+            }),
+            ("whole milliseconds", millis(5), Settled {
+                throttle_time_ms: 5,
+                recorded: millis(5),
+                refunded: true,
+            }),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (name, delay, want) in cases {
+            krabka_macros::request_test_identity! {
+                bind(user, peer, context);
+                user ["alice"];
+                client ["app"];
+            };
+            let buckets = QuotaBuckets::with_window(secs(1));
+            let ConsumerQuotaOutcome { charge, .. } = consume(&buckets, 1_500);
+            let throttle_time_ms = super::settle_consumer_throttle(&context, delay, charge);
+            actual.push((name, Settled {
+                throttle_time_ms,
+                recorded: context.take_throttle(),
+                refunded: consume(&buckets, 1_000).throttle == <Time as TimeExt>::ZERO,
+            }));
+            expected.push((name, want));
+        }
+        assert!(actual == expected);
     }
 
     /// Kafka's `ClientQuotaManager` holds `consumer_byte_rate` as a double,
