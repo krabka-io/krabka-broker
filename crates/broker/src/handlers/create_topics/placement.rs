@@ -5,9 +5,11 @@
 
 use {
     crate::{
+        broker::Broker,
         codes,
-        config_keys::resolve_broker_witness,
+        config_keys::{resolve_broker_witness, witness_node_ids},
         cordoned_log_dirs::fully_cordoned_brokers,
+        handlers::offline_replicas::unavailable_brokers,
         site_placement::{
             PlacementRng, SiteBrokerView, placement_failure_reason, stretch_replicas,
         },
@@ -333,6 +335,77 @@ pub fn site_broker_views(
     }
     views.sort_by_key(|view| view.node_id);
     views
+}
+
+/// The brokers a placement of new partitions chooses from, and the brokers
+/// that the ISR of a new partition leaves out.
+pub struct PlacementCandidates {
+    /// The registered brokers as the site-aware placement sees them: see
+    /// [`site_broker_views`].
+    pub brokers: Vec<SiteBrokerView>,
+    /// The brokers that Kafka's `ClusterControlManager.isActive` refuses: see
+    /// [`inactive_brokers`].
+    pub inactive: HashSet<u64>,
+}
+
+/// The [`PlacementCandidates`] for new partitions on `image`. `manual` is
+/// true when the request names the replicas of each partition.
+pub async fn placement_candidates(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    manual: bool,
+) -> PlacementCandidates {
+    // Read the current broker set from the controller's image, with the
+    // site and the witness role of each broker. `site_broker_views` sorts
+    // by node id for determinism, and it covers the race in which the
+    // self-registration record has not reached the local image yet.
+    // The automatic placement leaves out a broker that is in controlled
+    // shutdown and not fenced, and one whose log directories are all
+    // cordoned (KIP-1066). It takes a fenced broker only as a last resort,
+    // as Kafka's placer does. A broker that a controlled shutdown stopped
+    // is fenced, so it is such a last resort. The ISR leaves that broker
+    // out. A manual assignment may name any registered broker, because
+    // Kafka 4.3.1 checks only that the broker is registered, and the ISR
+    // again leaves out the inactive ones.
+    let unavailable = unavailable_brokers(broker, image).await;
+    let inactive = inactive_brokers(image, &unavailable);
+    let no_exclusion = HashSet::new();
+    let unusable = automatic_placement_exclusions(image, &unavailable);
+    let brokers = site_broker_views(
+        image,
+        broker.config.is_broker().then_some(broker.config.node_id),
+        if manual { &no_exclusion } else { &unusable },
+        &unavailable,
+    );
+    PlacementCandidates { brokers, inactive }
+}
+
+/// The starting leadership of each partition in `assignments`:
+/// [`manual_leaderships`] when `manual` is true, else
+/// [`automatic_leaderships`]. `inactive` is
+/// [`PlacementCandidates::inactive`], and `first_partition` is the index of
+/// the first partition in `assignments`.
+///
+/// # Errors
+/// Returns the `INVALID_REPLICA_ASSIGNMENT` message of
+/// [`manual_leaderships`].
+pub fn choose_leaderships(
+    assignments: &[Vec<krabka_raft::NodeId>],
+    inactive: &HashSet<u64>,
+    image: &krabka_metadata::MetadataImage,
+    manual: bool,
+    first_partition: i32,
+) -> Result<Vec<InitialLeadership>, String> {
+    if manual {
+        manual_leaderships(
+            assignments,
+            inactive,
+            &witness_node_ids(image),
+            first_partition,
+        )
+    } else {
+        Ok(automatic_leaderships(assignments, inactive))
+    }
 }
 
 /// The replica list of each partition of a new topic.

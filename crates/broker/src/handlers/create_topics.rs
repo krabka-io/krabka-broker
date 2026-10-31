@@ -40,9 +40,8 @@ mod tests;
 pub use self::{
     creation::TopicCreation,
     placement::{
-        InitialLeadership, automatic_leaderships, automatic_placement_exclusions, inactive_brokers,
-        manual_leaderships, placement_failure_message, site_broker_views,
-        validate_manual_partition_assignment,
+        InitialLeadership, PlacementCandidates, choose_leaderships, placement_candidates,
+        placement_failure_message, validate_manual_partition_assignment,
     },
     response::creatable_topic_configs,
 };
