@@ -2,7 +2,10 @@
 
 use {
     super::{Log, VerbatimBatch, open::DataProducerAppend},
-    crate::{DeliveryPolicy, LogError, SegmentAllocation, segment::PlacedBatch},
+    crate::{
+        DeliveryPolicy, LogError, SegmentAllocation,
+        segment::{PlacedBatch, TailSizes},
+    },
     krabka_ids::Offset,
     krabka_protocol::records::{Attributes, CRC_COVERAGE_START, HEADER_LEN, TimestampType},
     krabka_units::prelude::{ByteSize, ByteSizeExt as _, mebibytes},
@@ -88,7 +91,7 @@ impl Log {
         }
         let active = self.active.as_mut()?;
         active.reserve(config.segment_size);
-        active.write_direct(config.tail_cache_size);
+        active.write_direct(TailSizes::of(&config));
         if !active.writes_direct() {
             return None;
         }
@@ -106,6 +109,7 @@ impl Log {
             .as_mut()
             .ok_or_else(super::no_active_segment)?
             .append_verbatim_group(batches, index_interval)?;
+        self.release_covered_sealed_tail();
         let result = (|| {
             for &PlacedBatch { batch, base } in batches {
                 self.flush_after_append(batch.last_offset_delta, false)?;

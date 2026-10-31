@@ -2129,9 +2129,27 @@
             "null"
           ]
         },
+        "log_tail_cache_budget": {
+          "default": null,
+          "description": "The most memory the partitions with `preallocate=true` keep for their\nnewest data, in all. A partition keeps `log_tail_cache_size` whatever\nthe total, and grows towards `log_tail_cache_max` only while the\ntotal is under this; at it, a partition keeps the size it has. The\ndefault is an eighth of the memory limit of the broker's cgroup, or an\neighth of the machine's memory without one.",
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log_tail_cache_max": {
+          "default": null,
+          "description": "The most of its newest data a partition with `preallocate=true` keeps\nin memory once it grows past `log_tail_cache_size`. At the disk's rate\na fixed 8 MiB is 7 to 25 ms of one partition's data, so any pause of\nits consumer sent its fetches to the disk, where they competed with\nthe appends and the consumer fell further behind; a 1 GiB window kept\na single-partition consumer at 1.17M 1 KiB records/s up with a 50 ms\nend-to-end p99. The default is 1 GiB.",
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "log_tail_cache_size": {
           "default": null,
-          "description": "How much of the newest data a partition with `preallocate=true` keeps\nin memory to serve reads with. Such a partition writes its active\nsegment through `O_DIRECT`, which bypasses the page cache, so without\nthis a consumer reading right behind the producer reads from disk.\nEvery such partition holds up to this much, plus one batch. The\ndefault is 8 MiB, and 0 keeps only the newest batch.",
+          "description": "How much of the newest data a partition with `preallocate=true` keeps\nin memory to serve reads with. Such a partition writes its active\nsegment through `O_DIRECT`, which bypasses the page cache, so without\nthis a consumer reading right behind the producer reads from disk.\nEvery such partition holds up to this much, plus one batch. The\ndefault is 8 MiB, and 0 keeps only the newest batch. This is each\nsuch partition's floor: a busy one keeps more, up to\n`log_tail_cache_max`, while the partitions together hold less than\n`log_tail_cache_budget`.",
           "format": "byte-size",
           "type": [
             "string",

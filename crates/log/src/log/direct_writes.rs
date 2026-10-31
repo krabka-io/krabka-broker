@@ -241,6 +241,35 @@ fn inline_direct_reads_require_the_index_floor_and_payload_in_cache() {
     assert2::assert!(log.read_raw(Offset(8), Offset(9), NO_LIMIT).unwrap().bytes == expected);
 }
 
+/// A segment that rolls after writing directly keeps its window: a read of
+/// its end stays in memory, on the inline path and with the file's bytes gone,
+/// until the next segment's window holds as much.
+#[test]
+fn a_sealed_segment_keeps_its_window_until_the_next_one_holds_as_much() {
+    let disk = Arc::new(AlignedDisk::default());
+    let TempLog { dir, mut log } = direct_log(&disk, mebibytes(1));
+    append_samples(&mut log, 3, 3);
+    assert2::assert!(log.roll().unwrap());
+    let expected = log.read_raw(Offset(6), Offset(9), NO_LIMIT).unwrap().bytes;
+    assert2::assert!(!expected.is_empty());
+    assert2::assert!(!log.read_may_block(Offset(6)));
+    OpenOptions::new()
+        .write(true)
+        .open(name::log_path(dir.path(), 0))
+        .unwrap()
+        .set_len(0)
+        .unwrap();
+    let plan = log.plan_raw_read(Offset(6), Offset(9), NO_LIMIT).unwrap();
+    assert2::assert!(!plan.may_block());
+    assert2::assert!(plan.read_bytes().unwrap().bytes == expected);
+
+    // The next segment's window grows as large, and the kept one goes.
+    append_samples(&mut log, 2, 3);
+    assert2::assert!(!log.read_may_block(Offset(6)));
+    append_samples(&mut log, 1, 3);
+    assert2::assert!(log.read_may_block(Offset(6)));
+}
+
 #[test]
 fn direct_read_placement_tracks_truncation_and_mode_changes() {
     let disk = Arc::new(AlignedDisk::default());

@@ -108,9 +108,9 @@ pub use stamp_source::MonotonicStampSource;
 pub use {
     barrier_marker::{BarrierMarker, parse_barrier_marker},
     config::{
-        CleanupPolicy, DEFAULT_MAX_MESSAGE_SIZE, DEFAULT_READ_AHEAD_MAX, DEFAULT_TAIL_CACHE_SIZE,
-        DEFAULT_WRITEBACK_WINDOW, DeliveryPolicy, LogConfig, RemoteTierFlags, ScheduleOrder,
-        SegmentAllocation,
+        CleanupPolicy, DEFAULT_MAX_MESSAGE_SIZE, DEFAULT_READ_AHEAD_MAX, DEFAULT_TAIL_CACHE_MAX,
+        DEFAULT_TAIL_CACHE_SIZE, DEFAULT_WRITEBACK_WINDOW, DeliveryPolicy, LogConfig,
+        RemoteTierFlags, ScheduleOrder, SegmentAllocation,
     },
     delivery::{DeliveryAdvance, batch_is_deliverable},
     error::LogError,
@@ -130,7 +130,7 @@ pub use {
         SnapshotDecodeError, decode as decode_producer_snapshot,
     },
     retention::now_ms as epoch_ms,
-    segment::{RawSegmentRead, Segment},
+    segment::{RawSegmentRead, Segment, TailArena},
     stamp_index::{StampEntry, StampIndex},
     stamp_source::StampSource,
     txn_index::{AbortedTxn, TxnIndex},

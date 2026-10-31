@@ -128,8 +128,26 @@ pub struct RuntimeFileConfig {
     /// segment through `O_DIRECT`, which bypasses the page cache, so without
     /// this a consumer reading right behind the producer reads from disk.
     /// Every such partition holds up to this much, plus one batch. The
-    /// default is 8 MiB, and 0 keeps only the newest batch.
+    /// default is 8 MiB, and 0 keeps only the newest batch. This is each
+    /// such partition's floor: a busy one keeps more, up to
+    /// `log_tail_cache_max`, while the partitions together hold less than
+    /// `log_tail_cache_budget`.
     pub log_tail_cache_size: Option<ByteSize>,
+    /// The most of its newest data a partition with `preallocate=true` keeps
+    /// in memory once it grows past `log_tail_cache_size`. At the disk's rate
+    /// a fixed 8 MiB is 7 to 25 ms of one partition's data, so any pause of
+    /// its consumer sent its fetches to the disk, where they competed with
+    /// the appends and the consumer fell further behind; a 1 GiB window kept
+    /// a single-partition consumer at 1.17M 1 KiB records/s up with a 50 ms
+    /// end-to-end p99. The default is 1 GiB.
+    pub log_tail_cache_max: Option<ByteSize>,
+    /// The most memory the partitions with `preallocate=true` keep for their
+    /// newest data, in all. A partition keeps `log_tail_cache_size` whatever
+    /// the total, and grows towards `log_tail_cache_max` only while the
+    /// total is under this; at it, a partition keeps the size it has. The
+    /// default is an eighth of the memory limit of the broker's cgroup, or an
+    /// eighth of the machine's memory without one.
+    pub log_tail_cache_budget: Option<ByteSize>,
     /// How many bytes a partition written through the page cache appends
     /// between background write-outs of its active segment. The broker asks
     /// the kernel to write the segment's new whole pages out

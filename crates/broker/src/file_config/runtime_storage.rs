@@ -60,6 +60,7 @@ impl RuntimeFileConfig {
                 log_timestamp_scan_window => log_config.timestamp_scan_window;
             kafka_long_bytes: log_read_ahead_max => log_config.read_ahead_max,
                 log_tail_cache_size => log_config.tail_cache_size,
+                log_tail_cache_max => log_config.tail_cache_max,
                 log_writeback_window => log_config.writeback_window;
         }
         // The log's own default is no budget; the broker fills an unset one
@@ -68,6 +69,10 @@ impl RuntimeFileConfig {
         if let Some(value) = runtime.log_page_cache_budget {
             cfg.log_config.page_cache_budget =
                 Some(kafka_long_bytes("log_page_cache_budget", value)?);
+        }
+        if let Some(value) = runtime.log_tail_cache_budget {
+            cfg.log_config.tail_cache_budget =
+                Some(kafka_long_bytes("log_tail_cache_budget", value)?);
         }
         // A topic reports these two at `STATIC_BROKER_CONFIG` when the
         // operator named them, so the loader records the provenance.

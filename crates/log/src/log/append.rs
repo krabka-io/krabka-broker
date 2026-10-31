@@ -14,7 +14,7 @@ use {
         config::{DeliveryPolicy, ScheduleOrder, SegmentAllocation},
         error::LogError,
         producer_snapshot, retention,
-        segment::Segment,
+        segment::{Segment, TailSizes},
         stamp_index::OffsetRange,
         txn_index::TxnIndex,
     },
@@ -95,7 +95,7 @@ impl Log {
             index_interval,
             flush_on_append,
             segment_allocation,
-            tail_cache_size,
+            tail_sizes,
         ) = {
             let cfg = self.config.read().unwrap_or_else(PoisonError::into_inner);
             (
@@ -105,7 +105,7 @@ impl Log {
                 cfg.index_interval,
                 cfg.flush_on_append,
                 cfg.segment_allocation,
-                cfg.tail_cache_size,
+                TailSizes::of(&cfg),
             )
         };
         let segment_roll_interval = self.jittered_roll_interval(segment_roll_interval);
@@ -128,7 +128,7 @@ impl Log {
             match segment_allocation {
                 SegmentAllocation::Preallocate => {
                     active.reserve(segment_size);
-                    active.write_direct(tail_cache_size);
+                    active.write_direct(tail_sizes);
                 }
                 SegmentAllocation::OnWrite => active.write_buffered()?,
             }
@@ -676,6 +676,10 @@ impl Log {
         }
         let old = self.active.take().ok_or_else(super::no_active_segment)?;
         let old_base = old.base_offset();
+        // Only the segment that sealed last keeps its window.
+        if let Some(previous) = self.segments.last_mut() {
+            previous.release_sealed_tail();
+        }
         self.segments.push(old);
         let mut new_seg = Segment::create(&self.dir, new_base)?;
         new_seg.set_io(Arc::clone(&self.io));
