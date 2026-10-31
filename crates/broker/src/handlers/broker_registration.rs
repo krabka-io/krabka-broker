@@ -710,6 +710,7 @@ mod wire_tests {
             test_support::{
                 broker_registration, dispatch_wire, end_heartbeat_session,
                 finalized_broker_features, plaintext_broker_endpoint, start_broker_with_authorizer,
+                wait_for_controller_leader,
             },
         },
         assert2::assert,
@@ -947,14 +948,7 @@ mod wire_tests {
             bind(broker_handle, _dir, broker);
             boot [start_broker_with_authorizer(Arc::new(fixture_authorizers::AllowAllAuthorizer))];
         };
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !is_active_controller(&broker) {
-            assert!(
-                Instant::now() <= deadline,
-                "broker did not become controller leader"
-            );
-            time::sleep(Duration::from_millis(25)).await;
-        }
+        wait_for_controller_leader(&broker).await;
         let image = broker.controller.current_image();
         assert!(
             image
