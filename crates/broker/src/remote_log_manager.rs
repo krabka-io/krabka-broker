@@ -41,6 +41,7 @@
 //! every replica, because each one removes data from the topic's log.
 
 use {
+    self::delete::DeleteTargets,
     crate::{
         api_catalog::UnstableApiVersions,
         blocking::spawn_blocking,
@@ -281,6 +282,18 @@ pub struct RemoteTier<'a> {
     /// segment whose newest record claims a timestamp in the future. See
     /// [`local_retention::local_retention_target`].
     pub unstable_api_versions: UnstableApiVersions,
+}
+
+impl RemoteTier<'_> {
+    /// The parts of this tier a segment delete reaches.
+    const fn delete_targets(&self) -> DeleteTargets<'_> {
+        DeleteTargets {
+            archive: self.archive,
+            rsm: self.rsm,
+            rlmm: self.rlmm,
+            index_cache: self.index_cache,
+        }
+    }
 }
 
 impl RemoteLogManagerContext {

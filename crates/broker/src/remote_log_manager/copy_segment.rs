@@ -403,16 +403,7 @@ async fn delete_below_floor(
            "remote-log-manager: copy finished below the established log start; deleting it");
     tier.metrics
         .record_remote_request(RemoteTierPath::Delete, &tp.topic);
-    let deleted = delete_one_segment(
-        tp,
-        broker_id,
-        &current,
-        tier.archive,
-        tier.rsm,
-        tier.rlmm,
-        tier.index_cache,
-    )
-    .await;
+    let deleted = delete_one_segment(tier.delete_targets(), tp, broker_id, &current).await;
     if !deleted {
         tier.metrics
             .record_remote_error(RemoteTierPath::Delete, &tp.topic);

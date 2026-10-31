@@ -290,7 +290,7 @@ pub async fn remote_retention_pass(
     bounds: RemoteRetentionBounds<'_>,
     tier: &super::RemoteTier<'_>,
 ) -> RemoteRetentionOutcome {
-    let (rsm, rlmm, index_cache) = (tier.rsm, tier.rlmm, tier.index_cache);
+    let (rsm, rlmm) = (tier.rsm, tier.rlmm);
     let RemoteRetentionBounds {
         log_config,
         log_start_offset,
@@ -396,7 +396,7 @@ pub async fn remote_retention_pass(
     for md in evict {
         tier.metrics
             .record_remote_request(RemoteTierPath::Delete, &tp.topic);
-        if !delete_one_segment(tp, broker_id, &md, archive, rsm, rlmm, index_cache).await {
+        if !delete_one_segment(tier.delete_targets(), tp, broker_id, &md).await {
             tier.metrics
                 .record_remote_error(RemoteTierPath::Delete, &tp.topic);
             // Stop at the first failure to preserve the contiguous-prefix
@@ -467,17 +467,7 @@ async fn delete_in_order(
     for md in segments {
         tier.metrics
             .record_remote_request(RemoteTierPath::Delete, &tp.topic);
-        if !delete_one_segment(
-            tp,
-            broker_id,
-            md,
-            tier.archive,
-            tier.rsm,
-            tier.rlmm,
-            tier.index_cache,
-        )
-        .await
-        {
+        if !delete_one_segment(tier.delete_targets(), tp, broker_id, md).await {
             tier.metrics
                 .record_remote_error(RemoteTierPath::Delete, &tp.topic);
             break;
