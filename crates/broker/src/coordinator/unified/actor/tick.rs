@@ -10,9 +10,8 @@ use crate::coordinator::unified::share::config::ShareGroupConfig;
 use crate::coordinator::unified::streams::config::StreamsGroupConfig;
 use {
     super::{
-        ActorServices, ParkedWaiters, chrono_now_ms,
-        downgrade::{downgrade_fencing, downgrades_without},
-        heartbeat::fence_members,
+        ActorServices, ParkedWaiters,
+        downgrade::{FenceFailure, FenceOutcome, fence_or_downgrade},
         persistence::flush_classic_metadata,
         waiters::settle_removed_classic_waiters,
     },
@@ -150,12 +149,12 @@ async fn handle_session_tick(
         if !state.members.contains_key(&member_id) {
             continue;
         }
-        let member_ids = [member_id];
-        if downgrades_without(state, services.config, &member_ids) {
-            return downgrade_fencing(group, &member_ids, services).await;
+        let outcome = fence_or_downgrade(group, services, &[member_id])
+            .await
+            .map_err(FenceFailure::into_error)?;
+        if outcome == FenceOutcome::Downgraded {
+            return Ok(());
         }
-        let pending = fence_members(state, services.metadata, &member_ids);
-        services.flush(state, pending, chrono_now_ms()).await?;
     }
     Ok(())
 }

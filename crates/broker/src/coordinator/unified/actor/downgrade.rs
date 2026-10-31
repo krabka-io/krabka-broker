@@ -6,7 +6,7 @@
 //! with one atomic batch of the conversion's.
 
 use {
-    super::{ActorServices, chrono_now_ms},
+    super::{ActorServices, chrono_now_ms, heartbeat::fence_members},
     crate::{
         coordinator::unified::{
             config::NextGenConfig,
@@ -81,4 +81,58 @@ pub(super) async fn downgrade_fencing(
     );
     *group.kind_mut() = GroupKind::Classic(classic);
     Ok(())
+}
+
+/// Which way [`fence_or_downgrade`] went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FenceOutcome {
+    /// The group downgraded to a classic group in place of the fence.
+    Downgraded,
+    /// The members were fenced from the consumer group.
+    Fenced,
+}
+
+/// The log write that failed in [`fence_or_downgrade`].
+#[derive(Debug)]
+pub(super) enum FenceFailure {
+    Downgrade(BrokerError),
+    Fence(BrokerError),
+}
+
+impl FenceFailure {
+    pub(super) fn into_error(self) -> BrokerError {
+        match self {
+            Self::Downgrade(error) | Self::Fence(error) => error,
+        }
+    }
+}
+
+/// Kafka's `consumerGroupFenceMembers`: `member_ids` leave the consumer group
+/// in one batch, or the group downgrades in their place when only classic
+/// members would remain. A group that is not a consumer group is left as it
+/// is.
+///
+/// It returns `Err` on a log-write failure, and the actor then exits.
+pub(super) async fn fence_or_downgrade(
+    group: &mut CoordinatorGroup,
+    services: ActorServices<'_>,
+    member_ids: &[String],
+) -> Result<FenceOutcome, FenceFailure> {
+    if group
+        .as_consumer()
+        .is_some_and(|state| downgrades_without(state, services.config, member_ids))
+    {
+        downgrade_fencing(group, member_ids, services)
+            .await
+            .map_err(FenceFailure::Downgrade)?;
+        return Ok(FenceOutcome::Downgraded);
+    }
+    if let Some(state) = group.as_consumer_mut() {
+        let pending = fence_members(state, services.metadata, member_ids);
+        services
+            .flush(state, pending, chrono_now_ms())
+            .await
+            .map_err(FenceFailure::Fence)?;
+    }
+    Ok(FenceOutcome::Fenced)
 }
