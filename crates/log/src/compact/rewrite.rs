@@ -215,7 +215,10 @@ pub fn rewrite_segments(
     // and the horizon it computes is stamped into an on-disk `base_timestamp`,
     // so the extent crosses to a raw count once, here, truncating rather than
     // rounding so a stamped horizon can never land a millisecond late.
-    let delete_retention_ms = retention.delete_retention.millis_i64_trunc();
+    let clock = RetainClock {
+        now_ms: retention.now_ms,
+        delete_retention_ms: retention.delete_retention.millis_i64_trunc(),
+    };
 
     let first = segments
         .first()
@@ -242,68 +245,24 @@ pub fn rewrite_segments(
     let mut frontier = FrontierScan::new(new_base, u64::MAX, round.index_interval)?;
     for batch in group_batches(segments) {
         let batch = &batch?;
-        let is_control = batch.attributes.is_control_batch();
-        let producer_id = ProducerId(batch.producer_id);
         // The pass reads the batch before it filters its records, as Kafka's
         // `Cleaner.shouldDiscardBatch` does: a transaction whose records all
         // die in this pass still holds its marker until the next one.
-        let BatchTxn {
-            state: txn,
-            aborted,
-        } = classify_batch(batch, txn_meta)?;
+        let txn = classify_batch(batch, txn_meta)?;
         // `MemoryRecords.filterTo` decompresses every batch but one it deletes
         // outright, which is an aborted batch that is neither the last record
         // of an active producer nor the last batch of the round, and holds the
         // batch it decompresses to `max.decompressed.message.bytes`.
-        if !aborted
-            || (producer_id.get() >= 0 && round.is_last_record_of_producer(batch))
+        if !txn.aborted
+            || (batch.producer_id >= 0 && round.is_last_record_of_producer(batch))
             || round.is_last_batch_of_round(batch)
         {
             check_records_read(batch, batch.records.len(), round.max_decompressed_record)?;
         }
-        let batch_meta = BatchMeta {
-            is_control,
-            producer_id,
-            existing_horizon: batch.delete_horizon_ms(),
-        };
-
-        let mut kept: Vec<Record> = Vec::with_capacity(batch.records.len());
-        // Stamp the output batch with a delete horizon if any record's
-        // decision asks for it (stamp once per batch).
-        let mut stamp_horizon: Option<i64> = None;
-        for record in &batch.records {
-            let absolute = Offset(batch.base_offset + i64::from(record.offset_delta));
-            let is_newest_for_key = record
-                .key
-                .as_ref()
-                .is_some_and(|k| offset_map.get(k.as_ref()).copied() == Some(absolute));
-            let rec_meta = RecordMeta {
-                has_key: record.key.is_some(),
-                has_value: record.value.is_some(),
-            };
-            // Every record of an aborted transaction goes, whether or not it
-            // is the newest for its key: Kafka's `discardBatchRecords`.
-            let decision = if aborted {
-                RetainDecision::Delete
-            } else {
-                retain_decision(
-                    rec_meta,
-                    batch_meta,
-                    is_newest_for_key,
-                    txn,
-                    retention.now_ms,
-                    delete_retention_ms,
-                )
-            };
-            match decision {
-                RetainDecision::Keep => kept.push(record.clone()),
-                RetainDecision::SetHorizon(h) => {
-                    kept.push(record.clone());
-                    stamp_horizon = Some(h);
-                }
-                RetainDecision::Delete => {}
-            }
-        }
+        let RetainedRecords {
+            kept,
+            stamp_horizon,
+        } = retained_records(batch, offset_map, txn, clock);
 
         let Some(kept_max_timestamp) = kept
             .iter()
@@ -439,6 +398,79 @@ fn classify_batch(
         state,
         aborted: false,
     })
+}
+
+/// The clock the retain decision reads, in the raw milliseconds the verified
+/// kernel is stated over.
+#[derive(Debug, Clone, Copy)]
+struct RetainClock {
+    now_ms: i64,
+    delete_retention_ms: i64,
+}
+
+/// The records of one batch the retain decision keeps.
+#[derive(Debug)]
+struct RetainedRecords {
+    kept: Vec<Record>,
+    /// The delete horizon to stamp on the output batch, if any kept record's
+    /// decision asks for one.
+    stamp_horizon: Option<i64>,
+}
+
+/// Apply the KIP-534 [`retain_decision`] to every record of `batch`.
+fn retained_records(
+    batch: &RecordBatch,
+    offset_map: &HashMap<Bytes, Offset>,
+    txn: BatchTxn,
+    clock: RetainClock,
+) -> RetainedRecords {
+    let batch_meta = BatchMeta {
+        is_control: batch.attributes.is_control_batch(),
+        producer_id: ProducerId(batch.producer_id),
+        existing_horizon: batch.delete_horizon_ms(),
+    };
+
+    let mut kept: Vec<Record> = Vec::with_capacity(batch.records.len());
+    // Stamp the output batch with a delete horizon if any record's
+    // decision asks for it (stamp once per batch).
+    let mut stamp_horizon: Option<i64> = None;
+    for record in &batch.records {
+        let absolute = Offset(batch.base_offset + i64::from(record.offset_delta));
+        let is_newest_for_key = record
+            .key
+            .as_ref()
+            .is_some_and(|k| offset_map.get(k.as_ref()).copied() == Some(absolute));
+        let rec_meta = RecordMeta {
+            has_key: record.key.is_some(),
+            has_value: record.value.is_some(),
+        };
+        // Every record of an aborted transaction goes, whether or not it
+        // is the newest for its key: Kafka's `discardBatchRecords`.
+        let decision = if txn.aborted {
+            RetainDecision::Delete
+        } else {
+            retain_decision(
+                rec_meta,
+                batch_meta,
+                is_newest_for_key,
+                txn.state,
+                clock.now_ms,
+                clock.delete_retention_ms,
+            )
+        };
+        match decision {
+            RetainDecision::Keep => kept.push(record.clone()),
+            RetainDecision::SetHorizon(h) => {
+                kept.push(record.clone());
+                stamp_horizon = Some(h);
+            }
+            RetainDecision::Delete => {}
+        }
+    }
+    RetainedRecords {
+        kept,
+        stamp_horizon,
+    }
 }
 
 /// The bare header a `RETAIN_EMPTY` batch leaves in the output, Kafka's
