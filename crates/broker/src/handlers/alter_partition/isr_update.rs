@@ -248,20 +248,6 @@ fn proposed_isr_shape(proposed: &[i32], partition: &PartitionRecord) -> Proposed
     }
 }
 
-#[cfg(test)]
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct PartitionRequestSetup<'a> {
-    #[default("t")]
-    topic: &'a str,
-    partition: krabka_ids::PartitionIndex,
-    #[default(LeaderEpoch(5))]
-    leader_epoch: LeaderEpoch,
-    #[default(&[WireBrokerId(1)])]
-    new_isr: &'a [WireBrokerId],
-    #[default(&[])]
-    new_isr_with_epochs: &'a [BrokerState],
-}
-
 /// Runs [`handle_partition_with_recovery`] for one row from the partition's
 /// leader at its current partition epoch that asks for the `Recovered` state,
 /// with every broker the image registers active.
@@ -276,28 +262,21 @@ fn handle_partition(
     #[builder(default = & [WireBrokerId (1)])] new_isr: &'_ [WireBrokerId],
     #[builder(default = & [])] new_isr_with_epochs: &'_ [BrokerState],
 ) -> RespPartitionData {
-    let setup = PartitionRequestSetup {
-        topic,
-        partition,
-        leader_epoch,
-        new_isr,
-        new_isr_with_epochs,
-    };
     let active = image.brokers().map(|broker| broker.node_id.0).collect();
-    let current = image.partition(setup.topic, setup.partition.0);
+    let current = image.partition(topic, partition.0);
     handle_partition_with_recovery(
         image,
         &active,
         current.map_or(1, |partition| {
             i32::try_from(partition.leader.0).unwrap_or(i32::MAX)
         }),
-        setup.topic,
+        topic,
         &ReqPartitionData {
-            partition_index: setup.partition.0,
-            leader_epoch: setup.leader_epoch.0,
+            partition_index: partition.0,
+            leader_epoch: leader_epoch.0,
             partition_epoch: current.map_or(0, |partition| partition.partition_epoch),
-            new_isr: setup.new_isr.iter().map(|id| id.0).collect(),
-            new_isr_with_epochs: setup.new_isr_with_epochs.to_vec(),
+            new_isr: new_isr.iter().map(|id| id.0).collect(),
+            new_isr_with_epochs: new_isr_with_epochs.to_vec(),
             leader_recovery_state: LeaderRecoveryState::Recovered as i8,
             ..Default::default()
         },
