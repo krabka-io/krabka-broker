@@ -258,3 +258,40 @@ fn unwrap(
     let (_, body) = envelope::unwrap_response(api_key, flexible, &data)?;
     Ok(body)
 }
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::guarded_operation_on_source,
+        crate::test_support::FakeMetadataSource,
+        krabka_raft::RaftError,
+        std::{
+            sync::atomic::{AtomicUsize, Ordering},
+            time::Duration,
+        },
+        tokio::time::Instant,
+    };
+
+    /// A guarded operation never answers `UncommittedTail`. While a new leader
+    /// has not committed its own epoch, the operation runs again, and it gets
+    /// the deadline error if the tail is still there when the deadline passes.
+    /// The callers answer that error with the retriable `REQUEST_TIMED_OUT`.
+    #[tokio::test(start_paused = true)]
+    async fn an_uncommitted_tail_retries_until_the_deadline() {
+        let source = FakeMetadataSource::builder().build();
+        let attempts = AtomicUsize::new(0);
+
+        let result = guarded_operation_on_source(
+            &source,
+            Instant::now() + Duration::from_secs(5),
+            |_image| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                async { Err::<(), _>(RaftError::UncommittedTail) }
+            },
+        )
+        .await;
+
+        assert2::assert!(let Err(_) = result);
+        assert2::assert!(attempts.load(Ordering::SeqCst) > 1);
+    }
+}

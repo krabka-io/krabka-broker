@@ -403,3 +403,55 @@ struct Placement<'a> {
     overrides: &'a BTreeMap<String, String>,
     diskless: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::submit_failure_result,
+        crate::codes,
+        krabka_metadata::MetadataError,
+        krabka_protocol::owned::create_topics_response::CreatableTopicResult,
+        krabka_raft::{NodeId, RaftError},
+    };
+
+    /// The row Kafka's `CreateTopicsRequest.getErrorResponse` builds for a
+    /// refused topic, with the empty `Configs` Kafka sends.
+    fn row(error_code: i16, error_message: Option<&str>) -> CreatableTopicResult {
+        CreatableTopicResult {
+            name: "orders".to_owned(),
+            error_code,
+            error_message: error_message.map(str::to_owned),
+            configs: Some(Vec::new()),
+            ..Default::default()
+        }
+    }
+
+    /// A newly elected controller leader refuses a write with
+    /// `UncommittedTail` until it commits its own epoch. Kafka's controller is
+    /// not active in that window and answers `NOT_CONTROLLER`, which the admin
+    /// client retries, as it answers a lost leadership.
+    #[yare::parameterized(
+        not_leader = {
+            RaftError::NotLeader { current_leader: Some(NodeId(2)) },
+            row(codes::NOT_CONTROLLER, None),
+        },
+        leader_unknown = { RaftError::LeaderUnknown, row(codes::NOT_CONTROLLER, None) },
+        uncommitted_tail = { RaftError::UncommittedTail, row(codes::NOT_CONTROLLER, None) },
+        topic_exists = {
+            RaftError::Metadata(MetadataError::TopicExists("orders".to_owned())),
+            row(codes::TOPIC_ALREADY_EXISTS, Some("Topic 'orders' already exists.")),
+        },
+        invalid_record = {
+            RaftError::Metadata(MetadataError::InvalidRecord("partitions")),
+            row(codes::INVALID_PARTITIONS, None),
+        },
+        shutdown = { RaftError::Shutdown, row(codes::UNKNOWN_SERVER_ERROR, None) },
+        change_rejected = {
+            RaftError::ChangeRejected("stale".to_owned()),
+            row(codes::UNKNOWN_SERVER_ERROR, None),
+        },
+    )]
+    fn a_failed_commit_answers_kafkas_row(error: RaftError, expected: CreatableTopicResult) {
+        assert2::assert!(submit_failure_result("orders".to_owned(), &error) == expected);
+    }
+}
