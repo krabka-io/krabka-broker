@@ -15,6 +15,7 @@ use {
         codes,
         metrics::{BrokerMetrics, RemoteTierPath},
         partition::Partition,
+        remote_reader::RemoteReader,
     },
     bytes::Bytes,
     krabka_log::{DeliveryPolicy, LeaderEpoch, Offset},
@@ -23,7 +24,7 @@ use {
         primitives::uuid::Uuid as WireUuid,
         records::{HEADER_LEN, RecordBatchHeader, RecordsPayload},
     },
-    krabka_remote_storage::{RemoteStorageError, corrupt_log},
+    krabka_remote_storage::{RemoteStorageError, TopicIdPartition, corrupt_log},
     krabka_units::convert::TimeExt as _,
     krabka_verified::transaction,
     std::{
@@ -337,6 +338,135 @@ fn moved_to_tiered_storage(p: &mut PendingRead, live: LiveOffsets, local_log_sta
     0
 }
 
+/// Answers a consumer partition whose first remote batch is not due yet, as
+/// the local path answers a batch that is not due: an empty partition and no
+/// error. `OFFSET_OUT_OF_RANGE` would send the consumer to its reset policy and
+/// lose the record it is waiting for, and the batch is due later, not never.
+///
+/// Returns zero served bytes.
+fn answer_not_due(p: &mut PendingRead, live: LiveOffsets) -> usize {
+    tracing::debug!(
+        topic = %p.topic_name,
+        partition = p.partition_index,
+        offset = p.fetch_offset,
+        "remote-reader: batch is not due yet; holding it back"
+    );
+    p.out.error_code = codes::NONE;
+    live.report(&mut p.out);
+    p.out.records = None;
+    if p.read_committed {
+        p.out.aborted_transactions = Some(Vec::new());
+    }
+    0
+}
+
+/// The archived range a cold read returned, keyed as the tier keys it.
+#[derive(Clone, Copy)]
+struct ArchivedWindow<'tp> {
+    tp: &'tp TopicIdPartition,
+    /// The leader epoch that owned the fetch offset.
+    leader_epoch: LeaderEpoch,
+    /// The first offset the read asked for.
+    fetch_offset: i64,
+    /// The last offset the read's last batch holds.
+    last_offset: i64,
+}
+
+/// Why [`read_committed_aborts`] built no aborted-transaction list.
+#[derive(Debug)]
+enum AbortsFailed {
+    /// The tier failed the `.txnindex` read.
+    Remote(RemoteStorageError),
+    /// `remote.fetch.max.wait.ms` passed before the tier answered.
+    Expired,
+    /// The window's last offset is the largest offset there is, so the range
+    /// has no exclusive end.
+    Overflow,
+}
+
+/// KIP-405 read-committed: the aborted-transaction list for `window`, from
+/// the remote `.txnindex` files and then the local ones past the tier,
+/// including later marker segments, so the consumer drops aborted records
+/// client-side. Wire rows both tiers share appear once. An empty list is the
+/// correct read-committed signal.
+///
+/// The remote read is bounded by `wait`, the request's
+/// `remote.fetch.max.wait.ms`.
+async fn read_committed_aborts(
+    broker: &Broker,
+    reader: &RemoteReader,
+    wait: &mut RemoteFetchWait,
+    part: &Partition,
+    window: ArchivedWindow<'_>,
+) -> Result<Vec<AbortedTransaction>, AbortsFailed> {
+    let batch_end = window
+        .last_offset
+        .checked_add(1)
+        .ok_or(AbortsFailed::Overflow)?;
+    let aborts = wait
+        .bound(
+            broker,
+            reader.aborted_transactions(
+                window.tp,
+                window.leader_epoch,
+                window.fetch_offset,
+                window.last_offset,
+            ),
+        )
+        .await
+        .ok_or(AbortsFailed::Expired)?
+        .map_err(AbortsFailed::Remote)?;
+    let local = part
+        .log
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .aborted_in_range(Offset(window.fetch_offset), Offset(batch_end));
+    let rows: Vec<_> = aborts
+        .into_iter()
+        .map(|entry| (entry.producer_id, entry.start_offset))
+        .chain(
+            local
+                .into_iter()
+                .map(|entry| (entry.producer_id.get(), entry.start_offset.0)),
+        )
+        .collect();
+    Ok(transaction::unique_aborted_transaction_rows(&rows)
+        .into_iter()
+        .map(|(producer_id, first_offset)| AbortedTransaction {
+            producer_id,
+            first_offset,
+            ..Default::default()
+        })
+        .collect())
+}
+
+/// What a cold read needs from the partition's log, read under one lock.
+struct TierConfig {
+    /// The topic's KFC-1 delivery policy.
+    delivery_policy: DeliveryPolicy,
+    /// The declared clock bound the delivery check adds, in milliseconds.
+    delivery_uncertainty_ms: i64,
+    /// The global log start, when this process established it.
+    log_start: Option<Offset>,
+    /// The first offset the local log still holds.
+    local_log_start: Offset,
+}
+
+/// The partition's [`TierConfig`], or `None` when the topic does not have
+/// `remote.storage.enable=true`.
+fn tier_config(part: &Partition) -> Option<TierConfig> {
+    let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
+    let config = log.config_snapshot();
+    let tier = config.remote_storage_enable.then(|| TierConfig {
+        delivery_policy: config.delivery_policy,
+        delivery_uncertainty_ms: config.delivery_clock_uncertainty.millis_i64_trunc(),
+        log_start: log.established_log_start(),
+        local_log_start: log.local_log_start_offset(),
+    });
+    drop(log);
+    tier
+}
+
 /// KIP-405: try to serve `p`'s requested offset from the remote tier when the
 /// local log returned `OFFSET_OUT_OF_RANGE` and the topic has
 /// `remote.storage.enable=true`.
@@ -345,8 +475,8 @@ fn moved_to_tiered_storage(p: &mut PendingRead, live: LiveOffsets, local_log_sta
 /// reports the live bounds beside them (see [`LiveOffsets`]), and returns the
 /// size of the records it served. Those records are the segment's own bytes,
 /// as `RemoteLogManager.read` returns them: whole batches from the one that
-/// holds the offset, up to the partition's budget, and never fewer than the
-/// first. They are never decoded and encoded again, because a compressed
+/// holds the offset, up to `max_bytes`, the partition's budget for this read,
+/// and never fewer than the first. They are never decoded and encoded again, because a compressed
 /// batch encoded again need not have the length the response frame
 /// announced for it. On a genuine miss -- an offset below the established
 /// log start, or one no remote segment holds -- and for a non-tiered topic, it
@@ -387,29 +517,16 @@ pub(super) async fn try_remote_read(
     broker: &Broker,
     p: &mut PendingRead,
     part: &Partition,
+    max_bytes: i32,
     wait: &mut RemoteFetchWait,
 ) -> Option<usize> {
     let reader = broker.remote_reader.clone()?;
-    let (
-        remote_storage_enable,
+    let TierConfig {
         delivery_policy,
         delivery_uncertainty_ms,
         log_start,
         local_log_start,
-    ) = {
-        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
-        let config = log.config_snapshot();
-        (
-            config.remote_storage_enable,
-            config.delivery_policy,
-            config.delivery_clock_uncertainty.millis_i64_trunc(),
-            log.established_log_start(),
-            log.local_log_start_offset(),
-        )
-    };
-    if !remote_storage_enable {
-        return None;
-    }
+    } = tier_config(part)?;
     // KIP-405's `RemoteFetchRequestsPerSec`. Counted once this partition is
     // known to be tiered, so a cluster with no tiered topic materialises no
     // series, and before the reader pool can refuse the read, so a refusal
@@ -461,11 +578,7 @@ pub(super) async fn try_remote_read(
         return None;
     }
     let topic_id = uuid::Uuid::from_bytes(p.topic_id.0);
-    let tp = krabka_remote_storage::TopicIdPartition::new(
-        topic_id,
-        p.topic_name.to_string(),
-        p.partition_index,
-    );
+    let tp = TopicIdPartition::new(topic_id, p.topic_name.to_string(), p.partition_index);
     // Atomic stores the raw epoch; wrap into `LeaderEpoch` for the
     // remote-reader / RLMM seam that follows.
     let current_leader_epoch =
@@ -507,7 +620,7 @@ pub(super) async fn try_remote_read(
     };
     // A remote read with no cap reads the whole segment, so the smallest
     // budget is one byte, which still returns the first batch whole.
-    let max_bytes = usize::try_from(p.max_bytes.max(1)).unwrap_or(usize::MAX);
+    let max_bytes = usize::try_from(max_bytes.max(1)).unwrap_or(usize::MAX);
 
     // KIP-405's `remote.log.reader.threads` / `.max.pending.tasks` cap. The
     // permit is held for the batch read and the `.txnindex` read below, so one
@@ -569,88 +682,51 @@ pub(super) async fn try_remote_read(
         last_offset: batch_last_offset,
     }) = run
     else {
-        // Answer as the local path answers a batch that is not due: an empty
-        // partition and no error. `OFFSET_OUT_OF_RANGE` would send the
-        // consumer to its reset policy and lose the record it is waiting for,
-        // and the batch is due later, not never.
-        tracing::debug!(
-            topic = %p.topic_name,
-            partition = p.partition_index,
-            offset = p.fetch_offset,
-            "remote-reader: batch is not due yet; holding it back"
-        );
-        p.out.error_code = codes::NONE;
-        live.report(&mut p.out);
-        p.out.records = None;
-        if p.read_committed {
-            p.out.aborted_transactions = Some(Vec::new());
-        }
-        return Some(0);
+        return Some(answer_not_due(p, live));
     };
 
-    // KIP-405 read-committed: surface the aborted-transaction list from remote
-    // and local `.txnindex` files, including later marker segments, so the
-    // consumer drops aborted records client-side. Select against the window
-    // this read returns, then deduplicate wire rows shared by both tiers.
-    // `Some(empty)` is the correct read-committed signal (read-uncommitted
-    // leaves it `None`).
+    // KIP-405 read-committed: the aborted transactions in the window this read
+    // returns. Read-uncommitted leaves the list `None`.
     if p.read_committed && !p.is_follower_fetch {
-        let Some(batch_end) = batch_last_offset.checked_add(1) else {
-            return Some(fail_partition(p));
+        let window = ArchivedWindow {
+            tp: &tp,
+            leader_epoch,
+            fetch_offset: p.fetch_offset,
+            last_offset: batch_last_offset,
         };
-        let aborts = match wait
-            .bound(
-                broker,
-                reader.aborted_transactions(&tp, leader_epoch, p.fetch_offset, batch_last_offset),
-            )
-            .await
-        {
-            Some(Ok(aborts)) => aborts,
-            Some(Err(e)) => return Some(fail_remote_read(&broker.metrics, p, &e)),
-            None => {
-                return Some(expired(p, live));
-            }
-        };
-        let local = part
-            .log
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .aborted_in_range(Offset(p.fetch_offset), Offset(batch_end));
-        let rows: Vec<_> = aborts
-            .into_iter()
-            .map(|entry| (entry.producer_id, entry.start_offset))
-            .chain(
-                local
-                    .into_iter()
-                    .map(|entry| (entry.producer_id.get(), entry.start_offset.0)),
-            )
-            .collect();
-        p.out.aborted_transactions = Some(
-            transaction::unique_aborted_transaction_rows(&rows)
-                .into_iter()
-                .map(|(producer_id, first_offset)| AbortedTransaction {
-                    producer_id,
-                    first_offset,
-                    ..Default::default()
-                })
-                .collect(),
-        );
+        match read_committed_aborts(broker, &reader, wait, part, window).await {
+            Ok(aborts) => p.out.aborted_transactions = Some(aborts),
+            Err(AbortsFailed::Remote(e)) => return Some(fail_remote_read(&broker.metrics, p, &e)),
+            Err(AbortsFailed::Expired) => return Some(expired(p, live)),
+            Err(AbortsFailed::Overflow) => return Some(fail_partition(p)),
+        }
     }
 
-    // `DelayedRemoteFetch.onComplete`: the remote records beside the bounds
-    // the local read result carried for the remote band.
+    Some(answer_served(&broker.metrics, p, live, records))
+}
+
+/// `DelayedRemoteFetch.onComplete`: answers the partition with the remote
+/// records beside the bounds the local read result carried for the remote
+/// band, and counts them as KIP-405's `RemoteFetchBytesPerSec`.
+///
+/// Returns the size of the records served.
+fn answer_served(
+    metrics: &BrokerMetrics,
+    p: &mut PendingRead,
+    live: LiveOffsets,
+    records: Bytes,
+) -> usize {
     let served = records.len();
     p.out.error_code = codes::NONE;
     live.report(&mut p.out);
     p.out.records = Some(RecordsPayload::Raw(records));
-    // KIP-405's `RemoteFetchBytesPerSec`: what the tier actually served, which
-    // is the records about to go out.
-    broker.metrics.record_remote_bytes(
+    // What the tier actually served, which is the records about to go out.
+    metrics.record_remote_bytes(
         RemoteTierPath::Fetch,
         &p.topic_name,
         u64::try_from(served).unwrap_or(u64::MAX),
     );
-    Some(served)
+    served
 }
 
 #[cfg(test)]
@@ -696,6 +772,9 @@ mod tests {
     /// untouched `p.out` is what says it never got there.
     /// The topic every tiered-read case below uses.
     const TIERED_TOPIC: &str = "tiered-delete-records";
+
+    /// The `partition_max_bytes` every tiered-read case asks for.
+    const PARTITION_MAX_BYTES: i32 = 1_048_576;
 
     /// KIP-405's `remote.log.reader.max.pending.tasks`: a cold read that
     /// arrives with the reader pool's queue already full is answered with an
@@ -844,6 +923,7 @@ mod tests {
                 &self.broker,
                 &mut read,
                 &self.part,
+                PARTITION_MAX_BYTES,
                 &mut super::RemoteFetchWait::default(),
             )
             .await;
@@ -943,7 +1023,7 @@ mod tests {
             current_leader_epoch: 0,
             last_fetched_epoch: -1,
             fetch_offset,
-            max_bytes: 1_048_576,
+            max_bytes: PARTITION_MAX_BYTES,
             read_committed: false,
             is_follower_fetch: false,
             fetch_only_leader: false,
@@ -983,6 +1063,7 @@ mod tests {
             &tiered.broker,
             &mut refused,
             &tiered.part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -996,6 +1077,7 @@ mod tests {
             &tiered.broker,
             &mut at_floor,
             &tiered.part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1044,6 +1126,7 @@ mod tests {
             &tiered.broker,
             &mut follower,
             &tiered.part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1066,6 +1149,7 @@ mod tests {
             &tiered.broker,
             &mut consumer,
             &tiered.part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1090,6 +1174,7 @@ mod tests {
             &tiered.broker,
             &mut ahead,
             &tiered.part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1109,6 +1194,7 @@ mod tests {
             &tiered.broker,
             &mut deleted,
             &tiered.part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1191,6 +1277,7 @@ mod tests {
             &broker,
             &mut served,
             &part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1210,6 +1297,7 @@ mod tests {
                 &broker,
                 &mut follower,
                 &part,
+                PARTITION_MAX_BYTES,
                 &mut super::RemoteFetchWait::default()
             )
             .await
@@ -1279,6 +1367,7 @@ mod tests {
                 &broker,
                 &mut read,
                 &part,
+                PARTITION_MAX_BYTES,
                 &mut super::RemoteFetchWait::default(),
             )
             .await;
@@ -1559,6 +1648,7 @@ mod tests {
             &broker,
             &mut missing,
             &part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1574,6 +1664,7 @@ mod tests {
             &broker,
             &mut failed,
             &part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
