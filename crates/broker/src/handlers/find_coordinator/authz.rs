@@ -10,10 +10,7 @@
 //! the requested keys into refused rows and still-to-resolve keys.
 
 use {
-    super::{
-        KEY_TYPE_GROUP, KEY_TYPE_SHARE, KEY_TYPE_TRANSACTION, resolve::parse_share_key,
-        response::no_node_row,
-    },
+    super::{KeyType, resolve::parse_share_key, response::no_node_row},
     crate::{
         authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
         broker::Broker,
@@ -67,14 +64,12 @@ fn key_admission(
     key_type: i8,
     key: &str,
 ) -> FindCoordinatorAdmission {
-    let (resource_type, operation) = match key_type {
-        KEY_TYPE_GROUP => (ResourceType::Group, AclOperation::Describe),
-        KEY_TYPE_TRANSACTION => (ResourceType::TransactionalId, AclOperation::Describe),
-        KEY_TYPE_SHARE => {
-            let share_key_valid = parse_share_key(key).is_some();
-            return find_coordinator_admission(api_version, key_type, true, share_key_valid);
-        }
-        _ => return find_coordinator_admission(api_version, key_type, false, false),
+    let Some(kind) = KeyType::from_wire(key_type) else {
+        return find_coordinator_admission(api_version, key_type, false, false);
+    };
+    let Some((resource_type, operation)) = kind.acl() else {
+        let share_key_valid = parse_share_key(key).is_some();
+        return find_coordinator_admission(api_version, key_type, true, share_key_valid);
     };
     let acl_allowed = authorizer.authorize(image, &AuthorizationRequest {
         principal,
@@ -128,6 +123,7 @@ mod tests {
     use {
         super::*,
         crate::{
+            handlers::find_coordinator::{KEY_TYPE_GROUP, KEY_TYPE_SHARE, KEY_TYPE_TRANSACTION},
             authorizer::SimpleAclAuthorizer,
             test_support::{peer, principal},
         },

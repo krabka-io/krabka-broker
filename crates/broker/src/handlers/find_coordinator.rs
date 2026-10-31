@@ -33,6 +33,7 @@ use {
         },
         txn::bootstrap::TOPIC as TRANSACTION_STATE_TOPIC,
     },
+    krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::owned::{
         find_coordinator_request::FindCoordinatorRequest,
         find_coordinator_response::{Coordinator, FindCoordinatorResponse},
@@ -64,6 +65,46 @@ use {
 const KEY_TYPE_GROUP: i8 = 0;
 const KEY_TYPE_TRANSACTION: i8 = 1;
 const KEY_TYPE_SHARE: i8 = 2;
+
+/// The coordinator a key names: Kafka's `CoordinatorType`.
+#[derive(Clone, Copy, Debug)]
+enum KeyType {
+    Group,
+    Transaction,
+    Share,
+}
+
+impl KeyType {
+    /// `CoordinatorType.forId`, with `None` where Kafka throws for an id it
+    /// does not define.
+    const fn from_wire(key_type: i8) -> Option<Self> {
+        match key_type {
+            KEY_TYPE_GROUP => Some(Self::Group),
+            KEY_TYPE_TRANSACTION => Some(Self::Transaction),
+            KEY_TYPE_SHARE => Some(Self::Share),
+            _ => None,
+        }
+    }
+
+    /// The internal topic whose partitions hold this coordinator's state.
+    const fn state_topic(self) -> &'static str {
+        match self {
+            Self::Group => OFFSETS_TOPIC,
+            Self::Transaction => TRANSACTION_STATE_TOPIC,
+            Self::Share => SHARE_GROUP_STATE_TOPIC,
+        }
+    }
+
+    /// The ACL a key of this type needs on the resource the key names.
+    /// SHARE has none: its `ClusterAction` is checked once per request.
+    const fn acl(self) -> Option<(ResourceType, AclOperation)> {
+        match self {
+            Self::Group => Some((ResourceType::Group, AclOperation::Describe)),
+            Self::Transaction => Some((ResourceType::TransactionalId, AclOperation::Describe)),
+            Self::Share => None,
+        }
+    }
+}
 
 fn unavailable_for_keys(keys: Vec<String>) -> Vec<Coordinator> {
     keys.into_iter().map(unavailable_coordinator).collect()
@@ -131,16 +172,13 @@ pub async fn handle(
         ));
     }
     // `CoordinatorType.forId` throws `InvalidRequestException`.
-    if !matches!(
-        req.key_type,
-        KEY_TYPE_GROUP | KEY_TYPE_TRANSACTION | KEY_TYPE_SHARE
-    ) {
+    let Some(kind) = KeyType::from_wire(req.key_type) else {
         return Ok(request_error_response(
             version,
             codes::INVALID_REQUEST,
             keys,
         ));
-    }
+    };
 
     // ── Per-key admission ───────────────────────────────────────────
     // GROUP and TRANSACTION require `Describe` on their keyed resources; a
@@ -166,11 +204,7 @@ pub async fn handle(
     let coordinators: Vec<Coordinator> = if keys.is_empty() {
         Vec::new()
     } else {
-        let state_topic = match req.key_type {
-            KEY_TYPE_GROUP => OFFSETS_TOPIC,
-            KEY_TYPE_TRANSACTION => TRANSACTION_STATE_TOPIC,
-            _ => SHARE_GROUP_STATE_TOPIC,
-        };
+        let state_topic = kind.state_topic();
         let image = controller.current_image();
         if image.topic(state_topic).is_none() {
             // Kafka asks `AutoTopicCreationManager.createTopics` for the
@@ -188,8 +222,8 @@ pub async fn handle(
                 advertised: &advertised,
                 listener: ctx.connection_listener_name,
             };
-            match req.key_type {
-                KEY_TYPE_GROUP => keys
+            match kind {
+                KeyType::Group => keys
                     .into_iter()
                     .map(|key| match partition_for_group(&image, &key) {
                         Some(partition) => {
@@ -198,8 +232,8 @@ pub async fn handle(
                         None => unavailable_coordinator(key),
                     })
                     .collect(),
-                KEY_TYPE_TRANSACTION => resolve_transaction_keys(broker, &target, keys),
-                _ => keys
+                KeyType::Transaction => resolve_transaction_keys(broker, &target, keys),
+                KeyType::Share => keys
                     .into_iter()
                     .map(|key| {
                         // Admission validated the key already, so the parse
