@@ -253,4 +253,36 @@ mod tests {
         );
         broker_handle.shutdown().await;
     }
+
+    #[yare::parameterized(
+        not_leader = {
+            RaftError::NotLeader { current_leader: None },
+            response(codes::NOT_CONTROLLER, None),
+        },
+        leader_unknown = {
+            RaftError::LeaderUnknown,
+            response(codes::NOT_CONTROLLER, None),
+        },
+        uncommitted_tail = {
+            RaftError::UncommittedTail,
+            response(codes::NOT_CONTROLLER, None),
+        },
+        metadata_refusal = {
+            RaftError::Metadata(krabka_metadata::MetadataError::TopicExists("t".to_owned())),
+            response(
+                codes::INVALID_REGISTRATION,
+                Some(krabka_metadata::MetadataError::TopicExists("t".to_owned()).to_string()),
+            ),
+        },
+        shutdown = {
+            RaftError::Shutdown,
+            response(codes::UNKNOWN_SERVER_ERROR, Some(RaftError::Shutdown.to_string())),
+        },
+    )]
+    fn a_failed_registration_write_answers_kafkas_code(
+        error: RaftError,
+        expected: ControllerRegistrationResponse,
+    ) {
+        assert2::assert!(submit_error_response(&error) == expected);
+    }
 }

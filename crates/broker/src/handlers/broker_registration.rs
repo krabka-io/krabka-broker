@@ -684,6 +684,27 @@ mod tests {
         };
         assert2::check!(validate_features(&old_broker, &image) == Err(codes::UNSUPPORTED_VERSION));
     }
+
+    #[yare::parameterized(
+        not_leader = {
+            RaftError::NotLeader { current_leader: None },
+            codes::NOT_CONTROLLER,
+        },
+        leader_unknown = { RaftError::LeaderUnknown, codes::NOT_CONTROLLER },
+        uncommitted_tail = { RaftError::UncommittedTail, codes::NOT_CONTROLLER },
+        metadata_refusal = {
+            RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(String::new())),
+            codes::INVALID_REGISTRATION,
+        },
+        shutdown = { RaftError::Shutdown, codes::UNKNOWN_SERVER_ERROR },
+        change_rejected = {
+            RaftError::ChangeRejected("stale".to_owned()),
+            codes::UNKNOWN_SERVER_ERROR,
+        },
+    )]
+    fn a_failed_registration_write_answers_kafkas_code(error: RaftError, expected: i16) {
+        assert2::assert!(raft_error_code(&error) == expected);
+    }
 }
 
 /// KIP-966 on the wire: an external broker's registration carries the
