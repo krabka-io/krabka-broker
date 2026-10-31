@@ -6,10 +6,6 @@ use {
     crate::{
         BrokerError,
         config::{BrokerConfig, ListenerSpec, RlmmKind},
-        coordinator::unified::{
-            config::NextGenConfig, share::config::ShareGroupConfig,
-            streams::config::StreamsGroupConfig,
-        },
         internal_topics::validate_audit_topic_name,
     },
     krabka_security::SaslMechanism,
@@ -19,6 +15,25 @@ use {
     },
     std::time::Duration,
 };
+
+/// Projects the shared timeout and size fields of a group config
+/// (`NextGenConfig`, `ShareGroupConfig` or `StreamsGroupConfig`) into a
+/// [`GroupTimeoutBounds`]. The three types are unrelated, so a macro rather
+/// than a function reads the same field names from each.
+macro_rules! group_timeout_bounds {
+    ($config:expr) => {{
+        let config = $config;
+        GroupTimeoutBounds {
+            session_timeout: config.session_timeout,
+            heartbeat_interval: config.heartbeat_interval,
+            min_session_timeout: config.min_session_timeout,
+            max_session_timeout: config.max_session_timeout,
+            min_heartbeat_interval: config.min_heartbeat_interval,
+            max_heartbeat_interval: config.max_heartbeat_interval,
+            max_size: config.max_size,
+        }
+    }};
+}
 
 impl BrokerConfig {
     /// Validates the listener and auth configuration.
@@ -224,12 +239,9 @@ impl BrokerConfig {
     fn validate_groups(&self) -> Result<(), BrokerError> {
         let consumer = &self.next_gen_consumer_group;
         consumer.validate_assignors()?;
-        validate_group_bounds("consumer group", &GroupTimeoutBounds::consumer(consumer))?;
-        validate_group_bounds("share group", &GroupTimeoutBounds::share(&self.share_group))?;
-        validate_group_bounds(
-            "streams group",
-            &GroupTimeoutBounds::streams(&self.streams_group),
-        )
+        validate_group_bounds("consumer group", &group_timeout_bounds!(consumer))?;
+        validate_group_bounds("share group", &group_timeout_bounds!(&self.share_group))?;
+        validate_group_bounds("streams group", &group_timeout_bounds!(&self.streams_group))
     }
 
     /// The SASL mechanisms `listener` enables: its own, else the broker-wide
@@ -482,44 +494,6 @@ struct GroupTimeoutBounds {
     min_heartbeat_interval: Duration,
     max_heartbeat_interval: Duration,
     max_size: usize,
-}
-
-impl GroupTimeoutBounds {
-    fn consumer(config: &NextGenConfig) -> Self {
-        Self {
-            session_timeout: config.session_timeout,
-            heartbeat_interval: config.heartbeat_interval,
-            min_session_timeout: config.min_session_timeout,
-            max_session_timeout: config.max_session_timeout,
-            min_heartbeat_interval: config.min_heartbeat_interval,
-            max_heartbeat_interval: config.max_heartbeat_interval,
-            max_size: config.max_size,
-        }
-    }
-
-    fn share(config: &ShareGroupConfig) -> Self {
-        Self {
-            session_timeout: config.session_timeout,
-            heartbeat_interval: config.heartbeat_interval,
-            min_session_timeout: config.min_session_timeout,
-            max_session_timeout: config.max_session_timeout,
-            min_heartbeat_interval: config.min_heartbeat_interval,
-            max_heartbeat_interval: config.max_heartbeat_interval,
-            max_size: config.max_size,
-        }
-    }
-
-    fn streams(config: &StreamsGroupConfig) -> Self {
-        Self {
-            session_timeout: config.session_timeout,
-            heartbeat_interval: config.heartbeat_interval,
-            min_session_timeout: config.min_session_timeout,
-            max_session_timeout: config.max_session_timeout,
-            min_heartbeat_interval: config.min_heartbeat_interval,
-            max_heartbeat_interval: config.max_heartbeat_interval,
-            max_size: config.max_size,
-        }
-    }
 }
 
 /// Checks `bounds` for the group kind `name` and reports the first bound it
