@@ -5,8 +5,8 @@
 
 use {
     super::{
-        response::{fail_authenticate_with, sasl_ok},
-        state::{ConnectionAuth, SaslExchange, SessionExpiry, session_expiry},
+        response::fail_authenticate_with,
+        state::{CompletedAuthentication, ConnectionAuth, SaslExchange, complete_authentication},
     },
     crate::{codes::ILLEGAL_SASL_STATE, time_util::now_ms},
     krabka_protocol::owned::{
@@ -93,18 +93,20 @@ pub fn handle_authenticate_plain<S: BuildHasher>(
                     .to_owned(),
             );
         }
-        let SessionExpiry {
-            expires_at_ms,
-            session_lifetime_ms,
-        } = session_expiry(now_ms(), None, max_reauth);
-        *auth = ConnectionAuth::Authenticated {
-            principal: p,
-            mechanism: SaslMechanism::Plain,
-            expires_at_ms,
-            // PLAIN never auths via a delegation token.
-            authenticated_via_token: false,
-        };
-        sasl_ok(bytes::Bytes::new(), session_lifetime_ms)
+        complete_authentication(
+            auth,
+            CompletedAuthentication {
+                principal: p,
+                mechanism: SaslMechanism::Plain,
+                // PLAIN credentials carry no lifetime of their own.
+                credential_expires_at_ms: None,
+                // PLAIN never auths via a delegation token.
+                authenticated_via_token: false,
+                server_bytes: bytes::Bytes::new(),
+            },
+            now_ms(),
+            max_reauth,
+        )
     })
 }
 

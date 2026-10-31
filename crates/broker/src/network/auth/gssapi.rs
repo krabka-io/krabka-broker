@@ -10,7 +10,7 @@ use {
     super::{
         kerberos_name::{KerberosNameError, KerberosRule, short_name},
         response::{fail_authenticate, sasl_ok},
-        state::{ConnectionAuth, SaslExchange, SessionExpiry, session_expiry},
+        state::{CompletedAuthentication, ConnectionAuth, SaslExchange, complete_authentication},
     },
     crate::time_util::now_ms,
     krabka_protocol::owned::{
@@ -188,25 +188,27 @@ fn finish_gssapi(
         Ok(s) => s,
         Err(e) => return fail_authenticate(&format!("GSSAPI principal mapping failed: {e}")),
     };
-    let SessionExpiry {
-        expires_at_ms,
-        session_lifetime_ms,
-    } = session_expiry(now_ms(), None, max_reauth);
-    *auth = ConnectionAuth::Authenticated {
-        principal: Principal {
-            name: short,
-            auth_method: krabka_security::AuthMethod::SaslGssapi,
-            groups: vec![],
+    complete_authentication(
+        auth,
+        CompletedAuthentication {
+            principal: Principal {
+                name: short,
+                auth_method: krabka_security::AuthMethod::SaslGssapi,
+                groups: vec![],
+            },
+            mechanism: mech,
+            // The KDC enforces the ticket lifetime at context-establishment
+            // time and the broker never sees it, so the only ceiling on a
+            // GSSAPI session is the listener's `connections.max.reauth.ms`.
+            // KIP-368 re-auth rides the same SaslHandshake path as the other
+            // mechanisms.
+            credential_expires_at_ms: None,
+            authenticated_via_token: false,
+            server_bytes: bytes::Bytes::new(),
         },
-        mechanism: mech,
-        // The KDC enforces the ticket lifetime at context-establishment time
-        // and the broker never sees it, so the only ceiling on a GSSAPI
-        // session is the listener's `connections.max.reauth.ms`. KIP-368
-        // re-auth rides the same SaslHandshake path as the other mechanisms.
-        expires_at_ms,
-        authenticated_via_token: false,
-    };
-    sasl_ok(bytes::Bytes::new(), session_lifetime_ms)
+        now_ms(),
+        max_reauth,
+    )
 }
 
 /// Applies the configured `auth_to_local` rules to a raw Kerberos principal.
