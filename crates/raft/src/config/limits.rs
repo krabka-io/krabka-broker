@@ -15,10 +15,11 @@ use {
         DEFAULT_METADATA_RAFT_FETCH_MAX,
     },
     krabka_macros::RefinedNewtype,
+    krabka_units::{ByteSize, convert::ByteSizeExt as _},
     refined_type::rule::{GreaterI32, GreaterU32, GreaterUsize},
 };
 
-#[derive(derive_more::From, derive_more::Into)]
+#[derive(derive_more::Into)]
 /// The number of consecutive fetch misses a controller tolerates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, RefinedNewtype)]
 #[refined(
@@ -32,7 +33,7 @@ use {
 )]
 pub struct ControllerFetchMissLimit(u32);
 
-#[derive(derive_more::From, derive_more::Into)]
+#[derive(derive_more::Into)]
 /// The capacity of the metadata Raft command queue.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, RefinedNewtype)]
 #[refined(
@@ -46,7 +47,7 @@ pub struct ControllerFetchMissLimit(u32);
 )]
 pub struct MetadataRaftCommandQueueCapacity(usize);
 
-#[derive(derive_more::From, derive_more::Into)]
+#[derive(derive_more::Into)]
 /// The most bytes one metadata Raft fetch carries, a whole byte count that
 /// fits the protocol's `int32` field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, RefinedNewtype)]
@@ -62,13 +63,31 @@ pub struct MetadataRaftCommandQueueCapacity(usize);
 )]
 pub struct MetadataRaftFetchMax(i32);
 
+// A raw scalar goes through `new`, so a converted value holds the rule too.
+
+impl TryFrom<u32> for ControllerFetchMissLimit {
+    type Error = String;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> { Self::new(value) }
+}
+
+impl TryFrom<usize> for MetadataRaftCommandQueueCapacity {
+    type Error = String;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> { Self::new(value) }
+}
+
+impl TryFrom<i32> for MetadataRaftFetchMax {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        Self::new(ByteSize::from_bytes_i64(i64::from(value)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use {
-        super::*,
-        assert2::check,
-        krabka_units::prelude::{ByteSize, ByteSizeExt as _, mebibytes},
-    };
+    use {super::*, assert2::check, krabka_units::prelude::mebibytes};
 
     #[test]
     fn raft_runtime_policy_defaults_and_validation() {
@@ -108,5 +127,31 @@ mod tests {
         check!(format!("{}", ControllerFetchMissLimit::default()) == "3");
         check!(format!("{}", MetadataRaftCommandQueueCapacity::default()) == "256");
         check!(format!("{}", MetadataRaftFetchMax::default()) == "8MiB");
+    }
+
+    #[test]
+    fn a_raw_zero_is_refused_on_conversion() {
+        check!(ControllerFetchMissLimit::try_from(0_u32).is_err());
+        check!(MetadataRaftCommandQueueCapacity::try_from(0_usize).is_err());
+        check!(MetadataRaftFetchMax::try_from(0_i32).is_err());
+
+        check!(
+            ControllerFetchMissLimit::try_from(2_u32)
+                .ok()
+                .map(ControllerFetchMissLimit::get)
+                == Some(2)
+        );
+        check!(
+            MetadataRaftCommandQueueCapacity::try_from(16_usize)
+                .ok()
+                .map(MetadataRaftCommandQueueCapacity::get)
+                == Some(16)
+        );
+        check!(
+            MetadataRaftFetchMax::try_from(512_i32)
+                .ok()
+                .map(MetadataRaftFetchMax::bytes)
+                == Some(512)
+        );
     }
 }
