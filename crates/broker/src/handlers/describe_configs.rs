@@ -152,7 +152,15 @@ pub fn handle(
     // This node's own static settings, which a named broker resource
     // reports beside its dynamic overrides.
     let settings = static_settings(&broker.config);
-    let static_broker = StaticBrokerConfigs::from_config(&broker.config, &settings);
+    let serving = ServingBroker {
+        node: serving_node,
+        static_broker: StaticBrokerConfigs::from_config(&broker.config, &settings),
+        loggers: BrokerLoggers {
+            node_id: broker.config.broker_id,
+            levels: &broker.config.log_levels,
+        },
+        unstable_api_versions: broker.config.features.unstable_api_versions,
+    };
     // ── ACL preamble ────────────────────────────────────────────
     // Per-resource `DescribeConfigs`: Topic → `Topic(name)`, Group →
     // `Group(name)`, Broker, BrokerLogger and ClientMetrics →
@@ -185,15 +193,7 @@ pub fn handle(
             describe_one(
                 &image,
                 r,
-                ServingBroker {
-                    node: serving_node,
-                    static_broker,
-                    loggers: BrokerLoggers {
-                        node_id: broker.config.broker_id,
-                        levels: &broker.config.log_levels,
-                    },
-                    unstable_api_versions: broker.config.features.unstable_api_versions,
-                },
+                serving,
                 broker.config.client_metrics_default_interval.millis_i32(),
                 options,
             )
