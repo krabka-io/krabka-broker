@@ -515,6 +515,42 @@ async fn acquire_pass(
     apply_acks: bool,
     spent: Spent,
 ) -> Spent {
+    let mut pass = PassProgress {
+        now: Instant::now(),
+        apply_acks,
+        fetching: pending.iter().filter(|p| p.leadable && p.fetchable).count(),
+        byte_budget: i64::from(context.max_bytes) - spent.bytes,
+        fetch_index: 0,
+        total: spent,
+    };
+    for p in pending.iter_mut() {
+        acquire_partition(context, &mut pass, p).await;
+    }
+    pass.total
+}
+
+/// What one acquire pass carries from one partition to the next.
+struct PassProgress {
+    now: Instant,
+    /// Whether this pass applies the piggybacked acknowledgements.
+    apply_acks: bool,
+    /// The fetchable, leadable partitions that the pass splits its bytes over.
+    fetching: usize,
+    /// The response bytes this pass may still fill.
+    byte_budget: i64,
+    /// The position of the next fetchable partition in that split.
+    fetch_index: usize,
+    /// What this pass and the earlier ones have acquired.
+    total: Spent,
+}
+
+/// Runs one acquire pass over one pending partition, if this broker can lead
+/// it.
+async fn acquire_partition(
+    context: &AcquireContext<'_>,
+    pass: &mut PassProgress,
+    p: &mut PendingPartition,
+) {
     let &AcquireContext {
         broker,
         manager: mgr,
@@ -526,152 +562,150 @@ async fn acquire_pass(
         settings,
         ..
     } = context;
-    let now = Instant::now();
     let read_committed = settings.read_committed;
-    let mut total = spent;
-    let fetching = pending.iter().filter(|p| p.leadable && p.fetchable).count();
-    let byte_budget = i64::from(max_bytes) - spent.bytes;
-    let mut fetch_index = 0_usize;
-
-    for p in pending.iter_mut() {
-        if !p.leadable {
-            continue;
-        }
-
-        let mut has_acks = apply_acks && !p.ack_batches.is_empty();
-        // Kafka's `SharePartitionManager.acknowledge` runs before the fetch,
-        // and answers UNKNOWN_TOPIC_OR_PARTITION for a share partition that no
-        // earlier fetch on this broker loaded.
-        if has_acks && mgr.cached(group, p.topic_id, p.partition_index).is_none() {
-            p.out.acknowledge_error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
-            has_acks = false;
-        }
-        // A failed state read fails the partition and caches nothing, as
-        // Kafka's `SharePartitionManager.handleInitializationException` does.
-        let cell = match mgr.get_or_load(group, p.topic_id, p.partition_index).await {
-            Ok(cell) => cell,
-            Err(code) => {
-                fail_partition(p, has_acks, code);
-                continue;
-            }
-        };
-        let mut st = cell.lock().await;
-        st.set_dlq_enabled(settings.dlq_enabled);
-
-        if has_acks && let Err(code) = apply_piggybacked_acks(context, now, p, &cell, &mut st).await
-        {
-            fail_partition(p, true, code);
-            continue;
-        }
-
-        if !p.fetchable {
-            persist_best_effort(mgr, group, p, &cell, &mut st).await;
-            continue;
-        }
-
-        // Expire stale locks, materialize freshly produced records, acquire.
-        st.expire_locks(now, settings.delivery_count_limit);
-        let part = p.topic_name.as_deref().and_then(|name| {
-            broker
-                .partitions
-                .get(name, krabka_ids::PartitionIndex(p.partition_index))
-        });
-        let Some(part) = part else {
-            // Lost the partition between the leadership check and here.
-            p.out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
-            p.leadable = false;
-            persist_best_effort(mgr, group, p, &cell, &mut st).await;
-            continue;
-        };
-        let upper = read_upper_bound(&part, read_committed).await;
-        // A released or expired record at the delivery limit is archived
-        // first, so it cannot hold the window shut.
-        st.archive_exhausted(settings.delivery_count_limit);
-        let share = uniform_share(byte_budget, fetching, fetch_index);
-        fetch_index += 1;
-        let ReadBudget {
-            max_bytes: read_max_bytes,
-            min_one_batch,
-            remaining_records,
-        } = partition_read_budget(max_records, max_bytes, total, p.partition_max_bytes, share);
-        let tier = tiered_source(broker, p, read_committed);
-        let grow_and_acquire_args = || GrowAndAcquireArgs {
-            part: &part,
-            upper,
-            settings: &settings,
-            member,
-            max_bytes: read_max_bytes,
-            min_one_batch,
-            remaining_records,
-            mode,
-            now,
-            tier: tier.clone(),
-            diskless: broker
-                .diskless_read
-                .as_deref()
-                .map(|reader| DisklessSource {
-                    reader,
-                    topic_id: p.topic_id,
-                }),
-        };
-        // This pass's records land in `fresh`, then join what earlier passes
-        // put in the row.
-        let mut fresh = PartitionData::default();
-        let outcome = acquire_with_log_start_recovery(
-            broker,
-            &part,
-            p.topic_id,
-            &mut st,
-            &mut fresh,
-            grow_and_acquire_args,
-        )
-        .await;
-        let acquired_count = match outcome {
-            Ok(count) => count,
-            Err(err) => {
-                // Kafka's `ShareFetchUtils.processFetchResponse` turns a read
-                // error of one partition into that partition's error code with
-                // no records, and the other partitions of the request still
-                // return theirs. A record that this pass locked before the
-                // failure stays locked until its lock times out.
-                let code = read_failure_code(&err);
-                tracing::warn!(
-                    group,
-                    topic_id = %p.topic_id,
-                    partition = p.partition_index,
-                    error = %err,
-                    code,
-                    "share-partition log read failed"
-                );
-                persist_best_effort(mgr, group, p, &cell, &mut st).await;
-                fail_partition(p, false, code);
-                continue;
-            }
-        };
-
-        p.out.error_code = codes::NONE;
-        // The acquisition itself writes nothing, as in Kafka's
-        // `SharePartition.acquire`. The pass may still have dirtied the state,
-        // through an expired lock or an archived poison pill, and that write
-        // happens here. A failed write keeps the state dirty for a retry. A
-        // fenced write drops the cell, and the records acquired on it must not
-        // reach the client.
-        let persisted = mgr
-            .persist_if_dirty(group, p.topic_id, p.partition_index, Some(&cell), &mut st)
-            .await;
-        drop(st);
-        match persisted {
-            Err(code) if fences_the_partition(code) => fail_partition(p, false, code),
-            _ => match append_records(&mut p.out, fresh) {
-                Ok(bytes) => {
-                    total.records += acquired_count;
-                    total.bytes += bytes;
-                }
-                Err(err) => fail_partition(p, false, read_failure_code(&err)),
-            },
-        }
+    if !p.leadable {
+        return;
     }
-    total
+
+    let mut has_acks = pass.apply_acks && !p.ack_batches.is_empty();
+    // Kafka's `SharePartitionManager.acknowledge` runs before the fetch,
+    // and answers UNKNOWN_TOPIC_OR_PARTITION for a share partition that no
+    // earlier fetch on this broker loaded.
+    if has_acks && mgr.cached(group, p.topic_id, p.partition_index).is_none() {
+        p.out.acknowledge_error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
+        has_acks = false;
+    }
+    // A failed state read fails the partition and caches nothing, as
+    // Kafka's `SharePartitionManager.handleInitializationException` does.
+    let cell = match mgr.get_or_load(group, p.topic_id, p.partition_index).await {
+        Ok(cell) => cell,
+        Err(code) => {
+            fail_partition(p, has_acks, code);
+            return;
+        }
+    };
+    let mut st = cell.lock().await;
+    st.set_dlq_enabled(settings.dlq_enabled);
+
+    if has_acks
+        && let Err(code) = apply_piggybacked_acks(context, pass.now, p, &cell, &mut st).await
+    {
+        fail_partition(p, true, code);
+        return;
+    }
+
+    if !p.fetchable {
+        persist_best_effort(mgr, group, p, &cell, &mut st).await;
+        return;
+    }
+
+    // Expire stale locks, materialize freshly produced records, acquire.
+    st.expire_locks(pass.now, settings.delivery_count_limit);
+    let part = p.topic_name.as_deref().and_then(|name| {
+        broker
+            .partitions
+            .get(name, krabka_ids::PartitionIndex(p.partition_index))
+    });
+    let Some(part) = part else {
+        // Lost the partition between the leadership check and here.
+        p.out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
+        p.leadable = false;
+        persist_best_effort(mgr, group, p, &cell, &mut st).await;
+        return;
+    };
+    let upper = read_upper_bound(&part, read_committed).await;
+    // A released or expired record at the delivery limit is archived
+    // first, so it cannot hold the window shut.
+    st.archive_exhausted(settings.delivery_count_limit);
+    let share = uniform_share(pass.byte_budget, pass.fetching, pass.fetch_index);
+    pass.fetch_index += 1;
+    let ReadBudget {
+        max_bytes: read_max_bytes,
+        min_one_batch,
+        remaining_records,
+    } = partition_read_budget(
+        max_records,
+        max_bytes,
+        pass.total,
+        p.partition_max_bytes,
+        share,
+    );
+    let tier = tiered_source(broker, p, read_committed);
+    let grow_and_acquire_args = || GrowAndAcquireArgs {
+        part: &part,
+        upper,
+        settings: &settings,
+        member,
+        max_bytes: read_max_bytes,
+        min_one_batch,
+        remaining_records,
+        mode,
+        now: pass.now,
+        tier: tier.clone(),
+        diskless: broker
+            .diskless_read
+            .as_deref()
+            .map(|reader| DisklessSource {
+                reader,
+                topic_id: p.topic_id,
+            }),
+    };
+    // This pass's records land in `fresh`, then join what earlier passes
+    // put in the row.
+    let mut fresh = PartitionData::default();
+    let outcome = acquire_with_log_start_recovery(
+        broker,
+        &part,
+        p.topic_id,
+        &mut st,
+        &mut fresh,
+        grow_and_acquire_args,
+    )
+    .await;
+    let acquired_count = match outcome {
+        Ok(count) => count,
+        Err(err) => {
+            // Kafka's `ShareFetchUtils.processFetchResponse` turns a read
+            // error of one partition into that partition's error code with
+            // no records, and the other partitions of the request still
+            // return theirs. A record that this pass locked before the
+            // failure stays locked until its lock times out.
+            let code = read_failure_code(&err);
+            tracing::warn!(
+                group,
+                topic_id = %p.topic_id,
+                partition = p.partition_index,
+                error = %err,
+                code,
+                "share-partition log read failed"
+            );
+            persist_best_effort(mgr, group, p, &cell, &mut st).await;
+            fail_partition(p, false, code);
+            return;
+        }
+    };
+
+    p.out.error_code = codes::NONE;
+    // The acquisition itself writes nothing, as in Kafka's
+    // `SharePartition.acquire`. The pass may still have dirtied the state,
+    // through an expired lock or an archived poison pill, and that write
+    // happens here. A failed write keeps the state dirty for a retry. A
+    // fenced write drops the cell, and the records acquired on it must not
+    // reach the client.
+    let persisted = mgr
+        .persist_if_dirty(group, p.topic_id, p.partition_index, Some(&cell), &mut st)
+        .await;
+    drop(st);
+    match persisted {
+        Err(code) if fences_the_partition(code) => fail_partition(p, false, code),
+        _ => match append_records(&mut p.out, fresh) {
+            Ok(bytes) => {
+                pass.total.records += acquired_count;
+                pass.total.bytes += bytes;
+            }
+            Err(err) => fail_partition(p, false, read_failure_code(&err)),
+        },
+    }
 }
 
 /// Writes `st` back to the share coordinator if it is dirty, and ignores the
