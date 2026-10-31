@@ -304,6 +304,12 @@ fn resolve_max_timestamp(
     }
 }
 
+/// The leader epoch of the batch that holds a by-record lookup's `offset`,
+/// or `None` when the lookup found nothing and the row keeps its epoch.
+fn epoch_of_found(partition: &Partition, offset: i64) -> Option<i32> {
+    (offset != UNKNOWN_OFFSET).then(|| leader_epoch_for_offset(partition, offset))
+}
+
 /// The local snapshot and archive lookup needed to resolve scheduled LATEST.
 pub(super) struct LatestContext<'a> {
     pub(super) broker: &'a Broker,
@@ -722,8 +728,8 @@ pub(super) async fn resolve_partition(
             };
             // Kafka fills the epoch with the resolved batch's own
             // `partitionLeaderEpoch`. `UnifiedLog.java:1742-1749`.
-            if offset != UNKNOWN_OFFSET {
-                response.leader_epoch = leader_epoch_for_offset(&partition, offset);
+            if let Some(leader_epoch) = epoch_of_found(&partition, offset) {
+                response.leader_epoch = leader_epoch;
             }
             (offset, timestamp)
         }
@@ -744,8 +750,8 @@ pub(super) async fn resolve_partition(
             };
             // Kafka fills the epoch with the matched batch's own epoch.
             // `FileRecords.java:364-381`.
-            if offset != UNKNOWN_OFFSET {
-                response.leader_epoch = leader_epoch_for_offset(&partition, offset);
+            if let Some(leader_epoch) = epoch_of_found(&partition, offset) {
+                response.leader_epoch = leader_epoch;
             }
             (offset, timestamp)
         }
