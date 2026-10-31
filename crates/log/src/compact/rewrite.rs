@@ -156,6 +156,14 @@ impl CleaningRound<'_> {
     fn is_last_batch_of_round(&self, batch: &RecordBatch) -> bool {
         last_offset_of(batch) + 1 == self.upper_bound.0
     }
+
+    /// `RETAIN_EMPTY`: whether `batch` stays as a bare header when it loses
+    /// every record. It does when it keeps a producer's state alive, or when
+    /// it is the last batch of the round.
+    fn retains_if_emptied(&self, batch: &RecordBatch) -> bool {
+        (batch.producer_id >= 0 && self.is_last_record_of_producer(batch))
+            || self.is_last_batch_of_round(batch)
+    }
 }
 
 /// Stream `segments`, oldest to newest, into new `.cleaned` files and apply the
@@ -253,10 +261,7 @@ pub fn rewrite_segments(
         // outright, which is an aborted batch that is neither the last record
         // of an active producer nor the last batch of the round, and holds the
         // batch it decompresses to `max.decompressed.message.bytes`.
-        if !txn.aborted
-            || (batch.producer_id >= 0 && round.is_last_record_of_producer(batch))
-            || round.is_last_batch_of_round(batch)
-        {
+        if !txn.aborted || round.retains_if_emptied(batch) {
             check_records_read(batch, batch.records.len(), round.max_decompressed_record)?;
         }
         let retained = retained_records(batch, offset_map, txn, clock);
@@ -271,9 +276,7 @@ pub fn rewrite_segments(
             // keeps a producer's state alive, or that is the last batch of
             // the round, so the producer sequence and epoch and the log-end
             // offset survive.
-            let keeps_producer_state =
-                batch.producer_id >= 0 && round.is_last_record_of_producer(batch);
-            if !(keeps_producer_state || round.is_last_batch_of_round(batch)) {
+            if !round.retains_if_emptied(batch) {
                 continue;
             }
             let out_batch = bare_header(batch);
