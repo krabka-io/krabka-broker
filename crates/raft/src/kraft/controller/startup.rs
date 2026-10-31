@@ -230,6 +230,8 @@ impl KraftController {
             downgrade_snapshot_pending,
             #[cfg(test)]
             downgrade_snapshot_failures_remaining: 0,
+            #[cfg(test)]
+            apply_read_failure_at: None,
             snapshot_fetch: None,
             installed_snapshot_epoch: None,
             controls,

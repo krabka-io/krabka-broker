@@ -324,6 +324,9 @@ struct Engine {
     downgrade_snapshot_pending: Option<PendingDowngradeSnapshot>,
     #[cfg(test)]
     downgrade_snapshot_failures_remaining: usize,
+    /// The offset at which the apply of committed records fails its read.
+    #[cfg(test)]
+    apply_read_failure_at: Option<Offset>,
     /// In-flight follower snapshot reassembly, if any.
     snapshot_fetch: Option<SnapshotFetchState>,
     /// Set when a snapshot was just installed; the next follower Fetch carries
