@@ -7,10 +7,7 @@ use {
     super::{OP_DELETE, OP_SET, RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC},
     crate::{handlers::test_support::metadata_topic_record, test_support::broker_registration},
     krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord},
-    krabka_protocol::owned::{
-        incremental_alter_configs_request::AlterConfigsResource,
-        incremental_alter_configs_response::AlterConfigsResourceResponse,
-    },
+    krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource,
     std::collections::BTreeMap,
 };
 pub(super) use {
@@ -72,13 +69,6 @@ pub(super) fn overrides_map(overrides: &[StoredOverride<'_>]) -> BTreeMap<String
         .iter()
         .map(|stored| (stored.key.to_owned(), stored.value.to_owned()))
         .collect()
-}
-
-/// What an `IncrementalAlterConfigs` scope handler answered, and the records
-/// it staged.
-pub(super) struct Handled {
-    pub(super) response: AlterConfigsResourceResponse,
-    pub(super) records: Vec<MetadataRecord>,
 }
 
 pub(super) fn image_with_topic_config(

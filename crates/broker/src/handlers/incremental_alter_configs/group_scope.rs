@@ -6,7 +6,7 @@
 
 use {
     super::{
-        OP_DELETE, OP_SET, submit_or_refuse,
+        OP_DELETE, OP_SET,
         topic_scope::{merge_list_op, not_a_list},
     },
     crate::{
@@ -18,13 +18,10 @@ use {
         },
     },
     krabka_metadata::{GroupConfigRecord, MetadataImage, MetadataRecord},
-    krabka_protocol::owned::{
-        incremental_alter_configs_request::AlterConfigsResource,
-        incremental_alter_configs_response::AlterConfigsResourceResponse,
-    },
+    krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource,
 };
 
-fn group_record(
+pub(super) fn group_record(
     resource: &AlterConfigsResource,
     image: &MetadataImage,
     bounds: &GroupBounds,
@@ -72,21 +69,6 @@ fn group_record(
     }))
 }
 
-pub(super) fn handle_group_scoped(
-    resource: &AlterConfigsResource,
-    image: &MetadataImage,
-    bounds: &GroupBounds,
-    unstable: UnstableApiVersions,
-    out: &mut AlterConfigsResourceResponse,
-    to_submit: &mut Vec<MetadataRecord>,
-) {
-    submit_or_refuse(
-        group_record(resource, image, bounds, unstable).map(|record| [record]),
-        out,
-        to_submit,
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use {
@@ -98,35 +80,30 @@ mod tests {
             },
             handlers::incremental_alter_configs::{
                 RESOURCE_TYPE_GROUP,
-                test_support::{Handled, make_scoped_resource, make_set_cfg},
+                test_support::{make_scoped_resource, make_set_cfg},
             },
         },
         assert2::assert,
         krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
     };
 
-    fn drive(resource: &AlterConfigsResource, unstable: UnstableApiVersions) -> Handled {
-        let mut out = AlterConfigsResourceResponse::default();
-        let mut records = Vec::new();
-        handle_group_scoped(
+    fn drive(
+        resource: &AlterConfigsResource,
+        unstable: UnstableApiVersions,
+    ) -> Result<MetadataRecord, (i16, String)> {
+        group_record(
             resource,
             &MetadataImage::new(uuid::Uuid::nil()),
             &GroupBounds::default(),
             unstable,
-            &mut out,
-            &mut records,
-        );
-        Handled {
-            response: out,
-            records,
-        }
+        )
     }
 
     struct GroupConfigScenario {
         group: String,
         configs: Vec<AlterableConfig>,
         unstable: UnstableApiVersions,
-        handled: Option<Handled>,
+        handled: Option<Result<MetadataRecord, (i16, String)>>,
         record: Option<Result<MetadataRecord, (i16, String)>>,
     }
     #[rstest::fixture]
@@ -209,23 +186,17 @@ mod tests {
         "one authoritative group configuration record preserves every requested key and value"
     )]
     fn check_complete_group_record(group_config: &GroupConfigScenario) {
-        let handled = group_config.handled.as_ref().unwrap();
-        assert!(
-            handled.response.error_code == codes::NONE,
-            "{:?}",
-            handled.response
-        );
         let expected = group_config
             .configs
             .iter()
             .map(|cfg| (cfg.name.clone(), cfg.value.clone().unwrap()))
             .collect();
         assert!(
-            handled.records
-                == vec![MetadataRecord::V1GroupConfig(GroupConfigRecord {
+            group_config.handled
+                == Some(Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
                     group_id: group_config.group.clone(),
                     configs: expected
-                })]
+                })))
         );
     }
     #[rstest_bdd_macros::then(
@@ -233,14 +204,13 @@ mod tests {
     )]
     fn check_share_strategy(group_config: &GroupConfigScenario, code: i16) {
         let handled = group_config.handled.as_ref().unwrap();
-        assert!(handled.response.error_code == code);
         if code == codes::NONE {
             let value = group_config.configs[0].value.as_deref().unwrap();
             assert!(
-                matches!(handled.records.as_slice(),[MetadataRecord::V1GroupConfig(record)]if record.configs.get(KEY_SHARE_AUTO_OFFSET_RESET).map(String::as_str)==Some(value))
+                matches!(handled, Ok(MetadataRecord::V1GroupConfig(record)) if record.configs.get(KEY_SHARE_AUTO_OFFSET_RESET).map(String::as_str)==Some(value))
             );
         } else {
-            assert!(handled.records.is_empty());
+            assert!(matches!(handled, Err((refused, _)) if *refused == code));
         }
     }
     #[rstest_bdd_macros::then(
@@ -272,14 +242,10 @@ mod tests {
                 KEY_NUM_STANDBY_REPLICAS,
                 "1",
             )]);
-        let Handled {
-            response: out,
-            records,
-        } = drive(&resource, UnstableApiVersions::Enabled);
-        assert!(out.error_code == codes::NONE);
+        let record = drive(&resource, UnstableApiVersions::Enabled);
         assert!(matches!(
-            records.as_slice(),
-            [MetadataRecord::V1GroupConfig(record)]
+            record,
+            Ok(MetadataRecord::V1GroupConfig(record))
                 if record.group_id == "streams-app"
                     && record.configs.get(KEY_NUM_STANDBY_REPLICAS).map(String::as_str)
                         == Some("1")
@@ -293,11 +259,7 @@ mod tests {
                 KEY_SESSION_TIMEOUT_MS,
                 "1000",
             )]);
-        let Handled {
-            response: out,
-            records,
-        } = drive(&resource, UnstableApiVersions::Enabled);
-        assert!(out.error_code == codes::INVALID_CONFIG);
-        assert!(records.is_empty());
+        let record = drive(&resource, UnstableApiVersions::Enabled);
+        assert!(matches!(record, Err((codes::INVALID_CONFIG, _))));
     }
 }

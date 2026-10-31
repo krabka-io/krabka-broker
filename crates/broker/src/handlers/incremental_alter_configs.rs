@@ -60,15 +60,10 @@ mod group_scope;
 mod test_support;
 mod topic_scope;
 
-fn set_error_response(out: &mut AlterConfigsResourceResponse, (code, message): (i16, String)) {
-    out.error_code = code;
-    out.error_message = Some(message);
-}
-
 use {
     self::{
-        broker_logger_scope::handle_broker_logger_scoped, broker_scope::handle_broker_scoped,
-        client_metrics_scope::handle_client_metrics_scoped, group_scope::handle_group_scoped,
+        broker_logger_scope::handle_broker_logger_scoped, broker_scope::broker_records,
+        client_metrics_scope::client_metrics_records, group_scope::group_record,
         topic_scope::topic_config_record,
     },
     crate::{
@@ -271,19 +266,6 @@ async fn process_resource(
     resource_refusal(&resource, code)
 }
 
-/// Queue the records of one scope's validation, or answer its refusal on the
-/// resource's response.
-fn submit_or_refuse(
-    result: Result<impl IntoIterator<Item = MetadataRecord>, (i16, String)>,
-    out: &mut AlterConfigsResourceResponse,
-    to_submit: &mut Vec<MetadataRecord>,
-) {
-    match result {
-        Ok(records) => to_submit.extend(records),
-        Err(error) => set_error_response(out, error),
-    }
-}
-
 fn resource_refusal(resource: &AlterConfigsResource, code: i16) -> AlterConfigsResourceResponse {
     AlterConfigsResourceResponse {
         resource_type: resource.resource_type,
@@ -291,6 +273,56 @@ fn resource_refusal(resource: &AlterConfigsResource, code: i16) -> AlterConfigsR
         error_code: code,
         error_message: None,
         ..Default::default()
+    }
+}
+
+/// The records a TOPIC, BROKER, CLIENT_METRICS or GROUP resource stages, or
+/// the error it answers with.
+fn resource_records(
+    broker: &Broker,
+    image: &MetadataImage,
+    ctx: &RequestContext<'_>,
+    resource: &AlterConfigsResource,
+) -> Result<Vec<MetadataRecord>, (i16, String)> {
+    match resource.resource_type {
+        RESOURCE_TYPE_TOPIC => topic_config_record(
+            resource,
+            image,
+            &broker.config.topic_policy,
+            broker.config.remote_storage_backend.is_some(),
+            broker.config.features.unstable_api_versions,
+        )
+        .map(|record| vec![record]),
+        RESOURCE_TYPE_BROKER => {
+            let serving = if ctx.forwarded && !resource.resource_name.is_empty() {
+                resource
+                    .resource_name
+                    .parse::<u64>()
+                    .map_or(broker.config.node_id, krabka_metadata::NodeId)
+            } else {
+                broker.config.node_id
+            };
+            let log_dirs = if ctx.forwarded {
+                Vec::new()
+            } else {
+                broker.config.broker_log_dirs()
+            };
+            broker_records(resource, BrokerConfigContext {
+                image,
+                serving,
+                log_dirs: &log_dirs,
+                unstable: broker.config.features.unstable_api_versions,
+            })
+        }
+        RESOURCE_TYPE_CLIENT_METRICS => client_metrics_records(resource, image),
+        RESOURCE_TYPE_GROUP => group_record(
+            resource,
+            image,
+            &GroupBounds::of(&broker.config),
+            broker.config.features.unstable_api_versions,
+        )
+        .map(|record| vec![record]),
+        other => unreachable!("resource type {other} passed the ACL dispatch"),
     }
 }
 
@@ -317,86 +349,22 @@ async fn process_resource_once(
         return Ok(out.with_error(code, message));
     }
 
-    // After ACL pass: dispatch by resource type.
-    let mut to_submit: Vec<MetadataRecord> = Vec::new();
-
-    match resource.resource_type {
-        RESOURCE_TYPE_TOPIC => {
-            match topic_config_record(
-                &resource,
-                &image,
-                &broker.config.topic_policy,
-                broker.config.remote_storage_backend.is_some(),
-                broker.config.features.unstable_api_versions,
-            ) {
-                Ok(record) => to_submit.push(record),
-                Err((code, message)) => {
-                    return Ok(out.with_error(code, message));
-                }
-            }
-        }
-        RESOURCE_TYPE_BROKER => {
-            let serving = if ctx.forwarded && !resource.resource_name.is_empty() {
-                resource
-                    .resource_name
-                    .parse::<u64>()
-                    .map_or(broker.config.node_id, krabka_metadata::NodeId)
-            } else {
-                broker.config.node_id
-            };
-            let log_dirs = if ctx.forwarded {
-                Vec::new()
-            } else {
-                broker.config.broker_log_dirs()
-            };
-            handle_broker_scoped(
-                &resource,
-                BrokerConfigContext {
-                    image: &image,
-                    serving,
-                    log_dirs: &log_dirs,
-                    unstable: broker.config.features.unstable_api_versions,
-                },
-                &mut out,
-                &mut to_submit,
-            );
-            if out.error_code != codes::NONE {
-                return Ok(out);
-            }
-        }
-        RESOURCE_TYPE_BROKER_LOGGER => {
-            // Node-local and never persisted, so this returns without
-            // reaching `submit_change` whatever the outcome.
-            handle_broker_logger_scoped(
-                &resource,
-                broker.config.broker_id,
-                &broker.config.log_levels,
-                validate_only,
-                &mut out,
-            );
-            return Ok(out);
-        }
-        RESOURCE_TYPE_CLIENT_METRICS => {
-            handle_client_metrics_scoped(&resource, &image, &mut out, &mut to_submit);
-            if out.error_code != codes::NONE {
-                return Ok(out);
-            }
-        }
-        RESOURCE_TYPE_GROUP => {
-            handle_group_scoped(
-                &resource,
-                &image,
-                &GroupBounds::of(&broker.config),
-                broker.config.features.unstable_api_versions,
-                &mut out,
-                &mut to_submit,
-            );
-            if out.error_code != codes::NONE {
-                return Ok(out);
-            }
-        }
-        other => unreachable!("resource type {other} passed the ACL dispatch"),
+    if resource.resource_type == RESOURCE_TYPE_BROKER_LOGGER {
+        // Node-local and never persisted, so this returns without
+        // reaching `submit_change` whatever the outcome.
+        handle_broker_logger_scoped(
+            &resource,
+            broker.config.broker_id,
+            &broker.config.log_levels,
+            validate_only,
+            &mut out,
+        );
+        return Ok(out);
     }
+    let mut to_submit = match resource_records(broker, &image, ctx, &resource) {
+        Ok(records) => records,
+        Err((code, message)) => return Ok(out.with_error(code, message)),
+    };
 
     if let Some((code, message)) = super::alter_configs::config_value_size_error(&to_submit) {
         return Ok(out.with_error(code, message));
