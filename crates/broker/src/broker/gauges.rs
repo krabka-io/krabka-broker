@@ -164,9 +164,7 @@ fn update_metadata_health_metrics(
         metrics.raft_current_epoch.set(i64::from(snap.leader_epoch));
         metrics.raft_high_watermark.set(snap.high_watermark);
         metrics.raft_log_end_offset.set(snap.log_end_offset);
-        metrics
-            .raft_voters
-            .set(gauge_count(snap.voters.len()));
+        metrics.raft_voters.set(gauge_count(snap.voters.len()));
         metrics
             .raft_observers
             .set(gauge_count(snap.observers.len()));
@@ -282,9 +280,8 @@ impl LocalPartitionHealth {
             }
             let offline = inputs.is_offline(partition);
             health.offline += usize::from(offline);
-            health.offline_audit += usize::from(
-                offline && inputs.is_audit_partition_without_live_replica(partition),
-            );
+            health.offline_audit +=
+                usize::from(offline && inputs.is_audit_partition_without_live_replica(partition));
         }
         health
     }
@@ -340,9 +337,8 @@ impl ClusterCounts {
         };
         for partition in image.all_partitions() {
             counts.partitions += 1;
-            counts.at_min_isr += usize::from(
-                isr_size(partition) == inputs.minimum_isr.for_topic(&partition.topic),
-            );
+            counts.at_min_isr +=
+                usize::from(isr_size(partition) == inputs.minimum_isr.for_topic(&partition.topic));
             counts.reassigning += usize::from(
                 !partition.adding_replicas.is_empty() || !partition.removing_replicas.is_empty(),
             );
@@ -445,12 +441,8 @@ pub(super) fn spawn_broker_gauge_updater(
                     partition.current_leader.load(atomic::Ordering::Acquire) == node_id
                 })
                 .count();
-            metrics
-                .partitions_led
-                .set(gauge_count(led));
-            metrics
-                .partitions_total
-                .set(gauge_count(partitions.len()));
+            metrics.partitions_led.set(gauge_count(led));
+            metrics.partitions_total.set(gauge_count(partitions.len()));
             // The registry is the one place that knows a dir went offline: a
             // runtime write or fsync failure flips it there and nothing else
             // publishes the flip. `DescribeLogDirs` reports the same dirs,
@@ -471,9 +463,9 @@ pub(super) fn spawn_broker_gauge_updater(
                 audit_topic: audit_topic.as_deref(),
             };
             LocalPartitionHealth::count(&inputs).publish(&metrics);
-            metrics.leader_site_drift_partitions.set(
-                gauge_count(leader_site_drift_partitions(&image, node_id)),
-            );
+            metrics
+                .leader_site_drift_partitions
+                .set(gauge_count(leader_site_drift_partitions(&image, node_id)));
             metrics
                 .witness_role
                 .set(i64::from(u8::from(resolve_broker_witness(&image, node_id))));
@@ -524,7 +516,9 @@ mod tests {
             test_support::{broker_registration, single_partition_topic},
         },
         assert2::{assert, check},
-        krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionElrRecord},
+        krabka_metadata::{
+            MetadataImage, MetadataRecord, NodeId, PartitionElrRecord, PartitionRecord,
+        },
         krabka_units::{millis, secs},
         std::{collections::BTreeMap, path::PathBuf, time::Duration},
         tokio::{task, time},
@@ -766,6 +760,262 @@ mod tests {
             }));
         }
         image
+    }
+
+    /// Brokers 1 to 3 and two topics, one partition per shape the counts
+    /// tell apart. `orders` 0 is led by 1 over replicas 1 to 3 with only 1
+    /// in sync; `orders` 1 is led by 2, not its preferred replica 1;
+    /// `orders` 2 is led by 1 and carries the ELR leaderless marker;
+    /// `orders` 3 is led by 1 and is reassigning toward 3. The audit topic
+    /// has one partition on broker 3 alone.
+    fn partition_shapes_image() -> MetadataImage {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        for node_id in [NodeId(1), NodeId(2), NodeId(3)] {
+            image.apply(&MetadataRecord::V1BrokerRegistration(broker_registration(
+                node_id,
+            )));
+        }
+        image.apply(&topic_record("orders"));
+        image.apply(&topic_record(DEFAULT_AUDIT_TOPIC));
+        let partitions = [
+            PartitionRecord {
+                isr: vec![NodeId(1)],
+                ..replicated_partition()
+                    .replicas(&[NodeId(1), NodeId(2), NodeId(3)])
+                    .call()
+            },
+            replicated_partition().partition(1).leader(NodeId(2)).call(),
+            replicated_partition().partition(2).call(),
+            PartitionRecord {
+                adding_replicas: vec![NodeId(3)],
+                ..replicated_partition().partition(3).call()
+            },
+            replicated_partition()
+                .topic(DEFAULT_AUDIT_TOPIC)
+                .leader(NodeId(3))
+                .replicas(&[NodeId(3)])
+                .call(),
+        ];
+        for partition in partitions {
+            image.apply(&MetadataRecord::V1Partition(partition));
+        }
+        image.apply(&MetadataRecord::V1PartitionElr(PartitionElrRecord {
+            topic: "orders".into(),
+            partition: 2,
+            eligible_leader_replicas: Vec::new(),
+            last_known_elr: vec![NodeId(1)],
+        }));
+        image
+    }
+
+    /// One sample's inputs over `image`, with the test defaults: node 1, not
+    /// the controller, audit on, and a default minimum ISR of 2.
+    #[bon::builder]
+    fn gauge_inputs<'a>(
+        image: &'a MetadataImage,
+        alive: &'a HashSet<u64>,
+        #[builder(default = NodeId(1))] node_id: NodeId,
+        #[builder(default)] is_controller: bool,
+        #[builder(default = true)] audit_enabled: bool,
+        #[builder(default = 2)] default_min_insync_replicas: i32,
+    ) -> GaugeInputs<'a> {
+        GaugeInputs {
+            image,
+            node_id,
+            alive,
+            is_controller,
+            minimum_isr: MinimumIsr::resolve(image, node_id, default_min_insync_replicas),
+            audit_topic: audit_enabled.then_some(DEFAULT_AUDIT_TOPIC),
+        }
+    }
+
+    struct LocalHealthCase {
+        name: &'static str,
+        node_id: u64,
+        alive: &'static [u64],
+        is_controller: bool,
+        audit_enabled: bool,
+        expected: LocalPartitionHealth,
+    }
+
+    #[test]
+    fn local_partition_health_counts_each_partition_shape() {
+        let cases = [
+            LocalHealthCase {
+                name: "the leader of a short ISR, not the controller",
+                node_id: 1,
+                alive: &[1, 2, 3],
+                is_controller: false,
+                audit_enabled: true,
+                expected: LocalPartitionHealth {
+                    under_replicated: 1,
+                    under_min_isr: 1,
+                    offline: 0,
+                    offline_audit: 0,
+                },
+            },
+            LocalHealthCase {
+                name: "a node leading only a fully replicated partition",
+                node_id: 2,
+                alive: &[1, 2, 3],
+                is_controller: false,
+                audit_enabled: true,
+                expected: LocalPartitionHealth::default(),
+            },
+            LocalHealthCase {
+                name: "a full RF=1 ISR still sits below a minimum of 2",
+                node_id: 3,
+                alive: &[1, 2, 3],
+                is_controller: false,
+                audit_enabled: true,
+                expected: LocalPartitionHealth {
+                    under_replicated: 0,
+                    under_min_isr: 1,
+                    offline: 0,
+                    offline_audit: 0,
+                },
+            },
+            LocalHealthCase {
+                name: "the controller counts a leaderless partition with its leader alive",
+                node_id: 1,
+                alive: &[1, 2, 3],
+                is_controller: true,
+                audit_enabled: true,
+                expected: LocalPartitionHealth {
+                    under_replicated: 1,
+                    under_min_isr: 1,
+                    offline: 1,
+                    offline_audit: 0,
+                },
+            },
+            LocalHealthCase {
+                name: "the controller with broker 3 down: its audit partition has no live replica",
+                node_id: 1,
+                alive: &[1, 2],
+                is_controller: true,
+                audit_enabled: true,
+                expected: LocalPartitionHealth {
+                    under_replicated: 1,
+                    under_min_isr: 1,
+                    offline: 2,
+                    offline_audit: 1,
+                },
+            },
+            LocalHealthCase {
+                name: "audit disabled: the audit-named partition is a user partition",
+                node_id: 1,
+                alive: &[1, 2],
+                is_controller: true,
+                audit_enabled: false,
+                expected: LocalPartitionHealth {
+                    under_replicated: 1,
+                    under_min_isr: 1,
+                    offline: 2,
+                    offline_audit: 0,
+                },
+            },
+            LocalHealthCase {
+                name: "a non-controller counts nothing offline whoever is down",
+                node_id: 1,
+                alive: &[1, 2],
+                is_controller: false,
+                audit_enabled: true,
+                expected: LocalPartitionHealth {
+                    under_replicated: 1,
+                    under_min_isr: 1,
+                    offline: 0,
+                    offline_audit: 0,
+                },
+            },
+        ];
+        let image = partition_shapes_image();
+        for case in cases {
+            let alive = case.alive.iter().copied().collect();
+            let inputs = gauge_inputs()
+                .image(&image)
+                .alive(&alive)
+                .node_id(NodeId(case.node_id))
+                .is_controller(case.is_controller)
+                .audit_enabled(case.audit_enabled)
+                .call();
+
+            check!(
+                LocalPartitionHealth::count(&inputs) == case.expected,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    struct ClusterCase {
+        name: &'static str,
+        alive: &'static [u64],
+        default_min_insync_replicas: i32,
+        expected: ClusterCounts,
+    }
+
+    #[test]
+    fn cluster_counts_count_every_partition_and_broker() {
+        let cases = [
+            ClusterCase {
+                name: "every broker alive, minimum ISR 2",
+                alive: &[1, 2, 3],
+                default_min_insync_replicas: 2,
+                expected: ClusterCounts {
+                    active_brokers: 3,
+                    fenced_brokers: 0,
+                    topics: 2,
+                    partitions: 5,
+                    at_min_isr: 3,
+                    reassigning: 1,
+                    preferred_imbalance: 1,
+                },
+            },
+            ClusterCase {
+                name: "broker 3 down, minimum ISR 1",
+                alive: &[1, 2],
+                default_min_insync_replicas: 1,
+                expected: ClusterCounts {
+                    active_brokers: 2,
+                    fenced_brokers: 1,
+                    topics: 2,
+                    partitions: 5,
+                    at_min_isr: 2,
+                    reassigning: 1,
+                    preferred_imbalance: 1,
+                },
+            },
+            ClusterCase {
+                name: "no broker alive",
+                alive: &[],
+                default_min_insync_replicas: 2,
+                expected: ClusterCounts {
+                    active_brokers: 0,
+                    fenced_brokers: 3,
+                    topics: 2,
+                    partitions: 5,
+                    at_min_isr: 3,
+                    reassigning: 1,
+                    preferred_imbalance: 1,
+                },
+            },
+        ];
+        let image = partition_shapes_image();
+        for case in cases {
+            let alive = case.alive.iter().copied().collect();
+            let inputs = gauge_inputs()
+                .image(&image)
+                .alive(&alive)
+                .is_controller(true)
+                .default_min_insync_replicas(case.default_min_insync_replicas)
+                .call();
+
+            check!(
+                ClusterCounts::count(&inputs) == case.expected,
+                "{}",
+                case.name
+            );
+        }
     }
 
     /// #1516: a down broker leaves its RF=1 audit partition leaderless. The
