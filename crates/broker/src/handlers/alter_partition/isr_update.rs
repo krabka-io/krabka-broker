@@ -53,51 +53,20 @@ pub(super) fn handle_partition_with_recovery(
     changes: &mut Vec<MetadataRecord>,
 ) -> RespPartitionData {
     let partition_index = request.partition_index;
-    let new_isr_i32 = request.new_isr.as_slice();
-    let new_isr_with_epochs = request.new_isr_with_epochs.as_slice();
     let Some(part_rec) = image.partition(topic_name, partition_index) else {
         return error_part(partition_index, codes::UNKNOWN_TOPIC_OR_PARTITION);
     };
     let current_recovery_state = image.leader_recovery_state(topic_name, partition_index);
-
-    // Resolve the effective ISR from the request. Protocol v2 sends
-    // `new_isr: Vec<i32>`; v3 sends `new_isr_with_epochs` instead and
-    // leaves `new_isr` empty. Fall back to extracting broker_ids from
-    // `new_isr_with_epochs` when the v2 field is absent.
-    let fallback_isr_i32: Vec<i32>;
-    let effective_isr_i32: &[i32] = if new_isr_i32.is_empty() && !new_isr_with_epochs.is_empty() {
-        fallback_isr_i32 = new_isr_with_epochs.iter().map(|bs| bs.broker_id).collect();
-        &fallback_isr_i32
-    } else {
-        new_isr_i32
-    };
+    let (effective_isr, proposed_states) = proposed_replicas(request);
+    let effective_isr_i32 = effective_isr.as_slice();
 
     // Kafka's `ineligibleReplicasForIsr`: a broker in the proposed ISR is
     // ineligible if it is not registered, is in controlled shutdown, is
     // fenced, or carries a broker epoch other than -1 that disagrees with its
     // registration (KIP-903). The registration carries the fence and the
     // controlled shutdown, and `active`, the controller's heartbeat registry,
-    // also refuses a broker whose change has not committed yet. A request
-    // older than v3 carries no epochs, so Kafka checks its `new_isr` with -1
-    // for each. Any ineligible replica fails the whole partition.
-    let proposed_states: Vec<ProposedReplica> =
-        if !new_isr_i32.is_empty() || new_isr_with_epochs.is_empty() {
-            effective_isr_i32
-                .iter()
-                .map(|&broker_id| ProposedReplica {
-                    broker_id,
-                    broker_epoch: -1,
-                })
-                .collect()
-        } else {
-            new_isr_with_epochs
-                .iter()
-                .map(|state| ProposedReplica {
-                    broker_id: state.broker_id,
-                    broker_epoch: state.broker_epoch,
-                })
-                .collect()
-        };
+    // also refuses a broker whose change has not committed yet. Any
+    // ineligible replica fails the whole partition.
     let replicas_eligible = proposed_states.iter().all(
         |&ProposedReplica {
              broker_id,
@@ -192,6 +161,38 @@ pub(super) fn handle_partition_with_recovery(
         partition_epoch: new_partition_epoch,
         unknown_tagged_fields: UnknownTaggedFields::default(),
     }
+}
+
+/// The broker IDs of the proposed ISR, in request order, and each proposed
+/// replica with the broker epoch its eligibility check compares.
+///
+/// Protocol v2 sends `new_isr`; v3 sends `new_isr_with_epochs` instead and
+/// leaves `new_isr` empty. The epochs are used only when `new_isr` is empty
+/// and `new_isr_with_epochs` is not. Otherwise every replica of `new_isr`
+/// carries the epoch -1, as Kafka checks a request older than v3.
+fn proposed_replicas(request: &ReqPartitionData) -> (Vec<i32>, Vec<ProposedReplica>) {
+    let uses_epochs = request.new_isr.is_empty() && !request.new_isr_with_epochs.is_empty();
+    let replicas: Vec<ProposedReplica> = if uses_epochs {
+        request
+            .new_isr_with_epochs
+            .iter()
+            .map(|state| ProposedReplica {
+                broker_id: state.broker_id,
+                broker_epoch: state.broker_epoch,
+            })
+            .collect()
+    } else {
+        request
+            .new_isr
+            .iter()
+            .map(|&broker_id| ProposedReplica {
+                broker_id,
+                broker_epoch: -1,
+            })
+            .collect()
+    };
+    let broker_ids = replicas.iter().map(|replica| replica.broker_id).collect();
+    (broker_ids, replicas)
 }
 
 /// Kafka's `Replicas.validateIsr` and its leader-membership check: every
