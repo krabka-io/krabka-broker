@@ -10,7 +10,7 @@ use {
         network::{client::tune_socket, dispatch},
         quota::{lookup_ip_quota_with_key, positive_f64_to_u64},
     },
-    krabka_raft::AcceptingListener,
+    krabka_raft::{AcceptingListener, ConnectionLimit},
     krabka_units::{ByteSize, Time, convert::TimeExt as _},
     std::{net::IpAddr, sync::Arc, time::Instant},
     tokio::{
@@ -63,6 +63,15 @@ fn connection_creation_throttle(broker: &Broker, peer_ip: IpAddr) -> Option<Time
 async fn close_after(stream: TcpStream, delay: Time) {
     time::sleep(delay.to_std()).await;
     drop(stream);
+}
+
+/// The close reason a connection rejected at `limit` is counted under: the
+/// per-IP cap has its own, the broker-wide and listener caps share one.
+fn close_reason(limit: ConnectionLimit) -> ConnectionCloseReason {
+    match limit {
+        ConnectionLimit::Global | ConnectionLimit::Listener => ConnectionCloseReason::MaxConnections,
+        ConnectionLimit::PerIp => ConnectionCloseReason::MaxConnectionsPerIp,
+    }
 }
 
 async fn shutdown_connection_tasks(connections: &mut JoinSet<()>) { connections.shutdown().await; }
@@ -172,16 +181,7 @@ pub(super) async fn accept_loop(
                         let conn_guard = match broker.connections.try_acquire_within(peer_ip, accepting, &quotas) {
                             Ok(guard) => guard,
                             Err(limit) => {
-                                let reason = match limit {
-                                    krabka_raft::ConnectionLimit::Global
-                                    | krabka_raft::ConnectionLimit::Listener => {
-                                        ConnectionCloseReason::MaxConnections
-                                    }
-                                    krabka_raft::ConnectionLimit::PerIp => {
-                                        ConnectionCloseReason::MaxConnectionsPerIp
-                                    }
-                                };
-                                broker.metrics.record_connection_close(reason);
+                                broker.metrics.record_connection_close(close_reason(limit));
                                 tracing::debug!(
                                     %peer,
                                     name = %spec.name,
@@ -269,6 +269,18 @@ mod tests {
     #[test]
     fn connection_creation_delay_honors_nondefault_cap() {
         assert!(connection_creation_delay(0.1, millis(17)) == millis(17));
+    }
+
+    #[test]
+    fn close_reason_separates_the_per_ip_cap_from_the_others() {
+        let cases = [
+            (ConnectionLimit::Global, ConnectionCloseReason::MaxConnections),
+            (ConnectionLimit::Listener, ConnectionCloseReason::MaxConnections),
+            (ConnectionLimit::PerIp, ConnectionCloseReason::MaxConnectionsPerIp),
+        ];
+        for (limit, expected) in cases {
+            assert!(close_reason(limit) == expected, "{limit:?}");
+        }
     }
 
     #[tokio::test]
