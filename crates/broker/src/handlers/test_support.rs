@@ -43,7 +43,7 @@ use {
         broker::{Broker, BrokerHandle, spawn_partition as spawn_broker_partition},
         codes,
         config::{BreakGlassConfig, BrokerConfig, RemoteStorageBackend, RlmmKind},
-        config_keys::broker_dynamic::BrokerConfigContext,
+        config_keys::{self, broker_dynamic::BrokerConfigContext},
         error::BrokerError,
         features::{METADATA_VERSION, STREAMS_VERSION, require_feature},
         handlers::{
@@ -1084,6 +1084,16 @@ pub fn metadata_topic_record(
         partitions,
         replication_factor,
     }
+}
+
+/// The refusal either alter-config API answers when a topic's resulting map
+/// turns `krabka.diskless` on for a topic that does not have it.
+#[cfg(test)]
+pub fn diskless_turned_on_refusal() -> (i16, String) {
+    let diskless = maplit::btreemap! {config_keys::DISKLESS.to_owned() => "true".to_owned()};
+    let reason = config_keys::validate_diskless_unchanged(None, &diskless)
+        .expect_err("turning diskless on is a change");
+    (codes::INVALID_CONFIG, reason)
 }
 
 #[cfg(test)]
