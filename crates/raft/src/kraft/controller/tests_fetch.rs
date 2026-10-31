@@ -1154,6 +1154,45 @@ async fn admitted_fetch_selects_truncate_append_or_high_watermark_path() {
     assert2::assert!(advancing.log.hwm() == Offset(1));
 }
 
+/// A follower whose truncation to the leader's divergence point fails stops:
+/// the failure is the log's, whatever its kind, and the response does not
+/// reach the core, which would otherwise take the divergence as resolved and
+/// truncate or fetch again over a log in no known state. Kafka's raft driver
+/// halts on any error a truncation throws.
+#[tokio::test]
+async fn a_failed_follower_truncation_fails_the_log_and_stops() {
+    let (mut engine, _dir) = build_engine_only().ids(&[NodeId(1), NodeId(2)]).call();
+    for offset in 0..2 {
+        let mut batch = one_offset_batch(offset, 2, b"local");
+        engine
+            .log
+            .append(&mut batch, 0)
+            .expect("append local batch");
+    }
+    become_follower(&mut engine, NodeId(2), 3);
+    engine.log.fail_next_truncate = true;
+    let truncate = wire::PeerResponse::Fetch(wire::FetchAnswer {
+        diverging: Some(LogOffsetMetadata {
+            offset: 1,
+            epoch: 2,
+        }),
+        hwm: 2,
+        ..leader_answer(NodeId(2), 3)
+    })
+    .encode();
+
+    engine.on_fetch_response(NodeId(2), &truncate);
+
+    let failure = krabka_log::LogError::OffsetTooLow {
+        requested: Offset(1),
+        log_start: Offset(0),
+    }
+    .to_string();
+    assert!(engine.log.failure() == Some(failure.as_str()));
+    assert!(engine.log.log_end_offset() == Offset(2));
+    assert!(engine.publish_fault());
+}
+
 #[tokio::test]
 async fn fetch_snapshot_response_error_or_wrong_leader_aborts_transfer() {
     let (mut engine, _dir) = build_engine_only().ids(&[NodeId(1), NodeId(2)]).call();

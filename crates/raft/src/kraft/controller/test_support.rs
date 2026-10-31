@@ -353,6 +353,7 @@ pub fn build_engine_only(
             snapshot_write_delay: Duration::ZERO,
             downgrade_snapshot_pending: None,
             downgrade_snapshot_failures_remaining: 0,
+            apply_read_failure_at: None,
             snapshot_fetch: None,
             installed_snapshot_epoch: None,
             controls,

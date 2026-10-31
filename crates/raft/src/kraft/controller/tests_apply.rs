@@ -38,19 +38,26 @@ fn append_topic_batch(
         .expect("append metadata");
 }
 
-#[test]
-fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
+/// A one-voter engine that reads one batch at a time, with topics `first`
+/// (offsets 0 and 1) and `second` (offsets 2 and 3) appended but not yet
+/// committed.
+fn two_topic_engine_with_tiny_fetch_budget() -> (Engine, tempfile::TempDir, MetadataRaftFetchMax) {
     let tiny = MetadataRaftFetchMax::try_from(krabka_units::bytes(1))
         .expect("one byte still makes progress");
-    let (mut engine, _dir) = build_engine_only()
+    let (mut engine, dir) = build_engine_only()
         .ids(&[NodeId(1)])
         .metadata_raft_fetch_max(tiny)
         .call();
-
     let mut scratch = engine.image.clone();
     for (name, id) in [("first", 1), ("second", 2)] {
         append_topic_batch(&mut engine, &mut scratch, name, id, 1_700_000_000_123);
     }
+    (engine, dir, tiny)
+}
+
+#[test]
+fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
+    let (mut engine, _dir, tiny) = two_topic_engine_with_tiny_fetch_budget();
     check!(
         engine
             .log
@@ -80,6 +87,36 @@ fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
     assert2::assert!(recovered.topic("first").is_some());
     assert2::assert!(recovered.topic("second").is_some());
     assert2::assert!(recovered_timestamp == Some(1_700_000_000_123));
+}
+
+/// A read that fails while newly committed records apply stops the
+/// controller at the offset the read started from. The high watermark already
+/// covers those records, so no later pass would apply them: the image the
+/// first batch changed does not publish, the fault names the offset, and a
+/// later pass applies nothing, as Kafka's raft driver halts on any error its
+/// thread throws.
+#[test]
+fn a_failed_read_during_apply_stops_the_controller_and_publishes_nothing() {
+    let (mut engine, _dir, _) = two_topic_engine_with_tiny_fetch_budget();
+    let published_before = Arc::clone(&engine.image.published());
+    engine.apply_read_failure_at = Some(Offset(2));
+
+    engine.advance_and_apply(engine.log.log_end_offset());
+
+    let fault = MetadataReplayError::UnreadableLog {
+        offset: 2,
+        reason: "change rejected: injected apply read failure".into(),
+    };
+    check!(engine.replay_fault.as_ref() == Some(&fault));
+    check!(*engine.image.published() == published_before);
+
+    engine.apply_read_failure_at = None;
+    engine.advance_and_apply(engine.log.log_end_offset());
+
+    check!(engine.image.topic("second").is_none());
+    check!(*engine.image.published() == published_before);
+    check!(engine.publish_fault());
+    check!(*engine.fault_tx.borrow() == Some(fault.to_string()));
 }
 
 /// A replay reports the timestamp of the last committed batch, not of an

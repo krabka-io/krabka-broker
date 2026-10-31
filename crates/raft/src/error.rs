@@ -57,6 +57,18 @@ pub enum MetadataReplayError {
         /// Why it is invalid.
         reason: String,
     },
+    /// The committed metadata log could not be read at an offset whose
+    /// records have not been applied yet. Kafka's `KafkaRaftClientDriver`
+    /// hands any error its raft thread throws, a failed log read among them,
+    /// to `SharedServer.raftManagerFaultHandler`, which is fatal on every
+    /// role.
+    #[error("the committed metadata log at offset {offset} cannot be read: {reason}")]
+    UnreadableLog {
+        /// The offset the failed read started at.
+        offset: i64,
+        /// Why the read failed.
+        reason: String,
+    },
 }
 
 #[derive(Debug, Error)]

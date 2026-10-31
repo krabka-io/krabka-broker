@@ -296,10 +296,13 @@ impl Engine {
                 let Some(point) = diverging else { return };
                 let truncate_to = point.follower_truncation_offset(&self.log);
                 if let Err(e) = self.log.truncate_to(Offset(truncate_to)) {
+                    // The log has failed, and the engine stops at the end of
+                    // this turn. The core must not take the divergence as
+                    // resolved and fetch past it.
                     tracing::error!(?e, "kraft: follower truncate failed");
-                } else {
-                    self.restore_control_state_after_truncation(self.log.log_end_offset().0);
+                    return;
                 }
+                self.restore_control_state_after_truncation(self.log.log_end_offset().0);
             }
             FetchResponseMutation::Append => {
                 // Append the carried batches at their leader-assigned offsets.
