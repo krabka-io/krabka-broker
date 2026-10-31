@@ -12,7 +12,7 @@ use {
         REPLAY_FENCE_KEY, WAL_OBJECT_RESERVATION_PARTITION, wal_index_key_version,
     },
     krabka_remote_storage_topic::{
-        KeyedEvent, MetadataEventLog, MetadataEventRecord, PartitionStart,
+        KeyedEvent, MetadataEventLog, MetadataEventRecord, MetadataEventStream, PartitionStart,
     },
     std::{
         collections::HashMap,
@@ -92,9 +92,9 @@ impl DisklessIndexLog {
                 start_offset: 0,
             })
             .collect();
-        let (mut stream, _assignment) = log.subscribe(starts);
+        let (stream, _assignment) = log.subscribe(starts);
 
-        let mut pending = publish_replay_fences(&*log).await?;
+        let pending = publish_replay_fences(&*log).await?;
         let (progress_tx, progress_rx) = watch::channel(ReplayProgress {
             slowest_pending: 0,
             caught_up: pending.is_empty(),
@@ -110,120 +110,20 @@ impl DisklessIndexLog {
         let (consumed_tx, consumed_rx) = watch::channel(vec![-1; partition_count]);
         let valid = Arc::new(AtomicBool::new(true));
 
-        let pump_cache = Arc::clone(&cache);
-        let pump_valid = Arc::clone(&valid);
         let object_fences = Arc::new(StdMutex::new(ObjectFences::default()));
-        let pump_object_fences = Arc::clone(&object_fences);
-        tokio::spawn(async move {
-            let consumed_tx = consumed_tx.clone();
-            let mut delivered: HashMap<i32, u64> =
-                pending.keys().map(|partition| (*partition, 0)).collect();
-            while let Some(event) = stream.next().await {
-                match classify(&event) {
-                    IndexEvent::UnknownKeyVersion { key_version } => {
-                        invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                        tracing::error!(
-                            partition = event.partition,
-                            offset = event.offset,
-                            key_version = ?key_version,
-                            "diskless WAL index record has an unknown key version; projection is \
-                             unsafe"
-                        );
-                    }
-                    IndexEvent::ReleaseReservation(key) => {
-                        pump_cache
-                            .lock()
-                            .await
-                            .release_object_reservation(key.object_id());
-                        applied_tx.send_modify(|generation| {
-                            *generation = generation.wrapping_add(1);
-                        });
-                    }
-                    IndexEvent::ClearFloor(key) => pump_cache.lock().await.clear_delete_floor(key),
-                    IndexEvent::RemoveRange(key) => pump_cache.lock().await.remove(key),
-                    IndexEvent::TombstoneNoop | IndexEvent::ReplayFence => {}
-                    IndexEvent::InvalidReservation => {
-                        invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                    }
-                    IndexEvent::MismatchedReservation => {
-                        invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                        continue;
-                    }
-                    IndexEvent::Reserve(key) => {
-                        pump_cache.lock().await.reserve_object(key.object_id());
-                        applied_tx.send_modify(|generation| {
-                            *generation = generation.wrapping_add(1);
-                        });
-                    }
-                    IndexEvent::RaiseFloor { key, floor } => {
-                        pump_cache.lock().await.raise_delete_floor(
-                            key.topic_id,
-                            key.partition,
-                            floor,
-                        );
-                        applied_tx.send_modify(|generation| {
-                            *generation = generation.wrapping_add(1);
-                        });
-                    }
-                    IndexEvent::ApplyRange { key, record } => {
-                        // An object-local fence serializes additions with the
-                        // reclaimer's final check and DELETE, without blocking
-                        // unrelated cache traffic.
-                        let _object_fence =
-                            lock_object_fence(&pump_object_fences, &record.object_key).await;
-                        pump_cache.lock().await.apply_keyed(key, &record);
-                        applied_tx.send_modify(|generation| {
-                            *generation = generation.wrapping_add(1);
-                        });
-                    }
-                    IndexEvent::Unkeyed => {
-                        invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                        tracing::error!(
-                            partition = event.partition,
-                            offset = event.offset,
-                            "unkeyed diskless WAL index record; projection is unsafe"
-                        );
-                    }
-                    IndexEvent::Rejected(error) => {
-                        invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                        tracing::error!(
-                            partition = event.partition,
-                            offset = event.offset,
-                            %error,
-                            "diskless WAL index record rejected; projection is unsafe"
-                        );
-                    }
-                }
-                consumed_tx.send_modify(|offsets| {
-                    // A negative partition addresses no slot, as one past the end does.
-                    if let Ok(index) = usize::try_from(event.partition)
-                        && let Some(offset) = offsets.get_mut(index)
-                    {
-                        *offset = (*offset).max(event.offset);
-                    }
-                });
-                let Some(target) = pending.get(&event.partition).copied() else {
-                    continue;
-                };
-                *delivered.entry(event.partition).or_default() += 1;
-                if event.offset >= target {
-                    pending.remove(&event.partition);
-                    delivered.remove(&event.partition);
-                }
-                let next = ReplayProgress {
-                    slowest_pending: delivered.values().copied().min().unwrap_or(u64::MAX),
-                    caught_up: pending.is_empty(),
-                    invalid: !pump_valid.load(Ordering::Acquire),
-                };
-                // Notify only on a real change, so a waiter's stall timer is
-                // not reset by a busy partition while another one is stuck.
-                progress_tx.send_if_modified(|progress| {
-                    let changed = *progress != next;
-                    *progress = next;
-                    changed
-                });
-            }
-        });
+        let delivered = pending.keys().map(|partition| (*partition, 0)).collect();
+        let pump = IndexPump {
+            cache: Arc::clone(&cache),
+            valid: Arc::clone(&valid),
+            object_fences: Arc::clone(&object_fences),
+            metrics,
+            progress_tx,
+            applied_tx,
+            consumed_tx,
+            pending,
+            delivered,
+        };
+        tokio::spawn(pump.run(stream));
         Ok(Self {
             log,
             cache,
@@ -593,6 +493,142 @@ impl DisklessIndexLog {
             self.cache.lock().await.remove(*key);
         }
         Ok(())
+    }
+}
+
+/// The task that applies the index topic's records to the projection, in
+/// the order the subscription delivers them.
+struct IndexPump {
+    cache: Arc<Mutex<WalIndexCache>>,
+    valid: Arc<AtomicBool>,
+    object_fences: Arc<StdMutex<ObjectFences>>,
+    metrics: BrokerMetrics,
+    progress_tx: watch::Sender<ReplayProgress>,
+    applied_tx: watch::Sender<u64>,
+    consumed_tx: watch::Sender<Vec<i64>>,
+    /// The replay fence offset of each partition still being replayed.
+    pending: HashMap<i32, i64>,
+    /// Records delivered so far for each partition in `pending`.
+    delivered: HashMap<i32, u64>,
+}
+
+impl IndexPump {
+    async fn run(mut self, mut stream: MetadataEventStream) {
+        while let Some(event) = stream.next().await {
+            self.apply(event).await;
+        }
+    }
+
+    async fn apply(&mut self, event: MetadataEventRecord) {
+        match classify(&event) {
+            IndexEvent::UnknownKeyVersion { key_version } => {
+                self.invalidate();
+                tracing::error!(
+                    partition = event.partition,
+                    offset = event.offset,
+                    key_version = ?key_version,
+                    "diskless WAL index record has an unknown key version; projection is unsafe"
+                );
+            }
+            IndexEvent::ReleaseReservation(key) => {
+                self.cache
+                    .lock()
+                    .await
+                    .release_object_reservation(key.object_id());
+                self.bump_applied();
+            }
+            IndexEvent::ClearFloor(key) => self.cache.lock().await.clear_delete_floor(key),
+            IndexEvent::RemoveRange(key) => self.cache.lock().await.remove(key),
+            IndexEvent::TombstoneNoop | IndexEvent::ReplayFence => {}
+            IndexEvent::Reserve(key) => {
+                self.cache.lock().await.reserve_object(key.object_id());
+                self.bump_applied();
+            }
+            IndexEvent::InvalidReservation => self.invalidate(),
+            IndexEvent::MismatchedReservation => {
+                self.invalidate();
+                // Deliberately neither recorded as consumed nor counted toward
+                // the replay, as the pump has always done.
+                return;
+            }
+            IndexEvent::RaiseFloor { key, floor } => {
+                self.cache
+                    .lock()
+                    .await
+                    .raise_delete_floor(key.topic_id, key.partition, floor);
+                self.bump_applied();
+            }
+            IndexEvent::ApplyRange { key, record } => {
+                // An object-local fence serializes additions with the
+                // reclaimer's final check and DELETE, without blocking
+                // unrelated cache traffic.
+                let _object_fence =
+                    lock_object_fence(&self.object_fences, &record.object_key).await;
+                self.cache.lock().await.apply_keyed(key, &record);
+                self.bump_applied();
+            }
+            IndexEvent::Unkeyed => {
+                self.invalidate();
+                tracing::error!(
+                    partition = event.partition,
+                    offset = event.offset,
+                    "unkeyed diskless WAL index record; projection is unsafe"
+                );
+            }
+            IndexEvent::Rejected(error) => {
+                self.invalidate();
+                tracing::error!(
+                    partition = event.partition,
+                    offset = event.offset,
+                    %error,
+                    "diskless WAL index record rejected; projection is unsafe"
+                );
+            }
+        }
+        self.record_consumed(&event);
+        self.report_progress(&event);
+    }
+
+    /// Tell projection waiters the cache changed.
+    fn bump_applied(&self) {
+        self.applied_tx
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
+    }
+
+    fn invalidate(&self) { invalidate_projection(&self.metrics, &self.valid, &self.progress_tx); }
+
+    fn record_consumed(&self, event: &MetadataEventRecord) {
+        self.consumed_tx.send_modify(|offsets| {
+            // A negative partition addresses no slot, as one past the end does.
+            if let Ok(index) = usize::try_from(event.partition)
+                && let Some(offset) = offsets.get_mut(index)
+            {
+                *offset = (*offset).max(event.offset);
+            }
+        });
+    }
+
+    fn report_progress(&mut self, event: &MetadataEventRecord) {
+        let Some(target) = self.pending.get(&event.partition).copied() else {
+            return;
+        };
+        *self.delivered.entry(event.partition).or_default() += 1;
+        if event.offset >= target {
+            self.pending.remove(&event.partition);
+            self.delivered.remove(&event.partition);
+        }
+        let next = ReplayProgress {
+            slowest_pending: self.delivered.values().copied().min().unwrap_or(u64::MAX),
+            caught_up: self.pending.is_empty(),
+            invalid: !self.valid.load(Ordering::Acquire),
+        };
+        // Notify only on a real change, so a waiter's stall timer is not
+        // reset by a busy partition while another one is stuck.
+        self.progress_tx.send_if_modified(|progress| {
+            let changed = *progress != next;
+            *progress = next;
+            changed
+        });
     }
 }
 
