@@ -15,6 +15,7 @@ use {
         codes,
         metrics::{BrokerMetrics, RemoteTierPath},
         partition::Partition,
+        remote_reader::RemoteReader,
     },
     bytes::Bytes,
     krabka_log::{DeliveryPolicy, LeaderEpoch, Offset},
@@ -23,7 +24,7 @@ use {
         primitives::uuid::Uuid as WireUuid,
         records::{HEADER_LEN, RecordBatchHeader, RecordsPayload},
     },
-    krabka_remote_storage::{RemoteStorageError, corrupt_log},
+    krabka_remote_storage::{RemoteStorageError, TopicIdPartition, corrupt_log},
     krabka_units::convert::TimeExt as _,
     krabka_verified::transaction,
     std::{
@@ -359,6 +360,86 @@ fn answer_not_due(p: &mut PendingRead, live: LiveOffsets) -> usize {
     0
 }
 
+/// The archived range a cold read returned, keyed as the tier keys it.
+#[derive(Clone, Copy)]
+struct ArchivedWindow<'tp> {
+    tp: &'tp TopicIdPartition,
+    /// The leader epoch that owned the fetch offset.
+    leader_epoch: LeaderEpoch,
+    /// The first offset the read asked for.
+    fetch_offset: i64,
+    /// The last offset the read's last batch holds.
+    last_offset: i64,
+}
+
+/// Why [`read_committed_aborts`] built no aborted-transaction list.
+#[derive(Debug)]
+enum AbortsFailed {
+    /// The tier failed the `.txnindex` read.
+    Remote(RemoteStorageError),
+    /// `remote.fetch.max.wait.ms` passed before the tier answered.
+    Expired,
+    /// The window's last offset is the largest offset there is, so the range
+    /// has no exclusive end.
+    Overflow,
+}
+
+/// KIP-405 read-committed: the aborted-transaction list for `window`, from
+/// the remote `.txnindex` files and then the local ones past the tier,
+/// including later marker segments, so the consumer drops aborted records
+/// client-side. Wire rows both tiers share appear once. An empty list is the
+/// correct read-committed signal.
+///
+/// The remote read is bounded by `wait`, the request's
+/// `remote.fetch.max.wait.ms`.
+async fn read_committed_aborts(
+    broker: &Broker,
+    reader: &RemoteReader,
+    wait: &mut RemoteFetchWait,
+    part: &Partition,
+    window: ArchivedWindow<'_>,
+) -> Result<Vec<AbortedTransaction>, AbortsFailed> {
+    let batch_end = window
+        .last_offset
+        .checked_add(1)
+        .ok_or(AbortsFailed::Overflow)?;
+    let aborts = wait
+        .bound(
+            broker,
+            reader.aborted_transactions(
+                window.tp,
+                window.leader_epoch,
+                window.fetch_offset,
+                window.last_offset,
+            ),
+        )
+        .await
+        .ok_or(AbortsFailed::Expired)?
+        .map_err(AbortsFailed::Remote)?;
+    let local = part
+        .log
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .aborted_in_range(Offset(window.fetch_offset), Offset(batch_end));
+    let rows: Vec<_> = aborts
+        .into_iter()
+        .map(|entry| (entry.producer_id, entry.start_offset))
+        .chain(
+            local
+                .into_iter()
+                .map(|entry| (entry.producer_id.get(), entry.start_offset.0)),
+        )
+        .collect();
+    Ok(transaction::unique_aborted_transaction_rows(&rows)
+        .into_iter()
+        .map(|(producer_id, first_offset)| AbortedTransaction {
+            producer_id,
+            first_offset,
+            ..Default::default()
+        })
+        .collect())
+}
+
 /// What a cold read needs from the partition's log, read under one lock.
 struct TierConfig {
     /// The topic's KFC-1 delivery policy.
@@ -494,11 +575,7 @@ pub(super) async fn try_remote_read(
         return None;
     }
     let topic_id = uuid::Uuid::from_bytes(p.topic_id.0);
-    let tp = krabka_remote_storage::TopicIdPartition::new(
-        topic_id,
-        p.topic_name.to_string(),
-        p.partition_index,
-    );
+    let tp = TopicIdPartition::new(topic_id, p.topic_name.to_string(), p.partition_index);
     // Atomic stores the raw epoch; wrap into `LeaderEpoch` for the
     // remote-reader / RLMM seam that follows.
     let current_leader_epoch =
@@ -605,53 +682,21 @@ pub(super) async fn try_remote_read(
         return Some(answer_not_due(p, live));
     };
 
-    // KIP-405 read-committed: surface the aborted-transaction list from remote
-    // and local `.txnindex` files, including later marker segments, so the
-    // consumer drops aborted records client-side. Select against the window
-    // this read returns, then deduplicate wire rows shared by both tiers.
-    // `Some(empty)` is the correct read-committed signal (read-uncommitted
-    // leaves it `None`).
+    // KIP-405 read-committed: the aborted transactions in the window this read
+    // returns. Read-uncommitted leaves the list `None`.
     if p.read_committed && !p.is_follower_fetch {
-        let Some(batch_end) = batch_last_offset.checked_add(1) else {
-            return Some(fail_partition(p));
+        let window = ArchivedWindow {
+            tp: &tp,
+            leader_epoch,
+            fetch_offset: p.fetch_offset,
+            last_offset: batch_last_offset,
         };
-        let aborts = match wait
-            .bound(
-                broker,
-                reader.aborted_transactions(&tp, leader_epoch, p.fetch_offset, batch_last_offset),
-            )
-            .await
-        {
-            Some(Ok(aborts)) => aborts,
-            Some(Err(e)) => return Some(fail_remote_read(&broker.metrics, p, &e)),
-            None => {
-                return Some(expired(p, live));
-            }
-        };
-        let local = part
-            .log
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .aborted_in_range(Offset(p.fetch_offset), Offset(batch_end));
-        let rows: Vec<_> = aborts
-            .into_iter()
-            .map(|entry| (entry.producer_id, entry.start_offset))
-            .chain(
-                local
-                    .into_iter()
-                    .map(|entry| (entry.producer_id.get(), entry.start_offset.0)),
-            )
-            .collect();
-        p.out.aborted_transactions = Some(
-            transaction::unique_aborted_transaction_rows(&rows)
-                .into_iter()
-                .map(|(producer_id, first_offset)| AbortedTransaction {
-                    producer_id,
-                    first_offset,
-                    ..Default::default()
-                })
-                .collect(),
-        );
+        match read_committed_aborts(broker, &reader, wait, part, window).await {
+            Ok(aborts) => p.out.aborted_transactions = Some(aborts),
+            Err(AbortsFailed::Remote(e)) => return Some(fail_remote_read(&broker.metrics, p, &e)),
+            Err(AbortsFailed::Expired) => return Some(expired(p, live)),
+            Err(AbortsFailed::Overflow) => return Some(fail_partition(p)),
+        }
     }
 
     // `DelayedRemoteFetch.onComplete`: the remote records beside the bounds
