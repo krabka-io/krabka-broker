@@ -50,6 +50,7 @@ use {
         sync::{watch, watch::error::RecvError},
         time,
     },
+    tokio_util::sync::DropGuard,
 };
 
 impl Broker {
@@ -229,6 +230,7 @@ impl Broker {
                     admin_router: controller_admin_router,
                 },
             audit: raft_handshake_audit,
+            auto_join,
         } = start_metadata_phase(
             &mut config,
             controller_listener,
@@ -256,6 +258,7 @@ impl Broker {
                 controller,
                 controller_admin_router,
                 raft_handshake_audit,
+                auto_join,
             })),
         )
         .await
@@ -281,6 +284,7 @@ impl Broker {
             controller,
             controller_admin_router,
             raft_handshake_audit,
+            auto_join,
         } = joined;
 
         // 1b. KIP-853 controller auto-join. Spawned BEFORE the leader-wait in
@@ -505,6 +509,7 @@ impl Broker {
                 controller,
                 partitions,
                 admin_router: controller_admin_router,
+                auto_join,
             },
             BrokerCoordinatorSet {
                 group_coordinator,
@@ -551,6 +556,7 @@ struct JoinedQuorum {
     controller: Arc<dyn MetadataSource>,
     controller_admin_router: Option<Arc<BrokerControllerAdminRouter>>,
     raft_handshake_audit: AuditLogArc,
+    auto_join: DropGuard,
 }
 
 /// Wait for the first heartbeat answer that says this broker is unfenced, as
