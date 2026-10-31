@@ -28,7 +28,7 @@ use {
         sentinels::{UNKNOWN_EPOCH, UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP, timestamp_kind},
         timestamp::resolve_timestamp_offset,
     },
-    crate::{broker::Broker, codes, partition::Partition},
+    crate::{broker::Broker, codes, partition::Partition, remote_reader::TieredOffset},
     krabka_protocol::owned::{
         list_offsets_request::ListOffsetsPartition,
         list_offsets_response::ListOffsetsPartitionResponse,
@@ -63,6 +63,7 @@ struct EarliestContext<'a> {
 }
 
 /// An offset with the leader epoch that goes with it.
+#[derive(Debug, PartialEq, Eq)]
 struct ResolvedOffset {
     offset: i64,
     leader_epoch: i32,
@@ -217,6 +218,51 @@ async fn resolve_earliest_pending_upload(
             Ok(None)
         }
     }
+}
+
+/// The KIP-1005 `LATEST_TIERED` answer from what the tier answered: `None`
+/// when it holds no finished segment or failed, and `REQUEST_TIMED_OUT` when
+/// it did not answer within the remote timeout.
+fn latest_tiered_candidate(
+    answer: Option<&Result<Option<TieredOffset>, krabka_remote_storage::RemoteStorageError>>,
+) -> Result<Option<ResolvedOffset>, i16> {
+    match answer {
+        None => Err(codes::REQUEST_TIMED_OUT),
+        Some(Ok(Some(tiered))) => Ok(Some(ResolvedOffset {
+            offset: tiered.offset,
+            leader_epoch: tiered.leader_epoch.0,
+        })),
+        Some(Ok(None) | Err(_)) => Ok(None),
+    }
+}
+
+/// Resolve the KIP-1005 `LATEST_TIERED` sentinel: the highest offset a
+/// finished remote segment holds and the leader epoch that owns it, or `None`
+/// when there is no remote reader configured for this topic.
+///
+/// Split out of [`resolve_partition`] purely to keep that function's line
+/// count down.
+async fn resolve_latest_tiered(
+    broker: &Broker,
+    topic: TopicPartitionName<'_>,
+    remote_topic_id: Option<uuid::Uuid>,
+    remote_timeout: Duration,
+) -> Result<Option<ResolvedOffset>, i16> {
+    let Some((reader, id)) = broker.remote_reader.as_ref().zip(remote_topic_id) else {
+        return Ok(None);
+    };
+    let TopicPartitionName {
+        name: topic_name,
+        partition: index,
+    } = topic;
+    let topic_partition =
+        krabka_remote_storage::TopicIdPartition::new(id, topic_name.to_owned(), index);
+    let answer = await_remote(remote_timeout, reader.latest_tiered_offset(&topic_partition)).await;
+    if let Some(Err(error)) = &answer {
+        tracing::warn!(topic = topic_name, partition = index,
+            error = %error, "list_offsets: remote latest_tiered_offset failed");
+    }
+    latest_tiered_candidate(answer.as_ref())
 }
 
 /// The local snapshot and archive lookup needed to resolve scheduled LATEST.
@@ -597,29 +643,20 @@ pub(super) async fn resolve_partition(
             (offset, UNKNOWN_TIMESTAMP)
         }
         ListOffsetsKind::LatestTiered => {
-            if let Some((reader, id)) = broker.remote_reader.as_ref().zip(remote_topic_id) {
-                let topic_partition =
-                    krabka_remote_storage::TopicIdPartition::new(id, topic_name.to_owned(), index);
-                match await_remote(
-                    remote_timeout,
-                    reader.latest_tiered_offset(&topic_partition),
-                )
-                .await
-                {
-                    None => return error_response(index, codes::REQUEST_TIMED_OUT),
-                    Some(Ok(Some(tiered))) => {
-                        response.leader_epoch = tiered.leader_epoch.0;
-                        (tiered.offset, UNKNOWN_TIMESTAMP)
-                    }
-                    Some(Ok(None)) => (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
-                    Some(Err(error)) => {
-                        tracing::warn!(topic = topic_name, partition = index,
-                            error = %error, "list_offsets: remote latest_tiered_offset failed");
-                        (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP)
-                    }
+            let topic = TopicPartitionName {
+                name: topic_name,
+                partition: index,
+            };
+            match resolve_latest_tiered(broker, topic, remote_topic_id, remote_timeout).await {
+                Ok(None) => (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
+                Ok(Some(ResolvedOffset {
+                    offset,
+                    leader_epoch,
+                })) => {
+                    response.leader_epoch = leader_epoch;
+                    (offset, UNKNOWN_TIMESTAMP)
                 }
-            } else {
-                (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP)
+                Err(error_code) => return error_response(index, error_code),
             }
         }
         ListOffsetsKind::EarliestPendingUpload => {
@@ -783,6 +820,42 @@ mod tests {
                 remote_earliest_candidate(answer.as_ref(), deleted_below, 0) == expected,
                 "{name}"
             );
+        }
+    }
+
+    /// What the remote tier's answer makes of LATEST_TIERED. A tier that does
+    /// not answer within the remote timeout fails the row; one that holds no
+    /// finished segment, or fails, leaves the offset unknown.
+    #[test]
+    fn the_remote_tier_answer_decides_the_latest_tiered_candidate() {
+        use {krabka_ids::LeaderEpoch, krabka_remote_storage::RemoteStorageError};
+
+        let tiered = TieredOffset {
+            offset: 4,
+            leader_epoch: LeaderEpoch(2),
+        };
+        for (name, answer, expected) in [
+            (
+                "the tier answers",
+                Some(Ok(Some(tiered))),
+                Ok(Some(ResolvedOffset {
+                    offset: 4,
+                    leader_epoch: 2,
+                })),
+            ),
+            ("the tier holds nothing", Some(Ok(None)), Ok(None)),
+            (
+                "the tier fails",
+                Some(Err(RemoteStorageError::Io(io::Error::other("boom")))),
+                Ok(None),
+            ),
+            (
+                "the tier times out",
+                None,
+                Err(codes::REQUEST_TIMED_OUT),
+            ),
+        ] {
+            assert!(latest_tiered_candidate(answer.as_ref()) == expected, "{name}");
         }
     }
 
