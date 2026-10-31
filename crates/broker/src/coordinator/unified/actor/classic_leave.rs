@@ -9,9 +9,8 @@
 use {
     super::{
         ActorServices, ErrorCode, ParkedWaiters, chrono_now_ms,
-        downgrade::{downgrade_fencing, downgrades_without},
-        heartbeat::fence_members,
-        persistence::{flush_classic_metadata, flush_pending},
+        downgrade::{FenceFailure, fence_or_downgrade},
+        persistence::flush_classic_metadata,
         retention::append_tombstones,
         waiters::settle_removed_classic_waiters,
     },
@@ -88,37 +87,20 @@ pub(super) async fn handle_classic_leave_message(
     }
     // Kafka's `consumerGroupFenceMembers`: the members leave in one batch, or
     // the group downgrades in their place when only classic members remain.
-    if downgrades_without(state, services.config, &removed) {
-        downgrade_fencing(
-            group,
-            &removed,
-            services.config,
-            services.metadata,
-            services.offsets_log,
-            services.coordinator,
-        )
+    fence_or_downgrade(group, services, &removed)
         .await
-        .map_err(|error| {
-            tracing::warn!(group_id = %group.group_id, %error,
-                "hosted classic LeaveGroup downgrade log write failed");
-            write_failure_code(&error)
+        .map_err(|failure| match failure {
+            FenceFailure::Downgrade(error) => {
+                tracing::warn!(group_id = %group.group_id, %error,
+                    "hosted classic LeaveGroup downgrade log write failed");
+                write_failure_code(&error)
+            }
+            FenceFailure::Fence(error) => {
+                tracing::warn!(group_id = %group.group_id, %error,
+                    "hosted classic LeaveGroup log write failed");
+                write_failure_code(&error)
+            }
         })?;
-        return Ok(responses);
-    }
-    let pending = fence_members(state, services.metadata, &removed);
-    flush_pending(
-        state,
-        pending,
-        services.offsets_log,
-        services.coordinator,
-        chrono_now_ms(),
-    )
-    .await
-    .map_err(|error| {
-        tracing::warn!(group_id = %state.group_id, %error,
-            "hosted classic LeaveGroup log write failed");
-        write_failure_code(&error)
-    })?;
     Ok(responses)
 }
 

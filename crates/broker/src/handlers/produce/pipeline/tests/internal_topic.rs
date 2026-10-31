@@ -7,7 +7,7 @@
 //! before it parses the batch.
 
 use {
-    super::{PartitionInput, append_seed_batch, process_partition, seed_batch},
+    super::{append_seed_batch, process_partition, seed_batch},
     crate::{
         codes::{INVALID_TOPIC_EXCEPTION, NONE},
         config::BrokerConfig,
@@ -150,17 +150,15 @@ async fn a_denied_internal_topic_is_refused_and_its_log_end_offset_does_not_move
 
     for (label, client_id, want) in cases {
         let resp = process_partition(
-            PartitionInput {
-                internal_topic_denied: internal_topic_denied(
+            pipeline_input()
+                .topic("__consumer_offsets")
+                .payload(PartitionPayload::Slice(encode_batch(&seed_batch())))
+                .internal_topic_denied(internal_topic_denied(
                     &config,
                     "__consumer_offsets",
                     client_id,
-                ),
-                ..pipeline_input(
-                    "__consumer_offsets",
-                    PartitionPayload::Slice(encode_batch(&seed_batch())),
-                )
-            },
+                ))
+                .call(),
             fixture.services(&image),
         )
         .await

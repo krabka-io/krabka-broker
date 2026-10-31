@@ -91,9 +91,11 @@ pub async fn handle(
         .assignors
         .first()
         .map_or_default(|a| a.name());
-    // Kafka places every GROUP_AUTHORIZATION_FAILED row first, ahead of the
-    // coordinator results, which keep request order among themselves.
+    // Kafka places every GROUP_AUTHORIZATION_FAILED row first, then the
+    // INVALID_GROUP_ID rows, then the coordinator results, which keep
+    // request order among themselves.
     let mut denied: Vec<DescribedGroup> = Vec::new();
+    let mut invalid: Vec<DescribedGroup> = Vec::new();
     let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
     for group_id in &req.group_ids {
         if group_describe_denied(broker.config.authorizer.as_ref(), &image, ctx, group_id) {
@@ -105,9 +107,10 @@ pub async fn handle(
             continue;
         }
         // GroupCoordinatorService.consumerGroupDescribe rejects an empty id
-        // before it routes the group to a shard.
+        // before it routes the group to a shard, and its completed future
+        // comes ahead of the shard results.
         if group_id.is_empty() {
-            described.push(DescribedGroup::error_row("", codes::INVALID_GROUP_ID, None));
+            invalid.push(DescribedGroup::error_row("", codes::INVALID_GROUP_ID, None));
             continue;
         }
         if let Some(error_code) = group_coordinator_error(broker, group_id) {
@@ -151,6 +154,7 @@ pub async fn handle(
         &mut described,
     );
 
+    denied.extend(invalid);
     denied.extend(described);
     hide_undescribable_topics(broker.config.authorizer.as_ref(), &image, ctx, &mut denied);
     Ok(response(denied))
@@ -736,6 +740,50 @@ mod tests {
             );
         }
 
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka's `GroupCoordinatorService.consumerGroupDescribe` answers an
+    /// empty id with a completed `INVALID_GROUP_ID` future that goes ahead of
+    /// the shard futures, so its row comes before the coordinator rows,
+    /// whether or not this broker leads the partition `""` hashes to.
+    #[yare::parameterized(
+        leads_empty_id_partition = { true },
+        does_not_lead_empty_id_partition = { false },
+    )]
+    #[test_macro(tokio::test)]
+    async fn handle_puts_the_empty_id_row_ahead_of_the_coordinator_rows(leads: bool) {
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_group_broker_with(|_| {}).await;
+        let broker = broker_handle.broker_arc_for_test();
+        if !leads {
+            handler_fixture_support::lead_group_partition_elsewhere(&broker_handle, &broker, "")
+                .await;
+        }
+        krabka_macros::request_test_identity! {
+            bind(principal, peer, ctx);
+            user ["admin"];
+            client ["admin-client"];
+        };
+
+        let resp = handle(&broker, request(vec!["missing-group", ""]), VERSION, &ctx)
+            .await
+            .expect("ConsumerGroupDescribe handler");
+
+        assert2::assert!(
+            resp == krabka_macros::unthrottled_wire!(ConsumerGroupDescribeResponse {
+                groups: vec![
+                    error_group_row("", codes::INVALID_GROUP_ID, None),
+                    error_group_row(
+                        "missing-group",
+                        codes::GROUP_ID_NOT_FOUND,
+                        Some("Group missing-group not found."),
+                    ),
+                ],
+            })
+        );
         broker_handle.shutdown().await;
     }
 

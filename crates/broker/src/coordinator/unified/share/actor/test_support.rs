@@ -209,7 +209,7 @@ pub(super) async fn seed_initialized(
     #[builder(default = vec ! [PartitionIndex (0)])] partitions: Vec<PartitionIndex>,
 ) {
     use crate::coordinator::unified::{
-        ShareGroupSeed,
+        ReplaySeed, ShareGroupSeed,
         share::persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
     };
 

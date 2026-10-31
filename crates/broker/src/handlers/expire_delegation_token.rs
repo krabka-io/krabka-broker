@@ -25,7 +25,7 @@
 use {
     crate::{
         codes::{DELEGATION_TOKEN_EXPIRED, DELEGATION_TOKEN_OWNER_MISMATCH, INVALID_REQUEST},
-        handlers::{ErrorCodeResponse as _, renew_delegation_token::admit_token_request},
+        handlers::{ErrorCodeResponse as _, delegation_token_admission as admission},
         metadata_source::MetadataSource,
         network::auth::ConnectionAuth,
         time_util::now_ms,
@@ -52,7 +52,7 @@ pub async fn handle(
     secret_key: Option<&SecretBytes>,
     controller: &dyn MetadataSource,
 ) -> ExpireDelegationTokenResponse {
-    let (principal, token) = match admit_token_request(
+    let (principal, token) = match admission::admit_token_request(
         TokenApi::Expire,
         auth,
         secret_key,
@@ -69,7 +69,7 @@ pub async fn handle(
     };
     let caller = principal.to_kafka();
 
-    if token.owner != caller && !token.renewers.contains(&caller) {
+    if !admission::may_renew_or_expire(&token, &caller) {
         return ExpireDelegationTokenResponse::error(DELEGATION_TOKEN_OWNER_MISMATCH);
     }
 
@@ -118,11 +118,9 @@ pub async fn handle(
 mod tests {
     use {
         super::*,
-        crate::handlers::{
-            delegation_token_test_support as token_fixtures,
-            delegation_token_test_support::{in_mutation_window, stored_expiry},
-        },
+        crate::handlers::delegation_token_test_support as token_fixtures,
         assert2::assert,
+        token_fixtures::{in_mutation_window, stored_expiry},
     };
 
     type ExpireTokenScenario = token_fixtures::TokenMutationContext<ExpireDelegationTokenResponse>;

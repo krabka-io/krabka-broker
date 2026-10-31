@@ -10,10 +10,9 @@ use crate::coordinator::unified::share::config::ShareGroupConfig;
 use crate::coordinator::unified::streams::config::StreamsGroupConfig;
 use {
     super::{
-        ActorServices, ParkedWaiters, chrono_now_ms,
-        downgrade::{downgrade_fencing, downgrades_without},
-        heartbeat::fence_members,
-        persistence::{flush_classic_metadata, flush_pending},
+        ActorServices, ParkedWaiters,
+        downgrade::{FenceFailure, FenceOutcome, fence_or_downgrade},
+        persistence::flush_classic_metadata,
         waiters::settle_removed_classic_waiters,
     },
     crate::{
@@ -150,27 +149,12 @@ async fn handle_session_tick(
         if !state.members.contains_key(&member_id) {
             continue;
         }
-        let member_ids = [member_id];
-        if downgrades_without(state, services.config, &member_ids) {
-            return downgrade_fencing(
-                group,
-                &member_ids,
-                services.config,
-                services.metadata,
-                services.offsets_log,
-                services.coordinator,
-            )
-            .await;
+        let outcome = fence_or_downgrade(group, services, &[member_id])
+            .await
+            .map_err(FenceFailure::into_error)?;
+        if outcome == FenceOutcome::Downgraded {
+            return Ok(());
         }
-        let pending = fence_members(state, services.metadata, &member_ids);
-        flush_pending(
-            state,
-            pending,
-            services.offsets_log,
-            services.coordinator,
-            chrono_now_ms(),
-        )
-        .await?;
     }
     Ok(())
 }
@@ -186,15 +170,17 @@ mod tests {
                 actor::{
                     GroupActorMessage, GroupKindTag, PendingRecords, RegexResolution, SyncResult,
                     test_support::{
-                        actor_services_with, completing_classic_group, empty_metadata,
-                        last_classic_metadata, make_coordinator, parked_follower, rpc,
-                        subscribed_member,
+                        actor_services_with, bidirectional_coordinator, classic_member_for_topic,
+                        completing_classic_group, empty_metadata, last_classic_metadata,
+                        log_has_classic_group_metadata_write, make_coordinator, parked_follower,
+                        rpc, subscribed_member,
                     },
                 },
-                classic_state::GroupState as ClassicGroupState,
+                classic_state::{ClassicGroup, GroupState as ClassicGroupState},
                 config::NextGenConfig,
                 consumer_state::GroupState,
                 group::GroupKind,
+                migration,
                 offsets_log::fake::InMemoryOffsetsLog,
                 persistence_next_gen::GroupMetadataValue,
                 reconciler::ReconcileInput,
@@ -303,6 +289,54 @@ mod tests {
         check!(written == expected);
         let state = group.as_consumer().unwrap();
         check_two_members_expired((state.members.len(), state.group_epoch, state.target.epoch));
+    }
+
+    /// Kafka's `consumerGroupFenceMember` downgrades the group in place of the
+    /// fence when the expired member is its last native one and only classic
+    /// members remain.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_tick_fencing_the_last_native_member_downgrades_the_group() {
+        let (coord, log) = bidirectional_coordinator();
+        let config = NextGenConfig {
+            session_timeout: Duration::from_millis(1),
+            ..(*coord.config).clone()
+        };
+        let mut classic = ClassicGroup::new("g");
+        classic.protocol_type = Some("consumer".into());
+        classic.generation_id = 1;
+        classic.add_member(classic_member_for_topic("m-classic", "t"));
+        let mut state =
+            migration::convert_classic_to_consumer(&classic, &coord.metadata.snapshot())
+                .expect("the classic group converts");
+        // The hosted classic member stays live through the tick.
+        let live = Instant::now() + Duration::from_mins(1);
+        state.members.get_mut("m-classic").unwrap().last_seen = live;
+        let mut native = subscribed_member()
+            .member_id("m-native")
+            .client(ClientIdentity {
+                id: "client-a",
+                host: "h",
+            })
+            .now(Instant::now())
+            .call();
+        native.last_seen = expired_session_last_seen();
+        state.add_or_update_member(native);
+        let mut group = CoordinatorGroup::seeded("g", GroupKind::Consumer(state), HashMap::new());
+        let services = actor_services_with()
+            .config(&config)
+            .metadata(coord.metadata.as_ref())
+            .offsets_log(log.as_ref())
+            .coordinator(&coord)
+            .call();
+
+        handle_session_tick(&mut group, services)
+            .await
+            .expect("tick should succeed");
+
+        let classic = group.as_classic().expect("the group downgraded");
+        check!(classic.members.keys().collect::<Vec<_>>() == ["m-classic"]);
+        check!(log.has_next_gen_group_metadata_tombstone("g").await);
+        check!(log_has_classic_group_metadata_write(&log, "g").await);
     }
 
     /// KIP-848: Kafka fences a member that does not revoke its partitions

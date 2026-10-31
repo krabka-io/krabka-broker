@@ -493,23 +493,39 @@ enum Check {
     },
 }
 
+/// What [`Program::new`] compiles: a pattern and what the rewrite says about
+/// it.
+#[derive(Clone, Copy)]
+pub struct ProgramInput<'a> {
+    /// The pattern, in `fancy_regex` syntax.
+    pub translated: &'a str,
+    /// The number of groups, group 0 included.
+    pub groups: usize,
+    /// The fold of each backreference under a case flag, in order.
+    pub folds: &'a [BackrefFold],
+    /// Whether a quantifier binds to each `\R` alone, in order.
+    pub linebreak_atoms: &'a [bool],
+    /// For each group by number, whether Java repeats it with a `GroupCurly`
+    /// that sets the group itself: `JavaTranslation::group_repeats`.
+    pub group_repeats: &'a [bool],
+    /// Java's window of each look-behind in the order they open, outer ones
+    /// first.
+    pub windows: &'a [JavaWindow],
+}
+
 impl Program {
-    /// Compiles the pattern that `translated` is, in `fancy_regex` syntax, with
-    /// `groups` groups, group 0 included, `folds` the fold of each of its
-    /// backreferences under a case flag in order, and `linebreak_atoms`
-    /// whether a quantifier binds to each of its `\R`s alone, in order, and
-    /// `windows` Java's window of each look-behind in the order they open,
-    /// outer ones first. A look-behind past the last window tries the starts
-    /// at a char boundary within the lengths its body can match. `None` for a
-    /// pattern the machine does not know a node of.
-    pub(super) fn new(
-        translated: &str,
-        groups: usize,
-        folds: &[BackrefFold],
-        linebreak_atoms: &[bool],
-        group_repeats: &[bool],
-        windows: &[JavaWindow],
-    ) -> Option<Self> {
+    /// Compiles the pattern `input` gives. A look-behind past the last window
+    /// tries the starts at a char boundary within the lengths its body can
+    /// match. `None` for a pattern the machine does not know a node of.
+    pub(super) fn new(input: ProgramInput<'_>) -> Option<Self> {
+        let ProgramInput {
+            translated,
+            groups,
+            folds,
+            linebreak_atoms,
+            group_repeats,
+            windows,
+        } = input;
         let tree = Expr::parse_tree(translated).ok()?;
         let mut compiler = Compiler {
             blocks: vec![Vec::new()],
@@ -1558,14 +1574,14 @@ mod tests {
 
     /// The program of `pattern`, whose `\R`s have the `linebreak_atoms` given.
     fn program(pattern: &str, group_repeats: &[bool], linebreak_atoms: &[bool]) -> Program {
-        let compiled = Program::new(
-            pattern,
-            group_repeats.len(),
-            &[],
+        let compiled = Program::new(ProgramInput {
+            translated: pattern,
+            groups: group_repeats.len(),
+            folds: &[],
             linebreak_atoms,
             group_repeats,
-            &[],
-        );
+            windows: &[],
+        });
         compiled.unwrap_or_else(|| panic!("{pattern:?} does not compile"))
     }
 
@@ -1799,7 +1815,14 @@ mod tests {
     /// its look-behinds.
     fn windowed(pattern: &str, groups: usize, windows: &[JavaWindow]) -> Program {
         let pattern = pattern.replace('.', DOT);
-        let compiled = Program::new(&pattern, groups, &[], &[], &vec![false; groups], windows);
+        let compiled = Program::new(ProgramInput {
+            translated: &pattern,
+            groups,
+            folds: &[],
+            linebreak_atoms: &[],
+            group_repeats: &vec![false; groups],
+            windows,
+        });
         compiled.unwrap_or_else(|| panic!("{pattern:?} does not compile"))
     }
 

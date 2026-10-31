@@ -16,28 +16,59 @@ use {
     krabka_ids::Offset,
     std::{
         collections::HashSet,
-        sync::{Arc, atomic::Ordering},
-        time::SystemTime,
+        sync::atomic::Ordering,
+        time::{Instant, SystemTime},
     },
     tracing::{field, instrument},
 };
 
+/// What [`Log::remove_sealed_segments`] got off disk.
+#[derive(Debug)]
+pub(super) struct RemovedSegments {
+    /// How many segments left the disk and were forgotten.
+    pub(super) deleted: usize,
+    /// The error that stopped the run, if one did.
+    pub(super) failure: Option<LogError>,
+}
+
 impl Log {
     /// Remove sealed segments, their cached indexes, and their producer snapshots.
     /// The snapshot at the first surviving base stays for local and remote reads.
-    pub(super) fn remove_sealed_segments(&mut self, bases: &[Offset]) -> Result<(), LogError> {
-        let drop_set: HashSet<Offset> = bases.iter().copied().collect();
-        self.segments
-            .retain(|segment| !drop_set.contains(&segment.base_offset()));
-        self.sealed_txn_indexes
-            .retain(|base, _| !drop_set.contains(base));
-        self.stamp_indexes
-            .retain(|base, _| !drop_set.contains(base));
-        for base in bases {
-            self.retire_segment(*base, SystemTime::now())?;
-            producer_snapshot::remove_at(&self.dir, *base)?;
+    ///
+    /// Unlink first, and forget only what actually left the disk. A failed
+    /// unlink otherwise drops the segment from `self.segments` -- and from
+    /// `Log::size`, and from the partition's disk gauge -- while its bytes
+    /// stay on the filesystem with nothing left to retry them. `bases` is a
+    /// prefix, so stopping at the first failure keeps what is forgotten one.
+    pub(super) fn remove_sealed_segments(
+        &mut self,
+        bases: &[Offset],
+        now: SystemTime,
+    ) -> RemovedSegments {
+        let mut deleted: HashSet<Offset> = HashSet::with_capacity(bases.len());
+        let mut failure: Option<LogError> = None;
+        for &base in bases {
+            if let Err(error) = self.retire_segment(base, now) {
+                failure = Some(error);
+                break;
+            }
+            deleted.insert(base);
+            // Kafka's `deleteSegments` → `deleteProducerSnapshots`: the
+            // snapshot at a deleted segment's base goes with it.
+            if let Err(error) = producer_snapshot::remove_at(&self.dir, base) {
+                failure = Some(error);
+                break;
+            }
         }
-        Ok(())
+        self.segments
+            .retain(|segment| !deleted.contains(&segment.base_offset()));
+        self.sealed_txn_indexes
+            .retain(|base, _| !deleted.contains(base));
+        self.stamp_indexes.retain(|base, _| !deleted.contains(base));
+        RemovedSegments {
+            deleted: deleted.len(),
+            failure,
+        }
     }
 
     /// Retire a discarded tail before dropping its segment handle.
@@ -51,6 +82,20 @@ impl Log {
             &["log", "index", "timeindex", "txnindex", "stampindex"],
             DirSync::Now,
         )
+    }
+
+    /// Retire the files of the newest sealed segment, then forget the segment
+    /// and its cached transaction and stamp indexes. Does nothing when no
+    /// segment is sealed.
+    pub(super) fn drop_last_sealed_segment(&mut self) -> Result<(), LogError> {
+        let Some(base) = self.segments.last().map(Segment::base_offset) else {
+            return Ok(());
+        };
+        self.remove_truncated_segment_files(base)?;
+        self.segments.pop();
+        self.sealed_txn_indexes.remove(&base);
+        self.stamp_indexes.remove(&base);
+        Ok(())
     }
 
     /// Truncate the log so that no record at offset `>= offset` remains.
@@ -114,13 +159,8 @@ impl Log {
         );
 
         // Drop exactly the sealed suffix selected by the verified plan.
-        while self.segments.len() > plan.retained_sealed
-            && let Some(base) = self.segments.last().map(Segment::base_offset)
-        {
-            self.remove_truncated_segment_files(base)?;
-            self.segments.pop();
-            self.sealed_txn_indexes.remove(&base);
-            self.stamp_indexes.remove(&base);
+        while self.segments.len() > plan.retained_sealed {
+            self.drop_last_sealed_segment()?;
         }
 
         // Drop the active segment if its base_offset >= offset.
@@ -165,14 +205,7 @@ impl Log {
                     index.truncate_from(offset)?;
                 }
             } else {
-                let mut new_seg = Segment::create(&self.dir, offset)?;
-                new_seg.set_io(Arc::clone(&self.io));
-                self.active_txn_index = TxnIndex::open(new_seg.txn_index_path())?;
-                let stamp_index_path = new_seg.stamp_index_path();
-                self.active = Some(new_seg);
-                #[cfg(not(target_os = "wasi"))]
-                self.restart_writeback_pacing(0);
-                self.dir_sync_needed = true;
+                let (_, stamp_index_path) = self.install_new_active_segment(offset)?;
                 self.stamp_indexes.clear();
                 self.reopen_active_stamp_index(offset, stamp_index_path)?;
             }
@@ -267,7 +300,16 @@ impl Log {
             .take_while(|sealed| sealed.next_base <= target)
             .map(|sealed| sealed.segment.base_offset())
             .collect();
-        self.remove_sealed_segments(&to_drop)?;
+        if let Some(error) = self
+            .remove_sealed_segments(&to_drop, SystemTime::now())
+            .failure
+        {
+            // The records in a deleted prefix are gone, so the floor follows
+            // what did come off disk, as retention's does, before the failure
+            // is reported. That floor is still below `target`.
+            self.follow_retained_segments(Instant::now())?;
+            return Err(error);
+        }
 
         // Every dropped segment ended below `target`, so the first offset
         // still in the log is `target` itself: either it falls inside the

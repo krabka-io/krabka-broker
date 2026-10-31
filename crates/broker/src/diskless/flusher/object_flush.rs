@@ -43,6 +43,47 @@ pub async fn flush_once(
     config: &FlushConfig,
     is_current_leader: impl Fn(&FlushPartition) -> bool,
 ) -> Result<Option<WalFlushRecord>, BrokerError> {
+    let builder = build_object(metrics, index_log, partitions, config, &is_current_leader).await?;
+
+    if builder.is_empty() {
+        return Ok(None);
+    }
+    metrics.diskless_wal_flush_attempts_total.inc();
+    let attempt: Result<WalFlushRecord, BrokerError> = async {
+        let record = upload_and_publish(&target, metrics, index_log, config, builder).await?;
+        // The ranges are committed and applied, so they protect the object from
+        // here on. A release that fails leaves the reservation behind, which only
+        // keeps the object longer; it must not hold back the trim below.
+        if target.reserve_objects
+            && let Err(error) = index_log
+                .release_object_reservation(&record.object_key)
+                .await
+        {
+            tracing::warn!(object_key = %record.object_key, %error, "diskless object reservation release failed");
+        }
+
+        trim_flushed(metrics, index_log, partitions, config, &is_current_leader).await?;
+
+        Ok(record)
+    }
+    .await;
+    // Every failure after the attempt began counts once, whichever stage
+    // failed. A failure while building the object is no attempt.
+    if attempt.is_err() {
+        metrics.diskless_wal_flush_failures_total.inc();
+    }
+    attempt.map(Some)
+}
+
+/// Append each led partition's unflushed committed records to one WAL object,
+/// up to the configured size budget. An empty builder means nothing to flush.
+async fn build_object(
+    metrics: &BrokerMetrics,
+    index_log: &DisklessIndexLog,
+    partitions: &[FlushPartition],
+    config: &FlushConfig,
+    is_current_leader: &impl Fn(&FlushPartition) -> bool,
+) -> Result<WalObjectBuilder, BrokerError> {
     let cache = index_log.cache();
     let mut builder = WalObjectBuilder::new();
     for partition in partitions {
@@ -92,80 +133,66 @@ pub async fn flush_once(
             )
             .map_err(|error| BrokerError::Txn(format!("diskless wal object: {error}")))?;
     }
+    Ok(builder)
+}
 
-    if builder.is_empty() {
-        return Ok(None);
-    }
-    metrics.diskless_wal_flush_attempts_total.inc();
+/// Frame the object, reserve its key where the feature level asks for it,
+/// upload it, and publish its index ranges, returning once the projection has
+/// applied them. Bytes count as soon as the upload succeeds.
+async fn upload_and_publish(
+    target: &FlushTarget,
+    metrics: &BrokerMetrics,
+    index_log: &DisklessIndexLog,
+    config: &FlushConfig,
+    builder: WalObjectBuilder,
+) -> Result<WalFlushRecord, BrokerError> {
     let relative_key = format!("diskless-wal/{}/{}.ckwl", target.broker_id, Uuid::new_v4());
     let object_key =
         krabka_object_store::prefixed_key(config.object_prefix.as_deref(), &relative_key)
             .to_string();
-    let object = match builder.finish() {
-        Ok(object) => object,
-        Err(error) => {
-            metrics.diskless_wal_flush_failures_total.inc();
-            return Err(BrokerError::Txn(format!("diskless wal object: {error}")));
-        }
-    };
+    let object = builder
+        .finish()
+        .map_err(|error| BrokerError::Txn(format!("diskless wal object: {error}")))?;
     // A different broker may list and reclaim this prefix while upload or
     // index publication is delayed. Commit the reservation first; any failure
     // from this point leaves it behind, which can leak an object but cannot
     // make a live object appear reclaimable.
-    if target.reserve_objects
-        && let Err(error) = index_log.reserve_object(&object_key).await
-    {
-        metrics.diskless_wal_flush_failures_total.inc();
-        return Err(error);
+    if target.reserve_objects {
+        index_log.reserve_object(&object_key).await?;
     }
-    if let Err(error) = target
+    target
         .object_store
         .put(
             &Path::from(object_key.clone()),
             PutPayload::from(object.clone()),
         )
         .await
-    {
-        metrics.diskless_wal_flush_failures_total.inc();
-        return Err(BrokerError::Txn(format!("diskless wal put: {error}")));
-    }
+        .map_err(|error| BrokerError::Txn(format!("diskless wal put: {error}")))?;
     metrics
         .diskless_wal_flush_bytes_total
         .inc_by(u64::try_from(object.len()).unwrap_or(u64::MAX));
 
-    let entries = match batch_index_entries(&object, now_ms()) {
-        Ok(entries) => entries,
-        Err(error) => {
-            metrics.diskless_wal_flush_failures_total.inc();
-            return Err(error);
-        }
-    };
+    let entries = batch_index_entries(&object, now_ms())?;
     let record = WalFlushRecord {
         object_key,
         format_version: WalFlushRecord::FORMAT_VERSION,
         entries,
     };
-    if let Err(error) = index_log.publish_flush(&record).await {
-        metrics.diskless_wal_flush_failures_total.inc();
-        return Err(error);
-    }
-    if let Err(error) =
-        wait_for_committed_projection(index_log, &record, config.index_projection_timeout).await
-    {
-        metrics.diskless_wal_flush_failures_total.inc();
-        return Err(error);
-    }
-    // The ranges are committed and applied, so they protect the object from
-    // here on. A release that fails leaves the reservation behind, which only
-    // keeps the object longer; it must not hold back the trim below.
-    if target.reserve_objects
-        && let Err(error) = index_log
-            .release_object_reservation(&record.object_key)
-            .await
-    {
-        tracing::warn!(object_key = %record.object_key, %error, "diskless object reservation release failed");
-    }
+    index_log.publish_flush(&record).await?;
+    wait_for_committed_projection(index_log, &record, config.index_projection_timeout).await?;
+    Ok(record)
+}
 
+/// Record each led partition's projection lag behind the durable frontier
+/// and trim its local log behind that frontier, partition by partition.
+async fn trim_flushed(
+    metrics: &BrokerMetrics,
+    index_log: &DisklessIndexLog,
+    partitions: &[FlushPartition],
+    config: &FlushConfig,
+    is_current_leader: &impl Fn(&FlushPartition) -> bool,
+) -> Result<(), BrokerError> {
+    let cache = index_log.cache();
     for partition in partitions {
         if !is_current_leader(partition) {
             continue;
@@ -197,17 +224,11 @@ pub async fn flush_once(
                     current_start,
                 );
                 let trim_frontier = if decision.should_trim {
-                    match partition
+                    partition
                         .handle
                         .trim_to_offset(Offset(decision.target))
-                        .await
-                    {
-                        Ok(offset) => offset.0,
-                        Err(error) => {
-                            metrics.diskless_wal_flush_failures_total.inc();
-                            return Err(error);
-                        }
-                    }
+                        .await?
+                        .0
                 } else {
                     current_start
                 };
@@ -219,8 +240,7 @@ pub async fn flush_once(
             }
         }
     }
-
-    Ok(Some(record))
+    Ok(())
 }
 
 /// One index entry per v2 batch in the object.
@@ -290,21 +310,30 @@ mod tests {
     use {
         super::*,
         crate::diskless::{
-            flusher::test_support::{orders_partition, test_index_log, test_partition},
-            index_log::test_support::GroupAckLog,
+            flusher::test_support::{
+                flush_record, orders_partition, test_index_log, test_partition,
+            },
+            index_log::test_support::{GroupAckLog, PacedReplayLog, ReplayPace},
             wal_index::{WalIndexKey, WalObjectReservationKey},
             wal_object::WalObjectBuilder,
         },
         assert2::assert,
+        async_trait::async_trait,
         bytes::{Bytes, BytesMut},
+        krabka_object_store::fault::{
+            FaultInjectingStore, FaultKind, FaultPolicy, OpFault, StoreOp,
+        },
         krabka_protocol::records::{Record, RecordBatch},
         krabka_remote_storage::diskless::index::REPLAY_FENCE_KEY,
+        krabka_remote_storage_topic::{
+            InProcessMetadataEventLog, MetadataEventLog, MetadataLogError,
+        },
         object_store::{local::LocalFileSystem, memory::InMemory},
         std::{
             fs,
             sync::atomic::{AtomicUsize, Ordering},
         },
-        tempfile::tempdir,
+        tempfile::{TempDir, tempdir},
         tokio::task,
     };
 
@@ -601,6 +630,236 @@ mod tests {
 
         krabka_macros::metric_registry_fixture!(metrics, body, registry; unwrap());
         assert!(body.contains("krabka_broker_diskless_wal_flush_failures_total 1"));
+    }
+
+    /// Refuses every object-reservation record and delegates the rest.
+    struct RefuseReservations {
+        inner: Arc<dyn MetadataEventLog>,
+    }
+
+    #[krabka_macros::metadata_log_delegate(krabka_remote_storage_topic, keyed)]
+    #[async_trait]
+    impl MetadataEventLog for RefuseReservations {
+        async fn publish_keyed(
+            &self,
+            partition: i32,
+            key: Bytes,
+            event: Option<Bytes>,
+        ) -> Result<i64, MetadataLogError> {
+            if WalObjectReservationKey::from_bytes(&key).is_some() {
+                return Err(MetadataLogError::Publish("injected".into()));
+            }
+            self.inner.publish_keyed(partition, key, event).await
+        }
+    }
+
+    /// The stage of one flush that a test makes fail.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum FlushFault {
+        Nothing,
+        ReadRaw,
+        Reserve,
+        Put,
+        Publish,
+        Projection,
+        Trim,
+    }
+
+    /// The three flush counters, read together.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct FlushCounters {
+        attempts: u64,
+        failures: u64,
+        bytes: u64,
+    }
+
+    impl FlushCounters {
+        fn of(metrics: &BrokerMetrics) -> Self {
+            Self {
+                attempts: metrics.diskless_wal_flush_attempts_total.get(),
+                failures: metrics.diskless_wal_flush_failures_total.get(),
+                bytes: metrics.diskless_wal_flush_bytes_total.get(),
+            }
+        }
+    }
+
+    /// One `orders-0` partition with three records, an index log, a store
+    /// and a flush policy, each set up so that `fault` is what fails.
+    struct FaultedFlush {
+        _dir: TempDir,
+        target: FlushTarget,
+        index: DisklessIndexLog,
+        partition: FlushPartition,
+        config: FlushConfig,
+    }
+
+    async fn faulted_flush(fault: FlushFault) -> FaultedFlush {
+        let dir = tempdir().unwrap();
+        let handle = orders_partition(dir.path());
+        let topic_id = Uuid::from_u128(11);
+        let event_log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(1);
+        let log: Arc<dyn MetadataEventLog> = match fault {
+            FlushFault::Reserve => Arc::new(RefuseReservations { inner: event_log }),
+            FlushFault::Publish => GroupAckLog::build()
+                .inner(event_log)
+                .failing(vec![WalIndexKey {
+                    topic_id,
+                    partition: 0,
+                    first_offset: 0,
+                }])
+                .call(),
+            FlushFault::Projection => PacedReplayLog::new(event_log, ReplayPace::Never),
+            _ => event_log,
+        };
+        let index = DisklessIndexLog::start(log).await.unwrap();
+        let object_store: Arc<dyn ObjectStore> = if fault == FlushFault::Put {
+            Arc::new(FaultInjectingStore::new(
+                Arc::new(InMemory::new()),
+                FaultPolicy::none().with(StoreOp::Put, OpFault::always(FaultKind::ServerError)),
+            ))
+        } else {
+            Arc::new(InMemory::new())
+        };
+        let mut config = FlushConfig::default();
+        match fault {
+            FlushFault::ReadRaw => {
+                // An index frontier below the log start makes the read fail.
+                let seed = flush_record()
+                    .topic_id(topic_id)
+                    .first_offset(0)
+                    .last_offset(0)
+                    .call();
+                index.publish_flush(&seed).await.unwrap();
+                assert!(
+                    index
+                        .wait_until_applied(&seed, Duration::from_secs(5))
+                        .await
+                );
+                handle.trim_to_offset(Offset(2)).await.unwrap();
+            }
+            FlushFault::Projection => config.index_projection_timeout = Duration::from_millis(10),
+            FlushFault::Trim => {
+                let writer = handle
+                    .writer_handle
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("partition writer");
+                writer.abort();
+                assert!(writer.await.unwrap_err().is_cancelled());
+            }
+            FlushFault::Nothing | FlushFault::Reserve | FlushFault::Put | FlushFault::Publish => {}
+        }
+        FaultedFlush {
+            _dir: dir,
+            target: FlushTarget {
+                object_store,
+                broker_id: 7,
+                // The reservation waits for its own projection, which a
+                // stalled replay never delivers.
+                reserve_objects: fault != FlushFault::Projection,
+            },
+            index,
+            partition: FlushPartition {
+                topic_id,
+                handle,
+                high_watermark: Offset(3),
+            },
+            config,
+        }
+    }
+
+    /// A failure counts once per attempt, whichever stage fails after the
+    /// attempt began; bytes count only once the put succeeded; and a read
+    /// that fails while the object is still being built is no attempt.
+    #[tokio::test]
+    async fn each_failed_stage_counts_one_failure() {
+        let object_len = {
+            let FaultedFlush {
+                _dir,
+                target,
+                index,
+                partition,
+                config,
+            } = faulted_flush(FlushFault::Nothing).await;
+            let store = Arc::clone(&target.object_store);
+            let record = flush_once(
+                target,
+                &BrokerMetrics::new(),
+                &index,
+                &[partition],
+                &config,
+                |_| true,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            store
+                .head(&Path::from(record.object_key))
+                .await
+                .unwrap()
+                .size
+        };
+        let attempted = |failures, bytes| FlushCounters {
+            attempts: 1,
+            failures,
+            bytes,
+        };
+        for (fault, error, want) in [
+            (FlushFault::Nothing, None, attempted(0, object_len)),
+            (
+                FlushFault::ReadRaw,
+                Some("log: offset 1 below log start 2"),
+                FlushCounters {
+                    attempts: 0,
+                    failures: 0,
+                    bytes: 0,
+                },
+            ),
+            (
+                FlushFault::Reserve,
+                Some("diskless object reservation: publish failed: injected"),
+                attempted(1, 0),
+            ),
+            (FlushFault::Put, Some("diskless wal put: "), attempted(1, 0)),
+            (
+                FlushFault::Publish,
+                Some("diskless index publish"),
+                attempted(1, object_len),
+            ),
+            (
+                FlushFault::Projection,
+                Some("diskless wal index projection timed out"),
+                attempted(1, object_len),
+            ),
+            (
+                FlushFault::Trim,
+                Some("replication: partition writer dead"),
+                attempted(1, object_len),
+            ),
+        ] {
+            let FaultedFlush {
+                _dir,
+                target,
+                index,
+                partition,
+                config,
+            } = faulted_flush(fault).await;
+            let metrics = BrokerMetrics::new();
+
+            let result =
+                flush_once(target, &metrics, &index, &[partition], &config, |_| true).await;
+
+            let got = result.err().map(|error| error.to_string());
+            match error {
+                None => assert!(got.is_none(), "{fault:?}"),
+                Some(want) => assert!(
+                    got.as_deref().is_some_and(|got| got.contains(want)),
+                    "{fault:?}: {got:?}"
+                ),
+            }
+            assert!(FlushCounters::of(&metrics) == want, "{fault:?}");
+        }
     }
 
     #[tokio::test]

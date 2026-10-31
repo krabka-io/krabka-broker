@@ -27,9 +27,10 @@ use {
     tokio::time::sleep,
 };
 
-/// Advertise this controller at startup and after each leader change. The
-/// leader accepts this at both `kraft.version` levels; level zero keeps the
-/// data in memory for upgrade preflight, while level one persists it.
+/// Advertise this controller at startup and after each leader change, until
+/// `params.shutdown` is cancelled. The leader accepts this at both
+/// `kraft.version` levels; level zero keeps the data in memory for upgrade
+/// preflight, while level one persists it.
 pub async fn run_voter_updates(params: AutoJoinParams) {
     let Ok(voter_id) = i32::try_from(params.node_id.0) else {
         tracing::error!(
@@ -42,10 +43,14 @@ pub async fn run_voter_updates(params: AutoJoinParams) {
         params.advertised_controller.as_deref(),
         params.controller.controller_bound_addr(),
     );
-    advertise_forever(&params, voter_id, &listener).await;
+    // A stopped broker must not go on advertising itself to the quorum.
+    params
+        .shutdown
+        .run_until_cancelled(advertise_forever(&params, voter_id, &listener))
+        .await;
 }
 
-/// The loop of [`run_voter_updates`]: it runs for as long as the task does.
+/// The loop of [`run_voter_updates`]: it runs until the broker shuts down.
 async fn advertise_forever(
     params: &AutoJoinParams,
     voter_id: i32,
@@ -205,7 +210,10 @@ mod tests {
             },
             time::Duration,
         },
-        tokio::{net::TcpListener, time::timeout},
+        tokio::{
+            net::TcpListener,
+            time::{sleep, timeout},
+        },
     };
 
     #[test]
@@ -457,5 +465,34 @@ mod tests {
         let _ = timeout(Duration::from_millis(50), run_voter_updates(params)).await;
 
         assert2::assert!(count.load(Ordering::Relaxed) == 0);
+    }
+
+    /// A stopped broker must stop advertising itself. The leader keeps
+    /// rejecting the update, so the loop would retry for ever; cancelling the
+    /// shutdown token ends it, and no request follows.
+    #[tokio::test]
+    async fn run_voter_updates_returns_when_shutdown_is_cancelled() {
+        let MockUpdateServer { addr, count } =
+            spawn_mock_update_server(codes::UNKNOWN_SERVER_ERROR).await;
+        let params = voter_update_params(addr, Some(NodeId(1)));
+        let shutdown = params.shutdown.clone();
+        let task = tokio::spawn(run_voter_updates(params));
+        timeout(Duration::from_secs(10), async {
+            while count.load(Ordering::Relaxed) == 0 {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the loop sends a first UpdateRaftVoter");
+
+        shutdown.cancel();
+
+        timeout(Duration::from_secs(2), task)
+            .await
+            .expect("the loop returns once shutdown is cancelled")
+            .expect("the loop does not panic");
+        let sent = count.load(Ordering::Relaxed);
+        sleep(Duration::from_millis(100)).await;
+        assert2::assert!(count.load(Ordering::Relaxed) == sent);
     }
 }

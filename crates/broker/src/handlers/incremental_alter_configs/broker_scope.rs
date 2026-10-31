@@ -8,7 +8,7 @@
 //! live in [`crate::config_keys::broker_dynamic`].
 
 use {
-    super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT, submit_or_refuse},
+    super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT},
     crate::{
         api_catalog::UnstableApiVersions,
         codes,
@@ -24,10 +24,7 @@ use {
         cordoned_log_dirs::CORDONED_LOG_DIRS,
     },
     krabka_metadata::{BrokerConfigRecord, MetadataRecord},
-    krabka_protocol::owned::{
-        incremental_alter_configs_request::AlterConfigsResource,
-        incremental_alter_configs_response::AlterConfigsResourceResponse,
-    },
+    krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource,
     std::collections::BTreeMap,
 };
 
@@ -104,7 +101,7 @@ fn apply_operations(
 /// `log_dirs` are this node's log directories, which a named-broker
 /// `cordoned.log.dirs` must name, and are empty on a node without the broker
 /// role.
-fn broker_records(
+pub(super) fn broker_records(
     resource: &AlterConfigsResource,
     context: BrokerConfigContext<'_>,
 ) -> Result<Vec<MetadataRecord>, (i16, String)> {
@@ -209,15 +206,6 @@ pub(super) fn preprocess_broker_resource(
     apply_operations(resource, &mut proposed, context.unstable)?;
     validate_dynamic_broker_configs(&proposed, true, context.unstable)?;
     checks.check(context.image, &current, &proposed)
-}
-
-pub(super) fn handle_broker_scoped(
-    resource: &AlterConfigsResource,
-    context: BrokerConfigContext<'_>,
-    out: &mut AlterConfigsResourceResponse,
-    to_submit: &mut Vec<MetadataRecord>,
-) {
-    submit_or_refuse(broker_records(resource, context), out, to_submit);
 }
 
 #[cfg(test)]

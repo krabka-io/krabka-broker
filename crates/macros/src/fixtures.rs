@@ -1,9 +1,7 @@
 //! Item generators for fixtures shared across crate boundaries.
 
 use {
-    crate::meta::{
-        ItemBody, argument_array, arguments, body_group, item_body, mode, required_tokens,
-    },
+    crate::meta::{argument_array, arguments, mode, required_tokens},
     moxy::{
         ast::ParseError,
         token::{Ident, Span, TokenStream, TokenTree},
@@ -227,7 +225,7 @@ pub fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
         let [name_tokens, mode_tokens] = argument_array(tokens)?;
         (
             name(name_tokens)?,
-            mode(mode_tokens, ["plain", "full"])? == "full",
+            mode(mode_tokens, [("plain", false), ("full", true)])?,
         )
     } else {
         (name(tokens)?, true)
@@ -274,7 +272,7 @@ pub fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
 pub fn record_header_text(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let [name_tokens, mode_tokens] = argument_array(tokens)?;
     let name = name(name_tokens)?;
-    let strict = mode(mode_tokens, ["strict", "lossy"])? == "strict";
+    let strict = mode(mode_tokens, [("strict", true), ("lossy", false)])?;
     Ok(moxy::template! {
         fn {{ name }}(record: &::krabka_protocol::records::Record, key: &str) -> Option<String> {
             record.headers.iter()
@@ -391,97 +389,6 @@ pub fn simulation_actions(root: TokenStream) -> Result<TokenStream, ParseError> 
             }
         }
     })
-}
-
-/// Delegate a metadata-log wrapper's unchanged operations before `async_trait` expands it.
-pub fn metadata_log_delegate(
-    root: TokenStream,
-    item: TokenStream,
-) -> Result<TokenStream, ParseError> {
-    let ItemBody {
-        mut tokens,
-        body_index: body,
-    } = item_body(item, "metadata_log_delegate", TokenTree::is_keyword_impl)?;
-    let mut root_tokens: Vec<_> = root.into_iter().collect();
-    // Optional transport operations require explicit selectors.
-    let mut keyed = false;
-    let mut range = false;
-    loop {
-        let selector = root_tokens.last().and_then(TokenTree::as_ident);
-        match selector {
-            Some(name) if name == "keyed" => keyed = true,
-            Some(name) if name == "range" => range = true,
-            _ => break,
-        }
-        root_tokens.pop();
-        if root_tokens
-            .last()
-            .is_none_or(|token| !token.is_punct_comma())
-        {
-            return Err(ParseError::new(
-                Span::call_site(),
-                "expected crate path followed by comma-separated selectors",
-            ));
-        }
-        root_tokens.pop();
-    }
-    let root = required_tokens(
-        TokenStream::from(root_tokens),
-        "metadata_log_delegate needs the metadata log crate path",
-    )?;
-    let group = body_group(&mut tokens, body)?;
-    let candidates = [
-        (
-            "partition_count",
-            moxy::template! { fn partition_count(&self) -> i32 { self.inner.partition_count() } },
-        ),
-        (
-            "publish",
-            moxy::template! { async fn publish(&self, partition: i32, event: ::bytes::Bytes) -> Result<i64, {{ root }}::error::MetadataLogError> { self.inner.publish(partition, event).await } },
-        ),
-        (
-            "subscribe",
-            moxy::template! { fn subscribe(&self, assignment: Vec<{{ root }}::log::PartitionStart>) -> ({{ root }}::log::MetadataEventStream, ::std::sync::Arc<dyn {{ root }}::log::AssignmentHandle>) { self.inner.subscribe(assignment) } },
-        ),
-        (
-            "high_water_marks",
-            moxy::template! { async fn high_water_marks(&self) -> Result<Vec<i64>, {{ root }}::error::MetadataLogError> { self.inner.high_water_marks().await } },
-        ),
-    ];
-    let existing: Vec<_> = group.tokens.clone().into_iter().collect();
-    let has_method = |method: &str| {
-        existing.windows(2).any(|tokens| {
-            matches!(tokens, [keyword, name] if keyword.is_keyword_fn() && name.as_ident().is_some_and(|name| name == method))
-        })
-    };
-    let mut methods = TokenStream::new();
-    for (method, implementation) in candidates {
-        if !has_method(method) {
-            methods.extend(implementation);
-        }
-    }
-    if keyed && !has_method("publish_keyed") {
-        methods.extend(moxy::template! {
-            async fn publish_keyed(&self, partition: i32, key: ::bytes::Bytes, event: Option<::bytes::Bytes>) -> Result<i64, {{ root }}::error::MetadataLogError> {
-                self.inner.publish_keyed(partition, key, event).await
-            }
-        });
-    }
-    if range && !has_method("visit_range") {
-        methods.extend(moxy::template! {
-            async fn visit_range(
-                &self,
-                partition: i32,
-                start: i64,
-                end: i64,
-                visit: &mut {{ root }}::log::RangeVisitor<'_>,
-            ) -> Result<(), {{ root }}::error::MetadataLogError> {
-                self.inner.visit_range(partition, start, end, visit).await
-            }
-        });
-    }
-    group.tokens = methods.into_iter().chain(group.tokens.clone()).collect();
-    Ok(tokens.into())
 }
 
 pub fn remote_segment_check(tokens: TokenStream) -> Result<TokenStream, ParseError> {

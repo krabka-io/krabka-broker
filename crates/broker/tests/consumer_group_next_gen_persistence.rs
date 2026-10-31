@@ -6,7 +6,7 @@ mod support;
 
 use {
     crate::support::{
-        client::{connect, connect_client},
+        client::{connect, connect_client, create_topic},
         consumer_groups::{consumer_heartbeat, joining_consumer},
         heartbeat_config,
     },
@@ -17,35 +17,12 @@ use {
         owned::{
             consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
             consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
-            create_topics_request::{CreatableTopic, CreateTopicsRequest},
         },
         primitives::uuid::Uuid as WireUuid,
     },
     std::{collections::HashSet, path::PathBuf, sync::Arc, time::Duration},
     tokio::time,
 };
-
-async fn create_topic(client: &Client, name: &str, partitions: i32) {
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: name.to_owned(),
-            num_partitions: partitions,
-            replication_factor: 1,
-            assignments: vec![],
-            configs: vec![],
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        validate_only: false,
-        ..Default::default()
-    };
-    let resp = client.send(req).await.unwrap();
-    let code = resp.topics.first().map_or(0, |t| t.error_code);
-    assert!(
-        code == 0,
-        "create_topic {name} failed with error_code {code}"
-    );
-}
 
 fn rejoin_config(log_dir: PathBuf) -> BrokerConfig {
     let mut cfg = heartbeat_config(log_dir);

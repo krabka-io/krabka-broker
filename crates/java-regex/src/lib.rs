@@ -98,12 +98,12 @@ mod translate;
 
 use {
     self::{
-        backtrack::Program,
+        backtrack::{Program, ProgramInput},
         look_behind::{LookBehinds, Refusal, check_look_behinds},
         translate::{JavaTranslation, translate_java},
     },
     fancy_regex::{CompileError, Error as FancyError, Expr, Regex},
-    std::{collections::BTreeMap, fmt::Display, ops::Range, sync::Arc},
+    std::{collections::BTreeMap, fmt::Display, iter::Peekable, ops::Range, str::Chars, sync::Arc},
 };
 
 /// A `java.util.regex.Pattern` compiled for `matches()` and
@@ -223,35 +223,24 @@ impl JavaPattern {
         } else {
             compile_fancy(&translated)
         };
-        let names = tree.named_groups.into_iter().collect();
-        let program = Program::new(
-            &translated,
+        // `fancy_regex` lists every group of a name. Java refuses a second
+        // group of the same name, and the translation with it, so each name
+        // has one group. The last is the one `fancy_regex` resolves `\k` to.
+        let names = tree
+            .named_groups
+            .into_iter()
+            .filter_map(|(name, groups)| Some((name, *groups.last()?)))
+            .collect();
+        let program = Program::new(ProgramInput {
+            translated: &translated,
             groups,
-            &backref_folds,
-            &linebreak_atoms,
-            &group_repeats,
-            &windows,
-        );
-        // A pattern `fancy_regex` reads as Java does, or one with a node the
-        // matcher does not know, keeps `fancy_regex`. The matcher answers
-        // for one `fancy_regex` cannot build.
+            folds: &backref_folds,
+            linebreak_atoms: &linebreak_atoms,
+            group_repeats: &group_repeats,
+            windows: &windows,
+        });
         let counts_units = windows.iter().any(|window| !window.code_points);
-        let (engine, wide_input) = match (fancy, program) {
-            (Ok(_), Some(program)) if program.differs_from_fancy() => {
-                (Engine::Backtrack(program), WideInput::Engine)
-            }
-            (Ok((search, whole)), program) => (Engine::Fancy { search, whole }, match program {
-                _ if !counts_units => WideInput::Engine,
-                Some(program) => WideInput::Program(program),
-                None => WideInput::Refused,
-            }),
-            (Err(FancyFailure::Unbuilt(_)), Some(program)) => {
-                (Engine::Backtrack(program), WideInput::Engine)
-            }
-            (Err(FancyFailure::Unbuilt(error) | FancyFailure::Refused(error)), _) => {
-                return Err(error);
-            }
-        };
+        let (engine, wide_input) = select_engine(fancy, program, counts_units)?;
         Ok(Self(Arc::new(Compiled {
             engine,
             groups,
@@ -392,54 +381,16 @@ impl JavaPattern {
         input: &str,
         groups: &[Option<Range<usize>>],
     ) -> Result<(), MatchError> {
-        let refuse = |message: &str| MatchError(message.to_owned());
-        let group_count = self.group_count();
         let mut chars = replacement.chars().peekable();
         while let Some(character) = chars.next() {
             match character {
-                '\\' => out.push(
-                    chars
-                        .next()
-                        .ok_or_else(|| refuse("character to be escaped is missing"))?,
-                ),
+                '\\' => {
+                    out.push(chars.next().ok_or_else(|| {
+                        MatchError("character to be escaped is missing".to_owned())
+                    })?);
+                }
                 '$' => {
-                    let first = chars
-                        .next()
-                        .ok_or_else(|| refuse("illegal group reference: group index is missing"))?;
-                    let group = if first == '{' {
-                        let mut name = String::new();
-                        while let Some(next) = chars.next_if(char::is_ascii_alphanumeric) {
-                            name.push(next);
-                        }
-                        if name.is_empty() {
-                            return Err(refuse("named capturing group has 0 length name"));
-                        }
-                        if chars.next() != Some('}') {
-                            return Err(refuse("named capturing group is missing trailing '}'"));
-                        }
-                        *self
-                            .0
-                            .names
-                            .get(&name)
-                            .ok_or_else(|| MatchError(format!("no group with name {name}")))?
-                    } else {
-                        let mut group = first
-                            .to_digit(10)
-                            .ok_or_else(|| refuse("illegal group reference"))?
-                            as usize;
-                        if group > group_count {
-                            return Err(MatchError(format!("no group {group}")));
-                        }
-                        while let Some(digit) = chars.peek().and_then(|next| next.to_digit(10)) {
-                            let longer = group * 10 + digit as usize;
-                            if longer > group_count {
-                                break;
-                            }
-                            group = longer;
-                            chars.next();
-                        }
-                        group
-                    };
+                    let group = self.read_group_reference(&mut chars)?;
                     if let Some(Some(text)) = groups.get(group) {
                         // A look-behind may start a group between the two UTF-16
                         // units of a char, which Java gives as a lone surrogate.
@@ -455,6 +406,68 @@ impl JavaPattern {
             }
         }
         Ok(())
+    }
+
+    /// The group a replacement's `$` refers to, from the chars after it:
+    /// `${name}`, or `$n` with as many further digits as still name a group.
+    fn read_group_reference(&self, chars: &mut Peekable<Chars<'_>>) -> Result<usize, MatchError> {
+        let first = chars.next().ok_or_else(|| {
+            MatchError("illegal group reference: group index is missing".to_owned())
+        })?;
+        if first == '{' {
+            self.read_group_name(chars)
+        } else {
+            self.read_group_number(first, chars)
+        }
+    }
+
+    /// The group `${name}` refers to, from the chars after its `{`.
+    fn read_group_name(&self, chars: &mut Peekable<Chars<'_>>) -> Result<usize, MatchError> {
+        let mut name = String::new();
+        while let Some(next) = chars.next_if(char::is_ascii_alphanumeric) {
+            name.push(next);
+        }
+        if name.is_empty() {
+            return Err(MatchError(
+                "named capturing group has 0 length name".to_owned(),
+            ));
+        }
+        if chars.next() != Some('}') {
+            return Err(MatchError(
+                "named capturing group is missing trailing '}'".to_owned(),
+            ));
+        }
+        self.0
+            .names
+            .get(&name)
+            .copied()
+            .ok_or_else(|| MatchError(format!("no group with name {name}")))
+    }
+
+    /// The group `$n` refers to, from its `first` digit and the chars after
+    /// it: further digits join the number only while it names a group.
+    fn read_group_number(
+        &self,
+        first: char,
+        chars: &mut Peekable<Chars<'_>>,
+    ) -> Result<usize, MatchError> {
+        let group_count = self.group_count();
+        let mut group = first
+            .to_digit(10)
+            .ok_or_else(|| MatchError("illegal group reference".to_owned()))?
+            as usize;
+        if group > group_count {
+            return Err(MatchError(format!("no group {group}")));
+        }
+        while let Some(digit) = chars.peek().and_then(|next| next.to_digit(10)) {
+            let longer = group * 10 + digit as usize;
+            if longer > group_count {
+                break;
+            }
+            group = longer;
+            chars.next();
+        }
+        Ok(group)
     }
 }
 
@@ -499,6 +512,35 @@ fn compile_fancy(translated: &str) -> Result<(Regex, Regex), FancyFailure> {
         compile(translated)?,
         compile(&format!("\\A(?:{translated})\\z"))?,
     ))
+}
+
+/// The engine that answers for a pattern, and what answers an input with a
+/// char past U+FFFF, from `fancy_regex`'s pair and the matcher's `program`.
+/// `counts_units` is whether a look-behind of the pattern is one Java counts
+/// in UTF-16 units.
+///
+/// A pattern `fancy_regex` reads as Java does, or one with a node the matcher
+/// does not know, keeps `fancy_regex`. The matcher answers for one
+/// `fancy_regex` cannot build.
+fn select_engine(
+    fancy: Result<(Regex, Regex), FancyFailure>,
+    program: Option<Program>,
+    counts_units: bool,
+) -> Result<(Engine, WideInput), PatternError> {
+    match (fancy, program) {
+        (Ok(_), Some(program)) if program.differs_from_fancy() => {
+            Ok((Engine::Backtrack(program), WideInput::Engine))
+        }
+        (Ok((search, whole)), program) => Ok((Engine::Fancy { search, whole }, match program {
+            _ if !counts_units => WideInput::Engine,
+            Some(program) => WideInput::Program(program),
+            None => WideInput::Refused,
+        })),
+        (Err(FancyFailure::Unbuilt(_)), Some(program)) => {
+            Ok((Engine::Backtrack(program), WideInput::Engine))
+        }
+        (Err(FancyFailure::Unbuilt(error) | FancyFailure::Refused(error)), _) => Err(error),
+    }
 }
 
 /// The first group past the last of `groups`, group 0 included, that a
@@ -2155,6 +2197,7 @@ mod tests {
             replace_row("(a)", "a", "$1suffix", "asuffix"),
             // Digits after `$n` join the group number only while it names a group.
             replace_row("(a)", "a", "$10", "a0"),
+            replace_row("(a)", "a", "$12", "a2"),
             replace_row("(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)", "abcdefghij", "$10", "j"),
             replace_row("(a)", "a", "$0!", "a!"),
             replace_row("(?<who>a)", "a", "${who}-$1", "a-a"),
@@ -2186,6 +2229,24 @@ mod tests {
         check!(
             pattern(source).replace(input, replacement, true).is_err(),
             "{source} on {input} with {replacement}"
+        );
+    }
+
+    /// The message of each replacement Java throws on, which names what is
+    /// wrong as Java's own exception does.
+    #[yare::parameterized(
+        trailing_backslash = { "(a)", "\\", "character to be escaped is missing" },
+        trailing_dollar = { "(a)", "$", "illegal group reference: group index is missing" },
+        empty_named_group = { "(a)", "${}", "named capturing group has 0 length name" },
+        unclosed_named_group = { "(a)", "${a", "named capturing group is missing trailing '}'" },
+        unknown_named_group = { "(a)", "${who}", "no group with name who" },
+        group_number_out_of_range = { "(a)", "$9", "no group 9" },
+        nonnumeric_group_reference = { "(a)", "$x", "illegal group reference" },
+    )]
+    fn replace_all_names_what_java_throws_on(source: &str, replacement: &str, message: &str) {
+        check!(
+            pattern(source).replace("a", replacement, true) == Err(MatchError(message.to_owned())),
+            "{source} with {replacement}"
         );
     }
 

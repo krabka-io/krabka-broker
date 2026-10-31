@@ -1413,3 +1413,18 @@ fn offset_reservations_copy_the_image_only_for_in_batch_dependencies() {
         );
     }
 }
+
+/// A submit whose records fan out to no value is a committed no-op: it
+/// replies with an empty result, appends nothing and parks no waiter.
+#[test]
+fn a_submit_of_no_values_replies_without_an_append() {
+    let (mut engine, _dir) = single_voter_leader_engine();
+    let end_before = engine.log.log_end_offset();
+
+    let mut rx = submit_on_engine(&mut engine, &[]);
+
+    assert2::assert!(let Ok(Ok(result)) = rx.try_recv());
+    assert2::assert!(result == SubmitChangeResult::default());
+    check!(engine.log.log_end_offset() == end_before);
+    check!(engine.commit_waiters.is_empty());
+}

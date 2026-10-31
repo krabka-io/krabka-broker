@@ -37,6 +37,7 @@ use {
 };
 
 mod idle_in_flight;
+mod sasl_paths;
 mod telemetry_close;
 mod throttle_mute;
 

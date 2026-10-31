@@ -21,7 +21,6 @@ use {
         coordinator::unified::{
             GroupCoordinator,
             assignor::TopicIdPartition,
-            offsets_log::OffsetsLog,
             reconciler::ReconcileInput,
             share::{
                 config::ShareGroupConfig,
@@ -128,7 +127,6 @@ pub(super) fn start_initialize(
 /// its record names.
 pub(super) async fn cleanup_deleted_topics(
     state: &mut ShareGroupState,
-    offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
     now_ms: i64,
 ) {
@@ -138,7 +136,7 @@ pub(super) async fn cleanup_deleted_topics(
     }
     let deleted = deleted_topics(&topic_ids, &TopicImage::current(coordinator));
     if state.cleanup_deleted_topics(&deleted) {
-        write_state_partition_metadata(state, offsets_log, coordinator, now_ms).await;
+        write_state_partition_metadata(state, coordinator, now_ms).await;
     }
 }
 
@@ -312,7 +310,6 @@ fn spawn_initialize(
 pub(super) async fn apply_initialized(
     state: &mut ShareGroupState,
     outcomes: &[InitializeOutcome],
-    offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
     now_ms: i64,
 ) {
@@ -327,14 +324,13 @@ pub(super) async fn apply_initialized(
             state.uninitialize(&[partition]);
         }
     }
-    write_state_partition_metadata(state, offsets_log, coordinator, now_ms).await;
+    write_state_partition_metadata(state, coordinator, now_ms).await;
 }
 
 /// Writes the group's `ShareGroupStatePartitionMetadata` record, and says
 /// whether the write succeeded.
 async fn write_state_partition_metadata(
     state: &mut ShareGroupState,
-    offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
     now_ms: i64,
 ) -> bool {
@@ -343,7 +339,15 @@ async fn write_state_partition_metadata(
         state_partition_metadata: Some(state_partition_metadata_from(state)),
         ..Default::default()
     };
-    match flush_pending(state, pending, offsets_log, coordinator, now_ms).await {
+    match flush_pending(
+        state,
+        pending,
+        &*coordinator.offsets_log,
+        coordinator,
+        now_ms,
+    )
+    .await
+    {
         Ok(()) => true,
         Err(e) => {
             tracing::warn!(

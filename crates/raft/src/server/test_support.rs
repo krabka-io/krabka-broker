@@ -4,22 +4,17 @@
 
 use {
     crate::{
-        ControllerFetchMissLimit, MetadataLogConfig, MetadataRaftCommandQueueCapacity,
-        MetadataRaftFetchMax, NoEventQueueRecorder,
+        MetadataLogConfig,
         error::RaftError,
         kraft::{
-            Activation, KraftController, NullPeerSender, QuorumTimeouts,
+            KraftController, KraftOpenConfig, NullPeerSender, QuorumTimeouts,
             transport::wire::PeerRequest,
         },
         test_support::{encode, single_partition_topic},
     },
-    krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax,
     krabka_metadata::NodeId,
     krabka_protocol::owned::describe_quorum_request,
-    krabka_units::{
-        prelude,
-        prelude::{Time, TimeExt as _, millis, secs},
-    },
+    krabka_units::prelude::{Time, TimeExt as _, millis, secs},
     std::{sync::Arc, time::Duration},
     tokio::{io::AsyncReadExt, time},
     uuid::Uuid,
@@ -84,29 +79,21 @@ pub(super) fn test_engine_with_voters(
     let dir = tempfile::TempDir::new().unwrap();
     let ctrl = KraftController::open(
         dir.path().to_path_buf(),
-        NodeId(me),
-        Uuid::nil(),
-        Uuid::nil(),
-        krabka_metadata::VoterSet::from_voters(voters),
-        QuorumTimeouts {
-            election: TEST_ELECTION_TIMEOUT,
-            fetch: TEST_ELECTION_TIMEOUT,
-        },
-        None,
-        ControllerFetchMissLimit::default(),
-        MetadataRaftCommandQueueCapacity::default(),
-        MetadataRaftFetchMax::default(),
-        Arc::new(NullPeerSender),
-        0,
-        prelude::bytes(0),
-        millis(0),
-        MetadataSnapshotFetchMax::default(),
-        MetadataLogConfig {
-            max_idle_interval: millis(0),
-            ..MetadataLogConfig::default()
-        },
-        Activation::default(),
-        Arc::new(NoEventQueueRecorder),
+        KraftOpenConfig::builder()
+            .me(NodeId(me))
+            .cluster_id(Uuid::nil())
+            .directory_id(Uuid::nil())
+            .bootstrap_voters(krabka_metadata::VoterSet::from_voters(voters))
+            .timeouts(QuorumTimeouts {
+                election: TEST_ELECTION_TIMEOUT,
+                fetch: TEST_ELECTION_TIMEOUT,
+            })
+            .peers(Arc::new(NullPeerSender))
+            .metadata_log(MetadataLogConfig {
+                max_idle_interval: millis(0),
+                ..MetadataLogConfig::default()
+            })
+            .build(),
         |_| Ok(()),
     )
     .expect("open engine");

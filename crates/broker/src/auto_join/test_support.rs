@@ -17,6 +17,7 @@ use {
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpStream,
     },
+    tokio_util::sync::CancellationToken,
 };
 
 pub(super) async fn read_frame(socket: &mut TcpStream) -> io::Result<Vec<u8>> {
@@ -126,5 +127,6 @@ pub(super) fn params(
         inter_broker_server_name: "broker.internal".to_owned(),
         controller,
         inter_broker_client: Arc::new(InterBrokerClient::new(None, None)),
+        shutdown: CancellationToken::new(),
     }
 }

@@ -54,7 +54,7 @@
 //! Mixed JVM and Krabka controller quorums are outside this crate's
 //! compatibility target.
 
-#![doc(html_root_url = "https://docs.rs/krabka-raft/1.1.4")]
+#![doc(html_root_url = "https://docs.rs/krabka-raft/1.1.5")]
 
 mod config;
 mod connection_limiter;
@@ -101,7 +101,7 @@ pub use {
     },
     controller::{
         Controller, ControllerHandle, QuorumState, QuorumStateSnapshot, SnapshotRange,
-        SnapshotSlice, metadata_log_nonempty,
+        SnapshotSlice, metadata_log_nonempty, translate_submit_change_response,
     },
     error::{MetadataReplayError, PersistedFormatError, RaftError},
     event_queue::{EventQueueRecorder, NoEventQueueRecorder},
@@ -193,16 +193,10 @@ pub fn deserialize_metadata_snapshot_image(
     bytes: &[u8],
 ) -> Result<Vec<krabka_metadata::MetadataRecord>, RaftError> {
     let snapshot = snapshot::SnapshotReader::read(bytes)?;
-    let controls = snapshot.control_state.into_iter().flat_map(|controls| {
-        [
-            krabka_metadata::MetadataRecord::V1KRaftVersion(krabka_metadata::KRaftVersionRecord {
-                kraft_version: controls.kraft_version,
-            }),
-            krabka_metadata::MetadataRecord::V1Voters(krabka_metadata::VotersRecord {
-                voters: controls.voters,
-            }),
-        ]
-    });
+    let controls = snapshot
+        .control_state
+        .into_iter()
+        .flat_map(snapshot::SnapshotControlState::into_records);
     Ok(controls.chain(snapshot.metadata_records).collect())
 }
 

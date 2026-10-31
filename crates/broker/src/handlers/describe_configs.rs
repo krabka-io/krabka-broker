@@ -118,9 +118,7 @@ use {
     self::{
         authz::{denied_result, resource_authz_failure},
         entry::EntryOptions,
-        resources::{
-            BrokerLoggers, ServingBroker, StaticBrokerConfigs, StaticBrokerSetting, describe_one,
-        },
+        resources::{BrokerLoggers, ServingBroker, StaticBrokerConfigs, describe_one},
     },
     crate::{broker::Broker, handlers::RequestContext},
     std::sync::Arc,
@@ -152,47 +150,16 @@ pub fn handle(
     // process.
     let serving_node = krabka_metadata::NodeId(broker.config.node_id.0);
     // This node's own static settings, which a named broker resource
-    // reports beside its dynamic overrides. The two KIP-98 keys are
-    // `ConfigDef.Type::INT` in Kafka, and the broker's config validation
-    // already refused a value wider than that. The two KIP-211 keys travel
-    // as what the operator named, not as what the broker runs: the source
-    // a key reports is provenance, so a key set to its own default is
-    // still `STATIC_BROKER_CONFIG`.
-    let origins = &broker.config.static_config_origins;
+    // reports beside its dynamic overrides.
     let settings = static_settings(&broker.config);
-    let static_broker = StaticBrokerConfigs {
-        txn_id_expiration: StaticBrokerSetting {
-            value_ms: broker.config.txn_id_expiration.millis_i32(),
-            supplied: origins.txn_id_expiration,
+    let serving = ServingBroker {
+        node: serving_node,
+        static_broker: StaticBrokerConfigs::from_config(&broker.config, &settings),
+        loggers: BrokerLoggers {
+            node_id: broker.config.broker_id,
+            levels: &broker.config.log_levels,
         },
-        txn_id_expiration_cleanup_interval: StaticBrokerSetting {
-            value_ms: broker
-                .config
-                .txn_id_expiration_cleanup_interval
-                .millis_i32(),
-            supplied: origins.txn_id_expiration_cleanup_interval,
-        },
-        offsets_retention: broker.config.offsets_retention_override,
-        offsets_retention_check_interval: broker.config.offsets_retention_check_interval_override,
-        num_partitions: origins
-            .topic_creation
-            .num_partitions
-            .then_some(broker.config.num_partitions),
-        default_replication_factor: origins
-            .topic_creation
-            .default_replication_factor
-            .then_some(broker.config.default_replication_factor),
-        delete_topic_enable: origins
-            .topic_admin
-            .delete_topic_enable
-            .then_some(broker.config.delete_topic_enable),
-        auto_create_topics_enable: origins
-            .topic_admin
-            .auto_create_topics_enable
-            .then_some(broker.config.auto_create_topics_enable),
-        connections_max_idle: broker.config.connections_max_idle,
-        connections_max_idle_overrides: &broker.config.connections_max_idle_overrides,
-        settings: &settings,
+        unstable_api_versions: broker.config.features.unstable_api_versions,
     };
     // ── ACL preamble ────────────────────────────────────────────
     // Per-resource `DescribeConfigs`: Topic → `Topic(name)`, Group →
@@ -226,15 +193,7 @@ pub fn handle(
             describe_one(
                 &image,
                 r,
-                ServingBroker {
-                    node: serving_node,
-                    static_broker,
-                    loggers: BrokerLoggers {
-                        node_id: broker.config.broker_id,
-                        levels: &broker.config.log_levels,
-                    },
-                    unstable_api_versions: broker.config.features.unstable_api_versions,
-                },
+                serving,
                 broker.config.client_metrics_default_interval.millis_i32(),
                 options,
             )

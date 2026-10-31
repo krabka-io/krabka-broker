@@ -73,11 +73,10 @@ pub fn segment(input: TokenStream) -> Result<TokenStream, ParseError> {
     let [started, finish, root, timestamp]: [TokenStream; 4] = argument_array(input)?;
     let started = fixture_name(started)?;
     let finish = fixture_name(finish)?;
-    let timestamp = match mode(timestamp, ["end", "next_offset"])? {
-        "end" => moxy::template! { end },
-        "next_offset" => moxy::template! { end + 1 },
-        _ => unreachable!(),
-    };
+    let timestamp = mode(timestamp, [
+        ("end", moxy::template! { end }),
+        ("next_offset", moxy::template! { end + 1 }),
+    ])?;
     let metadata = started_metadata(
         &root,
         &moxy::template! { {{ root }}::RemoteLogSegmentId::new(tp(), ::uuid::Uuid::from_u128(id)) },

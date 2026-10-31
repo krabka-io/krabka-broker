@@ -6,10 +6,7 @@
 //! `POLICY_VIOLATION` (44) before it parses the batch.
 
 use {
-    super::{
-        super::{PartitionInput, process_partition},
-        seed_batch,
-    },
+    super::{super::process_partition, seed_batch},
     crate::{
         broker::spawn_partition,
         codes::{NONE, POLICY_VIOLATION},
@@ -213,10 +210,11 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
             krabka_verified::FreezeMutationKind::Produce,
         );
         let resp = process_partition(
-            PartitionInput {
-                freeze,
-                ..pipeline_input(topic, payload)
-            },
+            pipeline_input()
+                .topic(topic)
+                .payload(payload)
+                .freeze(freeze)
+                .call(),
             fixture.services(&image),
         )
         .await

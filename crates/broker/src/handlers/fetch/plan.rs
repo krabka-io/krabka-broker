@@ -167,11 +167,10 @@ async fn preferred_read_replica(
             })
             .collect()
     };
-    broker.config.replica_selector.select(
-        Some(rack_id),
-        i32::try_from(record.leader.0).unwrap_or(-1),
-        &replicas,
-    )
+    broker
+        .config
+        .replica_selector
+        .select(Some(rack_id), leader_id(record), &replicas)
 }
 
 /// The live bounds of a partition's offsets.
@@ -234,6 +233,12 @@ pub(super) fn refused_read(partition_index: i32, error_code: i16) -> PartitionDa
     }
 }
 
+/// The leader a partition record names, as a wire `leader_id`: -1 when the
+/// node id does not fit one.
+fn leader_id(record: &krabka_metadata::PartitionRecord) -> i32 {
+    i32::try_from(record.leader.0).unwrap_or(-1)
+}
+
 /// The leader the image names for a partition, as a KIP-951 `CurrentLeader`.
 fn image_leader(
     image: &krabka_metadata::MetadataImage,
@@ -243,7 +248,7 @@ fn image_leader(
     image
         .partition(topic, partition_index)
         .map_or_else(LeaderIdAndEpoch::default, |record| LeaderIdAndEpoch {
-            leader_id: i32::try_from(record.leader.0).unwrap_or(-1),
+            leader_id: leader_id(record),
             leader_epoch: record.leader_epoch.0,
             ..Default::default()
         })
@@ -376,7 +381,7 @@ pub(super) async fn apply_epoch_checks(
                 LeaderIdAndEpoch {
                     leader_id: image
                         .partition(topic, partition_index)
-                        .map_or(-1, |record| i32::try_from(record.leader.0).unwrap_or(-1)),
+                        .map_or(-1, leader_id),
                     leader_epoch: current_epoch,
                     ..Default::default()
                 }
@@ -407,10 +412,7 @@ pub(super) async fn apply_epoch_checks(
         *output = if request.current_leader_epoch >= 0 {
             refused_read(partition_index, codes::UNKNOWN_LEADER_EPOCH)
         } else {
-            PartitionData {
-                current_leader: image_leader(image, topic, partition_index),
-                ..refused_read(partition_index, codes::NOT_LEADER_OR_FOLLOWER)
-            }
+            not_leader_row(image, topic, partition_index)
         };
         return true;
     }
@@ -612,6 +614,11 @@ pub(super) async fn plan_partition_read(
             refused_partition(request.partition, error_code),
         ),
     };
+    // A row answered in the read pass, without reading the log.
+    let answered = |output| PlannedRead {
+        slot: ResponseSlot::Read,
+        read: PendingRead::planned(topic_name, topic_id, request, context.mode, None, output),
+    };
     // Kafka's `KafkaApis.handleFetchRequest` refuses every row of a follower
     // fetch without `ClusterAction` before it resolves any topic. So that
     // refusal comes first, and the fetch never reaches
@@ -646,25 +653,14 @@ pub(super) async fn plan_partition_read(
     // hosts the partition.
     if !context.mode.is_follower_fetch && context.broker.config.is_witness() {
         // This row never touches the log, so it carries the -1 sentinels of
-        // a refused read, like `leader_refusal` below it.
-        output = refused_read(request.partition, codes::NOT_LEADER_OR_FOLLOWER);
-        // KIP-951: name the leader the consumer should go to instead. Kafka
-        // fills `CurrentLeader` on every NOT_LEADER_OR_FOLLOWER row of a v16+
-        // Fetch response, and the response's `NodeEndpoints` then carries that
+        // a refused read, like `leader_refusal` below it. KIP-951: it names
+        // the leader the consumer should go to instead. Kafka fills
+        // `CurrentLeader` on every NOT_LEADER_OR_FOLLOWER row of a v16+ Fetch
+        // response, and the response's `NodeEndpoints` then carries that
         // node's address, so the consumer re-targets without a full Metadata
         // round-trip. A witness never leads, so the image's leader is always
         // some other node.
-        if let Some(record) = context.image.partition(topic_name, request.partition) {
-            output.current_leader = LeaderIdAndEpoch {
-                leader_id: i32::try_from(record.leader.0).unwrap_or(-1),
-                leader_epoch: record.leader_epoch.0,
-                ..Default::default()
-            };
-        }
-        return PlannedRead {
-            slot: ResponseSlot::Read,
-            read: PendingRead::planned(topic_name, topic_id, request, context.mode, None, output),
-        };
+        return answered(not_leader_row(context.image, topic_name, request.partition));
     }
     let partition = context
         .broker
@@ -730,10 +726,7 @@ pub(super) async fn plan_partition_read(
         )
         .await
     {
-        return PlannedRead {
-            slot: ResponseSlot::Read,
-            read: PendingRead::planned(topic_name, topic_id, request, context.mode, None, output),
-        };
+        return answered(output);
     }
     if let Some(partition) = partition.as_ref()
         && context
@@ -752,10 +745,7 @@ pub(super) async fn plan_partition_read(
             codes::KAFKA_STORAGE_ERROR
         };
         let output = refused_read(request.partition, error_code);
-        return PlannedRead {
-            slot: ResponseSlot::Read,
-            read: PendingRead::planned(topic_name, topic_id, request, context.mode, None, output),
-        };
+        return answered(output);
     }
     if partition.is_none() || topic_name.is_empty() {
         // Kafka refuses a partition its metadata does not hold before the
@@ -776,14 +766,7 @@ pub(super) async fn plan_partition_read(
         // its metadata. The row keeps its place among the rows read, and
         // carries the KIP-951 leader hint the way every other
         // `NOT_LEADER_OR_FOLLOWER` row of this fetch does.
-        let output = PartitionData {
-            current_leader: image_leader(context.image, topic_name, request.partition),
-            ..refused_read(request.partition, codes::NOT_LEADER_OR_FOLLOWER)
-        };
-        return PlannedRead {
-            slot: ResponseSlot::Read,
-            read: PendingRead::planned(topic_name, topic_id, request, context.mode, None, output),
-        };
+        return answered(not_leader_row(context.image, topic_name, request.partition));
     }
     // Kafka's `ReplicaManager.findPreferredReadReplica` names a read replica
     // only on the leader.
@@ -941,7 +924,9 @@ mod tests {
             handlers::{
                 fetch::test_support::append_epoch_batches,
                 produce::test_support::image_with_topic,
-                test_support::{StartedBroker, local_partition, start_broker_with},
+                test_support::{
+                    StartedBroker, local_partition, replicated_partition, start_broker_with,
+                },
             },
             partition::Partition,
             producer_state::ProducerState,
@@ -1038,6 +1023,14 @@ mod tests {
             .unwrap(),
         );
         let image = broker.controller.current_image();
+        // An image that names node 2 the partition's leader at epoch 7.
+        let mut named_leader = image_with_topic(TOPIC, &[2, 1]);
+        named_leader.apply(&krabka_metadata::MetadataRecord::V1Partition(
+            krabka_metadata::PartitionRecord {
+                leader_epoch: krabka_metadata::LeaderEpoch(7),
+                ..replicated_partition().topic(TOPIC).leader(2).call()
+            },
+        ));
         let consumer = super::FetchAuthorization::Consumer {
             denied_topics: HashSet::new(),
         };
@@ -1050,15 +1043,34 @@ mod tests {
             partition_max_bytes: 1024,
         };
 
-        for (name, is_follower_fetch, follower_id, want) in [
+        for (name, image, is_follower_fetch, follower_id, want) in [
+            // The image does not hold the partition, so the row names no
+            // leader.
             (
                 "client fetch",
+                &*image,
                 false,
                 -1,
                 super::refused_read(0, NOT_LEADER_OR_FOLLOWER),
             ),
+            // KIP-951: the row names the leader the image holds.
+            (
+                "client fetch, leader in the image",
+                &named_leader,
+                false,
+                -1,
+                super::PartitionData {
+                    current_leader: super::LeaderIdAndEpoch {
+                        leader_id: 2,
+                        leader_epoch: 7,
+                        ..Default::default()
+                    },
+                    ..super::refused_read(0, NOT_LEADER_OR_FOLLOWER)
+                },
+            ),
             (
                 "follower fetch",
+                &*image,
                 true,
                 2,
                 super::refused_read(0, NOT_LEADER_OR_FOLLOWER),
@@ -1066,7 +1078,7 @@ mod tests {
         ] {
             let context = super::PendingPlanContext {
                 broker: &broker,
-                image: &image,
+                image,
                 authorization: if is_follower_fetch {
                     &super::FetchAuthorization::Follower
                 } else {

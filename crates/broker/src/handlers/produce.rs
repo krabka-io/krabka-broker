@@ -28,14 +28,15 @@ use {
         leadership::{BrokerProducePolicy, current_effective_min_isr},
         pipeline::{
             Admission, AdmittedBatch, PartitionInput, PartitionOutcome, PartitionServices,
-            admit_partition, complete_partition, verify_admitted, verify_single_admitted,
+            TopicProducePolicy, admit_partition, complete_partition, verify_admitted,
+            verify_single_admitted,
         },
         producer_checks::TransactionRequest,
         response::build_topic_error_response,
         throttle::finish_produce_response,
         topic_settings::{
-            broker_default_timestamp_policy, resolve_compacted_topic, resolve_timestamp_policy,
-            resolve_topic_compression,
+            TimestampPolicy, broker_default_timestamp_policy, resolve_compacted_topic,
+            resolve_timestamp_policy, resolve_topic_compression,
         },
     },
     crate::{
@@ -52,6 +53,7 @@ use {
     },
     bytes::Bytes,
     futures_util::{StreamExt as _, future, stream::FuturesUnordered},
+    krabka_metadata::MetadataImage,
     krabka_protocol::{
         api_key::ApiKey,
         owned::produce_response::{PartitionProduceResponse, TopicProduceResponse},
@@ -361,6 +363,14 @@ pub async fn handle(
         unstable_api_versions: broker.config.features.unstable_api_versions,
     };
 
+    let policy_context = TopicPolicyContext {
+        broker,
+        image: &image,
+        client_id: ctx.client_id,
+        log_defaults,
+        broker_timestamp_default,
+    };
+
     for topic in req.topic_data {
         // v ≤ 12 sends the topic name; v ≥ 13 sends only topic_id and
         // we look it up in the metadata image. Kafka's
@@ -405,72 +415,7 @@ pub async fn handle(
         // real append is skipped.
         let topic_denied = denied_topics.contains(&*topic_name);
 
-        // Resolve the topic's broker-side `compression.type` once. `None`
-        // means Kafka's `producer` pass-through (no recompression). A
-        // concrete codec forces recompression of any batch whose codec
-        // differs — those batches must take the owned path. Mirrors the
-        // writer's `config_snapshot().compression_type` gate so the
-        // handler's verbatim decision matches the writer's recompression
-        // decision exactly.
-        let topic_compression =
-            resolve_topic_compression(&image, &topic_name, log_defaults.compression_type);
-
-        // Kafka's `max.message.bytes`, resolved here for the same reason: the
-        // cap belongs to the topic. A topic that sets none inherits the
-        // broker's `message.max.bytes`, which is the `DEFAULT_CONFIG` synonym
-        // `kafka-configs --describe --all` reports for the key.
-        let max_message_bytes =
-            resolve_max_message_bytes(&image, &topic_name, log_defaults.max_message_size);
-
-        // Resolve the topic's KFC-1 delivery settings once, beside the
-        // compression resolve and for the same reason: they are a property of
-        // the topic, not of a partition or of a batch. `None` is
-        // `delivery.mode=immediate`, the default, and every partition of such a
-        // topic then skips the delivery gate without reading a clock, a
-        // timestamp, or the log.
-        let delivery = resolve_delivery_gate(&image, &topic_name);
-
-        // KIP-32, resolved here for the same reason again: whose clock the
-        // records carry, and how far a producer timestamp may sit from the
-        // broker's, are properties of the topic. The default is `CreateTime`
-        // with both windows open, so a topic that configured neither costs
-        // every partition one boolean test and reads no clock.
-        let timestamps = resolve_timestamp_policy(&image, &topic_name, broker_timestamp_default);
-
-        // Kafka's `LogConfig.compact`, resolved once per topic: a compacted
-        // topic refuses a record with no key.
-        let compacted_topic =
-            resolve_compacted_topic(&image, &topic_name, log_defaults.cleanup_policy);
-
-        // KFC-7, resolved here for the same reason: schema validation is a
-        // property of the topic. `None` is the default, and every partition of
-        // such a topic then skips the check without reading a record body.
-        let schema = resolve_schema_validation(&image, &topic_name);
-
-        // KFC-9, resolved here for the same reason once more: a write freeze
-        // is a property of the topic. `None` is a topic that accepts writes, and
-        // the image answers an empty registry in two emptiness tests, so every
-        // partition of an unfrozen topic then pays one test of an `Option` and
-        // nothing else. The borrow allocates nothing, and only a refused row
-        // turns the entry into a `FreezeVerdict` and a message.
-        let freeze = resolve_freeze_mutation(
-            &image,
-            &topic_name,
-            !topic_denied,
-            FreezeMutationKind::Produce,
-        );
-
-        // Kafka's internal-topic gate, resolved here for the same reason as
-        // the freeze above: it is a property of the topic and of the request
-        // (its `client_id`), not of a partition or a batch. The group,
-        // transaction and share coordinators never reach this handler at all.
-        // They append to their own topics through the partition writer
-        // directly, so this is the only path an ordinary client Produce can
-        // take to `__consumer_offsets`, `__transaction_state` or
-        // `__share_group_state`, and the one Kafka refuses unless `client_id`
-        // is its own admin tooling's `"__admin_client"`.
-        let internal_topic_denied = is_internal_topic(&broker.config, &topic_name)
-            && !produce_internal_topics_allowed(ctx.client_id.unwrap_or_default());
+        let topic_policy = policy_context.resolve(&topic_name, topic_denied);
 
         for part_data in topic.partition_data {
             let idx = part_data.index;
@@ -487,21 +432,14 @@ pub async fn handle(
             let admission = admit_partition(
                 PartitionInput {
                     part_data,
-                    topic_compression,
-                    timestamps,
-                    compacted_topic,
-                    max_message_bytes,
-                    delivery,
-                    schema,
+                    topic: topic_policy,
                     topic_name: Arc::clone(&topic_name),
-                    freeze,
-                    internal_topic_denied,
                     transaction,
                     acks: req.acks,
                 },
                 services,
             )
-            .await?;
+            .await;
             let micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
             match admission {
                 Admission::Done(out) => {
@@ -582,6 +520,102 @@ pub async fn handle(
         topic_results,
         version,
     )
+}
+
+/// What every topic's produce settings resolve against: the request's
+/// metadata image and `client_id`, and the broker's log defaults.
+struct TopicPolicyContext<'a> {
+    broker: &'a Broker,
+    image: &'a MetadataImage,
+    client_id: Option<&'a str>,
+    log_defaults: BrokerLogDefaults,
+    broker_timestamp_default: TimestampPolicy,
+}
+
+impl<'a> TopicPolicyContext<'a> {
+    /// The produce settings of `topic_name`, resolved once per topic.
+    /// `topic_denied` is the topic's ACL verdict, which the freeze resolve
+    /// folds in.
+    fn resolve(&self, topic_name: &str, topic_denied: bool) -> TopicProducePolicy<'a> {
+        // Resolve the topic's broker-side `compression.type` once. `None`
+        // means Kafka's `producer` pass-through (no recompression). A
+        // concrete codec forces recompression of any batch whose codec
+        // differs — those batches must take the owned path. Mirrors the
+        // writer's `config_snapshot().compression_type` gate so the
+        // handler's verbatim decision matches the writer's recompression
+        // decision exactly.
+        let topic_compression =
+            resolve_topic_compression(self.image, topic_name, self.log_defaults.compression_type);
+
+        // Kafka's `max.message.bytes`, resolved here for the same reason: the
+        // cap belongs to the topic. A topic that sets none inherits the
+        // broker's `message.max.bytes`, which is the `DEFAULT_CONFIG` synonym
+        // `kafka-configs --describe --all` reports for the key.
+        let max_message_bytes =
+            resolve_max_message_bytes(self.image, topic_name, self.log_defaults.max_message_size);
+
+        // Resolve the topic's KFC-1 delivery settings once, beside the
+        // compression resolve and for the same reason: they are a property of
+        // the topic, not of a partition or of a batch. `None` is
+        // `delivery.mode=immediate`, the default, and every partition of such a
+        // topic then skips the delivery gate without reading a clock, a
+        // timestamp, or the log.
+        let delivery = resolve_delivery_gate(self.image, topic_name);
+
+        // KIP-32, resolved here for the same reason again: whose clock the
+        // records carry, and how far a producer timestamp may sit from the
+        // broker's, are properties of the topic. The default is `CreateTime`
+        // with both windows open, so a topic that configured neither costs
+        // every partition one boolean test and reads no clock.
+        let timestamps =
+            resolve_timestamp_policy(self.image, topic_name, self.broker_timestamp_default);
+
+        // Kafka's `LogConfig.compact`, resolved once per topic: a compacted
+        // topic refuses a record with no key.
+        let compacted_topic =
+            resolve_compacted_topic(self.image, topic_name, self.log_defaults.cleanup_policy);
+
+        // KFC-7, resolved here for the same reason: schema validation is a
+        // property of the topic. `None` is the default, and every partition of
+        // such a topic then skips the check without reading a record body.
+        let schema = resolve_schema_validation(self.image, topic_name);
+
+        // KFC-9, resolved here for the same reason once more: a write freeze
+        // is a property of the topic. `None` is a topic that accepts writes, and
+        // the image answers an empty registry in two emptiness tests, so every
+        // partition of an unfrozen topic then pays one test of an `Option` and
+        // nothing else. The borrow allocates nothing, and only a refused row
+        // turns the entry into a `FreezeVerdict` and a message.
+        let freeze = resolve_freeze_mutation(
+            self.image,
+            topic_name,
+            !topic_denied,
+            FreezeMutationKind::Produce,
+        );
+
+        // Kafka's internal-topic gate, resolved here for the same reason as
+        // the freeze above: it is a property of the topic and of the request
+        // (its `client_id`), not of a partition or a batch. The group,
+        // transaction and share coordinators never reach this handler at all.
+        // They append to their own topics through the partition writer
+        // directly, so this is the only path an ordinary client Produce can
+        // take to `__consumer_offsets`, `__transaction_state` or
+        // `__share_group_state`, and the one Kafka refuses unless `client_id`
+        // is its own admin tooling's `"__admin_client"`.
+        let internal_topic_denied = is_internal_topic(&self.broker.config, topic_name)
+            && !produce_internal_topics_allowed(self.client_id.unwrap_or_default());
+
+        TopicProducePolicy {
+            compression: topic_compression,
+            timestamps,
+            compacted: compacted_topic,
+            max_message_bytes,
+            delivery,
+            schema,
+            freeze,
+            internal_topic_denied,
+        }
+    }
 }
 
 /// One partition of this request that passed every gate before the

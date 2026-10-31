@@ -795,6 +795,31 @@ async fn a_directory_of_another_node_is_refused(extra: &[&str]) {
     assert2::check!(!b.exists(), "a refused run writes nothing");
 }
 
+/// A second format of the same directory without `--ignore-formatted` is
+/// refused with Kafka's message, which names the first formatted directory.
+#[test]
+fn an_already_formatted_directory_is_refused_with_kafka_s_message() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let argv = || argv_under().root(tmp.path()).log_dirs(&["a", "b"]).call();
+    let first = plan_of(argv())
+        .and_then(|plan| plan.execute(&Fault::default(), &mut io::sink()))
+        .map_err(|Failure { code, message }| format!("exit {code}: {message}"));
+    check!(first == Ok(()));
+
+    let message = format!(
+        "Log directory {} is already formatted. Use --ignore-formatted to ignore this directory \
+         and format the others.",
+        tmp.path().join("a").display()
+    );
+    check!(
+        plan_of(argv()).err()
+            == Some(Failure {
+                code: EXIT_DIRTY_LOG_DIR,
+                message,
+            })
+    );
+}
+
 /// A temporary root and the argv that formats a fresh directory under it.
 struct FreshArgv {
     dir: tempfile::TempDir,

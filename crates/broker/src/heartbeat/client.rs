@@ -23,9 +23,13 @@ use {
         network::client::InterBrokerClient,
     },
     krabka_client_core::ConnectionOptions,
-    krabka_metadata::metadata_version,
+    krabka_metadata::{MetadataImage, metadata_version},
     krabka_protocol::{
-        owned::broker_heartbeat_request::BrokerHeartbeatRequest, primitives::uuid::Uuid,
+        owned::{
+            broker_heartbeat_request::BrokerHeartbeatRequest,
+            broker_heartbeat_response::BrokerHeartbeatResponse,
+        },
+        primitives::uuid::Uuid,
     },
     krabka_security::ListenerProtocol,
     krabka_units::{Time, convert::TimeExt as _, fmt::Human as _, millis, secs},
@@ -202,6 +206,27 @@ fn heartbeat_request(
     }
 }
 
+/// The heartbeat this tick sends: the registration it names, the metadata it
+/// has applied, whether it asks to shut down, and its log dirs.
+fn next_heartbeat(
+    cfg: &Config,
+    caught_up: bool,
+    image: &MetadataImage,
+    want_shut_down: bool,
+) -> BrokerHeartbeatRequest {
+    let log_dirs = HeartbeatLogDirs {
+        offline: offline_dir_uuids(&cfg.log_dir_status, &cfg.log_dir_ids),
+        cordoned: cordoned_dir_uuids(caught_up, image, &cfg.cordoned_log_dirs, &cfg.log_dir_ids),
+    };
+    heartbeat_request(
+        cfg.broker_id,
+        registered_epoch(cfg, image),
+        cfg.controller.current_metadata_offset(),
+        want_shut_down,
+        log_dirs,
+    )
+}
+
 /// Triggers the KIP-112 self-shutdown. It latches `should_shutdown` and
 /// cancels the supervisor. Every early-exit path calls it, so the check is not
 /// accidentally skipped when the controller is temporarily unreachable.
@@ -212,6 +237,16 @@ fn trigger_all_dirs_offline_shutdown(cfg: &Config, reason: &str) {
     );
     let _ = cfg.should_shutdown.send(true);
     cfg.supervisor_shutdown.cancel();
+}
+
+/// Runs the KIP-112 self-shutdown, with `reason`, when every configured log
+/// dir is offline, and says whether it did.
+fn stop_if_all_dirs_offline(cfg: &Config, reason: &str) -> bool {
+    let offline = all_log_dirs_offline(cfg);
+    if offline {
+        trigger_all_dirs_offline_shutdown(cfg, reason);
+    }
+    offline
 }
 
 /// The broker epoch a heartbeat names: the newest registration of this
@@ -227,6 +262,74 @@ fn registered_epoch(cfg: &Config, image: &krabka_metadata::MetadataImage) -> i64
     })
 }
 
+/// What the heartbeat loop carries from one answer to the next heartbeat.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct HeartbeatState {
+    /// Kafka's `initialCatchUpFuture`: set by the first answer that says the
+    /// broker has caught up, and never cleared.
+    caught_up: bool,
+    /// Kafka's `gotControlledShutdownResponse`: whether the controller has
+    /// answered a heartbeat that asked to shut down.
+    controlled_shutdown_answered: bool,
+}
+
+/// What the heartbeat loop does after the controller answers a heartbeat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResponseOutcome {
+    /// The controller refused the heartbeat. The tick ends at once, without
+    /// the post-send log-dir check. The connection stays open unless the
+    /// controller answered `NOT_CONTROLLER`.
+    Rejected { keep_channel: bool },
+    /// The controller accepted the heartbeat, and the connection stays open.
+    /// `recheck_soon` asks for the next heartbeat after
+    /// [`CONTROLLED_SHUTDOWN_RECHECK`] rather than one interval.
+    Accepted { recheck_soon: bool },
+}
+
+/// Applies the controller's answer `r` to this tick's heartbeat, which asked to
+/// shut down when `want_shut_down`. It moves the initial unfence, latches
+/// `should_shutdown` and updates `state`.
+fn apply_response(
+    cfg: &Config,
+    state: &mut HeartbeatState,
+    want_shut_down: bool,
+    r: &BrokerHeartbeatResponse,
+) -> ResponseOutcome {
+    if r.error_code == CLUSTER_AUTHORIZATION_FAILED {
+        cfg.unfenced.send_if_modified(|unfence| {
+            let pending = *unfence == InitialUnfence::Pending;
+            if pending {
+                *unfence = InitialUnfence::Refused;
+            }
+            pending
+        });
+    }
+    if r.error_code != NONE {
+        warn!(
+            error_code = r.error_code,
+            "heartbeat rejected by controller"
+        );
+        return ResponseOutcome::Rejected {
+            keep_channel: r.error_code != NOT_CONTROLLER,
+        };
+    }
+    state.caught_up |= r.is_caught_up;
+    if !r.is_fenced {
+        cfg.unfenced.send_replace(InitialUnfence::Unfenced);
+    }
+    if r.should_shut_down {
+        // Latch true; never flip back. The `BrokerHandle::controlled_shutdown`
+        // waiter is single-shot.
+        let _ = cfg.should_shutdown.send(true);
+    } else if want_shut_down && !state.controlled_shutdown_answered {
+        state.controlled_shutdown_answered = true;
+        return ResponseOutcome::Accepted { recheck_soon: true };
+    }
+    ResponseOutcome::Accepted {
+        recheck_soon: false,
+    }
+}
+
 /// The controller leader, and the controller-listener endpoint the metadata
 /// names for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,6 +337,31 @@ struct ControllerAddress {
     leader: krabka_raft::NodeId,
     host: String,
     port: u16,
+}
+
+/// The current controller leader and the address of its controller listener,
+/// with the metadata image that named it, or `None` while either is unknown.
+fn resolve_controller(cfg: &Config) -> Option<(ControllerAddress, Arc<MetadataImage>)> {
+    let leader_id = *cfg.controller.watch_leader().borrow();
+    let Some(leader_id) = leader_id else {
+        debug!("heartbeat: no controller leader yet");
+        return None;
+    };
+    let image = cfg.controller.current_image();
+    let Some((host, port)) = leader_endpoint(&image, &cfg.controller_quorum_voters, leader_id)
+    else {
+        debug!(
+            leader = leader_id.0,
+            "heartbeat: controller leader has no known controller endpoint yet"
+        );
+        return None;
+    };
+    let controller = ControllerAddress {
+        leader: leader_id,
+        host,
+        port,
+    };
+    Some((controller, image))
 }
 
 /// The connection the heartbeats travel on, and the controller it reaches.
@@ -277,6 +405,30 @@ async fn dial(
     }
 }
 
+/// The open connection in `channel` when it still reaches `controller`, or a
+/// new one dialled to `controller` after closing the stale one. `None` when
+/// the dial fails.
+async fn reuse_or_dial(
+    cfg: &Config,
+    channel: Option<ControllerChannel>,
+    controller: ControllerAddress,
+    rpc_timeout: Time,
+) -> Option<ControllerChannel> {
+    match channel {
+        Some(open) if open.controller == controller && !open.connection.is_closed() => Some(open),
+        stale => {
+            if let Some(stale) = stale {
+                stale.connection.close();
+            }
+            let connection = dial(cfg, &controller, rpc_timeout).await?;
+            Some(ControllerChannel {
+                controller,
+                connection,
+            })
+        }
+    }
+}
+
 /// Sends a `BrokerHeartbeat` to the controller leader at every tick.
 ///
 /// Every heartbeat travels on one connection, as Kafka's
@@ -295,12 +447,7 @@ pub async fn run(mut cfg: Config) {
     }
     let mut tick = time::interval(cfg.interval.to_std());
     let mut channel: Option<ControllerChannel> = None;
-    // Kafka's `initialCatchUpFuture`: set by the first answer that says the
-    // broker has caught up, and never cleared.
-    let mut caught_up = false;
-    // Kafka's `gotControlledShutdownResponse`: whether the controller has
-    // answered a heartbeat that asked to shut down.
-    let mut controlled_shutdown_answered = false;
+    let mut state = HeartbeatState::default();
     loop {
         tokio::select! {
             _ = tick.tick() => {},
@@ -312,105 +459,38 @@ pub async fn run(mut cfg: Config) {
         }
         // KIP-112 check: even if we cannot reach the controller, self-shutdown
         // must fire as long as every log dir is offline.
-        if all_log_dirs_offline(&cfg) {
-            trigger_all_dirs_offline_shutdown(&cfg, "detected before controller resolution");
+        if stop_if_all_dirs_offline(&cfg, "detected before controller resolution") {
             return;
         }
         // Resolve the current controller leader's CONTROLLER-listener address
         // from the metadata image, or skip this tick if it is not known yet.
-        let leader_id = *cfg.controller.watch_leader().borrow();
-        let Some(leader_id) = leader_id else {
-            debug!("heartbeat: no controller leader yet");
+        let Some((controller, image)) = resolve_controller(&cfg) else {
             continue;
-        };
-        let image = cfg.controller.current_image();
-        let Some((host, port)) = leader_endpoint(&image, &cfg.controller_quorum_voters, leader_id)
-        else {
-            debug!(
-                leader = leader_id.0,
-                "heartbeat: controller leader has no known controller endpoint yet"
-            );
-            continue;
-        };
-        let controller = ControllerAddress {
-            leader: leader_id,
-            host,
-            port,
         };
         let rpc_timeout = heartbeat_rpc_timeout(cfg.interval);
-        let open = match channel.take() {
-            Some(open) if open.controller == controller && !open.connection.is_closed() => open,
-            stale => {
-                if let Some(stale) = stale {
-                    stale.connection.close();
-                }
-                let Some(connection) = dial(&cfg, &controller, rpc_timeout).await else {
-                    continue;
-                };
-                ControllerChannel {
-                    controller,
-                    connection,
-                }
-            }
+        let Some(open) = reuse_or_dial(&cfg, channel.take(), controller, rpc_timeout).await else {
+            continue;
         };
         let want_shut_down = *cfg.want_shutdown.borrow_and_update();
-        let log_dirs = HeartbeatLogDirs {
-            offline: offline_dir_uuids(&cfg.log_dir_status, &cfg.log_dir_ids),
-            cordoned: cordoned_dir_uuids(
-                caught_up,
-                &image,
-                &cfg.cordoned_log_dirs,
-                &cfg.log_dir_ids,
-            ),
-        };
-        let resp = time::timeout(
-            rpc_timeout.to_std(),
-            open.connection.send(heartbeat_request(
-                cfg.broker_id,
-                registered_epoch(&cfg, &image),
-                cfg.controller.current_metadata_offset(),
-                want_shut_down,
-                log_dirs,
-            )),
-        )
-        .await;
+        let request = next_heartbeat(&cfg, state.caught_up, &image, want_shut_down);
+        let resp = time::timeout(rpc_timeout.to_std(), open.connection.send(request)).await;
         match resp {
-            Ok(Ok(r)) => {
-                if r.error_code == NOT_CONTROLLER {
-                    open.connection.close();
-                } else {
-                    channel = Some(open);
-                }
-                if r.error_code == CLUSTER_AUTHORIZATION_FAILED {
-                    cfg.unfenced.send_if_modified(|state| {
-                        let pending = *state == InitialUnfence::Pending;
-                        if pending {
-                            *state = InitialUnfence::Refused;
-                        }
-                        pending
-                    });
-                }
-                if r.error_code != NONE {
-                    warn!(
-                        error_code = r.error_code,
-                        "heartbeat rejected by controller"
-                    );
+            Ok(Ok(r)) => match apply_response(&cfg, &mut state, want_shut_down, &r) {
+                ResponseOutcome::Rejected { keep_channel } => {
+                    if keep_channel {
+                        channel = Some(open);
+                    } else {
+                        open.connection.close();
+                    }
                     continue;
                 }
-                caught_up |= r.is_caught_up;
-                if !r.is_fenced {
-                    cfg.unfenced.send_replace(InitialUnfence::Unfenced);
+                ResponseOutcome::Accepted { recheck_soon } => {
+                    channel = Some(open);
+                    if recheck_soon {
+                        tick.reset_after(CONTROLLED_SHUTDOWN_RECHECK);
+                    }
                 }
-                if r.should_shut_down {
-                    // Latch true; never flip back. The
-                    // `BrokerHandle::controlled_shutdown` waiter is
-                    // single-shot.
-                    let _ = cfg.should_shutdown.send(true);
-                } else if want_shut_down && !controlled_shutdown_answered {
-                    controlled_shutdown_answered = true;
-                    tick.reset_after(CONTROLLED_SHUTDOWN_RECHECK);
-                }
-            }
+            },
             Ok(Err(e)) => {
                 warn!(error = %e, "heartbeat send failed");
                 open.connection.close();
@@ -428,8 +508,7 @@ pub async fn run(mut cfg: Config) {
         // window where dirs went offline *during* the connect/send. The
         // top-of-tick check already handles dirs that were offline before
         // leader resolution; this one handles the same-tick race.
-        if all_log_dirs_offline(&cfg) {
-            trigger_all_dirs_offline_shutdown(&cfg, "detected after heartbeat send");
+        if stop_if_all_dirs_offline(&cfg, "detected after heartbeat send") {
             // Returning stops heartbeats; if shutdown drags, the controller's
             // session timeout fences this broker independently.
             return;
@@ -442,7 +521,7 @@ mod tests {
     use {
         super::*,
         crate::{
-            codes::{NONE, NOT_CONTROLLER},
+            codes::{CLUSTER_AUTHORIZATION_FAILED, NONE, NOT_CONTROLLER, STALE_BROKER_EPOCH},
             cordoned_log_dirs::CordonedLogDirs,
             features::METADATA_VERSION,
             log_dir_id::LogDirIds,
@@ -482,6 +561,9 @@ mod tests {
         Accept,
         // `NOT_CONTROLLER`, as a controller that lost the leadership answers.
         NotController,
+        // `CLUSTER_AUTHORIZATION_FAILED`, as a controller that refuses the
+        // broker's principal answers.
+        Refuse,
         // No answer, so the heartbeat times out.
         Silent,
         // No answer, and the fake closes the connection.
@@ -545,6 +627,7 @@ mod tests {
                 let error_code = match mem::replace(&mut seen.next_answer, Answer::Accept) {
                     Answer::Accept => NONE,
                     Answer::NotController => NOT_CONTROLLER,
+                    Answer::Refuse => CLUSTER_AUTHORIZATION_FAILED,
                     Answer::Silent => return MockReply::Silent,
                     Answer::Close => return MockReply::Close,
                 };
@@ -607,7 +690,7 @@ mod tests {
     }
 
     // The heartbeat client of broker 7 against `controllers`, which are voters
-    // 1, 2, ... in order, with no log directories.
+    // 1, 2, ... in order, with `log_dirs` as its log directories.
     #[bon::builder]
     fn heartbeat_config(
         source: &Arc<FakeMetadataSource>,
@@ -616,8 +699,8 @@ mod tests {
         controllers: &[&FakeController],
         want_shutdown: Receiver<bool>,
         #[builder(default = Arc::new(watch::channel(false).0))] should_shutdown: Arc<Sender<bool>>,
+        #[builder(default)] log_dirs: Vec<PathBuf>,
     ) -> Config {
-        let no_dirs: Vec<PathBuf> = Vec::new();
         Config {
             broker_id: 7,
             broker_epoch: 11,
@@ -637,9 +720,9 @@ mod tests {
             want_shutdown,
             should_shutdown,
             unfenced: watch::channel(InitialUnfence::Pending).0,
-            log_dir_status: LogDirRegistry::probe(&no_dirs),
-            log_dir_ids: LogDirIds::resolve(&no_dirs),
-            all_log_dirs: no_dirs.clone(),
+            log_dir_status: LogDirRegistry::probe(&log_dirs),
+            log_dir_ids: LogDirIds::resolve(&log_dirs),
+            all_log_dirs: log_dirs,
             supervisor_shutdown: CancellationToken::new(),
             cordoned_log_dirs: CordonedLogDirs::default(),
         }
@@ -732,6 +815,233 @@ mod tests {
 
         check!((answered, controller.heartbeats()) == (true, 3));
         check!(took < Duration::from_secs(5), "{took:?}");
+    }
+
+    /// Kafka's `BrokerLifecycleManager` completes `initialUnfenceFuture`
+    /// exceptionally on `CLUSTER_AUTHORIZATION_FAILED`. The refusal is not
+    /// `NOT_CONTROLLER`, so the connection stays open for the next heartbeat.
+    #[tokio::test]
+    async fn a_refused_heartbeat_stops_the_initial_unfence_and_keeps_the_connection() {
+        let controller = FakeController::start().await;
+        controller.answer_next(Answer::Refuse);
+        let source = registered_broker_source();
+        let (want_shutdown_tx, want_shutdown) = watch::channel(false);
+        let shutdown = CancellationToken::new();
+        let cfg = heartbeat_config()
+            .source(&source)
+            .shutdown(&shutdown)
+            .interval(secs(60))
+            .controllers(&[&controller])
+            .want_shutdown(want_shutdown)
+            .call();
+        let mut initial_unfence = cfg.unfenced.subscribe();
+        let heartbeats = tokio::spawn(run(cfg));
+
+        let settled = timeout(
+            Duration::from_secs(10),
+            initial_unfence.wait_for(|state| *state != InitialUnfence::Pending),
+        )
+        .await
+        .ok()
+        .and_then(|state| state.ok().map(|state| *state));
+        // A controlled shutdown heartbeats at once, without waiting out the
+        // minute-long interval.
+        want_shutdown_tx.send_replace(true);
+        controller.wait_for_heartbeats(1).await;
+        shutdown.cancel();
+        heartbeats.await.unwrap();
+
+        check!(settled == Some(InitialUnfence::Refused));
+        check!(controller.connections() == 1);
+    }
+
+    /// KIP-112: a broker whose every log directory is offline shuts itself
+    /// down at the next tick without a heartbeat.
+    #[tokio::test]
+    async fn every_log_dir_offline_shuts_the_broker_down_before_a_heartbeat() {
+        let controller = FakeController::start().await;
+        let (a, b, paths) = two_log_dirs();
+        let source = registered_broker_source();
+        let (_want_shutdown, want_shutdown) = watch::channel(false);
+        let should_shutdown = Arc::new(watch::channel(false).0);
+        let told = should_shutdown.subscribe();
+        let shutdown = CancellationToken::new();
+        let cfg = heartbeat_config()
+            .source(&source)
+            .shutdown(&shutdown)
+            .interval(millis(20))
+            .controllers(&[&controller])
+            .want_shutdown(want_shutdown)
+            .should_shutdown(should_shutdown)
+            .log_dirs(paths)
+            .call();
+        cfg.log_dir_status.mark_offline(a.path(), "test");
+        cfg.log_dir_status.mark_offline(b.path(), "test");
+        let supervisor = cfg.supervisor_shutdown.clone();
+
+        let stopped = timeout(Duration::from_secs(10), run(cfg)).await;
+
+        check!(stopped.is_ok());
+        check!(*told.borrow());
+        check!(supervisor.is_cancelled());
+        check!(controller.heartbeats() == 0);
+    }
+
+    // Everything `apply_response` changes, compared whole.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Applied {
+        outcome: ResponseOutcome,
+        state: HeartbeatState,
+        unfence: InitialUnfence,
+        told_to_shut_down: bool,
+    }
+
+    // Applies `response` to a client in `before` whose initial unfence stands
+    // at `unfence`, for a heartbeat that asked to shut down when
+    // `asking_to_stop`.
+    fn apply(
+        before: HeartbeatState,
+        unfence: InitialUnfence,
+        asking_to_stop: bool,
+        response: &BrokerHeartbeatResponse,
+    ) -> Applied {
+        let source = registered_broker_source();
+        let shutdown = CancellationToken::new();
+        let (_want_shutdown, want_shutdown) = watch::channel(asking_to_stop);
+        let cfg = heartbeat_config()
+            .source(&source)
+            .shutdown(&shutdown)
+            .interval(secs(1))
+            .controllers(&[])
+            .want_shutdown(want_shutdown)
+            .call();
+        cfg.unfenced.send_replace(unfence);
+        let told = cfg.should_shutdown.subscribe();
+        let mut state = before;
+        let outcome = apply_response(&cfg, &mut state, asking_to_stop, response);
+        Applied {
+            outcome,
+            state,
+            unfence: *cfg.unfenced.borrow(),
+            told_to_shut_down: *told.borrow(),
+        }
+    }
+
+    /// Kafka's `BrokerLifecycleManager` heartbeat response handler: an error
+    /// answer changes nothing but the authorization refusal, and closes the
+    /// connection only on `NOT_CONTROLLER`; an accepted answer latches the
+    /// catch-up, the unfencing and the shutdown, and the first one to a
+    /// shutdown request asks again soon.
+    #[test]
+    fn apply_response_follows_the_lifecycle_rules() {
+        let fresh = HeartbeatState::default();
+        let caught_up = HeartbeatState {
+            caught_up: true,
+            ..fresh
+        };
+        let answered = HeartbeatState {
+            controlled_shutdown_answered: true,
+            ..fresh
+        };
+        let fenced = |error_code| BrokerHeartbeatResponse {
+            error_code,
+            is_fenced: true,
+            ..Default::default()
+        };
+        // Every flag that an accepted answer would act on.
+        let eager = |error_code| BrokerHeartbeatResponse {
+            error_code,
+            is_caught_up: true,
+            is_fenced: false,
+            should_shut_down: true,
+            ..Default::default()
+        };
+        let accepted = |recheck_soon| ResponseOutcome::Accepted { recheck_soon };
+        let rejected = |keep_channel| ResponseOutcome::Rejected { keep_channel };
+        let applied = |outcome, state, unfence, told_to_shut_down| Applied {
+            outcome,
+            state,
+            unfence,
+            told_to_shut_down,
+        };
+        let pending = InitialUnfence::Pending;
+        let unfenced = InitialUnfence::Unfenced;
+        let refused = InitialUnfence::Refused;
+        let cases = [
+            (
+                "accepted, caught up and unfenced",
+                (fresh, pending, false),
+                BrokerHeartbeatResponse {
+                    is_caught_up: true,
+                    is_fenced: false,
+                    ..fenced(NONE)
+                },
+                applied(accepted(false), caught_up, unfenced, false),
+            ),
+            (
+                "accepted while fenced",
+                (fresh, pending, false),
+                fenced(NONE),
+                applied(accepted(false), fresh, pending, false),
+            ),
+            (
+                "the catch-up is never cleared",
+                (caught_up, pending, false),
+                fenced(NONE),
+                applied(accepted(false), caught_up, pending, false),
+            ),
+            (
+                "told to shut down",
+                (fresh, pending, true),
+                BrokerHeartbeatResponse {
+                    should_shut_down: true,
+                    ..fenced(NONE)
+                },
+                applied(accepted(false), fresh, pending, true),
+            ),
+            (
+                "the first answer to a shutdown request",
+                (fresh, pending, true),
+                fenced(NONE),
+                applied(accepted(true), answered, pending, false),
+            ),
+            (
+                "a later answer to a shutdown request",
+                (answered, pending, true),
+                fenced(NONE),
+                applied(accepted(false), answered, pending, false),
+            ),
+            (
+                "NOT_CONTROLLER",
+                (fresh, pending, true),
+                eager(NOT_CONTROLLER),
+                applied(rejected(false), fresh, pending, false),
+            ),
+            (
+                "CLUSTER_AUTHORIZATION_FAILED before unfencing",
+                (fresh, pending, true),
+                eager(CLUSTER_AUTHORIZATION_FAILED),
+                applied(rejected(true), fresh, refused, false),
+            ),
+            (
+                "CLUSTER_AUTHORIZATION_FAILED after unfencing",
+                (fresh, unfenced, false),
+                eager(CLUSTER_AUTHORIZATION_FAILED),
+                applied(rejected(true), fresh, unfenced, false),
+            ),
+            (
+                "another error",
+                (fresh, pending, true),
+                eager(STALE_BROKER_EPOCH),
+                applied(rejected(true), fresh, pending, false),
+            ),
+        ];
+        for (label, (before, unfence, asking_to_stop), response, want) in cases {
+            check!(
+                apply(before, unfence, asking_to_stop, &response) == want,
+                "{label}"
+            );
+        }
     }
 
     #[test]

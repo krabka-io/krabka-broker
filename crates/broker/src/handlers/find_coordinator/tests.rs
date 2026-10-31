@@ -95,11 +95,13 @@ fn legacy_coordinator_error(
 
 const KAFKA_TOPIC_ID: &str = "BQUFBQUFBQUFBQUFBQUFBQ";
 
+/// Denies `Describe` on the resource of this type named `denied`, and allows
+/// everything else.
 #[derive(Debug)]
-struct DenyOneTransaction;
+struct DenyDescribeOf(ResourceType);
 
-krabka_macros::test_authorizer!(DenyOneTransaction, request; {
-    if request.resource_type == ResourceType::TransactionalId
+krabka_macros::test_authorizer!(DenyDescribeOf, request; {
+    if request.resource_type == self.0
         && request.operation == AclOperation::Describe
         && request.resource_name == "denied"
     {
@@ -209,7 +211,7 @@ async fn mixed_rejection_and_resolution_preserve_key_order_and_errors() {
         broker: broker_handle,
         dir: _dir,
     } = start_broker_no_audit_with(|config| {
-        config.authorizer = Arc::new(DenyOneTransaction);
+        config.authorizer = Arc::new(DenyDescribeOf(ResourceType::TransactionalId));
         config.transaction_state_replication_factor = 1;
     })
     .await;
@@ -849,5 +851,123 @@ async fn a_lookup_with_too_few_brokers_creates_nothing_until_enough_register() {
         check!(replicas == expected, "partition {}", record.partition);
     }
     check!(image.partitions_of(topic).count() == 3);
+    broker_handle.shutdown().await;
+}
+
+/// A v4+ group batch with one denied key: the denied key gets its own
+/// `GROUP_AUTHORIZATION_FAILED` row with no message and no node, and the
+/// allowed key on either side of it resolves to this broker.
+#[tokio::test]
+async fn mixed_group_batch_answers_the_denied_key_in_its_slot() {
+    let HandlerStartedBroker {
+        broker: broker_handle,
+        dir: _dir,
+    } = start_broker_no_audit_with(|config| {
+        config.authorizer = Arc::new(DenyDescribeOf(ResourceType::Group));
+        config.offsets_topic_replication_factor = 1;
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    broker_handle.wait_until_group_coordinator_ready().await;
+    let request = FindCoordinatorRequest {
+        key_type: KEY_TYPE_GROUP,
+        coordinator_keys: vec![
+            "allowed-first".into(),
+            "denied".into(),
+            "allowed-last".into(),
+        ],
+        ..Default::default()
+    };
+
+    let response = find(
+        &broker,
+        &request,
+        find_coordinator_response::MAX_VERSION,
+        "alice",
+    )
+    .await;
+
+    let resolved = |index: usize, key: &str| Coordinator {
+        key: key.into(),
+        node_id: broker.config.broker_id,
+        host: response.coordinators[index].host.clone(),
+        port: response.coordinators[index].port,
+        error_code: codes::NONE,
+        error_message: None,
+        ..Default::default()
+    };
+    assert!(
+        response
+            == FindCoordinatorResponse {
+                coordinators: vec![
+                    resolved(0, "allowed-first"),
+                    row("denied", codes::GROUP_AUTHORIZATION_FAILED, None),
+                    resolved(2, "allowed-last"),
+                ],
+                ..Default::default()
+            }
+    );
+    assert!(response.coordinators[0].port > 0);
+    broker_handle.shutdown().await;
+}
+
+/// Key type 7 is not a `CoordinatorType`, so every key of a v4+ batch gets
+/// `INVALID_REQUEST` with Kafka's default message.
+#[tokio::test]
+async fn key_type_seven_is_invalid_on_every_key() {
+    let HandlerStartedBroker {
+        broker: broker_handle,
+        dir: _dir,
+    } = start_broker_no_audit().await;
+    let broker = broker_handle.broker_arc_for_test();
+    let message = response::error_message(codes::INVALID_REQUEST);
+    let request = FindCoordinatorRequest {
+        key_type: 7,
+        coordinator_keys: vec!["a".into(), "b".into()],
+        ..Default::default()
+    };
+
+    let response = find(
+        &broker,
+        &request,
+        find_coordinator_response::MAX_VERSION,
+        "alice",
+    )
+    .await;
+
+    assert!(
+        response
+            == FindCoordinatorResponse {
+                coordinators: vec![
+                    row("a", codes::INVALID_REQUEST, message.clone()),
+                    row("b", codes::INVALID_REQUEST, message),
+                ],
+                ..Default::default()
+            }
+    );
+    broker_handle.shutdown().await;
+}
+
+/// The unknown-key-type check runs only inside Kafka's per-key loop, so an
+/// empty v4+ batch with an unknown key type stays empty.
+#[tokio::test]
+async fn empty_batch_with_unknown_key_type_stays_empty() {
+    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_no_audit()]; user ["alice"]; client ["find-client"]; };
+    let request = FindCoordinatorRequest {
+        key_type: 7,
+        coordinator_keys: vec![],
+        ..Default::default()
+    };
+
+    let response = handle(
+        &broker,
+        request,
+        find_coordinator_response::MAX_VERSION,
+        &context,
+    )
+    .await
+    .expect("empty batched coordinator lookup");
+
+    assert!(response == FindCoordinatorResponse::default());
     broker_handle.shutdown().await;
 }

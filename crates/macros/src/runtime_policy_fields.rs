@@ -8,20 +8,29 @@ use {
     },
 };
 
+/// The configuration surface that receives the shared policy fields.
+enum Interface {
+    Toml,
+    Cli,
+    NodeCli,
+}
+
 pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
-    let mode = mode(meta, ["toml", "cli", "node_cli"])?;
-    if mode == "node_cli" {
-        return controller_fields(item, ControllerFieldInterface::CommandLine);
-    }
-    let item = if mode == "toml" {
-        controller_fields(item, ControllerFieldInterface::Toml)?
-    } else {
-        item
-    };
-    let (startup_before, cli) = match mode {
-        "toml" => ("client_metrics_enable", false),
-        "cli" => ("client_metrics_eviction_tick", true),
-        _ => unreachable!(),
+    let interface = mode(meta, [
+        ("toml", Interface::Toml),
+        ("cli", Interface::Cli),
+        ("node_cli", Interface::NodeCli),
+    ])?;
+    let (item, startup_before, cli) = match interface {
+        Interface::NodeCli => {
+            return controller_fields(item, ControllerFieldInterface::CommandLine);
+        }
+        Interface::Toml => (
+            controller_fields(item, ControllerFieldInterface::Toml)?,
+            "client_metrics_enable",
+            false,
+        ),
+        Interface::Cli => (item, "client_metrics_eviction_tick", true),
     };
     let clients = moxy::template! {
     /// Cadence at which the KIP-714 client-metrics cache evicts entries.

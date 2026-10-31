@@ -7,7 +7,8 @@ use {
         config::LogConfig,
         leader_epoch_checkpoint::EpochEntry,
         log::test_support::{
-            ExpectedStamp, TempLog, append_samples, check_front_evicted_stamps, check_stamps,
+            ExpectedStamp, TempLog, abort_marker, append_samples, append_transaction,
+            check_front_evicted_stamps, check_stamps, configured_test_log, install_stamps,
             log_with_three_then_two_records, rolling_test_log, sample_batch,
             sample_batch_with_epoch, snapshot_offsets, stamped_rolling_log, stamped_test_log,
             test_batch_at, test_log, tiny_segments,
@@ -535,4 +536,89 @@ fn active_segment_at_one() -> TempLog {
     log.append(&mut test_batch_at(2)).unwrap();
     log.append(&mut test_batch_at(3)).unwrap();
     TempLog { dir, log }
+}
+
+/// Which segments a log holds and the transaction and stamp sidecars it keeps
+/// for them, as one comparable value.
+#[derive(Debug, PartialEq, Eq)]
+struct SegmentSidecars {
+    sealed_bases: Vec<Offset>,
+    active_base: Option<Offset>,
+    sealed_txn_index_bases: Vec<Offset>,
+    stamp_index_bases: Vec<Offset>,
+    active_txn_entries: Vec<AbortedTxn>,
+    active_stamp_entries: Option<Vec<StampEntry>>,
+}
+
+fn segment_sidecars(log: &Log) -> SegmentSidecars {
+    let active_base = log.active.as_ref().map(Segment::base_offset);
+    SegmentSidecars {
+        sealed_bases: log.segments.iter().map(Segment::base_offset).collect(),
+        active_base,
+        sealed_txn_index_bases: log.sealed_txn_indexes.keys().copied().collect(),
+        stamp_index_bases: log.stamp_indexes.keys().copied().collect(),
+        active_txn_entries: log.active_txn_index.entries().to_vec(),
+        active_stamp_entries: active_base
+            .and_then(|base| log.stamp_indexes.get(&base))
+            .map(|index| index.entries().to_vec()),
+    }
+}
+
+/// A fresh active segment at `base` with nothing sealed before it: empty
+/// transaction and stamp sidecars, and no sidecar of any older segment.
+fn lone_fresh_active(base: i64) -> SegmentSidecars {
+    SegmentSidecars {
+        sealed_bases: vec![],
+        active_base: Some(Offset(base)),
+        sealed_txn_index_bases: vec![],
+        stamp_index_bases: vec![Offset(base)],
+        active_txn_entries: vec![],
+        active_stamp_entries: Some(vec![]),
+    }
+}
+
+/// Abort one transaction on a one-batch-per-segment log: the data batch and
+/// the abort marker land in segments of their own, and the marker's segment
+/// records the aborted interval.
+fn abort_one_transaction(log: &mut Log) {
+    append_transaction(log, 7, 0, &["v"]);
+    log.append(&mut abort_marker(7, 0)).unwrap();
+}
+
+/// Every path that opens a new active segment -- a roll, a truncation that
+/// discards every segment, and a reset -- gives it fresh transaction and stamp
+/// sidecars and leaves no sidecar of a discarded segment behind.
+#[test]
+fn a_new_active_segment_starts_with_fresh_sidecars() {
+    let TempLog { dir: _dir, mut log } = configured_test_log(tiny_segments());
+    install_stamps(&mut log, 10, 1);
+    abort_one_transaction(&mut log);
+    append_samples(&mut log, 1, 1);
+    check!(!log.sealed_txn_indexes[&Offset(1)].entries().is_empty());
+
+    log.truncate_to(Offset(0)).unwrap();
+    assert2::assert!(segment_sidecars(&log) == lone_fresh_active(0));
+
+    abort_one_transaction(&mut log);
+    check!(!log.active_txn_index.entries().is_empty());
+    log.reset_to(Offset(5)).unwrap();
+    assert2::assert!(segment_sidecars(&log) == lone_fresh_active(5));
+    check!(log.lso() == Offset(5));
+
+    append_samples(&mut log, 2, 1);
+    assert2::assert!(
+        segment_sidecars(&log)
+            == SegmentSidecars {
+                sealed_bases: vec![Offset(5)],
+                active_base: Some(Offset(6)),
+                sealed_txn_index_bases: vec![Offset(5)],
+                stamp_index_bases: vec![Offset(5), Offset(6)],
+                active_txn_entries: vec![],
+                active_stamp_entries: Some(vec![StampEntry {
+                    base_offset: Offset(6),
+                    last_offset: Offset(6),
+                    stamp: 12,
+                }]),
+            }
+    );
 }

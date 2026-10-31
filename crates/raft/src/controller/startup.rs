@@ -15,7 +15,7 @@ use {
             BootstrapMode, ControllerConfig, UnstableFeatureVersions, metadata_partition_dir,
         },
         error::RaftError,
-        kraft::{Activation, KraftController, core::QuorumTimeouts},
+        kraft::{Activation, KraftController, KraftOpenConfig, core::QuorumTimeouts},
         network::{OutboundDialer, PlaintextDialer, RealPeerSender},
         server,
         snapshot::SnapshotReader,
@@ -160,29 +160,31 @@ impl Controller {
         // voter set sit unattached; `Bootstrap` seeds the static voter set.
         let engine = KraftController::open(
             data_dir.clone(),
-            config.node_id,
-            cluster_id,
-            config.directory_id,
-            voters.clone(),
-            QuorumTimeouts {
-                election: config.election_timeout,
-                fetch: config.fetch_timeout,
-            },
-            config.heartbeat_interval,
-            config.controller_fetch_miss_limit,
-            config.metadata_raft_command_queue_capacity,
-            config.metadata_raft_fetch_max,
-            peers,
-            config.snapshot_interval_records,
-            config.max_bytes_between_snapshots,
-            config.max_snapshot_interval,
-            metadata_snapshot_fetch_max,
-            config.metadata_log,
-            Activation {
-                bootstrap_records: config.bootstrap_records.clone(),
-                default_min_insync_replicas: config.default_min_insync_replicas,
-            },
-            Arc::clone(&config.event_queue_recorder),
+            KraftOpenConfig::builder()
+                .me(config.node_id)
+                .cluster_id(cluster_id)
+                .directory_id(config.directory_id)
+                .bootstrap_voters(voters.clone())
+                .timeouts(QuorumTimeouts {
+                    election: config.election_timeout,
+                    fetch: config.fetch_timeout,
+                })
+                .maybe_heartbeat_interval(config.heartbeat_interval)
+                .controller_fetch_miss_limit(config.controller_fetch_miss_limit)
+                .metadata_raft_command_queue_capacity(config.metadata_raft_command_queue_capacity)
+                .metadata_raft_fetch_max(config.metadata_raft_fetch_max)
+                .peers(peers)
+                .snapshot_interval_records(config.snapshot_interval_records)
+                .max_bytes_between_snapshots(config.max_bytes_between_snapshots)
+                .max_snapshot_interval(config.max_snapshot_interval)
+                .metadata_snapshot_fetch_max(metadata_snapshot_fetch_max)
+                .metadata_log(config.metadata_log)
+                .activation(Activation {
+                    bootstrap_records: config.bootstrap_records.clone(),
+                    default_min_insync_replicas: config.default_min_insync_replicas,
+                })
+                .event_queue_recorder(Arc::clone(&config.event_queue_recorder))
+                .build(),
             |image| {
                 if let Some(refusal) =
                     unsupported_feature_level(image, config.unstable_feature_versions)

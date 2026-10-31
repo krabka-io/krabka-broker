@@ -42,11 +42,18 @@ mod tests;
 use {
     self::resource::process_resource,
     crate::{
+        api_catalog::UnstableApiVersions,
         broker::Broker,
-        codes::{INVALID_CONFIG, INVALID_REQUEST},
+        codes::{
+            INVALID_CONFIG, INVALID_REQUEST, NOT_CONTROLLER, POLICY_VIOLATION, REQUEST_TIMED_OUT,
+            UNKNOWN_SERVER_ERROR, UNKNOWN_TOPIC_OR_PARTITION,
+        },
         config_keys::{
-            MIN_INSYNC_REPLICAS, broker_dynamic::BrokerConfigContext,
+            self, MIN_INSYNC_REPLICAS,
+            broker_dynamic::BrokerConfigContext,
+            group::{GroupBounds, validate_group_configs},
             is_controller_managed_topic_config,
+            listener_reconfig::OwnBrokerChecks,
         },
         handlers::{
             RequestContext, audit_resource, config_resource_refusal,
@@ -55,15 +62,23 @@ use {
                 RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
             },
             encode_response,
-            forward_to_controller::to_active_controller_or_handle,
+            forward_to_controller::{guarded_operation_on_source, to_active_controller_or_handle},
             response_encoding::{ErrorRow as _, ResourceErrorRow},
         },
+        topic_policy::{TopicPolicy, check as check_topic_policy},
     },
+    krabka_metadata::{GroupConfigRecord, MetadataImage, MetadataRecord, NodeId},
     krabka_protocol::owned::incremental_alter_configs_request,
+    krabka_raft::RaftError,
     std::{
         collections::{BTreeMap, BTreeSet, HashMap},
+        future::Future,
         mem,
+        path::PathBuf,
+        sync::Arc,
+        time::Duration,
     },
+    tokio::time::Instant,
 };
 
 pub(super) trait ResourceErrorRequestResource {
@@ -194,34 +209,13 @@ fn preprocess_resource(
             .map(|c| (c.name.as_str(), c.value.is_none())),
     );
     let image = broker.controller.current_image();
-    let result = shape.clone().and_then(|()| {
-        if resource.resource_type != RESOURCE_TYPE_BROKER {
-            return Ok(());
-        }
-        broker_configs::preprocess_broker_resource(
-            resource,
-            BrokerConfigContext {
-                image: &image,
-                serving: broker.config.node_id,
-                log_dirs: &broker.config.broker_log_dirs(),
-                unstable: broker.config.features.unstable_api_versions,
-            },
-            broker.own_config_checks(),
-        )
-    });
-    let (code, message) = result.err()?;
-    let (code, message) = if shape.is_err() {
-        (code, message)
-    } else {
-        config_resource_refusal(
-            broker.config.authorizer.as_ref(),
-            &image,
-            ctx,
-            (resource.resource_type, &resource.resource_name),
-            false,
-        )
-        .unwrap_or((code, message))
-    };
+    let (code, message) = broker_preprocess_refusal(broker, ctx, &image, BrokerPreprocess {
+        resource,
+        shape,
+        runs_preprocess: resource.resource_type == RESOURCE_TYPE_BROKER,
+        preprocess: broker_configs::preprocess_broker_resource,
+        broker_logger_supported: false,
+    })?;
     Some(
         AlterConfigsResourceResponse {
             resource_type: resource.resource_type,
@@ -229,6 +223,276 @@ fn preprocess_resource(
             ..Default::default()
         }
         .with_error(code, message),
+    )
+}
+
+/// The checks both alter-config APIs run on a topic's resulting override map
+/// once its own keys have validated: the storage transitions against the
+/// stored map, then the existence check, then the operator's policy.
+pub(super) fn finish_topic_overrides(
+    image: &MetadataImage,
+    topic: &str,
+    current: Option<&BTreeMap<String, String>>,
+    overrides: &BTreeMap<String, String>,
+    policy: &TopicPolicy,
+) -> Result<(), (i16, String)> {
+    config_keys::validate_diskless_unchanged(current, overrides)
+        .map_err(|reason| (INVALID_CONFIG, reason))?;
+    config_keys::validate_remote_storage_disable(current, overrides)
+        .map_err(|reason| (INVALID_CONFIG, reason))?;
+    if image.topic(topic).is_none() {
+        return Err((
+            UNKNOWN_TOPIC_OR_PARTITION,
+            format!("The topic '{topic}' does not exist."),
+        ));
+    }
+    // KIP-133: the operator-declared policy, on the map the topic ends up
+    // with. Kafka calls `AlterConfigPolicy.validate` on the same resolved map,
+    // and its `RequestMetadata` carries no partition count and no replication
+    // factor, so neither is passed here. It runs after the built-in
+    // validators, as `ConfigAdminManager` does: a config the broker itself
+    // refuses never reaches the policy.
+    check_topic_policy(policy, topic, None, None, overrides)
+        .map_err(|reason| (POLICY_VIOLATION, reason))
+}
+
+/// The `V1GroupConfig` record both alter-config APIs stage for a GROUP
+/// resource's resulting config map, after
+/// `ControllerConfigurationValidator.validateGroupName` and Kafka's
+/// `GroupConfig.validate` against the broker's group bounds.
+pub(super) fn group_config_record_from(
+    name: &str,
+    configs: BTreeMap<String, String>,
+    bounds: &GroupBounds,
+    unstable: UnstableApiVersions,
+) -> Result<MetadataRecord, (i16, String)> {
+    if name.is_empty() {
+        return Err((
+            INVALID_REQUEST,
+            "Default group resources are not allowed.".into(),
+        ));
+    }
+    validate_group_configs(&configs, bounds, unstable)
+        .map_err(|reason| (INVALID_CONFIG, reason))?;
+    Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
+        group_id: name.to_owned(),
+        configs,
+    }))
+}
+
+/// Run one resource's alter through the guarded optimistic retry: each attempt
+/// plans against a fresh controller image and submits only if that image is
+/// still current, so a conflicting commit replans every operation.
+///
+/// # Errors
+/// Returns the code the resource answers with when the retry gives up:
+/// `REQUEST_TIMED_OUT` at the deadline, `NOT_CONTROLLER` when this node is no
+/// longer the leader, and `UNKNOWN_SERVER_ERROR`, logged under `operation`, for
+/// any other submit failure.
+pub(super) async fn guarded_resource_response<Row, Attempt, Fut>(
+    broker: &Broker,
+    operation: &str,
+    attempt: Attempt,
+) -> Result<Row, i16>
+where
+    Attempt: FnMut(Arc<MetadataImage>) -> Fut,
+    Fut: Future<Output = Result<Row, RaftError>> + Send,
+{
+    let result = guarded_operation_on_source(
+        broker.controller.as_ref(),
+        Instant::now() + Duration::from_secs(5),
+        attempt,
+    )
+    .await;
+    match result {
+        Ok(Ok(row)) => Ok(row),
+        Err(_) => Err(REQUEST_TIMED_OUT),
+        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => Err(NOT_CONTROLLER),
+        Ok(Err(error)) => {
+            tracing::error!(%error, "{operation} submit_change failed");
+            Err(UNKNOWN_SERVER_ERROR)
+        }
+    }
+}
+
+/// The refusal a resource answers with before any record is built: its
+/// request-shape error, else its authorization error. Kafka's
+/// `ConfigAdminManager.preprocess` checks the shape before
+/// `ControllerApis.authorizeAlterResource` runs.
+pub(super) fn resource_preamble_refusal<Resource>(
+    broker: &Broker,
+    image: &MetadataImage,
+    ctx: &RequestContext<'_>,
+    resource: &Resource,
+    shape: Result<(), (i16, String)>,
+    broker_logger_supported: bool,
+) -> Option<(i16, String)>
+where
+    Resource: ResourceErrorRequestResource,
+{
+    if let Err(error) = shape {
+        return Some(error);
+    }
+    config_resource_refusal(
+        broker.config.authorizer.as_ref(),
+        image,
+        ctx,
+        (resource.resource_type(), resource.resource_name()),
+        broker_logger_supported,
+    )
+}
+
+/// The result of a builder that stages one record.
+type RecordResult = Result<MetadataRecord, (i16, String)>;
+/// The result of a builder that stages any number of records.
+type RecordsResult = Result<Vec<MetadataRecord>, (i16, String)>;
+
+/// Each API's record builder for one resource type, which
+/// [`resource_records`] dispatches to.
+pub(super) struct RecordBuilders<Resource> {
+    pub(super) topic:
+        fn(&Resource, &MetadataImage, &TopicPolicy, bool, UnstableApiVersions) -> RecordResult,
+    pub(super) broker: fn(&Resource, BrokerConfigContext<'_>) -> RecordsResult,
+    pub(super) group:
+        fn(&Resource, &MetadataImage, &GroupBounds, UnstableApiVersions) -> RecordResult,
+    pub(super) client_metrics: fn(&Resource, &MetadataImage) -> RecordsResult,
+}
+
+/// The records a TOPIC, BROKER, `CLIENT_METRICS` or GROUP resource stages, or
+/// the error it answers with, from this broker's settings and the resource's
+/// API-specific `builders`.
+pub(super) fn resource_records<Resource>(
+    broker: &Broker,
+    image: &MetadataImage,
+    ctx: &RequestContext<'_>,
+    resource: &Resource,
+    builders: &RecordBuilders<Resource>,
+) -> RecordsResult
+where
+    Resource: ResourceErrorRequestResource,
+{
+    let unstable = broker.config.features.unstable_api_versions;
+    match resource.resource_type() {
+        RESOURCE_TYPE_TOPIC => (builders.topic)(
+            resource,
+            image,
+            &broker.config.topic_policy,
+            broker.config.remote_storage_backend.is_some(),
+            unstable,
+        )
+        .map(|record| vec![record]),
+        RESOURCE_TYPE_BROKER => (builders.broker)(resource, BrokerConfigContext {
+            image,
+            serving: forwarded_serving_node(broker, ctx, resource.resource_name()),
+            log_dirs: &forwarded_log_dirs(broker, ctx),
+            unstable,
+        }),
+        RESOURCE_TYPE_GROUP => {
+            (builders.group)(resource, image, &GroupBounds::of(&broker.config), unstable)
+                .map(|record| vec![record])
+        }
+        RESOURCE_TYPE_CLIENT_METRICS => (builders.client_metrics)(resource, image),
+        other => unreachable!("resource type {other} passed the ACL dispatch"),
+    }
+}
+
+/// The node a BROKER resource's checks run for: the node the client
+/// addressed when the request was forwarded to this controller, else this
+/// node.
+fn forwarded_serving_node(
+    broker: &Broker,
+    ctx: &RequestContext<'_>,
+    resource_name: &str,
+) -> NodeId {
+    if ctx.forwarded && !resource_name.is_empty() {
+        resource_name
+            .parse::<u64>()
+            .map_or(broker.config.node_id, NodeId)
+    } else {
+        broker.config.node_id
+    }
+}
+
+/// This node's log directories for a BROKER resource's checks, or none when
+/// the request was forwarded and so addresses another node's directories.
+fn forwarded_log_dirs(broker: &Broker, ctx: &RequestContext<'_>) -> Vec<PathBuf> {
+    if ctx.forwarded {
+        Vec::new()
+    } else {
+        broker.config.broker_log_dirs()
+    }
+}
+
+/// The broker-side checks one API runs on a BROKER resource against this
+/// node's own settings.
+pub(super) type PreprocessBroker<Resource> =
+    fn(&Resource, BrokerConfigContext<'_>, OwnBrokerChecks<'_>) -> Result<(), (i16, String)>;
+
+/// One resource's broker-side preprocessing, as
+/// [`broker_preprocess_refusal`] runs it.
+pub(super) struct BrokerPreprocess<'a, Resource> {
+    pub(super) resource: &'a Resource,
+    /// The request-shape result, which the caller computes because each API
+    /// has its own rule for a missing value.
+    pub(super) shape: Result<(), (i16, String)>,
+    /// Whether this resource has broker-side checks to run at all.
+    pub(super) runs_preprocess: bool,
+    /// The broker-side checks against this node's own settings.
+    pub(super) preprocess: PreprocessBroker<Resource>,
+    /// Whether this API accepts a `BROKER_LOGGER` resource, which it then
+    /// authorizes against the cluster.
+    pub(super) broker_logger_supported: bool,
+}
+
+/// The refusal a resource earns from the broker-side preprocessing that both
+/// alter-config APIs run before they forward to the controller, or `None`
+/// when the resource goes on to the controller.
+///
+/// Kafka's `ConfigAdminManager.preprocess` precedence: a shape error answers
+/// before authorization runs, and an authorization error answers before a
+/// broker-side check failure.
+pub(super) fn broker_preprocess_refusal<Resource>(
+    broker: &Broker,
+    ctx: &RequestContext<'_>,
+    image: &MetadataImage,
+    request: BrokerPreprocess<'_, Resource>,
+) -> Option<(i16, String)>
+where
+    Resource: ResourceErrorRequestResource,
+{
+    let BrokerPreprocess {
+        resource,
+        shape,
+        runs_preprocess,
+        preprocess,
+        broker_logger_supported,
+    } = request;
+    if let Err(error) = shape {
+        return Some(error);
+    }
+    if !runs_preprocess {
+        return None;
+    }
+    let (code, message) = preprocess(
+        resource,
+        BrokerConfigContext {
+            image,
+            serving: broker.config.node_id,
+            log_dirs: &broker.config.broker_log_dirs(),
+            unstable: broker.config.features.unstable_api_versions,
+        },
+        broker.own_config_checks(),
+    )
+    .err()?;
+    Some(
+        config_resource_refusal(
+            broker.config.authorizer.as_ref(),
+            image,
+            ctx,
+            (resource.resource_type(), resource.resource_name()),
+            broker_logger_supported,
+        )
+        .unwrap_or((code, message)),
     )
 }
 

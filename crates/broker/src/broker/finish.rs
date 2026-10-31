@@ -50,7 +50,7 @@ use {
         task::JoinHandle,
         time,
     },
-    tokio_util::sync::CancellationToken,
+    tokio_util::sync::{CancellationToken, DropGuard},
 };
 
 /// The coordinators and managers that startup built before the final assembly.
@@ -70,6 +70,8 @@ pub(super) struct BrokerMetadataHandles {
     pub(super) controller: Arc<dyn MetadataSource>,
     pub(super) partitions: Arc<PartitionRegistry>,
     pub(super) admin_router: Option<Arc<BrokerControllerAdminRouter>>,
+    /// Stops the auto-join loops if startup fails before the handle exists.
+    pub(super) auto_join: DropGuard,
 }
 
 /// What the diskless bootstrap task hands back.
@@ -97,6 +99,7 @@ pub(super) async fn finish_broker_startup(
         controller,
         partitions,
         admin_router,
+        auto_join,
     } = metadata;
     let ListenerStartup {
         bound,
@@ -211,6 +214,7 @@ pub(super) async fn finish_broker_startup(
     Ok(BrokerHandle {
         listen_addr,
         shutdown,
+        auto_join_shutdown: auto_join.disarm(),
         listener_watcher,
         topic_rlmm_task,
         diskless_task,

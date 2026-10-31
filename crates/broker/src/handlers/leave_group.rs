@@ -77,18 +77,28 @@ pub async fn handle(
                     error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
                     members: Vec::new(),
                 },
-                asked => match asked.unwrap_or_default() {
-                    // The actor answers a group of a kind the classic leave
-                    // cannot reach with `UNKNOWN_MEMBER_ID`, which Kafka
-                    // shapes exactly as a missing group.
-                    result
-                        if result.error_code == codes::UNKNOWN_MEMBER_ID
-                            && result.members.is_empty() =>
-                    {
-                        unknown_group_result(&req, version)
-                    }
-                    result => result,
+                // The actor stopped with the leave in its mailbox: it unloads
+                // with its offsets partition or after a failed write. Kafka
+                // fails an operation on a shard that unloads, so the member
+                // has not left. The routing check runs again and answers
+                // `NOT_COORDINATOR` once another broker leads the partition;
+                // a broker that still serves the group answers the retriable
+                // `COORDINATOR_NOT_AVAILABLE`.
+                Err(AskError::Dropped) => LeaveResult {
+                    error_code: group_coordinator_error(broker, &req.group_id)
+                        .unwrap_or(codes::COORDINATOR_NOT_AVAILABLE),
+                    members: Vec::new(),
                 },
+                // The actor answers a group of a kind the classic leave
+                // cannot reach with `UNKNOWN_MEMBER_ID`, which Kafka shapes
+                // exactly as a missing group.
+                Ok(result)
+                    if result.error_code == codes::UNKNOWN_MEMBER_ID
+                        && result.members.is_empty() =>
+                {
+                    unknown_group_result(&req, version)
+                }
+                Ok(result) => result,
             }
         }
     };

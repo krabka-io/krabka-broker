@@ -41,6 +41,7 @@
 //! every replica, because each one removes data from the topic's log.
 
 use {
+    self::delete::DeleteTargets,
     crate::{
         api_catalog::UnstableApiVersions,
         blocking::spawn_blocking,
@@ -107,10 +108,7 @@ async fn disable_and_delete_remote(
     partition: &Arc<Partition>,
     image: &krabka_metadata::MetadataImage,
     broker_id: i32,
-    archive: ArchiveMode,
-    rsm: &Arc<dyn RemoteStorageManager>,
-    rlmm: &Arc<dyn RemoteLogMetadataManager>,
-    index_cache: &Arc<krabka_remote_storage::RemoteIndexCache>,
+    tier: &RemoteTier<'_>,
 ) {
     let Some(tp) = topic_partition(partition, image) else {
         return;
@@ -118,7 +116,7 @@ async fn disable_and_delete_remote(
     // Nothing to do once the tier is empty, which is every tick after the
     // first: the sweep runs on a timer, and this must not re-mark a partition
     // it already erased.
-    match rlmm.list_remote_log_segments(&tp) {
+    match tier.rlmm.list_remote_log_segments(&tp) {
         Ok(segments) if segments.is_empty() => return,
         Ok(_) => {}
         Err(error) => {
@@ -130,10 +128,10 @@ async fn disable_and_delete_remote(
     cascade_remote_partition_delete(
         tp.clone(),
         broker_id,
-        archive,
-        Arc::clone(rsm),
-        Arc::clone(rlmm),
-        Arc::clone(index_cache),
+        tier.archive,
+        Arc::clone(tier.rsm),
+        Arc::clone(tier.rlmm),
+        Arc::clone(tier.index_cache),
     )
     .await;
 
@@ -281,6 +279,18 @@ pub struct RemoteTier<'a> {
     /// segment whose newest record claims a timestamp in the future. See
     /// [`local_retention::local_retention_target`].
     pub unstable_api_versions: UnstableApiVersions,
+}
+
+impl RemoteTier<'_> {
+    /// The parts of this tier a segment delete reaches.
+    const fn delete_targets(&self) -> DeleteTargets<'_> {
+        DeleteTargets {
+            archive: self.archive,
+            rsm: self.rsm,
+            rlmm: self.rlmm,
+            index_cache: self.index_cache,
+        }
+    }
 }
 
 impl RemoteLogManagerContext {
@@ -490,16 +500,7 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
             && log_config.remote_tier.delete_on_disable
             && let Ok(_permit) = permits.expiration().await
         {
-            disable_and_delete_remote(
-                &partition,
-                image,
-                broker_id,
-                tier.archive,
-                tier.rsm,
-                tier.rlmm,
-                tier.index_cache,
-            )
-            .await;
+            disable_and_delete_remote(&partition, image, broker_id, tier).await;
         }
         return;
     }

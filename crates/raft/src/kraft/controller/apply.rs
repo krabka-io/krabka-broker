@@ -4,7 +4,7 @@
 
 use {
     super::{
-        Engine, PendingDowngradeSnapshot,
+        Engine, MetadataReplayError, PendingDowngradeSnapshot, RaftError,
         offsets::{
             batch_base_in_apply_window, expected_hwm_after_advance, hwm_advanced_as_expected,
             leader_alone_is_majority,
@@ -14,15 +14,30 @@ use {
             next_batch_offset,
         },
     },
+    crate::snapshot::mirror_controls,
     krabka_ids::Offset,
     krabka_metadata::{
         MetadataImage, MetadataRecord, VotersRecord, metadata_version::METADATA_VERSION_FEATURE,
     },
+    krabka_protocol::records::RecordBatch,
     std::{sync::Arc, time::Instant},
     tracing::field::Empty,
 };
 
 impl Engine {
+    /// Read the committed batches from `cursor` for the apply pass.
+    fn read_for_apply(&self, cursor: Offset) -> Result<Vec<RecordBatch>, RaftError> {
+        #[cfg(test)]
+        if self.apply_read_failure_at == Some(cursor) {
+            // What `read_decoded` returns for a batch that does not decode.
+            return Err(RaftError::ChangeRejected(
+                "injected apply read failure".into(),
+            ));
+        }
+        self.log
+            .read_decoded(cursor, self.metadata_raft_fetch_max.size())
+    }
+
     /// Publish the applied image, then its finalized-features epoch. The
     /// order keeps a reader that takes the epoch first from seeing it run
     /// ahead of the features.
@@ -81,10 +96,7 @@ impl Engine {
         let mut changed = false;
         let mut metadata_version_downgraded = false;
         while cursor < applied_hwm {
-            match self
-                .log
-                .read_decoded(cursor, self.metadata_raft_fetch_max.size())
-            {
+            match self.read_for_apply(cursor) {
                 Ok(batches) => {
                     let next = next_batch_offset(&batches);
                     if batches.is_empty() {
@@ -154,14 +166,11 @@ impl Engine {
                                                 .saturating_add(1),
                                         );
                                         let mut image = self.image.clone();
-                                        image.apply(&MetadataRecord::V1KRaftVersion(
-                                            krabka_metadata::KRaftVersionRecord {
-                                                kraft_version: self.controls.version_at(end_offset),
-                                            },
-                                        ));
-                                        image.apply(&MetadataRecord::V1Voters(VotersRecord {
-                                            voters: self.controls.voters_at(end_offset),
-                                        }));
+                                        mirror_controls(
+                                            &mut image,
+                                            self.controls.version_at(end_offset),
+                                            self.controls.voters_at(end_offset),
+                                        );
                                         self.downgrade_snapshot_pending =
                                             Some(PendingDowngradeSnapshot {
                                                 image,
@@ -198,8 +207,17 @@ impl Engine {
                     cursor = next;
                 }
                 Err(e) => {
-                    tracing::error!(?e, "kraft: read for apply failed");
-                    break;
+                    // The high watermark already covers the records from
+                    // `cursor` on, so no later pass would apply them. The
+                    // controller stops: nothing publishes, as on a record
+                    // that does not decode.
+                    let fault = MetadataReplayError::UnreadableLog {
+                        offset: cursor.0,
+                        reason: e.to_string(),
+                    };
+                    tracing::error!(%fault, "kraft: stopping the controller");
+                    self.replay_fault = Some(fault);
+                    return;
                 }
             }
         }

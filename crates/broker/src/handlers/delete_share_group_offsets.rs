@@ -93,13 +93,15 @@ pub async fn handle(
             topic_decisions.get(rt.topic_name.as_str()) == Some(&AuthorizationResult::Deny)
         });
 
-    if let Some(error_code) = group_coordinator_error(broker, &gid) {
-        return Ok(top_level(error_code, None));
-    }
     // GroupCoordinatorService.deleteShareGroupOffsets rejects an empty id
-    // before it routes the group to a shard.
+    // before it routes the group to a shard. An empty id hashes to some
+    // partition, and a broker that does not lead it would otherwise answer
+    // NOT_COORDINATOR instead.
     if gid.is_empty() {
         return Ok(top_level(codes::INVALID_GROUP_ID, None));
+    }
+    if let Some(error_code) = group_coordinator_error(broker, &gid) {
+        return Ok(top_level(error_code, None));
     }
     // GroupCoordinatorShard.initiateDeleteShareGroupOffsets looks the group
     // up through `shareGroup`, which refuses a missing group and a group of
@@ -719,6 +721,51 @@ mod tests {
             .expect("kept state");
         assert!(kept_state_epoch == 6);
         assert!(kept_start_offset == krabka_log::Offset(20));
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka's `GroupCoordinatorService.deleteShareGroupOffsets` refuses an
+    /// empty id with `INVALID_GROUP_ID` before it routes the group, so a
+    /// broker that does not lead the partition `""` hashes to gives the same
+    /// answer as one that does, not `NOT_COORDINATOR`.
+    #[yare::parameterized(
+        leads_empty_id_partition = { true },
+        does_not_lead_empty_id_partition = { false },
+    )]
+    #[test_macro(tokio::test)]
+    async fn handle_refuses_an_empty_group_id_before_routing(leads: bool) {
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_share_broker()
+            .authorizer(Arc::new(AllowAllAuthorizer))
+            .call()
+            .await;
+        let broker = broker_handle.broker_arc_for_test();
+        if !leads {
+            handler_fixture_support::lead_group_partition_elsewhere(&broker_handle, &broker, "")
+                .await;
+        }
+        krabka_macros::request_test_identity! {
+            bind(ctx);
+            user ["alice"];
+        };
+
+        let resp = handle(
+            &broker,
+            request("", &["t"]),
+            delete_share_group_offsets_response::MAX_VERSION,
+            &ctx,
+        )
+        .await
+        .expect("handle");
+
+        let expected = krabka_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
+            error_code: codes::INVALID_GROUP_ID,
+            error_message: Some("The group id is invalid.".into()),
+            responses: Vec::new(),
+        });
+        assert2::assert!(resp == expected);
         broker_handle.shutdown().await;
     }
 

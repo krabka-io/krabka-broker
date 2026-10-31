@@ -25,34 +25,24 @@
 
 use {
     crate::{
-        codes::{
-            DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_EXPIRED, DELEGATION_TOKEN_NOT_FOUND,
-            DELEGATION_TOKEN_OWNER_MISMATCH, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, INVALID_REQUEST,
-            UNSUPPORTED_VERSION,
+        codes::{DELEGATION_TOKEN_EXPIRED, DELEGATION_TOKEN_OWNER_MISMATCH, INVALID_REQUEST},
+        handlers::{
+            ErrorCodeResponse as _,
+            delegation_token_admission::{admit_token_request, may_renew_or_expire},
         },
-        features::{METADATA_VERSION, require_feature},
-        handlers::ErrorCodeResponse as _,
         metadata_source::MetadataSource,
         network::auth::ConnectionAuth,
         time_util::now_ms,
     },
-    krabka_metadata::{DelegationToken, DelegationTokenRecord, metadata_version},
+    krabka_metadata::DelegationTokenRecord,
     krabka_protocol::owned::{
         renew_delegation_token_request::RenewDelegationTokenRequest,
         renew_delegation_token_response::RenewDelegationTokenResponse,
     },
     krabka_raft::DelegationTokenMutation,
-    krabka_security::{Principal, SecretBytes},
-    krabka_verified::{
-        TokenRenewDecision,
-        delegation_token::{TokenApi, TokenApiAdmission},
-        renew_token_expiry,
-    },
+    krabka_security::SecretBytes,
+    krabka_verified::{TokenRenewDecision, delegation_token::TokenApi, renew_token_expiry},
 };
-
-/// Kafka's `DelegationTokenManager.ERROR_TIMESTAMP`, the expiry the broker
-/// answers with when it refuses the request before forwarding it.
-const ERROR_TIMESTAMP: i64 = -1;
 
 #[tracing::instrument(
     name = "handle_renew_delegation_token",
@@ -94,7 +84,7 @@ pub async fn handle(
     if decision == TokenRenewDecision::Expired {
         return RenewDelegationTokenResponse::error(DELEGATION_TOKEN_EXPIRED);
     }
-    if token.owner != caller && !token.renewers.contains(&caller) {
+    if !may_renew_or_expire(&token, &caller) {
         return RenewDelegationTokenResponse::error(DELEGATION_TOKEN_OWNER_MISMATCH);
     }
     let TokenRenewDecision::Renew(new_expiry) = decision else {
@@ -122,51 +112,6 @@ pub async fn handle(
         expiry_timestamp_ms: new_expiry,
         ..Default::default()
     }
-}
-
-/// The checks `RenewDelegationToken` and `ExpireDelegationToken` share,
-/// steps 1 and 2 of Kafka's order up to the `hmac` lookup.
-///
-/// Returns the authenticated principal and the token the `hmac` names, or the
-/// refusal's error code and the expiry its response carries:
-/// `ERROR_TIMESTAMP` for a broker-side refusal, the schema default of 0 for a
-/// controller-side one.
-pub fn admit_token_request<'a>(
-    api: TokenApi,
-    auth: &'a ConnectionAuth,
-    secret_key: Option<&SecretBytes>,
-    hmac: &[u8],
-    controller: &dyn MetadataSource,
-) -> Result<(&'a Principal, DelegationToken), (i16, i64)> {
-    let refuse = |code| Err((code, 0));
-    if auth.token_api_admission(api) == TokenApiAdmission::Reject {
-        return Err((DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, ERROR_TIMESTAMP));
-    }
-    let ConnectionAuth::Authenticated { principal, .. } = auth else {
-        return Err((DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, ERROR_TIMESTAMP));
-    };
-    let Some(secret_key) = secret_key else {
-        return refuse(DELEGATION_TOKEN_AUTH_DISABLED);
-    };
-
-    let image = controller.current_image();
-    // KIP-48/KIP-778: KRaft delegation tokens require metadata.version >= 3.6-IV2.
-    if require_feature(
-        &image,
-        METADATA_VERSION,
-        metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
-    )
-    .is_err()
-    {
-        return refuse(UNSUPPORTED_VERSION);
-    }
-    let Some(token) = image
-        .delegation_token_by_hmac(secret_key.as_bytes(), hmac)
-        .cloned()
-    else {
-        return refuse(DELEGATION_TOKEN_NOT_FOUND);
-    };
-    Ok((principal, token))
 }
 
 #[cfg(test)]

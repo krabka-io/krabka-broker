@@ -8,7 +8,7 @@
 //! Under `--dry-run` it does the same work and opens no log at all.
 
 use {
-    super::prepare::{BatchTally, PrepareBatchSetup, PreparedBatch, prepare_batch},
+    super::prepare::{BatchTally, PrepareBatchSetup, prepare_batch},
     crate::{
         args::{PartitionRef, RestoreArgs},
         bound::Predicates,
@@ -137,31 +137,17 @@ pub async fn write_segment_after_skip(
         outcome.end_offset = batch_base_offset + i64::from(last_offset_delta);
 
         if let Some(log) = log.as_mut() {
-            match &mut prepared {
-                PreparedBatch::Verbatim(verbatim) => {
-                    log.append_verbatim_at(verbatim, batch_base_offset)?;
-                }
-                PreparedBatch::Owned { batch, .. } => {
-                    log.append_at(batch, batch_base_offset)?;
-                }
-            }
+            prepared.append_to(log, batch_base_offset)?;
         }
 
         match tally {
-            BatchTally::Kept => {
-                outcome.batches_kept += 1;
-                outcome.records_kept += records_in_batch;
-            }
-            BatchTally::Rewritten { kept, dropped } => {
-                outcome.batches_rewritten += 1;
-                outcome.records_kept += kept;
-                outcome.records_dropped += dropped;
-            }
-            BatchTally::Emptied => {
-                outcome.batches_emptied += 1;
-                outcome.records_dropped += records_in_batch;
-            }
+            BatchTally::Kept => outcome.batches_kept += 1,
+            BatchTally::Rewritten { .. } => outcome.batches_rewritten += 1,
+            BatchTally::Emptied => outcome.batches_emptied += 1,
         }
+        let (kept, dropped) = tally.records(records_in_batch);
+        outcome.records_kept += kept;
+        outcome.records_dropped += dropped;
 
         pos += consumed;
     }

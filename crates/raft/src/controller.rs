@@ -13,6 +13,8 @@
 //! appends, commits, truncates, and snapshots the metadata log.
 
 use {
+    bytes::Bytes,
+    krabka_client_core::ClientError,
     krabka_metadata::MetadataImage,
     std::{
         collections::BTreeMap,
@@ -47,6 +49,7 @@ pub use {
     self::{
         checkpoint::{SnapshotRange, SnapshotSlice},
         startup::{Controller, metadata_log_nonempty},
+        submit::translate_submit_change_response,
     },
     crate::kraft::transport::QuorumStateSnapshot,
 };
@@ -61,6 +64,66 @@ fn connection_options(
         dispatch_queue_capacity,
         frame_max,
         ..krabka_client_core::ConnectionOptions::default()
+    }
+}
+
+/// The single un-mockable step of every controller-to-controller forward: dial
+/// a peer's controller listener, issue one private request with an
+/// already-encoded `body`, and return the raw response body. The concrete
+/// [`krabka_client_core::Connection`] is opaque (it cannot be built in a test),
+/// so this seam returns plain `Bytes`, and every encode and translate decision
+/// around it stays unit-testable against a mock.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait::async_trait]
+trait LeaderRoundTrip: Send + Sync {
+    /// Send `body` as `api_key` at `version` to node `target` on `addr` and
+    /// return the raw response body.
+    async fn round_trip(
+        &self,
+        target: NodeId,
+        addr: &str,
+        api_key: i16,
+        version: i16,
+        body: Bytes,
+    ) -> Result<Bytes, ClientError>;
+}
+
+/// Live [`LeaderRoundTrip`] over the injected [`OutboundDialer`]: dials a
+/// one-shot authenticated connection, sends one request, closes the
+/// connection, and returns the response body. This is the only part of the
+/// forward paths that touches a real socket.
+struct DialerRoundTrip<'a> {
+    dialer: &'a dyn OutboundDialer,
+    client_id: &'a str,
+    client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
+    client_frame_max: krabka_client_core::ClientFrameMax,
+}
+
+#[async_trait::async_trait]
+impl LeaderRoundTrip for DialerRoundTrip<'_> {
+    // cargo-mutants: the only un-mockable step: dial + one request + close, with
+    // no offline signal (a `krabka_client_core::Connection` cannot be built in a
+    // test). `#[mutants::skip]` rather than an `exclude_re` because cargo-mutants'
+    // name-regex exclusions do not reliably match the struct-field-deletion mutant
+    // its outbound connection options would otherwise generate.
+    #[cfg_attr(test, mutants::skip)]
+    async fn round_trip(
+        &self,
+        target: NodeId,
+        addr: &str,
+        api_key: i16,
+        version: i16,
+        body: Bytes,
+    ) -> Result<Bytes, ClientError> {
+        let opts = connection_options(
+            self.client_id,
+            self.client_dispatch_queue_capacity,
+            self.client_frame_max,
+        );
+        let conn = self.dialer.dial(target, addr, opts).await?;
+        let resp_body = conn.raw_request(api_key, version, body).await?;
+        conn.close();
+        Ok(resp_body)
     }
 }
 
@@ -124,7 +187,7 @@ pub struct ControllerHandle {
     /// registration from promotion. Membership itself is changed only by an
     /// engine-owned KIP-853 command.
     staged_learners: sync::Mutex<BTreeMap<NodeId, Node>>,
-    /// Outbound dialer; `forward_submit_to`/`fetch_metadata_from` reach a peer's
+    /// Outbound dialer; [`Self::round_trip_transport`] reaches a peer's
     /// controller listener with the same TLS/SASL handshake the engine's RPCs
     /// ride on.
     dialer: Arc<dyn OutboundDialer>,
@@ -137,6 +200,17 @@ impl ControllerHandle {
     /// Current metadata snapshot (cheap; `Arc` clone).
     #[must_use]
     pub fn current_image(&self) -> Arc<MetadataImage> { self.engine.current_image() }
+
+    /// The live round trip to a peer's controller listener, over this
+    /// controller's dialer and client connection settings.
+    fn round_trip_transport(&self) -> DialerRoundTrip<'_> {
+        DialerRoundTrip {
+            dialer: self.dialer.as_ref(),
+            client_id: &self.client_id,
+            client_dispatch_queue_capacity: self.client_dispatch_queue_capacity,
+            client_frame_max: self.client_frame_max,
+        }
+    }
 
     /// Install the hook every batch that registers a broker anew passes
     /// through while this node leads. See [`RegistrationAdmission`].

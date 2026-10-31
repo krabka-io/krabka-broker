@@ -109,12 +109,17 @@ use {
                     CommitFence, CommitRequest, GroupActorHandle, GroupActorMessage, GroupKindTag,
                     TxnOffsetReservation, validate_commit,
                 },
-                streams::actor::validate_streams_group_commit,
+                offsets_log::LeaderAppend,
+                streams::actor::{StreamsGroupActorHandle, validate_streams_group_commit},
             },
         },
         error::BrokerError,
         handlers::{RequestContext, group_partition_loading},
-        txn::{state::TopicPartition, util::now_millis, version::resolve_txn_version},
+        txn::{
+            state::TopicPartition,
+            util::now_millis,
+            version::{TxnVersion, resolve_txn_version},
+        },
     },
 };
 
@@ -124,42 +129,13 @@ pub async fn handle(
     version: i16,
     ctx: &RequestContext<'_>,
 ) -> Result<TxnOffsetCommitResponse, BrokerError> {
-    let partitions = Arc::clone(&broker.partitions);
-
     // ── ACL preamble: Write on TransactionalId, Read on the group ──
     if let Some(code) = preamble_refusal(broker, ctx, &req) {
         return Ok(error_response(&req, code));
     }
 
-    // ── KIP-1319: name every topic and give it its id ──────────
-    // ── ACL preamble: per-topic Read ──────────────────────────
-    // ── Existence check: authorized topic/partition must be in the image ──
+    let sweep = sweep_topics(broker, ctx, &mut req, version);
     let topic_ids = version >= FIRST_TOPIC_ID_VERSION;
-    let (denied_topics, unknown_rows) = {
-        let image = broker.controller.current_image();
-        resolve_topics(&mut req, version, &image);
-        let topic_names: Vec<&str> = req
-            .topics
-            .iter()
-            .map(|t| t.name.as_str())
-            .filter(|name| !(topic_ids && name.is_empty()))
-            .collect();
-        let topic_decisions = authorize_topics(
-            broker.config.authorizer.as_ref(),
-            &*image,
-            ctx.principal,
-            ctx.peer,
-            AclOperation::Read,
-            topic_names,
-        );
-        let denied_topics: HashSet<String> = topic_decisions
-            .into_iter()
-            .filter(|&(_, r)| r == AuthorizationResult::Deny)
-            .map(|(name, _)| name.to_owned())
-            .collect();
-        let unknown_rows = unknown_partitions(&req.topics, &denied_topics, &image);
-        (denied_topics, unknown_rows)
-    };
 
     // Every response from here on carries the per-row codes the sweep above
     // settled, and the given code only on the rows that survived it, the way
@@ -178,8 +154,8 @@ pub async fn handle(
             &req,
             code,
             topic_ids,
-            &denied_topics,
-            &unknown_rows,
+            &sweep.denied_topics,
+            &sweep.unknown_rows,
         ))
     };
 
@@ -187,41 +163,38 @@ pub async fn handle(
     // the topic sweep (`KafkaApis.scala:2163-2165`). A request whose every row
     // is denied or unknown answers those rows and nothing else: no routing
     // check, no fencing, no transaction registration.
-    let reserved = reserved_keys(&req, &denied_topics, &unknown_rows);
+    let reserved = reserved_keys(&req, &sweep.denied_topics, &sweep.unknown_rows);
     if reserved.is_empty() {
         return respond(codes::NONE);
     }
 
-    // 1. Verify that this broker leads the group's offsets partition before
-    //    creating or accessing its actor. This runs ahead of the staged
-    //    producer identity gate below, so a client that reached the wrong
-    //    broker gets the retriable `NOT_COORDINATOR` and re-finds the
-    //    coordinator instead of a fatal `INVALID_TXN_STATE`.
-    let (offsets_partition, txnv) = {
-        let image = broker.controller.current_image();
-        match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
-            Ok(partition) => {
-                // A shard still replaying answers `COORDINATOR_LOAD_IN_PROGRESS`
-                // on every row, as Kafka's `CoordinatorRuntime` does for a
-                // `LOADING` shard, before either coordinator is touched.
-                if let Some(code) = group_partition_loading(broker, partition) {
-                    return respond(code);
-                }
-                (partition, resolve_txn_version(&image))
-            }
-            Err(GroupRoutingError::Unavailable) => {
-                return respond(codes::COORDINATOR_NOT_AVAILABLE);
-            }
-            Err(GroupRoutingError::NotCoordinator) => return respond(codes::NOT_COORDINATOR),
-        }
-    };
+    respond(
+        commit_rows(broker, &req, version, &sweep, reserved)
+            .await
+            .err()
+            .unwrap_or(codes::NONE),
+    )
+}
 
-    if let Some(entry) = broker.txn_coordinator.get(&req.transactional_id)
-        && entry.lock().await.has_staged_producer_identity()
-    {
-        return respond(codes::INVALID_TXN_STATE);
-    }
-
+/// The group coordinator's part of the commit, for the rows that survived the
+/// topic sweep: the routing check, the staged producer identity gate, the
+/// KIP-890 producer verification, the group existence check, the KIP-447
+/// fencing, then the reserve, append and pending mark. `Err` is the code every
+/// surviving row answers.
+///
+/// Step 5: Kafka's `CoordinatorRuntime` completes the write, and so the
+/// request, once the high watermark covers the batch. An answer at the local
+/// append would acknowledge offsets that the next leader of the partition may
+/// never get, and the transaction would then commit without them.
+async fn commit_rows(
+    broker: &Broker,
+    req: &TxnOffsetCommitRequest,
+    version: i16,
+    sweep: &TopicSweep,
+    reserved: Vec<TopicPartition>,
+) -> Result<(), i16> {
+    let (offsets_partition, txnv) = route_to_offsets_partition(broker, &req.group_id)?;
+    refuse_staged_identity(broker, &req.transactional_id).await?;
     // KIP-890: Kafka verifies the producer with the transaction coordinator
     // before the group coordinator's write operation validates the group, at
     // every version. A wrong producer id, a stale epoch, an unknown
@@ -230,124 +203,236 @@ pub async fn handle(
     // check then runs under the append lock with the guard the verification
     // started.
     let producer_check =
-        match verification::verify_producer(broker, &req, version, offsets_partition, txnv).await {
-            Ok(check) => check,
-            Err(code) => return respond(code),
-        };
-
-    // Kafka's `OffsetMetadataManager.validateTransactionalOffsetCommit`: a
-    // group the coordinator does not hold is created as a simple group only
-    // for a commit without a generation (-1, and every commit below v3, which
-    // has no such field). Any other commit names a group that is gone, which
-    // v6 answers `GROUP_ID_NOT_FOUND` (KIP-1319) and older versions
-    // `ILLEGAL_GENERATION`.
-    let existing = broker.group_coordinator.find(&req.group_id);
-    // A streams actor that exited after a failed write is respawned, so it
-    // never refuses the commit with `UNKNOWN_SERVER_ERROR`.
-    let streams = broker.group_coordinator.find_live_streams(&req.group_id);
-    if existing.is_none() && streams.is_none() && req.generation_id_or_member_epoch >= 0 {
-        return respond(if version >= FIRST_TOPIC_ID_VERSION {
-            codes::GROUP_ID_NOT_FOUND
-        } else {
-            codes::ILLEGAL_GENERATION
-        });
-    }
-    let handle = existing.unwrap_or_else(|| {
-        broker
-            .group_coordinator
-            .get_or_create_group(&req.group_id, GroupKindTag::Classic)
-    });
-
-    // 2. KIP-447 / KIP-1319 fencing — identical to a regular OffsetCommit
-    //    (KIP-447: "consistent with normal offset fencing"). For a classic
-    //    group this checks member id + group.instance.id + generation
-    //    (ILLEGAL_GENERATION / UNKNOWN_MEMBER_ID / FENCED_INSTANCE_ID); for a
-    //    KIP-848 next-gen group the `generation_id_or_member_epoch` field
-    //    carries the member epoch, and a mismatch is Kafka's
-    //    `StaleMemberEpochException`, which [`fencing_code`] maps by version.
-    //    A producer that supplies no metadata (empty member_id,
-    //    generation_id_or_member_epoch = -1) is a simple consumer and is not
-    //    fenced. The fields only exist on v3+, so older requests carry the
-    //    simple-consumer defaults and no-op. `validate_commit` dispatches
-    //    on the actor's LIVE `group.kind`, so a KIP-848-flipped group is fenced
-    //    against its current protocol, not the stale spawn-time `handle.kind`.
-    // KIP-1071: a streams-group consumer's membership lives in the STREAMS
-    // group actor, not the classic one. Route its fencing there (member_epoch
-    // check) — `validate_commit` only knows the classic/consumer actor,
-    // so validating a streams member against the freshly-created empty classic
-    // actor would wrongly reject every EOS offset commit with UNKNOWN_MEMBER_ID.
-    if version >= 3 {
-        let code = if let Some(streams) = streams {
-            validate_streams_group_commit(
-                &streams,
-                &req.member_id,
-                req.group_instance_id.as_deref(),
-                req.generation_id_or_member_epoch,
-                reserved
-                    .iter()
-                    .map(|key| (key.topic.clone(), key.partition.get()))
-                    .collect(),
-            )
-            .await
-        } else {
-            validate_commit(&handle, CommitRequest {
-                member_id: req.member_id.clone(),
-                group_instance_id: req.group_instance_id.clone(),
-                generation_or_epoch: req.generation_id_or_member_epoch,
-                fence: CommitFence::Transactional,
-                partitions: reserved
-                    .iter()
-                    .map(|key| (topic_id_of(&req, &key.topic), key.partition.get()))
-                    .collect(),
-            })
-            .await
-        };
-        if let Some(code) = code {
-            return respond(fencing_code(code, version));
-        }
-    }
-
-    // 3. Append a transactional RecordBatch to __consumer_offsets.
-    //    We reuse the OffsetCommitKey/Value layout but stamp the batch with
-    //    is_transactional=true + (producer_id, producer_epoch) so the log's
-    //    LSO machinery holds the offsets until EndTxn commits/aborts.
-    //    Topics denied by the per-topic Read ACL, and rows the existence
-    //    check flagged, are skipped from the batch and surfaced as
-    //    TOPIC_AUTHORIZATION_FAILED / UNKNOWN_TOPIC_OR_PARTITION in the
-    //    response.
-    // Reserve the keys on the group actor before the append, so that a
-    // concurrent `DeleteGroups` either runs first (the actor stops and the
-    // reservation fails before anything is durable) or tombstones these keys
-    // after the records.
-    if reserve_offsets(&handle, req.producer_id, reserved.clone(), true)
-        .await
-        .is_err()
-    {
-        return respond(codes::COORDINATOR_NOT_AVAILABLE);
-    }
-    let now_ms = now_millis();
+        verification::verify_producer(broker, req, version, offsets_partition, txnv).await?;
+    let group = resolve_group_actors(broker, req, version)?;
+    fence_commit(req, version, &group, &reserved).await?;
     // Kafka trunk's `OffsetAndMetadata.fromRequest(topic.topicId(), ...)` keeps
     // the topic id of every commit. 4.3.1 keeps the zero id, and its versions
     // stop at 5, so only a v6 request and trunk mode record an id.
     let record_topic_ids = version >= FIRST_TOPIC_ID_VERSION
         || broker.config.features.unstable_api_versions == UnstableApiVersions::Enabled;
+    let append = TxnAppend {
+        offsets_partition,
+        sweep: sweep.rows(),
+        checks: AppendChecks {
+            producer_check,
+            record_topic_ids,
+        },
+    };
+    let Some(write) = append_and_mark(broker, req, append, &group.classic, reserved).await? else {
+        // Every row was denied or unknown: those rows keep their codes.
+        return Ok(());
+    };
+    write.committed().await.map_err(|error| {
+        tracing::warn!(
+            group = %req.group_id,
+            tid = %req.transactional_id,
+            %error,
+            "TxnOffsetCommit: the offsets append did not commit"
+        );
+        batch::append_error_code(&error)
+    })
+}
+
+/// Step 1 of the commit: this broker must lead the group's offsets partition
+/// before the handler creates or reaches the group's actor, and the answer is
+/// that partition and the transaction version that formats its batch.
+///
+/// This runs ahead of the staged producer identity gate, so a client that
+/// reached the wrong broker gets the retriable `NOT_COORDINATOR` and re-finds
+/// the coordinator instead of a fatal `INVALID_TXN_STATE`. A shard still
+/// replaying answers `COORDINATOR_LOAD_IN_PROGRESS` on every row, as Kafka's
+/// `CoordinatorRuntime` does for a `LOADING` shard, before either coordinator
+/// is touched.
+fn route_to_offsets_partition(broker: &Broker, group_id: &str) -> Result<(i32, TxnVersion), i16> {
+    let image = broker.controller.current_image();
+    match local_partition_for_group(&image, broker.config.node_id, group_id) {
+        Ok(partition) => {
+            if let Some(code) = group_partition_loading(broker, partition) {
+                return Err(code);
+            }
+            Ok((partition, resolve_txn_version(&image)))
+        }
+        Err(GroupRoutingError::Unavailable) => Err(codes::COORDINATOR_NOT_AVAILABLE),
+        Err(GroupRoutingError::NotCoordinator) => Err(codes::NOT_COORDINATOR),
+    }
+}
+
+/// The staged producer identity gate: a transactional id whose entry holds a
+/// staged producer identity refuses the commit with `INVALID_TXN_STATE`.
+async fn refuse_staged_identity(broker: &Broker, transactional_id: &str) -> Result<(), i16> {
+    if let Some(entry) = broker.txn_coordinator.get(transactional_id)
+        && entry.lock().await.has_staged_producer_identity()
+    {
+        return Err(codes::INVALID_TXN_STATE);
+    }
+    Ok(())
+}
+
+/// The group actors a commit reaches: the classic actor, which takes the
+/// reservation and the pending mark, and the streams actor of a KIP-1071
+/// group, which fences its members.
+struct GroupActors {
+    classic: Arc<GroupActorHandle>,
+    streams: Option<Arc<StreamsGroupActorHandle>>,
+}
+
+/// The group existence check of Kafka's
+/// `OffsetMetadataManager.validateTransactionalOffsetCommit`.
+///
+/// A group the coordinator does not hold is created as a simple group only
+/// for a commit without a generation (-1, and every commit below v3, which has
+/// no such field). Any other commit names a group that is gone, which v6
+/// answers `GROUP_ID_NOT_FOUND` (KIP-1319) and older versions
+/// `ILLEGAL_GENERATION`. A streams actor that exited after a failed write is
+/// respawned, so it never refuses the commit with `UNKNOWN_SERVER_ERROR`.
+fn resolve_group_actors(
+    broker: &Broker,
+    req: &TxnOffsetCommitRequest,
+    version: i16,
+) -> Result<GroupActors, i16> {
+    let existing = broker.group_coordinator.find(&req.group_id);
+    let streams = broker.group_coordinator.find_live_streams(&req.group_id);
+    if existing.is_none() && streams.is_none() && req.generation_id_or_member_epoch >= 0 {
+        return Err(if version >= FIRST_TOPIC_ID_VERSION {
+            codes::GROUP_ID_NOT_FOUND
+        } else {
+            codes::ILLEGAL_GENERATION
+        });
+    }
+    let classic = existing.unwrap_or_else(|| {
+        broker
+            .group_coordinator
+            .get_or_create_group(&req.group_id, GroupKindTag::Classic)
+    });
+    Ok(GroupActors { classic, streams })
+}
+
+/// Step 2 of the commit: KIP-447 / KIP-1319 fencing, identical to a regular
+/// `OffsetCommit` (KIP-447: "consistent with normal offset fencing").
+///
+/// For a classic group this checks member id + group.instance.id + generation
+/// (`ILLEGAL_GENERATION` / `UNKNOWN_MEMBER_ID` / `FENCED_INSTANCE_ID`); for a
+/// KIP-848 next-gen group the `generation_id_or_member_epoch` field carries
+/// the member epoch, and a mismatch is Kafka's `StaleMemberEpochException`,
+/// which [`fencing_code`] maps by version. A producer that supplies no
+/// metadata (empty `member_id`, `generation_id_or_member_epoch = -1`) is a
+/// simple consumer and is not fenced. The fields only exist on v3+, so older
+/// requests carry the simple-consumer defaults and no-op. `validate_commit`
+/// dispatches on the actor's LIVE `group.kind`, so a KIP-848-flipped group is
+/// fenced against its current protocol, not the stale spawn-time
+/// `handle.kind`.
+///
+/// KIP-1071: a streams-group consumer's membership lives in the STREAMS group
+/// actor, not the classic one. Its fencing goes there (`member_epoch` check):
+/// `validate_commit` only knows the classic/consumer actor, so validating a
+/// streams member against the freshly-created empty classic actor would
+/// wrongly reject every EOS offset commit with `UNKNOWN_MEMBER_ID`.
+async fn fence_commit(
+    req: &TxnOffsetCommitRequest,
+    version: i16,
+    group: &GroupActors,
+    reserved: &[TopicPartition],
+) -> Result<(), i16> {
+    if version < 3 {
+        return Ok(());
+    }
+    let code = if let Some(streams) = &group.streams {
+        validate_streams_group_commit(
+            streams,
+            &req.member_id,
+            req.group_instance_id.as_deref(),
+            req.generation_id_or_member_epoch,
+            reserved
+                .iter()
+                .map(|key| (key.topic.clone(), key.partition.get()))
+                .collect(),
+        )
+        .await
+    } else {
+        validate_commit(&group.classic, CommitRequest {
+            member_id: req.member_id.clone(),
+            group_instance_id: req.group_instance_id.clone(),
+            generation_or_epoch: req.generation_id_or_member_epoch,
+            fence: CommitFence::Transactional,
+            partitions: reserved
+                .iter()
+                .map(|key| (topic_id_of(req, &key.topic), key.partition.get()))
+                .collect(),
+        })
+        .await
+    };
+    code.map_or(Ok(()), |code| Err(fencing_code(code, version)))
+}
+
+/// What the transactional append needs besides the request: the offsets
+/// partition it goes to, the rows the topic sweep already answered, and the
+/// checks the log runs under its append lock.
+struct TxnAppend<'a> {
+    offsets_partition: i32,
+    sweep: RowSweep<'a>,
+    checks: AppendChecks,
+}
+
+/// Steps 3 and 4 of the commit: reserve the keys on the group actor, append
+/// the transactional batch to `__consumer_offsets`, and mark the appended
+/// offsets pending. The answer is the write whose commit the caller still
+/// waits for, or `None` when every row was denied or unknown and nothing was
+/// appended.
+///
+/// The keys are reserved on the group actor before the append, so that a
+/// concurrent `DeleteGroups` either runs first (the actor stops and the
+/// reservation fails before anything is durable, which answers
+/// `COORDINATOR_NOT_AVAILABLE`) or tombstones these keys after the records.
+///
+/// Step 3 appends a transactional `RecordBatch`. It reuses the
+/// `OffsetCommitKey`/`Value` layout but stamps the batch with
+/// `is_transactional=true` + (`producer_id`, `producer_epoch`) so the log's LSO
+/// machinery holds the offsets until `EndTxn` commits or aborts. Topics denied
+/// by the per-topic `Read` ACL, and rows the existence check flagged, are
+/// skipped from the batch and surfaced as `TOPIC_AUTHORIZATION_FAILED` /
+/// `UNKNOWN_TOPIC_OR_PARTITION` in the response. A failed append releases the
+/// reservation, since nothing reached the log.
+///
+/// Step 4 (KIP-447) marks those offsets pending on the group actor, so that an
+/// `OffsetFetch` with `require_stable = true` answers `UNSTABLE_OFFSET_COMMIT`
+/// for them until the transaction's marker resolves. Marking after the append
+/// is what guarantees the marker path can rediscover the same keys in the log
+/// and clear them; a mark placed before a failed append would never be
+/// cleared. The append's log position travels with the mark, because the
+/// marker for this very transaction can be resolved on the actor in between,
+/// and the log order is what tells the actor that it was. Kafka's runtime
+/// applies a write to the shard when it appends it, before the write commits,
+/// so the mark goes on here too.
+async fn append_and_mark(
+    broker: &Broker,
+    req: &TxnOffsetCommitRequest,
+    append: TxnAppend<'_>,
+    group: &GroupActorHandle,
+    reserved: Vec<TopicPartition>,
+) -> Result<Option<LeaderAppend>, i16> {
+    if reserve_offsets(group, req.producer_id, reserved.clone(), true)
+        .await
+        .is_err()
+    {
+        return Err(codes::COORDINATOR_NOT_AVAILABLE);
+    }
+    let TxnAppend {
+        offsets_partition,
+        sweep,
+        checks,
+    } = append;
     let appended = match append_txn_batch(
-        &req,
+        req,
         LocalOffsets {
-            registry: &partitions,
+            registry: &broker.partitions,
             metadata: &*broker.controller,
             node_id: broker.config.node_id,
         },
         offsets_partition,
-        now_ms,
-        RowSweep {
-            denied_topics: &denied_topics,
-            unknown_rows: &unknown_rows,
-        },
-        AppendChecks {
-            producer_check,
-            record_topic_ids,
-        },
+        now_millis(),
+        sweep,
+        checks,
     )
     .await
     {
@@ -355,53 +440,73 @@ pub async fn handle(
         Err(code) => {
             // Nothing reached the log, so the reservation goes. An actor that
             // stopped meanwhile took it with it.
-            let _ = reserve_offsets(&handle, req.producer_id, reserved, false).await;
-            return respond(code);
+            let _ = reserve_offsets(group, req.producer_id, reserved, false).await;
+            return Err(code);
         }
     };
-
-    // 4. KIP-447: mark those offsets pending on the group actor, so that an
-    //    `OffsetFetch` with `require_stable = true` answers
-    //    UNSTABLE_OFFSET_COMMIT for them until the transaction's marker
-    //    resolves. Marking after the append is what guarantees the marker
-    //    path can rediscover the same keys in the log and clear them; a mark
-    //    placed before a failed append would never be cleared. The append's
-    //    log position travels with the mark, because the marker for this very
-    //    transaction can be resolved on the actor in between, and the log
-    //    order is what tells the actor that it was. Kafka's runtime applies a
-    //    write to the shard when it appends it, before the write commits, so
-    //    the mark goes on here too.
-    let Some(TxnBatchWrite {
-        offsets: appended,
-        write,
-    }) = appended
-    else {
-        // 5. Every row was denied or unknown: those rows keep their codes.
-        return respond(codes::NONE);
+    let Some(TxnBatchWrite { offsets, write }) = appended else {
+        return Ok(None);
     };
-    if let Err(code) = mark_offsets_pending(&handle, req.producer_id, appended, &req.group_id).await
-    {
-        return respond(code);
+    mark_offsets_pending(group, req.producer_id, offsets, &req.group_id).await?;
+    Ok(Some(write))
+}
+
+/// The rows the topic sweep answered with their own codes: the topics the
+/// principal may not `Read`, and the rows of authorized topics that the
+/// existence check flagged. Every later exit keeps these codes.
+struct TopicSweep {
+    denied_topics: HashSet<String>,
+    unknown_rows: HashSet<TopicPartition>,
+}
+
+impl TopicSweep {
+    /// The sweep as the transactional append reads it.
+    fn rows(&self) -> RowSweep<'_> {
+        RowSweep {
+            denied_topics: &self.denied_topics,
+            unknown_rows: &self.unknown_rows,
+        }
     }
+}
 
-    // 5. Kafka's `CoordinatorRuntime` completes the write, and so the request,
-    //    once the high watermark covers the batch. An answer at the local
-    //    append would acknowledge offsets that the next leader of the
-    //    partition may never get, and the transaction would then commit
-    //    without them. Per-(topic, partition) error_code = NONE for allowed,
-    //    TOPIC_AUTHORIZATION_FAILED for denied, UNKNOWN_TOPIC_OR_PARTITION for
-    //    a row the existence check flagged.
-    match write.committed().await {
-        Ok(()) => respond(codes::NONE),
-        Err(error) => {
-            tracing::warn!(
-                group = %req.group_id,
-                tid = %req.transactional_id,
-                %error,
-                "TxnOffsetCommit: the offsets append did not commit"
-            );
-            respond(batch::append_error_code(&error))
-        }
+/// The topic sweep that runs after the ACL preamble.
+///
+/// KIP-1319 names every topic and gives it its id (see [`resolve_topics`]).
+/// The per-topic `Read` gate then denies whole topics, and the existence check
+/// flags every partition of an authorized topic that the metadata image does
+/// not hold.
+fn sweep_topics(
+    broker: &Broker,
+    ctx: &RequestContext<'_>,
+    req: &mut TxnOffsetCommitRequest,
+    version: i16,
+) -> TopicSweep {
+    let topic_ids = version >= FIRST_TOPIC_ID_VERSION;
+    let image = broker.controller.current_image();
+    resolve_topics(req, version, &image);
+    let topic_names: Vec<&str> = req
+        .topics
+        .iter()
+        .map(|t| t.name.as_str())
+        .filter(|name| !(topic_ids && name.is_empty()))
+        .collect();
+    let topic_decisions = authorize_topics(
+        broker.config.authorizer.as_ref(),
+        &*image,
+        ctx.principal,
+        ctx.peer,
+        AclOperation::Read,
+        topic_names,
+    );
+    let denied_topics: HashSet<String> = topic_decisions
+        .into_iter()
+        .filter(|&(_, r)| r == AuthorizationResult::Deny)
+        .map(|(name, _)| name.to_owned())
+        .collect();
+    let unknown_rows = unknown_partitions(&req.topics, &denied_topics, &image);
+    TopicSweep {
+        denied_topics,
+        unknown_rows,
     }
 }
 

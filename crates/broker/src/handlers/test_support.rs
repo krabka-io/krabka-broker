@@ -43,7 +43,7 @@ use {
         broker::{Broker, BrokerHandle, spawn_partition as spawn_broker_partition},
         codes,
         config::{BreakGlassConfig, BrokerConfig, RemoteStorageBackend, RlmmKind},
-        config_keys::broker_dynamic::BrokerConfigContext,
+        config_keys::{self, broker_dynamic::BrokerConfigContext},
         error::BrokerError,
         features::{METADATA_VERSION, STREAMS_VERSION, require_feature},
         handlers::{
@@ -1086,6 +1086,16 @@ pub fn metadata_topic_record(
     }
 }
 
+/// The refusal either alter-config API answers when a topic's resulting map
+/// turns `krabka.diskless` on for a topic that does not have it.
+#[cfg(test)]
+pub fn diskless_turned_on_refusal() -> (i16, String) {
+    let diskless = maplit::btreemap! {config_keys::DISKLESS.to_owned() => "true".to_owned()};
+    let reason = config_keys::validate_diskless_unchanged(None, &diskless)
+        .expect_err("turning diskless on is a change");
+    (codes::INVALID_CONFIG, reason)
+}
+
 #[cfg(test)]
 pub fn build_topic_config_record_with_default_policy<Resource>(
     resource: &Resource,
@@ -1641,4 +1651,35 @@ pub fn broker_config_context<'a>(
         log_dirs: setup.log_dirs,
         unstable: setup.unstable,
     }
+}
+
+/// Hand the `__consumer_offsets` partition that `group_id` hashes to over to
+/// another node, so `handle`'s broker no longer coordinates that group and
+/// routing answers `NOT_COORDINATOR` for it.
+pub async fn lead_group_partition_elsewhere(
+    handle: &BrokerHandle,
+    broker: &Broker,
+    group_id: &str,
+) {
+    use crate::coordinator::{bootstrap::OFFSETS_TOPIC, partitioner::partition_for_group};
+
+    let image = broker.controller.current_image();
+    let partition = partition_for_group(&image, group_id).expect("offsets topic exists");
+    let elsewhere = krabka_metadata::NodeId(broker.config.node_id.0 + 1);
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1Partition(single_replica_partition(
+            OFFSETS_TOPIC,
+            krabka_ids::PartitionIndex(partition),
+            elsewhere,
+        ))])
+        .await
+        .expect("the leader change commits");
+    handle
+        .wait_for_image(|image| {
+            image
+                .partition(OFFSETS_TOPIC, partition)
+                .is_some_and(|record| record.leader == elsewhere)
+        })
+        .await;
 }

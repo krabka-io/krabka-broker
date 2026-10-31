@@ -5,7 +5,7 @@ members = ["crates/*"]
 exclude = ["tools/mutants"]
 
 [workspace.package]
-version = "1.1.4"
+version = "1.1.5"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["The Krabka Authors"]
@@ -163,7 +163,7 @@ dashmap = "6"
 derive_more = { version = "2", features = ["debug", "display", "from", "into", "deref", "deref_mut", "as_ref", "constructor", "from_str", "add", "add_assign", "mul", "sum"] }
 # KIP-714: `CLIENT_METRICS` `match` patterns are `java.util.regex.Pattern`s,
 # lookaround and backreferences included, which the `regex` crate refuses.
-fancy-regex = "0.19"
+fancy-regex = "0.20"
 # gzip runs on zlib-rs rather than miniz_oxide: about 2.5x faster deflate and
 # 1.2x faster inflate on this workload. Feature unification also switches
 # krabka-compression's gzip codec. `runtime_detection` lets zlib-rs pick its
@@ -317,7 +317,7 @@ wincode = "=0.6"
 zerocopy = { version = "0.8", features = ["derive"] }
 
 # First-party crates inherited by more than one member.
-krabka-audit = { path = "crates/audit", version = "1.1.4" }
+krabka-audit = { path = "crates/audit", version = "1.1.5" }
 krabka-security = "0.7.0"
 krabka-units = "0.7.0"
 

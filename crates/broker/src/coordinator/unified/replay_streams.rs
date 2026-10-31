@@ -13,7 +13,6 @@ use {
             LEAVE_GROUP_MEMBER_EPOCH, ModernGroupType, group_tombstone,
             persisted_group_with_create, target_metadata, target_metadata_tombstone,
         },
-        seeds::StreamsGroupSeed,
         streams,
     },
     crate::error::BrokerError,
@@ -57,64 +56,8 @@ impl GroupCoordinator {
             ModernGroupType::Streams,
             self.replayed_modern_group(group_id),
             create_if_not_exists,
-            || {
-                self.streams_seeds
-                    .insert(group_id.into(), StreamsGroupSeed::new_group());
-                self.streams_seeds_cache
-                    .insert(group_id.into(), StreamsGroupSeed::new_group());
-            },
+            || self.streams_replay().create(group_id),
         )
-    }
-
-    /// Applies `update` to the replayed group and to its cached copy.
-    fn update_streams_seed(&self, group_id: &str, update: impl Fn(&mut StreamsGroupSeed)) {
-        if let Some(mut seed) = self.streams_seeds.get_mut(group_id) {
-            update(seed.value_mut());
-        }
-        update(
-            self.streams_seeds_cache
-                .entry(group_id.into())
-                .or_insert_with(StreamsGroupSeed::new_group)
-                .value_mut(),
-        );
-    }
-
-    /// Applies `update` with `value` to the replayed group, and with a copy
-    /// of it to the cached copy.
-    fn update_streams_seed_with<T: Clone>(
-        &self,
-        group_id: &str,
-        value: T,
-        update: impl Fn(&mut StreamsGroupSeed, T),
-    ) {
-        let cached = value.clone();
-        if let Some(mut seed) = self.streams_seeds.get_mut(group_id) {
-            update(seed.value_mut(), value);
-        }
-        update(
-            self.streams_seeds_cache
-                .entry(group_id.into())
-                .or_insert_with(StreamsGroupSeed::new_group)
-                .value_mut(),
-            cached,
-        );
-    }
-
-    /// Reads the replayed group, which must exist.
-    ///
-    /// # Errors
-    ///
-    /// Returns Kafka's `IllegalStateException` for a group with no replayed
-    /// state.
-    fn streams_seed<T>(
-        &self,
-        group_id: &str,
-        read: impl FnOnce(&StreamsGroupSeed) -> T,
-    ) -> Result<T, BrokerError> {
-        self.streams_seeds
-            .get(group_id)
-            .map(|seed| read(seed.value()))
-            .ok_or_else(|| BrokerError::Startup(format!("Group {group_id} has no replayed state.")))
     }
 
     /// Applies a `StreamsGroupMetadataValue`, as Kafka's
@@ -146,7 +89,7 @@ impl GroupCoordinator {
             }
             last_assignment_configs.insert(config.key, config.value);
         }
-        self.update_streams_seed(group_id, |seed| {
+        self.streams_replay().update(group_id, |seed| {
             seed.group_epoch = value.epoch;
             seed.metadata_hash = value.metadata_hash;
             seed.validated_topology_epoch = value.validated_topology_epoch;
@@ -170,7 +113,7 @@ impl GroupCoordinator {
         v: streams::persistence::StreamsGroupMemberMetadataValue,
     ) -> Result<(), BrokerError> {
         self.persisted_streams_group(group_id, true)?;
-        self.update_streams_seed_with(group_id, v, |seed, v| {
+        self.streams_replay().update_with(group_id, v, |seed, v| {
             seed.members.insert(member_id.into(), v);
         });
         Ok(())
@@ -187,7 +130,7 @@ impl GroupCoordinator {
         v: streams::persistence::StreamsGroupTopologyValue,
     ) -> Result<(), BrokerError> {
         self.persisted_streams_group(group_id, true)?;
-        self.update_streams_seed_with(group_id, v, |seed, v| {
+        self.streams_replay().update_with(group_id, v, |seed, v| {
             seed.topology = Some(v);
         });
         Ok(())
@@ -207,7 +150,7 @@ impl GroupCoordinator {
     ) -> Result<(), BrokerError> {
         self.persisted_streams_group(group_id, true)?;
         target_metadata(value.assignment_epoch, value.assignment_timestamp_ms)?;
-        self.update_streams_seed(group_id, |seed| {
+        self.streams_replay().update(group_id, |seed| {
             seed.assignment_epoch = value.assignment_epoch;
             seed.assignment_timestamp_ms = value.assignment_timestamp_ms;
         });
@@ -227,7 +170,7 @@ impl GroupCoordinator {
         v: streams::persistence::StreamsGroupTargetAssignmentMemberValue,
     ) -> Result<(), BrokerError> {
         self.persisted_streams_group(group_id, true)?;
-        self.update_streams_seed_with(group_id, v, |seed, v| {
+        self.streams_replay().update_with(group_id, v, |seed, v| {
             seed.target_per_member.insert(member_id.into(), v);
         });
         Ok(())
@@ -247,7 +190,7 @@ impl GroupCoordinator {
         v: streams::persistence::StreamsGroupCurrentMemberAssignmentValue,
     ) -> Result<(), BrokerError> {
         self.persisted_streams_group(group_id, true)?;
-        self.update_streams_seed_with(group_id, v, |seed, v| {
+        self.streams_replay().update_with(group_id, v, |seed, v| {
             seed.install_current_member(member_id, v, uninitialized_member);
         });
         Ok(())
@@ -284,7 +227,7 @@ impl GroupCoordinator {
         }
         match key {
             K::GroupMetadata { .. } => {
-                self.streams_seed(group_id, |seed| {
+                self.streams_replay().read(group_id, |seed| {
                     group_tombstone(
                         ModernGroupType::Streams,
                         group_id,
@@ -298,32 +241,38 @@ impl GroupCoordinator {
                 self.group_types.remove(group_id);
             }
             K::MemberMetadata { member_id, .. } => {
-                let remove =
-                    self.streams_seed(group_id, |seed| seed.member_tombstone(member_id))??;
+                let remove = self
+                    .streams_replay()
+                    .read(group_id, |seed| seed.member_tombstone(member_id))??;
                 if remove {
-                    self.update_streams_seed(group_id, |seed| {
+                    self.streams_replay().update(group_id, |seed| {
                         seed.remove_replayed_member(member_id);
                     });
                 }
             }
-            K::Topology { .. } => self.update_streams_seed(group_id, |seed| seed.topology = None),
+            K::Topology { .. } => self
+                .streams_replay()
+                .update(group_id, |seed| seed.topology = None),
             K::TargetAssignmentMetadata { .. } => {
-                self.streams_seed(group_id, |seed| {
+                self.streams_replay().read(group_id, |seed| {
                     target_metadata_tombstone(group_id, seed.target_per_member.len())
                 })??;
-                self.update_streams_seed(group_id, |seed| {
+                self.streams_replay().update(group_id, |seed| {
                     seed.assignment_epoch = -1;
                     seed.assignment_timestamp_ms = 0;
                 });
             }
             K::TargetAssignmentMember { member_id, .. } => {
-                self.update_streams_seed(group_id, |seed| {
+                self.streams_replay().update(group_id, |seed| {
                     seed.target_per_member.remove(member_id);
                 });
             }
             K::CurrentMemberAssignment { member_id, .. } => {
-                if self.streams_seed(group_id, |seed| seed.members.contains_key(member_id))? {
-                    self.update_streams_seed(group_id, |seed| {
+                if self
+                    .streams_replay()
+                    .read(group_id, |seed| seed.members.contains_key(member_id))?
+                {
+                    self.streams_replay().update(group_id, |seed| {
                         let state = seed.current_per_member.get(member_id).map_or(
                             streams::persistence::StreamsMemberWireState::Stable,
                             |current| current.state,

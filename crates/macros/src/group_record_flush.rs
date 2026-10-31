@@ -3,7 +3,7 @@
 use {
     crate::{
         meta::{
-            edit_native_body, expect_name, function_signature, grouped_value, is_plain_async,
+            edit_native_body, expect_name, function_signature, grouped_value, is_concrete_async,
             native_groups, next_group, parameter_ident,
         },
         sweep_loop::{SpliceValue, splice},
@@ -32,11 +32,7 @@ fn scaffold(metadata: &TokenStream, signature: &Signature) -> Result<TokenStream
         return Err(parser.error("unexpected record flush metadata"));
     }
     let inputs = &signature.params.inner.inputs;
-    if !is_plain_async(signature)
-        || inputs.len() != 5
-        || signature.generics.where_clause.is_some()
-        || signature.params.inner.variadic.is_some()
-    {
+    if !is_concrete_async(signature) || inputs.len() != 5 {
         return Err(ParseError::new(
             signature.span(),
             "expected a concrete async flush with five named parameters",

@@ -6,15 +6,13 @@
 //! with one atomic batch of the conversion's.
 
 use {
-    super::{MetadataProvider, chrono_now_ms},
+    super::{ActorServices, chrono_now_ms, heartbeat::fence_members},
     crate::{
         coordinator::unified::{
-            GroupCoordinator,
             config::NextGenConfig,
             consumer_state::GroupState,
             group::{CoordinatorGroup, GroupKind},
             migration,
-            offsets_log::OffsetsLog,
         },
         error::BrokerError,
     },
@@ -62,15 +60,12 @@ pub(super) fn downgrades_without(
 pub(super) async fn downgrade_fencing(
     group: &mut CoordinatorGroup,
     fenced: &[String],
-    config: &NextGenConfig,
-    metadata: &dyn MetadataProvider,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
+    services: ActorServices<'_>,
 ) -> Result<(), BrokerError> {
     let Some(state) = group.as_consumer() else {
         return Ok(());
     };
-    let image = metadata.snapshot();
+    let image = services.metadata.snapshot();
     let now_ms = chrono_now_ms();
     let Some(mut classic) = migration::convert_consumer_to_classic(state, fenced, &image) else {
         return Ok(());
@@ -78,9 +73,66 @@ pub(super) async fn downgrade_fencing(
     let pending = migration::downgrade_pending_records(state, &classic, now_ms);
     let group_id = group.group_id.clone();
     let batch = pending.to_batch(&group_id, now_ms)?;
-    offsets_log.append(&group_id, batch).await?;
-    coordinator.mark_classic_after_downgrade(&group_id);
-    classic.prepare_rebalance(config.classic_initial_rebalance_delay, Instant::now());
+    services.offsets_log.append(&group_id, batch).await?;
+    services.coordinator.mark_classic_after_downgrade(&group_id);
+    classic.prepare_rebalance(
+        services.config.classic_initial_rebalance_delay,
+        Instant::now(),
+    );
     *group.kind_mut() = GroupKind::Classic(classic);
     Ok(())
+}
+
+/// Which way [`fence_or_downgrade`] went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FenceOutcome {
+    /// The group downgraded to a classic group in place of the fence.
+    Downgraded,
+    /// The members were fenced from the consumer group.
+    Fenced,
+}
+
+/// The log write that failed in [`fence_or_downgrade`].
+#[derive(Debug)]
+pub(super) enum FenceFailure {
+    Downgrade(BrokerError),
+    Fence(BrokerError),
+}
+
+impl FenceFailure {
+    pub(super) fn into_error(self) -> BrokerError {
+        match self {
+            Self::Downgrade(error) | Self::Fence(error) => error,
+        }
+    }
+}
+
+/// Kafka's `consumerGroupFenceMembers`: `member_ids` leave the consumer group
+/// in one batch, or the group downgrades in their place when only classic
+/// members would remain. A group that is not a consumer group is left as it
+/// is.
+///
+/// It returns `Err` on a log-write failure, and the actor then exits.
+pub(super) async fn fence_or_downgrade(
+    group: &mut CoordinatorGroup,
+    services: ActorServices<'_>,
+    member_ids: &[String],
+) -> Result<FenceOutcome, FenceFailure> {
+    if group
+        .as_consumer()
+        .is_some_and(|state| downgrades_without(state, services.config, member_ids))
+    {
+        downgrade_fencing(group, member_ids, services)
+            .await
+            .map_err(FenceFailure::Downgrade)?;
+        return Ok(FenceOutcome::Downgraded);
+    }
+    if let Some(state) = group.as_consumer_mut() {
+        let pending = fence_members(state, services.metadata, member_ids);
+        services
+            .flush(state, pending, chrono_now_ms())
+            .await
+            .map_err(FenceFailure::Fence)?;
+    }
+    Ok(FenceOutcome::Fenced)
 }

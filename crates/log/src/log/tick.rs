@@ -12,13 +12,12 @@
 //! whose delivery time has not arrived.
 
 use {
-    super::Log,
-    crate::{error::LogError, producer_snapshot, retention, segment::Segment},
+    super::{Log, truncate::RemovedSegments},
+    crate::{error::LogError, retention, segment::Segment},
     krabka_ids::Offset,
     krabka_units::prelude::{ByteSizeExt, TimeExt as _},
     krabka_verified::retention::{LocalRetentionSegment, local_retention_prefix},
     std::{
-        collections::HashSet,
         iter,
         sync::PoisonError,
         time::{Instant, SystemTime},
@@ -151,32 +150,11 @@ impl Log {
             self.rollover_flusher.finish()?;
         }
 
-        // Unlink first, and forget only what actually left the disk. A failed
-        // unlink otherwise drops the segment from `self.segments` -- and from
-        // `Log::size`, and from the partition's disk gauge -- while its bytes
-        // stay on the filesystem with nothing left to retry them. Eviction is
-        // a prefix, so stopping at the first failure keeps it one.
-        let mut deleted: HashSet<Offset> = HashSet::with_capacity(to_evict.len());
-        let mut failure: Option<LogError> = None;
-        for base in to_evict {
-            if let Err(error) = self.retire_segment(base, now) {
-                failure = Some(error);
-                break;
-            }
-            deleted.insert(base);
-            // Kafka's `deleteSegments` → `deleteProducerSnapshots`: the
-            // snapshot at a deleted segment's base goes with it.
-            if let Err(error) = producer_snapshot::remove_at(&self.dir, base) {
-                failure = Some(error);
-                break;
-            }
-        }
-        tracing::Span::current().record("evicted", deleted.len());
-        self.segments
-            .retain(|s| !deleted.contains(&s.base_offset()));
-        self.sealed_txn_indexes
-            .retain(|base, _| !deleted.contains(base));
-        self.stamp_indexes.retain(|base, _| !deleted.contains(base));
+        // Unlink first, and forget only what actually left the disk: see
+        // `remove_sealed_segments`. Eviction is a prefix, so stopping at the
+        // first failure keeps it one.
+        let RemovedSegments { deleted, failure } = self.remove_sealed_segments(&to_evict, now);
+        tracing::Span::current().record("evicted", deleted);
         if let Some(error) = failure {
             // The floor still follows whatever did come off disk, so the log
             // start is refreshed before the failure is reported.

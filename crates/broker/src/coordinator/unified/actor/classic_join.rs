@@ -13,8 +13,8 @@ use {
         heartbeat::{MemberUpdateRecords, member_update_records, replace_static_member},
         member_state::{MemberChange, after_member_update, update_subscription},
         pending_records::PendingRecords,
-        persistence::{Recorder, flush_classic_metadata, flush_pending},
-        regex_resolution::{RegexResolution, apply_regex_result, maybe_update_regular_expressions},
+        persistence::{Recorder, flush_classic_metadata},
+        regex_resolution::{RegexResolution, maybe_update_regular_expressions},
         waiters::{
             complete_classic_rebalance, drain_followers_with, fence_replaced_classic_member,
         },
@@ -93,7 +93,7 @@ pub(super) async fn handle_classic_join_message(
             // group down the classic path, which deletes the consumer group
             // and creates a classic one; the committed offsets stay with the
             // group id.
-            if super::retention::append_tombstones(
+            if let Err(error) = super::retention::append_tombstones(
                 services.offsets_log,
                 &group.group_id,
                 &[],
@@ -101,14 +101,19 @@ pub(super) async fn handle_classic_join_message(
                 chrono_now_ms(),
             )
             .await
-            .is_err()
             {
+                // Kafka's `classicGroupJoinToClassicGroup` warns, keeps the
+                // group as it was, and answers only the append error. A write
+                // that is in the log may still commit and delete the group, so
+                // the actor then exits and the next one loads the group from
+                // the committed log.
+                tracing::warn!(group_id = %group.group_id, %error,
+                    "consumer group tombstone write for a classic join failed");
                 let _ = reply.send(JoinResult {
-                    error_code: codes::COORDINATOR_NOT_AVAILABLE,
-                    member_id: request.member_id,
+                    error_code: append_error_code(&error),
                     ..JoinResult::default()
                 });
-                return true;
+                return !matches!(error, BrokerError::CoordinatorWriteUncommitted { .. });
             }
             services
                 .coordinator
@@ -497,30 +502,11 @@ async fn classic_join_hosted(
         pending,
         resolutions,
     } = member_update_records(recorder, state, update, &member_id, replacement);
-    let flushed = flush_pending(
-        state,
-        pending,
-        services.offsets_log,
-        services.coordinator,
-        now_ms,
-    )
-    .await;
     // Kafka's `handleRegularExpressionsResult` writes what the resolution
     // found in a batch of its own, after the join's.
-    let flushed = match (flushed, resolutions) {
-        (Ok(()), Some(resolved)) => {
-            let result = apply_regex_result(state, resolved, &image);
-            flush_pending(
-                state,
-                result,
-                services.offsets_log,
-                services.coordinator,
-                chrono_now_ms(),
-            )
-            .await
-        }
-        (flushed, _) => flushed,
-    };
+    let flushed = services
+        .flush_with_regex_result(state, pending, now_ms, resolutions, || image)
+        .await;
     if let Err(e) = flushed {
         tracing::warn!(
             group_id = %state.group_id, error = %e,
@@ -668,7 +654,7 @@ mod tests {
             },
             classic_state::GroupState as ClassicGroupState,
             config::{ConsumerGroupMigrationPolicy as Policy, NextGenConfig},
-            offsets_log::fake::InMemoryOffsetsLog,
+            offsets_log::{OFFSETS_TOPIC, fake::InMemoryOffsetsLog},
             persistence_next_gen::NextGenKey,
             regex_resolver::{FixedRegexResolver, no_topic_regex_resolver},
         },
@@ -893,6 +879,58 @@ mod tests {
         check!(view.members[0].protocol_metadata == Bytes::from_static(b"subscription"));
         check!(view.members[0].assignment.as_deref() == Some(&b"assignment"[..]));
         check!(log.batches().await.is_empty());
+    }
+
+    /// A classic join to an empty consumer group whose tombstone write fails
+    /// answers as Kafka's `classicGroupJoinToClassicGroup` does: only the
+    /// `appendGroupMetadataErrorToResponseError` code. A write that never
+    /// reached the log leaves the group a consumer group under a live actor;
+    /// one that may still commit stops the actor, so that the next one loads
+    /// the group from the committed log.
+    #[rstest::rstest]
+    #[case::writer_gone(
+        BrokerError::PartitionWriterDied { topic: OFFSETS_TOPIC.into(), partition: 0 },
+        codes::NOT_COORDINATOR,
+        true
+    )]
+    #[case::uncommitted(
+        BrokerError::CoordinatorWriteUncommitted {
+            partition: 0,
+            code: codes::COORDINATOR_NOT_AVAILABLE,
+        },
+        codes::COORDINATOR_NOT_AVAILABLE,
+        false
+    )]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_tombstone_of_an_empty_consumer_group_answers_the_append_error(
+        #[case] failure: BrokerError,
+        #[case] error_code: i16,
+        #[case] actor_alive: bool,
+    ) {
+        let (coord, log) = make_coordinator_with_topic_policy("t", 1, Policy::Disabled);
+        let handle = coord.get_or_create_group("g", GroupKindTag::Consumer);
+        *log.fail_next_with.lock().expect("fail_next_with") = Some(failure);
+
+        let response = rpc::classic_join(&handle, "", "t").await;
+
+        check!(
+            response
+                == JoinResult {
+                    error_code,
+                    ..JoinResult::default()
+                }
+        );
+        check!(log.batches().await.is_empty());
+        if actor_alive {
+            let describe = rpc::begin(&handle, |reply| GroupActorMessage::Describe { reply }).await;
+            check!(
+                describe.await.is_ok(),
+                "the group is still a consumer group"
+            );
+        } else {
+            let closed = time::timeout(Duration::from_secs(1), handle.tx.closed()).await;
+            check!(closed.is_ok(), "the actor exits");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

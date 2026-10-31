@@ -8,16 +8,21 @@
 use {
     super::{
         response::{fail_authenticate, fail_authenticate_with, sasl_ok},
-        state::{ConnectionAuth, SaslExchange, SessionExpiry, session_expiry},
+        state::{
+            CompletedAuthentication, ConnectionAuth, SaslExchange, authenticate_with_reauth,
+            complete_authentication,
+        },
     },
     crate::{metadata_source::MetadataSource, time_util::now_ms},
     base64::engine::general_purpose::STANDARD,
+    krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_authenticate_response::SaslAuthenticateResponse,
     },
     krabka_security::{
-        Principal, SaslMechanism, ScramServerExchange, SecretBytes, compute_token_hmac,
+        AuthMethod, Principal, SaslMechanism, ScramCredential, ScramServerExchange, SecretBytes,
+        StepResult, compute_token_hmac,
         scram::{self, MIN_SCRAM_ITERATIONS},
     },
     krabka_units::Time,
@@ -69,196 +74,178 @@ pub fn handle_authenticate_scram(
     secret_key: Option<&SecretBytes>,
     max_reauth: Option<Time>,
 ) -> Result<SaslAuthenticateResponse, ScramDisconnect> {
-    let mut disconnect = false;
-    let response = super::state::authenticate_with_reauth(auth, |auth| {
-        // Round-1 case: still in `ScramPending` — build the exchange now that
-        // we have the client-first bytes (and thus the username).
-        if let ConnectionAuth::Negotiating {
-            exchange: SaslExchange::ScramPending,
-            mechanism,
-            ..
-        } = auth
-        {
-            let mech = *mechanism;
-            let Some(client_first) = ClientFirst::parse(&req.auth_bytes) else {
-                return fail_authenticate("malformed SCRAM client-first");
-            };
-            let Some(username) = decode_sasl_name(client_first.sasl_name) else {
-                return fail_authenticate("SCRAM username has an invalid `=` escape");
-            };
-
-            // Kafka's `ScramSaslServer` picks the credential store from the
-            // `tokenauth` extension alone: with it the name is a delegation-token
-            // id and only the token cache is read, without it only the SCRAM user
-            // store is. A token carries a credential for every SCRAM mechanism
-            // (`DelegationTokenManager.prepareScramCredentials`).
-            let image = controller.current_image();
-            let token_requested = client_first.token_authenticated();
-            let regular = if token_requested {
-                None
-            } else {
-                image.scram_credential(&username, mech)
-            };
-            // Kafka keeps its token cache only when `delegation.token.secret.key`
-            // is set, so a token is found only next to the key that recomputes
-            // its password.
-            let token = secret_key.filter(|_| token_requested).and_then(|secret| {
-                image
-                    .delegation_token_by_id(&username)
-                    .map(|token| (token, secret))
+    let mut disconnect = None;
+    let response = authenticate_with_reauth(auth, |auth| {
+        if let Some(in_flight) = take_scram_exchange(auth) {
+            return scram_final_round(req, auth, in_flight, max_reauth).unwrap_or_else(|closed| {
+                disconnect = Some(closed);
+                fail_authenticate("SCRAM proof of the wrong length")
             });
-            // A stored token is a credential whether or not it has expired, as
-            // in Kafka's `ScramServerCallbackHandler`, which reads the token
-            // cache without an expiry check. Its expiry bounds the session
-            // below, so an expired token gets a lifetime of 0 and its next
-            // request closes the connection; the expiry sweep removes it.
-            // The verified selector's `token_mechanism` input is whether the
-            // token store may be read, which is the `tokenauth` extension.
-            let (cred, principal, token_expiry_ms) = match (
-                scram_credential_source(regular.is_some(), token_requested, token.is_some()),
-                regular,
-                token,
-            ) {
-                (ScramCredentialSource::Regular, Some(regular), _) => (
-                    regular.clone(),
-                    Principal {
-                        name: username.clone(),
-                        auth_method: krabka_security::AuthMethod::from_sasl(mech),
-                        groups: vec![],
-                    },
-                    None,
-                ),
-                (ScramCredentialSource::DelegationToken, _, Some((token, secret))) => {
-                    let owner = Principal {
-                        name: token.owner.name.clone(),
-                        auth_method: krabka_security::AuthMethod::from_sasl(mech),
-                        groups: vec![],
-                    };
-                    (
-                        synthesize_token_scram_credential(token, secret, mech),
-                        owner,
-                        Some(token.expiry_timestamp_ms),
-                    )
-                }
-                // The selector names a source only when that source exists.
-                (
-                    ScramCredentialSource::Unknown
-                    | ScramCredentialSource::Regular
-                    | ScramCredentialSource::DelegationToken,
-                    ..,
-                ) => {
-                    return fail_authenticate("unknown user");
-                }
-            };
-
-            // Kafka checks the GS2 authorization id only once a credential is
-            // found, and this refusal is a `SaslAuthenticationException`, so its
-            // text reaches the client.
-            if client_first
-                .authorization_id
-                .is_some_and(|authzid| authzid != username)
-            {
-                return fail_authenticate_with(AUTHORIZATION_ID_MISMATCH.to_owned());
-            }
-
-            // Next, after the authorization id, Kafka refuses a stored
-            // credential with fewer than `ScramMechanism.minIterations`
-            // (4096) iterations. It throws a `SaslException`, so the client
-            // gets the generic text. `AlterUserScramCredentials` never writes
-            // such a credential, but a bootstrap record can carry one.
-            if i64::from(cred.iterations) < i64::from(MIN_SCRAM_ITERATIONS) {
-                return fail_authenticate("SCRAM credential iterations below the minimum");
-            }
-
-            // The exchange decodes the `n=` value and checks it against its
-            // username, as `ScramSaslServer` does with `ScramFormatter.username`,
-            // so it gets the decoded name.
-            let server = ScramServerExchange::new_with_principal(username, cred, principal);
-            // Feed the same client-first bytes; on success the exchange emits
-            // the server-first message and yields the next phase.
-            match server.step(&req.auth_bytes) {
-                krabka_security::StepResult::Continue(bytes, next) => {
-                    *auth = ConnectionAuth::Negotiating {
-                        mechanism: mech,
-                        exchange: SaslExchange::Scram(Box::new(next)),
-                        // Side-channel — `Some` here is the
-                        // unambiguous "this is a token-authed session"
-                        // signal that the round-2 success arm consumes
-                        // to set `Authenticated.authenticated_via_token`
-                        // + `expires_at_ms`.
-                        pending_token_expiry_ms: token_expiry_ms,
-                    };
-                    sasl_ok(bytes, 0)
-                }
-                // Done on the first round would be a server bug — SCRAM is
-                // always two round trips for SHA-512. Treat as auth failure.
-                krabka_security::StepResult::Done(_, _) => {
-                    fail_authenticate("SCRAM server completed in one round")
-                }
-                // Only the client-final step can end without a response.
-                krabka_security::StepResult::Failed(_)
-                | krabka_security::StepResult::Disconnect => fail_authenticate("SCRAM step failed"),
-            }
-        } else if let ConnectionAuth::Negotiating {
-            exchange: SaslExchange::Scram(_),
-            ..
-        } = auth
-        {
-            // Round 2: exchange already exists. `step` consumes the exchange, so
-            // extract it by value (mirroring `handle_handshake`'s re-auth
-            // snapshot swap) before stepping it with the client-final bytes; on
-            // success extract the principal + server-final bytes and transition
-            // to `Authenticated`.
-            let ConnectionAuth::Negotiating {
+        }
+        match auth {
+            ConnectionAuth::Negotiating {
+                exchange: SaslExchange::ScramPending,
                 mechanism,
-                exchange: SaslExchange::Scram(server),
-                pending_token_expiry_ms,
-            } = mem::replace(auth, ConnectionAuth::Anonymous)
-            else {
-                unreachable!("matched Negotiating{{Scram}} above");
-            };
-            match server.step(&req.auth_bytes) {
-                krabka_security::StepResult::Continue(_, _) => {
-                    // Two-round SCRAM-SHA-512: an extra `Continue` here is a bug.
-                    fail_authenticate("SCRAM second round expected Done")
-                }
-                krabka_security::StepResult::Done(principal, bytes) => {
-                    // When round-1 fell back to a delegation
-                    // token, `pending_token_expiry_ms` is `Some(expiry)`
-                    // — its presence is both the marker for
-                    // `authenticated_via_token: true` and the value of
-                    // `expires_at_ms` (the KIP-368 re-auth ceiling).
-                    // For regular SCRAM, it's `None` and the
-                    // session has no expiry. A token that expired during
-                    // the exchange still completes it, as in Kafka, with a
-                    // session lifetime of 0.
-                    let now = now_ms();
-                    let SessionExpiry {
-                        expires_at_ms,
-                        session_lifetime_ms,
-                    } = session_expiry(now, pending_token_expiry_ms, max_reauth);
-                    *auth = ConnectionAuth::Authenticated {
-                        principal,
-                        mechanism,
-                        expires_at_ms,
-                        authenticated_via_token: pending_token_expiry_ms.is_some(),
-                    };
-                    sasl_ok(bytes, session_lifetime_ms)
-                }
-                krabka_security::StepResult::Failed(_) => fail_authenticate("SCRAM proof failed"),
-                krabka_security::StepResult::Disconnect => {
-                    disconnect = true;
-                    fail_authenticate("SCRAM proof of the wrong length")
-                }
+                ..
+            } => {
+                let mech = *mechanism;
+                scram_first_round(req, auth, mech, controller, secret_key)
             }
-        } else {
-            fail_authenticate("not in SCRAM negotiation")
+            _ => fail_authenticate("not in SCRAM negotiation"),
         }
     });
-    if disconnect {
-        Err(ScramDisconnect)
-    } else {
-        Ok(response)
+    disconnect.map_or(Ok(response), Err)
+}
+
+/// A SCRAM exchange between its two rounds, taken out of the connection state
+/// so the client-final step can consume it.
+struct ScramInFlight {
+    mechanism: SaslMechanism,
+    server: Box<ScramServerExchange>,
+    /// The delegation token's expiry when round 1 picked the token store.
+    pending_token_expiry_ms: Option<i64>,
+}
+
+/// Takes the exchange out of a connection between the two SCRAM rounds,
+/// leaving `Anonymous` behind as round 2 always did. Any other state stays as
+/// it was and yields `None`.
+fn take_scram_exchange(auth: &mut ConnectionAuth) -> Option<ScramInFlight> {
+    match mem::replace(auth, ConnectionAuth::Anonymous) {
+        ConnectionAuth::Negotiating {
+            mechanism,
+            exchange: SaslExchange::Scram(server),
+            pending_token_expiry_ms,
+        } => Some(ScramInFlight {
+            mechanism,
+            server,
+            pending_token_expiry_ms,
+        }),
+        other => {
+            *auth = other;
+            None
+        }
+    }
+}
+
+/// Round 1: parses the client-first message, resolves the credential, and on
+/// success moves `auth` to `Negotiating { exchange: Scram(server) }` with the
+/// server-first message as the response.
+fn scram_first_round(
+    req: &SaslAuthenticateRequest,
+    auth: &mut ConnectionAuth,
+    mech: SaslMechanism,
+    controller: &dyn MetadataSource,
+    secret_key: Option<&SecretBytes>,
+) -> SaslAuthenticateResponse {
+    let Some(client_first) = ClientFirst::parse(&req.auth_bytes) else {
+        return fail_authenticate("malformed SCRAM client-first");
+    };
+    let Some(username) = decode_sasl_name(client_first.sasl_name) else {
+        return fail_authenticate("SCRAM username has an invalid `=` escape");
+    };
+    let ResolvedCredential {
+        credential,
+        principal,
+        token_expiry_ms,
+    } = match resolve_scram_credential(
+        &controller.current_image(),
+        &username,
+        mech,
+        client_first.token_authenticated(),
+        secret_key,
+    ) {
+        Ok(resolved) => resolved,
+        Err(refusal) => return refusal,
+    };
+
+    // Kafka checks the GS2 authorization id only once a credential is
+    // found, and this refusal is a `SaslAuthenticationException`, so its
+    // text reaches the client.
+    if client_first
+        .authorization_id
+        .is_some_and(|authzid| authzid != username)
+    {
+        return fail_authenticate_with(AUTHORIZATION_ID_MISMATCH.to_owned());
+    }
+
+    // Next, after the authorization id, Kafka refuses a stored
+    // credential with fewer than `ScramMechanism.minIterations`
+    // (4096) iterations. It throws a `SaslException`, so the client
+    // gets the generic text. `AlterUserScramCredentials` never writes
+    // such a credential, but a bootstrap record can carry one.
+    if i64::from(credential.iterations) < i64::from(MIN_SCRAM_ITERATIONS) {
+        return fail_authenticate("SCRAM credential iterations below the minimum");
+    }
+
+    // The exchange decodes the `n=` value and checks it against its
+    // username, as `ScramSaslServer` does with `ScramFormatter.username`,
+    // so it gets the decoded name.
+    let server = ScramServerExchange::new_with_principal(username, credential, principal);
+    // Feed the same client-first bytes; on success the exchange emits
+    // the server-first message and yields the next phase.
+    match server.step(&req.auth_bytes) {
+        StepResult::Continue(bytes, next) => {
+            *auth = ConnectionAuth::Negotiating {
+                mechanism: mech,
+                exchange: SaslExchange::Scram(Box::new(next)),
+                // Side-channel — `Some` here is the unambiguous "this is a
+                // token-authed session" signal that the round-2 success arm
+                // consumes to set `Authenticated.authenticated_via_token` +
+                // `expires_at_ms`.
+                pending_token_expiry_ms: token_expiry_ms,
+            };
+            sasl_ok(bytes, 0)
+        }
+        // Done on the first round would be a server bug — SCRAM is
+        // always two round trips for SHA-512. Treat as auth failure.
+        StepResult::Done(_, _) => fail_authenticate("SCRAM server completed in one round"),
+        // Only the client-final step can end without a response.
+        StepResult::Failed(_) | StepResult::Disconnect => fail_authenticate("SCRAM step failed"),
+    }
+}
+
+/// Round 2: steps the exchange with the client-final message and, on a valid
+/// proof, authenticates the connection.
+///
+/// # Errors
+///
+/// [`ScramDisconnect`] when the proof does not decode to the mechanism's hash
+/// length.
+fn scram_final_round(
+    req: &SaslAuthenticateRequest,
+    auth: &mut ConnectionAuth,
+    in_flight: ScramInFlight,
+    max_reauth: Option<Time>,
+) -> Result<SaslAuthenticateResponse, ScramDisconnect> {
+    let ScramInFlight {
+        mechanism,
+        server,
+        pending_token_expiry_ms,
+    } = in_flight;
+    match server.step(&req.auth_bytes) {
+        // Two-round SCRAM-SHA-512: an extra `Continue` here is a bug.
+        StepResult::Continue(_, _) => Ok(fail_authenticate("SCRAM second round expected Done")),
+        // When round 1 fell back to a delegation token,
+        // `pending_token_expiry_ms` is `Some(expiry)` — its presence is both
+        // the marker for `authenticated_via_token: true` and the credential
+        // lifetime that bounds the session (the KIP-368 re-auth ceiling).
+        // For regular SCRAM it is `None`. A token that expired during the
+        // exchange still completes it, as in Kafka, with a session lifetime
+        // of 0.
+        StepResult::Done(principal, bytes) => Ok(complete_authentication(
+            auth,
+            CompletedAuthentication {
+                principal,
+                mechanism,
+                credential_expires_at_ms: pending_token_expiry_ms,
+                authenticated_via_token: pending_token_expiry_ms.is_some(),
+                server_bytes: bytes.into(),
+            },
+            now_ms(),
+            max_reauth,
+        )),
+        StepResult::Failed(_) => Ok(fail_authenticate("SCRAM proof failed")),
+        StepResult::Disconnect => Err(ScramDisconnect),
     }
 }
 
@@ -271,6 +258,90 @@ pub fn handle_authenticate_scram(
 /// `SaslAuthenticate` response and no `connection.failed.authentication.delay.ms`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScramDisconnect;
+
+/// The credential round 1 found, and the principal it authenticates.
+struct ResolvedCredential {
+    credential: ScramCredential,
+    principal: Principal,
+    /// The delegation token's expiry, or `None` for a SCRAM user credential.
+    token_expiry_ms: Option<i64>,
+}
+
+/// Looks up the credential for `username` in the store the client-first
+/// message picked.
+///
+/// Kafka's `ScramSaslServer` picks the credential store from the `tokenauth`
+/// extension alone: with it the name is a delegation-token id and only the
+/// token cache is read, without it only the SCRAM user store is. A token
+/// carries a credential for every SCRAM mechanism
+/// (`DelegationTokenManager.prepareScramCredentials`).
+///
+/// # Errors
+///
+/// The `unknown user` refusal when the chosen store holds no credential.
+fn resolve_scram_credential(
+    image: &MetadataImage,
+    username: &str,
+    mech: SaslMechanism,
+    token_requested: bool,
+    secret_key: Option<&SecretBytes>,
+) -> Result<ResolvedCredential, SaslAuthenticateResponse> {
+    let regular = if token_requested {
+        None
+    } else {
+        image.scram_credential(username, mech)
+    };
+    // Kafka keeps its token cache only when `delegation.token.secret.key`
+    // is set, so a token is found only next to the key that recomputes
+    // its password.
+    let token = secret_key.filter(|_| token_requested).and_then(|secret| {
+        image
+            .delegation_token_by_id(username)
+            .map(|token| (token, secret))
+    });
+    // A stored token is a credential whether or not it has expired, as
+    // in Kafka's `ScramServerCallbackHandler`, which reads the token
+    // cache without an expiry check. Its expiry bounds the session, so an
+    // expired token gets a lifetime of 0 and its next request closes the
+    // connection; the expiry sweep removes it. The verified selector's
+    // `token_mechanism` input is whether the token store may be read,
+    // which is the `tokenauth` extension.
+    match (
+        scram_credential_source(regular.is_some(), token_requested, token.is_some()),
+        regular,
+        token,
+    ) {
+        (ScramCredentialSource::Regular, Some(regular), _) => Ok(ResolvedCredential {
+            credential: regular.clone(),
+            principal: scram_principal(username.to_owned(), mech),
+            token_expiry_ms: None,
+        }),
+        (ScramCredentialSource::DelegationToken, _, Some((token, secret))) => {
+            Ok(ResolvedCredential {
+                credential: synthesize_token_scram_credential(token, secret, mech),
+                principal: scram_principal(token.owner.name.clone(), mech),
+                token_expiry_ms: Some(token.expiry_timestamp_ms),
+            })
+        }
+        // The selector names a source only when that source exists.
+        (
+            ScramCredentialSource::Unknown
+            | ScramCredentialSource::Regular
+            | ScramCredentialSource::DelegationToken,
+            ..,
+        ) => Err(fail_authenticate("unknown user")),
+    }
+}
+
+/// The principal a SCRAM credential authenticates: `name`, with the auth
+/// method of `mech` and no groups.
+fn scram_principal(name: String, mech: SaslMechanism) -> Principal {
+    Principal {
+        name,
+        auth_method: AuthMethod::from_sasl(mech),
+        groups: vec![],
+    }
+}
 
 /// The iteration count of a delegation token's SCRAM credential: Kafka's
 /// `DelegationTokenManager.prepareScramCredentials` uses each mechanism's

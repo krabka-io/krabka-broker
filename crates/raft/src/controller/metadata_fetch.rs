@@ -3,7 +3,7 @@
 //! broker-only observer issues against a controller listener.
 
 use {
-    super::{ControllerHandle, connection_options},
+    super::{ControllerHandle, LeaderRoundTrip as _},
     crate::{
         error::RaftError,
         kraft::MetadataFetchSlice,
@@ -69,21 +69,17 @@ impl ControllerHandle {
         let mut body = Vec::with_capacity(32);
         req.encode_v0(&mut body);
 
-        let opts = connection_options(
-            &self.client_id,
-            self.client_dispatch_queue_capacity,
-            self.client_frame_max,
-        );
-        let conn = self
-            .dialer
-            .dial(NodeId(1), &addr.to_string(), opts)
+        let resp_body = self
+            .round_trip_transport()
+            .round_trip(
+                NodeId(1),
+                &addr.to_string(),
+                API_KEY_METADATA_FETCH,
+                version,
+                bytes::Bytes::from(body),
+            )
             .await
             .map_err(RaftError::Network)?;
-        let resp_body = conn
-            .raw_request(API_KEY_METADATA_FETCH, version, bytes::Bytes::from(body))
-            .await
-            .map_err(RaftError::Network)?;
-        conn.close();
 
         let mut cur: &[u8] = &resp_body;
         let response =

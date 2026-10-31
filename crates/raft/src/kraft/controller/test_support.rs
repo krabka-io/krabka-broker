@@ -198,16 +198,6 @@ pub fn open_test_controller(
         .call()
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct ControllerOpenSetup {
-    pub cluster_id: uuid::Uuid,
-    #[default(voter_set(&[NodeId(1)]))]
-    pub voters: VoterSet,
-    #[default(TEST_ELECTION_TIMEOUT)]
-    pub election_timeout: krabka_units::Time,
-    pub activation: Activation,
-}
-
 #[bon::builder]
 pub fn open_test_controller_with(
     data_dir: PathBuf,
@@ -217,40 +207,21 @@ pub fn open_test_controller_with(
     #[builder(default)] activation: Activation,
     #[builder(default = |_| Ok(()))] validate_image: fn(&MetadataImage) -> Result<(), RaftError>,
 ) -> Result<KraftController, RaftError> {
-    let setup = ControllerOpenSetup {
-        cluster_id,
-        voters,
-        election_timeout,
-        activation,
-    };
-    let ControllerOpenSetup {
-        cluster_id,
-        voters,
-        election_timeout,
-        activation,
-    } = setup;
     KraftController::open(
         data_dir,
-        NodeId(1),
-        cluster_id,
-        uuid::Uuid::nil(),
-        voters,
-        QuorumTimeouts {
-            election: election_timeout,
-            fetch: TEST_FETCH_TIMEOUT,
-        },
-        None,
-        ControllerFetchMissLimit::default(),
-        MetadataRaftCommandQueueCapacity::default(),
-        MetadataRaftFetchMax::default(),
-        Arc::new(NullPeerSender),
-        0,
-        prelude::bytes(0),
-        prelude::millis(0),
-        MetadataSnapshotFetchMax::default(),
-        test_metadata_log(),
-        activation,
-        Arc::new(NoEventQueueRecorder),
+        KraftOpenConfig::builder()
+            .me(NodeId(1))
+            .cluster_id(cluster_id)
+            .directory_id(uuid::Uuid::nil())
+            .bootstrap_voters(voters)
+            .timeouts(QuorumTimeouts {
+                election: election_timeout,
+                fetch: TEST_FETCH_TIMEOUT,
+            })
+            .peers(Arc::new(NullPeerSender))
+            .metadata_log(test_metadata_log())
+            .activation(activation)
+            .build(),
         validate_image,
     )
 }
@@ -382,6 +353,7 @@ pub fn build_engine_only(
             snapshot_write_delay: Duration::ZERO,
             downgrade_snapshot_pending: None,
             downgrade_snapshot_failures_remaining: 0,
+            apply_read_failure_at: None,
             snapshot_fetch: None,
             installed_snapshot_epoch: None,
             controls,

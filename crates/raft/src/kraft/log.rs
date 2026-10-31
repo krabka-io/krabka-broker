@@ -16,6 +16,7 @@ use {
     krabka_units::{prelude, prelude::ByteSize},
     krabka_verified::raft,
     std::{
+        fmt::Display,
         fs,
         io::{Error, ErrorKind},
         path::{Path, PathBuf},
@@ -31,10 +32,14 @@ pub struct KraftLog {
     /// not track it.
     hwm: Offset,
     hwm_path: PathBuf,
-    /// The first I/O error a write to the metadata log directory returned.
-    /// It stays set: Kafka treats a failed metadata log directory as fatal
-    /// (KIP-858), and the engine stops the controller over it.
+    /// The first I/O error a write to the metadata log directory returned,
+    /// or the first error of a truncation, which leaves the log in no known
+    /// state. It stays set: Kafka treats a failed metadata log directory as
+    /// fatal (KIP-858), and the engine stops the controller over it.
     failure: Option<String>,
+    /// Makes the next [`Self::truncate_to`] fail as a corrupt log would.
+    #[cfg(test)]
+    pub(crate) fail_next_truncate: bool,
     /// The retired files being deleted off the engine, if a deletion is
     /// running. See [`Self::reap_retired_files`].
     reaping: Option<JoinHandle<Result<(), FailedDeletion>>>,
@@ -180,6 +185,8 @@ impl KraftLog {
             hwm,
             hwm_path,
             failure: None,
+            #[cfg(test)]
+            fail_next_truncate: false,
             reaping: None,
         })
     }
@@ -198,7 +205,7 @@ impl KraftLog {
         Ok(result?)
     }
 
-    fn note_failure(&mut self, error: &Error) {
+    fn note_failure(&mut self, error: &impl Display) {
         if self.failure.is_none() {
             self.failure = Some(error.to_string());
         }
@@ -351,11 +358,18 @@ impl KraftLog {
     /// Truncates the log so that no record at offset `>= offset` remains, and
     /// clamps the HWM down.
     ///
+    /// Any failure is recorded as the [`Self::failure`] of the log, not only an
+    /// I/O error: a truncation that stops part way leaves the log neither cut
+    /// nor whole, as Kafka's raft driver treats any error a truncation throws
+    /// as fatal.
+    ///
     /// # Errors
     /// Returns [`RaftError`] if the underlying truncation fails.
     pub fn truncate_to(&mut self, offset: Offset) -> Result<(), RaftError> {
-        let truncated = self.log.truncate_to(offset);
-        self.checked(truncated)?;
+        if let Err(error) = self.truncate_log(offset) {
+            self.note_failure(&error);
+            return Err(error.into());
+        }
         // A cut inside a batch can leave the physical end below the request.
         self.hwm = Offset(krabka_verified::truncation_frontier(
             self.hwm.0,
@@ -363,6 +377,19 @@ impl KraftLog {
         ));
         self.persist_hwm();
         Ok(())
+    }
+
+    /// The truncation of the underlying log.
+    fn truncate_log(&mut self, offset: Offset) -> Result<(), krabka_log::LogError> {
+        #[cfg(test)]
+        if self.fail_next_truncate {
+            self.fail_next_truncate = false;
+            return Err(krabka_log::LogError::OffsetTooLow {
+                requested: offset,
+                log_start: self.log.log_start_offset(),
+            });
+        }
+        self.log.truncate_to(offset)
     }
 
     /// Prunes the committed prefix below `end_offset`: it advances the

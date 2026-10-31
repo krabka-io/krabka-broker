@@ -64,14 +64,15 @@ async fn process_partition_non_leader_skips_schema_registry_and_preserves_hint()
     });
 
     let resp = process_partition(
-        PartitionInput {
-            schema: Some(SchemaGate {
+        pipeline_input()
+            .topic("orders")
+            .payload(PartitionPayload::Slice(payload))
+            .schema(SchemaGate {
                 key: false,
                 value: true,
                 mode: ValidationMode::Full,
-            }),
-            ..pipeline_input("orders", PartitionPayload::Slice(payload))
-        },
+            })
+            .call(),
         PartitionServices {
             schema_validator: Some(&schema_validator),
             ..fixture.services(&image)
@@ -104,7 +105,10 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
     });
 
     let resp = process_partition(
-        pipeline_input("orders", PartitionPayload::Slice(payload)),
+        pipeline_input()
+            .topic("orders")
+            .payload(PartitionPayload::Slice(payload))
+            .call(),
         PartitionServices {
             broker_policy: BrokerProducePolicy {
                 node_id: krabka_audit::NodeId(2),
@@ -135,7 +139,16 @@ mod freeze;
 // admin-tooling exception.
 mod internal_topic;
 
-fn non_leader_image() -> Arc<krabka_metadata::MetadataImage> {
+// ── gate order ────────────────────────────────────────────────────
+//
+// Which gate answers when one batch trips two of them.
+mod gate_order;
+
+fn non_leader_image() -> Arc<krabka_metadata::MetadataImage> { Arc::new(non_leader_metadata()) }
+
+// `orders` led by node 2 at leader epoch 17, so a pipeline running as node 1
+// is not its leader.
+fn non_leader_metadata() -> krabka_metadata::MetadataImage {
     let mut img = image_with_topic("orders", &[2, 3]);
     img.apply(&MetadataRecord::V1Partition(PartitionRecord {
         leader_epoch: krabka_metadata::LeaderEpoch(17),
@@ -145,7 +158,7 @@ fn non_leader_image() -> Arc<krabka_metadata::MetadataImage> {
             .replicas(&[krabka_audit::NodeId(2), krabka_audit::NodeId(3)])
             .call()
     }));
-    Arc::new(img)
+    img
 }
 
 fn non_leader_row() -> PartitionProduceResponse {
@@ -174,3 +187,9 @@ pub(super) fn seed_batch() -> RecordBatch {
         ..Default::default()
     }
 }
+
+// ── poisoned partition log ────────────────────────────────────────
+//
+// The size gates when a panic elsewhere has poisoned the partition's log
+// mutex.
+mod poisoned_log;

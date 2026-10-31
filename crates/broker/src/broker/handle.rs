@@ -436,6 +436,7 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn crash_for_test(mut self) {
+        self.auto_join_shutdown.cancel();
         self.broker.supervisor_shutdown.cancel();
         self.shutdown.cancel();
         self.broker.audit_log.close();
@@ -537,6 +538,9 @@ impl BrokerHandle {
     /// Cancel the listener and drain in-flight connections. The returned
     /// future completes when the listener task exits.
     pub async fn shutdown(mut self) {
+        // A stopping controller sends no more voter RPCs, as Kafka's
+        // `KafkaRaftClient` stops its update-voter work when it shuts down.
+        self.auto_join_shutdown.cancel();
         // Cancel the replicator supervisor BEFORE the controller drops:
         // in-flight replication tasks must observe a clean cancellation
         // rather than a torn-down metadata-watch channel.
@@ -609,6 +613,7 @@ impl BrokerHandle {
 
 impl Drop for BrokerHandle {
     fn drop(&mut self) {
+        self.auto_join_shutdown.cancel();
         self.broker.supervisor_shutdown.cancel();
         self.shutdown.cancel();
         self.broker.audit_log.close();
