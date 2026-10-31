@@ -449,17 +449,7 @@ impl Engine {
             return Ok(()); // stale; we already advanced past this snapshot
         }
         let cluster_id = self.image.cluster_id();
-        let mut new_image = MetadataImage::from_records(cluster_id, &contents.metadata_records);
-        if let Some(control) = &contents.control_state {
-            new_image.apply(&MetadataRecord::V1KRaftVersion(
-                krabka_metadata::KRaftVersionRecord {
-                    kraft_version: control.kraft_version,
-                },
-            ));
-            new_image.apply(&MetadataRecord::V1Voters(VotersRecord {
-                voters: control.voters.clone(),
-            }));
-        }
+        let new_image = contents.to_image(cluster_id);
         write_checkpoint(&self.data_dir, end_offset, epoch, bytes)?;
         self.image.replace(new_image);
         self.features_epoch = features_epoch_after_snapshot(

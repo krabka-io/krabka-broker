@@ -17,6 +17,7 @@ use {
             types::{Epoch, ReplicaKey},
         },
         reconfig::{ReconfigOutcome, VoterChange},
+        snapshot::SnapshotControlState,
     },
     krabka_ids::Offset,
     krabka_metadata::{MetadataRecord, VoterSet, VotersRecord},
@@ -487,14 +488,13 @@ impl Engine {
         }
         self.core.commit_voter_set();
         self.core.set_kraft_version(self.controls.committed_version);
-        self.image.apply(&MetadataRecord::V1KRaftVersion(
-            krabka_metadata::KRaftVersionRecord {
-                kraft_version: self.controls.committed_version,
-            },
-        ));
-        self.image.apply(&MetadataRecord::V1Voters(VotersRecord {
+        let controls = SnapshotControlState {
+            kraft_version: self.controls.committed_version,
             voters: self.controls.committed_voters.clone(),
-        }));
+        };
+        for record in controls.into_records() {
+            self.image.apply(&record);
+        }
         if self.downgrade_snapshot_pending.is_none() {
             self.publish_image();
         }

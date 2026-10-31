@@ -193,16 +193,10 @@ pub fn deserialize_metadata_snapshot_image(
     bytes: &[u8],
 ) -> Result<Vec<krabka_metadata::MetadataRecord>, RaftError> {
     let snapshot = snapshot::SnapshotReader::read(bytes)?;
-    let controls = snapshot.control_state.into_iter().flat_map(|controls| {
-        [
-            krabka_metadata::MetadataRecord::V1KRaftVersion(krabka_metadata::KRaftVersionRecord {
-                kraft_version: controls.kraft_version,
-            }),
-            krabka_metadata::MetadataRecord::V1Voters(krabka_metadata::VotersRecord {
-                voters: controls.voters,
-            }),
-        ]
-    });
+    let controls = snapshot
+        .control_state
+        .into_iter()
+        .flat_map(snapshot::SnapshotControlState::into_records);
     Ok(controls.chain(snapshot.metadata_records).collect())
 }
 

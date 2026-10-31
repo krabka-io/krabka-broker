@@ -5,8 +5,7 @@
 use {
     super::{
         Engine, KraftConfig, KraftControlState, KraftController, KraftOpenConfig,
-        METADATA_LOG_CLEAN_INTERVAL,
-        PendingDowngradeSnapshot,
+        METADATA_LOG_CLEAN_INTERVAL, PendingDowngradeSnapshot,
         activation::{Activation, check_bootstrap_records},
         applied_image::AppliedImage,
         checkpoint::{BOOTSTRAP_SNAPSHOT_ID, latest_checkpoint_id, load_latest_checkpoint},
@@ -32,7 +31,7 @@ use {
             transport::{CommandSender, PeerSender},
             types::{NodeId, QuorumState},
         },
-        snapshot::SnapshotReader,
+        snapshot::{SnapshotReader, mirror_controls},
     },
     krabka_ids::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord, voters::VoterSet},
@@ -143,14 +142,11 @@ impl KraftController {
         // the published `MetadataImage` so image readers (e.g. the broker's
         // voter-set views, auto-join) observe the live quorum membership.
         let mut image = image;
-        image.apply(&MetadataRecord::V1KRaftVersion(
-            krabka_metadata::KRaftVersionRecord {
-                kraft_version: core.quorum_state().kraft_version,
-            },
-        ));
-        image.apply(&MetadataRecord::V1Voters(VotersRecord {
-            voters: core.quorum_state().voters.clone(),
-        }));
+        mirror_controls(
+            &mut image,
+            core.quorum_state().kraft_version,
+            core.quorum_state().voters.clone(),
+        );
 
         let (image, image_rx) = AppliedImage::new(image);
         let (features_epoch_tx, features_epoch_rx) = watch::channel(features_epoch);
@@ -346,14 +342,7 @@ impl KraftController {
                 }
             }
             if let Some(control) = contents.control_state {
-                image.apply(&MetadataRecord::V1KRaftVersion(
-                    krabka_metadata::KRaftVersionRecord {
-                        kraft_version: control.kraft_version,
-                    },
-                ));
-                image.apply(&MetadataRecord::V1Voters(VotersRecord {
-                    voters: control.voters.clone(),
-                }));
+                mirror_controls(&mut image, control.kraft_version, control.voters.clone());
                 snapshot_control = Some(control);
             }
             if let Some((off, _ep)) = latest_checkpoint_id(&data_dir) {
@@ -383,7 +372,8 @@ impl KraftController {
         let features_epoch =
             replayed_features_epoch.map_or(features_epoch, |replayed| replayed.max(features_epoch));
 
-        let mut boundary_state = QuorumState::bootstrap(cluster_id, config.bootstrap_voters.clone());
+        let mut boundary_state =
+            QuorumState::bootstrap(cluster_id, config.bootstrap_voters.clone());
         if let Some(control) = &snapshot_control {
             boundary_state.kraft_version = control.kraft_version;
             boundary_state.voters = control.voters.clone();
@@ -404,24 +394,18 @@ impl KraftController {
                 pending.end_offset,
                 metadata_raft_fetch_max,
             )?;
-            pending.image.apply(&MetadataRecord::V1KRaftVersion(
-                krabka_metadata::KRaftVersionRecord {
-                    kraft_version: boundary_state.kraft_version,
-                },
-            ));
-            pending.image.apply(&MetadataRecord::V1Voters(VotersRecord {
-                voters: boundary_state.voters,
-            }));
+            mirror_controls(
+                &mut pending.image,
+                boundary_state.kraft_version,
+                boundary_state.voters,
+            );
         }
         replay_control_records(&log, &mut initial_state, metadata_raft_fetch_max)?;
-        image.apply(&MetadataRecord::V1KRaftVersion(
-            krabka_metadata::KRaftVersionRecord {
-                kraft_version: initial_state.kraft_version,
-            },
-        ));
-        image.apply(&MetadataRecord::V1Voters(VotersRecord {
-            voters: initial_state.voters.clone(),
-        }));
+        mirror_controls(
+            &mut image,
+            initial_state.kraft_version,
+            initial_state.voters.clone(),
+        );
 
         // The guard reads the committed image, which the engine starts from,
         // and then every feature level the log holds above the high
