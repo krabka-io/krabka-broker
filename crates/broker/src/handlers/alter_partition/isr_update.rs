@@ -25,7 +25,7 @@ use {
         },
     },
     krabka_verified::isr::{AlterPartitionFacts, IsrAdmission, ProposedIsr, isr_admission},
-    std::collections::HashSet,
+    std::{collections::HashSet, iter},
 };
 #[cfg(test)]
 use {krabka_metadata::LeaderEpoch, krabka_protocol::owned::alter_partition_request::BrokerState};
@@ -58,11 +58,10 @@ pub(super) fn handle_partition_with_recovery(
     };
     let current_recovery_state = image.leader_recovery_state(topic_name, partition_index);
     let (effective_isr, proposed_states) = proposed_replicas(request);
-    let effective_isr_i32 = effective_isr.as_slice();
     let requested_recovery_state = requested_recovery_state(request.leader_recovery_state);
     let recovery_state_valid = requested_recovery_state.is_some_and(|requested| {
         requested == LeaderRecoveryState::Recovered
-            || (effective_isr_i32.len() <= 1
+            || (effective_isr.len() <= 1
                 && current_recovery_state == LeaderRecoveryState::Recovering)
     });
 
@@ -72,7 +71,7 @@ pub(super) fn handle_partition_with_recovery(
         request_partition_epoch: request.partition_epoch,
         current_partition_epoch: part_rec.partition_epoch,
         requester_is_leader: u64::try_from(requester).is_ok_and(|id| part_rec.leader.0 == id),
-        proposed_isr: proposed_isr_shape(effective_isr_i32, part_rec),
+        proposed_isr: proposed_isr_shape(&effective_isr, part_rec),
         recovery_state_valid,
         replicas_eligible: replicas_eligible(image, active, &proposed_states),
     });
@@ -82,44 +81,26 @@ pub(super) fn handle_partition_with_recovery(
     else {
         return error_part(partition_index, admission_error_code(admission));
     };
-    // An admitted ISR is a valid replica subset, so every member converts.
-    let proposed_isr: Vec<NodeId> = effective_isr_i32
-        .iter()
-        .filter_map(|&n| u64::try_from(n).ok().map(NodeId))
-        .collect();
-
-    // Success: submit the ISR change.
     let Some(new_partition_epoch) = next_i32(part_rec.partition_epoch) else {
         return error_part(partition_index, codes::INVALID_REQUEST);
     };
-    changes.push(MetadataRecord::V1Partition(PartitionRecord {
-        topic: topic_name.to_owned(),
-        partition: partition_index,
-        leader: part_rec.leader,
-        replicas: part_rec.replicas.clone(),
-        isr: proposed_isr,
-        leader_epoch: part_rec.leader_epoch,
-        adding_replicas: part_rec.adding_replicas.clone(),
-        removing_replicas: part_rec.removing_replicas.clone(),
-        directories: part_rec.directories.clone(),
-        partition_epoch: new_partition_epoch,
-    }));
-    if requested_recovery_state != current_recovery_state {
-        changes.push(MetadataRecord::V1PartitionRecovery(
-            PartitionRecoveryRecord {
-                topic: topic_name.to_owned(),
-                partition: partition_index,
-                state: requested_recovery_state,
-            },
-        ));
-    }
+    let recovery_change =
+        (requested_recovery_state != current_recovery_state).then_some(requested_recovery_state);
+    changes.extend(isr_change_records(
+        topic_name,
+        partition_index,
+        part_rec,
+        &effective_isr,
+        new_partition_epoch,
+        recovery_change,
+    ));
 
     RespPartitionData {
         partition_index,
         error_code: codes::NONE,
         leader_id: i32::try_from(part_rec.leader.0).unwrap_or(0),
         leader_epoch: part_rec.leader_epoch.0,
-        isr: effective_isr_i32.to_vec(),
+        isr: effective_isr,
         leader_recovery_state: requested_recovery_state as i8,
         partition_epoch: new_partition_epoch,
         unknown_tagged_fields: UnknownTaggedFields::default(),
@@ -156,6 +137,44 @@ fn proposed_replicas(request: &ReqPartitionData) -> (Vec<i32>, Vec<ProposedRepli
     };
     let broker_ids = replicas.iter().map(|replica| replica.broker_id).collect();
     (broker_ids, replicas)
+}
+
+/// The records an admitted row of partition `partition_index` stages: the
+/// partition with the proposed ISR at `partition_epoch`, then the new leader
+/// recovery state when `recovery_change` carries one.
+fn isr_change_records(
+    topic_name: &str,
+    partition_index: i32,
+    part_rec: &PartitionRecord,
+    isr: &[i32],
+    partition_epoch: i32,
+    recovery_change: Option<LeaderRecoveryState>,
+) -> Vec<MetadataRecord> {
+    // An admitted ISR is a valid replica subset, so every member converts.
+    let proposed_isr: Vec<NodeId> = isr
+        .iter()
+        .filter_map(|&n| u64::try_from(n).ok().map(NodeId))
+        .collect();
+    let partition = MetadataRecord::V1Partition(PartitionRecord {
+        topic: topic_name.to_owned(),
+        partition: partition_index,
+        leader: part_rec.leader,
+        replicas: part_rec.replicas.clone(),
+        isr: proposed_isr,
+        leader_epoch: part_rec.leader_epoch,
+        adding_replicas: part_rec.adding_replicas.clone(),
+        removing_replicas: part_rec.removing_replicas.clone(),
+        directories: part_rec.directories.clone(),
+        partition_epoch,
+    });
+    let recovery = recovery_change.map(|state| {
+        MetadataRecord::V1PartitionRecovery(PartitionRecoveryRecord {
+            topic: topic_name.to_owned(),
+            partition: partition_index,
+            state,
+        })
+    });
+    iter::once(partition).chain(recovery).collect()
 }
 
 /// Kafka's `ineligibleReplicasForIsr`: a broker in the proposed ISR is
@@ -775,6 +794,57 @@ mod tests {
                 ..
             })
         ]));
+    }
+
+    /// An admitted row that also leaves the `Recovering` state stages the
+    /// whole partition record with the new ISR and the next partition epoch,
+    /// then the recovery record, in that order.
+    #[test]
+    fn an_admitted_recovery_stages_the_partition_then_the_recovery_record() {
+        let mut image = image_with_partition(
+            &PartitionFixture {
+                partition_epoch: PartitionEpoch(4),
+                ..Default::default()
+            },
+            TWO_REGISTERED_BROKERS,
+        );
+        image.apply(&MetadataRecord::V1PartitionRecovery(
+            PartitionRecoveryRecord {
+                topic: "t".into(),
+                partition: 0,
+                state: LeaderRecoveryState::Recovering,
+            },
+        ));
+        let current_epoch = image.partition("t", 0).expect("partition").partition_epoch;
+        let mut changes = Vec::new();
+
+        let response = handle_partition()
+            .image(&image)
+            .changes(&mut changes)
+            .new_isr(&[WireBrokerId(1)])
+            .call();
+
+        assert!(response.error_code == codes::NONE);
+        let expected = vec![
+            MetadataRecord::V1Partition(PartitionRecord {
+                topic: "t".into(),
+                partition: 0,
+                leader: NodeId(1),
+                replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
+                isr: vec![NodeId(1)],
+                leader_epoch: LeaderEpoch(5),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![],
+                partition_epoch: current_epoch + 1,
+            }),
+            MetadataRecord::V1PartitionRecovery(PartitionRecoveryRecord {
+                topic: "t".into(),
+                partition: 0,
+                state: LeaderRecoveryState::Recovered,
+            }),
+        ];
+        assert!(changes == expected);
     }
 
     /// krabka-io/krabka-broker#825: Kafka's `ineligibleReplicasForIsr`. The
