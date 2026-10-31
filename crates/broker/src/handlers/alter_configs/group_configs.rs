@@ -8,12 +8,9 @@
 //! complete set of non-default values.
 
 use {
-    crate::{
-        api_catalog::UnstableApiVersions,
-        codes,
-        config_keys::group::{GroupBounds, validate_group_configs},
-    },
-    krabka_metadata::{GroupConfigRecord, MetadataRecord},
+    super::group_config_record_from,
+    crate::{api_catalog::UnstableApiVersions, config_keys::group::GroupBounds},
+    krabka_metadata::MetadataRecord,
     krabka_protocol::owned::alter_configs_request::AlterConfigsResource,
     std::collections::BTreeMap,
 };
@@ -26,23 +23,12 @@ pub(super) fn group_config_record(
     bounds: &GroupBounds,
     unstable: UnstableApiVersions,
 ) -> Result<MetadataRecord, (i16, String)> {
-    if resource.resource_name.is_empty() {
-        return Err((
-            codes::INVALID_REQUEST,
-            "Default group resources are not allowed.".into(),
-        ));
-    }
     let overrides: BTreeMap<String, String> = resource
         .configs
         .iter()
         .map(|cfg| (cfg.name.clone(), cfg.value.clone().unwrap_or_default()))
         .collect();
-    validate_group_configs(&overrides, bounds, unstable)
-        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
-    Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
-        group_id: resource.resource_name.clone(),
-        configs: overrides,
-    }))
+    group_config_record_from(&resource.resource_name, overrides, bounds, unstable)
 }
 
 #[cfg(test)]
@@ -51,6 +37,7 @@ mod tests {
         super::*,
         crate::{
             api_catalog::UnstableApiVersions,
+            codes,
             coordinator::unified::streams::{
                 config,
                 config::{KEY_NUM_STANDBY_REPLICAS, KEY_SESSION_TIMEOUT_MS},
@@ -58,6 +45,7 @@ mod tests {
             handlers::alter_configs::test_support::group_resource,
         },
         assert2::assert,
+        krabka_metadata::GroupConfigRecord,
     };
 
     #[test]
