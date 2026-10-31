@@ -511,7 +511,9 @@ mod tests {
             SslPrincipalMapper,
             config::{
                 PlainCredentials, RemoteStorageBackend,
-                test_support::{RuntimeInvalidator, assert_invalid_runtime, base},
+                test_support::{
+                    RuntimeInvalidator, assert_invalid_runtime, assert_invalid_runtime_cases, base,
+                },
             },
         },
         assert2::{assert, check},
@@ -986,6 +988,54 @@ mod tests {
         let mut config = BrokerConfig::default();
         config.streams_group.max_size = 0;
         assert_invalid_runtime(&config, "streams group maximum size must be positive");
+    }
+
+    /// Each group bound check, in the order `validate` runs them, for the
+    /// consumer group: the error names the group and the bound it breaks.
+    #[test]
+    fn rejects_each_consumer_group_bound() {
+        assert_invalid_runtime_cases([
+            RuntimeInvalidator {
+                expected: "consumer group minimum session timeout must be positive",
+                invalidate: |c| c.next_gen_consumer_group.min_session_timeout = Duration::ZERO,
+            },
+            RuntimeInvalidator {
+                expected: "consumer group minimum session timeout exceeds maximum",
+                invalidate: |c| {
+                    c.next_gen_consumer_group.min_session_timeout =
+                        c.next_gen_consumer_group.max_session_timeout * 2;
+                },
+            },
+            RuntimeInvalidator {
+                expected: "consumer group session timeout is outside its bounds",
+                invalidate: |c| {
+                    c.next_gen_consumer_group.session_timeout =
+                        c.next_gen_consumer_group.min_session_timeout / 2;
+                },
+            },
+            RuntimeInvalidator {
+                expected: "consumer group minimum heartbeat interval must be positive",
+                invalidate: |c| c.next_gen_consumer_group.min_heartbeat_interval = Duration::ZERO,
+            },
+            RuntimeInvalidator {
+                expected: "consumer group minimum heartbeat interval exceeds maximum",
+                invalidate: |c| {
+                    c.next_gen_consumer_group.min_heartbeat_interval =
+                        c.next_gen_consumer_group.max_heartbeat_interval * 2;
+                },
+            },
+            RuntimeInvalidator {
+                expected: "consumer group heartbeat interval is outside its bounds",
+                invalidate: |c| {
+                    c.next_gen_consumer_group.heartbeat_interval =
+                        c.next_gen_consumer_group.max_heartbeat_interval * 2;
+                },
+            },
+            RuntimeInvalidator {
+                expected: "consumer group maximum size must be positive",
+                invalidate: |c| c.next_gen_consumer_group.max_size = 0,
+            },
+        ]);
     }
 
     #[test]
