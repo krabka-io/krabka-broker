@@ -401,7 +401,7 @@ fn response(error_code: i16, broker_epoch: i64) -> BrokerRegistrationResponse {
 mod tests {
     use {
         super::*,
-        crate::test_support::broker_registration,
+        crate::test_support::{broker_registration, plaintext_broker_endpoint},
         krabka_metadata::krabka_version::{
             DISKLESS_OBJECT_RESERVATION_LEVEL, KRABKA_VERSION_FEATURE,
         },
@@ -466,8 +466,8 @@ mod tests {
             ..broker_registration(NodeId(2))
         };
         let endpoints = vec![
-            crate::test_support::plaintext_broker_endpoint("broker-2", 9092),
-            crate::test_support::plaintext_broker_endpoint("broker-2b", 9093),
+            plaintext_broker_endpoint("broker-2", 9092),
+            plaintext_broker_endpoint("broker-2b", 9093),
         ];
         let admitted = Admitted {
             incarnation_id,
