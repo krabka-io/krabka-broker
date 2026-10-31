@@ -63,7 +63,7 @@ struct EarliestContext<'a> {
 }
 
 /// An offset with the leader epoch that goes with it.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ResolvedOffset {
     offset: i64,
     leader_epoch: i32,
@@ -859,7 +859,7 @@ mod tests {
         }
     }
 
-    /// What the remote tier's answer makes of LATEST_TIERED. A tier that does
+    /// What the remote tier's answer makes of `LATEST_TIERED`. A tier that does
     /// not answer within the remote timeout fails the row; one that holds no
     /// finished segment, or fails, leaves the offset unknown.
     #[test]
