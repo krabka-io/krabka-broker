@@ -55,8 +55,6 @@ use {
     },
 };
 
-// `async` matches the call-site shape used by every other
-// `crate::handlers::*::handle`; today the body is purely synchronous.
 #[tracing::instrument(
     name = "handle_describe_delegation_token",
     level = "info",
