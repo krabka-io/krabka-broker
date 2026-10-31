@@ -394,7 +394,7 @@ fn tiered_source<'a>(
 
 /// The highest offset an acquire pass may materialize or read on `part`.
 ///
-/// Under read_committed, never surface records past the last stable offset:
+/// Under `read_committed`, never surface records past the last stable offset:
 /// clamp the materialize/read window to `min(lso, hwm)` so no record from an
 /// OPEN transaction can be acquired.
 ///
