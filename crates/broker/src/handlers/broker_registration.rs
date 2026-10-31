@@ -10,6 +10,7 @@ use {
         handlers::{
             ApiVersion, RequestContext,
             registration_listeners::{self, ListenerFields},
+            submit_failure_code,
         },
         leader_election::{compute_failover_changes, compute_unclean_restart_changes},
     },
@@ -409,11 +410,16 @@ fn validate_features(
     Ok(())
 }
 
+/// The error code for a registration whose controller write failed.
+///
+/// A controller that is not active answers `NOT_CONTROLLER`, which the broker
+/// retries against the active controller. That includes a new leader that has
+/// not committed its own epoch: see [`submit_failure_code`].
 fn raft_error_code(error: &RaftError) -> i16 {
     match error {
         RaftError::NotLeader { .. } | RaftError::LeaderUnknown => codes::NOT_CONTROLLER,
         RaftError::Metadata(_) => codes::INVALID_REGISTRATION,
-        _ => codes::UNKNOWN_SERVER_ERROR,
+        other => submit_failure_code(other, codes::UNKNOWN_SERVER_ERROR),
     }
 }
 

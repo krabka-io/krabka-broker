@@ -114,9 +114,15 @@ pub async fn handle(
 }
 
 /// The answer to a registration whose controller write failed with `error`.
+///
+/// A controller that is not active answers `NOT_CONTROLLER` with no message,
+/// as Kafka's `ApiError` does for a `NotControllerException`. That includes a
+/// new leader that has not committed its own epoch, which refuses with
+/// [`RaftError::UncommittedTail`]: see
+/// [`submit_failure_code`](crate::handlers::submit_failure_code).
 fn submit_error_response(error: &RaftError) -> ControllerRegistrationResponse {
     match error {
-        RaftError::NotLeader { .. } | RaftError::LeaderUnknown => {
+        RaftError::NotLeader { .. } | RaftError::LeaderUnknown | RaftError::UncommittedTail => {
             response(codes::NOT_CONTROLLER, None)
         }
         RaftError::Metadata(error) => {
