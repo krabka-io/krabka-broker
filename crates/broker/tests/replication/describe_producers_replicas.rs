@@ -16,7 +16,7 @@ use {
     crate::{
         cluster_lock,
         support::{
-            client::connect_with_context,
+            client::{connect_with_context, raw_connection},
             produce::{SinglePartitionProduceSetup, batch_request},
             shutdown_cluster,
             topics::CreateTopicRequestSetup,
@@ -27,7 +27,7 @@ use {
     assert2::assert,
     bytes::BytesMut,
     krabka_broker::{BrokerConfig, BrokerHandle, codes},
-    krabka_client_core::{Connection, ConnectionOptions},
+    krabka_client_core::{Connection},
     krabka_ids::ProducerId,
     krabka_protocol::{
         Decode, Encode,
@@ -95,12 +95,7 @@ use crate::support::records::now_ms;
 /// One connection to the broker that binds `address`, so that a request
 /// reaches that broker and no other.
 async fn connect(address: SocketAddr) -> Connection {
-    Connection::connect(address, ConnectionOptions {
-        client_id: "describe-producers-replicas".to_owned(),
-        ..ConnectionOptions::default()
-    })
-    .await
-    .expect("connect")
+    raw_connection(address, "describe-producers-replicas").await
 }
 
 /// Three brokers whose leaders append a transactional `Produce` below v12

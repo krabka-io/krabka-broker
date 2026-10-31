@@ -19,7 +19,7 @@ use {
         Cluster, cluster_lock,
         support::{
             self,
-            client::connect_with_context,
+            client::{connect_with_context, raw_connection},
             produce::{SinglePartitionProduceSetup, send_batch},
             records::batch_from_records,
             registered_cluster, shutdown_cluster,
@@ -30,7 +30,7 @@ use {
     assert2::assert,
     bytes::Bytes,
     krabka_broker::{BrokerHandle, codes},
-    krabka_client_core::{Connection, ConnectionOptions},
+    krabka_client_core::{Connection},
     krabka_ids::ProducerId,
     krabka_protocol::{
         owned::create_topics_request::CreatableTopicConfig,
@@ -76,12 +76,7 @@ use crate::support::records::now_ms;
 /// One connection to the broker that binds `address`, so that a request
 /// reaches that broker and no other.
 async fn connect(address: SocketAddr) -> Connection {
-    Connection::connect(address, ConnectionOptions {
-        client_id: "compaction-replicas".to_owned(),
-        ..ConnectionOptions::default()
-    })
-    .await
-    .expect("connect")
+    raw_connection(address, "compaction-replicas").await
 }
 
 /// A one-record batch of `key` and `value`. `producer` is the identity and
