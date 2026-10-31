@@ -337,6 +337,31 @@ fn moved_to_tiered_storage(p: &mut PendingRead, live: LiveOffsets, local_log_sta
     0
 }
 
+/// What a cold read needs from the partition's log, read under one lock.
+struct TierConfig {
+    /// The topic's KFC-1 delivery policy.
+    delivery_policy: DeliveryPolicy,
+    /// The declared clock bound the delivery check adds, in milliseconds.
+    delivery_uncertainty_ms: i64,
+    /// The global log start, when this process established it.
+    log_start: Option<Offset>,
+    /// The first offset the local log still holds.
+    local_log_start: Offset,
+}
+
+/// The partition's [`TierConfig`], or `None` when the topic does not have
+/// `remote.storage.enable=true`.
+fn tier_config(part: &Partition) -> Option<TierConfig> {
+    let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
+    let config = log.config_snapshot();
+    config.remote_storage_enable.then(|| TierConfig {
+        delivery_policy: config.delivery_policy,
+        delivery_uncertainty_ms: config.delivery_clock_uncertainty.millis_i64_trunc(),
+        log_start: log.established_log_start(),
+        local_log_start: log.local_log_start_offset(),
+    })
+}
+
 /// KIP-405: try to serve `p`'s requested offset from the remote tier when the
 /// local log returned `OFFSET_OUT_OF_RANGE` and the topic has
 /// `remote.storage.enable=true`.
@@ -390,26 +415,12 @@ pub(super) async fn try_remote_read(
     wait: &mut RemoteFetchWait,
 ) -> Option<usize> {
     let reader = broker.remote_reader.clone()?;
-    let (
-        remote_storage_enable,
+    let TierConfig {
         delivery_policy,
         delivery_uncertainty_ms,
         log_start,
         local_log_start,
-    ) = {
-        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
-        let config = log.config_snapshot();
-        (
-            config.remote_storage_enable,
-            config.delivery_policy,
-            config.delivery_clock_uncertainty.millis_i64_trunc(),
-            log.established_log_start(),
-            log.local_log_start_offset(),
-        )
-    };
-    if !remote_storage_enable {
-        return None;
-    }
+    } = tier_config(part)?;
     // KIP-405's `RemoteFetchRequestsPerSec`. Counted once this partition is
     // known to be tiered, so a cluster with no tiered topic materialises no
     // series, and before the reader pool can refuse the read, so a refusal
