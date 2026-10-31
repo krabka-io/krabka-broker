@@ -1,5 +1,95 @@
 //! The replayed and last-known-good seed maps of one group protocol, viewed
 //! together.
+//!
+//! The bootstrap replay applies every record to both maps, so that a group
+//! that finishes replay is ready to hydrate an actor and to survive a later
+//! actor respawn. The consumer, share and streams replays differ only in the
+//! seed type and the pair of maps, which [`SeedMaps`] takes as a parameter.
+
+use {
+    super::{
+        group_coordinator::GroupCoordinator,
+        seeds::{GroupSeed, ReplaySeed},
+    },
+    crate::error::BrokerError,
+    dashmap::DashMap,
+};
+
+/// One protocol's replayed seeds and their cached copies.
+pub(super) struct SeedMaps<'a, S> {
+    live: &'a DashMap<String, S>,
+    cache: &'a DashMap<String, S>,
+}
+
+impl<S: ReplaySeed> SeedMaps<'_, S> {
+    /// Puts a new group under `group_id` in both maps, as Kafka's replay
+    /// creates one for the first record of a group id.
+    pub(super) fn create(&self, group_id: &str) {
+        self.live.insert(group_id.into(), S::new_group());
+        self.cache.insert(group_id.into(), S::new_group());
+    }
+
+    /// Applies `update` to the replayed group and to its cached copy.
+    pub(super) fn update(&self, group_id: &str, update: impl Fn(&mut S)) {
+        if let Some(mut seed) = self.live.get_mut(group_id) {
+            update(seed.value_mut());
+        }
+        update(
+            self.cache
+                .entry(group_id.into())
+                .or_insert_with(S::new_group)
+                .value_mut(),
+        );
+    }
+
+    /// Applies `update` with `value` to the replayed group, and with a copy
+    /// of it to the cached copy.
+    pub(super) fn update_with<T: Clone>(
+        &self,
+        group_id: &str,
+        value: T,
+        update: impl Fn(&mut S, T),
+    ) {
+        let cached = value.clone();
+        if let Some(mut seed) = self.live.get_mut(group_id) {
+            update(seed.value_mut(), value);
+        }
+        update(
+            self.cache
+                .entry(group_id.into())
+                .or_insert_with(S::new_group)
+                .value_mut(),
+            cached,
+        );
+    }
+
+    /// Reads the replayed group, which must exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns Kafka's `IllegalStateException` for a group with no replayed
+    /// state.
+    pub(super) fn read<T>(
+        &self,
+        group_id: &str,
+        read: impl FnOnce(&S) -> T,
+    ) -> Result<T, BrokerError> {
+        self.live
+            .get(group_id)
+            .map(|seed| read(seed.value()))
+            .ok_or_else(|| BrokerError::Startup(format!("Group {group_id} has no replayed state.")))
+    }
+}
+
+impl GroupCoordinator {
+    /// The consumer groups' replayed seeds and cached copies.
+    pub(super) fn consumer_replay(&self) -> SeedMaps<'_, GroupSeed> {
+        SeedMaps {
+            live: &self.seeds,
+            cache: &self.seeds_cache,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -23,7 +113,7 @@ mod tests {
             test_support::{make_coord, next_current, next_member, share_member, streams_member},
         },
         crate::error::BrokerError,
-        assert2::check,
+        assert2::{assert, check},
         dashmap::DashMap,
     };
 
@@ -720,5 +810,18 @@ mod tests {
             },
         ];
         check_cases(cases, |c| (&*c.streams_seeds, &*c.streams_seeds_cache));
+    }
+
+    #[test]
+    fn a_consumer_update_of_a_group_the_replay_does_not_hold_creates_only_its_cached_copy() {
+        let c = make_coord();
+        c.consumer_replay().update("g", |seed| seed.group_epoch = 7);
+        check!(
+            (c.seeds.get("g").is_none(), c.cached_seed("g"))
+                == (true, Some(consumer(|seed| seed.group_epoch = 7)))
+        );
+        let read = c.consumer_replay().read("g", |seed| seed.group_epoch);
+        assert!(let Err(BrokerError::Startup(message)) = read);
+        check!(message == "Group g has no replayed state.");
     }
 }

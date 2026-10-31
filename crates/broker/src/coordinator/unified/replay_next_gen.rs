@@ -19,7 +19,6 @@ use {
             ExistingGroup, LEAVE_GROUP_MEMBER_EPOCH, ModernGroupType, group_tombstone,
             persisted_group_with_create, target_metadata, target_metadata_tombstone,
         },
-        seeds::{GroupSeed, ReplaySeed},
     },
     crate::error::BrokerError,
 };
@@ -88,63 +87,8 @@ impl GroupCoordinator {
             ModernGroupType::Consumer,
             self.replayed_modern_group(group_id),
             create_if_not_exists,
-            || {
-                self.seeds.insert(group_id.into(), GroupSeed::new_group());
-                self.seeds_cache
-                    .insert(group_id.into(), GroupSeed::new_group());
-            },
+            || self.consumer_replay().create(group_id),
         )
-    }
-
-    /// Applies `update` to the replayed group and to its cached copy.
-    fn update_consumer_seed(&self, group_id: &str, update: impl Fn(&mut GroupSeed)) {
-        if let Some(mut seed) = self.seeds.get_mut(group_id) {
-            update(seed.value_mut());
-        }
-        update(
-            self.seeds_cache
-                .entry(group_id.into())
-                .or_insert_with(GroupSeed::new_group)
-                .value_mut(),
-        );
-    }
-
-    /// Applies `update` with `value` to the replayed group, and with a copy
-    /// of it to the cached copy.
-    fn update_consumer_seed_with<T: Clone>(
-        &self,
-        group_id: &str,
-        value: T,
-        update: impl Fn(&mut GroupSeed, T),
-    ) {
-        let cached = value.clone();
-        if let Some(mut seed) = self.seeds.get_mut(group_id) {
-            update(seed.value_mut(), value);
-        }
-        update(
-            self.seeds_cache
-                .entry(group_id.into())
-                .or_insert_with(GroupSeed::new_group)
-                .value_mut(),
-            cached,
-        );
-    }
-
-    /// Reads the replayed group, which must exist.
-    ///
-    /// # Errors
-    ///
-    /// Returns Kafka's `IllegalStateException` for a group with no replayed
-    /// state.
-    fn consumer_seed<T>(
-        &self,
-        group_id: &str,
-        read: impl FnOnce(&GroupSeed) -> T,
-    ) -> Result<T, BrokerError> {
-        self.seeds
-            .get(group_id)
-            .map(|seed| read(seed.value()))
-            .ok_or_else(|| BrokerError::Startup(format!("Group {group_id} has no replayed state.")))
     }
 
     /// `ConsumerGroupMetadataValue`: the group epoch and the metadata hash.
@@ -158,7 +102,7 @@ impl GroupCoordinator {
         v: persistence_next_gen::GroupMetadataValue,
     ) -> Result<(), BrokerError> {
         self.persisted_consumer_group(group_id, true)?;
-        self.update_consumer_seed(group_id, |seed| {
+        self.consumer_replay().update(group_id, |seed| {
             seed.group_epoch = v.epoch;
             seed.metadata_hash = v.metadata_hash;
         });
@@ -174,7 +118,7 @@ impl GroupCoordinator {
     /// Returns the error of `Self::persisted_consumer_group`.
     pub fn replay_partition_metadata(&self, group_id: &str) -> Result<(), BrokerError> {
         self.persisted_consumer_group(group_id, true)?;
-        self.update_consumer_seed(group_id, |seed| {
+        self.consumer_replay().update(group_id, |seed| {
             seed.has_subscription_metadata_record = true;
         });
         Ok(())
@@ -193,7 +137,7 @@ impl GroupCoordinator {
         v: persistence_next_gen::MemberMetadataValue,
     ) -> Result<(), BrokerError> {
         self.persisted_consumer_group(group_id, true)?;
-        self.update_consumer_seed_with(group_id, v, |seed, v| {
+        self.consumer_replay().update_with(group_id, v, |seed, v| {
             seed.members.insert(member_id.into(), v);
         });
         Ok(())
@@ -213,7 +157,7 @@ impl GroupCoordinator {
     ) -> Result<(), BrokerError> {
         self.persisted_consumer_group(group_id, true)?;
         target_metadata(v.assignment_epoch, v.assignment_timestamp_ms)?;
-        self.update_consumer_seed(group_id, |seed| {
+        self.consumer_replay().update(group_id, |seed| {
             seed.target_epoch = v.assignment_epoch;
             seed.assignment_timestamp_ms = v.assignment_timestamp_ms;
         });
@@ -233,7 +177,7 @@ impl GroupCoordinator {
         v: persistence_next_gen::TargetAssignmentMemberValue,
     ) -> Result<(), BrokerError> {
         self.persisted_consumer_group(group_id, true)?;
-        self.update_consumer_seed_with(group_id, v, |seed, v| {
+        self.consumer_replay().update_with(group_id, v, |seed, v| {
             seed.target_per_member.insert(member_id.into(), v);
         });
         Ok(())
@@ -253,7 +197,7 @@ impl GroupCoordinator {
         v: CurrentMemberAssignmentValue,
     ) -> Result<(), BrokerError> {
         self.persisted_consumer_group(group_id, true)?;
-        self.update_consumer_seed_with(group_id, v, |seed, v| {
+        self.consumer_replay().update_with(group_id, v, |seed, v| {
             seed.install_current_member(member_id, v, uninitialized_member);
         });
         Ok(())
@@ -273,7 +217,7 @@ impl GroupCoordinator {
         v: persistence_next_gen::RegularExpressionValue,
     ) -> Result<(), BrokerError> {
         self.persisted_consumer_group(group_id, true)?;
-        self.update_consumer_seed_with(group_id, v, |seed, v| {
+        self.consumer_replay().update_with(group_id, v, |seed, v| {
             seed.resolved_regexes.insert(regex.into(), v);
         });
         Ok(())
@@ -310,7 +254,7 @@ impl GroupCoordinator {
         }
         match key {
             K::GroupMetadata { .. } => {
-                self.consumer_seed(group_id, |seed| {
+                self.consumer_replay().read(group_id, |seed| {
                     group_tombstone(
                         ModernGroupType::Consumer,
                         group_id,
@@ -323,35 +267,39 @@ impl GroupCoordinator {
                 self.seeds_cache.remove(group_id);
                 self.group_types.remove(group_id);
             }
-            K::PartitionMetadata { .. } => self.update_consumer_seed(group_id, |seed| {
+            K::PartitionMetadata { .. } => self.consumer_replay().update(group_id, |seed| {
                 seed.has_subscription_metadata_record = false;
             }),
             K::MemberMetadata { member_id, .. } => {
-                let remove =
-                    self.consumer_seed(group_id, |seed| seed.member_tombstone(member_id))??;
+                let remove = self
+                    .consumer_replay()
+                    .read(group_id, |seed| seed.member_tombstone(member_id))??;
                 if remove {
-                    self.update_consumer_seed(group_id, |seed| {
+                    self.consumer_replay().update(group_id, |seed| {
                         seed.remove_replayed_member(member_id);
                     });
                 }
             }
             K::TargetAssignmentMetadata { .. } => {
-                self.consumer_seed(group_id, |seed| {
+                self.consumer_replay().read(group_id, |seed| {
                     target_metadata_tombstone(group_id, seed.target_per_member.len())
                 })??;
-                self.update_consumer_seed(group_id, |seed| {
+                self.consumer_replay().update(group_id, |seed| {
                     seed.target_epoch = -1;
                     seed.assignment_timestamp_ms = 0;
                 });
             }
             K::TargetAssignmentMember { member_id, .. } => {
-                self.update_consumer_seed(group_id, |seed| {
+                self.consumer_replay().update(group_id, |seed| {
                     seed.target_per_member.remove(member_id);
                 });
             }
             K::CurrentMemberAssignment { member_id, .. } => {
-                if self.consumer_seed(group_id, |seed| seed.members.contains_key(member_id))? {
-                    self.update_consumer_seed(group_id, |seed| {
+                if self
+                    .consumer_replay()
+                    .read(group_id, |seed| seed.members.contains_key(member_id))?
+                {
+                    self.consumer_replay().update(group_id, |seed| {
                         let state = seed
                             .current_per_member
                             .get(member_id)
@@ -369,7 +317,7 @@ impl GroupCoordinator {
                     });
                 }
             }
-            K::RegularExpression { regex, .. } => self.update_consumer_seed(group_id, |seed| {
+            K::RegularExpression { regex, .. } => self.consumer_replay().update(group_id, |seed| {
                 seed.resolved_regexes.remove(regex);
             }),
         }
@@ -384,7 +332,7 @@ mod persisted_group_behavior {
             bootstrap::test_support::replay_compacted_group_log,
             unified::{
                 persistence::encode_string_key,
-                seeds::{ShareGroupSeed, StreamsGroupSeed},
+                seeds::{GroupSeed, ShareGroupSeed, StreamsGroupSeed},
                 test_support::{make_coord, persisted_snapshots},
             },
         },
