@@ -377,6 +377,13 @@ mod tests {
             test_support::{ImageMetadatalessProvider, make_coord, stop_streams_actor},
         },
         assert2::{assert, check},
+        std::{
+            sync::{
+                Barrier, Mutex,
+                atomic::{AtomicBool, Ordering},
+            },
+            thread,
+        },
         tokio::sync::{mpsc, oneshot},
     };
 
@@ -548,6 +555,85 @@ mod tests {
             .expect("send Describe");
         assert!(view.await.expect("a describe view").group_epoch == 27);
         coord.shutdown_all().await;
+    }
+
+    /// A registry entry that records every seed it is handed, standing in for
+    /// an actor handle so a test can choose when it reads as closed.
+    #[derive(Debug, Default)]
+    struct FakeActor {
+        closed: AtomicBool,
+        seeds: Mutex<Vec<u32>>,
+    }
+
+    impl FakeActor {
+        fn closed() -> Self {
+            Self {
+                closed: AtomicBool::new(true),
+                ..Self::default()
+            }
+        }
+
+        fn seeds(&self) -> Vec<u32> { self.seeds.lock().expect("seeds lock").clone() }
+    }
+
+    impl RegisteredActor for FakeActor {
+        type Seed = u32;
+
+        fn is_closed(&self) -> bool { self.closed.load(Ordering::SeqCst) }
+
+        fn try_seed(&self, seed: u32) { self.seeds.lock().expect("seeds lock").push(seed); }
+    }
+
+    #[test]
+    fn a_respawn_keeps_and_does_not_seed_an_actor_another_caller_registered() {
+        let map = DashMap::new();
+        map.insert("g".to_owned(), Arc::new(FakeActor::closed()));
+        let winner = Arc::new(FakeActor::default());
+
+        // Another caller respawns the group while this one spawns its own.
+        let answer = get_or_spawn(
+            &map,
+            "g",
+            || {
+                map.insert("g".to_owned(), Arc::clone(&winner));
+                FakeActor::default()
+            },
+            || Some(7),
+        );
+
+        check!(Arc::ptr_eq(&answer, &winner));
+        check!(map.get("g").is_some_and(|r| Arc::ptr_eq(r.value(), &winner)));
+        assert!(winner.seeds() == Vec::<u32>::new());
+    }
+
+    #[test]
+    fn racing_respawns_of_a_closed_actor_agree_on_one_actor_seeded_once() {
+        const CALLERS: usize = 8;
+        for _ in 0..200 {
+            let map = DashMap::new();
+            map.insert("g".to_owned(), Arc::new(FakeActor::closed()));
+            let start = Barrier::new(CALLERS);
+
+            let answers: Vec<Arc<FakeActor>> = thread::scope(|scope| {
+                let callers: Vec<_> = (0..CALLERS)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            start.wait();
+                            get_or_spawn(&map, "g", FakeActor::default, || Some(7))
+                        })
+                    })
+                    .collect();
+                callers
+                    .into_iter()
+                    .map(|caller| caller.join().expect("the caller finishes"))
+                    .collect()
+            });
+
+            let registered = Arc::clone(map.get("g").expect("a registered actor").value());
+            check!(!registered.is_closed());
+            check!(answers.iter().all(|a| Arc::ptr_eq(a, &registered)));
+            assert!(registered.seeds() == vec![7]);
+        }
     }
 
     /// What the registry holds for the group when `respawn_closed_streams`
