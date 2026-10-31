@@ -7,10 +7,9 @@ mod support;
 use {
     crate::support::{
         classic::{ClassicTimeouts, classic_join_request},
-        client::{connect_client, list_groups_by_type},
+        client::{connect_client, create_topic, list_groups_by_type},
         consumer_groups::{consumer_heartbeat, reported_assignment},
         discovery::named_topic_metadata,
-        topics::{creatable_topic, create_topic_request},
     },
     assert2::{assert, check},
     krabka_broker::{Broker, BrokerConfig, coordinator::unified::config::RebalanceProtocol},
@@ -56,22 +55,6 @@ fn boot() -> Pin<Box<impl Future<Output = BootedBroker>>> {
             dir: started.directory,
         }
     })
-}
-
-async fn create_topic(client: &Client, topic: &str, partitions: i32) {
-    let resp = client
-        .send(create_topic_request(
-            creatable_topic()
-                .name((topic).into())
-                .partitions(partitions)
-                .call(),
-        ))
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "topic create failed: {resp:?}"
-    );
 }
 
 /// A heartbeat Kafka accepts at v1: an empty `member_id` becomes a
