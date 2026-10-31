@@ -17,6 +17,7 @@ use {
     },
     dashmap::{DashMap, Entry},
     std::sync::Arc,
+    tokio::sync::mpsc::error::TrySendError,
 };
 
 /// What a registry needs from an actor handle: whether the actor has exited,
@@ -27,9 +28,20 @@ trait RegisteredActor {
     /// `true` once the actor has exited and its mailbox is closed.
     fn is_closed(&self) -> bool;
 
-    /// Hands `seed` to the actor, dropping it when the mailbox is full or
-    /// closed.
-    fn try_seed(&self, seed: Self::Seed);
+    /// Hands `seed` to the actor without waiting.
+    ///
+    /// # Errors
+    ///
+    /// Fails, dropping `seed`, when the mailbox is full or closed.
+    fn try_seed(&self, seed: Self::Seed) -> Result<(), TrySendError<()>>;
+}
+
+/// `error` without the message it could not deliver.
+fn undelivered<T>(error: &TrySendError<T>) -> TrySendError<()> {
+    match error {
+        TrySendError::Full(_) => TrySendError::Full(()),
+        TrySendError::Closed(_) => TrySendError::Closed(()),
+    }
 }
 
 impl RegisteredActor for GroupActorHandle {
@@ -37,7 +49,11 @@ impl RegisteredActor for GroupActorHandle {
 
     fn is_closed(&self) -> bool { self.tx.is_closed() }
 
-    fn try_seed(&self, seed: GroupSeed) { let _ = self.tx.try_send(GroupActorMessage::Seed(seed)); }
+    fn try_seed(&self, seed: GroupSeed) -> Result<(), TrySendError<()>> {
+        self.tx
+            .try_send(GroupActorMessage::Seed(seed))
+            .map_err(|error| undelivered(&error))
+    }
 }
 
 impl RegisteredActor for ShareGroupActorHandle {
@@ -45,8 +61,10 @@ impl RegisteredActor for ShareGroupActorHandle {
 
     fn is_closed(&self) -> bool { self.tx.is_closed() }
 
-    fn try_seed(&self, seed: ShareGroupSeed) {
-        let _ = self.tx.try_send(ShareGroupActorMessage::Seed(seed));
+    fn try_seed(&self, seed: ShareGroupSeed) -> Result<(), TrySendError<()>> {
+        self.tx
+            .try_send(ShareGroupActorMessage::Seed(seed))
+            .map_err(|error| undelivered(&error))
     }
 }
 
@@ -55,37 +73,51 @@ impl RegisteredActor for StreamsGroupActorHandle {
 
     fn is_closed(&self) -> bool { self.tx.is_closed() }
 
-    fn try_seed(&self, seed: StreamsGroupSeed) {
-        let _ = self.tx.try_send(StreamsGroupActorMessage::Seed(seed));
+    fn try_seed(&self, seed: StreamsGroupSeed) -> Result<(), TrySendError<()>> {
+        self.tx
+            .try_send(StreamsGroupActorMessage::Seed(seed))
+            .map_err(|error| undelivered(&error))
     }
 }
 
 /// The live actor that `map` holds for `group_id`, or a fresh one from
 /// `spawn` when the entry is absent or its actor has exited.
 ///
-/// After the insert, the registered actor is hydrated with what `seed`
-/// returns.
+/// A fresh actor is hydrated with what `seed` returns before it is
+/// registered, so the seed is the first message it reads. When another caller
+/// registers a live actor first, that actor is returned untouched and the
+/// fresh one is dropped: one group never has two actors, and a live actor is
+/// never seeded twice.
 fn get_or_spawn<H: RegisteredActor>(
     map: &DashMap<String, Arc<H>>,
     group_id: &str,
     spawn: impl FnOnce() -> H,
     seed: impl FnOnce() -> Option<H::Seed>,
 ) -> Arc<H> {
-    if let Some(h) = map.get(group_id) {
-        // Dead-actor detection: a closed mpsc sender means the actor exited
-        // (typically after a log-write failure). Drop the entry and respawn.
-        if !h.value().is_closed() {
-            return Arc::clone(h.value());
+    // Dead-actor detection: a closed mpsc sender means the actor exited
+    // (typically after a log-write failure), and the entry is replaced.
+    if let Some(h) = map.get(group_id)
+        && !h.value().is_closed()
+    {
+        return Arc::clone(h.value());
+    }
+    let spawned = Arc::new(spawn());
+    if let Some(seed) = seed()
+        && let Err(error) = spawned.try_seed(seed)
+    {
+        tracing::warn!(group_id, %error, "dropped the seed of a respawned group actor");
+    }
+    match map.entry(group_id.into()) {
+        Entry::Occupied(entry) if !entry.get().is_closed() => Arc::clone(entry.get()),
+        Entry::Occupied(mut entry) => {
+            entry.insert(Arc::clone(&spawned));
+            spawned
         }
-        drop(h);
-        map.remove(group_id);
+        Entry::Vacant(entry) => {
+            entry.insert(Arc::clone(&spawned));
+            spawned
+        }
     }
-    let h = Arc::new(spawn());
-    let inserted = Arc::clone(map.entry(group_id.into()).or_insert(h).value());
-    if let Some(seed) = seed() {
-        inserted.try_seed(seed);
-    }
-    inserted
 }
 
 /// The `GROUP_ID_NOT_FOUND` message of a `ConsumerGroupHeartbeat` that names a
@@ -378,6 +410,7 @@ mod tests {
         },
         assert2::{assert, check},
         std::{
+            iter,
             sync::{
                 Barrier, Mutex,
                 atomic::{AtomicBool, Ordering},
@@ -581,7 +614,10 @@ mod tests {
 
         fn is_closed(&self) -> bool { self.closed.load(Ordering::SeqCst) }
 
-        fn try_seed(&self, seed: u32) { self.seeds.lock().expect("seeds lock").push(seed); }
+        fn try_seed(&self, seed: u32) -> Result<(), TrySendError<()>> {
+            self.seeds.lock().expect("seeds lock").push(seed);
+            Ok(())
+        }
     }
 
     #[test]
@@ -602,7 +638,10 @@ mod tests {
         );
 
         check!(Arc::ptr_eq(&answer, &winner));
-        check!(map.get("g").is_some_and(|r| Arc::ptr_eq(r.value(), &winner)));
+        check!(
+            map.get("g")
+                .is_some_and(|r| Arc::ptr_eq(r.value(), &winner))
+        );
         assert!(winner.seeds() == Vec::<u32>::new());
     }
 
@@ -615,14 +654,14 @@ mod tests {
             let start = Barrier::new(CALLERS);
 
             let answers: Vec<Arc<FakeActor>> = thread::scope(|scope| {
-                let callers: Vec<_> = (0..CALLERS)
-                    .map(|_| {
-                        scope.spawn(|| {
-                            start.wait();
-                            get_or_spawn(&map, "g", FakeActor::default, || Some(7))
-                        })
+                let callers: Vec<_> = iter::repeat_with(|| {
+                    scope.spawn(|| {
+                        start.wait();
+                        get_or_spawn(&map, "g", FakeActor::default, || Some(7))
                     })
-                    .collect();
+                })
+                .take(CALLERS)
+                .collect();
                 callers
                     .into_iter()
                     .map(|caller| caller.join().expect("the caller finishes"))
