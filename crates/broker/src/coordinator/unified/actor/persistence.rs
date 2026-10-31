@@ -8,7 +8,8 @@
 
 use {
     super::{
-        FALLBACK_REBALANCE_TIMEOUT_MS_I32, FALLBACK_SESSION_TIMEOUT_MS_I32, chrono_now_ms,
+        ActorServices, FALLBACK_REBALANCE_TIMEOUT_MS_I32, FALLBACK_SESSION_TIMEOUT_MS_I32,
+        chrono_now_ms,
         pending_records::{PartitionMetadataWrite, PendingRecords},
     },
     crate::{
@@ -311,6 +312,18 @@ pub(super) async fn flush_pending(
         state.set_has_subscription_metadata_record(false);
     }
     pending.apply_to_cache(coordinator, &state.group_id);
+}
+
+impl ActorServices<'_> {
+    /// [`flush_pending`] through this actor's offsets log and coordinator.
+    pub(super) async fn flush(
+        self,
+        state: &mut GroupState,
+        pending: PendingRecords,
+        now_ms: i64,
+    ) -> Result<(), BrokerError> {
+        flush_pending(state, pending, self.offsets_log, self.coordinator, now_ms).await
+    }
 }
 
 #[cfg(test)]

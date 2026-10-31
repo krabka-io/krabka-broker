@@ -19,7 +19,7 @@ use {
             reported_owned, try_build_member, update_member_state,
         },
         pending_records::PendingRecords,
-        persistence::{Recorder, current_assignment_value, flush_pending, target_assignment_value},
+        persistence::{Recorder, current_assignment_value, target_assignment_value},
         regex_resolution::{
             RegexResolution, Resolutions, apply_regex_result, delete_unsubscribed_regexes,
         },
@@ -569,24 +569,10 @@ async fn handle_heartbeat(
         Some(prefix) => prefix.followed_by(step.pending),
         None => step.pending,
     };
-    flush_pending(
-        state,
-        pending,
-        services.offsets_log,
-        services.coordinator,
-        now_ms,
-    )
-    .await?;
+    services.flush(state, pending, now_ms).await?;
     if let Some(resolved) = step.resolutions {
         let result = apply_regex_result(state, resolved, &services.metadata.snapshot());
-        flush_pending(
-            state,
-            result,
-            services.offsets_log,
-            services.coordinator,
-            chrono_now_ms(),
-        )
-        .await?;
+        services.flush(state, result, chrono_now_ms()).await?;
     }
     Ok(step.response)
 }

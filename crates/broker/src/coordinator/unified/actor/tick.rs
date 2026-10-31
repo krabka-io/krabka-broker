@@ -13,7 +13,7 @@ use {
         ActorServices, ParkedWaiters, chrono_now_ms,
         downgrade::{downgrade_fencing, downgrades_without},
         heartbeat::fence_members,
-        persistence::{flush_classic_metadata, flush_pending},
+        persistence::flush_classic_metadata,
         waiters::settle_removed_classic_waiters,
     },
     crate::{
@@ -155,14 +155,7 @@ async fn handle_session_tick(
             return downgrade_fencing(group, &member_ids, services).await;
         }
         let pending = fence_members(state, services.metadata, &member_ids);
-        flush_pending(
-            state,
-            pending,
-            services.offsets_log,
-            services.coordinator,
-            chrono_now_ms(),
-        )
-        .await?;
+        services.flush(state, pending, chrono_now_ms()).await?;
     }
     Ok(())
 }

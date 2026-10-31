@@ -13,7 +13,7 @@ use {
         heartbeat::{MemberUpdateRecords, member_update_records, replace_static_member},
         member_state::{MemberChange, after_member_update, update_subscription},
         pending_records::PendingRecords,
-        persistence::{Recorder, flush_classic_metadata, flush_pending},
+        persistence::{Recorder, flush_classic_metadata},
         regex_resolution::{RegexResolution, apply_regex_result, maybe_update_regular_expressions},
         waiters::{
             complete_classic_rebalance, drain_followers_with, fence_replaced_classic_member,
@@ -497,27 +497,13 @@ async fn classic_join_hosted(
         pending,
         resolutions,
     } = member_update_records(recorder, state, update, &member_id, replacement);
-    let flushed = flush_pending(
-        state,
-        pending,
-        services.offsets_log,
-        services.coordinator,
-        now_ms,
-    )
-    .await;
+    let flushed = services.flush(state, pending, now_ms).await;
     // Kafka's `handleRegularExpressionsResult` writes what the resolution
     // found in a batch of its own, after the join's.
     let flushed = match (flushed, resolutions) {
         (Ok(()), Some(resolved)) => {
             let result = apply_regex_result(state, resolved, &image);
-            flush_pending(
-                state,
-                result,
-                services.offsets_log,
-                services.coordinator,
-                chrono_now_ms(),
-            )
-            .await
+            services.flush(state, result, chrono_now_ms()).await
         }
         (flushed, _) => flushed,
     };

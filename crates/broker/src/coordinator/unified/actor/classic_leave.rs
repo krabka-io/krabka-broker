@@ -11,7 +11,7 @@ use {
         ActorServices, ErrorCode, ParkedWaiters, chrono_now_ms,
         downgrade::{downgrade_fencing, downgrades_without},
         heartbeat::fence_members,
-        persistence::{flush_classic_metadata, flush_pending},
+        persistence::flush_classic_metadata,
         retention::append_tombstones,
         waiters::settle_removed_classic_waiters,
     },
@@ -99,19 +99,14 @@ pub(super) async fn handle_classic_leave_message(
         return Ok(responses);
     }
     let pending = fence_members(state, services.metadata, &removed);
-    flush_pending(
-        state,
-        pending,
-        services.offsets_log,
-        services.coordinator,
-        chrono_now_ms(),
-    )
-    .await
-    .map_err(|error| {
-        tracing::warn!(group_id = %state.group_id, %error,
+    services
+        .flush(state, pending, chrono_now_ms())
+        .await
+        .map_err(|error| {
+            tracing::warn!(group_id = %state.group_id, %error,
             "hosted classic LeaveGroup log write failed");
-        write_failure_code(&error)
-    })?;
+            write_failure_code(&error)
+        })?;
     Ok(responses)
 }
 
