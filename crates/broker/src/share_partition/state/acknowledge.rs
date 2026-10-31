@@ -143,7 +143,7 @@ impl AcquisitionState {
 
         let old_batches = mem::take(&mut self.batches);
         let mut batches = Vec::with_capacity(old_batches.len());
-        let mut archive = super::dlq::ArchiveSink {
+        let mut archive = ArchiveSink {
             dlq_enabled: self.dlq_enabled,
             delivery_complete_count: &mut self.delivery_complete_count,
             pending_dlq: &mut self.pending_dlq,
@@ -184,25 +184,9 @@ impl AcquisitionState {
                 let mut run = batch.clone();
                 run.first_offset = offset;
                 run.last_offset = run_last;
-                let n = clamp_i32(run.len());
                 match action {
-                    AckAction::Disposition(AckType::Accept) => {
-                        run.state = RecordState::Acknowledged;
-                        run.acquired_by = None;
-                        run.lock_deadline = None;
-                        *archive.delivery_complete_count += n;
-                    }
-                    AckAction::Disposition(AckType::Release) => {
-                        give_back(&mut run, max_attempts, &mut archive);
-                    }
-                    AckAction::Disposition(AckType::Reject) => {
-                        archive.archive(&mut run, DlqCause::ClientReject);
-                    }
-                    AckAction::Disposition(AckType::Gap) => {
-                        run.state = RecordState::Archived;
-                        run.acquired_by = None;
-                        run.lock_deadline = None;
-                        *archive.delivery_complete_count += n;
+                    AckAction::Disposition(ack) => {
+                        apply_ack(&mut run, ack, max_attempts, &mut archive);
                     }
                     AckAction::Renew { deadline } => run.lock_deadline = Some(deadline),
                 }
