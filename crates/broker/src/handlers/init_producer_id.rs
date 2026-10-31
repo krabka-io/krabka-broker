@@ -33,6 +33,7 @@ use {
             version::resolve_txn_version,
         },
     },
+    krabka_ids::PartitionIndex,
     krabka_metadata::{AclOperation, MetadataImage, ResourceType},
     krabka_protocol::owned::{
         init_producer_id_request::InitProducerIdRequest,
@@ -275,8 +276,9 @@ async fn ensure_partition_loaded(
 ) -> Result<Result<(), i16>, BrokerError> {
     let coord = &broker.txn_coordinator;
     drop(coord.refresh_leader_partitions(image).await);
-    let Some(txn_partition) = coord.partition_for(tid) else {
-        return Ok(Err(codes::COORDINATOR_NOT_AVAILABLE));
+    let txn_partition = match coordinator_partition(coord, tid) {
+        Ok(partition) => partition,
+        Err(error_code) => return Ok(Err(error_code)),
     };
     if coord.load_status(txn_partition).await == Some(LoadStatus::Pending) {
         // This broker leads the `__transaction_state` partition, but
@@ -313,6 +315,15 @@ async fn ensure_partition_loaded(
     // answers `COORDINATOR_LOAD_IN_PROGRESS`. Later calls do not wait.
     coord.wait_for_load(txn_partition, INIT_LOAD_WAIT).await;
     Ok(coord.coordinator_error(tid).await.map_or(Ok(()), Err))
+}
+
+/// The `__transaction_state` partition that coordinates `tid`, or
+/// `COORDINATOR_NOT_AVAILABLE` when `coord` has none, which happens only when
+/// its partition count is not positive.
+fn coordinator_partition(coord: &TxnCoordinator, tid: &str) -> Result<PartitionIndex, i16> {
+    coord
+        .partition_for(tid)
+        .ok_or(codes::COORDINATOR_NOT_AVAILABLE)
 }
 
 /// The error code that answers a transactional `InitProducerId` that failed
