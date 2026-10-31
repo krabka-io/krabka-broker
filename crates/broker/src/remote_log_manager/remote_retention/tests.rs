@@ -1197,6 +1197,69 @@ async fn a_retention_pass_finishes_the_deletes_started_below_the_floor(
     check!(segment_states(&rlmm) == remaining);
 }
 
+/// The delete counters an abandoned-delete pass leaves: one request per
+/// attempt, and one error for the delete that stops the pass.
+///
+/// Segments 0 and 10 were marked `DeleteSegmentStarted` under a floor of 20,
+/// so they are the only work: nothing finished lies below the floor and no
+/// retention setting is on.
+#[yare::parameterized(
+    every_delete_goes = { false, 2, 0 },
+    the_first_refusal_stops_the_pass = { true, 1, 1 },
+)]
+#[test_macro(tokio::test)]
+async fn finishing_abandoned_deletes_records_its_delete_requests_and_errors(
+    refuse: bool,
+    requests: u64,
+    errors: u64,
+) {
+    let fixtures::OwnedTierResources {
+        rlmm,
+        metrics,
+        index_cache,
+    } = fixtures::owned_tier_resources();
+    seed_finished_segments(&rlmm, 4);
+    mark_delete_started(&rlmm, &[0, 1]);
+    let rsm: Arc<dyn RemoteStorageManager> = if refuse {
+        Arc::new(RefusesDeleteRsm::default())
+    } else {
+        Arc::new(AcceptingRsm)
+    };
+    let tier = fixtures::configured_tier()
+        .rsm(&rsm)
+        .rlmm(&rlmm)
+        .metrics(&metrics)
+        .index_cache(&index_cache)
+        .call();
+    let cfg = LogConfig {
+        retention: None,
+        retention_size: None,
+        ..LogConfig::default()
+    };
+
+    remote_retention_pass(
+        &tp(),
+        1,
+        empty_local_bounds(&cfg, Offset(20), Some(Offset(20)), now_ms()),
+        &tier,
+    )
+    .await;
+
+    let topic = fixtures::orders_label();
+    check!(
+        (
+            metrics
+                .remote_delete_requests_total
+                .get_or_create(&topic)
+                .get(),
+            metrics
+                .remote_delete_errors_total
+                .get_or_create(&topic)
+                .get()
+        ) == (requests, errors)
+    );
+}
+
 #[derive(Default)]
 struct RemoteTimeRetention {
     segments: Vec<RemoteLogSegmentMetadata>,

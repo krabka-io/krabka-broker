@@ -680,6 +680,83 @@ mod tests {
         check!(residue == expected);
     }
 
+    /// Accepts every copy and refuses every delete.
+    struct RefusesDeleteRsm;
+
+    #[krabka_macros::missing_remote_reads]
+    impl RemoteStorageManager for RefusesDeleteRsm {
+        fn copy_log_segment_data(
+            &self,
+            _metadata: &RemoteLogSegmentMetadata,
+            _data: &LogSegmentData,
+        ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
+            Ok(None)
+        }
+
+        fn delete_log_segment_data(
+            &self,
+            _metadata: &RemoteLogSegmentMetadata,
+        ) -> Result<(), RemoteStorageError> {
+            Err(RemoteStorageError::InvalidArgument("refused".into()))
+        }
+    }
+
+    /// Deleting a copy that finished below the floor counts as one delete
+    /// request, and as one delete error when the backend refuses it.
+    #[yare::parameterized(
+        the_delete_goes = { false, 0 },
+        the_backend_refuses_it = { true, 1 },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_delete_below_the_floor_records_its_delete_request_and_error(
+        refuse: bool,
+        errors: u64,
+    ) {
+        let rsm: Arc<dyn RemoteStorageManager> = if refuse {
+            Arc::new(RefusesDeleteRsm)
+        } else {
+            Arc::new(DeletingRsm::default())
+        };
+        let fixtures::OwnedTierResources {
+            rlmm,
+            metrics,
+            index_cache,
+        } = fixtures::owned_tier_resources();
+        let tier = fixtures::configured_tier()
+            .rsm(&rsm)
+            .rlmm(&rlmm)
+            .metrics(&metrics)
+            .index_cache(&index_cache)
+            .call();
+
+        copy_one(
+            &tier,
+            &tp(),
+            CopyIdentity {
+                broker_id: 1,
+                leader_epoch: LeaderEpoch(0),
+                fence: &FloorFence(Some(Offset(10))),
+            },
+            &synth_export().call(),
+            ChainPosition::Unchained,
+        )
+        .await;
+
+        let topic = fixtures::orders_label();
+        check!(
+            (
+                metrics
+                    .remote_delete_requests_total
+                    .get_or_create(&topic)
+                    .get(),
+                metrics
+                    .remote_delete_errors_total
+                    .get_or_create(&topic)
+                    .get()
+            ) == (1, errors)
+        );
+    }
+
     /// A `DeleteRecords` that marks a segment `DeleteSegmentStarted` while
     /// its copy uploads makes `CopySegmentFinished` an invalid transition.
     /// The copy then rolls back: its bytes are deleted, and its metadata ends
