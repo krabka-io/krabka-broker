@@ -553,6 +553,17 @@ fn a_failed_sealed_segment_removal_keeps_the_survivors_accounted_for(
         log.size().bytes_u64() == on_disk_log_bytes(dir.path()),
         "{removal:?}, on_rename={on_rename}: the log must still report the bytes that are really there"
     );
+    // A trim's floor follows the prefix that did come off disk, as
+    // retention's does. A tiered eviction leaves it behind: the remote tier
+    // still answers for the evicted offsets.
+    let floor = match removal {
+        SealedRemoval::Trim => sealed[1],
+        SealedRemoval::TieredEviction => sealed[0],
+    };
+    check!(
+        log.log_start_offset() == floor,
+        "{removal:?}, on_rename={on_rename}: the floor after a partial removal"
+    );
 
     // The fault fires once, so the retry is what a healthy disk gives.
     log.test_set_io(file_io());
