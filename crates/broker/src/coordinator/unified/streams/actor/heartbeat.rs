@@ -9,11 +9,11 @@
 
 use {
     super::{
-        ActorState, chrono_now_ms,
+        ActorState, StreamsTurn, chrono_now_ms,
         reconciliation::{
             assignment_delay, configure_after_load, reconcile, validation_or_configs_changed,
         },
-        records::{StreamsRecorder, flush_pending},
+        records::StreamsRecorder,
         request::{build_member, task_ids_to_map, task_offsets_to_map, update_client_tags},
         response::{ResponseDelta, build_assignment_resp, endpoint_to_partitions, error_resp},
     },
@@ -21,8 +21,7 @@ use {
         api_catalog::UnstableApiVersions,
         codes,
         coordinator::unified::{
-            ClientIdentity, GroupCoordinator,
-            offsets_log::OffsetsLog,
+            ClientIdentity,
             streams::{
                 config::StreamsGroupConfig,
                 persistence::{
@@ -49,12 +48,12 @@ use {
 /// `Err` if a log write fails (the actor exits).
 pub(super) async fn handle_session_tick(
     actor: &mut ActorState,
-    config: &StreamsGroupConfig,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
+    turn: StreamsTurn<'_>,
 ) -> Result<(), BrokerError> {
     let now = Instant::now();
-    let mut fenced = actor.state.expired_members(now, config.session_timeout);
+    let mut fenced = actor
+        .state
+        .expired_members(now, turn.config.session_timeout);
     // A member that did not revoke its tasks within its rebalance timeout is
     // fenced like a member whose session expired
     // (`scheduleStreamsGroupRebalanceTimeout`).
@@ -65,7 +64,7 @@ pub(super) async fn handle_session_tick(
     }
     for member_id in fenced {
         let pending = fence_member(actor, &member_id);
-        flush_pending(actor, pending, offsets_log, coordinator, chrono_now_ms()).await?;
+        turn.flush(actor, pending, chrono_now_ms()).await?;
     }
     Ok(())
 }
@@ -83,13 +82,15 @@ fn fence_member(actor: &mut ActorState, member_id: &str) -> PendingStreamsRecord
 
 pub(super) async fn handle_heartbeat(
     actor: &mut ActorState,
-    config: &StreamsGroupConfig,
-    offsets_log: &dyn OffsetsLog,
-    metadata_source: Option<&Arc<dyn MetadataSource>>,
-    coordinator: &GroupCoordinator,
+    turn: StreamsTurn<'_>,
     req: &StreamsGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
 ) -> Result<StreamsGroupHeartbeatResponse, BrokerError> {
+    let StreamsTurn {
+        config,
+        metadata_source,
+        ..
+    } = turn;
     let ClientIdentity {
         id: client_id,
         host: client_host,
@@ -104,7 +105,7 @@ pub(super) async fn handle_heartbeat(
     // ─── Leave path ──────────────────────────────────────────────
     // -1 leaves, and -2 is the temporary leave of a static member.
     if req.member_epoch < 0 {
-        return handle_leave(actor, offsets_log, coordinator, req, now_ms).await;
+        return handle_leave(actor, turn, req, now_ms).await;
     }
 
     // ─── Static membership ───────────────────────────────────────
@@ -186,7 +187,7 @@ pub(super) async fn handle_heartbeat(
             actor.state.track_rebalance_timeout(&new_member_id, now);
         }
         let pending = recorder.finish(actor);
-        flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
+        turn.flush(actor, pending, now_ms).await?;
         return Ok(accepted_response(
             actor,
             config,
@@ -262,7 +263,7 @@ pub(super) async fn handle_heartbeat(
         actor.state.request_shutdown(&req.member_id);
     }
     let pending = recorder.finish(actor);
-    flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
+    turn.flush(actor, pending, now_ms).await?;
     Ok(accepted_response(
         actor,
         config,
@@ -629,8 +630,7 @@ fn update_member_metadata(m: &mut StreamsMemberState, req: &StreamsGroupHeartbea
 /// Handles a leave-group heartbeat, where `member_epoch == -1`.
 async fn handle_leave(
     actor: &mut ActorState,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
+    turn: StreamsTurn<'_>,
     req: &StreamsGroupHeartbeatRequest,
     now_ms: i64,
 ) -> Result<StreamsGroupHeartbeatResponse, BrokerError> {
@@ -646,7 +646,7 @@ async fn handle_leave(
             return Ok(response);
         }
         if req.member_epoch == LEAVE_GROUP_STATIC_MEMBER_EPOCH {
-            return leave_static_member(actor, offsets_log, coordinator, req, now_ms).await;
+            return leave_static_member(actor, turn, req, now_ms).await;
         }
     }
     if !actor.state.members.contains_key(&req.member_id) {
@@ -659,7 +659,7 @@ async fn handle_leave(
         ));
     }
     let pending = fence_member(actor, &req.member_id);
-    flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
+    turn.flush(actor, pending, now_ms).await?;
     // Kafka's leave response echoes the member id and epoch, and sends an
     // empty status list and no group configuration.
     Ok(StreamsGroupHeartbeatResponse {
@@ -789,8 +789,7 @@ fn replace_static_member(actor: &mut ActorState, previous: &str, member_id: &str
 /// back without a rebalance. Its tasks pending revocation are dropped.
 async fn leave_static_member(
     actor: &mut ActorState,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
+    turn: StreamsTurn<'_>,
     req: &StreamsGroupHeartbeatRequest,
     now_ms: i64,
 ) -> Result<StreamsGroupHeartbeatResponse, BrokerError> {
@@ -803,7 +802,7 @@ async fn leave_static_member(
     }
     actor.state.rebalance_deadlines.remove(&req.member_id);
     let pending = recorder.finish(actor);
-    flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
+    turn.flush(actor, pending, now_ms).await?;
     Ok(StreamsGroupHeartbeatResponse {
         member_id: req.member_id.clone(),
         member_epoch: LEAVE_GROUP_STATIC_MEMBER_EPOCH,
