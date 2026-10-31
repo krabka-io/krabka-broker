@@ -43,6 +43,8 @@ mod assignment;
 mod response;
 
 #[cfg(test)]
+mod guarded_failure_tests;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;
@@ -75,7 +77,7 @@ use {
         site_placement::PlacementRng,
     },
     std::cmp,
-    tokio::time::Instant,
+    tokio::time::{Instant, error::Elapsed},
 };
 
 krabka_macros::decoded_dispatch! {
@@ -197,20 +199,7 @@ pub async fn handle(
             grow_topic(&growth, &t, image)
         })
         .await;
-        let out = match classify_guarded(attempt) {
-            Ok(row) => row,
-            Err(failure) => {
-                if let GuardedFailure::Failed(error) = &failure {
-                    tracing::error!(%error, topic = %t.name, "CreatePartitions guarded submission failed");
-                }
-                CreatePartitionsTopicResult {
-                    name: t.name,
-                    error_code: failure.code(codes::UNKNOWN_SERVER_ERROR),
-                    ..Default::default()
-                }
-            }
-        };
-        results.push(out);
+        results.push(growth_outcome(t.name, attempt));
     }
 
     // A `--dry-run` request grows nothing, so it changed no topic.
@@ -384,6 +373,27 @@ fn reconcile_locked_growth_charge(
     }
     growth.charged.store(current, Ordering::Relaxed);
     true
+}
+
+/// The row for topic `name` from the result of its guarded growth: the grown
+/// row, or the error code of the failure.
+fn growth_outcome(
+    name: String,
+    attempt: Result<Result<CreatePartitionsTopicResult, RaftError>, Elapsed>,
+) -> CreatePartitionsTopicResult {
+    match classify_guarded(attempt) {
+        Ok(row) => row,
+        Err(failure) => {
+            if let GuardedFailure::Failed(error) = &failure {
+                tracing::error!(%error, topic = %name, "CreatePartitions guarded submission failed");
+            }
+            CreatePartitionsTopicResult {
+                name,
+                error_code: failure.code(codes::UNKNOWN_SERVER_ERROR),
+                ..Default::default()
+            }
+        }
+    }
 }
 
 /// A refusal to grow a topic: Kafka's error code and, where Kafka sends one,

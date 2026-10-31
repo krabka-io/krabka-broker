@@ -48,9 +48,12 @@ use {
         quota::throttle_time_ms,
     },
     krabka_metadata::MetadataError,
-    krabka_protocol::owned::{
-        delete_topics_request::{self, DeleteTopicsRequest},
-        delete_topics_response::DeleteTopicsResponse,
+    krabka_protocol::{
+        owned::{
+            delete_topics_request::{self, DeleteTopicsRequest},
+            delete_topics_response::{DeletableTopicResult, DeleteTopicsResponse},
+        },
+        primitives::uuid::Uuid as WireUuid,
     },
     krabka_raft::RaftError,
     std::time::Duration,
@@ -66,6 +69,8 @@ mod tiering;
 mod wire;
 
 #[cfg(test)]
+mod guarded_failure_tests;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;
@@ -80,7 +85,7 @@ use {
             shuffle_rows,
         },
     },
-    tokio::time::Instant,
+    tokio::time::{Instant, error::Elapsed},
 };
 
 krabka_macros::decoded_dispatch! {
@@ -208,25 +213,12 @@ pub async fn handle(
             delete_topic_once(broker, ctx, &name, wire_topic_id, requested_by_id, image)
         })
         .await;
-        let row = match classify_guarded(attempt) {
-            Ok(row) => row,
-            Err(failure) => {
-                let code = match &failure {
-                    GuardedFailure::Failed(RaftError::Metadata(MetadataError::UnknownTopic(_))) => {
-                        vanished_code(requested_by_id)
-                    }
-                    GuardedFailure::Failed(error) => {
-                        tracing::error!(topic = %name, %error, "DeleteTopics guarded submission failed");
-                        failure.code(codes::UNKNOWN_SERVER_ERROR)
-                    }
-                    GuardedFailure::TimedOut | GuardedFailure::NotController => {
-                        failure.code(codes::UNKNOWN_SERVER_ERROR)
-                    }
-                };
-                delete_topic_result(Some(name), wire_topic_id, code)
-            }
-        };
-        results.push(row);
+        results.push(deletion_outcome(
+            name,
+            wire_topic_id,
+            requested_by_id,
+            attempt,
+        ));
     }
     shuffle_rows(&mut results, random_seed());
 
@@ -245,4 +237,33 @@ pub async fn handle(
 
     let resp = delete_topics_response(results, throttle_time_ms);
     Ok(resp)
+}
+
+/// The row for topic `name` from the result of its guarded deletion: the
+/// deleted row, or the error code of the failure. A topic that vanished during
+/// the attempt answers [`vanished_code`].
+fn deletion_outcome(
+    name: String,
+    wire_topic_id: WireUuid,
+    requested_by_id: bool,
+    attempt: Result<Result<DeletableTopicResult, RaftError>, Elapsed>,
+) -> DeletableTopicResult {
+    match classify_guarded(attempt) {
+        Ok(row) => row,
+        Err(failure) => {
+            let code = match &failure {
+                GuardedFailure::Failed(RaftError::Metadata(MetadataError::UnknownTopic(_))) => {
+                    vanished_code(requested_by_id)
+                }
+                GuardedFailure::Failed(error) => {
+                    tracing::error!(topic = %name, %error, "DeleteTopics guarded submission failed");
+                    failure.code(codes::UNKNOWN_SERVER_ERROR)
+                }
+                GuardedFailure::TimedOut | GuardedFailure::NotController => {
+                    failure.code(codes::UNKNOWN_SERVER_ERROR)
+                }
+            };
+            delete_topic_result(Some(name), wire_topic_id, code)
+        }
+    }
 }
