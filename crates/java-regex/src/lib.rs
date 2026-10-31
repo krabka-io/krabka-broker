@@ -2155,6 +2155,7 @@ mod tests {
             replace_row("(a)", "a", "$1suffix", "asuffix"),
             // Digits after `$n` join the group number only while it names a group.
             replace_row("(a)", "a", "$10", "a0"),
+            replace_row("(a)", "a", "$12", "a2"),
             replace_row("(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)", "abcdefghij", "$10", "j"),
             replace_row("(a)", "a", "$0!", "a!"),
             replace_row("(?<who>a)", "a", "${who}-$1", "a-a"),
@@ -2186,6 +2187,24 @@ mod tests {
         check!(
             pattern(source).replace(input, replacement, true).is_err(),
             "{source} on {input} with {replacement}"
+        );
+    }
+
+    /// The message of each replacement Java throws on, which names what is
+    /// wrong as Java's own exception does.
+    #[yare::parameterized(
+        trailing_backslash = { "(a)", "\\", "character to be escaped is missing" },
+        trailing_dollar = { "(a)", "$", "illegal group reference: group index is missing" },
+        empty_named_group = { "(a)", "${}", "named capturing group has 0 length name" },
+        unclosed_named_group = { "(a)", "${a", "named capturing group is missing trailing '}'" },
+        unknown_named_group = { "(a)", "${who}", "no group with name who" },
+        group_number_out_of_range = { "(a)", "$9", "no group 9" },
+        nonnumeric_group_reference = { "(a)", "$x", "illegal group reference" },
+    )]
+    fn replace_all_names_what_java_throws_on(source: &str, replacement: &str, message: &str) {
+        check!(
+            pattern(source).replace("a", replacement, true) == Err(MatchError(message.to_owned())),
+            "{source} with {replacement}"
         );
     }
 
