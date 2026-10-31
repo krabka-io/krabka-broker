@@ -674,3 +674,78 @@ pub fn delete_topic_request(tokens: TokenStream) -> Result<TokenStream, ParseErr
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::metadata_log_delegate,
+        crate::meta::compact,
+        moxy::token::{TokenStream, TokenTree},
+    };
+
+    const ITEM: &str = "#[async_trait] impl MetadataEventLog for Wrapper { async fn high_water_marks(&self) -> Result<Vec<i64>, E> { Ok(vec![]) } }";
+
+    /// Every function the expanded impl declares, in body order.
+    fn declared_functions(output: &TokenStream) -> Vec<String> {
+        let Some(TokenTree::Group(body)) = output.clone().into_iter().last() else {
+            panic!("expanded impl has a body");
+        };
+        let tokens = Vec::from(body.tokens);
+        tokens
+            .windows(2)
+            .filter(|pair| pair[0].is_keyword_fn())
+            .filter_map(|pair| pair[1].as_ident().map(|name| compact(name)))
+            .collect()
+    }
+
+    #[yare::parameterized(
+        no_selectors = { "log", ITEM, &["partition_count", "publish", "subscribe", "high_water_marks"] },
+        keyed = { "log, keyed", ITEM, &["partition_count", "publish", "subscribe", "publish_keyed", "high_water_marks"] },
+        range = { "log, range", ITEM, &["partition_count", "publish", "subscribe", "visit_range", "high_water_marks"] },
+        both_selectors = { "log, range, keyed", ITEM, &["partition_count", "publish", "subscribe", "publish_keyed", "visit_range", "high_water_marks"] },
+        existing_publish = {
+            "log",
+            "impl MetadataEventLog for Wrapper { async fn publish(&self) {} }",
+            &["partition_count", "subscribe", "high_water_marks", "publish"],
+        },
+        existing_keyed = {
+            "log, keyed",
+            "impl MetadataEventLog for Wrapper { async fn publish_keyed(&self) {} }",
+            &["partition_count", "publish", "subscribe", "high_water_marks", "publish_keyed"],
+        },
+    )]
+    fn delegates_missing_operations_ahead_of_the_wrapper_methods(
+        root: &str,
+        item: &str,
+        expected: &[&str],
+    ) {
+        let output = metadata_log_delegate(root.parse().unwrap(), item.parse().unwrap()).unwrap();
+        assert2::assert!(declared_functions(&output) == expected, "{root}");
+    }
+
+    #[test]
+    fn delegated_operations_name_the_metadata_log_crate() {
+        let output = metadata_log_delegate(
+            "::nested::log".parse().unwrap(),
+            "impl MetadataEventLog for Wrapper { fn partition_count(&self) -> i32 { 1 } fn subscribe() {} async fn high_water_marks() {} }".parse().unwrap(),
+        )
+        .unwrap();
+        assert2::assert!(
+            compact(&output)
+                == "implMetadataEventLogforWrapper{asyncfnpublish(&self,partition:i32,event:::bytes::Bytes)->Result<i64,::nested::log::error::MetadataLogError>{self.inner.publish(partition,event).await}fnpartition_count(&self)->i32{1}fnsubscribe(){}asyncfnhigh_water_marks(){}}"
+        );
+    }
+
+    #[yare::parameterized(
+        missing_root = { "", ITEM },
+        selector_only = { "keyed", ITEM },
+        selector_without_comma = { "log keyed", ITEM },
+        not_an_impl = { "log", "struct Wrapper {}" },
+    )]
+    fn rejects_missing_roots_unseparated_selectors_and_non_impls(root: &str, item: &str) {
+        assert2::assert!(
+            metadata_log_delegate(root.parse().unwrap(), item.parse().unwrap()).is_err(),
+            "{root} / {item}"
+        );
+    }
+}
