@@ -941,7 +941,9 @@ mod tests {
             handlers::{
                 fetch::test_support::append_epoch_batches,
                 produce::test_support::image_with_topic,
-                test_support::{StartedBroker, local_partition, start_broker_with},
+                test_support::{
+                    StartedBroker, local_partition, replicated_partition, start_broker_with,
+                },
             },
             partition::Partition,
             producer_state::ProducerState,
@@ -1038,6 +1040,14 @@ mod tests {
             .unwrap(),
         );
         let image = broker.controller.current_image();
+        // An image that names node 2 the partition's leader at epoch 7.
+        let mut named_leader = image_with_topic(TOPIC, &[2, 1]);
+        named_leader.apply(&krabka_metadata::MetadataRecord::V1Partition(
+            krabka_metadata::PartitionRecord {
+                leader_epoch: krabka_metadata::LeaderEpoch(7),
+                ..replicated_partition().topic(TOPIC).leader(2).call()
+            },
+        ));
         let consumer = super::FetchAuthorization::Consumer {
             denied_topics: HashSet::new(),
         };
@@ -1050,15 +1060,34 @@ mod tests {
             partition_max_bytes: 1024,
         };
 
-        for (name, is_follower_fetch, follower_id, want) in [
+        for (name, image, is_follower_fetch, follower_id, want) in [
+            // The image does not hold the partition, so the row names no
+            // leader.
             (
                 "client fetch",
+                &*image,
                 false,
                 -1,
                 super::refused_read(0, NOT_LEADER_OR_FOLLOWER),
             ),
+            // KIP-951: the row names the leader the image holds.
+            (
+                "client fetch, leader in the image",
+                &named_leader,
+                false,
+                -1,
+                super::PartitionData {
+                    current_leader: super::LeaderIdAndEpoch {
+                        leader_id: 2,
+                        leader_epoch: 7,
+                        ..Default::default()
+                    },
+                    ..super::refused_read(0, NOT_LEADER_OR_FOLLOWER)
+                },
+            ),
             (
                 "follower fetch",
+                &*image,
                 true,
                 2,
                 super::refused_read(0, NOT_LEADER_OR_FOLLOWER),
@@ -1066,7 +1095,7 @@ mod tests {
         ] {
             let context = super::PendingPlanContext {
                 broker: &broker,
-                image: &image,
+                image,
                 authorization: if is_follower_fetch {
                     &super::FetchAuthorization::Follower
                 } else {

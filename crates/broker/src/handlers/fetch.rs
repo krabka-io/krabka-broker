@@ -45,6 +45,8 @@ mod wait;
 #[cfg(test)]
 mod broker_limit_tests;
 #[cfg(test)]
+mod consumer_quota_tests;
+#[cfg(test)]
 mod follower_authorization_tests;
 #[cfg(test)]
 mod follower_watermark_tests;
