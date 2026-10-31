@@ -702,13 +702,21 @@ async fn join_consumers(
     while let Some(joined) = tasks.join_next().await {
         match joined {
             Ok(task) => {
-                let _ = merged.latency.add(&task.latency);
-                merged.msgs += task.msgs;
-                merged.bytes += task.bytes;
-                for (total, m) in merged.interval_msgs.iter_mut().zip(&task.interval_msgs) {
+                let _ = merged.latency.add(&task.measurements.latency);
+                merged.msgs += task.measurements.msgs;
+                merged.bytes += task.measurements.bytes;
+                for (total, m) in merged
+                    .interval_msgs
+                    .iter_mut()
+                    .zip(&task.measurements.interval_msgs)
+                {
                     *total += *m;
                 }
-                for (total, h) in merged.interval_hist.iter_mut().zip(&task.interval_hist) {
+                for (total, h) in merged
+                    .interval_hist
+                    .iter_mut()
+                    .zip(&task.measurements.interval_hist)
+                {
                     let _ = total.add(h);
                 }
                 if !task.error.is_empty() {
@@ -967,12 +975,10 @@ struct ProducerOut {
 }
 
 struct ConsumerOut {
-    latency: Histogram<u64>,
-    msgs: u64,
-    bytes: u64,
+    /// Measurement-window tallies. The interval vectors are empty on a build
+    /// failure.
+    measurements: TaskMeasurements,
     error: String,
-    interval_msgs: Vec<u64>,
-    interval_hist: Vec<Histogram<u64>>,
 }
 
 fn empty_output(
@@ -1450,12 +1456,14 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
         Ok(c) => c,
         Err(e) => {
             return ConsumerOut {
-                latency: histogram,
-                msgs: 0,
-                bytes: 0,
+                measurements: TaskMeasurements {
+                    latency: histogram,
+                    interval_msgs: Vec::new(),
+                    interval_hist: Vec::new(),
+                    msgs: 0,
+                    bytes: 0,
+                },
                 error: format!("consumer-{idx}-build: {e:#}"),
-                interval_msgs: Vec::new(),
-                interval_hist: Vec::new(),
             };
         }
     };
@@ -1521,12 +1529,8 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
         error = format!("consumer-{idx}-close-timeout");
     }
     ConsumerOut {
-        latency: measurements.latency,
-        msgs: measurements.msgs,
-        bytes: measurements.bytes,
+        measurements,
         error,
-        interval_msgs: measurements.interval_msgs,
-        interval_hist: measurements.interval_hist,
     }
 }
 
@@ -2189,10 +2193,13 @@ mod tests {
             .await
             .expect("consumer startup retries end")
         {
-            let output = joined.expect("consumer reports its build error");
+            let ConsumerOut {
+                measurements: output,
+                error,
+            } = joined.expect("consumer reports its build error");
             assert!((output.msgs, output.bytes, output.latency.len()) == (0, 0, 0));
             assert!(output.interval_msgs.is_empty() && output.interval_hist.is_empty());
-            errors.push(output.error);
+            errors.push(error);
         }
         errors.sort();
         for (idx, error) in errors.iter().enumerate() {
