@@ -536,4 +536,140 @@ mod tests {
             current_leader: None
         }));
     }
+
+    /// What a forwarded write ended with, in a shape a test can compare whole.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Forwarded {
+        Applied,
+        TopicExists,
+        UncommittedTail,
+        ClusterAuthorizationFailed,
+        UnsupportedPrivateVersion { api_key: i16, version: i16 },
+        NotLeader(Option<NodeId>),
+        Other(String),
+    }
+
+    impl From<Result<SubmitChangeResult, RaftError>> for Forwarded {
+        fn from(outcome: Result<SubmitChangeResult, RaftError>) -> Self {
+            match outcome {
+                Ok(_) => Self::Applied,
+                Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {
+                    Self::TopicExists
+                }
+                Err(RaftError::UncommittedTail) => Self::UncommittedTail,
+                Err(RaftError::ClusterAuthorizationFailed) => Self::ClusterAuthorizationFailed,
+                Err(RaftError::UnsupportedPrivateVersion { api_key, version }) => {
+                    Self::UnsupportedPrivateVersion { api_key, version }
+                }
+                Err(RaftError::NotLeader { current_leader }) => Self::NotLeader(current_leader),
+                Err(other) => Self::Other(format!("{other:?}")),
+            }
+        }
+    }
+
+    /// One forwarded write of `rpc` to a quorum of three voters that each
+    /// answer `code` with `leader_hint`: what it ended with, and how many
+    /// voters it asked.
+    async fn forward_against_three_voters(
+        rpc: PrivateRpc,
+        code: i16,
+        leader_hint: i64,
+    ) -> (Forwarded, usize) {
+        let asked = Arc::new(AtomicUsize::new(0));
+        let asked_for_mock = sync::Arc::clone(&asked);
+        let mock = mock_request_broker(
+            rpc.api_key(),
+            move || {
+                asked_for_mock.fetch_add(1, Ordering::SeqCst);
+                submit_change_response_body(code, leader_hint)
+            },
+            api_versions_response_v0,
+        )
+        .await;
+        let forwarder = QuorumForwarder {
+            voters: (1..=3).map(|id| (NodeId(id), mock.addr.to_string())).collect(),
+            ..forwarder(mock.addr, Arc::new(Mutex::new(Vec::new())), Some(NodeId(1)))
+        };
+        let outcome = match rpc {
+            PrivateRpc::DelegationTokenMutation => {
+                forwarder.submit_delegation_token_mutations(vec![]).await
+            }
+            _ => forwarder.submit_change(vec![topic_record("forwarded")]).await,
+        };
+        mock.stop();
+        (Forwarded::from(outcome), asked.load(Ordering::SeqCst))
+    }
+
+    /// Each response code of both forwarded writes ends as the controller's
+    /// own forward path (`translate_submit_change_response`) ends it. Only a
+    /// voter that is not the leader sends the write on to the next voter. A
+    /// leader that refuses the version it was sent answers the same way on
+    /// every voter, so the forward stops at the first: the write fails with
+    /// `UnsupportedPrivateVersion`, not the retriable `NotLeader`.
+    #[tokio::test]
+    async fn quorum_forwarder_maps_each_response_code_like_the_controller() {
+        let unsupported = |rpc: PrivateRpc| Forwarded::UnsupportedPrivateVersion {
+            api_key: rpc.api_key(),
+            version: 0,
+        };
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for rpc in [PrivateRpc::SubmitChange, PrivateRpc::DelegationTokenMutation] {
+            let table = [
+                (0, -1, Forwarded::Applied, 1),
+                (2, -1, Forwarded::TopicExists, 1),
+                (
+                    krabka_raft::SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+                    -1,
+                    Forwarded::UncommittedTail,
+                    1,
+                ),
+                (
+                    krabka_raft::PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
+                    -1,
+                    Forwarded::ClusterAuthorizationFailed,
+                    1,
+                ),
+                (krabka_raft::PRIVATE_UNSUPPORTED_VERSION, -1, unsupported(rpc), 1),
+                (1, 7, Forwarded::NotLeader(Some(NodeId(7))), 3),
+                (3, -1, Forwarded::NotLeader(None), 3),
+            ];
+            for (code, leader_hint, outcome, asked) in table {
+                actual.push((
+                    rpc,
+                    code,
+                    forward_against_three_voters(rpc, code, leader_hint).await,
+                ));
+                expected.push((rpc, code, (outcome, asked)));
+            }
+        }
+        assert2::assert!(actual == expected);
+    }
+
+    /// A truncated response is a protocol error, and the forward tries the
+    /// next voter, as it does for a voter it cannot reach.
+    #[tokio::test]
+    async fn quorum_forwarder_truncated_response_is_a_protocol_error() {
+        let asked = Arc::new(AtomicUsize::new(0));
+        let asked_for_mock = sync::Arc::clone(&asked);
+        let mock = mock_request_broker(
+            krabka_raft::API_KEY_SUBMIT_CHANGE,
+            move || {
+                asked_for_mock.fetch_add(1, Ordering::SeqCst);
+                vec![0, 0]
+            },
+            api_versions_response_v0,
+        )
+        .await;
+        let forwarder = QuorumForwarder {
+            voters: (1..=3).map(|id| (NodeId(id), mock.addr.to_string())).collect(),
+            ..forwarder(mock.addr, Arc::new(Mutex::new(Vec::new())), Some(NodeId(1)))
+        };
+
+        let outcome = forwarder.submit_change(vec![topic_record("truncated")]).await;
+        mock.stop();
+
+        assert2::assert!(matches!(outcome, Err(RaftError::Protocol(_))), "{outcome:?}");
+        assert2::assert!(asked.load(Ordering::SeqCst) == 3);
+    }
 }
