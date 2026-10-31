@@ -33,8 +33,9 @@ use {
             group::GroupBounds,
         },
         handlers::{
-            ApiVersion, DispatchResult, RequestContext, audit_resource, config_resource_refusal,
-            encode_response,
+            ApiVersion, DispatchResult, RequestContext,
+            alter_configs::{BrokerPreprocess, broker_preprocess_refusal},
+            audit_resource, config_resource_refusal, encode_response,
             forward_to_controller::{guarded_operation_on_source, to_active_controller_or_handle},
             response_encoding::ErrorRow as _,
         },
@@ -111,35 +112,21 @@ krabka_macros::decoded_dispatch! {
                 local.push(resource);
                 continue;
             }
-            if resource.resource_type == RESOURCE_TYPE_BROKER {
-                let shape = validate_resource_shape(&resource, duplicate);
-                let preprocessed = shape.and_then(|()| {
-                    broker_scope::preprocess_broker_resource(&resource, BrokerConfigContext {
-                        image: &image,
-                        serving: broker.config.node_id,
-                        log_dirs: &broker.config.broker_log_dirs(),
-                        unstable: broker.config.features.unstable_api_versions,
-                    }, broker.own_config_checks())
-                });
-                if let Err((code, message)) = preprocessed {
-                    let (code, message) = if validate_resource_shape(&resource, duplicate).is_err() {
-                        (code, message)
-                    } else {
-                        config_resource_refusal(
-                            broker.config.authorizer.as_ref(),
-                            &image,
-                            ctx,
-                            (resource.resource_type, &resource.resource_name),
-                            true,
-                        )
-                        .unwrap_or((code, message))
-                    };
-                    indexed_responses.push((
-                        index,
-                        resource_refusal(&resource, code).with_error(code, message),
-                    ));
-                    continue;
-                }
+            let refusal = (resource.resource_type == RESOURCE_TYPE_BROKER).then(|| {
+                broker_preprocess_refusal(broker, ctx, &image, BrokerPreprocess {
+                    resource: &resource,
+                    shape: validate_resource_shape(&resource, duplicate),
+                    runs_preprocess: true,
+                    preprocess: broker_scope::preprocess_broker_resource,
+                    broker_logger_supported: true,
+                })
+            });
+            if let Some((code, message)) = refusal.flatten() {
+                indexed_responses.push((
+                    index,
+                    resource_refusal(&resource, code).with_error(code, message),
+                ));
+                continue;
             }
             forwarded_indices.push(index);
             forwarded.push(resource);
@@ -582,8 +569,10 @@ mod tests {
             .before_guarded_submit(move |source| source.set_image(newer))
             .build();
         let resource = make_topic_resource("orders", vec![make_set_cfg(SEGMENT_BYTES, "1048576")]);
-        let result =
-            guarded_operation_on_source(&source, Instant::now() + Duration::from_secs(1), |image| {
+        let result = guarded_operation_on_source(
+            &source,
+            Instant::now() + Duration::from_secs(1),
+            |image| {
                 let resource = &resource;
                 let source = &source;
                 async move {
@@ -600,10 +589,11 @@ mod tests {
                     source.submit_change_if_image(vec![record], image).await?;
                     Ok(Ok(()))
                 }
-            })
-            .await
-            .expect("bounded retry")
-            .expect("guarded submission");
+            },
+        )
+        .await
+        .expect("bounded retry")
+        .expect("guarded submission");
         check!(result == Ok(()));
         check!(
             source.submitted_records()

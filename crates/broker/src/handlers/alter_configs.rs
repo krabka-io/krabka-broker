@@ -46,7 +46,7 @@ use {
         codes::{INVALID_CONFIG, INVALID_REQUEST},
         config_keys::{
             MIN_INSYNC_REPLICAS, broker_dynamic::BrokerConfigContext,
-            is_controller_managed_topic_config,
+            is_controller_managed_topic_config, listener_reconfig::OwnBrokerChecks,
         },
         handlers::{
             RequestContext, audit_resource, config_resource_refusal,
@@ -59,6 +59,7 @@ use {
             response_encoding::{ErrorRow as _, ResourceErrorRow},
         },
     },
+    krabka_metadata::MetadataImage,
     krabka_protocol::owned::incremental_alter_configs_request,
     std::{
         collections::{BTreeMap, BTreeSet, HashMap},
@@ -194,34 +195,13 @@ fn preprocess_resource(
             .map(|c| (c.name.as_str(), c.value.is_none())),
     );
     let image = broker.controller.current_image();
-    let result = shape.clone().and_then(|()| {
-        if resource.resource_type != RESOURCE_TYPE_BROKER {
-            return Ok(());
-        }
-        broker_configs::preprocess_broker_resource(
-            resource,
-            BrokerConfigContext {
-                image: &image,
-                serving: broker.config.node_id,
-                log_dirs: &broker.config.broker_log_dirs(),
-                unstable: broker.config.features.unstable_api_versions,
-            },
-            broker.own_config_checks(),
-        )
-    });
-    let (code, message) = result.err()?;
-    let (code, message) = if shape.is_err() {
-        (code, message)
-    } else {
-        config_resource_refusal(
-            broker.config.authorizer.as_ref(),
-            &image,
-            ctx,
-            (resource.resource_type, &resource.resource_name),
-            false,
-        )
-        .unwrap_or((code, message))
-    };
+    let (code, message) = broker_preprocess_refusal(broker, ctx, &image, BrokerPreprocess {
+        resource,
+        shape,
+        runs_preprocess: resource.resource_type == RESOURCE_TYPE_BROKER,
+        preprocess: broker_configs::preprocess_broker_resource,
+        broker_logger_supported: false,
+    })?;
     Some(
         AlterConfigsResourceResponse {
             resource_type: resource.resource_type,
@@ -229,6 +209,74 @@ fn preprocess_resource(
             ..Default::default()
         }
         .with_error(code, message),
+    )
+}
+
+/// One resource's broker-side preprocessing, as
+/// [`broker_preprocess_refusal`] runs it.
+pub(super) struct BrokerPreprocess<'a, Resource> {
+    pub(super) resource: &'a Resource,
+    /// The request-shape result, which the caller computes because each API
+    /// has its own rule for a missing value.
+    pub(super) shape: Result<(), (i16, String)>,
+    /// Whether this resource has broker-side checks to run at all.
+    pub(super) runs_preprocess: bool,
+    /// The broker-side checks against this node's own settings.
+    pub(super) preprocess:
+        fn(&Resource, BrokerConfigContext<'_>, OwnBrokerChecks<'_>) -> Result<(), (i16, String)>,
+    /// Whether the authorizer accepts a `BROKER_LOGGER` resource type.
+    pub(super) broker_logger_supported: bool,
+}
+
+/// The refusal a resource earns from the broker-side preprocessing that both
+/// alter-config APIs run before they forward to the controller, or `None`
+/// when the resource goes on to the controller.
+///
+/// Kafka's `ConfigAdminManager.preprocess` precedence: a shape error answers
+/// before authorization runs, and an authorization error answers before a
+/// broker-side check failure.
+pub(super) fn broker_preprocess_refusal<Resource>(
+    broker: &Broker,
+    ctx: &RequestContext<'_>,
+    image: &MetadataImage,
+    request: BrokerPreprocess<'_, Resource>,
+) -> Option<(i16, String)>
+where
+    Resource: ResourceErrorRequestResource,
+{
+    let BrokerPreprocess {
+        resource,
+        shape,
+        runs_preprocess,
+        preprocess,
+        broker_logger_supported,
+    } = request;
+    if let Err(error) = shape {
+        return Some(error);
+    }
+    if !runs_preprocess {
+        return None;
+    }
+    let (code, message) = preprocess(
+        resource,
+        BrokerConfigContext {
+            image,
+            serving: broker.config.node_id,
+            log_dirs: &broker.config.broker_log_dirs(),
+            unstable: broker.config.features.unstable_api_versions,
+        },
+        broker.own_config_checks(),
+    )
+    .err()?;
+    Some(
+        config_resource_refusal(
+            broker.config.authorizer.as_ref(),
+            image,
+            ctx,
+            (resource.resource_type(), resource.resource_name()),
+            broker_logger_supported,
+        )
+        .unwrap_or((code, message)),
     )
 }
 

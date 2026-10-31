@@ -70,10 +70,8 @@ pub(super) fn client_metrics_records(
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
-        crate::handlers::incremental_alter_configs::RESOURCE_TYPE_CLIENT_METRICS,
-        assert2::check,
-        krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
+        super::*, crate::handlers::incremental_alter_configs::RESOURCE_TYPE_CLIENT_METRICS,
+        assert2::check, krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
         std::collections::BTreeMap,
     };
 
