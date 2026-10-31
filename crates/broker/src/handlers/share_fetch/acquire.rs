@@ -318,6 +318,66 @@ fn log_start_moved_past_spso(err: &BrokerError) -> bool {
     matches!(err, BrokerError::Log(LogError::OffsetTooLow { .. }))
 }
 
+/// The highest offset an acquire pass may materialize or read on `part`.
+///
+/// Under read_committed, never surface records past the last stable offset:
+/// clamp the materialize/read window to `min(lso, hwm)` so no record from an
+/// OPEN transaction can be acquired.
+///
+/// KFC-1 puts no delivery watermark here on purpose. That cap is what holds a
+/// classic group to offset order, and a share group is exactly the reader that
+/// does not need it: the window runs to the high watermark and the deferral
+/// marks hold the waiting records back one range at a time.
+async fn read_upper_bound(part: &Partition, read_committed: bool) -> Offset {
+    let hwm = part.high_watermark().await;
+    if read_committed {
+        part.last_stable_offset(hwm)
+    } else {
+        hwm
+    }
+}
+
+/// What one partition may acquire in a pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReadBudget {
+    /// The byte cap of the partition's read.
+    max_bytes: i32,
+    /// Whether the read may exceed `max_bytes` by the one batch it starts with.
+    min_one_batch: bool,
+    /// The records the partition may still acquire.
+    remaining_records: i32,
+}
+
+/// The read budget of a partition whose byte `share` of the pass is known,
+/// after the request already spent `total`.
+fn partition_read_budget(
+    max_records: i32,
+    max_bytes: i32,
+    total: Spent,
+    partition_max_bytes: i32,
+    share: i32,
+) -> ReadBudget {
+    // A partition that the byte budget does not reach acquires nothing this
+    // pass.
+    let remaining_records = if share > 0 {
+        remaining_record_budget(max_records, total.records)
+    } else {
+        0
+    };
+    // Kafka's `ReplicaManager.readFromLog`: each read is capped at what the
+    // response has left, and only a read made while the response still holds
+    // no record may exceed its cap, by the one batch that it starts with.
+    // Without that, each partition whose next batch is larger than its share
+    // would add one oversized batch.
+    let response_left = i64::from(max_bytes).saturating_sub(total.bytes).max(0);
+    ReadBudget {
+        max_bytes: read_budget(partition_max_bytes, share)
+            .min(i32::try_from(response_left).unwrap_or(i32::MAX)),
+        min_one_batch: total.bytes == 0,
+        remaining_records,
+    }
+}
+
 /// Runs [`grow_and_acquire`], and recovers once when the log start offset has
 /// moved past the SPSO.
 ///
@@ -475,42 +535,17 @@ async fn acquire_pass(
             persist_best_effort(mgr, group, p, &cell, &mut st).await;
             continue;
         };
-        let hwm = part.high_watermark().await;
-        // Under read_committed, never surface records past the last stable
-        // offset: clamp the materialize/read window to `min(lso, hwm)` so no
-        // record from an OPEN transaction can be acquired.
-        //
-        // KFC-1 puts no delivery watermark here on purpose. That cap is what
-        // holds a classic group to offset order, and a share group is exactly
-        // the reader that does not need it: the window runs to the high
-        // watermark and the deferral marks below hold the waiting records
-        // back one range at a time.
-        let upper = if read_committed {
-            part.last_stable_offset(hwm)
-        } else {
-            hwm
-        };
+        let upper = read_upper_bound(&part, read_committed).await;
         // A released or expired record at the delivery limit is archived
         // first, so it cannot hold the window shut.
         st.archive_exhausted(settings.delivery_count_limit);
         let share = uniform_share(byte_budget, fetching, fetch_index);
         fetch_index += 1;
-        // A partition that the byte budget does not reach acquires nothing
-        // this pass.
-        let remaining_records = if share > 0 {
-            remaining_record_budget(max_records, total.records)
-        } else {
-            0
-        };
-        // Kafka's `ReplicaManager.readFromLog`: each read is capped at what
-        // the response has left, and only a read made while the response
-        // still holds no record may exceed its cap, by the one batch that it
-        // starts with. Without that, each partition whose next batch is
-        // larger than its share would add one oversized batch.
-        let response_left = i64::from(max_bytes).saturating_sub(total.bytes).max(0);
-        let read_max_bytes = read_budget(p.partition_max_bytes, share)
-            .min(i32::try_from(response_left).unwrap_or(i32::MAX));
-        let min_one_batch = total.bytes == 0;
+        let ReadBudget {
+            max_bytes: read_max_bytes,
+            min_one_batch,
+            remaining_records,
+        } = partition_read_budget(max_records, max_bytes, total, p.partition_max_bytes, share);
         let tier = broker
             .remote_reader
             .as_deref()
@@ -1022,6 +1057,36 @@ mod tests {
             }
         );
         broker.shutdown().await;
+    }
+
+    /// A request of 500 records and 1000 bytes.
+    #[yare::parameterized(
+        first_read_takes_its_share = {
+            Spent::default(), 0, 400,
+            ReadBudget { max_bytes: 400, min_one_batch: true, remaining_records: 500 },
+        },
+        no_share_acquires_nothing = {
+            Spent::default(), 0, 0,
+            ReadBudget { max_bytes: 0, min_one_batch: true, remaining_records: 0 },
+        },
+        partition_cap_is_held_to_the_response_left = {
+            Spent { records: 100, bytes: 900 }, 2000, 50,
+            ReadBudget { max_bytes: 100, min_one_batch: false, remaining_records: 400 },
+        },
+        overspent_response_reads_no_bytes = {
+            Spent { records: 300, bytes: 1200 }, 0, 10,
+            ReadBudget { max_bytes: 0, min_one_batch: false, remaining_records: 200 },
+        },
+    )]
+    fn partition_read_budget_caps_records_and_bytes(
+        total: Spent,
+        partition_max_bytes: i32,
+        share: i32,
+        expected: ReadBudget,
+    ) {
+        assert2::assert!(
+            partition_read_budget(500, 1000, total, partition_max_bytes, share) == expected
+        );
     }
 
     #[test]
