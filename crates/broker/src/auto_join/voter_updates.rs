@@ -210,7 +210,10 @@ mod tests {
             },
             time::Duration,
         },
-        tokio::{net::TcpListener, time::timeout},
+        tokio::{
+            net::TcpListener,
+            time::{sleep, timeout},
+        },
     };
 
     #[test]
@@ -476,7 +479,7 @@ mod tests {
         let task = tokio::spawn(run_voter_updates(params));
         timeout(Duration::from_secs(10), async {
             while count.load(Ordering::Relaxed) == 0 {
-                tokio::time::sleep(Duration::from_millis(5)).await;
+                sleep(Duration::from_millis(5)).await;
             }
         })
         .await
@@ -489,7 +492,7 @@ mod tests {
             .expect("the loop returns once shutdown is cancelled")
             .expect("the loop does not panic");
         let sent = count.load(Ordering::Relaxed);
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
         assert2::assert!(count.load(Ordering::Relaxed) == sent);
     }
 }
