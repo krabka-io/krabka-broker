@@ -52,51 +52,9 @@ pub async fn handle(
         Err(code) => return Ok(response(code, -1)),
     };
     let incarnation_id = admitted.incarnation_id;
-    let existing = admitted.existing;
-    let directory_assignment = admitted.directory_assignment;
-    let endpoints = admitted.endpoints;
-    let (host, port) = admitted.advertised;
-    let features = req
-        .features
-        .iter()
-        .map(|feature| {
-            (
-                feature.name.clone(),
-                (feature.min_supported_version, feature.max_supported_version),
-            )
-        })
-        .collect();
-    let log_dirs = if directory_assignment {
-        req.log_dirs
-            .iter()
-            .map(|directory| uuid::Uuid::from_bytes(directory.0))
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let amended = existing.filter(|existing| existing.incarnation_id == incarnation_id);
-    let record = BrokerRegistrationRecord {
-        // `ClusterControlManager.registerBroker`: a new registration keeps the
-        // schema default `Fenced = true` and is not in controlled shutdown,
-        // and an amend copies both from the registration it amends.
-        fenced: amended.is_none_or(|existing| existing.fenced),
-        in_controlled_shutdown: amended.is_some_and(|existing| existing.in_controlled_shutdown),
-        cordoned_log_dirs: None,
-        node_id,
-        // An amend keeps the epoch it registered at, and the controller
-        // applies it only while the broker is still registered at that epoch.
-        // Any other registration carries no epoch (-1), and the controller
-        // stamps the offset it commits at.
-        broker_epoch: amended.map_or(-1, |existing| existing.broker_epoch),
-        incarnation_id,
-        host,
-        port,
-        rack: req.rack.clone(),
-        endpoints,
-        log_dirs,
-        features,
-    };
-    if amended.is_some() {
+    let amended = admitted.amended().is_some();
+    let record = registration_record(&req, node_id, admitted);
+    if amended {
         // The same process registered again, after a lost response or a
         // controller change. Kafka rewrites the record with the listeners and
         // features the request carries and keeps the epoch; nothing about the
@@ -175,6 +133,15 @@ struct Admitted<'a> {
     advertised: (String, u16),
 }
 
+impl<'a> Admitted<'a> {
+    /// The registration this one amends: the one the image holds for the
+    /// same broker id and incarnation, which the same process wrote.
+    fn amended(&self) -> Option<&'a BrokerRegistrationRecord> {
+        self.existing
+            .filter(|existing| existing.incarnation_id == self.incarnation_id)
+    }
+}
+
 /// The refusal checks of a registration, in the order of
 /// `ClusterControlManager.registerBroker`, so a request with more than one
 /// fault gets Kafka's error code.
@@ -221,6 +188,56 @@ async fn check_registration<'a>(
         endpoints,
         advertised,
     })
+}
+
+/// The record an admitted registration writes, from the request and, for an
+/// amend, the registration it amends.
+fn registration_record(
+    req: &BrokerRegistrationRequest,
+    node_id: NodeId,
+    admitted: Admitted<'_>,
+) -> BrokerRegistrationRecord {
+    let amended = admitted.amended();
+    let features = req
+        .features
+        .iter()
+        .map(|feature| {
+            (
+                feature.name.clone(),
+                (feature.min_supported_version, feature.max_supported_version),
+            )
+        })
+        .collect();
+    let log_dirs = if admitted.directory_assignment {
+        req.log_dirs
+            .iter()
+            .map(|directory| uuid::Uuid::from_bytes(directory.0))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let (host, port) = admitted.advertised;
+    BrokerRegistrationRecord {
+        // `ClusterControlManager.registerBroker`: a new registration keeps the
+        // schema default `Fenced = true` and is not in controlled shutdown,
+        // and an amend copies both from the registration it amends.
+        fenced: amended.is_none_or(|existing| existing.fenced),
+        in_controlled_shutdown: amended.is_some_and(|existing| existing.in_controlled_shutdown),
+        cordoned_log_dirs: None,
+        node_id,
+        // An amend keeps the epoch it registered at, and the controller
+        // applies it only while the broker is still registered at that epoch.
+        // Any other registration carries no epoch (-1), and the controller
+        // stamps the offset it commits at.
+        broker_epoch: amended.map_or(-1, |existing| existing.broker_epoch),
+        incarnation_id: admitted.incarnation_id,
+        host,
+        port,
+        rack: req.rack.clone(),
+        endpoints: admitted.endpoints,
+        log_dirs,
+        features,
+    }
 }
 
 /// The answer to an accepted registration: the epoch the image now holds for
@@ -409,6 +426,87 @@ mod tests {
                 ..valid
             }])
             .is_err()
+        );
+    }
+
+    const INCARNATION: u128 = 0xbeef;
+
+    /// What the image holds for broker 2 before it registers.
+    #[derive(Debug, Clone, Copy)]
+    enum Held {
+        Nothing,
+        /// A registration of another process, unfenced at epoch 40.
+        OtherIncarnation,
+        /// A registration of this process, unfenced, in controlled shutdown,
+        /// at epoch 40.
+        ThisIncarnation,
+    }
+
+    #[rstest::rstest]
+    #[case::new_broker(Held::Nothing, true, true, false, -1, vec![700])]
+    #[case::restart(Held::OtherIncarnation, true, true, false, -1, vec![700])]
+    #[case::amend(Held::ThisIncarnation, true, false, true, 40, vec![700])]
+    #[case::before_directory_assignment(Held::Nothing, false, true, false, -1, vec![])]
+    fn registration_record_takes_amend_state_only_from_its_own_incarnation(
+        #[case] held: Held,
+        #[case] directory_assignment: bool,
+        #[case] fenced: bool,
+        #[case] in_controlled_shutdown: bool,
+        #[case] broker_epoch: i64,
+        #[case] log_dirs: Vec<u128>,
+    ) {
+        let incarnation_id = uuid::Uuid::from_u128(INCARNATION);
+        let previous = BrokerRegistrationRecord {
+            in_controlled_shutdown: true,
+            broker_epoch: 40,
+            incarnation_id: match held {
+                Held::ThisIncarnation => incarnation_id,
+                _ => uuid::Uuid::from_u128(0xdead),
+            },
+            ..broker_registration(NodeId(2))
+        };
+        let endpoints = vec![
+            crate::test_support::plaintext_broker_endpoint("broker-2", 9092),
+            crate::test_support::plaintext_broker_endpoint("broker-2b", 9093),
+        ];
+        let admitted = Admitted {
+            incarnation_id,
+            existing: match held {
+                Held::Nothing => None,
+                Held::OtherIncarnation | Held::ThisIncarnation => Some(&previous),
+            },
+            directory_assignment,
+            endpoints: endpoints.clone(),
+            advertised: ("broker-2".into(), 9092),
+        };
+        let req = BrokerRegistrationRequest {
+            rack: Some("rack-a".into()),
+            log_dirs: vec![Uuid(uuid::Uuid::from_u128(700).into_bytes())],
+            features: vec![Feature {
+                name: "metadata.version".into(),
+                min_supported_version: 7,
+                max_supported_version: 25,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert2::assert!(
+            registration_record(&req, NodeId(2), admitted)
+                == BrokerRegistrationRecord {
+                    fenced,
+                    in_controlled_shutdown,
+                    cordoned_log_dirs: None,
+                    node_id: NodeId(2),
+                    broker_epoch,
+                    incarnation_id,
+                    host: "broker-2".into(),
+                    port: 9092,
+                    rack: Some("rack-a".into()),
+                    endpoints,
+                    log_dirs: log_dirs.into_iter().map(uuid::Uuid::from_u128).collect(),
+                    features: [("metadata.version".to_owned(), (7, 25))].into(),
+                }
         );
     }
 
