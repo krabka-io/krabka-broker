@@ -234,63 +234,19 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     let mut partitions = Vec::with_capacity(archive.partitions.len());
     let mut skipped = unclaimed;
     for entry in &archive.partitions {
-        if entry.segments.is_empty() {
-            continue;
+        if let Some(report) = restore_partition(
+            &store,
+            args,
+            &predicates,
+            authenticated_archive,
+            entry,
+            &mut skipped,
+            &mut consumed_authenticated_objects,
+        )
+        .await?
+        {
+            partitions.push(report);
         }
-        let mut segments = Vec::with_capacity(entry.segments.len());
-        let mut skipped_predecessor = false;
-        for segment in &entry.segments {
-            let verification = match authenticated_archive {
-                Some(authenticated) => {
-                    verify_segment_authenticated(
-                        &store,
-                        &entry.partition,
-                        segment,
-                        authenticated.objects(),
-                    )
-                    .await
-                }
-                None => verify_segment(&store, &entry.partition, segment).await,
-            };
-            let verified = match verification {
-                Ok(verified) => verified,
-                Err(error)
-                    if args.continue_on_corrupt
-                        && !matches!(error, RestoreError::Authenticity { .. }) =>
-                {
-                    skipped.push(SkippedSegment {
-                        topic: entry.partition.topic.clone(),
-                        partition: entry.partition.partition,
-                        segment_id: segment.segment_id,
-                        reason: error.to_string(),
-                    });
-                    skipped_predecessor = true;
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
-            if authenticated_archive.is_some() {
-                consumed_authenticated_objects
-                    .extend(segment.artifacts().map(|object| object.key.to_string()));
-            }
-            segments.push(
-                materialize::write_segment_after_skip(
-                    args,
-                    &entry.partition,
-                    &verified,
-                    &predicates,
-                    skipped_predecessor,
-                )
-                .await?,
-            );
-            skipped_predecessor = false;
-        }
-        partitions.push(PartitionReport {
-            topic: entry.partition.topic.clone(),
-            partition: entry.partition.partition,
-            topic_id: entry.partition.topic_id,
-            segments,
-        });
     }
 
     let diskless = match diskless_capture {
@@ -325,6 +281,80 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         partitions,
         skipped,
     })
+}
+
+/// Verify and write one partition's archived segments.
+///
+/// Returns `None` for a partition with no segments. Under
+/// `--continue-on-corrupt` a segment that fails verification, other than for
+/// authenticity, is pushed onto `skipped` and the next segment is written as
+/// following a skipped predecessor. The keys of every verified segment of an
+/// authenticated archive are added to `consumed`.
+async fn restore_partition(
+    store: &ArchiveStore,
+    args: &RestoreArgs,
+    predicates: &Predicates,
+    authenticated: Option<&AuthenticatedArchive>,
+    entry: &PartitionInventory,
+    skipped: &mut Vec<SkippedSegment>,
+    consumed: &mut BTreeSet<String>,
+) -> Result<Option<PartitionReport>, RestoreError> {
+    if entry.segments.is_empty() {
+        return Ok(None);
+    }
+    let mut segments = Vec::with_capacity(entry.segments.len());
+    let mut skipped_predecessor = false;
+    for segment in &entry.segments {
+        let verification = match authenticated {
+            Some(authenticated) => {
+                verify_segment_authenticated(
+                    store,
+                    &entry.partition,
+                    segment,
+                    authenticated.objects(),
+                )
+                .await
+            }
+            None => verify_segment(store, &entry.partition, segment).await,
+        };
+        let verified = match verification {
+            Ok(verified) => verified,
+            Err(error)
+                if args.continue_on_corrupt
+                    && !matches!(error, RestoreError::Authenticity { .. }) =>
+            {
+                skipped.push(SkippedSegment {
+                    topic: entry.partition.topic.clone(),
+                    partition: entry.partition.partition,
+                    segment_id: segment.segment_id,
+                    reason: error.to_string(),
+                });
+                skipped_predecessor = true;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if authenticated.is_some() {
+            consumed.extend(segment.artifacts().map(|object| object.key.to_string()));
+        }
+        segments.push(
+            materialize::write_segment_after_skip(
+                args,
+                &entry.partition,
+                &verified,
+                predicates,
+                skipped_predecessor,
+            )
+            .await?,
+        );
+        skipped_predecessor = false;
+    }
+    Ok(Some(PartitionReport {
+        topic: entry.partition.topic.clone(),
+        partition: entry.partition.partition,
+        topic_id: entry.partition.topic_id,
+        segments,
+    }))
 }
 
 /// Format the target, seeding the restored metadata with each diskless
