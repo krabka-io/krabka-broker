@@ -594,6 +594,27 @@ mod tests {
         );
     }
 
+    #[yare::parameterized(
+        first = { "strict", "strict" },
+        second = { "open", "open" },
+    )]
+    fn modes_select_each_accepted_name(tokens: &str, expected: &str) {
+        assert2::assert!(mode(tokens.parse().unwrap(), ["strict", "open"]).unwrap() == expected);
+    }
+
+    #[yare::parameterized(
+        unknown_name = { "lenient" },
+        multiple_tokens = { "strict open" },
+        empty = { "" },
+        literal = { "\"strict\"" },
+    )]
+    fn modes_name_every_accepted_choice_when_rejecting(tokens: &str) {
+        let error = mode(tokens.parse().unwrap(), ["strict", "open"])
+            .err()
+            .expect("mode rejected");
+        assert2::assert!(error.to_string() == "expected one of `strict`, `open`", "{tokens}");
+    }
+
     #[test]
     fn schema_tables_preserve_paths_and_domain_errors() {
         let paths = nonempty_paths(
