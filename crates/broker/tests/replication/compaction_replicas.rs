@@ -30,7 +30,7 @@ use {
     assert2::assert,
     bytes::Bytes,
     krabka_broker::{BrokerHandle, codes},
-    krabka_client_core::{Connection},
+    krabka_client_core::Connection,
     krabka_ids::ProducerId,
     krabka_protocol::{
         owned::create_topics_request::CreatableTopicConfig,

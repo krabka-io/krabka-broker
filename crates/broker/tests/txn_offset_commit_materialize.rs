@@ -24,10 +24,10 @@
 
 use {
     crate::support::{
+        client::create_topic,
         offsets::{
             offset_commit_topic, offset_fetch_group, offset_fetch_request, offset_fetch_topic,
         },
-        client::create_topic,
         transactions::{
             EndTransactionSetup, ProducerEpoch, ProducerIdentity, TransactionOutcome,
             end_transaction_request, init_producer_request, txn_offset_partition, txn_offset_topic,

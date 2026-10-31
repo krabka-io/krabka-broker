@@ -27,7 +27,7 @@ use {
     assert2::assert,
     bytes::BytesMut,
     krabka_broker::{BrokerConfig, BrokerHandle, codes},
-    krabka_client_core::{Connection},
+    krabka_client_core::Connection,
     krabka_ids::ProducerId,
     krabka_protocol::{
         Decode, Encode,
