@@ -19,8 +19,9 @@ use {
         network::client::InterBrokerClient,
         partition_registry::PartitionRegistry,
         share_coordinator::{
-            config::ShareCoordinatorConfig, coordinator::ShareCoordinator,
-            persister_client::SharePersister,
+            config::ShareCoordinatorConfig,
+            coordinator::ShareCoordinator,
+            persister_client::{InterBrokerListener, SharePersister},
         },
         test_support::{FakeMetadataSource, KafkaErrorCode, string_pairs},
     },
@@ -204,8 +205,11 @@ pub(super) fn make_share_persister(source: Arc<dyn MetadataSource>) -> Arc<Share
         source,
         Arc::default(),
         Arc::new(InterBrokerClient::new(None, None)),
-        krabka_security::ListenerProtocol::Plaintext,
-        "PLAINTEXT".into(),
+        InterBrokerListener {
+            protocol: krabka_security::ListenerProtocol::Plaintext,
+            name: "PLAINTEXT".into(),
+            server_name: "localhost".into(),
+        },
     ))
 }
 

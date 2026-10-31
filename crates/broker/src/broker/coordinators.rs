@@ -19,7 +19,10 @@ use {
         network::client::InterBrokerClient,
         partition_registry::PartitionRegistry,
         producer_id_manager::ProducerIdManager,
-        share_coordinator::{coordinator::ShareCoordinator, persister_client::SharePersister},
+        share_coordinator::{
+            coordinator::ShareCoordinator,
+            persister_client::{InterBrokerListener, SharePersister},
+        },
         share_partition::{dlq::DlqWriter, manager::SharePartitionLeaderManager},
         txn::coordinator::TxnCoordinator,
     },
@@ -100,8 +103,11 @@ pub(super) async fn start_coordinators(
         Arc::clone(controller),
         Arc::clone(auto_topic_creation),
         Arc::clone(inter_broker_client),
-        listener_protocol,
-        config.inter_broker_listener_name.clone(),
+        InterBrokerListener {
+            protocol: listener_protocol,
+            name: config.inter_broker_listener_name.clone(),
+            server_name: config.inter_broker_server_name.clone(),
+        },
     ));
     group_coordinator.set_share_persister(Arc::clone(&share_persister));
     group_coordinator.set_metadata_source(Arc::clone(controller));

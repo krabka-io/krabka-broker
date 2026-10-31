@@ -13,8 +13,9 @@ use {
         network::client::InterBrokerClient,
         partition_registry::PartitionRegistry,
         share_coordinator::{
-            config::ShareCoordinatorConfig, coordinator::ShareCoordinator,
-            persister_client::SharePersister,
+            config::ShareCoordinatorConfig,
+            coordinator::ShareCoordinator,
+            persister_client::{InterBrokerListener, SharePersister},
         },
         share_partition::dlq::{DlqSink, test_support::RecordingDlq},
         test_support::{FakeMetadataSource, UnixMillis, open_partition, static_records_batch},
@@ -137,8 +138,11 @@ fn build(
         Arc::clone(&controller),
         Arc::default(),
         client,
-        ListenerProtocol::Plaintext,
-        "INTERNAL".to_owned(),
+        InterBrokerListener {
+            protocol: ListenerProtocol::Plaintext,
+            name: "INTERNAL".to_owned(),
+            server_name: "localhost".to_owned(),
+        },
     ));
     SharePartitionLeaderManager::new(
         krabka_audit::NodeId(1),
