@@ -11,7 +11,7 @@ use {
             produce::{
                 delivery::DeliveryGate,
                 framing::{FramedPartition, PartitionPayload},
-                pipeline::PartitionInput,
+                pipeline::{PartitionInput, TopicProducePolicy},
                 producer_checks::TransactionRequest,
                 topic_settings::TimestampPolicy,
             },
@@ -172,15 +172,17 @@ pub(super) fn pipeline_input<'a>(
 ) -> PartitionInput<'a> {
     PartitionInput {
         part_data: FramedPartition { index: 0, payload },
-        topic_compression: None,
-        timestamps: TimestampPolicy::default(),
-        compacted_topic: false,
-        max_message_bytes,
-        delivery,
-        schema,
+        topic: TopicProducePolicy {
+            compression: None,
+            timestamps: TimestampPolicy::default(),
+            compacted: false,
+            max_message_bytes,
+            delivery,
+            schema,
+            freeze,
+            internal_topic_denied,
+        },
         topic_name: topic.into(),
-        freeze,
-        internal_topic_denied,
         transaction,
         acks,
     }

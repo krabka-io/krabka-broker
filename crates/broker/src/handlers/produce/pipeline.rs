@@ -35,7 +35,7 @@ use {
         schema_validation::{SchemaGate, SchemaValidator},
         txn::{coordinator::TxnCoordinator, state::TopicPartition},
     },
-    krabka_compression::RecordDecompressionPolicy,
+    krabka_compression::{CompressionType, RecordDecompressionPolicy},
     krabka_protocol::owned::produce_response::{
         BatchIndexAndErrorMessage, PartitionProduceResponse,
     },
@@ -43,6 +43,43 @@ use {
     std::sync::{Arc, atomic},
     tokio::sync::OwnedRwLockReadGuard,
 };
+
+/// The produce settings of one topic, resolved once per topic by the handler
+/// and shared by every partition of that topic in the request.
+#[derive(Clone, Copy)]
+pub(super) struct TopicProducePolicy<'a> {
+    /// The topic's broker-side `compression.type`. `None` is Kafka's
+    /// `producer` pass-through, with no recompression.
+    pub(super) compression: Option<CompressionType>,
+    /// The topic's KIP-32 timestamp policy, resolved once per topic:
+    /// `message.timestamp.type` plus the two
+    /// `message.timestamp.{before,after}.max.ms` windows. The default admits
+    /// every timestamp and costs one boolean test per batch.
+    pub(super) timestamps: TimestampPolicy,
+    /// Whether the topic's `cleanup.policy` holds `compact`, resolved once per
+    /// topic. Kafka's `LogValidator` then refuses a record with no key.
+    pub(super) compacted: bool,
+    /// The topic's `max.message.bytes`, resolved once per topic, with the
+    /// broker's `message.max.bytes` behind it. Every topic has one, so unlike
+    /// the gates below it is a value and not an `Option`.
+    pub(super) max_message_bytes: ByteSize,
+    /// The topic's KFC-1 delivery settings, resolved once per topic. `None` is
+    /// `delivery.mode=immediate`, and skips the delivery gate entirely.
+    pub(super) delivery: Option<DeliveryGate>,
+    /// The topic's KFC-7 schema-validation settings, resolved once per topic.
+    /// `None` is "neither `schema.validation.key` nor
+    /// `schema.validation.value` is set", and skips the check entirely.
+    pub(super) schema: Option<SchemaGate>,
+    /// The topic's authorization-and-freeze result, resolved once per topic.
+    /// Only `Frozen` carries registry detail, after authorization succeeded.
+    pub(super) freeze: FreezeMutationResolution<'a>,
+    /// Whether this topic is one of [`crate::internal_topics::
+    /// INTERNAL_TOPICS`] (or the configured audit topic) and the request's
+    /// `client_id` is not Kafka's admin-tooling exception. Resolved once per
+    /// topic, beside `freeze`, since it is a property of the topic and the
+    /// request, not of a partition or a batch.
+    pub(super) internal_topic_denied: bool,
+}
 
 /// Per-partition produce input, held apart so that the call site can time the
 /// work and charge it to `partition_cpu_micros_total`.
@@ -57,40 +94,13 @@ use {
 /// `txn_coordinator.put` errors propagate with `?`.
 pub(super) struct PartitionInput<'a> {
     pub(super) part_data: FramedPartition,
-    pub(super) topic_compression: Option<krabka_compression::CompressionType>,
-    /// The topic's KIP-32 timestamp policy, resolved once per topic:
-    /// `message.timestamp.type` plus the two
-    /// `message.timestamp.{before,after}.max.ms` windows. The default admits
-    /// every timestamp and costs one boolean test per batch.
-    pub(super) timestamps: TimestampPolicy,
-    /// Whether the topic's `cleanup.policy` holds `compact`, resolved once per
-    /// topic. Kafka's `LogValidator` then refuses a record with no key.
-    pub(super) compacted_topic: bool,
-    /// The topic's `max.message.bytes`, resolved once per topic, with the
-    /// broker's `message.max.bytes` behind it. Every topic has one, so unlike
-    /// the gates below it is a value and not an `Option`.
-    pub(super) max_message_bytes: ByteSize,
-    /// The topic's KFC-1 delivery settings, resolved once per topic. `None` is
-    /// `delivery.mode=immediate`, and skips the delivery gate entirely.
-    pub(super) delivery: Option<DeliveryGate>,
-    /// The topic's KFC-7 schema-validation settings, resolved once per topic.
-    /// `None` is "neither `schema.validation.key` nor
-    /// `schema.validation.value` is set", and skips the check entirely.
-    pub(super) schema: Option<SchemaGate>,
+    /// The settings of this partition's topic.
+    pub(super) topic: TopicProducePolicy<'a>,
     /// The topic name, as the `Arc<str>` the metric label sets clone. The
     /// registry owns the one copy — see `PartitionRegistry::shared_topic_name`
     /// — so passing it down here is what keeps the per-partition accounting
     /// free of allocations.
     pub(super) topic_name: Arc<str>,
-    /// The topic's authorization-and-freeze result, resolved once per topic.
-    /// Only `Frozen` carries registry detail, after authorization succeeded.
-    pub(super) freeze: FreezeMutationResolution<'a>,
-    /// Whether this partition's topic is one of [`crate::internal_topics::
-    /// INTERNAL_TOPICS`] (or the configured audit topic) and the request's
-    /// `client_id` is not Kafka's admin-tooling exception. Resolved once per
-    /// topic, beside `freeze`, since it is a property of the topic and the
-    /// request, not of a partition or a batch.
-    pub(super) internal_topic_denied: bool,
     /// The request fields of the KIP-890 transaction check.
     pub(super) transaction: TransactionRequest<'a>,
     pub(super) acks: i16,
@@ -380,15 +390,18 @@ pub(super) async fn admit_partition(
 ) -> Result<Admission, BrokerError> {
     let PartitionInput {
         part_data,
-        topic_compression,
-        timestamps,
-        compacted_topic,
-        max_message_bytes,
-        delivery,
-        schema,
+        topic:
+            TopicProducePolicy {
+                compression: topic_compression,
+                timestamps,
+                compacted: compacted_topic,
+                max_message_bytes,
+                delivery,
+                schema,
+                freeze,
+                internal_topic_denied,
+            },
         topic_name,
-        freeze,
-        internal_topic_denied,
         transaction,
         acks,
     } = input;
