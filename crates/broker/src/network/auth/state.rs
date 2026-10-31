@@ -1115,7 +1115,14 @@ mod tests {
     fn complete_authentication_records_the_session_and_advertises_its_window() {
         let now = 1_000_000_i64;
         let cases = [
-            ("no credential lifetime and no cap", None, None, false, None, 0),
+            (
+                "no credential lifetime and no cap",
+                None,
+                None,
+                false,
+                None,
+                0,
+            ),
             (
                 "the cap bounds a credential without a lifetime",
                 None,

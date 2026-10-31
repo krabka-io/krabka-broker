@@ -15,11 +15,11 @@ use {
     },
     crate::{metadata_source::MetadataSource, time_util::now_ms},
     base64::engine::general_purpose::STANDARD,
+    krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_authenticate_response::SaslAuthenticateResponse,
     },
-    krabka_metadata::MetadataImage,
     krabka_security::{
         AuthMethod, Principal, SaslMechanism, ScramCredential, ScramServerExchange, SecretBytes,
         StepResult, compute_token_hmac,
