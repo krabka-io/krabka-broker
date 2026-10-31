@@ -219,11 +219,12 @@ fn wal_timestamp_error(error: impl Display) -> RemoteStorageError {
 }
 
 /// Tries to satisfy a local `OFFSET_OUT_OF_RANGE` fetch from the diskless WAL
-/// objects.
+/// objects, reading at most `max_bytes`, the partition's budget for this read.
 pub async fn try_diskless_read(
     broker: &Broker,
     p: &mut PendingRead,
     part: &Partition,
+    max_bytes: i32,
 ) -> Option<usize> {
     if !part.diskless || p.topic_id == WireUuid::ZERO {
         return None;
@@ -238,7 +239,7 @@ pub async fn try_diskless_read(
 
     let handle = broker.diskless_read.clone()?;
     let topic_id = Uuid::from_bytes(p.topic_id.0);
-    let max_bytes = usize::try_from(p.max_bytes.max(0)).unwrap_or(0);
+    let max_bytes = usize::try_from(max_bytes.max(0)).unwrap_or(0);
     let records = match handle
         .read_records(topic_id, p.partition_index, p.fetch_offset, max_bytes)
         .await
@@ -791,6 +792,9 @@ mod tests {
 
     #[tokio::test]
     async fn max_bytes_and_store_failure_map_the_whole_fetch_partition() {
+        // A one-byte budget, which still serves the first batch whole.
+        const PARTITION_MAX_BYTES: i32 = 1;
+
         let dir = tempfile::tempdir().unwrap();
         let object_dir = tempfile::tempdir().unwrap();
         let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
@@ -859,7 +863,7 @@ mod tests {
             current_leader_epoch: 0,
             last_fetched_epoch: -1,
             fetch_offset: 0,
-            max_bytes: 1,
+            max_bytes: PARTITION_MAX_BYTES,
             read_committed: false,
             is_follower_fetch: false,
             fetch_only_leader: false,
@@ -874,7 +878,10 @@ mod tests {
             cpu_micros: 0,
         };
 
-        assert!(try_diskless_read(&broker, &mut pending, &part).await == Some(first.len()));
+        assert!(
+            try_diskless_read(&broker, &mut pending, &part, PARTITION_MAX_BYTES).await
+                == Some(first.len())
+        );
         assert!(broker.metrics.diskless_wal_cold_read_hits_total.get() == 1);
         assert!(
             round_trip_partition(wire_topic_id, pending.out.clone())
@@ -893,7 +900,7 @@ mod tests {
         pending.fetch_offset = 99;
         pending.out.error_code = codes::OFFSET_OUT_OF_RANGE;
         assert!(
-            try_diskless_read(&broker, &mut pending, &part)
+            try_diskless_read(&broker, &mut pending, &part, PARTITION_MAX_BYTES)
                 .await
                 .is_none()
         );
@@ -915,7 +922,9 @@ mod tests {
             log_start_offset: 3,
             ..Default::default()
         };
-        assert!(try_diskless_read(&broker, &mut pending, &part).await == Some(0));
+        assert!(
+            try_diskless_read(&broker, &mut pending, &part, PARTITION_MAX_BYTES).await == Some(0)
+        );
         assert!(broker.metrics.diskless_wal_cold_read_errors_total.get() == 1);
         assert!(
             round_trip_partition(wire_topic_id, pending.out)

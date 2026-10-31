@@ -865,7 +865,9 @@ async fn serve_from_cold_tier(
     let max_bytes = read.max_bytes;
     let served = match Box::pin(try_remote_read(broker, read, part, max_bytes, remote_wait)).await {
         Some(remote_bytes) => remote_bytes,
-        None => try_diskless_read(broker, read, part).await.unwrap_or(0),
+        None => try_diskless_read(broker, read, part, max_bytes)
+            .await
+            .unwrap_or(0),
     };
     phases.add_remote(started.elapsed());
     served
