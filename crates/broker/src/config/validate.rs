@@ -6,6 +6,10 @@ use {
     crate::{
         BrokerError,
         config::{BrokerConfig, ListenerSpec, RlmmKind},
+        coordinator::unified::{
+            config::NextGenConfig, share::config::ShareGroupConfig,
+            streams::config::StreamsGroupConfig,
+        },
         internal_topics::validate_audit_topic_name,
     },
     krabka_security::SaslMechanism,
@@ -176,85 +180,13 @@ impl BrokerConfig {
         self.validate_runtime_relations()?;
         self.validate_additional_runtime_relations()?;
 
-        let validate_group = |name: &str,
-                              session_timeout: Duration,
-                              heartbeat_interval: Duration,
-                              min_session_timeout: Duration,
-                              max_session_timeout: Duration,
-                              min_heartbeat_interval: Duration,
-                              max_heartbeat_interval: Duration,
-                              max_size: Option<usize>| {
-            if min_session_timeout.is_zero() {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} minimum session timeout must be positive"
-                )));
-            }
-            if min_session_timeout > max_session_timeout {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} minimum session timeout exceeds maximum"
-                )));
-            }
-            if !(min_session_timeout..=max_session_timeout).contains(&session_timeout) {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} session timeout is outside its bounds"
-                )));
-            }
-            if min_heartbeat_interval.is_zero() {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} minimum heartbeat interval must be positive"
-                )));
-            }
-            if min_heartbeat_interval > max_heartbeat_interval {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} minimum heartbeat interval exceeds maximum"
-                )));
-            }
-            if !(min_heartbeat_interval..=max_heartbeat_interval).contains(&heartbeat_interval) {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} heartbeat interval is outside its bounds"
-                )));
-            }
-            if max_size == Some(0) {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} maximum size must be positive"
-                )));
-            }
-            Ok(())
-        };
-
         let consumer = &self.next_gen_consumer_group;
         consumer.validate_assignors()?;
-        validate_group(
-            "consumer group",
-            consumer.session_timeout,
-            consumer.heartbeat_interval,
-            consumer.min_session_timeout,
-            consumer.max_session_timeout,
-            consumer.min_heartbeat_interval,
-            consumer.max_heartbeat_interval,
-            Some(consumer.max_size),
-        )?;
-        let share = &self.share_group;
-        validate_group(
-            "share group",
-            share.session_timeout,
-            share.heartbeat_interval,
-            share.min_session_timeout,
-            share.max_session_timeout,
-            share.min_heartbeat_interval,
-            share.max_heartbeat_interval,
-            Some(share.max_size),
-        )?;
-        let streams = &self.streams_group;
-        validate_group(
+        validate_group_bounds("consumer group", &GroupTimeoutBounds::consumer(consumer))?;
+        validate_group_bounds("share group", &GroupTimeoutBounds::share(&self.share_group))?;
+        validate_group_bounds(
             "streams group",
-            streams.session_timeout,
-            streams.heartbeat_interval,
-            streams.min_session_timeout,
-            streams.max_session_timeout,
-            streams.min_heartbeat_interval,
-            streams.max_heartbeat_interval,
-            Some(streams.max_size),
+            &GroupTimeoutBounds::streams(&self.streams_group),
         )?;
 
         if let RlmmKind::TopicBacked(config) = &self.remote_log_metadata {
@@ -501,6 +433,92 @@ impl BrokerConfig {
         }
         Ok(())
     }
+}
+
+/// The timeout and size bounds every group kind checks the same way: a
+/// default session timeout and heartbeat interval inside their positive,
+/// ordered ranges, and a positive maximum group size.
+struct GroupTimeoutBounds {
+    session_timeout: Duration,
+    heartbeat_interval: Duration,
+    min_session_timeout: Duration,
+    max_session_timeout: Duration,
+    min_heartbeat_interval: Duration,
+    max_heartbeat_interval: Duration,
+    max_size: usize,
+}
+
+impl GroupTimeoutBounds {
+    fn consumer(config: &NextGenConfig) -> Self {
+        Self {
+            session_timeout: config.session_timeout,
+            heartbeat_interval: config.heartbeat_interval,
+            min_session_timeout: config.min_session_timeout,
+            max_session_timeout: config.max_session_timeout,
+            min_heartbeat_interval: config.min_heartbeat_interval,
+            max_heartbeat_interval: config.max_heartbeat_interval,
+            max_size: config.max_size,
+        }
+    }
+
+    fn share(config: &ShareGroupConfig) -> Self {
+        Self {
+            session_timeout: config.session_timeout,
+            heartbeat_interval: config.heartbeat_interval,
+            min_session_timeout: config.min_session_timeout,
+            max_session_timeout: config.max_session_timeout,
+            min_heartbeat_interval: config.min_heartbeat_interval,
+            max_heartbeat_interval: config.max_heartbeat_interval,
+            max_size: config.max_size,
+        }
+    }
+
+    fn streams(config: &StreamsGroupConfig) -> Self {
+        Self {
+            session_timeout: config.session_timeout,
+            heartbeat_interval: config.heartbeat_interval,
+            min_session_timeout: config.min_session_timeout,
+            max_session_timeout: config.max_session_timeout,
+            min_heartbeat_interval: config.min_heartbeat_interval,
+            max_heartbeat_interval: config.max_heartbeat_interval,
+            max_size: config.max_size,
+        }
+    }
+}
+
+/// Checks `bounds` for the group kind `name` and reports the first bound it
+/// breaks, naming the group in the message.
+fn validate_group_bounds(name: &str, bounds: &GroupTimeoutBounds) -> Result<(), BrokerError> {
+    let invalid = |problem: &str| {
+        Err(BrokerError::InvalidRuntimeConfig(format!(
+            "{name} {problem}"
+        )))
+    };
+    if bounds.min_session_timeout.is_zero() {
+        return invalid("minimum session timeout must be positive");
+    }
+    if bounds.min_session_timeout > bounds.max_session_timeout {
+        return invalid("minimum session timeout exceeds maximum");
+    }
+    if !(bounds.min_session_timeout..=bounds.max_session_timeout).contains(&bounds.session_timeout)
+    {
+        return invalid("session timeout is outside its bounds");
+    }
+    if bounds.min_heartbeat_interval.is_zero() {
+        return invalid("minimum heartbeat interval must be positive");
+    }
+    if bounds.min_heartbeat_interval > bounds.max_heartbeat_interval {
+        return invalid("minimum heartbeat interval exceeds maximum");
+    }
+    if !(bounds.min_heartbeat_interval..=bounds.max_heartbeat_interval)
+        .contains(&bounds.heartbeat_interval)
+    {
+        return invalid("heartbeat interval is outside its bounds");
+    }
+    if bounds.max_size == 0 {
+        return invalid("maximum size must be positive");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
