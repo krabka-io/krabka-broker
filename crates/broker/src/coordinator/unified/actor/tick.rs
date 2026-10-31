@@ -152,15 +152,7 @@ async fn handle_session_tick(
         }
         let member_ids = [member_id];
         if downgrades_without(state, services.config, &member_ids) {
-            return downgrade_fencing(
-                group,
-                &member_ids,
-                services.config,
-                services.metadata,
-                services.offsets_log,
-                services.coordinator,
-            )
-            .await;
+            return downgrade_fencing(group, &member_ids, services).await;
         }
         let pending = fence_members(state, services.metadata, &member_ids);
         flush_pending(

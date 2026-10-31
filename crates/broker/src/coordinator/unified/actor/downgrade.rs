@@ -6,15 +6,13 @@
 //! with one atomic batch of the conversion's.
 
 use {
-    super::{MetadataProvider, chrono_now_ms},
+    super::{ActorServices, chrono_now_ms},
     crate::{
         coordinator::unified::{
-            GroupCoordinator,
             config::NextGenConfig,
             consumer_state::GroupState,
             group::{CoordinatorGroup, GroupKind},
             migration,
-            offsets_log::OffsetsLog,
         },
         error::BrokerError,
     },
@@ -62,15 +60,12 @@ pub(super) fn downgrades_without(
 pub(super) async fn downgrade_fencing(
     group: &mut CoordinatorGroup,
     fenced: &[String],
-    config: &NextGenConfig,
-    metadata: &dyn MetadataProvider,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
+    services: ActorServices<'_>,
 ) -> Result<(), BrokerError> {
     let Some(state) = group.as_consumer() else {
         return Ok(());
     };
-    let image = metadata.snapshot();
+    let image = services.metadata.snapshot();
     let now_ms = chrono_now_ms();
     let Some(mut classic) = migration::convert_consumer_to_classic(state, fenced, &image) else {
         return Ok(());
@@ -78,9 +73,12 @@ pub(super) async fn downgrade_fencing(
     let pending = migration::downgrade_pending_records(state, &classic, now_ms);
     let group_id = group.group_id.clone();
     let batch = pending.to_batch(&group_id, now_ms)?;
-    offsets_log.append(&group_id, batch).await?;
-    coordinator.mark_classic_after_downgrade(&group_id);
-    classic.prepare_rebalance(config.classic_initial_rebalance_delay, Instant::now());
+    services.offsets_log.append(&group_id, batch).await?;
+    services.coordinator.mark_classic_after_downgrade(&group_id);
+    classic.prepare_rebalance(
+        services.config.classic_initial_rebalance_delay,
+        Instant::now(),
+    );
     *group.kind_mut() = GroupKind::Classic(classic);
     Ok(())
 }

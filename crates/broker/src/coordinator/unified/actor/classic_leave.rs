@@ -89,20 +89,13 @@ pub(super) async fn handle_classic_leave_message(
     // Kafka's `consumerGroupFenceMembers`: the members leave in one batch, or
     // the group downgrades in their place when only classic members remain.
     if downgrades_without(state, services.config, &removed) {
-        downgrade_fencing(
-            group,
-            &removed,
-            services.config,
-            services.metadata,
-            services.offsets_log,
-            services.coordinator,
-        )
-        .await
-        .map_err(|error| {
-            tracing::warn!(group_id = %group.group_id, %error,
+        downgrade_fencing(group, &removed, services)
+            .await
+            .map_err(|error| {
+                tracing::warn!(group_id = %group.group_id, %error,
                 "hosted classic LeaveGroup downgrade log write failed");
-            write_failure_code(&error)
-        })?;
+                write_failure_code(&error)
+            })?;
         return Ok(responses);
     }
     let pending = fence_members(state, services.metadata, &removed);

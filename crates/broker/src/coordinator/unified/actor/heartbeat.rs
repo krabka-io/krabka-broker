@@ -160,16 +160,7 @@ pub(super) async fn handle_actor_heartbeat(
     {
         let fenced = [member.member_id.clone()];
         if downgrades_without(state, services.config, &fenced) {
-            if let Err(error) = downgrade_fencing(
-                group,
-                &fenced,
-                services.config,
-                services.metadata,
-                services.offsets_log,
-                services.coordinator,
-            )
-            .await
-            {
+            if let Err(error) = downgrade_fencing(group, &fenced, services).await {
                 tracing::warn!(group_id = %group.group_id, %error,
                     "next-gen actor exiting after downgrade log-write failure");
                 let _ = reply.send(ConsumerGroupHeartbeatResponse {
