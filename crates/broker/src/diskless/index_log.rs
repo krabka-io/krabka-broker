@@ -547,8 +547,10 @@ impl IndexPump {
             IndexEvent::InvalidReservation => self.invalidate(),
             IndexEvent::MismatchedReservation => {
                 self.invalidate();
-                // Deliberately neither recorded as consumed nor counted toward
-                // the replay, as the pump has always done.
+                // Deliberate: unlike every other record, this one is neither
+                // recorded as consumed nor counted toward the replay. Kept
+                // as the pump has always behaved; see the characterization
+                // test before changing it.
                 return;
             }
             IndexEvent::RaiseFloor { key, floor } => {
@@ -595,7 +597,14 @@ impl IndexPump {
             .send_modify(|generation| *generation = generation.wrapping_add(1));
     }
 
-    fn invalidate(&self) { invalidate_projection(&self.metrics, &self.valid, &self.progress_tx); }
+    /// Mark the projection unsafe to read, and count the record that made it
+    /// so.
+    fn invalidate(&self) {
+        self.metrics.diskless_wal_index_decode_failures_total.inc();
+        self.valid.store(false, Ordering::Release);
+        self.progress_tx
+            .send_modify(|progress| progress.invalid = true);
+    }
 
     fn record_consumed(&self, event: &MetadataEventRecord) {
         self.consumed_tx.send_modify(|offsets| {
@@ -699,16 +708,6 @@ async fn publish_replay_fences(
     Ok(pending)
 }
 
-fn invalidate_projection(
-    metrics: &BrokerMetrics,
-    valid: &AtomicBool,
-    progress: &watch::Sender<ReplayProgress>,
-) {
-    metrics.diskless_wal_index_decode_failures_total.inc();
-    valid.store(false, Ordering::Release);
-    progress.send_modify(|progress| progress.invalid = true);
-}
-
 /// What one committed index record asks of the projection.
 #[derive(Debug)]
 enum IndexEvent {
@@ -780,10 +779,10 @@ fn classify(event: &MetadataEventRecord) -> IndexEvent {
     if key == Some(REPLAY_FENCE_KEY) {
         return IndexEvent::ReplayFence;
     }
-    match floor_key {
-        Some(floor_key) => classify_floor_value(event, floor_key, reservation_key),
-        None => classify_flush_value(&event.payload, range_key),
-    }
+    floor_key.map_or_else(
+        || classify_flush_value(&event.payload, range_key),
+        |floor_key| classify_floor_value(event, floor_key, reservation_key),
+    )
 }
 
 /// Classify the value of a delete-floor key, which an object reservation
@@ -819,13 +818,14 @@ fn classify_floor_value(
 
 /// Classify a value that is not a delete floor's: a flush record.
 fn classify_flush_value(payload: &[u8], range_key: Option<WalIndexKey>) -> IndexEvent {
-    match WalFlushRecord::from_bytes(payload) {
-        Ok(record) => match range_key {
-            Some(key) => IndexEvent::ApplyRange { key, record },
-            None => IndexEvent::Unkeyed,
-        },
-        Err(error) => IndexEvent::Rejected(error),
-    }
+    let record = match WalFlushRecord::from_bytes(payload) {
+        Ok(record) => record,
+        Err(error) => return IndexEvent::Rejected(error),
+    };
+    range_key.map_or(IndexEvent::Unkeyed, |key| IndexEvent::ApplyRange {
+        key,
+        record,
+    })
 }
 
 /// Most index records that [`DisklessIndexLog::publish_flush`] submits before
@@ -1621,9 +1621,9 @@ mod pump_tests {
         crate::diskless::wal_index::IndexedRange,
         assert2::assert,
         async_trait::async_trait,
+        futures_util::stream,
         krabka_remote_storage_topic::{
-            AssignmentHandle, InProcessMetadataEventLog, MetadataEventRecord, MetadataEventStream,
-            MetadataLogError,
+            AssignmentHandle, InProcessMetadataEventLog, MetadataLogError,
         },
         tokio::{sync::mpsc, time::timeout},
         uuid::Uuid,
@@ -1634,7 +1634,7 @@ mod pump_tests {
     const REPLAY_TARGET: i64 = 100;
     const TOPIC: Uuid = Uuid::from_u128(7);
     const OTHER_TOPIC: Uuid = Uuid::from_u128(8);
-    /// A UUIDv4, as diskless object names are.
+    /// A `UUIDv4`, as diskless object names are.
     const OBJECT: Uuid = Uuid::from_u128(0x0000_0000_0000_4000_8000_0000_0000_0001);
 
     /// A two-partition log whose subscription delivers exactly what the test
@@ -1668,10 +1668,10 @@ mod pump_tests {
         ) -> (MetadataEventStream, Arc<dyn AssignmentHandle>) {
             let (_, handle) = self.inner.subscribe(assignment);
             let events = self.events.lock().unwrap().take().expect("subscribed once");
-            let stream = futures_util::stream::unfold(events, |mut events| async move {
+            let scripted = stream::unfold(events, |mut events| async move {
                 events.recv().await.map(|event| (event, events))
             });
-            (Box::pin(stream), handle)
+            (Box::pin(scripted), handle)
         }
 
         async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> { Ok(vec![1, 0]) }
