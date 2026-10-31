@@ -259,12 +259,10 @@ pub fn rewrite_segments(
         {
             check_records_read(batch, batch.records.len(), round.max_decompressed_record)?;
         }
-        let RetainedRecords {
-            kept,
-            stamp_horizon,
-        } = retained_records(batch, offset_map, txn, clock);
+        let retained = retained_records(batch, offset_map, txn, clock);
 
-        let Some(kept_max_timestamp) = kept
+        let Some(kept_max_timestamp) = retained
+            .kept
             .iter()
             .map(|r| batch.base_timestamp.saturating_add(r.timestamp_delta))
             .max()
@@ -289,31 +287,7 @@ pub fn rewrite_segments(
             continue;
         };
 
-        // Kafka's `MemoryRecords.buildRetainedRecordsInto` keeps the original
-        // batch's base offset and last offset (`overrideLastOffset`), so the
-        // producer's last sequence (`base_sequence + last_offset_delta`) and
-        // the `RETAIN_EMPTY` comparisons of the next pass survive a batch that
-        // loses its tail records. The max timestamp is the retained records'
-        // under CreateTime (`MemoryRecordsBuilder.recordWritten`), and the
-        // batch's own under LogAppendTime (`writeDefaultBatchHeader`). The
-        // timestamps are absolute here, whether or not a delete horizon
-        // already re-based the batch.
-        let max_timestamp = match batch.attributes.timestamp_type() {
-            TimestampType::LogAppendTime => batch.max_timestamp,
-            TimestampType::CreateTime => kept_max_timestamp,
-        };
-        let mut out_batch = RecordBatch {
-            max_timestamp,
-            records: kept,
-            ..batch.clone()
-        };
-        // Stamp the delete horizon once, after the kept batch is built. This
-        // rewrites each kept record's timestamp_delta so absolute timestamps
-        // are preserved (see `RecordBatch::with_delete_horizon`).
-        if let Some(h) = stamp_horizon {
-            out_batch = out_batch.with_delete_horizon(h);
-        }
-
+        let out_batch = retained_batch(batch, retained, kept_max_timestamp);
         last_kept_offset =
             write_rewritten_batch(&*io, &log_file, &out_batch, last_kept_offset, &mut frontier)?;
     }
@@ -471,6 +445,40 @@ fn retained_records(
         kept,
         stamp_horizon,
     }
+}
+
+/// The output batch for `batch` when it keeps `retained`, whose newest record
+/// is at `kept_max_timestamp`.
+fn retained_batch(
+    batch: &RecordBatch,
+    retained: RetainedRecords,
+    kept_max_timestamp: i64,
+) -> RecordBatch {
+    // Kafka's `MemoryRecords.buildRetainedRecordsInto` keeps the original
+    // batch's base offset and last offset (`overrideLastOffset`), so the
+    // producer's last sequence (`base_sequence + last_offset_delta`) and
+    // the `RETAIN_EMPTY` comparisons of the next pass survive a batch that
+    // loses its tail records. The max timestamp is the retained records'
+    // under CreateTime (`MemoryRecordsBuilder.recordWritten`), and the
+    // batch's own under LogAppendTime (`writeDefaultBatchHeader`). The
+    // timestamps are absolute here, whether or not a delete horizon
+    // already re-based the batch.
+    let max_timestamp = match batch.attributes.timestamp_type() {
+        TimestampType::LogAppendTime => batch.max_timestamp,
+        TimestampType::CreateTime => kept_max_timestamp,
+    };
+    let mut out_batch = RecordBatch {
+        max_timestamp,
+        records: retained.kept,
+        ..batch.clone()
+    };
+    // Stamp the delete horizon once, after the kept batch is built. This
+    // rewrites each kept record's timestamp_delta so absolute timestamps
+    // are preserved (see `RecordBatch::with_delete_horizon`).
+    if let Some(h) = retained.stamp_horizon {
+        out_batch = out_batch.with_delete_horizon(h);
+    }
+    out_batch
 }
 
 /// The bare header a `RETAIN_EMPTY` batch leaves in the output, Kafka's
