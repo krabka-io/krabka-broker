@@ -54,9 +54,11 @@ use {
         handlers::{RequestContext, acl_denied, cluster_action_denied},
         partition::Partition,
     },
-    krabka_metadata::{AclOperation, ResourceType},
+    krabka_ids::PartitionIndex,
+    krabka_log::LeaderEpoch,
+    krabka_metadata::{AclOperation, MetadataImage, ResourceType},
     krabka_protocol::owned::{
-        offset_for_leader_epoch_request::OffsetForLeaderEpochRequest,
+        offset_for_leader_epoch_request::{OffsetForLeaderEpochRequest, OffsetForLeaderPartition},
         offset_for_leader_epoch_response::{
             EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
         },
@@ -72,7 +74,7 @@ use {
 /// before the supervisor installs the new role, and the installed role can
 /// lag the other way while a promotion prepares the log.
 fn not_leader(
-    image: &krabka_metadata::MetadataImage,
+    image: &MetadataImage,
     topic: &str,
     partition_index: i32,
     partition: &Partition,
@@ -94,6 +96,68 @@ fn error_row(partition: i32, error_code: i16) -> EpochEndOffset {
         error_code,
         leader_epoch: -1,
         end_offset: -1,
+        ..Default::default()
+    }
+}
+
+/// The row for one authorized partition: the first hosting, fence or
+/// leader refusal that applies, else the epoch checkpoint's answer.
+fn epoch_end_offset(
+    broker: &Broker,
+    image: &MetadataImage,
+    topic: &str,
+    part: &OffsetForLeaderPartition,
+) -> EpochEndOffset {
+    // The three hosting outcomes of `ReplicaManager
+    // .lastOffsetForLeaderEpoch`, decided before the fence: a
+    // replica this broker does not host is `NOT_LEADER_OR_FOLLOWER`
+    // when the metadata still holds the partition (a reassignment
+    // moved it away, so the client refreshes its metadata) and
+    // `UNKNOWN_TOPIC_OR_PARTITION` when it does not, and a
+    // partition in an offline log dir is `KAFKA_STORAGE_ERROR`.
+    let Some(p) = broker.partitions.get(topic, PartitionIndex(part.partition)) else {
+        let error_code = if image.partition(topic, part.partition).is_some() {
+            codes::NOT_LEADER_OR_FOLLOWER
+        } else {
+            codes::UNKNOWN_TOPIC_OR_PARTITION
+        };
+        return error_row(part.partition, error_code);
+    };
+    if broker.log_dir_status.is_offline(&p.log_dir.load()) {
+        return error_row(part.partition, codes::KAFKA_STORAGE_ERROR);
+    }
+
+    // KIP-320 leader-epoch fence, ahead of the leader-only gate and
+    // the KIP-101 domain logic below, exactly as
+    // `Partition.getLocalLog` runs `checkCurrentLeaderEpoch` before
+    // its leader check. `list_offsets_leader_epoch_fence` reads
+    // only `-1` as "no epoch asserted", the rule
+    // `ReplicaManager.lastOffsetForLeaderEpoch` applies here too.
+    if let Some((error_code, _)) = p.list_offsets_leader_epoch_fence(part.current_leader_epoch) {
+        return error_row(part.partition, error_code);
+    }
+
+    if not_leader(image, topic, part.partition, &p, broker.config.node_id) {
+        return error_row(part.partition, codes::NOT_LEADER_OR_FOLLOWER);
+    }
+
+    // `Partition.lastOffsetForLeaderEpoch`: Kafka's
+    // `LeaderEpochFileCache.endOffsetFor` pair, verbatim. An epoch
+    // the checkpoint cannot place answers `(-1, -1)`, which is
+    // also what `UnifiedLog.endOffsetForEpoch`'s `None` leaves in
+    // the row. No error either way: the hosting checks above are
+    // what set an error code, not this KIP-101 lookup.
+    let log = p.log.lock().unwrap_or_else(PoisonError::into_inner);
+    let leo = log.log_end_offset();
+    let (found_epoch, end_offset) = log
+        .epoch_checkpoint()
+        .epoch_and_offset_for(LeaderEpoch(part.leader_epoch), leo);
+    drop(log);
+    EpochEndOffset {
+        partition: part.partition,
+        error_code: codes::NONE,
+        leader_epoch: found_epoch.0,
+        end_offset: end_offset.0,
         ..Default::default()
     }
 }
@@ -153,77 +217,11 @@ pub fn handle(
             });
             continue;
         }
-        let mut parts_out: Vec<EpochEndOffset> = Vec::with_capacity(topic.partitions.len());
-
-        for part in &topic.partitions {
-            // The three hosting outcomes of `ReplicaManager
-            // .lastOffsetForLeaderEpoch`, decided before the fence: a
-            // replica this broker does not host is `NOT_LEADER_OR_FOLLOWER`
-            // when the metadata still holds the partition (a reassignment
-            // moved it away, so the client refreshes its metadata) and
-            // `UNKNOWN_TOPIC_OR_PARTITION` when it does not, and a
-            // partition in an offline log dir is `KAFKA_STORAGE_ERROR`.
-            let Some(p) = broker
-                .partitions
-                .get(&topic.topic, krabka_ids::PartitionIndex(part.partition))
-            else {
-                let error_code = if acl_image.partition(&topic.topic, part.partition).is_some() {
-                    codes::NOT_LEADER_OR_FOLLOWER
-                } else {
-                    codes::UNKNOWN_TOPIC_OR_PARTITION
-                };
-                parts_out.push(error_row(part.partition, error_code));
-                continue;
-            };
-            if broker.log_dir_status.is_offline(&p.log_dir.load()) {
-                parts_out.push(error_row(part.partition, codes::KAFKA_STORAGE_ERROR));
-                continue;
-            }
-
-            // KIP-320 leader-epoch fence, ahead of the leader-only gate and
-            // the KIP-101 domain logic below, exactly as
-            // `Partition.getLocalLog` runs `checkCurrentLeaderEpoch` before
-            // its leader check. `list_offsets_leader_epoch_fence` reads
-            // only `-1` as "no epoch asserted", the rule
-            // `ReplicaManager.lastOffsetForLeaderEpoch` applies here too.
-            if let Some((error_code, _)) =
-                p.list_offsets_leader_epoch_fence(part.current_leader_epoch)
-            {
-                parts_out.push(error_row(part.partition, error_code));
-                continue;
-            }
-
-            if not_leader(
-                &acl_image,
-                &topic.topic,
-                part.partition,
-                &p,
-                broker.config.node_id,
-            ) {
-                parts_out.push(error_row(part.partition, codes::NOT_LEADER_OR_FOLLOWER));
-                continue;
-            }
-
-            // `Partition.lastOffsetForLeaderEpoch`: Kafka's
-            // `LeaderEpochFileCache.endOffsetFor` pair, verbatim. An epoch
-            // the checkpoint cannot place answers `(-1, -1)`, which is
-            // also what `UnifiedLog.endOffsetForEpoch`'s `None` leaves in
-            // the row. No error either way: the hosting checks above are
-            // what set an error code, not this KIP-101 lookup.
-            let log = p.log.lock().unwrap_or_else(PoisonError::into_inner);
-            let leo = log.log_end_offset();
-            let (found_epoch, end_offset) = log
-                .epoch_checkpoint()
-                .epoch_and_offset_for(krabka_log::LeaderEpoch(part.leader_epoch), leo);
-            drop(log);
-            parts_out.push(EpochEndOffset {
-                partition: part.partition,
-                error_code: codes::NONE,
-                leader_epoch: found_epoch.0,
-                end_offset: end_offset.0,
-                ..Default::default()
-            });
-        }
+        let parts_out = topic
+            .partitions
+            .iter()
+            .map(|part| epoch_end_offset(broker, &acl_image, &topic.topic, part))
+            .collect();
 
         authorized_out.push(OffsetForLeaderTopicResult {
             topic: topic.topic.clone(),
