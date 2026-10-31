@@ -457,12 +457,14 @@ struct TierConfig {
 fn tier_config(part: &Partition) -> Option<TierConfig> {
     let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
     let config = log.config_snapshot();
-    config.remote_storage_enable.then(|| TierConfig {
+    let tier = config.remote_storage_enable.then(|| TierConfig {
         delivery_policy: config.delivery_policy,
         delivery_uncertainty_ms: config.delivery_clock_uncertainty.millis_i64_trunc(),
         log_start: log.established_log_start(),
         local_log_start: log.local_log_start_offset(),
-    })
+    });
+    drop(log);
+    tier
 }
 
 /// KIP-405: try to serve `p`'s requested offset from the remote tier when the
