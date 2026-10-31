@@ -416,7 +416,9 @@ mod tests {
                 },
             },
             metadata_source::MetadataSource,
-            test_support::{FakeMetadataSource, start_broker_with_authorizer as start_broker},
+            test_support::{
+                DenyAll, FakeMetadataSource, start_broker_with_authorizer as start_broker,
+            },
             topic_policy::TopicPolicy,
         },
         krabka_metadata::TopicConfigRecord,
@@ -511,6 +513,58 @@ mod tests {
             .await;
         }
         handle.shutdown().await;
+    }
+
+    /// Kafka's error precedence for a BROKER resource that the principal may
+    /// not alter: a request-shape error answers before authorization, and an
+    /// authorization error answers before the broker-side preprocess checks.
+    #[yare::parameterized(
+        authorization_beats_preprocess = {
+            vec![make_set_cfg("log.retention.ms", "1")],
+            "2",
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+            "Cluster authorization failed.",
+        },
+        shape_beats_authorization = {
+            vec![make_set_cfg("log.retention.ms", "1"), make_set_cfg("log.retention.ms", "2")],
+            "1",
+            codes::INVALID_REQUEST,
+            "Error due to duplicate config keys",
+        },
+    )]
+    #[test_macro(tokio::test)]
+    async fn unauthorized_broker_resource_precedence(
+        configs: Vec<AlterableConfig>,
+        name: &str,
+        error_code: i16,
+        error_message: &str,
+    ) {
+        let started = start_broker(Arc::new(DenyAll)).await;
+        let broker = started.broker.broker_arc_for_test();
+        krabka_macros::request_test_identity! {
+            bind(ctx);
+            user ["admin"];
+        };
+        let request = IncrementalAlterConfigsRequest {
+            resources: vec![make_scoped_resource(RESOURCE_TYPE_BROKER, name, configs)],
+            ..Default::default()
+        };
+        let expected = IncrementalAlterConfigsResponse {
+            responses: vec![config_resource_error_response(
+                RESOURCE_TYPE_BROKER,
+                name,
+                error_code,
+                Some(error_message.into()),
+            )],
+            ..Default::default()
+        };
+        let broker_ref = broker.as_ref();
+        let context_ref = &ctx;
+        assert_dispatch_response(&request, &expected, 1, |body| async move {
+            dispatch(broker_ref, 1, &body, context_ref).await
+        })
+        .await;
+        started.broker.shutdown().await;
     }
 
     /// An incremental SET merges onto the image that the guarded retry reads
