@@ -34,7 +34,8 @@ use {
         },
         handlers::{
             ApiVersion, DispatchResult, RequestContext, audit_resource, config_resource_refusal,
-            encode_response, forward_to_controller::to_active_controller_or_handle,
+            encode_response,
+            forward_to_controller::{guarded_operation_on_source, to_active_controller_or_handle},
             response_encoding::ErrorRow as _,
         },
     },
@@ -79,7 +80,7 @@ use {
         },
     },
     std::{iter, mem},
-    tokio::time::{Instant, sleep, timeout_at},
+    tokio::time::Instant,
 };
 const OP_SET: i8 = 0;
 const OP_DELETE: i8 = 1;
@@ -243,53 +244,31 @@ async fn process_resource(
 ) -> AlterConfigsResourceResponse {
     // Read and admission are optimistic; the engine atomically checks that
     // image when it appends. Rebuild every operation after a conflicting commit.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let mut images = broker.controller.watch_image();
-        let image = images.borrow_and_update().clone();
-        let planned = timeout_at(
-            deadline,
+    let result = guarded_operation_on_source(
+        broker.controller.as_ref(),
+        Instant::now() + Duration::from_secs(5),
+        |image| {
             process_resource_once(
                 broker,
-                &image,
+                image,
                 ctx,
                 resource.clone(),
                 validate_only,
                 is_duplicate,
-            ),
-        )
-        .await;
-        let Ok(planned) = planned else {
-            return resource_refusal(&resource, codes::REQUEST_TIMED_OUT);
-        };
-        match planned {
-            Ok(response) => return response,
-            Err(RaftError::StaleMetadataImage) if Instant::now() < deadline => {}
-            Err(RaftError::UncommittedTail) if Instant::now() < deadline => {
-                // Some committed control records advance the high watermark
-                // without publishing a different image. Recheck admission even
-                // when the image watch has no notification for that commit.
-                tokio::select! {
-                    changed = images.changed() => {
-                        if changed.is_err() {
-                            return resource_refusal(&resource, codes::NOT_CONTROLLER);
-                        }
-                    }
-                    () = sleep(Duration::from_millis(10)) => {}
-                }
-            }
-            Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-                return resource_refusal(&resource, codes::NOT_CONTROLLER);
-            }
-            Err(RaftError::StaleMetadataImage | RaftError::UncommittedTail) => {
-                return resource_refusal(&resource, codes::REQUEST_TIMED_OUT);
-            }
-            Err(error) => {
-                tracing::error!(%error, "IncrementalAlterConfigs submit_change failed");
-                return resource_refusal(&resource, codes::UNKNOWN_SERVER_ERROR);
-            }
+            )
+        },
+    )
+    .await;
+    let code = match result {
+        Ok(Ok(response)) => return response,
+        Err(_) => codes::REQUEST_TIMED_OUT,
+        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => codes::NOT_CONTROLLER,
+        Ok(Err(error)) => {
+            tracing::error!(%error, "IncrementalAlterConfigs submit_change failed");
+            codes::UNKNOWN_SERVER_ERROR
         }
-    }
+    };
+    resource_refusal(&resource, code)
 }
 
 /// Queue the records of one scope's validation, or answer its refusal on the
@@ -317,7 +296,7 @@ fn resource_refusal(resource: &AlterConfigsResource, code: i16) -> AlterConfigsR
 
 async fn process_resource_once(
     broker: &Broker,
-    image: &Arc<MetadataImage>,
+    image: Arc<MetadataImage>,
     ctx: &RequestContext<'_>,
     resource: AlterConfigsResource,
     validate_only: bool,
@@ -330,7 +309,7 @@ async fn process_resource_once(
     }
     if let Some((code, message)) = config_resource_refusal(
         broker.config.authorizer.as_ref(),
-        image,
+        &image,
         ctx,
         (resource.resource_type, &resource.resource_name),
         true,
@@ -345,7 +324,7 @@ async fn process_resource_once(
         RESOURCE_TYPE_TOPIC => {
             match topic_config_record(
                 &resource,
-                image,
+                &image,
                 &broker.config.topic_policy,
                 broker.config.remote_storage_backend.is_some(),
                 broker.config.features.unstable_api_versions,
@@ -373,7 +352,7 @@ async fn process_resource_once(
             handle_broker_scoped(
                 &resource,
                 BrokerConfigContext {
-                    image,
+                    image: &image,
                     serving,
                     log_dirs: &log_dirs,
                     unstable: broker.config.features.unstable_api_versions,
@@ -398,7 +377,7 @@ async fn process_resource_once(
             return Ok(out);
         }
         RESOURCE_TYPE_CLIENT_METRICS => {
-            handle_client_metrics_scoped(&resource, image, &mut out, &mut to_submit);
+            handle_client_metrics_scoped(&resource, &image, &mut out, &mut to_submit);
             if out.error_code != codes::NONE {
                 return Ok(out);
             }
@@ -406,7 +385,7 @@ async fn process_resource_once(
         RESOURCE_TYPE_GROUP => {
             handle_group_scoped(
                 &resource,
-                image,
+                &image,
                 &GroupBounds::of(&broker.config),
                 broker.config.features.unstable_api_versions,
                 &mut out,
@@ -429,11 +408,11 @@ async fn process_resource_once(
                 .configs
                 .iter()
                 .any(|item| item.name == MIN_INSYNC_REPLICAS);
-        super::alter_configs::changes_min_isr(image, record, include_topic)
+        super::alter_configs::changes_min_isr(&image, record, include_topic)
     }) {
         let topic = (resource.resource_type == RESOURCE_TYPE_TOPIC)
             .then_some(resource.resource_name.as_str());
-        to_submit.extend(clear_elr_records(image, topic));
+        to_submit.extend(clear_elr_records(&image, topic));
     }
 
     if validate_only {
@@ -445,7 +424,7 @@ async fn process_resource_once(
     }
     broker
         .controller
-        .submit_change_if_image(to_submit, Arc::clone(image))
+        .submit_change_if_image(to_submit, image)
         .await?;
     Ok(out)
 }
