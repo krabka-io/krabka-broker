@@ -217,12 +217,10 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         metadata_bytes.as_deref(),
     )
     .await?;
+    let authenticated_archive = authenticated_archive(authenticated.as_ref());
     materialize::seed_rlmm_snapshot_from(
         args,
-        authenticated
-            .as_ref()
-            .and_then(|source| source.archive.as_ref())
-            .map(AuthenticatedArchive::report),
+        authenticated_archive.map(AuthenticatedArchive::report),
         rlmm_snapshot.as_ref(),
     )?;
 
@@ -242,11 +240,8 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         let mut segments = Vec::with_capacity(entry.segments.len());
         let mut skipped_predecessor = false;
         for segment in &entry.segments {
-            let verification = match &authenticated {
-                Some(SourceAuthentication {
-                    archive: Some(authenticated),
-                    ..
-                }) => {
+            let verification = match authenticated_archive {
+                Some(authenticated) => {
                     verify_segment_authenticated(
                         &store,
                         &entry.partition,
@@ -255,9 +250,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
                     )
                     .await
                 }
-                Some(SourceAuthentication { archive: None, .. }) | None => {
-                    verify_segment(&store, &entry.partition, segment).await
-                }
+                None => verify_segment(&store, &entry.partition, segment).await,
             };
             let verified = match verification {
                 Ok(verified) => verified,
@@ -276,13 +269,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
                 }
                 Err(error) => return Err(error),
             };
-            if matches!(
-                &authenticated,
-                Some(SourceAuthentication {
-                    archive: Some(_),
-                    ..
-                })
-            ) {
+            if authenticated_archive.is_some() {
                 consumed_authenticated_objects
                     .extend(segment.artifacts().map(|object| object.key.to_string()));
             }
@@ -364,6 +351,14 @@ async fn format_with_next_offsets(
         materialize::format_target_with_snapshot(args, archive, metadata_snapshot, &next_offsets)
             .await?;
     Ok((format, next_offsets))
+}
+
+/// The signed archive a source authentication vouches for, if any.
+///
+/// A source has no archive when it holds no classic segments and only the
+/// signed diskless capture is authenticated.
+fn authenticated_archive(source: Option<&SourceAuthentication>) -> Option<&AuthenticatedArchive> {
+    source.and_then(|source| source.archive.as_ref())
 }
 
 /// Refuse an archive that, after filtering, holds no partition to restore.
