@@ -38,7 +38,9 @@ use {
     krabka_metadata::{AclOperation, MetadataImage},
     krabka_protocol::{
         owned::{
-            alter_share_group_offsets_request::AlterShareGroupOffsetsRequest,
+            alter_share_group_offsets_request::{
+                AlterShareGroupOffsetsRequest, AlterShareGroupOffsetsRequestTopic,
+            },
             alter_share_group_offsets_response::{
                 AlterShareGroupOffsetsResponse, AlterShareGroupOffsetsResponsePartition,
                 AlterShareGroupOffsetsResponseTopic,
@@ -46,7 +48,7 @@ use {
         },
         primitives::uuid::Uuid,
     },
-    std::ops::ControlFlow,
+    std::{collections::HashSet, ops::ControlFlow},
 };
 
 pub async fn handle(
@@ -74,12 +76,112 @@ pub async fn handle(
         req.topics.iter().map(|t| t.topic_name.as_str()),
     );
 
-    let mut responses: Vec<AlterShareGroupOffsetsResponseTopic> =
-        Vec::with_capacity(req.topics.len());
-    let mut actor_requests = Vec::new();
-    let mut actor_response_slots = Vec::new();
+    let ResetPlan {
+        mut responses,
+        requests,
+        slots,
+    } = plan_resets(&image, &denied_topics, req.topics);
 
-    for rt in req.topics {
+    // No partition survived denial/unknown-topic filtering, and the group id
+    // does not exist yet: every response row already carries its final error
+    // code, and there is nothing to send an actor. Answer now, without
+    // claiming the group id as `Share` -- locking a not-yet-existing id for a
+    // request that mutates nothing would block classic/consumer/streams use
+    // of that id for the broker's lifetime while leaving no persisted trace
+    // of the group (a phantom that vanishes on restart). An id that already
+    // exists as a share group still goes to the actor below even with an
+    // empty batch, so its own emptiness/existence checks (e.g.
+    // `NON_EMPTY_GROUP`) still run.
+    if requests.is_empty() && !group_already_exists {
+        return Ok(ok_response(responses));
+    }
+
+    // The actor checks emptiness and applies the complete requested batch in
+    // one mailbox turn, so a heartbeat cannot join between the gate and a
+    // reset. Its seed message is queued first when this is a recovered group.
+    //
+    // `mark_share` + `get_or_create_share` is Kafka's
+    // `getOrMaybeCreateShareGroup(groupId, true)`: a group id with no prior
+    // type lock is created as a share group here, exactly as the first
+    // `ShareGroupHeartbeat` would create it.
+    let ng = &broker.group_coordinator;
+    ng.mark_share(&gid);
+    let actor = ng.get_or_create_share(&gid);
+    let asked = ask(&actor.tx, |reply| ShareGroupActorMessage::ResetOffsets {
+        requests,
+        reply,
+    })
+    .await;
+    let actor_result = match asked {
+        Ok(actor_result) => actor_result,
+        Err(AskError::Closed) => {
+            return Ok(AlterShareGroupOffsetsResponse::error(
+                codes::COORDINATOR_NOT_AVAILABLE,
+                None,
+            ));
+        }
+        Err(AskError::Dropped) => {
+            return Err(BrokerError::Share("share-group reset actor stopped".into()));
+        }
+    };
+    let result_codes = match actor_result {
+        Ok(result_codes) => result_codes,
+        Err(error_code) => return Ok(AlterShareGroupOffsetsResponse::error(error_code, None)),
+    };
+    if result_codes.len() != slots.len() {
+        return Ok(AlterShareGroupOffsetsResponse::error(
+            codes::COORDINATOR_NOT_AVAILABLE,
+            None,
+        ));
+    }
+    for ((topic_slot, partition_slot), error_code) in
+        slots.into_iter().zip(result_codes)
+    {
+        let Some(topic) = responses.get_mut(topic_slot) else {
+            continue;
+        };
+        let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
+        let Some(partition) = topic.partitions.get_mut(partition_slot) else {
+            continue;
+        };
+        partition.error_code = error_code;
+        if error_code == codes::NONE {
+            broker
+                .share_partition_leaders
+                .invalidate(&gid, topic_id, partition.partition_index);
+        }
+    }
+
+    Ok(ok_response(responses))
+}
+
+/// The response rows for every requested partition, and the partitions to
+/// hand the reset actor.
+///
+/// `slots[i]` is the `(topic, partition)` index into `responses` of the row
+/// that `requests[i]` answers. Each such row starts at `NONE` and takes the
+/// actor's code for its request.
+struct ResetPlan {
+    responses: Vec<AlterShareGroupOffsetsResponseTopic>,
+    requests: Vec<ResetPartition>,
+    slots: Vec<(usize, usize)>,
+}
+
+/// Builds the response row of every requested partition. A partition of a
+/// denied topic gets `TOPIC_AUTHORIZATION_FAILED`, a partition the image does
+/// not have gets `UNKNOWN_TOPIC_OR_PARTITION`, and every other partition
+/// becomes a reset request for the actor.
+fn plan_resets(
+    image: &MetadataImage,
+    denied_topics: &HashSet<String>,
+    topics: Vec<AlterShareGroupOffsetsRequestTopic>,
+) -> ResetPlan {
+    let mut responses: Vec<AlterShareGroupOffsetsResponseTopic> =
+        Vec::with_capacity(topics.len());
+    let mut requests = Vec::new();
+    let mut slots = Vec::new();
+
+    for rt in topics {
         let topic_name = rt.topic_name;
         let topic_denied = denied_topics.contains(&topic_name);
 
@@ -119,8 +221,8 @@ pub async fn handle(
                 continue;
             };
 
-            actor_response_slots.push((responses.len(), partitions.len()));
-            actor_requests.push(ResetPartition {
+            slots.push((responses.len(), partitions.len()));
+            requests.push(ResetPartition {
                 topic_id,
                 topic_name: topic_name.clone(),
                 partition: rp.partition_index,
@@ -141,77 +243,11 @@ pub async fn handle(
         });
     }
 
-    // No partition survived denial/unknown-topic filtering, and the group id
-    // does not exist yet: every response row already carries its final error
-    // code, and there is nothing to send an actor. Answer now, without
-    // claiming the group id as `Share` -- locking a not-yet-existing id for a
-    // request that mutates nothing would block classic/consumer/streams use
-    // of that id for the broker's lifetime while leaving no persisted trace
-    // of the group (a phantom that vanishes on restart). An id that already
-    // exists as a share group still goes to the actor below even with an
-    // empty batch, so its own emptiness/existence checks (e.g.
-    // `NON_EMPTY_GROUP`) still run.
-    if actor_requests.is_empty() && !group_already_exists {
-        return Ok(ok_response(responses));
+    ResetPlan {
+        responses,
+        requests,
+        slots,
     }
-
-    // The actor checks emptiness and applies the complete requested batch in
-    // one mailbox turn, so a heartbeat cannot join between the gate and a
-    // reset. Its seed message is queued first when this is a recovered group.
-    //
-    // `mark_share` + `get_or_create_share` is Kafka's
-    // `getOrMaybeCreateShareGroup(groupId, true)`: a group id with no prior
-    // type lock is created as a share group here, exactly as the first
-    // `ShareGroupHeartbeat` would create it.
-    let ng = &broker.group_coordinator;
-    ng.mark_share(&gid);
-    let actor = ng.get_or_create_share(&gid);
-    let asked = ask(&actor.tx, |reply| ShareGroupActorMessage::ResetOffsets {
-        requests: actor_requests,
-        reply,
-    })
-    .await;
-    let actor_result = match asked {
-        Ok(actor_result) => actor_result,
-        Err(AskError::Closed) => {
-            return Ok(AlterShareGroupOffsetsResponse::error(
-                codes::COORDINATOR_NOT_AVAILABLE,
-                None,
-            ));
-        }
-        Err(AskError::Dropped) => {
-            return Err(BrokerError::Share("share-group reset actor stopped".into()));
-        }
-    };
-    let result_codes = match actor_result {
-        Ok(result_codes) => result_codes,
-        Err(error_code) => return Ok(AlterShareGroupOffsetsResponse::error(error_code, None)),
-    };
-    if result_codes.len() != actor_response_slots.len() {
-        return Ok(AlterShareGroupOffsetsResponse::error(
-            codes::COORDINATOR_NOT_AVAILABLE,
-            None,
-        ));
-    }
-    for ((topic_slot, partition_slot), error_code) in
-        actor_response_slots.into_iter().zip(result_codes)
-    {
-        let Some(topic) = responses.get_mut(topic_slot) else {
-            continue;
-        };
-        let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
-        let Some(partition) = topic.partitions.get_mut(partition_slot) else {
-            continue;
-        };
-        partition.error_code = error_code;
-        if error_code == codes::NONE {
-            broker
-                .share_partition_leaders
-                .invalidate(&gid, topic_id, partition.partition_index);
-        }
-    }
-
-    Ok(ok_response(responses))
 }
 
 /// Runs the checks that refuse the whole request before any partition is
