@@ -7,17 +7,19 @@
 /// [`validate_complete_reacquire`].
 pub use krabka_verified::transaction::TransactionCompletionDecision as ReacquireDecision;
 use {
-    crate::txn::state::{TxnEntry, TxnState},
-    krabka_log::ProducerId,
-    krabka_verified::transaction::transaction_completion_decision,
+    crate::txn::{decision::CompletionExpectation, state::TxnEntry},
+    krabka_verified::transaction::{
+        TransactionIdentity, TransactionSnapshot, transaction_completion_decision,
+    },
 };
 
 /// Re-validate, after re-acquiring the coordinator's *current* entry for a
 /// transactional-id, that it is safe to finalise the transaction.
 ///
-/// `expected_epoch` and `expected_pid` are the producer identity this `EndTxn`
-/// handler validated and acted on. `prepare` is the state this handler wrote
-/// in Phase 1. `complete` is the state it is about to write.
+/// `expectation.prepared` is the producer identity this `EndTxn` handler
+/// validated and acted on, and `expectation.completion` the identity it staged
+/// for the producer. `expectation.prepare` is the state this handler wrote in
+/// Phase 1. `expectation.complete` is the state it is about to write.
 ///
 /// Returns:
 /// - [`ReacquireDecision::RejectStaleIdentity`] if the pid or epoch no longer
@@ -27,24 +29,17 @@ use {
 ///   an `EndTxn` retry, finished the transition, so a second finalise would be
 ///   a redundant overwrite.
 /// - [`ReacquireDecision::RejectState`] if the state is anything other than the
-///   `prepare` this handler left in place. For
+///   `expectation.prepare` this handler left in place. For
 ///   example, a concurrent `AddPartitionsToTxn` advanced it to `Ongoing`, or
 ///   it moved into the *opposite* prepare/complete kind. The marker fan-out
 ///   then no longer reflects the live transaction, and this handler must not
 ///   finalise.
 /// - [`ReacquireDecision::Proceed`] only when the epoch matches and the state
-///   is still exactly `prepare`.
+///   is still exactly `expectation.prepare`.
 pub fn validate_complete_reacquire(
     entry: &TxnEntry,
-    expected_pid: ProducerId,
-    expected_epoch: i16,
-    expected_completion_pid: ProducerId,
-    expected_completion_epoch: i16,
-    prepare: TxnState,
-    complete: TxnState,
+    expectation: &CompletionExpectation,
 ) -> ReacquireDecision {
-    use krabka_verified::transaction::{TransactionIdentity, TransactionSnapshot};
-
     transaction_completion_decision(
         TransactionSnapshot {
             pid: entry.producer_id.get(),
@@ -52,21 +47,50 @@ pub fn validate_complete_reacquire(
             state: entry.state.to_kafka_status(),
         },
         TransactionIdentity {
-            pid: expected_pid.get(),
-            epoch: expected_epoch,
+            pid: expectation.prepared.producer_id.get(),
+            epoch: expectation.prepared.producer_epoch,
         },
         TransactionIdentity {
-            pid: expected_completion_pid.get(),
-            epoch: expected_completion_epoch,
+            pid: expectation.completion.producer_id.get(),
+            epoch: expectation.completion.producer_epoch,
         },
-        prepare.to_kafka_status(),
-        complete.to_kafka_status(),
+        expectation.prepare.to_kafka_status(),
+        expectation.complete.to_kafka_status(),
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::txn::handlers::end_txn::test_support::entry, assert2::assert};
+    use {
+        super::*,
+        crate::txn::{
+            handlers::end_txn::test_support::entry, state::TxnState, util::ProducerIdentity,
+        },
+        assert2::assert,
+        krabka_log::ProducerId,
+    };
+
+    /// The expectation of a handler that prepared under `(prepared_pid,
+    /// prepared_epoch)` and staged `(completion_pid, completion_epoch)`.
+    fn expectation(
+        (prepared_pid, prepared_epoch): (i64, i16),
+        (completion_pid, completion_epoch): (i64, i16),
+        prepare: TxnState,
+        complete: TxnState,
+    ) -> CompletionExpectation {
+        CompletionExpectation {
+            prepared: ProducerIdentity {
+                producer_id: ProducerId(prepared_pid),
+                producer_epoch: prepared_epoch,
+            },
+            completion: ProducerIdentity {
+                producer_id: ProducerId(completion_pid),
+                producer_epoch: completion_epoch,
+            },
+            prepare,
+            complete,
+        }
+    }
 
     #[test]
     fn commit_reacquire_decision_matrix() {
@@ -115,12 +139,12 @@ mod tests {
             let e = entry(pid, epoch, state);
             let decision = validate_complete_reacquire(
                 &e,
-                ProducerId(7),
-                3,
-                ProducerId(7),
-                3,
-                TxnState::PrepareCommit,
-                TxnState::CompleteCommit,
+                &expectation(
+                    (7, 3),
+                    (7, 3),
+                    TxnState::PrepareCommit,
+                    TxnState::CompleteCommit,
+                ),
             );
             assert!(
                 decision == expected,
@@ -136,24 +160,24 @@ mod tests {
         assert!(
             validate_complete_reacquire(
                 &prep,
-                ProducerId(7),
-                3,
-                ProducerId(7),
-                3,
-                TxnState::PrepareAbort,
-                TxnState::CompleteAbort
+                &expectation(
+                    (7, 3),
+                    (7, 3),
+                    TxnState::PrepareAbort,
+                    TxnState::CompleteAbort
+                )
             ) == ReacquireDecision::Proceed
         );
         let done = entry(7, 3, TxnState::CompleteAbort);
         assert!(
             validate_complete_reacquire(
                 &done,
-                ProducerId(7),
-                3,
-                ProducerId(7),
-                3,
-                TxnState::PrepareAbort,
-                TxnState::CompleteAbort
+                &expectation(
+                    (7, 3),
+                    (7, 3),
+                    TxnState::PrepareAbort,
+                    TxnState::CompleteAbort
+                )
             ) == ReacquireDecision::AlreadyComplete
         );
     }
@@ -164,12 +188,12 @@ mod tests {
         assert!(
             validate_complete_reacquire(
                 &completed,
-                ProducerId(7),
-                i16::MAX,
-                ProducerId(11),
-                0,
-                TxnState::PrepareCommit,
-                TxnState::CompleteCommit,
+                &expectation(
+                    (7, i16::MAX),
+                    (11, 0),
+                    TxnState::PrepareCommit,
+                    TxnState::CompleteCommit
+                )
             ) == ReacquireDecision::AlreadyComplete
         );
 
@@ -177,12 +201,12 @@ mod tests {
         assert!(
             validate_complete_reacquire(
                 &stale,
-                ProducerId(7),
-                i16::MAX,
-                ProducerId(11),
-                0,
-                TxnState::PrepareCommit,
-                TxnState::CompleteCommit,
+                &expectation(
+                    (7, i16::MAX),
+                    (11, 0),
+                    TxnState::PrepareCommit,
+                    TxnState::CompleteCommit
+                )
             ) == ReacquireDecision::RejectState
         );
     }

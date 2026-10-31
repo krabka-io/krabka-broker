@@ -10,6 +10,7 @@ use {
     super::{
         handlers::end_txn::{ReacquireDecision, validate_complete_reacquire},
         state::{TxnEntry, TxnState},
+        util::ProducerIdentity,
     },
     crate::codes,
     krabka_log::ProducerId,
@@ -59,6 +60,23 @@ pub fn apply_end_txn_prepare(entry: &mut TxnEntry, committed: bool) -> (TxnState
     (prepare, complete)
 }
 
+/// What Phase 3 of `EndTxn` expects to find when it re-reads the entry, and
+/// what it is about to write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompletionExpectation {
+    /// The producer identity that this handler validated and that prepared
+    /// the transaction in Phase 1.
+    pub(crate) prepared: ProducerIdentity,
+    /// The completion identity staged with the Prepare record. Phase 3
+    /// returns it to the producer. It may carry a bumped epoch or a rotated
+    /// producer id.
+    pub(crate) completion: ProducerIdentity,
+    /// The `Prepare{Commit,Abort}` state that Phase 1 wrote.
+    pub(crate) prepare: TxnState,
+    /// The `Complete{Commit,Abort}` state that Phase 3 is about to write.
+    pub(crate) complete: TxnState,
+}
+
 /// Outcome of [`decide_end_txn_completion`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompletionDecision {
@@ -94,15 +112,19 @@ pub fn decide_end_txn_completion(
     prepare: TxnState,
     complete: TxnState,
 ) -> CompletionDecision {
-    match validate_complete_reacquire(
-        entry,
-        expected_pid,
-        expected_epoch,
-        expected_completion_pid,
-        expected_completion_epoch,
+    let expectation = CompletionExpectation {
+        prepared: ProducerIdentity {
+            producer_id: expected_pid,
+            producer_epoch: expected_epoch,
+        },
+        completion: ProducerIdentity {
+            producer_id: expected_completion_pid,
+            producer_epoch: expected_completion_epoch,
+        },
         prepare,
         complete,
-    ) {
+    };
+    match validate_complete_reacquire(entry, &expectation) {
         ReacquireDecision::Proceed => CompletionDecision::Proceed {
             next_state: complete,
             response_pid: expected_completion_pid,
