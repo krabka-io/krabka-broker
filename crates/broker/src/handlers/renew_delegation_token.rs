@@ -26,7 +26,10 @@
 use {
     crate::{
         codes::{DELEGATION_TOKEN_EXPIRED, DELEGATION_TOKEN_OWNER_MISMATCH, INVALID_REQUEST},
-        handlers::{ErrorCodeResponse as _, delegation_token_admission::admit_token_request},
+        handlers::{
+            ErrorCodeResponse as _,
+            delegation_token_admission::{admit_token_request, may_renew_or_expire},
+        },
         metadata_source::MetadataSource,
         network::auth::ConnectionAuth,
         time_util::now_ms,
@@ -81,7 +84,7 @@ pub async fn handle(
     if decision == TokenRenewDecision::Expired {
         return RenewDelegationTokenResponse::error(DELEGATION_TOKEN_EXPIRED);
     }
-    if token.owner != caller && !token.renewers.contains(&caller) {
+    if !may_renew_or_expire(&token, &caller) {
         return RenewDelegationTokenResponse::error(DELEGATION_TOKEN_OWNER_MISMATCH);
     }
     let TokenRenewDecision::Renew(new_expiry) = decision else {

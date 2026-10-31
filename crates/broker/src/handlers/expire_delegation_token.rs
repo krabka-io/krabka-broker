@@ -25,7 +25,10 @@
 use {
     crate::{
         codes::{DELEGATION_TOKEN_EXPIRED, DELEGATION_TOKEN_OWNER_MISMATCH, INVALID_REQUEST},
-        handlers::{ErrorCodeResponse as _, delegation_token_admission::admit_token_request},
+        handlers::{
+            ErrorCodeResponse as _,
+            delegation_token_admission::{admit_token_request, may_renew_or_expire},
+        },
         metadata_source::MetadataSource,
         network::auth::ConnectionAuth,
         time_util::now_ms,
@@ -69,7 +72,7 @@ pub async fn handle(
     };
     let caller = principal.to_kafka();
 
-    if token.owner != caller && !token.renewers.contains(&caller) {
+    if !may_renew_or_expire(&token, &caller) {
         return ExpireDelegationTokenResponse::error(DELEGATION_TOKEN_OWNER_MISMATCH);
     }
 

@@ -46,7 +46,7 @@ use {
             DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, INVALID_PRINCIPAL_TYPE, INVALID_REQUEST,
             UNKNOWN_SERVER_ERROR, UNSUPPORTED_VERSION,
         },
-        features::{METADATA_VERSION, require_feature},
+        handlers::delegation_token_admission::delegation_tokens_supported,
         metadata_source::MetadataSource,
         network::auth::ConnectionAuth,
         time_util::now_ms,
@@ -78,13 +78,10 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-use {
-    self::{
-        lifetime::{TokenCreateDecision, create_token_deadlines},
-        owner::{may_create_for, resolve_owner},
-        wire::{broker_refusal, controller_refusal, minted_response},
-    },
-    krabka_metadata::metadata_version,
+use self::{
+    lifetime::{TokenCreateDecision, create_token_deadlines},
+    owner::{may_create_for, resolve_owner},
+    wire::{broker_refusal, controller_refusal, minted_response},
 };
 
 /// A relative span of milliseconds, such as a token lifetime or a renew
@@ -158,14 +155,7 @@ pub async fn handle(
     let Some(secret_key) = secret_key else {
         return controller_refusal(DELEGATION_TOKEN_AUTH_DISABLED, &owner, &requester);
     };
-    // KIP-48/KIP-778: KRaft delegation tokens require metadata.version >= 3.6-IV2.
-    if require_feature(
-        &image,
-        METADATA_VERSION,
-        metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
-    )
-    .is_err()
-    {
+    if !delegation_tokens_supported(&image) {
         return controller_refusal(UNSUPPORTED_VERSION, &owner, &requester);
     }
 
