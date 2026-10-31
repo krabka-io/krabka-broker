@@ -64,14 +64,15 @@ async fn process_partition_non_leader_skips_schema_registry_and_preserves_hint()
     });
 
     let resp = process_partition(
-        PartitionInput {
-            schema: Some(SchemaGate {
+        pipeline_input()
+            .topic("orders")
+            .payload(PartitionPayload::Slice(payload))
+            .schema(SchemaGate {
                 key: false,
                 value: true,
                 mode: ValidationMode::Full,
-            }),
-            ..pipeline_input("orders", PartitionPayload::Slice(payload))
-        },
+            })
+            .call(),
         PartitionServices {
             schema_validator: Some(&schema_validator),
             ..fixture.services(&image)
@@ -104,7 +105,10 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
     });
 
     let resp = process_partition(
-        pipeline_input("orders", PartitionPayload::Slice(payload)),
+        pipeline_input()
+            .topic("orders")
+            .payload(PartitionPayload::Slice(payload))
+            .call(),
         PartitionServices {
             broker_policy: BrokerProducePolicy {
                 node_id: krabka_audit::NodeId(2),

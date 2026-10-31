@@ -7,19 +7,30 @@ use {
         api_catalog::UnstableApiVersions,
         config_keys::MIN_INSYNC_REPLICAS,
         freeze::resolve::FreezeMutationResolution,
-        handlers::test_support::{replicated_partition, spawn_partition},
+        handlers::{
+            produce::{
+                delivery::DeliveryGate,
+                framing::{FramedPartition, PartitionPayload},
+                pipeline::PartitionInput,
+                producer_checks::TransactionRequest,
+                topic_settings::TimestampPolicy,
+            },
+            test_support::{replicated_partition, spawn_partition},
+        },
         log_dir_status::LogDirRegistry,
         metrics::{BrokerMetrics, RequestPhases},
         partition::Partition,
         partition_registry::PartitionRegistry,
         producer_id_manager::ProducerIdManager,
         producer_state::ProducerState,
+        schema_validation::SchemaGate,
         test_support::{replica_nodes, topic_partition_image},
         txn::coordinator::TxnCoordinator,
     },
     bytes::{Bytes, BytesMut},
     krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord},
     krabka_protocol::records::{Attributes, Record, RecordBatch, RecordsPayload},
+    krabka_units::ByteSize,
     std::{collections::BTreeMap, path::Path, sync::Arc},
 };
 
@@ -138,28 +149,40 @@ impl PipelineFixture {
     }
 }
 
-pub(super) fn pipeline_input(
+/// One standalone partition's produce input: partition 0 of `topic`, carrying
+/// `payload`, with every per-topic setting a test does not name at the value a
+/// topic with no config overrides resolves to.
+#[bon::builder]
+pub(super) fn pipeline_input<'a>(
     topic: &str,
-    payload: super::framing::PartitionPayload,
-) -> super::pipeline::PartitionInput<'static> {
-    super::pipeline::PartitionInput {
-        part_data: super::framing::FramedPartition { index: 0, payload },
+    payload: PartitionPayload,
+    delivery: Option<DeliveryGate>,
+    schema: Option<SchemaGate>,
+    #[builder(default = krabka_log::DEFAULT_MAX_MESSAGE_SIZE)] max_message_bytes: ByteSize,
+    #[builder(default = FreezeMutationResolution::Admit)] freeze: FreezeMutationResolution<'a>,
+    #[builder(default = false)] internal_topic_denied: bool,
+    #[builder(default = TransactionRequest {
+        transactional_id: None,
+        version: 9,
+        producer_id_expiration_ms: 86_400_000,
+        verification_enabled: true,
+    })]
+    transaction: TransactionRequest<'a>,
+    #[builder(default = 1)] acks: i16,
+) -> PartitionInput<'a> {
+    PartitionInput {
+        part_data: FramedPartition { index: 0, payload },
         topic_compression: None,
-        timestamps: super::topic_settings::TimestampPolicy::default(),
+        timestamps: TimestampPolicy::default(),
         compacted_topic: false,
-        max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
-        delivery: None,
-        schema: None,
+        max_message_bytes,
+        delivery,
+        schema,
         topic_name: topic.into(),
-        freeze: FreezeMutationResolution::Admit,
-        internal_topic_denied: false,
-        transaction: super::producer_checks::TransactionRequest {
-            transactional_id: None,
-            version: 9,
-            producer_id_expiration_ms: 86_400_000,
-            verification_enabled: true,
-        },
-        acks: 1,
+        freeze,
+        internal_topic_denied,
+        transaction,
+        acks,
     }
 }
 

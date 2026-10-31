@@ -447,9 +447,7 @@ mod tests {
             handlers::produce::{
                 framing::PartitionPayload,
                 leadership::current_effective_min_isr,
-                pipeline::{
-                    PartitionInput, PartitionOutcome, PartitionServices, process_partition,
-                },
+                pipeline::{PartitionOutcome, PartitionServices, process_partition},
                 prepare::PreparedSource,
                 test_support::{PipelineFixture, encode_batch, image_with_topic, pipeline_input},
             },
@@ -575,15 +573,16 @@ mod tests {
                 ..Default::default()
             });
             let row = process_partition(
-                PartitionInput {
-                    transaction: super::TransactionRequest {
+                pipeline_input()
+                    .topic("orders")
+                    .payload(PartitionPayload::Slice(payload))
+                    .transaction(super::TransactionRequest {
                         transactional_id: Some("tid"),
                         version,
                         producer_id_expiration_ms: 86_400_000,
                         verification_enabled,
-                    },
-                    ..pipeline_input("orders", PartitionPayload::Slice(payload))
-                },
+                    })
+                    .call(),
                 leader.pipeline.services(&leader.image),
             )
             .await
@@ -728,10 +727,11 @@ mod tests {
 
         let resp: PartitionProduceResponse = {
             let outcome = process_partition(
-                PartitionInput {
-                    acks: -1,
-                    ..pipeline_input("orders", PartitionPayload::Slice(payload))
-                },
+                pipeline_input()
+                    .topic("orders")
+                    .payload(PartitionPayload::Slice(payload))
+                    .acks(-1)
+                    .call(),
                 leader.pipeline.services(&leader.image),
             )
             .await
@@ -810,7 +810,10 @@ mod tests {
             let image = &leader.image;
             async move {
                 process_partition(
-                    pipeline_input("orders", PartitionPayload::Slice(payload)),
+                    pipeline_input()
+                        .topic("orders")
+                        .payload(PartitionPayload::Slice(payload))
+                        .call(),
                     fixture.services(image),
                 )
                 .await
@@ -959,7 +962,10 @@ mod tests {
                 let image = &leader.image;
                 async move {
                     process_partition(
-                        pipeline_input("orders", PartitionPayload::Slice(payload)),
+                        pipeline_input()
+                            .topic("orders")
+                            .payload(PartitionPayload::Slice(payload))
+                            .call(),
                         PartitionServices {
                             unstable_api_versions: unstable,
                             ..fixture.services(image)
