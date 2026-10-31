@@ -199,7 +199,7 @@ const SUBMIT_TIMEOUT: Duration = Duration::from_secs(5);
 /// newer image.
 ///
 /// A `kraft.version` upgrade is finalized before the feature records are
-/// appended, as `FeatureControlManager.updateFeature` asks the KRaft layer to
+/// appended, as `FeatureControlManager.updateFeature` asks the `KRaft` layer to
 /// upgrade before it returns the records. A request whose append then fails
 /// leaves `kraft.version` upgraded, as it does in Kafka. A retry never
 /// finalizes the same level twice.
