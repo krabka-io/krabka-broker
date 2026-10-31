@@ -229,6 +229,61 @@ async fn leave_of_an_unknown_member_is_refused_and_writes_nothing() {
     check!(log.batches().await == before);
 }
 
+/// A heartbeat that the coordinator refuses on a group that holds nothing
+/// does not close the actor while another message is queued behind it: both
+/// get their answer, and the group that the second one joins stays.
+#[tokio::test]
+async fn a_refused_heartbeat_with_a_queued_join_answers_both() {
+    let (coord, _log) = make_coordinator();
+    let handle = coord.get_or_create_streams("g");
+    // On this single-threaded runtime the actor runs only once the test
+    // awaits, so both heartbeats are in the mailbox before it handles one.
+    let (refused_tx, refused_rx) = oneshot::channel();
+    let (joined_tx, joined_rx) = oneshot::channel();
+    for (request, reply) in [
+        (
+            StreamsGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m9".into(),
+                member_epoch: -1,
+                ..Default::default()
+            },
+            refused_tx,
+        ),
+        (member_request("m1", 0), joined_tx),
+    ] {
+        handle
+            .tx
+            .try_send(StreamsGroupActorMessage::Heartbeat {
+                request: Box::new(request),
+                version: MAX_VERSION,
+                client_id: "client".into(),
+                client_host: "/127.0.0.1".into(),
+                reply,
+            })
+            .expect("a mailbox with room for two heartbeats");
+    }
+
+    let refused = refused_rx
+        .await
+        .expect("an answer to the refused heartbeat");
+    let joined = joined_rx.await.expect("an answer to the queued join");
+
+    check!(
+        refused.response
+            == super::response::error_resp(
+                codes::UNKNOWN_MEMBER_ID,
+                Some("Member m9 is not a member of group g.".into())
+            )
+    );
+    check!(joined.response.error_code == codes::NONE);
+    check!(joined.response.member_epoch == 2);
+    // The actor still reads its mailbox.
+    let steady = heartbeat(&handle, member_request("m1", 2)).await;
+    check!(steady.error_code == codes::NONE);
+    check!(coord.streams_groups.contains_key("g"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fenced_epoch_is_rejected() {
     let (coord, _log) = make_coordinator();
