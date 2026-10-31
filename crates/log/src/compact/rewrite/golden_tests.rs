@@ -200,7 +200,7 @@ const GOLDEN_LOG: &[u8] = &[
     0, 0, 0, 1, 20, 0, 0, 0, 8, 0, 0, 0, 1, 1, 0,
 ];
 
-/// The `.timeindex.cleaned` bytes: one entry, timestamp 5_000 at offset 4.
+/// The `.timeindex.cleaned` bytes: one entry, timestamp 5000 at offset 4.
 /// The `.index.cleaned` stays empty, because the output is shorter than one
 /// `index.interval.bytes`.
 const GOLDEN_TIMEINDEX: &[u8] = &[0, 0, 0, 0, 0, 0, 19, 136, 0, 0, 0, 4];
