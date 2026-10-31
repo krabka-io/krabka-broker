@@ -71,40 +71,15 @@ pub(super) async fn handle_actor_heartbeat(
     // classic group in the heartbeat's own batch, and the whole batch fails
     // or commits together. The classic group comes back when the heartbeat
     // is refused.
-    let mut prefix: Option<PendingRecords> = None;
-    let mut classic_before: Option<GroupKind> = None;
-    if group
-        .as_classic()
-        .is_some_and(|classic| classic.members.is_empty())
-    {
-        // `maybeDeleteEmptyClassicGroup`: an empty classic group, such as one
-        // that only holds committed offsets, is deleted whatever the policy
-        // and protocol type, and a new consumer group takes its id. The
-        // committed offsets stay with the group id.
-        prefix = Some(PendingRecords {
-            classic_group_metadata_tombstone: true,
-            ..PendingRecords::default()
-        });
-        let fresh = GroupState::new(group.group_id.clone());
-        classic_before = Some(mem::replace(group.kind_mut(), GroupKind::Consumer(fresh)));
-    } else if let Some(classic) = group.as_classic() {
-        // `convertToConsumerGroup`, which refuses a member that
-        // `ConsumerGroup.fromClassicGroup` cannot carry over.
-        let new_state =
-            match migration::convert_classic_to_consumer(classic, &services.metadata.snapshot()) {
-                Ok(new_state) => new_state,
-                Err(message) => {
-                    let _ = reply.send(group_id_not_found(Some(message)));
-                    return true;
-                }
-            };
-        prefix = Some(migration::upgrade_pending_records(&new_state));
-        classic_before = Some(mem::replace(
-            group.kind_mut(),
-            GroupKind::Consumer(new_state),
-        ));
-    }
-
+    let (prefix, classic_before) = match take_over_classic(group, services.metadata) {
+        Ok(takeover) => takeover
+            .map(|takeover| (takeover.prefix, takeover.classic_before))
+            .unzip(),
+        Err(message) => {
+            let _ = reply.send(group_id_not_found(Some(message)));
+            return true;
+        }
+    };
     let Some(state) = group.as_consumer_mut() else {
         let _ = reply.send(group_id_not_found(None));
         return true;
@@ -185,6 +160,48 @@ fn refuse_over_classic(
         config.max_size,
     )
     .err()
+}
+
+/// A classic group that a heartbeat replaced with a consumer group.
+struct ClassicTakeover {
+    /// The records that replace the classic group, written ahead of the
+    /// heartbeat's own in one batch.
+    prefix: PendingRecords,
+    /// The classic group, restored when the heartbeat is refused.
+    classic_before: GroupKind,
+}
+
+/// Replaces a classic group with a consumer group in place, or returns
+/// `Ok(None)` when the group is not classic. It returns Kafka's message when
+/// the classic group cannot be converted.
+fn take_over_classic(
+    group: &mut CoordinatorGroup,
+    metadata: &dyn MetadataProvider,
+) -> Result<Option<ClassicTakeover>, String> {
+    let Some(classic) = group.as_classic() else {
+        return Ok(None);
+    };
+    let (prefix, state) = if classic.members.is_empty() {
+        // `maybeDeleteEmptyClassicGroup`: an empty classic group, such as one
+        // that only holds committed offsets, is deleted whatever the policy
+        // and protocol type, and a new consumer group takes its id. The
+        // committed offsets stay with the group id.
+        let prefix = PendingRecords {
+            classic_group_metadata_tombstone: true,
+            ..PendingRecords::default()
+        };
+        (prefix, GroupState::new(group.group_id.clone()))
+    } else {
+        // `convertToConsumerGroup`, which refuses a member that
+        // `ConsumerGroup.fromClassicGroup` cannot carry over.
+        let state = migration::convert_classic_to_consumer(classic, &metadata.snapshot())?;
+        (migration::upgrade_pending_records(&state), state)
+    };
+    let classic_before = mem::replace(group.kind_mut(), GroupKind::Consumer(state));
+    Ok(Some(ClassicTakeover {
+        prefix,
+        classic_before,
+    }))
 }
 
 /// The `GROUP_ID_NOT_FOUND` answer, with Kafka's message when it has one.
