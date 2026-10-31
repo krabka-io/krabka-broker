@@ -16,6 +16,25 @@ use {
     std::time::Duration,
 };
 
+/// Projects the shared timeout and size fields of a group config
+/// (`NextGenConfig`, `ShareGroupConfig` or `StreamsGroupConfig`) into a
+/// [`GroupTimeoutBounds`]. The three types are unrelated, so a macro rather
+/// than a function reads the same field names from each.
+macro_rules! group_timeout_bounds {
+    ($config:expr) => {{
+        let config = $config;
+        GroupTimeoutBounds {
+            session_timeout: config.session_timeout,
+            heartbeat_interval: config.heartbeat_interval,
+            min_session_timeout: config.min_session_timeout,
+            max_session_timeout: config.max_session_timeout,
+            min_heartbeat_interval: config.min_heartbeat_interval,
+            max_heartbeat_interval: config.max_heartbeat_interval,
+            max_size: config.max_size,
+        }
+    }};
+}
+
 impl BrokerConfig {
     /// Validates the listener and auth configuration.
     ///
@@ -42,36 +61,71 @@ impl BrokerConfig {
     ///   scope that contains it: instance, then `client_id` or principal, then
     ///   the global ceiling.
     pub fn validate(&self) -> Result<(), BrokerError> {
+        self.validate_broker_id()?;
+        self.validate_log_io_policy()?;
+        self.validate_profiling()?;
+        validate_audit_topic_name(&self.audit_topic)?;
+        self.validate_node_roles()?;
+        let listeners = self.effective_listeners();
+        let inter_broker_listener = self.validate_listener_topology(&listeners)?;
+        self.validate_listener_auth(&listeners)?;
+        self.validate_controller_listener()?;
+        self.validate_outbound_sasl(inter_broker_listener)?;
+        self.validate_platform(cfg!(target_family = "wasm"))?;
+        self.validate_positive_runtime_scalars()?;
+        self.validate_additional_runtime_scalars()?;
+        // After the scalar checks: the stretch durability check reads the
+        // replication factor and `min.insync.replicas`, and the kernel it
+        // calls takes a positive replication factor.
+        self.validate_stretch()?;
+        self.record_decompression_policy()?;
+        self.validate_runtime_relations()?;
+        self.validate_additional_runtime_relations()?;
+        self.validate_groups()?;
+        if let RlmmKind::TopicBacked(config) = &self.remote_log_metadata {
+            config.validate()?;
+        }
+        self.validate_remote_storage_worm()?;
+        self.validate_leader_rebalance()
+    }
+
+    /// Kafka's `KafkaConfig` requires `broker.id == node.id` in `KRaft` mode.
+    fn validate_broker_id(&self) -> Result<(), BrokerError> {
         if u64::try_from(self.broker_id).ok() != Some(self.node_id.0) {
             return Err(BrokerError::BrokerIdNodeIdMismatch {
                 broker_id: self.broker_id,
                 node_id: self.node_id,
             });
         }
-        self.validate_log_io_policy()?;
+        Ok(())
+    }
+
+    /// The profiling endpoint is off, or listens on loopback behind a token
+    /// file with a valid profiling policy.
+    fn validate_profiling(&self) -> Result<(), BrokerError> {
         match (self.profiling_listen_addr, &self.profiling_auth_token_file) {
-            (None, None) => {}
-            (None, Some(_)) => {
-                return Err(BrokerError::InvalidRuntimeConfig(
-                    "profiling_auth_token_file requires profiling_listen_addr".into(),
-                ));
-            }
-            (Some(_), None) => {
-                return Err(BrokerError::InvalidRuntimeConfig(
-                    "profiling_listen_addr requires profiling_auth_token_file".into(),
-                ));
-            }
+            (None, None) => Ok(()),
+            (None, Some(_)) => Err(BrokerError::InvalidRuntimeConfig(
+                "profiling_auth_token_file requires profiling_listen_addr".into(),
+            )),
+            (Some(_), None) => Err(BrokerError::InvalidRuntimeConfig(
+                "profiling_listen_addr requires profiling_auth_token_file".into(),
+            )),
             (Some(address), Some(_)) if !address.ip().is_loopback() => {
-                return Err(BrokerError::InvalidRuntimeConfig(
+                Err(BrokerError::InvalidRuntimeConfig(
                     "profiling_listen_addr must use a loopback address".into(),
-                ));
+                ))
             }
             (Some(_), Some(_)) => self
                 .profiling
                 .validate()
-                .map_err(BrokerError::InvalidRuntimeConfig)?,
+                .map_err(BrokerError::InvalidRuntimeConfig),
         }
-        validate_audit_topic_name(&self.audit_topic)?;
+    }
+
+    /// The role set is non-empty and coherent: a witness is configured as one,
+    /// only a controller is a voter, and only a broker names `[[listeners]]`.
+    fn validate_node_roles(&self) -> Result<(), BrokerError> {
         if self.roles.is_empty() {
             return Err(BrokerError::EmptyRoles);
         }
@@ -96,9 +150,15 @@ impl BrokerConfig {
                     .join(", "),
             });
         }
+        Ok(())
+    }
 
-        let listeners = self.effective_listeners();
-
+    /// No two `listeners` share a bind address, and one of them is the
+    /// inter-broker listener, which this returns.
+    fn validate_listener_topology<'a>(
+        &self,
+        listeners: &'a [ListenerSpec],
+    ) -> Result<&'a ListenerSpec, BrokerError> {
         // Bind-address collisions.
         for (i, listener) in listeners.iter().enumerate() {
             for other in listeners.iter().skip(i + 1) {
@@ -112,16 +172,19 @@ impl BrokerConfig {
         }
 
         // Inter-broker listener must exist.
-        let inter_broker_listener = listeners
+        listeners
             .iter()
             .find(|listener| listener.name == self.inter_broker_listener_name)
             .ok_or_else(|| BrokerError::InvalidInterBrokerListener {
                 name: self.inter_broker_listener_name.clone(),
-            })?;
+            })
+    }
 
+    /// Every SASL listener in `listeners` can authenticate a client.
+    fn validate_listener_auth(&self, listeners: &[ListenerSpec]) -> Result<(), BrokerError> {
         // Every SASL listener requires at least one mechanism. Per-listener
         // sasl_mechanisms wins over the broker-wide default.
-        for l in &listeners {
+        for l in listeners {
             self.validate_sasl_listener(l)?;
         }
 
@@ -138,7 +201,12 @@ impl BrokerConfig {
         if gssapi_enabled && self.gssapi.is_none() {
             return Err(BrokerError::GssapiConfigMissing);
         }
+        Ok(())
+    }
 
+    /// The controller listener has the TLS material and SASL credentials its
+    /// protocol needs.
+    fn validate_controller_listener(&self) -> Result<(), BrokerError> {
         let cp = self.controller_listener_protocol;
         if cp.requires_tls() && self.tls_config.is_none() {
             return Err(BrokerError::Tls(
@@ -151,10 +219,10 @@ impl BrokerConfig {
                     name: "controller".into(),
                 });
             }
-            // As above, but the controller listener is configured on its own
-            // and is not in `effective_listeners`: an empty table here starts
-            // the node and then rejects every controller peer, so no quorum
-            // ever forms.
+            // As `validate_sasl_listener` checks for a SASL listener, but the
+            // controller listener is configured on its own and is not in
+            // `effective_listeners`: an empty table here starts the node and
+            // then rejects every controller peer, so no quorum ever forms.
             if self.enabled_sasl_mechanisms.contains(&SaslMechanism::Plain)
                 && self.plain_credentials.is_empty()
             {
@@ -163,105 +231,17 @@ impl BrokerConfig {
                 });
             }
         }
-        self.validate_outbound_sasl(inter_broker_listener)?;
-        self.validate_platform(cfg!(target_family = "wasm"))?;
-        self.validate_positive_runtime_scalars()?;
-        self.validate_additional_runtime_scalars()?;
-        // After the scalar checks: the stretch durability check reads the
-        // replication factor and `min.insync.replicas`, and the kernel it
-        // calls takes a positive replication factor.
-        self.validate_stretch()?;
-        self.record_decompression_policy()?;
+        Ok(())
+    }
 
-        self.validate_runtime_relations()?;
-        self.validate_additional_runtime_relations()?;
-
-        let validate_group = |name: &str,
-                              session_timeout: Duration,
-                              heartbeat_interval: Duration,
-                              min_session_timeout: Duration,
-                              max_session_timeout: Duration,
-                              min_heartbeat_interval: Duration,
-                              max_heartbeat_interval: Duration,
-                              max_size: Option<usize>| {
-            if min_session_timeout.is_zero() {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} minimum session timeout must be positive"
-                )));
-            }
-            if min_session_timeout > max_session_timeout {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} minimum session timeout exceeds maximum"
-                )));
-            }
-            if !(min_session_timeout..=max_session_timeout).contains(&session_timeout) {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} session timeout is outside its bounds"
-                )));
-            }
-            if min_heartbeat_interval.is_zero() {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} minimum heartbeat interval must be positive"
-                )));
-            }
-            if min_heartbeat_interval > max_heartbeat_interval {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} minimum heartbeat interval exceeds maximum"
-                )));
-            }
-            if !(min_heartbeat_interval..=max_heartbeat_interval).contains(&heartbeat_interval) {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} heartbeat interval is outside its bounds"
-                )));
-            }
-            if max_size == Some(0) {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} maximum size must be positive"
-                )));
-            }
-            Ok(())
-        };
-
+    /// Each group kind's assignors and timeout bounds. The consumer group's
+    /// assignors are checked before its bounds.
+    fn validate_groups(&self) -> Result<(), BrokerError> {
         let consumer = &self.next_gen_consumer_group;
         consumer.validate_assignors()?;
-        validate_group(
-            "consumer group",
-            consumer.session_timeout,
-            consumer.heartbeat_interval,
-            consumer.min_session_timeout,
-            consumer.max_session_timeout,
-            consumer.min_heartbeat_interval,
-            consumer.max_heartbeat_interval,
-            Some(consumer.max_size),
-        )?;
-        let share = &self.share_group;
-        validate_group(
-            "share group",
-            share.session_timeout,
-            share.heartbeat_interval,
-            share.min_session_timeout,
-            share.max_session_timeout,
-            share.min_heartbeat_interval,
-            share.max_heartbeat_interval,
-            Some(share.max_size),
-        )?;
-        let streams = &self.streams_group;
-        validate_group(
-            "streams group",
-            streams.session_timeout,
-            streams.heartbeat_interval,
-            streams.min_session_timeout,
-            streams.max_session_timeout,
-            streams.min_heartbeat_interval,
-            streams.max_heartbeat_interval,
-            Some(streams.max_size),
-        )?;
-
-        if let RlmmKind::TopicBacked(config) = &self.remote_log_metadata {
-            config.validate()?;
-        }
-        self.validate_remote_storage_worm()?;
-        self.validate_leader_rebalance()
+        validate_group_bounds("consumer group", &group_timeout_bounds!(consumer))?;
+        validate_group_bounds("share group", &group_timeout_bounds!(&self.share_group))?;
+        validate_group_bounds("streams group", &group_timeout_bounds!(&self.streams_group))
     }
 
     /// The SASL mechanisms `listener` enables: its own, else the broker-wide
@@ -503,6 +483,54 @@ impl BrokerConfig {
     }
 }
 
+/// The timeout and size bounds every group kind checks the same way: a
+/// default session timeout and heartbeat interval inside their positive,
+/// ordered ranges, and a positive maximum group size.
+struct GroupTimeoutBounds {
+    session_timeout: Duration,
+    heartbeat_interval: Duration,
+    min_session_timeout: Duration,
+    max_session_timeout: Duration,
+    min_heartbeat_interval: Duration,
+    max_heartbeat_interval: Duration,
+    max_size: usize,
+}
+
+/// Checks `bounds` for the group kind `name` and reports the first bound it
+/// breaks, naming the group in the message.
+fn validate_group_bounds(name: &str, bounds: &GroupTimeoutBounds) -> Result<(), BrokerError> {
+    let invalid = |problem: &str| {
+        Err(BrokerError::InvalidRuntimeConfig(format!(
+            "{name} {problem}"
+        )))
+    };
+    if bounds.min_session_timeout.is_zero() {
+        return invalid("minimum session timeout must be positive");
+    }
+    if bounds.min_session_timeout > bounds.max_session_timeout {
+        return invalid("minimum session timeout exceeds maximum");
+    }
+    if !(bounds.min_session_timeout..=bounds.max_session_timeout).contains(&bounds.session_timeout)
+    {
+        return invalid("session timeout is outside its bounds");
+    }
+    if bounds.min_heartbeat_interval.is_zero() {
+        return invalid("minimum heartbeat interval must be positive");
+    }
+    if bounds.min_heartbeat_interval > bounds.max_heartbeat_interval {
+        return invalid("minimum heartbeat interval exceeds maximum");
+    }
+    if !(bounds.min_heartbeat_interval..=bounds.max_heartbeat_interval)
+        .contains(&bounds.heartbeat_interval)
+    {
+        return invalid("heartbeat interval is outside its bounds");
+    }
+    if bounds.max_size == 0 {
+        return invalid("maximum size must be positive");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use {
@@ -511,7 +539,9 @@ mod tests {
             SslPrincipalMapper,
             config::{
                 PlainCredentials, RemoteStorageBackend,
-                test_support::{RuntimeInvalidator, assert_invalid_runtime, base},
+                test_support::{
+                    RuntimeInvalidator, assert_invalid_runtime, assert_invalid_runtime_cases, base,
+                },
             },
         },
         assert2::{assert, check},
@@ -986,6 +1016,54 @@ mod tests {
         let mut config = BrokerConfig::default();
         config.streams_group.max_size = 0;
         assert_invalid_runtime(&config, "streams group maximum size must be positive");
+    }
+
+    /// Each group bound check, in the order `validate` runs them, for the
+    /// consumer group: the error names the group and the bound it breaks.
+    #[test]
+    fn rejects_each_consumer_group_bound() {
+        assert_invalid_runtime_cases([
+            RuntimeInvalidator {
+                expected: "consumer group minimum session timeout must be positive",
+                invalidate: |c| c.next_gen_consumer_group.min_session_timeout = Duration::ZERO,
+            },
+            RuntimeInvalidator {
+                expected: "consumer group minimum session timeout exceeds maximum",
+                invalidate: |c| {
+                    c.next_gen_consumer_group.min_session_timeout =
+                        c.next_gen_consumer_group.max_session_timeout * 2;
+                },
+            },
+            RuntimeInvalidator {
+                expected: "consumer group session timeout is outside its bounds",
+                invalidate: |c| {
+                    c.next_gen_consumer_group.session_timeout =
+                        c.next_gen_consumer_group.min_session_timeout / 2;
+                },
+            },
+            RuntimeInvalidator {
+                expected: "consumer group minimum heartbeat interval must be positive",
+                invalidate: |c| c.next_gen_consumer_group.min_heartbeat_interval = Duration::ZERO,
+            },
+            RuntimeInvalidator {
+                expected: "consumer group minimum heartbeat interval exceeds maximum",
+                invalidate: |c| {
+                    c.next_gen_consumer_group.min_heartbeat_interval =
+                        c.next_gen_consumer_group.max_heartbeat_interval * 2;
+                },
+            },
+            RuntimeInvalidator {
+                expected: "consumer group heartbeat interval is outside its bounds",
+                invalidate: |c| {
+                    c.next_gen_consumer_group.heartbeat_interval =
+                        c.next_gen_consumer_group.max_heartbeat_interval * 2;
+                },
+            },
+            RuntimeInvalidator {
+                expected: "consumer group maximum size must be positive",
+                invalidate: |c| c.next_gen_consumer_group.max_size = 0,
+            },
+        ]);
     }
 
     #[test]
