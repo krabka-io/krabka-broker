@@ -83,11 +83,10 @@ impl RegisteredActor for StreamsGroupActorHandle {
 /// The live actor that `map` holds for `group_id`, or a fresh one from
 /// `spawn` when the entry is absent or its actor has exited.
 ///
-/// A fresh actor is hydrated with what `seed` returns before it is
-/// registered, so the seed is the first message it reads. When another caller
-/// registers a live actor first, that actor is returned untouched and the
-/// fresh one is dropped: one group never has two actors, and a live actor is
-/// never seeded twice.
+/// The entry guard is held from the live-or-closed decision until the fresh
+/// actor is registered, so racing callers agree on one actor and only that
+/// caller spawns one. The fresh actor is hydrated with what `seed` returns
+/// before it is registered, so the seed is the first message it reads.
 fn get_or_spawn<H: RegisteredActor>(
     map: &DashMap<String, Arc<H>>,
     group_id: &str,
@@ -101,23 +100,18 @@ fn get_or_spawn<H: RegisteredActor>(
     {
         return Arc::clone(h.value());
     }
+    let entry = match map.entry(group_id.into()) {
+        Entry::Occupied(entry) if !entry.get().is_closed() => return Arc::clone(entry.get()),
+        entry => entry,
+    };
     let spawned = Arc::new(spawn());
     if let Some(seed) = seed()
         && let Err(error) = spawned.try_seed(seed)
     {
         tracing::warn!(group_id, %error, "dropped the seed of a respawned group actor");
     }
-    match map.entry(group_id.into()) {
-        Entry::Occupied(entry) if !entry.get().is_closed() => Arc::clone(entry.get()),
-        Entry::Occupied(mut entry) => {
-            entry.insert(Arc::clone(&spawned));
-            spawned
-        }
-        Entry::Vacant(entry) => {
-            entry.insert(Arc::clone(&spawned));
-            spawned
-        }
-    }
+    entry.insert(Arc::clone(&spawned));
+    spawned
 }
 
 /// The `GROUP_ID_NOT_FOUND` message of a `ConsumerGroupHeartbeat` that names a
@@ -413,7 +407,7 @@ mod tests {
             iter,
             sync::{
                 Barrier, Mutex,
-                atomic::{AtomicBool, Ordering},
+                atomic::{AtomicBool, AtomicUsize, Ordering},
             },
             thread,
         },
@@ -621,43 +615,23 @@ mod tests {
     }
 
     #[test]
-    fn a_respawn_keeps_and_does_not_seed_an_actor_another_caller_registered() {
-        let map = DashMap::new();
-        map.insert("g".to_owned(), Arc::new(FakeActor::closed()));
-        let winner = Arc::new(FakeActor::default());
-
-        // Another caller respawns the group while this one spawns its own.
-        let answer = get_or_spawn(
-            &map,
-            "g",
-            || {
-                map.insert("g".to_owned(), Arc::clone(&winner));
-                FakeActor::default()
-            },
-            || Some(7),
-        );
-
-        check!(Arc::ptr_eq(&answer, &winner));
-        check!(
-            map.get("g")
-                .is_some_and(|r| Arc::ptr_eq(r.value(), &winner))
-        );
-        assert!(winner.seeds() == Vec::<u32>::new());
-    }
-
-    #[test]
-    fn racing_respawns_of_a_closed_actor_agree_on_one_actor_seeded_once() {
+    fn racing_respawns_of_a_closed_actor_spawn_and_seed_one_actor() {
         const CALLERS: usize = 8;
         for _ in 0..200 {
             let map = DashMap::new();
             map.insert("g".to_owned(), Arc::new(FakeActor::closed()));
             let start = Barrier::new(CALLERS);
+            let spawns = AtomicUsize::new(0);
+            let spawn = || {
+                spawns.fetch_add(1, Ordering::SeqCst);
+                FakeActor::default()
+            };
 
             let answers: Vec<Arc<FakeActor>> = thread::scope(|scope| {
                 let callers: Vec<_> = iter::repeat_with(|| {
                     scope.spawn(|| {
                         start.wait();
-                        get_or_spawn(&map, "g", FakeActor::default, || Some(7))
+                        get_or_spawn(&map, "g", spawn, || Some(7))
                     })
                 })
                 .take(CALLERS)
@@ -671,6 +645,7 @@ mod tests {
             let registered = Arc::clone(map.get("g").expect("a registered actor").value());
             check!(!registered.is_closed());
             check!(answers.iter().all(|a| Arc::ptr_eq(a, &registered)));
+            check!(spawns.load(Ordering::SeqCst) == 1);
             assert!(registered.seeds() == vec![7]);
         }
     }
