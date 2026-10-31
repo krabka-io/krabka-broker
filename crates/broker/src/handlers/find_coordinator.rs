@@ -106,35 +106,40 @@ pub async fn handle(
         req.coordinator_keys.clone()
     };
 
+    // With no keys Kafka's per-key loop never runs, so an empty v4+ batch
+    // stays empty whatever its key type. Below v4 there is always one key.
+    if keys.is_empty() {
+        return Ok(coordinators_response(version, Vec::new()));
+    }
+
     // ── Request-level failures ──────────────────────────────────────
     // Kafka's per-key loop throws out of the handler for these two, and
     // `FindCoordinatorRequest.getErrorResponse` stamps the one error on every
-    // key. With no keys the loop never runs, so an empty v4+ batch stays empty.
-    if !keys.is_empty() {
-        // `authorizeClusterOperation(request, CLUSTER_ACTION)` runs before
-        // `SharePartitionKey.validate`, so a malformed key of a refused
-        // principal is answered 31 like the others.
-        if req.key_type == KEY_TYPE_SHARE
-            && version >= 6
-            && !cluster_action_allowed(broker, &controller.current_image(), ctx)
-        {
-            return Ok(request_error_response(
-                version,
-                codes::CLUSTER_AUTHORIZATION_FAILED,
-                keys,
-            ));
-        }
-        // `CoordinatorType.forId` throws `InvalidRequestException`.
-        if !matches!(
-            req.key_type,
-            KEY_TYPE_GROUP | KEY_TYPE_TRANSACTION | KEY_TYPE_SHARE
-        ) {
-            return Ok(request_error_response(
-                version,
-                codes::INVALID_REQUEST,
-                keys,
-            ));
-        }
+    // key.
+    //
+    // `authorizeClusterOperation(request, CLUSTER_ACTION)` runs before
+    // `SharePartitionKey.validate`, so a malformed key of a refused
+    // principal is answered 31 like the others.
+    if req.key_type == KEY_TYPE_SHARE
+        && version >= 6
+        && !cluster_action_allowed(broker, &controller.current_image(), ctx)
+    {
+        return Ok(request_error_response(
+            version,
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+            keys,
+        ));
+    }
+    // `CoordinatorType.forId` throws `InvalidRequestException`.
+    if !matches!(
+        req.key_type,
+        KEY_TYPE_GROUP | KEY_TYPE_TRANSACTION | KEY_TYPE_SHARE
+    ) {
+        return Ok(request_error_response(
+            version,
+            codes::INVALID_REQUEST,
+            keys,
+        ));
     }
 
     // ── Per-key admission ───────────────────────────────────────────
@@ -157,6 +162,7 @@ pub async fn handle(
         })
         .collect();
 
+    // Every key may have been refused, and then nothing is resolved.
     let coordinators: Vec<Coordinator> = if keys.is_empty() {
         Vec::new()
     } else {
