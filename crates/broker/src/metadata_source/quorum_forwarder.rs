@@ -518,36 +518,40 @@ mod tests {
     }
 
     /// One forwarded write of `rpc` to a quorum of three voters that each
-    /// answer `code` with `leader_hint`: what it ended with, and how many
-    /// voters it asked.
-    async fn forward_against_three_voters(
+    /// answer `response`: what it ended with, and how many voters it asked.
+    async fn forward_to_three_voters(
         rpc: PrivateRpc,
-        code: i16,
-        leader_hint: i64,
-    ) -> (Forwarded, usize) {
+        response: Vec<u8>,
+    ) -> (Result<SubmitChangeResult, RaftError>, usize) {
         let asked = Arc::new(AtomicUsize::new(0));
         let asked_for_mock = sync::Arc::clone(&asked);
         let mock = mock_request_broker(
             rpc.api_key(),
             move || {
                 asked_for_mock.fetch_add(1, Ordering::SeqCst);
-                submit_change_response_body(code, leader_hint)
+                response.clone()
             },
             api_versions_response_v0,
         )
         .await;
         let forwarder = QuorumForwarder {
-            voters: (1..=3).map(|id| (NodeId(id), mock.addr.to_string())).collect(),
+            voters: (1..=3)
+                .map(|id| (NodeId(id), mock.addr.to_string()))
+                .collect(),
             ..forwarder(mock.addr, Arc::new(Mutex::new(Vec::new())), Some(NodeId(1)))
         };
         let outcome = match rpc {
             PrivateRpc::DelegationTokenMutation => {
                 forwarder.submit_delegation_token_mutations(vec![]).await
             }
-            _ => forwarder.submit_change(vec![topic_record("forwarded")]).await,
+            _ => {
+                forwarder
+                    .submit_change(vec![topic_record("forwarded")])
+                    .await
+            }
         };
         mock.stop();
-        (Forwarded::from(outcome), asked.load(Ordering::SeqCst))
+        (outcome, asked.load(Ordering::SeqCst))
     }
 
     /// Each response code of both forwarded writes ends as the controller's
@@ -564,7 +568,10 @@ mod tests {
         };
         let mut actual = Vec::new();
         let mut expected = Vec::new();
-        for rpc in [PrivateRpc::SubmitChange, PrivateRpc::DelegationTokenMutation] {
+        for rpc in [
+            PrivateRpc::SubmitChange,
+            PrivateRpc::DelegationTokenMutation,
+        ] {
             let table = [
                 (0, -1, Forwarded::Applied, 1),
                 (2, -1, Forwarded::TopicExists, 1),
@@ -580,16 +587,20 @@ mod tests {
                     Forwarded::ClusterAuthorizationFailed,
                     1,
                 ),
-                (krabka_raft::PRIVATE_UNSUPPORTED_VERSION, -1, unsupported(rpc), 1),
+                (
+                    krabka_raft::PRIVATE_UNSUPPORTED_VERSION,
+                    -1,
+                    unsupported(rpc),
+                    1,
+                ),
                 (1, 7, Forwarded::NotLeader(Some(NodeId(7))), 3),
                 (3, -1, Forwarded::NotLeader(None), 3),
             ];
             for (code, leader_hint, outcome, asked) in table {
-                actual.push((
-                    rpc,
-                    code,
-                    forward_against_three_voters(rpc, code, leader_hint).await,
-                ));
+                let (outcome_seen, asked_seen) =
+                    forward_to_three_voters(rpc, submit_change_response_body(code, leader_hint))
+                        .await;
+                actual.push((rpc, code, (Forwarded::from(outcome_seen), asked_seen)));
                 expected.push((rpc, code, (outcome, asked)));
             }
         }
@@ -600,26 +611,12 @@ mod tests {
     /// next voter, as it does for a voter it cannot reach.
     #[tokio::test]
     async fn quorum_forwarder_truncated_response_is_a_protocol_error() {
-        let asked = Arc::new(AtomicUsize::new(0));
-        let asked_for_mock = sync::Arc::clone(&asked);
-        let mock = mock_request_broker(
-            krabka_raft::API_KEY_SUBMIT_CHANGE,
-            move || {
-                asked_for_mock.fetch_add(1, Ordering::SeqCst);
-                vec![0, 0]
-            },
-            api_versions_response_v0,
-        )
-        .await;
-        let forwarder = QuorumForwarder {
-            voters: (1..=3).map(|id| (NodeId(id), mock.addr.to_string())).collect(),
-            ..forwarder(mock.addr, Arc::new(Mutex::new(Vec::new())), Some(NodeId(1)))
-        };
+        let (outcome, asked) = forward_to_three_voters(PrivateRpc::SubmitChange, vec![0, 0]).await;
 
-        let outcome = forwarder.submit_change(vec![topic_record("truncated")]).await;
-        mock.stop();
-
-        assert2::assert!(matches!(outcome, Err(RaftError::Protocol(_))), "{outcome:?}");
-        assert2::assert!(asked.load(Ordering::SeqCst) == 3);
+        assert2::assert!(
+            matches!(outcome, Err(RaftError::Protocol(_))),
+            "{outcome:?}"
+        );
+        assert2::assert!(asked == 3);
     }
 }
