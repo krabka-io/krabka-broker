@@ -21,7 +21,10 @@ use {
         },
     },
     assert2::assert,
-    krabka_protocol::{owned::fetch_request::MAX_VERSION, primitives::uuid::Uuid as WireUuid},
+    krabka_protocol::{
+        owned::{fetch_request::MAX_VERSION, fetch_response::FetchResponse},
+        primitives::uuid::Uuid as WireUuid,
+    },
     krabka_units::secs,
     std::sync::Arc,
 };
@@ -52,7 +55,7 @@ async fn fetch_from(
     topic_id: WireUuid,
     fetch_offset: i64,
     user: &str,
-) -> krabka_protocol::owned::fetch_response::FetchResponse {
+) -> FetchResponse {
     let mut request = consumer_fetch_request().topic_id(topic_id).call();
     request.topics[0].partitions[0].fetch_offset = fetch_offset;
     fetch_wire()
