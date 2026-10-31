@@ -167,6 +167,22 @@ impl GroupActorHandle {
             _task: task,
         }
     }
+
+    /// A stand-in actor that takes every message and drops it unanswered, as
+    /// an actor does when it stops with requests still in its mailbox.
+    #[cfg(test)]
+    pub(crate) fn dropping_replies(kind: GroupKindTag) -> Self {
+        let (tx, task) = spawn_mailbox(8, |mut rx: mpsc::Receiver<GroupActorMessage>| async move {
+            while let Some(message) = rx.recv().await {
+                drop(message);
+            }
+        });
+        Self {
+            tx,
+            kind,
+            _task: task,
+        }
+    }
 }
 
 pub trait MetadataProvider: Send + Sync + Debug {

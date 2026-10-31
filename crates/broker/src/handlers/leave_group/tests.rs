@@ -189,3 +189,45 @@ async fn denied_read_answers_group_authorization_failed_before_validation() {
     );
     broker_handle.shutdown().await;
 }
+
+/// An actor that stops with the leave in its mailbox drops the reply. Kafka
+/// fails an operation on a shard that unloads, so the member must not be told
+/// it left: the routing check runs again, and a broker that still serves the
+/// group answers `COORDINATOR_NOT_AVAILABLE` at the top level.
+#[rstest::rstest]
+#[case::legacy(0)]
+#[case::batched(5)]
+#[tokio::test]
+async fn dropped_reply_answers_coordinator_not_available(#[case] version: i16) {
+    use crate::coordinator::unified::actor::{GroupActorHandle, GroupKindTag};
+
+    let started =
+        start_broker_no_audit_with(|config| config.offsets_topic_replication_factor = 1).await;
+    started.broker.wait_until_group_coordinator_ready().await;
+    let broker = started.broker.broker_arc_for_test();
+    broker.group_coordinator.groups.insert(
+        "stopping".into(),
+        Arc::new(GroupActorHandle::dropping_replies(GroupKindTag::Classic)),
+    );
+    let request = LeaveGroupRequest {
+        group_id: "stopping".into(),
+        member_id: if version < 3 { "m-a".into() } else { String::new() },
+        members: if version < 3 {
+            Vec::new()
+        } else {
+            vec![identity("m-a", None)]
+        },
+        ..Default::default()
+    };
+
+    let response = leave(&broker, &request, version).await;
+
+    assert!(
+        response
+            == LeaveGroupResponse {
+                error_code: codes::COORDINATOR_NOT_AVAILABLE,
+                ..Default::default()
+            }
+    );
+    started.broker.shutdown().await;
+}
