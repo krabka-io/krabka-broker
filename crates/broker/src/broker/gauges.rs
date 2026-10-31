@@ -25,6 +25,7 @@ use {
     },
     tokio::time,
     tokio_util::sync::CancellationToken,
+    uuid::Uuid,
 };
 
 /// Epoch milliseconds for the KIP-835 time-since-last-applied-record gauge.
@@ -372,6 +373,29 @@ impl ClusterCounts {
     }
 }
 
+/// Moves the `voted_directory` gauge from the `previous` directory, whose
+/// series drops to `0`, to the `current` one, whose series reads `1`.
+fn swap_voted_directory_label(
+    metrics: &BrokerMetrics,
+    previous: Option<Uuid>,
+    current: Option<Uuid>,
+) {
+    let set = |directory_id: Uuid, value| {
+        metrics
+            .voted_directory
+            .get_or_create(&DirectoryLabel {
+                directory_id: directory_id.to_string(),
+            })
+            .set(value);
+    };
+    if let Some(directory_id) = previous {
+        set(directory_id, 0);
+    }
+    if let Some(directory_id) = current {
+        set(directory_id, 1);
+    }
+}
+
 /// What this broker holds locally: the partitions it hosts and the health of
 /// the directories they sit in. They travel together because one gauge pass
 /// samples both, and neither is reachable from the metadata image.
@@ -480,22 +504,7 @@ pub(super) fn spawn_broker_gauge_updater(
                 .set(gauge_count(ignored_static_voters));
             let voted_directory = controller.voted_directory_id();
             if voted_directory != previous_voted_directory {
-                if let Some(directory_id) = previous_voted_directory {
-                    metrics
-                        .voted_directory
-                        .get_or_create(&DirectoryLabel {
-                            directory_id: directory_id.to_string(),
-                        })
-                        .set(0);
-                }
-                if let Some(directory_id) = voted_directory {
-                    metrics
-                        .voted_directory
-                        .get_or_create(&DirectoryLabel {
-                            directory_id: directory_id.to_string(),
-                        })
-                        .set(1);
-                }
+                swap_voted_directory_label(&metrics, previous_voted_directory, voted_directory);
                 previous_voted_directory = voted_directory;
             }
         }
