@@ -19,7 +19,7 @@ use {
     },
     krabka_units::convert::TimeExt as _,
     std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         sync::{Arc, atomic},
         time::{SystemTime, UNIX_EPOCH},
     },
@@ -210,6 +210,100 @@ impl<'a> MinimumIsr<'a> {
     }
 }
 
+/// The ISR size compared against a topic's minimum, saturating at `i32::MAX`.
+fn isr_size(partition: &krabka_metadata::PartitionRecord) -> i32 {
+    i32::try_from(partition.isr.len()).unwrap_or(i32::MAX)
+}
+
+/// One sample's view of the cluster, which the partition counts read.
+struct GaugeInputs<'a> {
+    image: &'a krabka_metadata::MetadataImage,
+    node_id: krabka_metadata::NodeId,
+    /// The brokers the controller's liveness view holds alive.
+    alive: &'a HashSet<u64>,
+    /// Whether this node is the active controller, the one node whose
+    /// liveness view can say a partition is offline.
+    is_controller: bool,
+    minimum_isr: MinimumIsr<'a>,
+    /// The audit topic, when audit is enabled.
+    audit_topic: Option<&'a str>,
+}
+
+impl GaugeInputs<'_> {
+    /// Kafka's OfflinePartitionsCount counts every partition with no leader,
+    /// internal topics included. A partition has none when its recorded
+    /// leader is gone, or when the controller left it leaderless with the
+    /// leader still alive, as the KIP-112 offline-dir failover does: krabka's
+    /// record keeps that leader, and the ELR marker says it no longer leads.
+    fn is_offline(&self, partition: &krabka_metadata::PartitionRecord) -> bool {
+        self.is_controller
+            && (!self.alive.contains(&partition.leader.0) || is_leaderless(self.image, partition))
+    }
+
+    /// The audit share is the part a down broker explains: each audit
+    /// partition has one replica on its own broker (#1516). A failed dir on a
+    /// live broker is not down, so the alert still counts it.
+    fn is_audit_partition_without_live_replica(
+        &self,
+        partition: &krabka_metadata::PartitionRecord,
+    ) -> bool {
+        self.audit_topic == Some(partition.topic.as_str())
+            && !partition
+                .replicas
+                .iter()
+                .any(|replica| self.alive.contains(&replica.0))
+    }
+}
+
+/// The partition-health gauges every broker publishes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct LocalPartitionHealth {
+    /// Partitions this node leads whose ISR is smaller than the replica set.
+    under_replicated: usize,
+    /// Partitions this node leads whose ISR is below the topic's minimum.
+    under_min_isr: usize,
+    /// Partitions with no leader; only the active controller counts any.
+    offline: usize,
+    /// The audit partitions among `offline` that have no live replica.
+    offline_audit: usize,
+}
+
+impl LocalPartitionHealth {
+    fn count(inputs: &GaugeInputs<'_>) -> Self {
+        let mut health = Self::default();
+        for partition in inputs.image.all_partitions() {
+            if partition.leader == inputs.node_id {
+                health.under_replicated +=
+                    usize::from(partition.isr.len() < partition.replicas.len());
+                health.under_min_isr += usize::from(
+                    isr_size(partition) < inputs.minimum_isr.for_topic(&partition.topic),
+                );
+            }
+            let offline = inputs.is_offline(partition);
+            health.offline += usize::from(offline);
+            health.offline_audit += usize::from(
+                offline && inputs.is_audit_partition_without_live_replica(partition),
+            );
+        }
+        health
+    }
+
+    fn publish(self, metrics: &BrokerMetrics) {
+        metrics
+            .under_replicated_partitions
+            .set(gauge_count(self.under_replicated));
+        metrics
+            .under_min_isr_partition_count
+            .set(gauge_count(self.under_min_isr));
+        metrics
+            .offline_partitions_count
+            .set(gauge_count(self.offline));
+        metrics
+            .offline_audit_partitions
+            .set(gauge_count(self.offline_audit));
+    }
+}
+
 /// What this broker holds locally: the partitions it hosts and the health of
 /// the directories they sit in. They travel together because one gauge pass
 /// samples both, and neither is reachable from the metadata image.
@@ -276,52 +370,15 @@ pub(super) fn spawn_broker_gauge_updater(
                 .watch_leader()
                 .borrow()
                 .is_some_and(|leader| leader == node_id);
-            let minimum_isr = MinimumIsr::resolve(&image, node_id, default_min_insync_replicas);
-            let mut partition_health = (0_usize, 0_usize, 0_usize);
-            let mut offline_audit = 0_usize;
-            for partition in image.all_partitions() {
-                if partition.leader == node_id {
-                    partition_health.0 +=
-                        usize::from(partition.isr.len() < partition.replicas.len());
-                    let minimum = minimum_isr.for_topic(&partition.topic);
-                    partition_health.1 += usize::from(
-                        i32::try_from(partition.isr.len()).unwrap_or(i32::MAX) < minimum,
-                    );
-                }
-                // Kafka's OfflinePartitionsCount counts every partition with
-                // no leader, internal topics included. A partition has none
-                // when its recorded leader is gone, or when the controller
-                // left it leaderless with the leader still alive, as the
-                // KIP-112 offline-dir failover does: krabka's record keeps
-                // that leader, and the ELR marker says it no longer leads.
-                let offline = is_controller
-                    && (!alive.contains(&partition.leader.0) || is_leaderless(&image, partition));
-                partition_health.2 += usize::from(offline);
-                // The audit share is the part a down broker explains: each
-                // audit partition has one replica on its own broker (#1516).
-                // A failed dir on a live broker is not down, so the alert
-                // still counts it.
-                offline_audit += usize::from(
-                    offline
-                        && audit_topic.as_deref() == Some(partition.topic.as_str())
-                        && !partition
-                            .replicas
-                            .iter()
-                            .any(|replica| alive.contains(&replica.0)),
-                );
-            }
-            metrics
-                .under_replicated_partitions
-                .set(gauge_count(partition_health.0));
-            metrics
-                .under_min_isr_partition_count
-                .set(gauge_count(partition_health.1));
-            metrics
-                .offline_partitions_count
-                .set(gauge_count(partition_health.2));
-            metrics
-                .offline_audit_partitions
-                .set(gauge_count(offline_audit));
+            let inputs = GaugeInputs {
+                image: &image,
+                node_id,
+                alive: &alive,
+                is_controller,
+                minimum_isr: MinimumIsr::resolve(&image, node_id, default_min_insync_replicas),
+                audit_topic: audit_topic.as_deref(),
+            };
+            LocalPartitionHealth::count(&inputs).publish(&metrics);
             metrics.leader_site_drift_partitions.set(
                 gauge_count(leader_site_drift_partitions(&image, node_id)),
             );
@@ -357,7 +414,7 @@ pub(super) fn spawn_broker_gauge_updater(
                 let mut preferred_imbalance = 0_usize;
                 for partition in image.all_partitions() {
                     total_partitions += 1;
-                    let minimum = minimum_isr.for_topic(&partition.topic);
+                    let minimum = inputs.minimum_isr.for_topic(&partition.topic);
                     if i32::try_from(partition.isr.len()).unwrap_or(i32::MAX) == minimum {
                         at_min_isr += 1;
                     }
