@@ -49,6 +49,7 @@ pub use {
     self::{
         checkpoint::{SnapshotRange, SnapshotSlice},
         startup::{Controller, metadata_log_nonempty},
+        submit::translate_submit_change_response,
     },
     crate::kraft::transport::QuorumStateSnapshot,
 };
