@@ -1508,3 +1508,456 @@ mod tests {
         .unwrap();
     }
 }
+
+/// One event at a time through the pump, each case checked against the whole
+/// observable state it leaves behind.
+#[cfg(test)]
+mod pump_tests {
+    use {
+        super::*,
+        crate::diskless::wal_index::IndexedRange,
+        assert2::assert,
+        async_trait::async_trait,
+        krabka_remote_storage_topic::{
+            AssignmentHandle, InProcessMetadataEventLog, MetadataEventRecord, MetadataEventStream,
+            MetadataLogError,
+        },
+        tokio::{sync::mpsc, time::timeout},
+        uuid::Uuid,
+    };
+
+    /// The offset of the replay fence the scripted log reports for
+    /// partition 0, the only partition with a backlog.
+    const REPLAY_TARGET: i64 = 100;
+    const TOPIC: Uuid = Uuid::from_u128(7);
+    const OTHER_TOPIC: Uuid = Uuid::from_u128(8);
+    /// A UUIDv4, as diskless object names are.
+    const OBJECT: Uuid = Uuid::from_u128(0x0000_0000_0000_4000_8000_0000_0000_0001);
+
+    /// A two-partition log whose subscription delivers exactly what the test
+    /// sends. Partition 0 reports a backlog, so its replay is pending until
+    /// [`REPLAY_TARGET`]; partition 1 is empty and carries the probe.
+    struct ScriptedLog {
+        inner: Arc<InProcessMetadataEventLog>,
+        events: StdMutex<Option<mpsc::UnboundedReceiver<MetadataEventRecord>>>,
+    }
+
+    #[async_trait]
+    impl MetadataEventLog for ScriptedLog {
+        fn partition_count(&self) -> i32 { 2 }
+
+        async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
+            self.inner.publish(partition, event).await
+        }
+
+        async fn publish_keyed(
+            &self,
+            _partition: i32,
+            _key: Bytes,
+            _event: Option<Bytes>,
+        ) -> Result<i64, MetadataLogError> {
+            Ok(REPLAY_TARGET)
+        }
+
+        fn subscribe(
+            &self,
+            assignment: Vec<PartitionStart>,
+        ) -> (MetadataEventStream, Arc<dyn AssignmentHandle>) {
+            let (_, handle) = self.inner.subscribe(assignment);
+            let events = self
+                .events
+                .lock()
+                .unwrap()
+                .take()
+                .expect("subscribed once");
+            let stream = futures_util::stream::unfold(events, |mut events| async move {
+                events.recv().await.map(|event| (event, events))
+            });
+            (Box::pin(stream), handle)
+        }
+
+        async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
+            Ok(vec![1, 0])
+        }
+    }
+
+    /// Everything the pump's work can be observed through.
+    #[derive(Debug, PartialEq)]
+    struct PumpState {
+        ranges: Vec<IndexedRange>,
+        /// `(topic, partition, floor)` for [`TOPIC`] and the reservation
+        /// namespace.
+        floors: Vec<(Uuid, i32, i64)>,
+        reservations: Vec<Uuid>,
+        valid: bool,
+        decode_failures: u64,
+        applied: u64,
+        consumed: Vec<i64>,
+        progress: ReplayProgress,
+    }
+
+    #[bon::builder]
+    fn pump_state(
+        #[builder(default)] ranges: Vec<IndexedRange>,
+        #[builder(default)] floors: Vec<(Uuid, i32, i64)>,
+        #[builder(default)] reservations: Vec<Uuid>,
+        #[builder(default)] decode_failures: u64,
+        #[builder(default)] applied: u64,
+        /// The highest offset consumed on partition 0.
+        #[builder(default = -1)]
+        consumed: i64,
+        /// Partition 0 events delivered before the replay target.
+        #[builder(default)]
+        delivered: u64,
+        #[builder(default)] caught_up: bool,
+    ) -> PumpState {
+        PumpState {
+            ranges,
+            floors,
+            reservations,
+            valid: decode_failures == 0,
+            decode_failures,
+            applied,
+            // The probe always lands on partition 1 at offset 0.
+            consumed: vec![consumed, 0],
+            progress: ReplayProgress {
+                slowest_pending: if caught_up { u64::MAX } else { delivered },
+                caught_up,
+                invalid: decode_failures != 0,
+            },
+        }
+    }
+
+    fn reservation_topic() -> Uuid {
+        WalDeleteFloorKey::from_bytes(&WalObjectReservationKey::new(OBJECT).to_bytes())
+            .unwrap()
+            .topic_id
+    }
+
+    async fn snapshot(index: &DisklessIndexLog, decode_failures: u64) -> PumpState {
+        let cache = index.cache();
+        let cache = cache.lock().await;
+        let mut floors = Vec::new();
+        for topic in [TOPIC, reservation_topic()] {
+            let mut partitions = cache.delete_floor_partitions(topic);
+            partitions.sort_unstable();
+            floors.extend(
+                partitions
+                    .into_iter()
+                    .map(|partition| (topic, partition, cache.delete_floor(topic, partition))),
+            );
+        }
+        let mut reservations: Vec<Uuid> = cache.reserved_objects().into_iter().collect();
+        reservations.sort_unstable();
+        PumpState {
+            ranges: cache.timestamp_ranges(TOPIC, 0),
+            floors,
+            reservations,
+            valid: index.is_valid(),
+            decode_failures,
+            applied: *index.applied.borrow(),
+            consumed: index.consumed_offsets.borrow().clone(),
+            progress: *index.progress.borrow(),
+        }
+    }
+
+    /// Feed `events` to a fresh pump, then a no-op probe on partition 1, and
+    /// report the state once the probe is consumed: the pump handles events in
+    /// order, so every earlier event has been handled by then.
+    async fn pump_state_after(events: Vec<MetadataEventRecord>) -> PumpState {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let log = Arc::new(ScriptedLog {
+            inner: InProcessMetadataEventLog::new(2),
+            events: StdMutex::new(Some(receiver)),
+        });
+        let metrics = BrokerMetrics::new();
+        let failures = metrics.diskless_wal_index_decode_failures_total.clone();
+        let index = DisklessIndexLog::start_with_cache(
+            log,
+            Arc::new(Mutex::new(WalIndexCache::default())),
+            metrics,
+        )
+        .await
+        .unwrap();
+        for event in events {
+            sender.send(event).unwrap();
+        }
+        sender
+            .send(MetadataEventRecord {
+                partition: 1,
+                offset: 0,
+                key: Some(Bytes::from_static(REPLAY_FENCE_KEY)),
+                payload: Bytes::new(),
+                tombstone: false,
+            })
+            .unwrap();
+        let mut consumed = index.consumed_offsets.clone();
+        timeout(
+            Duration::from_secs(5),
+            consumed.wait_for(|offsets| offsets[1] >= 0),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        snapshot(&index, failures.get()).await
+    }
+
+    /// A partition-0 record at `offset`; `None` payload is a tombstone.
+    fn event(offset: i64, key: Option<Bytes>, payload: Option<Bytes>) -> MetadataEventRecord {
+        MetadataEventRecord {
+            partition: 0,
+            offset,
+            key,
+            tombstone: payload.is_none(),
+            payload: payload.unwrap_or_default(),
+        }
+    }
+
+    fn entry() -> WalIndexEntry {
+        WalIndexEntry {
+            topic_id: TOPIC,
+            partition: 0,
+            first_offset: 0,
+            last_offset: 3,
+            byte_start: 0,
+            byte_len: 4,
+            max_timestamp_ms: 0,
+        }
+    }
+
+    fn range_key() -> Bytes { WalIndexKey::from(&entry()).to_bytes() }
+
+    fn range_value() -> Bytes {
+        WalFlushRecord::keyed_entry("object-a", entry()).unwrap().1
+    }
+
+    fn indexed_range() -> IndexedRange {
+        IndexedRange {
+            object_key: "object-a".into(),
+            entry: entry(),
+        }
+    }
+
+    fn floor_key() -> Bytes {
+        WalDeleteFloorKey {
+            topic_id: TOPIC,
+            partition: 0,
+        }
+        .to_bytes()
+    }
+
+    fn floor_value(topic_id: Uuid, partition: i32, floor: i64) -> Bytes {
+        WalDeleteFloorRecord {
+            topic_id,
+            partition,
+            floor,
+        }
+        .to_bytes()
+        .unwrap()
+    }
+
+    fn reservation_key() -> Bytes { WalObjectReservationKey::new(OBJECT).to_bytes() }
+
+    fn reservation_value(topic_id: Uuid, floor: i64) -> Bytes {
+        floor_value(topic_id, WAL_OBJECT_RESERVATION_PARTITION, floor)
+    }
+
+    fn fence_key() -> Bytes { Bytes::from_static(REPLAY_FENCE_KEY) }
+
+    /// A range key of key version 7, which this build does not read.
+    fn unknown_version_key() -> Bytes {
+        let mut key = range_key().to_vec();
+        key[..2].copy_from_slice(&7_i16.to_be_bytes());
+        Bytes::from(key)
+    }
+
+    #[tokio::test]
+    async fn each_index_event_leaves_the_expected_pump_state() {
+        struct Case {
+            name: &'static str,
+            events: Vec<MetadataEventRecord>,
+            expected: PumpState,
+        }
+        let reservation = reservation_value(reservation_topic(), 0);
+        let cases = [
+            Case {
+                name: "range",
+                events: vec![event(0, Some(range_key()), Some(range_value()))],
+                expected: pump_state()
+                    .ranges(vec![indexed_range()])
+                    .applied(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "floor",
+                events: vec![event(0, Some(floor_key()), Some(floor_value(TOPIC, 0, 5)))],
+                expected: pump_state()
+                    .floors(vec![(TOPIC, 0, 5)])
+                    .applied(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "reservation",
+                events: vec![event(0, Some(reservation_key()), Some(reservation.clone()))],
+                expected: pump_state()
+                    .reservations(vec![OBJECT])
+                    .applied(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "reservation with a nonzero floor",
+                events: vec![event(
+                    0,
+                    Some(reservation_key()),
+                    Some(reservation_value(reservation_topic(), 1)),
+                )],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                // Quirk kept: the pump returns before it records the offset as
+                // consumed or counts it toward the replay.
+                name: "reservation whose record names another key",
+                events: vec![event(
+                    0,
+                    Some(reservation_key()),
+                    Some(reservation_value(OTHER_TOPIC, 0)),
+                )],
+                expected: pump_state().decode_failures(1).call(),
+            },
+            Case {
+                name: "range tombstone",
+                events: vec![
+                    event(0, Some(range_key()), Some(range_value())),
+                    event(1, Some(range_key()), None),
+                ],
+                expected: pump_state().applied(1).consumed(1).delivered(2).call(),
+            },
+            Case {
+                name: "floor tombstone",
+                events: vec![
+                    event(0, Some(floor_key()), Some(floor_value(TOPIC, 0, 5))),
+                    event(1, Some(floor_key()), None),
+                ],
+                expected: pump_state().applied(1).consumed(1).delivered(2).call(),
+            },
+            Case {
+                name: "reservation tombstone",
+                events: vec![
+                    event(0, Some(reservation_key()), Some(reservation.clone())),
+                    event(1, Some(reservation_key()), None),
+                ],
+                expected: pump_state().applied(2).consumed(1).delivered(2).call(),
+            },
+            Case {
+                name: "replay fence",
+                events: vec![event(0, Some(fence_key()), Some(Bytes::new()))],
+                expected: pump_state().consumed(0).delivered(1).call(),
+            },
+            Case {
+                name: "replay fence at the replay target",
+                events: vec![event(REPLAY_TARGET, Some(fence_key()), Some(Bytes::new()))],
+                expected: pump_state()
+                    .consumed(REPLAY_TARGET)
+                    .caught_up(true)
+                    .call(),
+            },
+            Case {
+                name: "replay fence tombstone",
+                events: vec![event(0, Some(fence_key()), None)],
+                expected: pump_state().consumed(0).delivered(1).call(),
+            },
+            Case {
+                name: "unkeyed tombstone",
+                events: vec![event(0, None, None)],
+                expected: pump_state().consumed(0).delivered(1).call(),
+            },
+            Case {
+                name: "unknown key version",
+                events: vec![event(0, Some(unknown_version_key()), Some(range_value()))],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "unknown key version tombstone",
+                events: vec![event(0, Some(unknown_version_key()), None)],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "unkeyed record",
+                events: vec![event(0, None, Some(range_value()))],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "undecodable range payload",
+                events: vec![event(0, Some(range_key()), Some(Bytes::from_static(b"xx")))],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "undecodable floor payload",
+                events: vec![event(0, Some(floor_key()), Some(range_value()))],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "undecodable reservation payload",
+                events: vec![event(0, Some(reservation_key()), Some(range_value()))],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "invalid projection keeps applying later records",
+                events: vec![
+                    event(0, None, Some(range_value())),
+                    event(1, Some(floor_key()), Some(floor_value(TOPIC, 0, 5))),
+                ],
+                expected: pump_state()
+                    .floors(vec![(TOPIC, 0, 5)])
+                    .decode_failures(1)
+                    .applied(1)
+                    .consumed(1)
+                    .delivered(2)
+                    .call(),
+            },
+        ];
+        for Case {
+            name,
+            events,
+            expected,
+        } in cases
+        {
+            let actual = pump_state_after(events).await;
+            assert!(actual == expected, "case {name}");
+        }
+    }
+}
