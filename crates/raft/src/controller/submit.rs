@@ -5,11 +5,10 @@
 //! without a live quorum.
 
 use {
-    super::{ControllerHandle, connection_options},
+    super::{ControllerHandle, LeaderRoundTrip, connection_options},
     crate::{
         DelegationTokenMutation, SubmitChangeResult,
         error::RaftError,
-        network::OutboundDialer,
         types::{NodeId, controller_endpoint_addr as endpoint_addr_from_endpoints},
         wire::{
             API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_SUBMIT_CHANGE, KrabkaSubmitChangeRequest,
@@ -210,11 +209,11 @@ impl ControllerHandle {
     /// `API_KEY_SUBMIT_CHANGE`, and translate the response into a `RaftError`.
     ///
     /// Decomposed into three killable steps: [`encode_submit_change_body`] builds
-    /// the exact wire bytes, the [`SubmitChangeTransport`] seam performs the
+    /// the exact wire bytes, the [`LeaderRoundTrip`] seam performs the
     /// (un-mockable) dial→`raw_request`→close round trip and hands back the raw
     /// response body, and [`translate_submit_change_response`] decodes that body
     /// and maps the transport `error_code` into a `RaftError`.
-    // cargo-mutants: thin wrapper; builds the live DialerSubmitTransport, needs a real dialer
+    // cargo-mutants: thin wrapper; builds the live DialerRoundTrip, needs a real dialer
     #[cfg_attr(test, mutants::skip)]
     #[tracing::instrument(
         level = "debug",
@@ -228,17 +227,11 @@ impl ControllerHandle {
         addr: &str,
         records: &[krabka_metadata::MetadataRecord],
     ) -> Result<SubmitChangeResult, RaftError> {
-        let transport = DialerSubmitTransport {
-            dialer: self.dialer.as_ref(),
-            client_id: &self.client_id,
-            client_dispatch_queue_capacity: self.client_dispatch_queue_capacity,
-            client_frame_max: self.client_frame_max,
-        };
         let version = private_request_version(
             krabka_metadata::PrivateRpc::SubmitChange,
             Some(&self.current_image()),
         );
-        forward_submit_via(&transport, leader, addr, version, records).await
+        forward_submit_via(&self.round_trip_transport(), leader, addr, version, records).await
     }
 }
 
@@ -257,72 +250,12 @@ fn controller_endpoint_addr(voters: &krabka_metadata::VoterSet, node_id: NodeId)
     endpoint_addr_from_endpoints(&voter.endpoints)
 }
 
-/// The single un-mockable step of leader-forwarding a `submit_change`: dial the
-/// leader's controller listener, issue one `API_KEY_SUBMIT_CHANGE` request with
-/// the already-encoded `body`, and return the raw response body bytes. The
-/// concrete [`krabka_client_core::Connection`] is opaque (it cannot be built in
-/// a test), so this seam returns plain `Bytes` — every serialize/translate
-/// decision around it stays unit-testable against a mock.
-#[cfg_attr(test, mockall::automock)]
-#[async_trait::async_trait]
-trait SubmitChangeTransport: Send + Sync {
-    /// Round-trip the encoded `API_KEY_SUBMIT_CHANGE` `body` to the leader at
-    /// request `version` and return the raw response body.
-    async fn send_submit_change(
-        &self,
-        leader: NodeId,
-        addr: &str,
-        version: i16,
-        body: Vec<u8>,
-    ) -> Result<bytes::Bytes, krabka_client_core::ClientError>;
-}
-
-/// Live [`SubmitChangeTransport`] over the injected [`OutboundDialer`]: dials a
-/// one-shot authenticated connection, sends the request at the negotiated
-/// `API_KEY_SUBMIT_CHANGE` version, closes the connection, and returns the response body. This is the
-/// only part of the forward path that touches a real socket.
-struct DialerSubmitTransport<'a> {
-    dialer: &'a dyn OutboundDialer,
-    client_id: &'a str,
-    client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
-    client_frame_max: krabka_client_core::ClientFrameMax,
-}
-
-#[async_trait::async_trait]
-impl SubmitChangeTransport for DialerSubmitTransport<'_> {
-    // cargo-mutants: the only un-mockable step: dial + one `API_KEY_SUBMIT_CHANGE` + close, with
-    // no offline signal (a `krabka_client_core::Connection` cannot be built in a
-    // test). `#[mutants::skip]` rather than an `exclude_re` because cargo-mutants'
-    // name-regex exclusions do not reliably match the struct-field-deletion mutant
-    // its outbound connection options would otherwise generate.
-    #[cfg_attr(test, mutants::skip)]
-    async fn send_submit_change(
-        &self,
-        leader: NodeId,
-        addr: &str,
-        version: i16,
-        body: Vec<u8>,
-    ) -> Result<bytes::Bytes, krabka_client_core::ClientError> {
-        let opts = connection_options(
-            self.client_id,
-            self.client_dispatch_queue_capacity,
-            self.client_frame_max,
-        );
-        let conn = self.dialer.dial(leader, addr, opts).await?;
-        let resp_body = conn
-            .raw_request(API_KEY_SUBMIT_CHANGE, version, bytes::Bytes::from(body))
-            .await?;
-        conn.close();
-        Ok(resp_body)
-    }
-}
-
 /// `forward_submit_to`'s testable core: serialize → send (via the injected
-/// [`SubmitChangeTransport`]) → translate. The real path supplies a
-/// [`DialerSubmitTransport`]; tests supply a mock so the serialize/translate
+/// [`LeaderRoundTrip`]) → translate. The real path supplies a
+/// [`DialerRoundTrip`]; tests supply a mock so the serialize/translate
 /// decisions carry mutation signal without a live quorum.
 async fn forward_submit_via(
-    transport: &dyn SubmitChangeTransport,
+    transport: &dyn LeaderRoundTrip,
     leader: NodeId,
     addr: &str,
     version: i16,
@@ -330,7 +263,13 @@ async fn forward_submit_via(
 ) -> Result<SubmitChangeResult, RaftError> {
     let body = encode_submit_change_body(records)?;
     let resp_body = transport
-        .send_submit_change(leader, addr, version, body)
+        .round_trip(
+            leader,
+            addr,
+            API_KEY_SUBMIT_CHANGE,
+            version,
+            bytes::Bytes::from(body),
+        )
         .await
         .map_err(RaftError::Network)?;
     translate_submit_change_response(&resp_body, leader, API_KEY_SUBMIT_CHANGE, version)
@@ -421,9 +360,12 @@ mod tests {
         super::*,
         crate::{
             DelegationTokenMutation, SubmitChangeResult,
-            controller::test_support::{
-                bootstrap_controller, joining_controller, submit_change_response_bytes,
-                topic_record,
+            controller::{
+                MockLeaderRoundTrip,
+                test_support::{
+                    bootstrap_controller, joining_controller, submit_change_response_bytes,
+                    topic_record,
+                },
             },
             wire::{
                 API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
@@ -780,17 +722,18 @@ mod tests {
         let records = vec![topic_record("gamma")];
         let expected_body = encode_submit_change_body(&records).expect("encode");
 
-        let mut transport = MockSubmitChangeTransport::new();
+        let mut transport = MockLeaderRoundTrip::new();
         transport
-            .expect_send_submit_change()
-            .withf(move |leader, addr, version, body| {
+            .expect_round_trip()
+            .withf(move |leader, addr, api_key, version, body| {
                 *leader == 7
                     && addr == "leader-host:9093"
+                    && *api_key == API_KEY_SUBMIT_CHANGE
                     && *version == 0
                     && body == &expected_body
             })
             .times(1)
-            .returning(|_, _, _, _| Ok(submit_change_response_bytes(0, -1)));
+            .returning(|_, _, _, _, _| Ok(submit_change_response_bytes(0, -1)));
 
         forward_submit_via(&transport, NodeId(7), "leader-host:9093", 0, &records)
             .await
@@ -801,10 +744,10 @@ mod tests {
     async fn forward_submit_via_translates_not_leader_hint() {
         // The transport's response leader_hint must flow through translation to
         // the caller's NotLeader error.
-        let mut transport = MockSubmitChangeTransport::new();
+        let mut transport = MockLeaderRoundTrip::new();
         transport
-            .expect_send_submit_change()
-            .returning(|_, _, _, _| Ok(submit_change_response_bytes(1, 4)));
+            .expect_round_trip()
+            .returning(|_, _, _, _, _| Ok(submit_change_response_bytes(1, 4)));
 
         let err = forward_submit_via(&transport, NodeId(7), "leader-host:9093", 0, &[
             topic_record("z"),
@@ -820,10 +763,10 @@ mod tests {
     async fn forward_submit_via_maps_transport_error_to_network() {
         // A dial/send failure surfaces as RaftError::Network (so CreateTopics
         // retries), not a panic or a swallowed success.
-        let mut transport = MockSubmitChangeTransport::new();
+        let mut transport = MockLeaderRoundTrip::new();
         transport
-            .expect_send_submit_change()
-            .returning(|_, _, _, _| {
+            .expect_round_trip()
+            .returning(|_, _, _, _, _| {
                 Err(krabka_client_core::ClientError::Io(Error::new(
                     ErrorKind::ConnectionRefused,
                     "refused",
