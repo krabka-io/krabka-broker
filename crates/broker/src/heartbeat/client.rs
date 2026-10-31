@@ -286,8 +286,8 @@ enum ResponseOutcome {
     Accepted { recheck_soon: bool },
 }
 
-/// Applies the controller's answer to a heartbeat that asked to shut down
-/// when `want_shut_down`: it moves the initial unfence, latches
+/// Applies the controller's answer `r` to this tick's heartbeat, which asked to
+/// shut down when `want_shut_down`. It moves the initial unfence, latches
 /// `should_shutdown` and updates `state`.
 fn apply_response(
     cfg: &Config,
@@ -296,10 +296,10 @@ fn apply_response(
     r: &BrokerHeartbeatResponse,
 ) -> ResponseOutcome {
     if r.error_code == CLUSTER_AUTHORIZATION_FAILED {
-        cfg.unfenced.send_if_modified(|state| {
-            let pending = *state == InitialUnfence::Pending;
+        cfg.unfenced.send_if_modified(|unfence| {
+            let pending = *unfence == InitialUnfence::Pending;
             if pending {
-                *state = InitialUnfence::Refused;
+                *unfence = InitialUnfence::Refused;
             }
             pending
         });
@@ -900,16 +900,17 @@ mod tests {
     }
 
     // Applies `response` to a client in `before` whose initial unfence stands
-    // at `unfence`.
+    // at `unfence`, for a heartbeat that asked to shut down when
+    // `asking_to_stop`.
     fn apply(
         before: HeartbeatState,
         unfence: InitialUnfence,
-        want_shut_down: bool,
+        asking_to_stop: bool,
         response: &BrokerHeartbeatResponse,
     ) -> Applied {
         let source = registered_broker_source();
         let shutdown = CancellationToken::new();
-        let (_want_shutdown, want_shutdown) = watch::channel(want_shut_down);
+        let (_want_shutdown, want_shutdown) = watch::channel(asking_to_stop);
         let cfg = heartbeat_config()
             .source(&source)
             .shutdown(&shutdown)
@@ -920,7 +921,7 @@ mod tests {
             .call();
         let told = cfg.should_shutdown.subscribe();
         let mut state = before;
-        let outcome = apply_response(&cfg, &mut state, want_shut_down, response);
+        let outcome = apply_response(&cfg, &mut state, asking_to_stop, response);
         Applied {
             outcome,
             state,
@@ -1038,9 +1039,9 @@ mod tests {
                 applied(rejected(true), fresh, pending, false),
             ),
         ];
-        for (label, (before, unfence, want_shut_down), response, want) in cases {
+        for (label, (before, unfence, asking_to_stop), response, want) in cases {
             check!(
-                apply(before, unfence, want_shut_down, &response) == want,
+                apply(before, unfence, asking_to_stop, &response) == want,
                 "{label}"
             );
         }
