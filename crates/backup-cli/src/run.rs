@@ -103,15 +103,16 @@ pub async fn capture(
     archive: &ArchiveArgs,
 ) -> OperationReport<String> {
     let mut events = Vec::new();
-    let result = capture_secured_inner(
+    let signing = CaptureSigningArgs::default();
+    let request = CaptureRequest {
         log_dir,
         bootstrap_server,
-        None,
-        &CaptureSigningArgs::default(),
+        security: None,
+        signing: &signing,
         archive,
-        &mut events,
-    )
-    .await;
+        captured_at_ms: now_ms(),
+    };
+    let result = run_capture(request, &mut events).await;
     OperationReport { result, events }
 }
 
@@ -134,38 +135,29 @@ pub async fn capture_configured(
             Some(_) => security.load().await?,
             None => None,
         };
-        capture_secured_inner(
+        let request = CaptureRequest {
             log_dir,
             bootstrap_server,
-            client_security,
+            security: client_security,
             signing,
             archive,
-            &mut events,
-        )
-        .await
+            captured_at_ms: now_ms(),
+        };
+        run_capture(request, &mut events).await
     }
     .await;
     OperationReport { result, events }
 }
 
-async fn capture_secured_inner(
-    log_dir: Option<&Path>,
-    bootstrap_server: Option<&str>,
+/// Everything one capture reads: where to take artifacts from, how to reach
+/// and sign for the cluster, where to put them, and the capture's timestamp.
+struct CaptureRequest<'a> {
+    log_dir: Option<&'a Path>,
+    bootstrap_server: Option<&'a str>,
     security: Option<ClientSecurity>,
-    signing: &CaptureSigningArgs,
-    archive: &ArchiveArgs,
-    events: &mut Vec<BackupEvent>,
-) -> Result<String, BackupError> {
-    capture_secured_at_inner(
-        log_dir,
-        bootstrap_server,
-        security,
-        signing,
-        archive,
-        now_ms(),
-        events,
-    )
-    .await
+    signing: &'a CaptureSigningArgs,
+    archive: &'a ArchiveArgs,
+    captured_at_ms: u64,
 }
 
 #[cfg(test)]
@@ -178,28 +170,30 @@ async fn capture_secured_at(
     captured_at_ms: u64,
 ) -> OperationReport<String> {
     let mut events = Vec::new();
-    let result = capture_secured_at_inner(
+    let request = CaptureRequest {
         log_dir,
         bootstrap_server,
         security,
         signing,
         archive,
         captured_at_ms,
-        &mut events,
-    )
-    .await;
+    };
+    let result = run_capture(request, &mut events).await;
     OperationReport { result, events }
 }
 
-async fn capture_secured_at_inner(
-    log_dir: Option<&Path>,
-    bootstrap_server: Option<&str>,
-    security: Option<ClientSecurity>,
-    signing: &CaptureSigningArgs,
-    archive: &ArchiveArgs,
-    captured_at_ms: u64,
+async fn run_capture(
+    request: CaptureRequest<'_>,
     events: &mut Vec<BackupEvent>,
 ) -> Result<String, BackupError> {
+    let CaptureRequest {
+        log_dir,
+        bootstrap_server,
+        security,
+        signing,
+        archive,
+        captured_at_ms,
+    } = request;
     let store = Archive::open(archive)?;
     let id = capture_id(captured_at_ms);
     let mut artifacts: Vec<Artifact> = Vec::new();
