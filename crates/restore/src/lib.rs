@@ -233,11 +233,14 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     }
     let mut partitions = Vec::with_capacity(archive.partitions.len());
     let mut skipped = unclaimed;
+    let inputs = PhaseInputs {
+        store: &store,
+        args,
+        predicates: &predicates,
+    };
     for entry in &archive.partitions {
         if let Some(report) = restore_partition(
-            &store,
-            args,
-            &predicates,
+            &inputs,
             authenticated_archive,
             entry,
             &mut skipped,
@@ -250,9 +253,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     }
 
     let diskless = restore_diskless(
-        &store,
-        args,
-        &predicates,
+        &inputs,
         diskless_capture.as_ref(),
         diskless_claims,
         &diskless_next_offsets,
@@ -274,6 +275,13 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     })
 }
 
+/// The inputs every restore phase after formatting reads.
+struct PhaseInputs<'a> {
+    store: &'a ArchiveStore,
+    args: &'a RestoreArgs,
+    predicates: &'a Predicates,
+}
+
 /// Verify and write one partition's archived segments.
 ///
 /// Returns `None` for a partition with no segments. Under
@@ -282,14 +290,17 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
 /// following a skipped predecessor. The keys of every verified segment of an
 /// authenticated archive are added to `consumed`.
 async fn restore_partition(
-    store: &ArchiveStore,
-    args: &RestoreArgs,
-    predicates: &Predicates,
+    inputs: &PhaseInputs<'_>,
     authenticated: Option<&AuthenticatedArchive>,
     entry: &PartitionInventory,
     skipped: &mut Vec<SkippedSegment>,
     consumed: &mut BTreeSet<String>,
 ) -> Result<Option<PartitionReport>, RestoreError> {
+    let PhaseInputs {
+        store,
+        args,
+        predicates,
+    } = *inputs;
     if entry.segments.is_empty() {
         return Ok(None);
     }
@@ -354,9 +365,7 @@ async fn restore_partition(
 /// When the capture is authenticated, the object keys of every selected
 /// topic's ranges are added to `consumed`.
 async fn restore_diskless(
-    store: &ArchiveStore,
-    args: &RestoreArgs,
-    predicates: &Predicates,
+    inputs: &PhaseInputs<'_>,
     capture: Option<&DisklessWalCapture>,
     claims: Option<&BTreeMap<String, krabka_remote_storage::ObjectEntry>>,
     next_offsets: &[diskless::DisklessNextOffset],
@@ -365,6 +374,11 @@ async fn restore_diskless(
     let Some(capture) = capture else {
         return Ok(None);
     };
+    let PhaseInputs {
+        store,
+        args,
+        predicates,
+    } = *inputs;
     let report = diskless::materialize(store, args, predicates, capture, claims).await?;
     diskless::check_next_offsets(&report, next_offsets)?;
     if claims.is_some() {
