@@ -115,6 +115,41 @@ impl FetcherState {
         self.session.reset();
         self.mark_all_dirty();
     }
+
+    /// Takes over a changed membership snapshot: every partition is replanned,
+    /// the session reopens, and each newly followed partition has its local
+    /// log opened. A partition whose log cannot be opened stops being followed.
+    fn adopt_snapshot(
+        &mut self,
+        fetcher: &FetcherConfig,
+        FollowedSnapshot {
+            generation,
+            entries,
+        }: FollowedSnapshot,
+    ) {
+        self.followed_generation = generation;
+        self.followed = entries;
+        self.followed_index = FollowedIndex::new(&self.followed);
+        self.mark_all_dirty();
+        self.request_epochs
+            .retain(|key, _| self.followed.contains_key(key));
+        self.forgotten.clear();
+        self.session.reset();
+        self.materialized
+            .retain(|key| self.followed.contains_key(key));
+        for (key, cfg) in &self.followed {
+            if self.materialized.contains(key) {
+                continue;
+            }
+            if let Err(error) = ensure_local_partition(cfg) {
+                warn!(error = %error, topic = %cfg.topic, partition = cfg.partition.get(),
+                    "replicator failed to open local partition; not following it");
+                drop_partition(fetcher, key);
+                continue;
+            }
+            self.materialized.insert(key.clone());
+        }
+    }
 }
 
 pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), String> {
@@ -133,37 +168,11 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             return Ok(());
         }
 
-        if let Some(FollowedSnapshot {
-            generation,
-            entries,
-        }) = fetcher
+        if let Some(snapshot) = fetcher
             .followed
             .snapshot_if_changed(state.followed_generation)
         {
-            state.followed_generation = generation;
-            state.followed = entries;
-            state.followed_index = FollowedIndex::new(&state.followed);
-            state.mark_all_dirty();
-            state
-                .request_epochs
-                .retain(|key, _| state.followed.contains_key(key));
-            state.forgotten.clear();
-            state.session.reset();
-            state
-                .materialized
-                .retain(|key| state.followed.contains_key(key));
-            for (key, cfg) in &state.followed {
-                if state.materialized.contains(key) {
-                    continue;
-                }
-                if let Err(error) = ensure_local_partition(cfg) {
-                    warn!(error = %error, topic = %cfg.topic, partition = cfg.partition.get(),
-                        "replicator failed to open local partition; not following it");
-                    drop_partition(fetcher, key);
-                    continue;
-                }
-                state.materialized.insert(key.clone());
-            }
+            state.adopt_snapshot(fetcher, snapshot);
         }
 
         let now = Instant::now();
