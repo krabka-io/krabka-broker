@@ -58,7 +58,9 @@ use {
     krabka_log::LeaderEpoch,
     krabka_metadata::{AclOperation, MetadataImage, ResourceType},
     krabka_protocol::owned::{
-        offset_for_leader_epoch_request::{OffsetForLeaderEpochRequest, OffsetForLeaderPartition},
+        offset_for_leader_epoch_request::{
+            OffsetForLeaderEpochRequest, OffsetForLeaderPartition, OffsetForLeaderTopic,
+        },
         offset_for_leader_epoch_response::{
             EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
         },
@@ -162,6 +164,20 @@ fn epoch_end_offset(
     }
 }
 
+/// The result for a topic the caller may not `Describe`:
+/// `TOPIC_AUTHORIZATION_FAILED` on every partition it requested.
+fn unauthorized_topic(topic: &OffsetForLeaderTopic) -> OffsetForLeaderTopicResult {
+    OffsetForLeaderTopicResult {
+        topic: topic.topic.clone(),
+        partitions: topic
+            .partitions
+            .iter()
+            .map(|part| error_row(part.partition, codes::TOPIC_AUTHORIZATION_FAILED))
+            .collect(),
+        ..Default::default()
+    }
+}
+
 pub fn handle(
     broker: &Broker,
     req: &OffsetForLeaderEpochRequest,
@@ -205,27 +221,16 @@ pub fn handle(
                 AclOperation::Describe,
             )
         {
-            let parts_out = topic
-                .partitions
-                .iter()
-                .map(|part| error_row(part.partition, codes::TOPIC_AUTHORIZATION_FAILED))
-                .collect();
-            unauthorized_out.push(OffsetForLeaderTopicResult {
-                topic: topic.topic.clone(),
-                partitions: parts_out,
-                ..Default::default()
-            });
+            unauthorized_out.push(unauthorized_topic(topic));
             continue;
         }
-        let parts_out = topic
-            .partitions
-            .iter()
-            .map(|part| epoch_end_offset(broker, &acl_image, &topic.topic, part))
-            .collect();
-
         authorized_out.push(OffsetForLeaderTopicResult {
             topic: topic.topic.clone(),
-            partitions: parts_out,
+            partitions: topic
+                .partitions
+                .iter()
+                .map(|part| epoch_end_offset(broker, &acl_image, &topic.topic, part))
+                .collect(),
             ..Default::default()
         });
     }
