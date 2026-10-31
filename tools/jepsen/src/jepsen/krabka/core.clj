@@ -155,7 +155,13 @@
   (let [workload (kafka/workload opts)
         db       (db/db)
         nemesis  (nemesis-package opts db)
-        final    (:final-generator workload)]
+        ; The highest offset seen of each key, which the final polls read up
+        ; to. The workload tracks these inside its main generator, which
+        ; stops hearing of completions once the main phase ends, so a send
+        ; that completes after that is never polled for and is reported
+        ; unseen. Tracking around the whole generator counts it.
+        offsets  (atom (sorted-map))
+        final    (gen/each-thread (kafka/final-polls offsets))]
     (merge tests/noop-test
            opts
            {:name      (test-name opts)
@@ -165,18 +171,20 @@
             :node-ips  (atom {})
             :client    (client/client)
             :nemesis   (:nemesis nemesis)
-            :generator (gen/phases
-                         (->> (:generator workload)
-                              (gen/stagger (/ (:rate opts)))
-                              (gen/nemesis (:generator nemesis))
-                              (gen/time-limit (:time-limit opts)))
-                         (gen/nemesis (:final-generator nemesis))
-                         (gen/log "Waiting for recovery")
-                         (gen/sleep 10)
-                         ; A consumer may never see some offsets; give up
-                         ; eventually and let the checker say which.
-                         (gen/time-limit (:final-time-limit opts)
-                                         (gen/clients final)))
+            :generator (kafka/track-key-offsets
+                         offsets
+                         (gen/phases
+                           (->> (:generator workload)
+                                (gen/stagger (/ (:rate opts)))
+                                (gen/nemesis (:generator nemesis))
+                                (gen/time-limit (:time-limit opts)))
+                           (gen/nemesis (:final-generator nemesis))
+                           (gen/log "Waiting for recovery")
+                           (gen/sleep 10)
+                           ; A consumer may never see some offsets; give up
+                           ; eventually and let the checker say which.
+                           (gen/time-limit (:final-time-limit opts)
+                                           (gen/clients final))))
             :checker   (checker/compose
                          {:stats    (stats-checker)
                           :perf     (perf-checker (:perf nemesis))

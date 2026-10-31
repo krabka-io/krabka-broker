@@ -3,7 +3,7 @@
   bookkeeping, the node configuration and the key mapping. They need no
   cluster.
 
-    java -Djava.awt.headless=true \\
+    java -Djava.awt.headless=true -Dclojure.compile.path=target/jepsen/classes \\
       -cp tools/jepsen/src:tools/jepsen/test:$(cat target/jepsen/classpath.txt) \\
       clojure.main -m jepsen.krabka.core-test"
   (:require [clojure.test :refer [deftest is are testing run-tests]]

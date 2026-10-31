@@ -220,10 +220,13 @@ runner's bookkeeping, the node configuration and the key mapping. They need no
 cluster:
 
 ```sh
-java -Djava.awt.headless=true \
+java -Djava.awt.headless=true -Dclojure.compile.path=target/jepsen/classes \
   -cp "tools/jepsen/src:tools/jepsen/test:$(cat target/jepsen/classpath.txt)" \
   clojure.main -m jepsen.krabka.core-test
 ```
+
+`clojure.compile.path` keeps the classes that Jepsen's `dom-top` library
+compiles at load time out of the working tree. Its default is `./classes`.
 
 `aspect tests jepsen` tests the task's own functions.
 
