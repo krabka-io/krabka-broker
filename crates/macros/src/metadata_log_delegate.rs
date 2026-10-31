@@ -1,7 +1,7 @@
 //! Delegate a metadata-log wrapper's unchanged operations through `self.inner`.
 
 use {
-    crate::meta::{ItemBody, body_group, item_body, required_tokens},
+    crate::meta::{ItemBody, body_group, declares_fn, item_body, required_tokens},
     moxy::{
         ast::ParseError,
         token::{Span, TokenStream, TokenTree},
@@ -61,11 +61,7 @@ pub fn expand(root: TokenStream, item: TokenStream) -> Result<TokenStream, Parse
         ),
     ];
     let existing: Vec<_> = group.tokens.clone().into_iter().collect();
-    let has_method = |method: &str| {
-        existing.windows(2).any(|tokens| {
-            matches!(tokens, [keyword, name] if keyword.is_keyword_fn() && name.as_ident().is_some_and(|name| name == method))
-        })
-    };
+    let has_method = |method: &str| declares_fn(&existing, method);
     let mut methods = TokenStream::new();
     for (method, implementation) in candidates {
         if !has_method(method) {

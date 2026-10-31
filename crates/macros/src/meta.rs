@@ -363,6 +363,15 @@ impl FromMeta for Tokens {
     }
 }
 
+/// Whether `tokens` declare a function called `name` at their top level. Raw
+/// identifiers match their unprefixed name.
+pub fn declares_fn(tokens: &[TokenTree], name: &str) -> bool {
+    tokens.windows(2).any(|pair| {
+        matches!(pair, [keyword, item] if keyword.is_keyword_fn()
+            && item.as_ident().is_some_and(|item| item.text() == name))
+    })
+}
+
 /// An item's complete tokens and the index of its brace-delimited body.
 pub struct ItemBody {
     pub(crate) tokens: Vec<TokenTree>,
@@ -637,6 +646,19 @@ mod tests {
     ) {
         let signature = function_signature(&source.parse().unwrap()).unwrap();
         assert2::assert!(is_concrete_async(&signature) == expected, "{source}");
+    }
+
+    #[yare::parameterized(
+        declared = { "fn other() {} async fn publish(&self) {}", true },
+        raw_identifier = { "fn r#publish() {}", true },
+        absent = { "fn publish_keyed() {}", false },
+        not_after_fn = { "const publish: () = ();", false },
+        nested = { "mod inner { fn publish() {} }", false },
+        empty = { "", false },
+    )]
+    fn declared_functions_are_found_only_at_the_top_level(tokens: &str, expected: bool) {
+        let tokens = Vec::from(tokens.parse::<TokenStream>().unwrap());
+        assert2::assert!(declares_fn(&tokens, "publish") == expected);
     }
 
     #[test]
