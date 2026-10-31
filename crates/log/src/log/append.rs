@@ -24,6 +24,7 @@ use {
     krabka_units::prelude::{ByteSize, ByteSizeExt as _, Time, TimeExt as _},
     std::{
         mem,
+        path::PathBuf,
         sync::{Arc, PoisonError},
         time::SystemTime,
     },
@@ -681,21 +682,35 @@ impl Log {
             previous.release_sealed_tail();
         }
         self.segments.push(old);
-        let mut new_seg = Segment::create(&self.dir, new_base)?;
-        new_seg.set_io(Arc::clone(&self.io));
-        let new_txn_index = TxnIndex::open(new_seg.txn_index_path())?;
-        let old_txn_index = mem::replace(&mut self.active_txn_index, new_txn_index);
+        let (old_txn_index, stamp_index_path) = self.install_new_active_segment(new_base)?;
         self.sealed_txn_indexes.insert(old_base, old_txn_index);
-        let stamp_index_path = new_seg.stamp_index_path();
-        self.active = Some(new_seg);
         self.roll_jitter = None;
-        // The rollover flush syncs what the sealed segment's background
-        // syncs had not reached; the new segment starts with nothing unsynced.
+        self.reopen_active_stamp_index(new_base, stamp_index_path)?;
+        Ok(())
+    }
+
+    /// Make a freshly created, empty segment at `base` the active segment,
+    /// with a fresh transaction index of its own.
+    ///
+    /// Returns the transaction index the new one replaces and the path of the
+    /// new segment's stamp index. The caller settles its other sidecars and
+    /// then reopens the stamp index with [`Log::reopen_active_stamp_index`].
+    pub(super) fn install_new_active_segment(
+        &mut self,
+        base: Offset,
+    ) -> Result<(TxnIndex, PathBuf), LogError> {
+        let mut segment = Segment::create(&self.dir, base)?;
+        segment.set_io(Arc::clone(&self.io));
+        let txn_index = TxnIndex::open(segment.txn_index_path())?;
+        let previous_txn_index = mem::replace(&mut self.active_txn_index, txn_index);
+        let stamp_index_path = segment.stamp_index_path();
+        self.active = Some(segment);
+        // Whatever synced the segments before it, the new segment starts
+        // with nothing unsynced.
         #[cfg(not(target_os = "wasi"))]
         self.restart_writeback_pacing(0);
         self.dir_sync_needed = true;
-        self.reopen_active_stamp_index(new_base, stamp_index_path)?;
-        Ok(())
+        Ok((previous_txn_index, stamp_index_path))
     }
 }
 
