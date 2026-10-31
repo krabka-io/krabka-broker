@@ -14,6 +14,7 @@ use {
     krabka_units::{ByteSize, Time, convert::TimeExt as _},
     std::{
         net::{IpAddr, SocketAddr},
+        ops::ControlFlow,
         sync::Arc,
         time::Instant,
     },
@@ -144,6 +145,79 @@ fn close_reason(limit: ConnectionLimit) -> ConnectionCloseReason {
 
 async fn shutdown_connection_tasks(connections: &mut JoinSet<()>) { connections.shutdown().await; }
 
+/// Admit and serve one accepted connection, or throttle or reject it.
+///
+/// `Break` means `shutdown` fired while the accept waited out a
+/// `max.connection.creation.rate` throttle, so the accept loop must stop.
+async fn on_accept(
+    broker: &Arc<Broker>,
+    spec: &ListenerSpec,
+    shutdown: &CancellationToken,
+    connections: &mut JoinSet<()>,
+    (stream, peer): (TcpStream, SocketAddr),
+) -> ControlFlow<()> {
+    tracing::debug!(%peer, name = %spec.name, "accepted connection");
+    // Kafka's `ConnectionQuotas.protectedListener` is evaluated at each
+    // accept, so a listener added or removed while the broker runs protects or
+    // unprotects the inter-broker listener from the next connection on.
+    let accepting = AcceptingListener {
+        name: &spec.name,
+        protected: broker
+            .data_plane
+            .is_protected(&spec.name, &broker.config.inter_broker_listener_name),
+    };
+    tune_accepted_socket(
+        &stream,
+        broker.config.socket_send_buffer,
+        broker.config.socket_receive_buffer,
+    );
+
+    // The connection quotas are resolved per accept, so a dynamic change
+    // applies to the next connection without a restart. Over
+    // `max.connection.creation.rate`, broker-wide or for this listener, the
+    // acceptor waits the throttle out and then takes the connection, as
+    // Kafka's `ConnectionQuotas.waitForConnectionSlot` does.
+    let quotas = broker
+        .connections
+        .quotas(&broker.controller.current_image(), broker.config.node_id, &spec.name);
+    let delay = broker.connections.creation_delay(
+        accepting,
+        &quotas,
+        Instant::now(),
+        broker.config.connection_creation_throttle_max.to_std(),
+    );
+    if !delay.is_zero() {
+        tokio::select! {
+            () = time::sleep(delay) => {}
+            () = shutdown.cancelled() => return ControlFlow::Break(()),
+        }
+    }
+
+    match admit(broker, spec, accepting, &quotas, peer) {
+        Admission::Serve(conn_guard) => {
+            let b = Arc::clone(broker);
+            let s = spec.clone();
+            connections.spawn(async move {
+                // Hold the connection guard for the lifetime of the
+                // connection; dropping it releases the global + per-IP slots.
+                let _conn_guard = conn_guard;
+                // `Box::pin` the per-connection handler: the request dispatch
+                // state machine (68 API handlers, each now carrying a tracing
+                // span) is a legitimately large future that trips
+                // `clippy::large_futures` once held inline in this spawned
+                // task. Boxing moves it to the heap (one alloc per long-lived
+                // connection — free).
+                Box::pin(dispatch::serve_connection_on_listener(b, stream, s)).await;
+            });
+        }
+        Admission::Throttled(delay) => {
+            connections.spawn(close_after(stream, delay));
+        }
+        Admission::Rejected => drop(stream),
+    }
+    ControlFlow::Continue(())
+}
+
 /// Accept connections on `listener` until `shutdown`, then close the
 /// listener and every connection it accepted.
 pub(super) async fn accept_loop(
@@ -153,7 +227,7 @@ pub(super) async fn accept_loop(
     shutdown: CancellationToken,
 ) {
     let mut connections = JoinSet::new();
-    'accept: loop {
+    loop {
         tokio::select! {
             () = shutdown.cancelled() => {
                 tracing::info!(name = %spec.name, "listener shutting down");
@@ -168,78 +242,13 @@ pub(super) async fn accept_loop(
             }
             accept = listener.accept() => {
                 match accept {
-                    Ok((stream, peer)) => {
-                        tracing::debug!(%peer, name = %spec.name, "accepted connection");
-                        // Kafka's `ConnectionQuotas.protectedListener` is
-                        // evaluated at each accept, so a listener added or
-                        // removed while the broker runs protects or
-                        // unprotects the inter-broker listener from the
-                        // next connection on.
-                        let accepting = AcceptingListener {
-                            name: &spec.name,
-                            protected: broker
-                                .data_plane
-                                .is_protected(&spec.name, &broker.config.inter_broker_listener_name),
-                        };
-                        tune_accepted_socket(
-                            &stream,
-                            broker.config.socket_send_buffer,
-                            broker.config.socket_receive_buffer,
-                        );
-
-                        // The connection quotas are resolved per accept, so a
-                        // dynamic change applies to the next connection
-                        // without a restart. Over `max.connection.creation.rate`,
-                        // broker-wide or for this listener, the acceptor waits
-                        // the throttle out and then takes the connection, as
-                        // Kafka's `ConnectionQuotas.waitForConnectionSlot`
-                        // does.
-                        let quotas = broker
-                            .connections
-                            .quotas(&broker.controller.current_image(), broker.config.node_id, &spec.name);
-                        let delay = broker.connections.creation_delay(
-                            accepting,
-                            &quotas,
-                            Instant::now(),
-                            broker.config.connection_creation_throttle_max.to_std(),
-                        );
-                        if !delay.is_zero() {
-                            tokio::select! {
-                                () = time::sleep(delay) => {}
-                                () = shutdown.cancelled() => break 'accept,
-                            }
+                    Ok(accepted) => {
+                        if on_accept(&broker, &spec, &shutdown, &mut connections, accepted)
+                            .await
+                            .is_break()
+                        {
+                            break;
                         }
-
-                        let conn_guard = match admit(&broker, &spec, accepting, &quotas, peer) {
-                            Admission::Serve(guard) => guard,
-                            Admission::Throttled(delay) => {
-                                connections.spawn(close_after(stream, delay));
-                                continue;
-                            }
-                            Admission::Rejected => {
-                                drop(stream);
-                                continue;
-                            }
-                        };
-
-                        let b = Arc::clone(&broker);
-                        let s = spec.clone();
-                        connections.spawn(async move {
-                            // Hold the connection guard for the lifetime of the
-                            // connection; dropping it releases the global +
-                            // per-IP slots.
-                            let _conn_guard = conn_guard;
-                            // `Box::pin` the per-connection handler: the request
-                            // dispatch state machine (68 API handlers, each now
-                            // carrying a tracing span) is a legitimately large
-                            // future that trips `clippy::large_futures` once held
-                            // inline in this spawned task. Boxing moves it to the
-                            // heap (one alloc per long-lived connection — free).
-                            Box::pin(dispatch::serve_connection_on_listener(
-                                b, stream, s,
-                            ))
-                            .await;
-                        });
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, name = %spec.name, "accept failed");
