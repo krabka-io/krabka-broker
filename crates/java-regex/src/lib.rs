@@ -98,7 +98,7 @@ mod translate;
 
 use {
     self::{
-        backtrack::Program,
+        backtrack::{Program, ProgramInput},
         look_behind::{LookBehinds, Refusal, check_look_behinds},
         translate::{JavaTranslation, translate_java},
     },
@@ -224,14 +224,14 @@ impl JavaPattern {
             compile_fancy(&translated)
         };
         let names = tree.named_groups.into_iter().collect();
-        let program = Program::new(
-            &translated,
+        let program = Program::new(ProgramInput {
+            translated: &translated,
             groups,
-            &backref_folds,
-            &linebreak_atoms,
-            &group_repeats,
-            &windows,
-        );
+            folds: &backref_folds,
+            linebreak_atoms: &linebreak_atoms,
+            group_repeats: &group_repeats,
+            windows: &windows,
+        });
         // A pattern `fancy_regex` reads as Java does, or one with a node the
         // matcher does not know, keeps `fancy_regex`. The matcher answers
         // for one `fancy_regex` cannot build.
