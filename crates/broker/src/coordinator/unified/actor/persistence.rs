@@ -8,8 +8,10 @@
 
 use {
     super::{
-        FALLBACK_REBALANCE_TIMEOUT_MS_I32, FALLBACK_SESSION_TIMEOUT_MS_I32, chrono_now_ms,
+        ActorServices, FALLBACK_REBALANCE_TIMEOUT_MS_I32, FALLBACK_SESSION_TIMEOUT_MS_I32,
+        chrono_now_ms,
         pending_records::{PartitionMetadataWrite, PendingRecords},
+        regex_resolution::{Resolutions, apply_regex_result},
     },
     crate::{
         coordinator::unified::{
@@ -24,11 +26,12 @@ use {
                 GroupMetadataValue as NextGenGroupMetadataValue, MemberMetadataValue,
                 TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
             },
+            reconciler::ReconcileInput,
         },
         error::BrokerError,
     },
     krabka_protocol::primitives::uuid::Uuid,
-    std::collections::HashMap,
+    std::{collections::HashMap, sync::Arc},
 };
 
 /// Maps a member's in-memory classic facade, if there is one, into the
@@ -311,6 +314,38 @@ pub(super) async fn flush_pending(
         state.set_has_subscription_metadata_record(false);
     }
     pending.apply_to_cache(coordinator, &state.group_id);
+}
+
+impl ActorServices<'_> {
+    /// [`flush_pending`] through this actor's offsets log and coordinator.
+    pub(super) async fn flush(
+        self,
+        state: &mut GroupState,
+        pending: PendingRecords,
+        now_ms: i64,
+    ) -> Result<(), BrokerError> {
+        flush_pending(state, pending, self.offsets_log, self.coordinator, now_ms).await
+    }
+
+    /// Flushes `pending`, then applies what a regex resolution found against
+    /// the metadata `image` yields and flushes that in a batch of its own, as
+    /// Kafka's `handleRegularExpressionsResult` does. Nothing is resolved
+    /// when the first flush fails.
+    pub(super) async fn flush_with_regex_result(
+        self,
+        state: &mut GroupState,
+        pending: PendingRecords,
+        now_ms: i64,
+        resolutions: Option<Resolutions>,
+        image: impl FnOnce() -> Arc<ReconcileInput>,
+    ) -> Result<(), BrokerError> {
+        self.flush(state, pending, now_ms).await?;
+        if let Some(resolved) = resolutions {
+            let result = apply_regex_result(state, resolved, &image());
+            self.flush(state, result, chrono_now_ms()).await?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

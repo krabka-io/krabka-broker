@@ -19,10 +19,8 @@ use {
             reported_owned, try_build_member, update_member_state,
         },
         pending_records::PendingRecords,
-        persistence::{Recorder, current_assignment_value, flush_pending, target_assignment_value},
-        regex_resolution::{
-            RegexResolution, Resolutions, apply_regex_result, delete_unsubscribed_regexes,
-        },
+        persistence::{Recorder, current_assignment_value, target_assignment_value},
+        regex_resolution::{RegexResolution, Resolutions, delete_unsubscribed_regexes},
     },
     crate::{
         codes,
@@ -65,77 +63,25 @@ pub(super) async fn handle_actor_heartbeat(
     regex_resolver: &dyn TopicRegexResolver,
     reply: oneshot::Sender<ConsumerGroupHeartbeatResponse>,
 ) -> bool {
-    if let Some(classic) = group.as_classic() {
-        // Kafka's `getOrMaybeCreateConsumerGroup`: only a joining heartbeat
-        // (epoch 0) may create a consumer group over a classic one.
-        let refusal = if request.member_epoch != 0 {
-            Some(format!("Group {} is not a consumer group.", group.group_id))
-        } else if classic.members.is_empty() {
-            None
-        } else {
-            migration::validate_online_upgrade(
-                classic,
-                services.config.migration_policy.allows_upgrade(),
-                services.config.max_size,
-            )
-            .err()
-        };
-        if let Some(message) = refusal {
-            let _ = reply.send(ConsumerGroupHeartbeatResponse {
-                error_code: codes::GROUP_ID_NOT_FOUND,
-                error_message: Some(message),
-                ..Default::default()
-            });
-            return true;
-        }
+    if let Some(message) = refuse_over_classic(group, services.config, request.member_epoch) {
+        let _ = reply.send(group_id_not_found(Some(message)));
+        return true;
     }
     // Kafka's `getOrMaybeCreateConsumerGroup` writes the records that replace a
     // classic group in the heartbeat's own batch, and the whole batch fails
     // or commits together. The classic group comes back when the heartbeat
     // is refused.
-    let mut prefix: Option<PendingRecords> = None;
-    let mut classic_before: Option<GroupKind> = None;
-    if group
-        .as_classic()
-        .is_some_and(|classic| classic.members.is_empty())
-    {
-        // `maybeDeleteEmptyClassicGroup`: an empty classic group, such as one
-        // that only holds committed offsets, is deleted whatever the policy
-        // and protocol type, and a new consumer group takes its id. The
-        // committed offsets stay with the group id.
-        prefix = Some(PendingRecords {
-            classic_group_metadata_tombstone: true,
-            ..PendingRecords::default()
-        });
-        let fresh = GroupState::new(group.group_id.clone());
-        classic_before = Some(mem::replace(group.kind_mut(), GroupKind::Consumer(fresh)));
-    } else if let Some(classic) = group.as_classic() {
-        // `convertToConsumerGroup`, which refuses a member that
-        // `ConsumerGroup.fromClassicGroup` cannot carry over.
-        let new_state =
-            match migration::convert_classic_to_consumer(classic, &services.metadata.snapshot()) {
-                Ok(new_state) => new_state,
-                Err(message) => {
-                    let _ = reply.send(ConsumerGroupHeartbeatResponse {
-                        error_code: codes::GROUP_ID_NOT_FOUND,
-                        error_message: Some(message),
-                        ..Default::default()
-                    });
-                    return true;
-                }
-            };
-        prefix = Some(migration::upgrade_pending_records(&new_state));
-        classic_before = Some(mem::replace(
-            group.kind_mut(),
-            GroupKind::Consumer(new_state),
-        ));
-    }
-
+    let (prefix, classic_before) = match take_over_classic(group, services.metadata) {
+        Ok(takeover) => takeover
+            .map(|takeover| (takeover.prefix, takeover.classic_before))
+            .unzip(),
+        Err(message) => {
+            let _ = reply.send(group_id_not_found(Some(message)));
+            return true;
+        }
+    };
     let Some(state) = group.as_consumer_mut() else {
-        let _ = reply.send(ConsumerGroupHeartbeatResponse {
-            error_code: codes::GROUP_ID_NOT_FOUND,
-            ..Default::default()
-        });
+        let _ = reply.send(group_id_not_found(None));
         return true;
     };
     // A consumer group exists once the log holds it, and it stays after its
@@ -143,47 +89,12 @@ pub(super) async fn handle_actor_heartbeat(
     // a join that Kafka refused before it wrote anything, holds no group, and
     // Kafka answers any other epoch with GROUP_ID_NOT_FOUND.
     if request.member_epoch != 0 && !state.is_persisted() && state.members.is_empty() {
-        let _ = reply.send(ConsumerGroupHeartbeatResponse {
-            error_code: codes::GROUP_ID_NOT_FOUND,
-            error_message: Some(consumer_group_not_found(
-                &state.group_id,
-                request.member_epoch,
-            )),
-            ..Default::default()
-        });
+        let message = consumer_group_not_found(&state.group_id, request.member_epoch);
+        let _ = reply.send(group_id_not_found(Some(message)));
         return true;
     }
-    // Kafka's `consumerGroupFenceMembers` downgrades the group, in place of
-    // the fence, when the leaving member is its last native one.
-    if request.member_epoch == LEAVE_GROUP_MEMBER_EPOCH
-        && let Ok(member) = resolve_leaving_member(state, &request)
-    {
-        let fenced = [member.member_id.clone()];
-        if downgrades_without(state, services.config, &fenced) {
-            if let Err(error) = downgrade_fencing(
-                group,
-                &fenced,
-                services.config,
-                services.metadata,
-                services.offsets_log,
-                services.coordinator,
-            )
-            .await
-            {
-                tracing::warn!(group_id = %group.group_id, %error,
-                    "next-gen actor exiting after downgrade log-write failure");
-                let _ = reply.send(ConsumerGroupHeartbeatResponse {
-                    error_code: write_failure_code(&error),
-                    ..Default::default()
-                });
-                return false;
-            }
-            let _ = reply.send(ConsumerGroupHeartbeatResponse {
-                member_id: Some(request.member_id.clone()),
-                ..base_resp(codes::NONE, request.member_epoch)
-            });
-            return true;
-        }
+    if let Some(fenced) = downgrading_leave(state, services.config, &request) {
+        return downgrade_on_leave(group, &fenced, services, &request, reply).await;
     }
     match handle_heartbeat(state, services, &request, client, regex_resolver, prefix).await {
         Ok(response) => {
@@ -205,6 +116,123 @@ pub(super) async fn handle_actor_heartbeat(
         }
     }
     true
+}
+
+/// Kafka's `getOrMaybeCreateConsumerGroup` over a classic group: the message
+/// of its refusal, or `None` when the heartbeat may replace the group. Only a
+/// joining heartbeat (epoch 0) may create a consumer group over a classic
+/// one, and only when the classic group is empty or can upgrade online.
+fn refuse_over_classic(
+    group: &CoordinatorGroup,
+    config: &NextGenConfig,
+    member_epoch: i32,
+) -> Option<String> {
+    let classic = group.as_classic()?;
+    if member_epoch != 0 {
+        return Some(format!("Group {} is not a consumer group.", group.group_id));
+    }
+    if classic.members.is_empty() {
+        return None;
+    }
+    migration::validate_online_upgrade(
+        classic,
+        config.migration_policy.allows_upgrade(),
+        config.max_size,
+    )
+    .err()
+}
+
+/// Kafka's `consumerGroupFenceMembers` downgrades the group, in place of the
+/// fence, when the leaving member is its last native one. The member to fence
+/// when this leave downgrades the group, or `None`.
+fn downgrading_leave(
+    state: &GroupState,
+    config: &NextGenConfig,
+    request: &ConsumerGroupHeartbeatRequest,
+) -> Option<[String; 1]> {
+    if request.member_epoch != LEAVE_GROUP_MEMBER_EPOCH {
+        return None;
+    }
+    let member = resolve_leaving_member(state, request).ok()?;
+    let fenced = [member.member_id.clone()];
+    downgrades_without(state, config, &fenced).then_some(fenced)
+}
+
+/// Downgrades the group in place of fencing the leaving member and answers
+/// the leave. It returns `false` when the downgrade's log write fails, and
+/// the actor then exits.
+async fn downgrade_on_leave(
+    group: &mut CoordinatorGroup,
+    fenced: &[String],
+    services: ActorServices<'_>,
+    request: &ConsumerGroupHeartbeatRequest,
+    reply: oneshot::Sender<ConsumerGroupHeartbeatResponse>,
+) -> bool {
+    if let Err(error) = downgrade_fencing(group, fenced, services).await {
+        tracing::warn!(group_id = %group.group_id, %error,
+            "next-gen actor exiting after downgrade log-write failure");
+        let _ = reply.send(ConsumerGroupHeartbeatResponse {
+            error_code: write_failure_code(&error),
+            ..Default::default()
+        });
+        return false;
+    }
+    let _ = reply.send(ConsumerGroupHeartbeatResponse {
+        member_id: Some(request.member_id.clone()),
+        ..base_resp(codes::NONE, request.member_epoch)
+    });
+    true
+}
+
+/// A classic group that a heartbeat replaced with a consumer group.
+struct ClassicTakeover {
+    /// The records that replace the classic group, written ahead of the
+    /// heartbeat's own in one batch.
+    prefix: PendingRecords,
+    /// The classic group, restored when the heartbeat is refused.
+    classic_before: GroupKind,
+}
+
+/// Replaces a classic group with a consumer group in place, or returns
+/// `Ok(None)` when the group is not classic. It returns Kafka's message when
+/// the classic group cannot be converted.
+fn take_over_classic(
+    group: &mut CoordinatorGroup,
+    metadata: &dyn MetadataProvider,
+) -> Result<Option<ClassicTakeover>, String> {
+    let Some(classic) = group.as_classic() else {
+        return Ok(None);
+    };
+    let (prefix, state) = if classic.members.is_empty() {
+        // `maybeDeleteEmptyClassicGroup`: an empty classic group, such as one
+        // that only holds committed offsets, is deleted whatever the policy
+        // and protocol type, and a new consumer group takes its id. The
+        // committed offsets stay with the group id.
+        let prefix = PendingRecords {
+            classic_group_metadata_tombstone: true,
+            ..PendingRecords::default()
+        };
+        (prefix, GroupState::new(group.group_id.clone()))
+    } else {
+        // `convertToConsumerGroup`, which refuses a member that
+        // `ConsumerGroup.fromClassicGroup` cannot carry over.
+        let state = migration::convert_classic_to_consumer(classic, &metadata.snapshot())?;
+        (migration::upgrade_pending_records(&state), state)
+    };
+    let classic_before = mem::replace(group.kind_mut(), GroupKind::Consumer(state));
+    Ok(Some(ClassicTakeover {
+        prefix,
+        classic_before,
+    }))
+}
+
+/// The `GROUP_ID_NOT_FOUND` answer, with Kafka's message when it has one.
+fn group_id_not_found(message: Option<String>) -> ConsumerGroupHeartbeatResponse {
+    ConsumerGroupHeartbeatResponse {
+        error_code: codes::GROUP_ID_NOT_FOUND,
+        error_message: message,
+        ..Default::default()
+    }
 }
 
 /// Outcome of the pure heartbeat decision phase: the response to return to the
@@ -578,25 +606,11 @@ async fn handle_heartbeat(
         Some(prefix) => prefix.followed_by(step.pending),
         None => step.pending,
     };
-    flush_pending(
-        state,
-        pending,
-        services.offsets_log,
-        services.coordinator,
-        now_ms,
-    )
-    .await?;
-    if let Some(resolved) = step.resolutions {
-        let result = apply_regex_result(state, resolved, &services.metadata.snapshot());
-        flush_pending(
-            state,
-            result,
-            services.offsets_log,
-            services.coordinator,
-            chrono_now_ms(),
-        )
+    services
+        .flush_with_regex_result(state, pending, now_ms, step.resolutions, || {
+            services.metadata.snapshot()
+        })
         .await?;
-    }
     Ok(step.response)
 }
 
