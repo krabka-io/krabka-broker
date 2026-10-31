@@ -63,29 +63,9 @@ pub(super) async fn handle_actor_heartbeat(
     regex_resolver: &dyn TopicRegexResolver,
     reply: oneshot::Sender<ConsumerGroupHeartbeatResponse>,
 ) -> bool {
-    if let Some(classic) = group.as_classic() {
-        // Kafka's `getOrMaybeCreateConsumerGroup`: only a joining heartbeat
-        // (epoch 0) may create a consumer group over a classic one.
-        let refusal = if request.member_epoch != 0 {
-            Some(format!("Group {} is not a consumer group.", group.group_id))
-        } else if classic.members.is_empty() {
-            None
-        } else {
-            migration::validate_online_upgrade(
-                classic,
-                services.config.migration_policy.allows_upgrade(),
-                services.config.max_size,
-            )
-            .err()
-        };
-        if let Some(message) = refusal {
-            let _ = reply.send(ConsumerGroupHeartbeatResponse {
-                error_code: codes::GROUP_ID_NOT_FOUND,
-                error_message: Some(message),
-                ..Default::default()
-            });
-            return true;
-        }
+    if let Some(message) = refuse_over_classic(group, services.config, request.member_epoch) {
+        let _ = reply.send(group_id_not_found(Some(message)));
+        return true;
     }
     // Kafka's `getOrMaybeCreateConsumerGroup` writes the records that replace a
     // classic group in the heartbeat's own batch, and the whole batch fails
@@ -114,11 +94,7 @@ pub(super) async fn handle_actor_heartbeat(
             match migration::convert_classic_to_consumer(classic, &services.metadata.snapshot()) {
                 Ok(new_state) => new_state,
                 Err(message) => {
-                    let _ = reply.send(ConsumerGroupHeartbeatResponse {
-                        error_code: codes::GROUP_ID_NOT_FOUND,
-                        error_message: Some(message),
-                        ..Default::default()
-                    });
+                    let _ = reply.send(group_id_not_found(Some(message)));
                     return true;
                 }
             };
@@ -130,10 +106,7 @@ pub(super) async fn handle_actor_heartbeat(
     }
 
     let Some(state) = group.as_consumer_mut() else {
-        let _ = reply.send(ConsumerGroupHeartbeatResponse {
-            error_code: codes::GROUP_ID_NOT_FOUND,
-            ..Default::default()
-        });
+        let _ = reply.send(group_id_not_found(None));
         return true;
     };
     // A consumer group exists once the log holds it, and it stays after its
@@ -141,14 +114,8 @@ pub(super) async fn handle_actor_heartbeat(
     // a join that Kafka refused before it wrote anything, holds no group, and
     // Kafka answers any other epoch with GROUP_ID_NOT_FOUND.
     if request.member_epoch != 0 && !state.is_persisted() && state.members.is_empty() {
-        let _ = reply.send(ConsumerGroupHeartbeatResponse {
-            error_code: codes::GROUP_ID_NOT_FOUND,
-            error_message: Some(consumer_group_not_found(
-                &state.group_id,
-                request.member_epoch,
-            )),
-            ..Default::default()
-        });
+        let message = consumer_group_not_found(&state.group_id, request.member_epoch);
+        let _ = reply.send(group_id_not_found(Some(message)));
         return true;
     }
     // Kafka's `consumerGroupFenceMembers` downgrades the group, in place of
@@ -194,6 +161,39 @@ pub(super) async fn handle_actor_heartbeat(
         }
     }
     true
+}
+
+/// Kafka's `getOrMaybeCreateConsumerGroup` over a classic group: the message
+/// of its refusal, or `None` when the heartbeat may replace the group. Only a
+/// joining heartbeat (epoch 0) may create a consumer group over a classic
+/// one, and only when the classic group is empty or can upgrade online.
+fn refuse_over_classic(
+    group: &CoordinatorGroup,
+    config: &NextGenConfig,
+    member_epoch: i32,
+) -> Option<String> {
+    let classic = group.as_classic()?;
+    if member_epoch != 0 {
+        return Some(format!("Group {} is not a consumer group.", group.group_id));
+    }
+    if classic.members.is_empty() {
+        return None;
+    }
+    migration::validate_online_upgrade(
+        classic,
+        config.migration_policy.allows_upgrade(),
+        config.max_size,
+    )
+    .err()
+}
+
+/// The `GROUP_ID_NOT_FOUND` answer, with Kafka's message when it has one.
+fn group_id_not_found(message: Option<String>) -> ConsumerGroupHeartbeatResponse {
+    ConsumerGroupHeartbeatResponse {
+        error_code: codes::GROUP_ID_NOT_FOUND,
+        error_message: message,
+        ..Default::default()
+    }
 }
 
 /// Outcome of the pure heartbeat decision phase: the response to return to the
