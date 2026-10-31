@@ -181,6 +181,35 @@ fn update_metadata_health_metrics(
     metrics.set_metadata_load_error_count(controller.metadata_load_error_count());
 }
 
+/// The `min.insync.replicas` each topic in an image resolves to on one node,
+/// and the broker default for a topic the image does not name.
+struct MinimumIsr<'a> {
+    by_topic: HashMap<&'a str, i32>,
+    default: i32,
+}
+
+impl<'a> MinimumIsr<'a> {
+    fn resolve(
+        image: &'a krabka_metadata::MetadataImage,
+        node_id: krabka_metadata::NodeId,
+        default: i32,
+    ) -> Self {
+        let by_topic = image
+            .topics()
+            .map(|topic| {
+                let minimum =
+                    node_min_insync_replicas(image, node_id, &topic.name).unwrap_or(default);
+                (topic.name.as_str(), minimum)
+            })
+            .collect();
+        Self { by_topic, default }
+    }
+
+    fn for_topic(&self, topic: &str) -> i32 {
+        self.by_topic.get(topic).copied().unwrap_or(self.default)
+    }
+}
+
 /// What this broker holds locally: the partitions it hosts and the health of
 /// the directories they sit in. They travel together because one gauge pass
 /// samples both, and neither is reachable from the metadata image.
@@ -247,24 +276,14 @@ pub(super) fn spawn_broker_gauge_updater(
                 .watch_leader()
                 .borrow()
                 .is_some_and(|leader| leader == node_id);
-            let minimum_isr: HashMap<&str, i32> = image
-                .topics()
-                .map(|topic| {
-                    let minimum = node_min_insync_replicas(&image, node_id, &topic.name)
-                        .unwrap_or(default_min_insync_replicas);
-                    (topic.name.as_str(), minimum)
-                })
-                .collect();
+            let minimum_isr = MinimumIsr::resolve(&image, node_id, default_min_insync_replicas);
             let mut partition_health = (0_usize, 0_usize, 0_usize);
             let mut offline_audit = 0_usize;
             for partition in image.all_partitions() {
                 if partition.leader == node_id {
                     partition_health.0 +=
                         usize::from(partition.isr.len() < partition.replicas.len());
-                    let minimum = minimum_isr
-                        .get(partition.topic.as_str())
-                        .copied()
-                        .unwrap_or(default_min_insync_replicas);
+                    let minimum = minimum_isr.for_topic(&partition.topic);
                     partition_health.1 += usize::from(
                         i32::try_from(partition.isr.len()).unwrap_or(i32::MAX) < minimum,
                     );
@@ -338,10 +357,7 @@ pub(super) fn spawn_broker_gauge_updater(
                 let mut preferred_imbalance = 0_usize;
                 for partition in image.all_partitions() {
                     total_partitions += 1;
-                    let minimum = minimum_isr
-                        .get(partition.topic.as_str())
-                        .copied()
-                        .unwrap_or(default_min_insync_replicas);
+                    let minimum = minimum_isr.for_topic(&partition.topic);
                     if i32::try_from(partition.isr.len()).unwrap_or(i32::MAX) == minimum {
                         at_min_isr += 1;
                     }
