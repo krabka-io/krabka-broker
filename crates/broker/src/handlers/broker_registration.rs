@@ -22,6 +22,7 @@ use {
     },
     krabka_raft::RaftError,
     std::collections::HashSet,
+    tokio::sync::MutexGuard,
 };
 
 pub async fn handle(
@@ -51,24 +52,51 @@ pub async fn handle(
         Ok(admitted) => admitted,
         Err(code) => return Ok(response(code, -1)),
     };
-    let incarnation_id = admitted.incarnation_id;
     let amended = admitted.amended().is_some();
     let record = registration_record(&req, node_id, admitted);
     if amended {
-        // The same process registered again, after a lost response or a
-        // controller change. Kafka rewrites the record with the listeners and
-        // features the request carries and keeps the epoch; nothing about the
-        // broker's log changed, so no restart handling runs.
-        if let Err(error) = broker
-            .controller
-            .submit_change(vec![MetadataRecord::V1BrokerRegistration(record)])
-            .await
-        {
-            return Ok(response(raft_error_code(&error), -1));
-        }
-        return Ok(registered_response(broker, node_id, incarnation_id));
+        return Ok(amend_registration(broker, record).await);
     }
-    let clean_restart = clean_shutdown_proven(&req, version, &image, node_id);
+    Ok(register_new_incarnation(broker, &req, version, &image, record, turn).await)
+}
+
+/// Commits an amend: the same process registered again, after a lost
+/// response or a controller change.
+///
+/// Kafka rewrites the record with the listeners and features the request
+/// carries and keeps the epoch; nothing about the broker's log changed, so no
+/// restart handling runs.
+async fn amend_registration(
+    broker: &Broker,
+    record: BrokerRegistrationRecord,
+) -> BrokerRegistrationResponse {
+    let (node_id, incarnation_id) = (record.node_id, record.incarnation_id);
+    if let Err(error) = broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1BrokerRegistration(record)])
+        .await
+    {
+        return response(raft_error_code(&error), -1);
+    }
+    registered_response(broker, node_id, incarnation_id)
+}
+
+/// Commits the registration of a new incarnation, with what retiring the
+/// previous one costs, then replaces its heartbeat session and hands the
+/// partitions it leaves to unclean recovery.
+///
+/// `turn` is the registration turn `handle` took. It is held until the
+/// session is replaced, and released before the recoveries are enqueued.
+async fn register_new_incarnation(
+    broker: &Broker,
+    req: &BrokerRegistrationRequest,
+    version: ApiVersion,
+    image: &krabka_metadata::MetadataImage,
+    record: BrokerRegistrationRecord,
+    turn: MutexGuard<'_, ()>,
+) -> BrokerRegistrationResponse {
+    let (node_id, incarnation_id) = (record.node_id, record.incarnation_id);
+    let clean_restart = clean_shutdown_proven(req, version, image, node_id);
     // `ClusterControlManager.registerBroker` calls
     // `handleBrokerShutdown(id, isCleanShutdown, records)` for every new
     // incarnation, before it appends the `RegisterBrokerRecord`. KIP-966: a
@@ -83,9 +111,9 @@ pub async fn handle(
     // fencing failover computes. A broker that stopped through controlled
     // shutdown holds neither, so that branch writes nothing for it.
     let restart = if clean_restart {
-        compute_failover_changes(&image, node_id, &broker.liveness, &broker.metrics).await
+        compute_failover_changes(image, node_id, &broker.liveness, &broker.metrics).await
     } else {
-        compute_unclean_restart_changes(&image, node_id, &broker.liveness, &broker.metrics).await
+        compute_unclean_restart_changes(image, node_id, &broker.liveness, &broker.metrics).await
     };
     for (topic, partition) in &restart.unavailable {
         tracing::warn!(
@@ -98,7 +126,7 @@ pub async fn handle(
         .submit_change(registration_records(restart.changes, record))
         .await
     {
-        return Ok(response(raft_error_code(&error), -1));
+        return response(raft_error_code(&error), -1);
     }
     // The session of the previous incarnation, if there was one, belongs to
     // a process that is gone. `ClusterControlManager.registerBroker` removes
@@ -116,7 +144,7 @@ pub async fn handle(
         .enqueue_background(restart.recoveries)
         .await;
 
-    Ok(answer)
+    answer
 }
 
 /// What a registration that passed every refusal check is admitted with.
