@@ -445,14 +445,14 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
     while let Some(j) = prod_set.join_next().await {
         match j {
             Ok(t) => {
-                let _ = prod_hist.add(&t.latency);
-                prod_msgs += t.msgs;
-                prod_bytes += t.bytes;
+                let _ = prod_hist.add(&t.measurements.latency);
+                prod_msgs += t.measurements.msgs;
+                prod_bytes += t.measurements.bytes;
                 prod_dropped += t.dropped;
-                for (total, m) in prod_iv_msgs.iter_mut().zip(&t.interval_msgs) {
+                for (total, m) in prod_iv_msgs.iter_mut().zip(&t.measurements.interval_msgs) {
                     *total += *m;
                 }
-                for (total, h) in prod_iv_hist.iter_mut().zip(&t.interval_hist) {
+                for (total, h) in prod_iv_hist.iter_mut().zip(&t.measurements.interval_hist) {
                     let _ = total.add(h);
                 }
                 if t.latency_spike_max > max_spike {
@@ -961,17 +961,13 @@ const STATE_MEASURING: u8 = 1;
 const STATE_STOP: u8 = 2;
 
 struct ProducerOut {
-    latency: Histogram<u64>,
-    msgs: u64,
-    bytes: u64,
+    /// Measurement-window tallies. The interval vectors hold one entry per
+    /// slice of the [`Grid`], and are empty on a build failure.
+    measurements: TaskMeasurements,
     dropped: u64,
     recovery_unix_ms: u64,
     latency_spike_max: Time,
     error: String,
-    /// Measurement-window tallies, one per slice of the [`Grid`]. This is empty
-    /// on a build failure. `run()` merges by index with bounds checks.
-    interval_msgs: Vec<u64>,
-    interval_hist: Vec<Histogram<u64>>,
 }
 
 struct ConsumerOut {
@@ -1111,22 +1107,17 @@ impl<'a> ProducerObservations<'a> {
         shared: SharedHandles<'a>,
         histogram: &Histogram<u64>,
     ) -> Self {
-        let measurements = TaskMeasurements::new(grid.n, histogram);
         Self {
             idx,
             msg_size,
             grid,
             shared,
             output: ProducerOut {
-                latency: measurements.latency,
-                msgs: measurements.msgs,
-                bytes: measurements.bytes,
+                measurements: TaskMeasurements::new(grid.n, histogram),
                 dropped: 0,
                 recovery_unix_ms: 0,
                 latency_spike_max: Time::ZERO,
                 error: String::new(),
-                interval_msgs: measurements.interval_msgs,
-                interval_hist: measurements.interval_hist,
             },
         }
     }
@@ -1162,14 +1153,14 @@ impl<'a> ProducerObservations<'a> {
             Ok(_meta) => {
                 let latency = sent_at.elapsed().as_time();
                 if self.shared.stop.load(Ordering::Relaxed) == STATE_MEASURING {
-                    hist::record(&mut self.output.latency, latency);
-                    self.output.msgs += 1;
-                    self.output.bytes += self.msg_size;
+                    hist::record(&mut self.output.measurements.latency, latency);
+                    self.output.measurements.msgs += 1;
+                    self.output.measurements.bytes += self.msg_size;
                     let iv = self.grid.idx(Instant::now());
-                    if let Some(count) = self.output.interval_msgs.get_mut(iv) {
+                    if let Some(count) = self.output.measurements.interval_msgs.get_mut(iv) {
                         *count += 1;
                     }
-                    if let Some(histogram) = self.output.interval_hist.get_mut(iv) {
+                    if let Some(histogram) = self.output.measurements.interval_hist.get_mut(iv) {
                         hist::record(histogram, latency);
                     }
                     // Recovery and the spike are measured against the
@@ -1259,15 +1250,17 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
         .context("build producer")
     {
         Err(e) => ProducerOut {
-            latency: histogram,
-            msgs: 0,
-            bytes: 0,
+            measurements: TaskMeasurements {
+                latency: histogram,
+                interval_msgs: Vec::new(),
+                interval_hist: Vec::new(),
+                msgs: 0,
+                bytes: 0,
+            },
             dropped: 0,
             recovery_unix_ms: 0,
             latency_spike_max: Time::ZERO,
             error: format!("producer-{idx}-build: {e:#}"),
-            interval_msgs: Vec::new(),
-            interval_hist: Vec::new(),
         },
         Ok(producer) => {
             let mut tmpl = payload::template(scenario.msg_size);
@@ -1714,8 +1707,8 @@ mod tests {
 
     fn producer_counters(output: &ProducerOut) -> ProducerCounters {
         ProducerCounters {
-            messages: output.msgs,
-            bytes: output.bytes,
+            messages: output.measurements.msgs,
+            bytes: output.measurements.bytes,
             dropped: output.dropped,
         }
     }
@@ -1834,11 +1827,20 @@ mod tests {
                         dropped: measured,
                     }
             );
-            assert!(observations.output.latency.len() == measured);
-            assert!(observations.output.interval_msgs.iter().sum::<u64>() == measured);
+            assert!(observations.output.measurements.latency.len() == measured);
             assert!(
                 observations
                     .output
+                    .measurements
+                    .interval_msgs
+                    .iter()
+                    .sum::<u64>()
+                    == measured
+            );
+            assert!(
+                observations
+                    .output
+                    .measurements
                     .interval_hist
                     .iter()
                     .map(Histogram::len)
@@ -1864,7 +1866,8 @@ mod tests {
             observations.record_ack(Ok(metadata.clone()), sent_at);
             observations.record_ack(Err(ProducerError::Server(32)), sent_at);
             assert!(
-                observations.output.msgs == measured && observations.output.dropped == 2 * measured
+                observations.output.measurements.msgs == measured
+                    && observations.output.dropped == 2 * measured
             );
             assert!(first_ack.load(Ordering::SeqCst) == first_receipt);
             let first_error = observations.output.error.clone();
@@ -2132,16 +2135,22 @@ mod tests {
         assert2::assert!(producers.is_empty());
         broker.stop();
 
-        assert2::assert!(output.interval_msgs.iter().sum::<u64>() == output.msgs);
-        assert2::assert!(output.latency.len() == output.msgs);
-        assert2::assert!(output.bytes == output.msgs * 100);
+        assert2::assert!(
+            output.measurements.interval_msgs.iter().sum::<u64>() == output.measurements.msgs
+        );
+        assert2::assert!(output.measurements.latency.len() == output.measurements.msgs);
+        assert2::assert!(output.measurements.bytes == output.measurements.msgs * 100);
         if metadata_error == 0 && delivery_error == 0 {
-            assert2::assert!(output.msgs > 0);
+            assert2::assert!(output.measurements.msgs > 0);
             assert2::assert!((output.dropped, output.error.as_str()) == (0, ""));
             assert2::assert!(first_ack.load(Ordering::SeqCst) > 0);
         } else {
             assert2::assert!(
-                (output.msgs, output.bytes, first_ack.load(Ordering::SeqCst)) == (0, 0, 0)
+                (
+                    output.measurements.msgs,
+                    output.measurements.bytes,
+                    first_ack.load(Ordering::SeqCst)
+                ) == (0, 0, 0)
             );
             assert2::assert!(output.dropped > 0);
             assert2::assert!(output.error == "producer-0-err: broker error_code 29");
