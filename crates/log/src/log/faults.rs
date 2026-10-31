@@ -483,3 +483,97 @@ fn log_open_reclaims_what_an_interrupted_segment_deletion_left_behind() {
         "the surviving segments still describe the log"
     );
 }
+
+/// The two head-trimming paths that delete a run of sealed segments outside
+/// retention's tick.
+#[derive(Debug, Clone, Copy)]
+enum SealedRemoval {
+    /// `DeleteRecords`, through [`Log::trim_to_offset`].
+    Trim,
+    /// Tiered local eviction, through [`Log::delete_local_segments_through`].
+    TieredEviction,
+}
+
+/// A failed unlink in the middle of a run of sealed-segment deletions keeps
+/// the segment that is still on disk, and every one after it, in the log's
+/// own accounting, and a retry finishes the run.
+///
+/// Forgetting the whole run before unlinking it would drop the survivor from
+/// `self.segments` and from `Log::size` while its bytes stay on the
+/// filesystem, with nothing left to retry them until the next restart.
+#[yare::parameterized(
+    trim_rename_fails = { SealedRemoval::Trim, true },
+    trim_unlink_fails = { SealedRemoval::Trim, false },
+    tiered_rename_fails = { SealedRemoval::TieredEviction, true },
+    tiered_unlink_fails = { SealedRemoval::TieredEviction, false },
+)]
+fn a_failed_sealed_segment_removal_keeps_the_survivors_accounted_for(
+    removal: SealedRemoval,
+    on_rename: bool,
+) {
+    let dir = tempdir().unwrap();
+    let config = LogConfig {
+        file_delete_delay: krabka_units::millis(0),
+        ..tiny_segments()
+    };
+    let mut log = synced_sample_log(dir.path(), config, 4, 2);
+    let sealed: Vec<Offset> = log
+        .tierable_segments()
+        .iter()
+        .map(|segment| segment.base_offset)
+        .collect();
+    assert2::assert!(sealed.len() >= 3, "{sealed:?}");
+    let target = log.log_end_offset();
+    let remove = |log: &mut Log| match removal {
+        SealedRemoval::Trim => log.trim_to_offset(target).map(drop),
+        SealedRemoval::TieredEviction => log.delete_local_segments_through(target).map(drop),
+    };
+
+    // The second segment of the run is the one the disk refuses.
+    let fault = FailSegmentDeletionOnce::new(
+        &format!("{}.log", name::format_base_offset(sealed[1].0)),
+        on_rename,
+    );
+    log.test_set_io(fault);
+    let error = remove(&mut log).expect_err("a failed unlink must be reported, not discarded");
+    check!(
+        matches!(&error, LogError::Io(io) if io.kind() == ErrorKind::PermissionDenied),
+        "{removal:?}, on_rename={on_rename}: {error:?}"
+    );
+    let survivors: Vec<Offset> = log
+        .tierable_segments()
+        .iter()
+        .map(|segment| segment.base_offset)
+        .collect();
+    check!(
+        survivors == sealed[1..],
+        "{removal:?}, on_rename={on_rename}: only the segment that left the disk is forgotten"
+    );
+    check!(
+        log.size().bytes_u64() == on_disk_log_bytes(dir.path()),
+        "{removal:?}, on_rename={on_rename}: the log must still report the bytes that are really there"
+    );
+    // A trim's floor follows the prefix that did come off disk, as
+    // retention's does. A tiered eviction leaves it behind: the remote tier
+    // still answers for the evicted offsets.
+    let floor = match removal {
+        SealedRemoval::Trim => sealed[1],
+        SealedRemoval::TieredEviction => sealed[0],
+    };
+    check!(
+        log.log_start_offset() == floor,
+        "{removal:?}, on_rename={on_rename}: the floor after a partial removal"
+    );
+
+    // The fault fires once, so the retry is what a healthy disk gives.
+    log.test_set_io(file_io());
+    remove(&mut log).expect("the retry finishes the removal");
+    check!(
+        log.tierable_segments().is_empty(),
+        "{removal:?}, on_rename={on_rename}: every sealed segment is gone"
+    );
+    check!(
+        log.size().bytes_u64() == on_disk_log_bytes(dir.path()),
+        "{removal:?}, on_rename={on_rename}: the retry leaves the accounting consistent"
+    );
+}

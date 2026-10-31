@@ -9,15 +9,22 @@ use {
     proc_macro::{Delimiter, Group, TokenStream as NativeTokenStream, TokenTree},
 };
 
+/// Which projection a field group extends.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Member,
+    Group,
+}
+
 struct FieldAdditions {
     prefix: TokenStream,
     suffix: TokenStream,
 }
 
-fn additions(item: &ItemStruct, role: &str) -> Result<FieldAdditions, ParseError> {
+fn additions(item: &ItemStruct, role: Role) -> Result<FieldAdditions, ParseError> {
     let visibility = &item.vis;
     let fields = named_fields(item, "reconciliation_fields")?;
-    if role == "member" {
+    if role == Role::Member {
         return Ok(FieldAdditions {
             prefix: moxy::template! {
                 {{ visibility }} id: String,
@@ -80,12 +87,15 @@ pub fn expand(
     metadata: &TokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
-    let role = mode(metadata.clone(), ["member", "group"])?;
+    let role = mode(metadata.clone(), [
+        ("member", Role::Member),
+        ("group", Role::Group),
+    ])?;
     let parsed_tokens: TokenStream = item.clone().into();
     let parsed: ItemStruct = moxy::parse!({ parsed_tokens })?;
     let FieldAdditions { prefix, suffix } = additions(&parsed, role)?;
     let mut tokens: Vec<_> = item.into_iter().collect();
-    if role == "group" {
+    if role == Role::Group {
         let mut derived: Vec<_> = NativeTokenStream::from(group_derives())
             .into_iter()
             .collect();
@@ -106,7 +116,7 @@ pub fn expand(
     }
     let mut fields: NativeTokenStream = prefix.into();
     let original: Vec<_> = body.stream().into_iter().collect();
-    if role == "group" {
+    if role == Role::Group {
         // The typed declaration requires the first field to be members: Vec<Member>.
         // Its comma is top-level; tuple/documentation commas remain in native groups.
         let separator = original
@@ -130,7 +140,7 @@ pub fn expand(
 #[cfg(test)]
 mod tests {
     use {
-        super::{FieldAdditions, additions},
+        super::{FieldAdditions, Role, additions},
         assert2::assert,
     };
 
@@ -138,13 +148,13 @@ mod tests {
     fn member_prefix_and_group_surroundings_keep_original_order() {
         let item =
             moxy::parse!("pub struct Projection { members: Vec<Member>, extra: usize }").unwrap();
-        let FieldAdditions { prefix, suffix } = additions(&item, "group").unwrap();
+        let FieldAdditions { prefix, suffix } = additions(&item, Role::Group).unwrap();
         let prefix = prefix.to_string();
         assert!(prefix.find("group_epoch").unwrap() < prefix.find("metadata_hash").unwrap());
         assert!(prefix.find("metadata_hash").unwrap() < prefix.find("target_epoch").unwrap());
         let suffix = suffix.to_string();
         assert!(suffix.find("client_owned").unwrap() < suffix.find("advertised").unwrap());
-        let FieldAdditions { prefix, suffix } = additions(&item, "member").unwrap();
+        let FieldAdditions { prefix, suffix } = additions(&item, Role::Member).unwrap();
         assert!(suffix.is_empty());
         assert!(
             prefix.to_string().find("assigned").unwrap()
@@ -160,15 +170,15 @@ mod tests {
     )]
     fn field_groups_require_named_fields_and_a_concrete_first_member_list(declaration: &str) {
         let item = moxy::parse!({ declaration }).unwrap();
-        assert2::assert!(additions(&item, "group").is_err(), "{declaration}");
+        assert2::assert!(additions(&item, Role::Group).is_err(), "{declaration}");
     }
 
     #[test]
     fn field_groups_reject_tuple_structs_and_keep_visibility() {
         let unnamed = moxy::parse!("struct Projection(Member);").unwrap();
-        assert!(additions(&unnamed, "member").is_err());
+        assert!(additions(&unnamed, Role::Member).is_err());
         let visible = moxy::parse!("pub(super) struct Projection { target: Vec<i32> }").unwrap();
-        let fields = additions(&visible, "member").unwrap();
+        let fields = additions(&visible, Role::Member).unwrap();
         assert!(fields.prefix.to_string().contains("pub"));
         assert!(fields.prefix.to_string().contains("MemberAssignmentState"));
     }

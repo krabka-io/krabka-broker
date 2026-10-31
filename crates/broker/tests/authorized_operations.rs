@@ -26,9 +26,8 @@ use {
             BIT_ALTER, BIT_ALTER_CONFIGS, BIT_CLUSTER_ACTION, BIT_CREATE, BIT_DELETE, BIT_DESCRIBE,
             BIT_DESCRIBE_CONFIGS, BIT_IDEMPOTENT_WRITE, BIT_READ, TOPIC_FULL_MASK,
         },
-        client::connect_owned,
+        client::{connect_owned, create_topic},
         discovery::named_topic_metadata,
-        topics::{creatable_topic, create_topic_request},
         wire::{HeaderEncoding, request_body_capacity, request_frame},
     },
     assert2::assert,
@@ -116,19 +115,6 @@ fn boot_with_super_user(super_user: &str) -> impl Future<Output = Harness> {
             _tempdir: tempdir,
         }
     })
-}
-
-async fn create_topic(client: &Client, name: &str, partitions: i32) {
-    let resp = client
-        .send(create_topic_request(
-            creatable_topic()
-                .name(name.to_owned())
-                .partitions(partitions)
-                .call(),
-        ))
-        .await
-        .expect("CreateTopics");
-    assert!(resp.topics[0].error_code == 0, "topic create: {resp:?}");
 }
 
 use krabka_protocol::owned::describe_cluster_response::DescribeClusterResponse;

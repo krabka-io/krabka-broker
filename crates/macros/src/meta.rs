@@ -57,6 +57,14 @@ pub fn is_plain_async(signature: &Signature) -> bool {
     signature.asyncness.is_some() && has_plain_qualifiers(signature)
 }
 
+/// A plain async signature that also has no where clause and no variadic
+/// parameter, so its parameters are concrete.
+pub fn is_concrete_async(signature: &Signature) -> bool {
+    is_plain_async(signature)
+        && signature.generics.where_clause.is_none()
+        && signature.params.inner.variadic.is_none()
+}
+
 fn has_plain_qualifiers(signature: &Signature) -> bool {
     signature.constness.is_none()
         && signature.safety.is_none()
@@ -122,11 +130,7 @@ pub fn named_async_parameter_types(
     message: &str,
 ) -> Result<Vec<String>, ParseError> {
     let parameters = &signature.params.inner.inputs;
-    if !is_plain_async(signature)
-        || signature.generics.where_clause.is_some()
-        || signature.params.inner.variadic.is_some()
-        || parameters.len() != names.len()
-    {
+    if !is_concrete_async(signature) || parameters.len() != names.len() {
         return Err(ParseError::new(signature.span(), message));
     }
     parameters
@@ -359,6 +363,15 @@ impl FromMeta for Tokens {
     }
 }
 
+/// Whether `tokens` declare a function called `name` at their top level. Raw
+/// identifiers match their unprefixed name.
+pub fn declares_fn(tokens: &[TokenTree], name: &str) -> bool {
+    tokens.windows(2).any(|pair| {
+        matches!(pair, [keyword, item] if keyword.is_keyword_fn()
+            && item.as_ident().is_some_and(|item| item.text() == name))
+    })
+}
+
 /// An item's complete tokens and the index of its brace-delimited body.
 pub struct ItemBody {
     pub(crate) tokens: Vec<TokenTree>,
@@ -465,22 +478,24 @@ pub fn required_tokens(tokens: TokenStream, message: &str) -> Result<TokenStream
     }
 }
 
-/// Read one of the explicit modes accepted by a field-group attribute.
-pub fn mode<const N: usize>(
+/// Read one of the explicit modes accepted by a field-group attribute, as the
+/// value paired with its name.
+pub fn mode<T, const N: usize>(
     tokens: TokenStream,
-    modes: [&'static str; N],
-) -> Result<&'static str, ParseError> {
+    modes: [(&'static str, T); N],
+) -> Result<T, ParseError> {
+    let names = modes.each_ref().map(|(name, _)| *name);
     let tokens: Vec<_> = tokens.into_iter().collect();
     if let [TokenTree::Ident(name)] = tokens.as_slice()
-        && let Some(mode) = modes.into_iter().find(|mode| name == *mode)
+        && let Some((_, value)) = modes.into_iter().find(|(mode, _)| name == *mode)
     {
-        return Ok(mode);
+        return Ok(value);
     }
     Err(ParseError::new(
         Span::call_site(),
         format!(
             "expected one of {}",
-            modes.map(|mode| format!("`{mode}`")).join(", ")
+            names.map(|mode| format!("`{mode}`")).join(", ")
         ),
     ))
 }
@@ -491,11 +506,7 @@ pub fn mode_docs<const N: usize>(
     file: [&'static str; N],
     runtime: [&'static str; N],
 ) -> Result<[LitStr; N], ParseError> {
-    let docs = match mode(meta, ["file", "runtime"])? {
-        "file" => file,
-        "runtime" => runtime,
-        _ => unreachable!(),
-    };
+    let docs = mode(meta, [("file", file), ("runtime", runtime)])?;
     Ok(docs.map(|doc| LitStr::new(doc, Span::call_site())))
 }
 
@@ -592,6 +603,61 @@ mod tests {
             !is_plain_sync(&signature) && !is_plain_async(&signature),
             "{source}"
         );
+    }
+
+    #[yare::parameterized(
+        first = { "strict", "strict" },
+        second = { "open", "open" },
+    )]
+    fn modes_select_each_accepted_name(tokens: &str, expected: &str) {
+        let modes = [("strict", "strict"), ("open", "open")];
+        assert2::assert!(mode(tokens.parse().unwrap(), modes).unwrap() == expected);
+    }
+
+    #[yare::parameterized(
+        unknown_name = { "lenient" },
+        multiple_tokens = { "strict open" },
+        empty = { "" },
+        literal = { "\"strict\"" },
+    )]
+    fn modes_name_every_accepted_choice_when_rejecting(tokens: &str) {
+        let error = mode(tokens.parse().unwrap(), [("strict", ()), ("open", ())])
+            .expect_err("mode rejected");
+        assert2::assert!(
+            error.to_string() == "expected one of `strict`, `open`",
+            "{tokens}"
+        );
+    }
+
+    #[yare::parameterized(
+        plain = { "async fn perform(value: u8) {}", true },
+        sync = { "fn perform(value: u8) {}", false },
+        const_fn = { "const async fn perform() {}", false },
+        unsafe_fn = { "async unsafe fn perform() {}", false },
+        extern_fn = { "async extern \"C\" fn perform() {}", false },
+        generic = { "async fn perform<T>(value: T) {}", false },
+        where_clause = { "async fn perform() where Concrete: Trait {}", false },
+        variadic = { "async fn perform(value: u8, ...) {}", false },
+    )]
+    fn concrete_async_rejects_qualifiers_generics_where_clauses_and_variadics(
+        source: &str,
+        expected: bool,
+    ) {
+        let signature = function_signature(&source.parse().unwrap()).unwrap();
+        assert2::assert!(is_concrete_async(&signature) == expected, "{source}");
+    }
+
+    #[yare::parameterized(
+        declared = { "fn other() {} async fn publish(&self) {}", true },
+        raw_identifier = { "fn r#publish() {}", true },
+        absent = { "fn publish_keyed() {}", false },
+        not_after_fn = { "const publish: () = ();", false },
+        nested = { "mod inner { fn publish() {} }", false },
+        empty = { "", false },
+    )]
+    fn declared_functions_are_found_only_at_the_top_level(tokens: &str, expected: bool) {
+        let tokens = Vec::from(tokens.parse::<TokenStream>().unwrap());
+        assert2::assert!(declares_fn(&tokens, "publish") == expected);
     }
 
     #[test]

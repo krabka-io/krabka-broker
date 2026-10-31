@@ -459,12 +459,6 @@ async fn transaction_initialization_case_4(
 #[tokio::test]
 async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version_2() {
     use crate::api_catalog::UnstableApiVersions::{Disabled, Enabled};
-    let refused = |error_code| InitProducerIdResponse {
-        error_code,
-        producer_id: -1,
-        producer_epoch: -1,
-        ..Default::default()
-    };
     // `keepPreparedTxn` is refused as Kafka 4.3.1 refuses it unless 2PC and
     // `unstable.api.versions.enable` are both on (#784).
     for (two_phase_commit, unstable, enable_2pc, keep_prepared_txn, want) in [
@@ -496,12 +490,7 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
         let HandlerStartedBroker {
             broker: broker_handle,
             dir: _dir,
-        } = start_broker_no_audit_with(|config| {
-            config.features.transaction_two_phase_commit_enable = two_phase_commit;
-            config.features.unstable_api_versions = unstable;
-        })
-        .await;
-        wait_for_transaction_version_2(&broker_handle).await;
+        } = two_phase_commit_broker(two_phase_commit, unstable).await;
         let broker = broker_handle.broker_arc_for_test();
         krabka_macros::request_test_identity! {
             bind(principal, peer, context);
@@ -526,6 +515,98 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
              keepPreparedTxn {keep_prepared_txn}: {response:?}"
         );
         broker_handle.shutdown().await;
+    }
+}
+
+/// Kafka's `TransactionCoordinator.handleInitProducerId` refuses a
+/// `keepPreparedTxn` request that names a producer identity with
+/// `INVALID_REQUEST`, after the 2PC and `keepPreparedTxn` gates and before the
+/// timeout check and the coordinator check.
+#[tokio::test]
+async fn keep_prepared_txn_with_an_identity_is_invalid_before_the_timeout_check() {
+    let HandlerStartedBroker {
+        broker: broker_handle,
+        dir: _dir,
+    } = two_phase_commit_broker(true, UnstableApiVersions::Enabled).await;
+    let broker = broker_handle.broker_arc_for_test();
+    krabka_macros::request_test_identity! {
+        bind(principal, peer, context);
+        user ["admin"];
+        client ["txn-client"];
+    };
+    // (name, request identity, transaction timeout, expected code). No
+    // FindCoordinator ran, so this broker coordinates nothing, and `i32::MAX`
+    // is above the default maximum transaction timeout.
+    let cases = [
+        (
+            "an identity is invalid",
+            (5, 1),
+            5_000,
+            codes::INVALID_REQUEST,
+        ),
+        (
+            "an identity is invalid before an invalid timeout",
+            (5, 1),
+            i32::MAX,
+            codes::INVALID_REQUEST,
+        ),
+        (
+            "no identity reaches the timeout check",
+            (-1, -1),
+            i32::MAX,
+            codes::INVALID_TRANSACTION_TIMEOUT,
+        ),
+        (
+            "no identity reaches the coordinator check",
+            (-1, -1),
+            5_000,
+            codes::NOT_COORDINATOR,
+        ),
+    ];
+    for (name, (producer_id, producer_epoch), transaction_timeout_ms, code) in cases {
+        let request = InitProducerIdRequest {
+            transactional_id: Some("txn-keep-prepared-identity".to_owned()),
+            transaction_timeout_ms,
+            producer_id,
+            producer_epoch,
+            keep_prepared_txn: true,
+            ..Default::default()
+        };
+        let response = init_producer_id_handle(
+            &broker,
+            request,
+            init_producer_id_response::MAX_VERSION,
+            &context,
+        )
+        .await
+        .expect("answer the keepPreparedTxn request");
+        assert!(response == refused(code), "{name}: {response:?}");
+    }
+    broker_handle.shutdown().await;
+}
+
+/// A broker with `transaction.two.phase.commit.enable` and
+/// `unstable.api.versions.enable` set, once it runs at transaction version 2.
+async fn two_phase_commit_broker(
+    two_phase_commit: bool,
+    unstable: UnstableApiVersions,
+) -> HandlerStartedBroker {
+    let started = start_broker_no_audit_with(|config| {
+        config.features.transaction_two_phase_commit_enable = two_phase_commit;
+        config.features.unstable_api_versions = unstable;
+    })
+    .await;
+    wait_for_transaction_version_2(&started.broker).await;
+    started
+}
+
+/// The response that refuses an `InitProducerId` with `error_code`.
+fn refused(error_code: i16) -> InitProducerIdResponse {
+    InitProducerIdResponse {
+        error_code,
+        producer_id: -1,
+        producer_epoch: -1,
+        ..Default::default()
     }
 }
 
@@ -1149,9 +1230,9 @@ async fn find_transaction_coordinator(
 }
 
 /// A coordinator with no `__transaction_state` partition for the id answers
-/// `COORDINATOR_NOT_AVAILABLE`, at every request version. Config validation
-/// rejects a non-positive partition count, so a started broker never gets
-/// here, and the coordinator is built directly.
+/// `COORDINATOR_NOT_AVAILABLE`. Config validation rejects a non-positive
+/// partition count, so a started broker never gets here, and the coordinator
+/// is built directly.
 #[test]
 fn a_coordinator_without_state_partitions_is_not_available() {
     let coordinator = TxnCoordinator::new(
@@ -1161,16 +1242,5 @@ fn a_coordinator_without_state_partitions_is_not_available() {
         0,
         krabka_units::mebibytes(1),
     );
-    for version in [0, init_producer_id_response::MAX_VERSION] {
-        assert!(
-            coordinator_partition(&coordinator, "tid", version)
-                == Err(InitProducerIdResponse {
-                    error_code: codes::COORDINATOR_NOT_AVAILABLE,
-                    producer_id: -1,
-                    producer_epoch: -1,
-                    ..Default::default()
-                }),
-            "version {version}"
-        );
-    }
+    assert!(coordinator_partition(&coordinator, "tid") == Err(codes::COORDINATOR_NOT_AVAILABLE));
 }

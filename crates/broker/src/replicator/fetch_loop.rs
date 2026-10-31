@@ -67,23 +67,176 @@ struct Round {
     all_throttled: bool,
 }
 
+/// What one fetcher carries from one round to the next.
+struct FetcherState {
+    session: FollowerFetchSession,
+    /// The partitions whose on-disk log this fetcher has already opened. A
+    /// reconcile adds a partition to a running fetcher, and the first round
+    /// that sees it is what opens it; re-checking every partition every round
+    /// would put the registry lookup back on the per-partition path this
+    /// batching exists to leave.
+    materialized: HashSet<FollowedKey>,
+    followed: BTreeMap<FollowedKey, Arc<Config>>,
+    followed_generation: u64,
+    followed_index: FollowedIndex,
+    /// The partitions the next round replans.
+    dirty: BTreeSet<FollowedKey>,
+    /// The `current_leader_epoch` each partition was last asked about with.
+    request_epochs: HashMap<FollowedKey, i32>,
+    /// Session keys the next incremental request tells the leader to forget.
+    forgotten: Vec<SessionKey>,
+    delayed: DelayedUntil,
+    next_partition_audit: Instant,
+}
+
+impl FetcherState {
+    fn new() -> Self {
+        let followed = BTreeMap::new();
+        Self {
+            session: FollowerFetchSession::default(),
+            materialized: HashSet::new(),
+            followed_index: FollowedIndex::new(&followed),
+            followed,
+            followed_generation: 0,
+            dirty: BTreeSet::new(),
+            request_epochs: HashMap::new(),
+            forgotten: Vec::new(),
+            delayed: DelayedUntil::new(),
+            next_partition_audit: Instant::now() + PARTITION_STATE_AUDIT_INTERVAL,
+        }
+    }
+
+    /// Marks every followed partition for the next round to replan.
+    fn mark_all_dirty(&mut self) { self.dirty = self.followed.keys().cloned().collect(); }
+
+    /// Forgets the leader's session, so the next round is full and replans
+    /// every followed partition.
+    fn reset_session(&mut self) {
+        self.session.reset();
+        self.mark_all_dirty();
+    }
+
+    /// Takes over a changed membership snapshot: every partition is replanned,
+    /// the session reopens, and each newly followed partition has its local
+    /// log opened. A partition whose log cannot be opened stops being followed.
+    fn adopt_snapshot(
+        &mut self,
+        fetcher: &FetcherConfig,
+        FollowedSnapshot {
+            generation,
+            entries,
+        }: FollowedSnapshot,
+    ) {
+        self.followed_generation = generation;
+        self.followed = entries;
+        self.followed_index = FollowedIndex::new(&self.followed);
+        self.mark_all_dirty();
+        self.request_epochs
+            .retain(|key, _| self.followed.contains_key(key));
+        self.forgotten.clear();
+        self.session.reset();
+        self.materialized
+            .retain(|key| self.followed.contains_key(key));
+        for (key, cfg) in &self.followed {
+            if self.materialized.contains(key) {
+                continue;
+            }
+            if let Err(error) = ensure_local_partition(cfg) {
+                warn!(error = %error, topic = %cfg.topic, partition = cfg.partition.get(),
+                    "replicator failed to open local partition; not following it");
+                drop_partition(fetcher, key);
+                continue;
+            }
+            self.materialized.insert(key.clone());
+        }
+    }
+
+    /// Marks this round's due partitions dirty and plans the round.
+    ///
+    /// Every partition is due when the periodic audit is, and a held-back
+    /// partition is due once its hold has expired. The hold is cleared against
+    /// a fresh reading of the clock, not against `now`.
+    fn collect_due(&mut self, now: Instant) -> Round {
+        if now >= self.next_partition_audit {
+            self.dirty.extend(self.followed.keys().cloned());
+            self.next_partition_audit = now + PARTITION_STATE_AUDIT_INTERVAL;
+        }
+        self.dirty.extend(
+            self.delayed
+                .iter()
+                .filter(|(_, until)| **until <= now)
+                .map(|(key, _)| key.clone()),
+        );
+        self.delayed
+            .retain(|key, until| self.followed.contains_key(key) && *until > Instant::now());
+        plan_changed(&self.followed, &self.delayed, &self.dirty)
+    }
+
+    /// Applies what one response said about each row of the round, and
+    /// returns the longest back-off any row asked for.
+    ///
+    /// The round's rows leave `dirty`; a row the leader wants fetched again
+    /// goes back in. A full session replans every partition regardless.
+    fn apply_actions(
+        &mut self,
+        fetcher: &FetcherConfig,
+        round_keys: &[FollowedKey],
+        actions: Vec<KeyedAction>,
+    ) -> Option<Time> {
+        let replication = &fetcher.connection.replication;
+        for key in round_keys {
+            self.dirty.remove(key);
+        }
+        let mut backoff: Option<Time> = None;
+        for KeyedAction { key, action } in actions {
+            match action {
+                RowAction::Continue => {
+                    self.dirty.insert(key);
+                }
+                RowAction::Drop => {
+                    self.dirty.remove(&key);
+                    info!(topic = %key.topic, partition = key.partition.get(),
+                        "replicator.not_leader; holding the partition back until \
+                         the metadata image settles");
+                    self.delayed.insert(
+                        key.clone(),
+                        Instant::now() + replication.epoch_fence_backoff.to_std(),
+                    );
+                    if let Some(cfg) = self.followed.get(&key) {
+                        self.forgotten.push(session_key(cfg));
+                    }
+                    // The leader's cached set still holds it; the next round
+                    // forgets it, which is what the session handler does with
+                    // a key that left the wanted set.
+                }
+                RowAction::Backoff(delay) => {
+                    self.dirty.insert(key);
+                    backoff = Some(match backoff {
+                        Some(current) if current > delay => current,
+                        _ => delay,
+                    });
+                }
+                RowAction::Offline => {
+                    // The next round sees the smaller membership, re-opens the
+                    // session without the partition, and the supervisor does
+                    // not hand it back while its log directory is offline.
+                    self.dirty.remove(&key);
+                    warn!(topic = %key.topic, partition = key.partition.get(),
+                        "replicator: log directory offline; no longer following the partition");
+                    drop_partition(fetcher, &key);
+                }
+            }
+        }
+        if self.session.is_full() {
+            self.mark_all_dirty();
+        }
+        backoff
+    }
+}
+
 pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), String> {
     let replication = &fetcher.connection.replication;
-    let mut session = FollowerFetchSession::default();
-    // The partitions whose on-disk log this fetcher has already opened. A
-    // reconcile adds a partition to a running fetcher, and the first round
-    // that sees it is what opens it; re-checking every partition every round
-    // would put the registry lookup back on the per-partition path this
-    // batching exists to leave.
-    let mut materialized: HashSet<FollowedKey> = HashSet::new();
-    let mut followed = BTreeMap::new();
-    let mut followed_generation = 0;
-    let mut followed_index = FollowedIndex::new(&followed);
-    let mut dirty = BTreeSet::new();
-    let mut request_epochs = HashMap::new();
-    let mut forgotten = Vec::new();
-    let mut delayed: DelayedUntil = DelayedUntil::new();
-    let mut next_partition_audit = Instant::now() + PARTITION_STATE_AUDIT_INTERVAL;
+    let mut state = FetcherState::new();
     // The leader connection, dialled lazily. Opening the local logs must not
     // wait behind the dial: a follower whose leader is not accepting yet still
     // has to have its replicas on disk, because the ISR report, a later
@@ -97,48 +250,16 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             return Ok(());
         }
 
-        if let Some(FollowedSnapshot {
-            generation,
-            entries,
-        }) = fetcher.followed.snapshot_if_changed(followed_generation)
+        if let Some(snapshot) = fetcher
+            .followed
+            .snapshot_if_changed(state.followed_generation)
         {
-            followed_generation = generation;
-            followed = entries;
-            followed_index = FollowedIndex::new(&followed);
-            dirty = followed.keys().cloned().collect();
-            request_epochs.retain(|key, _| followed.contains_key(key));
-            forgotten.clear();
-            session.reset();
-            materialized.retain(|key| followed.contains_key(key));
-            for (key, cfg) in &followed {
-                if materialized.contains(key) {
-                    continue;
-                }
-                if let Err(error) = ensure_local_partition(cfg) {
-                    warn!(error = %error, topic = %cfg.topic, partition = cfg.partition.get(),
-                        "replicator failed to open local partition; not following it");
-                    drop_partition(fetcher, key);
-                    continue;
-                }
-                materialized.insert(key.clone());
-            }
+            state.adopt_snapshot(fetcher, snapshot);
         }
 
-        let now = Instant::now();
-        if now >= next_partition_audit {
-            dirty.extend(followed.keys().cloned());
-            next_partition_audit = now + PARTITION_STATE_AUDIT_INTERVAL;
-        }
-        dirty.extend(
-            delayed
-                .iter()
-                .filter(|(_, until)| **until <= now)
-                .map(|(key, _)| key.clone()),
-        );
-        delayed.retain(|key, until| followed.contains_key(key) && *until > Instant::now());
-        let round = plan_changed(&followed, &delayed, &dirty);
+        let round = state.collect_due(Instant::now());
         if round.entries.is_empty()
-            && (session.is_full() || followed.is_empty() || round.all_throttled)
+            && (state.session.is_full() || state.followed.is_empty() || round.all_throttled)
         {
             // Nothing to ask for: either this fetcher follows nothing yet, or
             // every partition it follows is out of throttle budget. Wait, and
@@ -159,12 +280,14 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             None => client.insert(connect_with_backoff(fetcher).await?),
         };
         for (key, entry) in round.keys.iter().zip(&round.entries) {
-            request_epochs.insert(key.clone(), entry.request_leader_epoch);
+            state
+                .request_epochs
+                .insert(key.clone(), entry.request_leader_epoch);
         }
-        let removed = mem::take(&mut forgotten);
+        let removed = mem::take(&mut state.forgotten);
         let request = RawFetchRequest(build_fetch_request(
             fetcher,
-            &mut session,
+            &mut state.session,
             round.wanted,
             &removed,
         ));
@@ -180,16 +303,14 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             // Drop the session with the connection; the next round is full.
             Err(ClientError::Disconnected | ClientError::Io(_)) => {
                 client = None;
-                session.reset();
-                dirty = followed.keys().cloned().collect();
+                state.reset_session();
                 continue;
             }
             Err(e) => {
                 warn!(error = %e,
                     "replicator: client.send unexpected error; retrying after backoff");
                 client = None;
-                session.reset();
-                dirty = followed.keys().cloned().collect();
+                state.reset_session();
                 if sleep_or_cancel(&fetcher.shutdown, replication.send_error_backoff)
                     .await
                     .is_err()
@@ -200,9 +321,12 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             }
         };
 
-        if session.handle_response(resp.error_code, resp.session_id) == SessionOutcome::SessionLost
+        if state
+            .session
+            .handle_response(resp.error_code, resp.session_id)
+            == SessionOutcome::SessionLost
         {
-            dirty = followed.keys().cloned().collect();
+            state.mark_all_dirty();
             info!(
                 leader_node_id = fetcher.leader_node_id.0,
                 error_code = resp.error_code,
@@ -211,53 +335,9 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             continue;
         }
 
-        let actions = apply_response_indexed(&mut resp, &followed_index, &request_epochs).await;
-        for key in &round.keys {
-            dirty.remove(key);
-        }
-        let mut backoff: Option<Time> = None;
-        for KeyedAction { key, action } in actions {
-            match action {
-                RowAction::Continue => {
-                    dirty.insert(key);
-                }
-                RowAction::Drop => {
-                    dirty.remove(&key);
-                    info!(topic = %key.topic, partition = key.partition.get(),
-                        "replicator.not_leader; holding the partition back until \
-                         the metadata image settles");
-                    delayed.insert(
-                        key.clone(),
-                        Instant::now() + replication.epoch_fence_backoff.to_std(),
-                    );
-                    if let Some(cfg) = followed.get(&key) {
-                        forgotten.push(session_key(cfg));
-                    }
-                    // The leader's cached set still holds it; the next round
-                    // forgets it, which is what the session handler does with
-                    // a key that left the wanted set.
-                }
-                RowAction::Backoff(delay) => {
-                    dirty.insert(key);
-                    backoff = Some(match backoff {
-                        Some(current) if current > delay => current,
-                        _ => delay,
-                    });
-                }
-                RowAction::Offline => {
-                    // The next round sees the smaller membership, re-opens the
-                    // session without the partition, and the supervisor does
-                    // not hand it back while its log directory is offline.
-                    dirty.remove(&key);
-                    warn!(topic = %key.topic, partition = key.partition.get(),
-                        "replicator: log directory offline; no longer following the partition");
-                    drop_partition(fetcher, &key);
-                }
-            }
-        }
-        if session.is_full() {
-            dirty = followed.keys().cloned().collect();
-        }
+        let actions =
+            apply_response_indexed(&mut resp, &state.followed_index, &state.request_epochs).await;
+        let backoff = state.apply_actions(fetcher, &round.keys, actions);
         if let Some(delay) = backoff
             && sleep_or_cancel(&fetcher.shutdown, delay).await.is_err()
         {
@@ -431,7 +511,7 @@ mod tests {
         crate::{
             codes::NONE,
             replicator::{
-                FollowedPartitions,
+                FollowedPartitions, FollowedPartitionsState,
                 test_support::{
                     ConfigWithDir, LEADER_ID, NODE_ID, PARTITION, TOPIC, WIRE_TOPIC_ID,
                     image_with_follower_throttle, image_with_leader, test_config,
@@ -442,7 +522,7 @@ mod tests {
         krabka_protocol::primitives::uuid::Uuid as WireUuid,
         krabka_raft::NodeId,
         krabka_units::{bytes, millis},
-        std::{collections::BTreeSet, iter, time::Duration},
+        std::{collections::BTreeSet, iter, slice, time::Duration},
         tokio::{time, time::Instant},
         tokio_util::sync::CancellationToken,
     };
@@ -795,6 +875,174 @@ mod tests {
 
         shutdown.cancel();
         let _ = task.await;
+    }
+
+    /// A state following `followed` over an incremental session, so a test
+    /// sees what one step does without a full session re-marking everything.
+    fn incremental_state(followed: BTreeMap<FollowedKey, Arc<Config>>) -> FetcherState {
+        let mut state = FetcherState::new();
+        state.followed = followed;
+        state.session.handle_response(NONE, 77);
+        assert!(!state.session.is_full());
+        state
+    }
+
+    #[test]
+    fn resetting_the_session_reopens_it_and_replans_every_partition() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let key = followed_key(&cfg);
+        let mut state = incremental_state(followed_partition(cfg));
+
+        state.reset_session();
+
+        check!(state.session.is_full());
+        check!(state.dirty == BTreeSet::from([key]));
+    }
+
+    /// A partition whose hold-back has expired is replanned, and the hold is
+    /// cleared. The paused clock keeps the periodic audit from firing, so the
+    /// expiry is what marks it.
+    #[tokio::test(start_paused = true)]
+    async fn an_expired_hold_back_is_replanned_and_cleared() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let key = followed_key(&cfg);
+        let mut state = incremental_state(followed_partition(cfg));
+        let now = Instant::now();
+        state.delayed.insert(key.clone(), now);
+
+        state.collect_due(now);
+
+        check!(state.dirty == BTreeSet::from([key]));
+        check!(state.delayed.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_hold_back_that_has_not_expired_stays() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let key = followed_key(&cfg);
+        let mut state = incremental_state(followed_partition(cfg));
+        let now = Instant::now();
+        let until = now + Duration::from_secs(1);
+        state.delayed.insert(key.clone(), until);
+
+        state.collect_due(now);
+
+        check!(state.dirty.is_empty());
+        check!(state.delayed == DelayedUntil::from([(key, until)]));
+    }
+
+    fn keyed(key: &FollowedKey, action: RowAction) -> KeyedAction {
+        KeyedAction {
+            key: key.clone(),
+            action,
+        }
+    }
+
+    /// A key on another topic, which no test fetcher follows. Only the
+    /// `Backoff` arm sees it, and that arm never looks the key up.
+    fn other_topic_key(key: &FollowedKey, topic: &str) -> FollowedKey {
+        FollowedKey {
+            topic: Arc::from(topic),
+            partition: key.partition,
+        }
+    }
+
+    /// A row the leader disowned leaves `dirty`, is held back for the epoch
+    /// fence back-off, and goes on the list the next request forgets. The
+    /// round key list is empty so that the `Drop` arm is what clears `dirty`.
+    #[tokio::test(start_paused = true)]
+    async fn a_dropped_row_is_forgotten_and_held_back() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let fetcher = test_fetcher(&cfg, FollowedPartitions::default());
+        let key = followed_key(&cfg);
+        let forgotten = vec![session_key(&cfg)];
+        let mut state = incremental_state(followed_partition(cfg));
+        state.dirty.insert(key.clone());
+
+        let backoff = state.apply_actions(&fetcher, &[], vec![keyed(&key, RowAction::Drop)]);
+
+        let until = Instant::now() + fetcher.connection.replication.epoch_fence_backoff.to_std();
+        check!(backoff.is_none());
+        check!(state.dirty.is_empty());
+        check!(state.forgotten == forgotten);
+        check!(state.delayed == DelayedUntil::from([(key, until)]));
+    }
+
+    /// A row whose log directory went offline is no longer followed, so the
+    /// supervisor's shared membership loses it as well as `dirty`.
+    #[tokio::test]
+    async fn an_offline_row_stops_being_followed() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let key = followed_key(&cfg);
+        let followed = followed_partition(cfg);
+        let shared: FollowedPartitions = Arc::new(FollowedPartitionsState::new(followed.clone()));
+        let fetcher = test_fetcher(
+            followed.values().next().expect("one partition"),
+            Arc::clone(&shared),
+        );
+        let mut state = incremental_state(followed);
+        state.dirty.insert(key.clone());
+
+        let backoff = state.apply_actions(&fetcher, &[], vec![keyed(&key, RowAction::Offline)]);
+
+        check!(backoff.is_none());
+        check!(state.dirty.is_empty());
+        check!(state.forgotten.is_empty());
+        check!(shared.lock().expect("followed").is_empty());
+    }
+
+    /// Every row asking for a back-off stays dirty, and the round waits for
+    /// the longest of them, wherever it falls in the response.
+    #[tokio::test]
+    async fn the_longest_backoff_wins_and_its_rows_stay_dirty() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let fetcher = test_fetcher(&cfg, FollowedPartitions::default());
+        let key = followed_key(&cfg);
+        let second = other_topic_key(&key, "second");
+        let third = other_topic_key(&key, "third");
+        let mut state = incremental_state(followed_partition(cfg));
+
+        let backoff = state.apply_actions(&fetcher, &[], vec![
+            keyed(&key, RowAction::Backoff(millis(3))),
+            keyed(&second, RowAction::Backoff(millis(7))),
+            keyed(&third, RowAction::Backoff(millis(2))),
+        ]);
+
+        check!(backoff == Some(millis(7)));
+        check!(state.dirty == BTreeSet::from([key, second, third]));
+    }
+
+    /// The round's rows leave `dirty`, but a session that is still full
+    /// replans every followed partition anyway.
+    #[tokio::test]
+    async fn a_full_session_replans_every_followed_partition() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let fetcher = test_fetcher(&cfg, FollowedPartitions::default());
+        let key = followed_key(&cfg);
+        let mut state = FetcherState::new();
+        state.followed = followed_partition(cfg);
+        state.dirty.insert(key.clone());
+
+        let backoff = state.apply_actions(&fetcher, slice::from_ref(&key), Vec::new());
+
+        check!(state.session.is_full());
+        check!(backoff.is_none());
+        check!(state.dirty == BTreeSet::from([key]));
+    }
+
+    /// The same round over an incremental session leaves its rows clean.
+    #[tokio::test]
+    async fn an_incremental_session_clears_the_rounds_rows() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let fetcher = test_fetcher(&cfg, FollowedPartitions::default());
+        let key = followed_key(&cfg);
+        let mut state = incremental_state(followed_partition(cfg));
+        state.dirty.insert(key.clone());
+
+        let backoff = state.apply_actions(&fetcher, slice::from_ref(&key), Vec::new());
+
+        check!(backoff.is_none());
+        check!(state.dirty.is_empty());
     }
 
     /// `WireUuid` is only here to keep the import used when the assertions

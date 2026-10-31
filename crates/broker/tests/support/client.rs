@@ -104,6 +104,34 @@ pub async fn connect_with_context(
 pub async fn connect_owned(bootstrap: impl AsRef<str>, client_id: &str, context: &str) -> Client {
     connect_with_context(bootstrap, Some(client_id), context).await
 }
+
+/// Open one connection to the broker that binds `address`, past any relay
+/// or metadata routing, so a request reaches that broker and no other.
+///
+/// # Panics
+/// Panics if the connection or its `ApiVersions` bootstrap fails.
+pub async fn raw_connection(address: SocketAddr, client_id: &str) -> Connection {
+    raw_connection_with_context(address, client_id, "connect").await
+}
+
+/// Open one connection to `address`, keeping the fixture's diagnostic.
+///
+/// # Panics
+/// Panics with `context` if the connection or its `ApiVersions` bootstrap
+/// fails.
+pub async fn raw_connection_with_context(
+    address: SocketAddr,
+    client_id: &str,
+    context: &str,
+) -> Connection {
+    Connection::connect(address, ConnectionOptions {
+        client_id: client_id.to_owned(),
+        ..ConnectionOptions::default()
+    })
+    .await
+    .expect(context)
+}
+
 pub async fn create_topic(client: &Client, topic: &str, partitions: i32) {
     create_topic_with(client, CreateTopicSetup {
         topic,
@@ -282,12 +310,8 @@ pub async fn metadata_fetch(
     client_id: &str,
     from: i64,
 ) -> KrabkaMetadataFetchResponse {
-    let connection = Connection::connect(controller, ConnectionOptions {
-        client_id: client_id.to_owned(),
-        ..Default::default()
-    })
-    .await
-    .expect("dial the controller listener");
+    let connection =
+        raw_connection_with_context(controller, client_id, "dial the controller listener").await;
     let mut body = Vec::new();
     KrabkaMetadataFetchRequest {
         fetch_offset: from,
