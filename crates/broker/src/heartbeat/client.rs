@@ -25,7 +25,11 @@ use {
     krabka_client_core::ConnectionOptions,
     krabka_metadata::{MetadataImage, metadata_version},
     krabka_protocol::{
-        owned::broker_heartbeat_request::BrokerHeartbeatRequest, primitives::uuid::Uuid,
+        owned::{
+            broker_heartbeat_request::BrokerHeartbeatRequest,
+            broker_heartbeat_response::BrokerHeartbeatResponse,
+        },
+        primitives::uuid::Uuid,
     },
     krabka_security::ListenerProtocol,
     krabka_units::{Time, convert::TimeExt as _, fmt::Human as _, millis, secs},
@@ -248,6 +252,63 @@ struct HeartbeatState {
     controlled_shutdown_answered: bool,
 }
 
+/// What the heartbeat loop does after the controller answers a heartbeat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResponseOutcome {
+    /// The controller refused the heartbeat. The tick ends at once, without
+    /// the post-send log-dir check. The connection stays open unless the
+    /// controller answered `NOT_CONTROLLER`.
+    Rejected { keep_channel: bool },
+    /// The controller accepted the heartbeat, and the connection stays open.
+    /// `recheck_soon` asks for the next heartbeat after
+    /// [`CONTROLLED_SHUTDOWN_RECHECK`] rather than one interval.
+    Accepted { recheck_soon: bool },
+}
+
+/// Applies the controller's answer to a heartbeat that asked to shut down
+/// when `want_shut_down`: it moves the initial unfence, latches
+/// `should_shutdown` and updates `state`.
+fn apply_response(
+    cfg: &Config,
+    state: &mut HeartbeatState,
+    want_shut_down: bool,
+    r: &BrokerHeartbeatResponse,
+) -> ResponseOutcome {
+    if r.error_code == CLUSTER_AUTHORIZATION_FAILED {
+        cfg.unfenced.send_if_modified(|state| {
+            let pending = *state == InitialUnfence::Pending;
+            if pending {
+                *state = InitialUnfence::Refused;
+            }
+            pending
+        });
+    }
+    if r.error_code != NONE {
+        warn!(
+            error_code = r.error_code,
+            "heartbeat rejected by controller"
+        );
+        return ResponseOutcome::Rejected {
+            keep_channel: r.error_code != NOT_CONTROLLER,
+        };
+    }
+    state.caught_up |= r.is_caught_up;
+    if !r.is_fenced {
+        cfg.unfenced.send_replace(InitialUnfence::Unfenced);
+    }
+    if r.should_shut_down {
+        // Latch true; never flip back. The `BrokerHandle::controlled_shutdown`
+        // waiter is single-shot.
+        let _ = cfg.should_shutdown.send(true);
+    } else if want_shut_down && !state.controlled_shutdown_answered {
+        state.controlled_shutdown_answered = true;
+        return ResponseOutcome::Accepted { recheck_soon: true };
+    }
+    ResponseOutcome::Accepted {
+        recheck_soon: false,
+    }
+}
+
 /// The controller leader, and the controller-listener endpoint the metadata
 /// names for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -411,42 +472,22 @@ pub async fn run(mut cfg: Config) {
         )
         .await;
         match resp {
-            Ok(Ok(r)) => {
-                if r.error_code == NOT_CONTROLLER {
-                    open.connection.close();
-                } else {
-                    channel = Some(open);
-                }
-                if r.error_code == CLUSTER_AUTHORIZATION_FAILED {
-                    cfg.unfenced.send_if_modified(|state| {
-                        let pending = *state == InitialUnfence::Pending;
-                        if pending {
-                            *state = InitialUnfence::Refused;
-                        }
-                        pending
-                    });
-                }
-                if r.error_code != NONE {
-                    warn!(
-                        error_code = r.error_code,
-                        "heartbeat rejected by controller"
-                    );
+            Ok(Ok(r)) => match apply_response(&cfg, &mut state, want_shut_down, &r) {
+                ResponseOutcome::Rejected { keep_channel } => {
+                    if keep_channel {
+                        channel = Some(open);
+                    } else {
+                        open.connection.close();
+                    }
                     continue;
                 }
-                state.caught_up |= r.is_caught_up;
-                if !r.is_fenced {
-                    cfg.unfenced.send_replace(InitialUnfence::Unfenced);
+                ResponseOutcome::Accepted { recheck_soon } => {
+                    channel = Some(open);
+                    if recheck_soon {
+                        tick.reset_after(CONTROLLED_SHUTDOWN_RECHECK);
+                    }
                 }
-                if r.should_shut_down {
-                    // Latch true; never flip back. The
-                    // `BrokerHandle::controlled_shutdown` waiter is
-                    // single-shot.
-                    let _ = cfg.should_shutdown.send(true);
-                } else if want_shut_down && !state.controlled_shutdown_answered {
-                    state.controlled_shutdown_answered = true;
-                    tick.reset_after(CONTROLLED_SHUTDOWN_RECHECK);
-                }
-            }
+            },
             Ok(Err(e)) => {
                 warn!(error = %e, "heartbeat send failed");
                 open.connection.close();
@@ -477,7 +518,7 @@ mod tests {
     use {
         super::*,
         crate::{
-            codes::{CLUSTER_AUTHORIZATION_FAILED, NONE, NOT_CONTROLLER},
+            codes::{CLUSTER_AUTHORIZATION_FAILED, NONE, NOT_CONTROLLER, STALE_BROKER_EPOCH},
             cordoned_log_dirs::CordonedLogDirs,
             features::METADATA_VERSION,
             log_dir_id::LogDirIds,
@@ -844,6 +885,162 @@ mod tests {
         check!(*told.borrow());
         check!(supervisor.is_cancelled());
         check!(controller.heartbeats() == 0);
+    }
+
+    // Everything `apply_response` changes, compared whole.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Applied {
+        outcome: ResponseOutcome,
+        state: HeartbeatState,
+        unfence: InitialUnfence,
+        told_to_shut_down: bool,
+    }
+
+    // Applies `response` to a client in `before` whose initial unfence stands
+    // at `unfence`.
+    fn apply(
+        before: HeartbeatState,
+        unfence: InitialUnfence,
+        want_shut_down: bool,
+        response: &BrokerHeartbeatResponse,
+    ) -> Applied {
+        let source = registered_broker_source();
+        let shutdown = CancellationToken::new();
+        let (_want_shutdown, want_shutdown) = watch::channel(want_shut_down);
+        let cfg = heartbeat_config()
+            .source(&source)
+            .shutdown(&shutdown)
+            .interval(secs(1))
+            .controllers(&[])
+            .want_shutdown(want_shutdown)
+            .unfenced(watch::channel(unfence).0)
+            .call();
+        let told = cfg.should_shutdown.subscribe();
+        let mut state = before;
+        let outcome = apply_response(&cfg, &mut state, want_shut_down, response);
+        Applied {
+            outcome,
+            state,
+            unfence: *cfg.unfenced.borrow(),
+            told_to_shut_down: *told.borrow(),
+        }
+    }
+
+    /// Kafka's `BrokerLifecycleManager` heartbeat response handler: an error
+    /// answer changes nothing but the authorization refusal, and closes the
+    /// connection only on `NOT_CONTROLLER`; an accepted answer latches the
+    /// catch-up, the unfencing and the shutdown, and the first one to a
+    /// shutdown request asks again soon.
+    #[test]
+    fn apply_response_follows_the_lifecycle_rules() {
+        let fresh = HeartbeatState::default();
+        let caught_up = HeartbeatState {
+            caught_up: true,
+            ..fresh
+        };
+        let answered = HeartbeatState {
+            controlled_shutdown_answered: true,
+            ..fresh
+        };
+        let fenced = |error_code| BrokerHeartbeatResponse {
+            error_code,
+            is_fenced: true,
+            ..Default::default()
+        };
+        // Every flag that an accepted answer would act on.
+        let eager = |error_code| BrokerHeartbeatResponse {
+            error_code,
+            is_caught_up: true,
+            is_fenced: false,
+            should_shut_down: true,
+            ..Default::default()
+        };
+        let accepted = |recheck_soon| ResponseOutcome::Accepted { recheck_soon };
+        let rejected = |keep_channel| ResponseOutcome::Rejected { keep_channel };
+        let applied = |outcome, state, unfence, told_to_shut_down| Applied {
+            outcome,
+            state,
+            unfence,
+            told_to_shut_down,
+        };
+        let pending = InitialUnfence::Pending;
+        let unfenced = InitialUnfence::Unfenced;
+        let refused = InitialUnfence::Refused;
+        let cases = [
+            (
+                "accepted, caught up and unfenced",
+                (fresh, pending, false),
+                BrokerHeartbeatResponse {
+                    is_caught_up: true,
+                    is_fenced: false,
+                    ..fenced(NONE)
+                },
+                applied(accepted(false), caught_up, unfenced, false),
+            ),
+            (
+                "accepted while fenced",
+                (fresh, pending, false),
+                fenced(NONE),
+                applied(accepted(false), fresh, pending, false),
+            ),
+            (
+                "the catch-up is never cleared",
+                (caught_up, pending, false),
+                fenced(NONE),
+                applied(accepted(false), caught_up, pending, false),
+            ),
+            (
+                "told to shut down",
+                (fresh, pending, true),
+                BrokerHeartbeatResponse {
+                    should_shut_down: true,
+                    ..fenced(NONE)
+                },
+                applied(accepted(false), fresh, pending, true),
+            ),
+            (
+                "the first answer to a shutdown request",
+                (fresh, pending, true),
+                fenced(NONE),
+                applied(accepted(true), answered, pending, false),
+            ),
+            (
+                "a later answer to a shutdown request",
+                (answered, pending, true),
+                fenced(NONE),
+                applied(accepted(false), answered, pending, false),
+            ),
+            (
+                "NOT_CONTROLLER",
+                (fresh, pending, true),
+                eager(NOT_CONTROLLER),
+                applied(rejected(false), fresh, pending, false),
+            ),
+            (
+                "CLUSTER_AUTHORIZATION_FAILED before unfencing",
+                (fresh, pending, true),
+                eager(CLUSTER_AUTHORIZATION_FAILED),
+                applied(rejected(true), fresh, refused, false),
+            ),
+            (
+                "CLUSTER_AUTHORIZATION_FAILED after unfencing",
+                (fresh, unfenced, false),
+                eager(CLUSTER_AUTHORIZATION_FAILED),
+                applied(rejected(true), fresh, unfenced, false),
+            ),
+            (
+                "another error",
+                (fresh, pending, true),
+                eager(STALE_BROKER_EPOCH),
+                applied(rejected(true), fresh, pending, false),
+            ),
+        ];
+        for (label, (before, unfence, want_shut_down), response, want) in cases {
+            check!(
+                apply(before, unfence, want_shut_down, &response) == want,
+                "{label}"
+            );
+        }
     }
 
     #[test]
