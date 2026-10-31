@@ -423,13 +423,37 @@ fn fenced(tp: &TopicIdPartition, ex: &SegmentExport, when: &str) {
 /// segment UUID, so its keys cannot collide with theirs. This residue is
 /// exactly what the WORM verifier reports as `orphan_objects`: unreferenced
 /// bytes are the standing cost of a tier that can take nothing back.
+///
+/// # A failed delete on a mutable tier
+///
+/// The RSM delete counts as one KIP-405 `RemoteDeleteRequestsPerSec`. When it
+/// fails, the rollback warns and counts a `RemoteDeleteErrorsPerSec`, but still
+/// drops the metadata: nothing retries the delete, and the failed copy's
+/// objects stay in the tier unreferenced, as Kafka's copy task leaves them when
+/// its own cleanup delete fails. A delete of objects the copy never wrote
+/// succeeds, since the RSM contract makes it idempotent.
 async fn rollback(tier: &RemoteTier<'_>, metadata: &RemoteLogSegmentMetadata, broker_id: i32) {
     let id = metadata.remote_log_segment_id().clone();
+    let tp = &id.topic_id_partition;
     match tier.archive {
         ArchiveMode::Mutable => {
+            tier.metrics
+                .record_remote_request(RemoteTierPath::Delete, &tp.topic);
             let rsm_del = Arc::clone(tier.rsm);
             let md_del = metadata.clone();
-            let _ = spawn_blocking(move || rsm_del.delete_log_segment_data(&md_del)).await;
+            let failure =
+                match spawn_blocking(move || rsm_del.delete_log_segment_data(&md_del)).await {
+                    Ok(Ok(())) => None,
+                    Ok(Err(e)) => Some(e.to_string()),
+                    Err(e) => Some(format!("RSM delete task panicked: {e}")),
+                };
+            if let Some(error) = failure {
+                warn!(topic = %tp.topic, partition = tp.partition, base = metadata.start_offset(),
+                      error, "remote-log-manager: failed to delete a failed copy's objects; \
+                              they stay in the tier unreferenced");
+                tier.metrics
+                    .record_remote_error(RemoteTierPath::Delete, &tp.topic);
+            }
         }
         ArchiveMode::WriteOnce => {
             debug!(topic = %id.topic_id_partition.topic,
@@ -443,7 +467,15 @@ async fn rollback(tier: &RemoteTier<'_>, metadata: &RemoteLogSegmentMetadata, br
         RemoteLogSegmentState::DeleteSegmentStarted,
         RemoteLogSegmentState::DeleteSegmentFinished,
     ] {
-        let _ = super::rlmm::update_segment(tier.rlmm, id.clone(), None, state, broker_id).await;
+        // A segment deleted under the copy is already `DeleteSegmentStarted`,
+        // so that update fails as expected; hence DEBUG.
+        if let Err(e) =
+            super::rlmm::update_segment(tier.rlmm, id.clone(), None, state, broker_id).await
+        {
+            debug!(topic = %tp.topic, partition = tp.partition, base = metadata.start_offset(),
+                   ?state, error = %e,
+                   "remote-log-manager: rollback could not record a delete state");
+        }
     }
 }
 
