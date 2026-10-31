@@ -699,9 +699,6 @@ mod tests {
         controllers: &[&FakeController],
         want_shutdown: Receiver<bool>,
         #[builder(default = Arc::new(watch::channel(false).0))] should_shutdown: Arc<Sender<bool>>,
-        #[builder(default = watch::channel(InitialUnfence::Pending).0)] unfenced: Sender<
-            InitialUnfence,
-        >,
         #[builder(default)] log_dirs: Vec<PathBuf>,
     ) -> Config {
         Config {
@@ -722,7 +719,7 @@ mod tests {
                 .collect(),
             want_shutdown,
             should_shutdown,
-            unfenced,
+            unfenced: watch::channel(InitialUnfence::Pending).0,
             log_dir_status: LogDirRegistry::probe(&log_dirs),
             log_dir_ids: LogDirIds::resolve(&log_dirs),
             all_log_dirs: log_dirs,
@@ -829,16 +826,16 @@ mod tests {
         controller.answer_next(Answer::Refuse);
         let source = registered_broker_source();
         let (want_shutdown_tx, want_shutdown) = watch::channel(false);
-        let (unfenced, mut initial_unfence) = watch::channel(InitialUnfence::Pending);
         let shutdown = CancellationToken::new();
-        let heartbeats = tokio::spawn(run(heartbeat_config()
+        let cfg = heartbeat_config()
             .source(&source)
             .shutdown(&shutdown)
             .interval(secs(60))
             .controllers(&[&controller])
             .want_shutdown(want_shutdown)
-            .unfenced(unfenced)
-            .call()));
+            .call();
+        let mut initial_unfence = cfg.unfenced.subscribe();
+        let heartbeats = tokio::spawn(run(cfg));
 
         let settled = timeout(
             Duration::from_secs(10),
@@ -917,8 +914,8 @@ mod tests {
             .interval(secs(1))
             .controllers(&[])
             .want_shutdown(want_shutdown)
-            .unfenced(watch::channel(unfence).0)
             .call();
+        cfg.unfenced.send_replace(unfence);
         let told = cfg.should_shutdown.subscribe();
         let mut state = before;
         let outcome = apply_response(&cfg, &mut state, asking_to_stop, response);
