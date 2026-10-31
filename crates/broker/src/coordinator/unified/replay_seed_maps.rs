@@ -10,7 +10,7 @@ mod tests {
                 GroupMetadataValue, NextGenKey, TargetAssignmentMemberValue,
                 TargetAssignmentMetadataValue,
             },
-            seeds::{GroupSeed, ShareGroupSeed, StreamsGroupSeed},
+            seeds::{GroupSeed, ReplaySeed, ShareGroupSeed, StreamsGroupSeed},
             share::persistence::{
                 ShareGroupCurrentMemberAssignmentValue, ShareGroupKey, ShareGroupMetadataValue,
                 ShareGroupTargetAssignmentMemberValue, ShareGroupTargetAssignmentMetadataValue,
@@ -371,10 +371,8 @@ mod tests {
                     "Received a tombstone record to delete group g but the target assignment \
                      still has 1 members.",
                     share(|seed| {
-                        seed.target_per_member.insert(
-                            "m".into(),
-                            ShareGroupTargetAssignmentMemberValue::default(),
-                        );
+                        seed.target_per_member
+                            .insert("m".into(), ShareGroupTargetAssignmentMemberValue::default());
                     }),
                 ),
             },
@@ -413,10 +411,8 @@ mod tests {
                     "Received a tombstone record to delete target assignment of g but the \
                      assignment still has 1 members.",
                     share(|seed| {
-                        seed.target_per_member.insert(
-                            "m".into(),
-                            ShareGroupTargetAssignmentMemberValue::default(),
-                        );
+                        seed.target_per_member
+                            .insert("m".into(), ShareGroupTargetAssignmentMemberValue::default());
                     }),
                 ),
             },
@@ -500,11 +496,10 @@ mod tests {
                      assignment.",
                     share(|seed| {
                         seed.members.insert("m".into(), share_member("client"));
-                        seed.current_per_member.insert("m".into(), share_current(-1));
-                        seed.target_per_member.insert(
-                            "m".into(),
-                            ShareGroupTargetAssignmentMemberValue::default(),
-                        );
+                        seed.current_per_member
+                            .insert("m".into(), share_current(-1));
+                        seed.target_per_member
+                            .insert("m".into(), ShareGroupTargetAssignmentMemberValue::default());
                     }),
                 ),
             },

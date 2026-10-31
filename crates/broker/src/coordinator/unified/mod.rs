@@ -84,3 +84,5 @@ pub(crate) use self::{
     },
     offset_batch::OffsetRecordBatchBuilder,
 };
+#[cfg(test)]
+pub(crate) use self::seeds::ReplaySeed;

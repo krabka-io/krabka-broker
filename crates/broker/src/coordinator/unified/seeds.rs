@@ -115,12 +115,19 @@ pub struct StreamsGroupSeed {
     pub current_per_member: HashMap<String, StreamsGroupCurrentMemberAssignmentValue>,
 }
 
-impl GroupSeed {
-    /// The consumer group that Kafka's replay creates for the first record of
-    /// a group id: a new `ConsumerGroup`, whose group epoch and assignment
-    /// epoch start at 1 (`TargetAssignmentMetadata.INITIAL`).
+/// What the bootstrap replay needs from every protocol's seed beyond its
+/// records: the group that replay creates for a new group id.
+pub(crate) trait ReplaySeed {
+    /// The group that Kafka's replay creates for the first record of a group
+    /// id.
     #[must_use]
-    pub fn new_group() -> Self {
+    fn new_group() -> Self;
+}
+
+impl ReplaySeed for GroupSeed {
+    /// A new `ConsumerGroup`, whose group epoch and assignment epoch start at
+    /// 1 (`TargetAssignmentMetadata.INITIAL`).
+    fn new_group() -> Self {
         Self {
             group_epoch: super::INITIAL_GROUP_EPOCH,
             target_epoch: super::INITIAL_GROUP_EPOCH,
@@ -129,12 +136,9 @@ impl GroupSeed {
     }
 }
 
-impl ShareGroupSeed {
-    /// The share group that Kafka's replay creates for the first record of a
-    /// group id: a new `ShareGroup`, whose group epoch and assignment epoch
-    /// start at 1.
-    #[must_use]
-    pub fn new_group() -> Self {
+impl ReplaySeed for ShareGroupSeed {
+    /// A new `ShareGroup`, whose group epoch and assignment epoch start at 1.
+    fn new_group() -> Self {
         Self {
             group_epoch: super::INITIAL_GROUP_EPOCH,
             target_epoch: super::INITIAL_GROUP_EPOCH,
@@ -143,12 +147,10 @@ impl ShareGroupSeed {
     }
 }
 
-impl StreamsGroupSeed {
-    /// The streams group that Kafka's replay creates for the first record of
-    /// a group id: a new `StreamsGroup`, whose group epoch and assignment
-    /// epoch start at 1 and whose validated topology epoch starts at 0.
-    #[must_use]
-    pub fn new_group() -> Self {
+impl ReplaySeed for StreamsGroupSeed {
+    /// A new `StreamsGroup`, whose group epoch and assignment epoch start at
+    /// 1 and whose validated topology epoch starts at 0.
+    fn new_group() -> Self {
         Self {
             group_epoch: streams::state::INITIAL_EPOCH,
             assignment_epoch: streams::state::INITIAL_EPOCH,
@@ -161,7 +163,7 @@ impl StreamsGroupSeed {
 mod replay_member_maps_tests {
     use {
         super::{
-            GroupSeed, ShareGroupCurrentMemberAssignmentValue, ShareGroupSeed,
+            GroupSeed, ReplaySeed, ShareGroupCurrentMemberAssignmentValue, ShareGroupSeed,
             ShareGroupTargetAssignmentMemberValue, StreamsGroupCurrentMemberAssignmentValue,
             StreamsGroupSeed, StreamsGroupTargetAssignmentMemberValue, TargetAssignmentMemberValue,
         },

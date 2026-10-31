@@ -14,7 +14,7 @@ use {
             LEAVE_GROUP_MEMBER_EPOCH, ModernGroupType, group_tombstone,
             persisted_group_with_create, target_metadata, target_metadata_tombstone,
         },
-        seeds::ShareGroupSeed,
+        seeds::{ReplaySeed, ShareGroupSeed},
         share,
     },
     crate::error::BrokerError,
