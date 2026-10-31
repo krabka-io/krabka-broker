@@ -832,11 +832,13 @@ mod tests {
         let cases = [
             (
                 "mutable tier stamps nothing",
+                ArchiveMode::Mutable,
                 ChainPosition::Unchained,
                 None,
             ),
             (
                 "write-once stamps the request form",
+                ArchiveMode::WriteOnce,
                 ChainPosition::At(stamp),
                 Some(
                     WormChainRecord::request(stamp)
@@ -845,14 +847,14 @@ mod tests {
                 ),
             ),
         ];
-        for (name, chain, expected) in cases {
+        for (name, archive, chain, expected) in cases {
             let rsm_impl = Arc::new(CapturingRsm::default());
             let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
             let rlmm = fixtures::in_memory_metadata();
             let export = synth_export().call();
 
             let outcome = copy_one(
-                &tier(chain.archive(), &rsm, &rlmm),
+                &tier(archive, &rsm, &rlmm),
                 &tp(),
                 CopyIdentity::unfenced(1, LeaderEpoch(0)),
                 &export,
@@ -911,11 +913,13 @@ mod tests {
             );
         }
     }
-    /// One seal case: what it is called, the backend it runs against, where
-    /// the copy sits in the chain, and the counter values it must leave.
+    /// One seal case: what it is called, the backend it runs against, the
+    /// tier's archive mode, where the copy sits in the chain, and the counter
+    /// values it must leave.
     struct SealCase {
         name: &'static str,
         rsm: Arc<dyn RemoteStorageManager>,
+        archive: ArchiveMode,
         chain: ChainPosition,
         sealed: u64,
         failed: u64,
@@ -938,6 +942,7 @@ mod tests {
             SealCase {
                 name: "a sealed manifest with a matching receipt",
                 rsm: Arc::new(FakeWormArchive::new()),
+                archive: ArchiveMode::WriteOnce,
                 chain: ChainPosition::At(stamp),
                 sealed: 1,
                 failed: 0,
@@ -945,6 +950,7 @@ mod tests {
             SealCase {
                 name: "a copy the backend refused",
                 rsm: Arc::new(AlwaysFailRsm),
+                archive: ArchiveMode::WriteOnce,
                 chain: ChainPosition::At(stamp),
                 sealed: 0,
                 failed: 1,
@@ -952,6 +958,7 @@ mod tests {
             SealCase {
                 name: "a copy that came back with no receipt",
                 rsm: Arc::new(ReturningRsm(None)),
+                archive: ArchiveMode::WriteOnce,
                 chain: ChainPosition::At(stamp),
                 sealed: 0,
                 failed: 1,
@@ -959,6 +966,7 @@ mod tests {
             SealCase {
                 name: "an unchained copy that failed",
                 rsm: Arc::new(AlwaysFailRsm),
+                archive: ArchiveMode::Mutable,
                 chain: ChainPosition::Unchained,
                 sealed: 0,
                 failed: 0,
@@ -967,6 +975,7 @@ mod tests {
         for SealCase {
             name,
             rsm,
+            archive,
             chain,
             sealed,
             failed,
@@ -980,7 +989,7 @@ mod tests {
             let tier = fixtures::configured_tier()
                 .rsm(&rsm)
                 .rlmm(&rlmm)
-                .archive(chain.archive())
+                .archive(archive)
                 .metrics(&metrics)
                 .index_cache(&index_cache)
                 .call();
