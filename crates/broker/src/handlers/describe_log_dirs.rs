@@ -109,13 +109,23 @@ pub async fn handle(
         // the future log and the source log; while the move is
         // running this shrinks toward zero, then the directory
         // rename turns the entry into a regular current log.
-        for is_future_key in [false, true] {
-            let discovered = if is_future_key {
-                log_dir::scan_future(dir)
-            } else {
-                log_dir::scan(dir)
-            };
-            for DiscoveredPartition { topic, partition } in discovered.unwrap_or_default() {
+        //
+        // A dir that cannot be listed is a storage failure, as an
+        // `IOException` on a log dir is in Kafka: it goes offline and
+        // answers like the offline dirs above, which is what
+        // `ReplicaManager.describeLogDirs` answers for an offline dir.
+        let scanned = log_dir::scan(dir)
+            .and_then(|current| log_dir::scan_future(dir).map(|future| (current, future)));
+        let (current, future) = match scanned {
+            Ok(scanned) => scanned,
+            Err(error) => {
+                log_dir_status.mark_offline(dir, &format!("log dir scan failed: {error}"));
+                results.push(offline_result(dir));
+                continue;
+            }
+        };
+        for (is_future_key, discovered) in [(false, current), (true, future)] {
+            for DiscoveredPartition { topic, partition } in discovered {
                 if !filter.allows(&topic, partition) {
                     continue;
                 }
