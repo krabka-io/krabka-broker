@@ -103,7 +103,7 @@ use {
         translate::{JavaTranslation, translate_java},
     },
     fancy_regex::{CompileError, Error as FancyError, Expr, Regex},
-    std::{collections::BTreeMap, fmt::Display, ops::Range, sync::Arc},
+    std::{collections::BTreeMap, fmt::Display, iter::Peekable, ops::Range, str::Chars, sync::Arc},
 };
 
 /// A `java.util.regex.Pattern` compiled for `matches()` and
@@ -374,54 +374,16 @@ impl JavaPattern {
         input: &str,
         groups: &[Option<Range<usize>>],
     ) -> Result<(), MatchError> {
-        let refuse = |message: &str| MatchError(message.to_owned());
-        let group_count = self.group_count();
         let mut chars = replacement.chars().peekable();
         while let Some(character) = chars.next() {
             match character {
-                '\\' => out.push(
-                    chars
-                        .next()
-                        .ok_or_else(|| refuse("character to be escaped is missing"))?,
-                ),
+                '\\' => {
+                    out.push(chars.next().ok_or_else(|| {
+                        MatchError("character to be escaped is missing".to_owned())
+                    })?);
+                }
                 '$' => {
-                    let first = chars
-                        .next()
-                        .ok_or_else(|| refuse("illegal group reference: group index is missing"))?;
-                    let group = if first == '{' {
-                        let mut name = String::new();
-                        while let Some(next) = chars.next_if(char::is_ascii_alphanumeric) {
-                            name.push(next);
-                        }
-                        if name.is_empty() {
-                            return Err(refuse("named capturing group has 0 length name"));
-                        }
-                        if chars.next() != Some('}') {
-                            return Err(refuse("named capturing group is missing trailing '}'"));
-                        }
-                        *self
-                            .0
-                            .names
-                            .get(&name)
-                            .ok_or_else(|| MatchError(format!("no group with name {name}")))?
-                    } else {
-                        let mut group = first
-                            .to_digit(10)
-                            .ok_or_else(|| refuse("illegal group reference"))?
-                            as usize;
-                        if group > group_count {
-                            return Err(MatchError(format!("no group {group}")));
-                        }
-                        while let Some(digit) = chars.peek().and_then(|next| next.to_digit(10)) {
-                            let longer = group * 10 + digit as usize;
-                            if longer > group_count {
-                                break;
-                            }
-                            group = longer;
-                            chars.next();
-                        }
-                        group
-                    };
+                    let group = self.read_group_reference(&mut chars)?;
                     if let Some(Some(text)) = groups.get(group) {
                         // A look-behind may start a group between the two UTF-16
                         // units of a char, which Java gives as a lone surrogate.
@@ -437,6 +399,68 @@ impl JavaPattern {
             }
         }
         Ok(())
+    }
+
+    /// The group a replacement's `$` refers to, from the chars after it:
+    /// `${name}`, or `$n` with as many further digits as still name a group.
+    fn read_group_reference(&self, chars: &mut Peekable<Chars<'_>>) -> Result<usize, MatchError> {
+        let first = chars.next().ok_or_else(|| {
+            MatchError("illegal group reference: group index is missing".to_owned())
+        })?;
+        if first == '{' {
+            self.read_group_name(chars)
+        } else {
+            self.read_group_number(first, chars)
+        }
+    }
+
+    /// The group `${name}` refers to, from the chars after its `{`.
+    fn read_group_name(&self, chars: &mut Peekable<Chars<'_>>) -> Result<usize, MatchError> {
+        let mut name = String::new();
+        while let Some(next) = chars.next_if(char::is_ascii_alphanumeric) {
+            name.push(next);
+        }
+        if name.is_empty() {
+            return Err(MatchError(
+                "named capturing group has 0 length name".to_owned(),
+            ));
+        }
+        if chars.next() != Some('}') {
+            return Err(MatchError(
+                "named capturing group is missing trailing '}'".to_owned(),
+            ));
+        }
+        self.0
+            .names
+            .get(&name)
+            .copied()
+            .ok_or_else(|| MatchError(format!("no group with name {name}")))
+    }
+
+    /// The group `$n` refers to, from its `first` digit and the chars after
+    /// it: further digits join the number only while it names a group.
+    fn read_group_number(
+        &self,
+        first: char,
+        chars: &mut Peekable<Chars<'_>>,
+    ) -> Result<usize, MatchError> {
+        let group_count = self.group_count();
+        let mut group = first
+            .to_digit(10)
+            .ok_or_else(|| MatchError("illegal group reference".to_owned()))?
+            as usize;
+        if group > group_count {
+            return Err(MatchError(format!("no group {group}")));
+        }
+        while let Some(digit) = chars.peek().and_then(|next| next.to_digit(10)) {
+            let longer = group * 10 + digit as usize;
+            if longer > group_count {
+                break;
+            }
+            group = longer;
+            chars.next();
+        }
+        Ok(group)
     }
 }
 
