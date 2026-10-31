@@ -547,6 +547,15 @@ fn test_voter(id: NodeId, directory_id: uuid::Uuid) -> krabka_metadata::Voter {
     }
 }
 
+/// The replica that the add-voter tests add: node 4 in directory 7, the key
+/// of `add_request(4, 7)`.
+fn candidate_key() -> ReplicaKey {
+    ReplicaKey {
+        id: NodeId(4),
+        directory_id: uuid::Uuid::from_u128(7),
+    }
+}
+
 fn add_request(id: u64, directory: u128) -> AddVoter {
     AddVoter {
         voter: test_voter(NodeId(id), uuid::Uuid::from_u128(directory)),
@@ -573,10 +582,7 @@ async fn an_observer_that_dropped_out_of_describe_quorum_can_still_be_added() {
         engine: mut leader,
         dir: _dir,
     } = kraft_version_one_leader();
-    let candidate = ReplicaKey {
-        id: NodeId(4),
-        directory_id: uuid::Uuid::from_u128(7),
-    };
+    let candidate = candidate_key();
     let bystander = ReplicaKey {
         id: NodeId(9),
         directory_id: uuid::Uuid::from_u128(9),
@@ -1098,10 +1104,7 @@ async fn an_add_answers_on_append_only_when_asked(ack_when_committed: bool, answ
         engine: mut leader,
         dir: _dir,
     } = kraft_version_one_leader();
-    let candidate = ReplicaKey {
-        id: NodeId(4),
-        directory_id: uuid::Uuid::from_u128(7),
-    };
+    let candidate = candidate_key();
     let end_before = leader.log.log_end_offset();
     leader.record_observer_fetch(candidate, end_before.0);
     let (reply, mut rx) = oneshot::channel();
