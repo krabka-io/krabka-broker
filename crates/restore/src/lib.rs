@@ -425,7 +425,7 @@ async fn format_with_next_offsets(
 /// A source has no archive when it holds no classic segments and only the
 /// signed diskless capture is authenticated.
 fn authenticated_archive(source: Option<&SourceAuthentication>) -> Option<&AuthenticatedArchive> {
-    source.and_then(|source| source.archive.as_ref())
+    source?.archive.as_ref()
 }
 
 /// Refuse an archive that, after filtering, holds no partition to restore.
