@@ -103,6 +103,75 @@ struct HeldVsTarget {
     wanted: Partitions,
 }
 
+/// What `computeNextAssignment` decided for a member before it builds the
+/// next assignment: its holdings split against the target, and the wanted
+/// partitions resolved against the other members.
+struct Split {
+    /// The held partitions that stay in the target.
+    kept: Partitions,
+    /// The held partitions that left the target.
+    to_revoke: Partitions,
+    /// The wanted partitions no other member holds.
+    granted: Partitions,
+    /// `true` when another member still holds a wanted partition.
+    has_unreleased: bool,
+}
+
+impl Split {
+    /// Builds the member's next assignment, with `assigned` and `pending`
+    /// sorted. `owned` is what the heartbeat reports.
+    fn into_rebuilt(
+        self,
+        member: &MemberState,
+        target_epoch: i32,
+        owned: Option<&Partitions>,
+    ) -> Rebuilt {
+        let Self {
+            mut kept,
+            to_revoke,
+            granted,
+            has_unreleased,
+        } = self;
+        let mut rebuilt = if !to_revoke.is_empty() && owns_any(owned, &to_revoke) {
+            // The member keeps its epoch and waits for the client to
+            // acknowledge the revocation.
+            Rebuilt {
+                state: MemberAssignmentState::UnrevokedPartitions,
+                epoch: member.member_epoch,
+                assigned: kept,
+                pending: to_revoke,
+                granted: Partitions::new(),
+            }
+        } else {
+            // Whatever the member had to revoke it has revoked. It moves to
+            // the target epoch with what it keeps and what is free.
+            let state = if has_unreleased {
+                MemberAssignmentState::UnreleasedPartitions
+            } else {
+                MemberAssignmentState::Stable
+            };
+            for (topic_id, parts) in &granted {
+                kept.entry(*topic_id).or_default().extend(parts);
+            }
+            Rebuilt {
+                state,
+                epoch: target_epoch,
+                assigned: kept,
+                pending: Partitions::new(),
+                granted,
+            }
+        };
+        for parts in rebuilt
+            .assigned
+            .values_mut()
+            .chain(rebuilt.pending.values_mut())
+        {
+            parts.sort_unstable();
+        }
+        rebuilt
+    }
+}
+
 impl GroupState {
     /// Installs a freshly computed target at the current group epoch.
     ///
@@ -305,49 +374,18 @@ impl GroupState {
             .unwrap_or(&no_target);
 
         let HeldVsTarget {
-            mut kept,
+            kept,
             to_revoke,
             wanted,
         } = subscription.split_against_target(target);
         let (granted, has_unreleased) = self.grant_free(member, wanted);
-
-        let mut rebuilt = if !to_revoke.is_empty() && owns_any(owned, &to_revoke) {
-            // The member keeps its epoch and waits for the client to
-            // acknowledge the revocation.
-            Rebuilt {
-                state: MemberAssignmentState::UnrevokedPartitions,
-                epoch: member.member_epoch,
-                assigned: kept,
-                pending: to_revoke,
-                granted: Partitions::new(),
-            }
-        } else {
-            // Whatever the member had to revoke it has revoked. It moves to
-            // the target epoch with what it keeps and what is free.
-            let state = if has_unreleased {
-                MemberAssignmentState::UnreleasedPartitions
-            } else {
-                MemberAssignmentState::Stable
-            };
-            for (topic_id, parts) in &granted {
-                kept.entry(*topic_id).or_default().extend(parts);
-            }
-            Rebuilt {
-                state,
-                epoch: target_epoch,
-                assigned: kept,
-                pending: Partitions::new(),
-                granted,
-            }
-        };
-        for parts in rebuilt
-            .assigned
-            .values_mut()
-            .chain(rebuilt.pending.values_mut())
-        {
-            parts.sort_unstable();
+        Split {
+            kept,
+            to_revoke,
+            granted,
+            has_unreleased,
         }
-        rebuilt
+        .into_rebuilt(member, target_epoch, owned)
     }
 
     /// Resolves the partitions `member` wants against what the other members
