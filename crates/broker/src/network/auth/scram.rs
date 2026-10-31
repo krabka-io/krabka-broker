@@ -8,7 +8,7 @@
 use {
     super::{
         response::{fail_authenticate, fail_authenticate_with, sasl_ok},
-        state::{ConnectionAuth, SaslExchange, SessionExpiry, session_expiry},
+        state::{CompletedAuthentication, ConnectionAuth, SaslExchange, complete_authentication},
     },
     crate::{metadata_source::MetadataSource, time_util::now_ms},
     base64::engine::general_purpose::STANDARD,
@@ -222,29 +222,25 @@ pub fn handle_authenticate_scram(
                     // Two-round SCRAM-SHA-512: an extra `Continue` here is a bug.
                     fail_authenticate("SCRAM second round expected Done")
                 }
-                krabka_security::StepResult::Done(principal, bytes) => {
-                    // When round-1 fell back to a delegation
-                    // token, `pending_token_expiry_ms` is `Some(expiry)`
-                    // — its presence is both the marker for
-                    // `authenticated_via_token: true` and the value of
-                    // `expires_at_ms` (the KIP-368 re-auth ceiling).
-                    // For regular SCRAM, it's `None` and the
-                    // session has no expiry. A token that expired during
-                    // the exchange still completes it, as in Kafka, with a
-                    // session lifetime of 0.
-                    let now = now_ms();
-                    let SessionExpiry {
-                        expires_at_ms,
-                        session_lifetime_ms,
-                    } = session_expiry(now, pending_token_expiry_ms, max_reauth);
-                    *auth = ConnectionAuth::Authenticated {
+                // When round 1 fell back to a delegation token,
+                // `pending_token_expiry_ms` is `Some(expiry)` — its presence
+                // is both the marker for `authenticated_via_token: true` and
+                // the credential lifetime that bounds `expires_at_ms` (the
+                // KIP-368 re-auth ceiling). For regular SCRAM it is `None`. A
+                // token that expired during the exchange still completes it,
+                // as in Kafka, with a session lifetime of 0.
+                krabka_security::StepResult::Done(principal, bytes) => complete_authentication(
+                    auth,
+                    CompletedAuthentication {
                         principal,
                         mechanism,
-                        expires_at_ms,
+                        credential_expires_at_ms: pending_token_expiry_ms,
                         authenticated_via_token: pending_token_expiry_ms.is_some(),
-                    };
-                    sasl_ok(bytes, session_lifetime_ms)
-                }
+                        server_bytes: bytes.into(),
+                    },
+                    now_ms(),
+                    max_reauth,
+                ),
                 krabka_security::StepResult::Failed(_) => fail_authenticate("SCRAM proof failed"),
                 krabka_security::StepResult::Disconnect => {
                     disconnect = true;
