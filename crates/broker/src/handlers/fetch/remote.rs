@@ -896,6 +896,26 @@ mod tests {
             .await;
             (read, bytes)
         }
+
+        /// Cuts the leader-epoch cache with a floor established too high (5),
+        /// takes the leader's start of 0 back, and moves the current leader
+        /// epoch to 7, which no archived segment carries. Offsets 0 to 4 are
+        /// then archived but have no cache entry.
+        fn cut_epoch_cache_below_offset_5(&self) {
+            use krabka_log::Offset;
+
+            let mut log = self.part.log.lock().expect("log mutex poisoned");
+            log.set_log_start_offset(Offset(5))
+                .expect("raise the floor too high");
+            log.follow_leader_log_start(Offset(0))
+                .expect("take the leader's start back");
+            let cut_epoch = log.epoch_checkpoint().epoch_for_offset(Offset(0));
+            drop(log);
+            assert!(cut_epoch == None);
+            self.part
+                .current_leader_epoch
+                .store(7, atomic::Ordering::Release);
+        }
     }
 
     /// [`tiered_partition`] under `dir`, with every record it holds committed.
@@ -1179,23 +1199,10 @@ mod tests {
     /// segment carries and which would answer `OFFSET_OUT_OF_RANGE`.
     #[tokio::test]
     async fn a_read_below_a_cut_epoch_cache_takes_the_epoch_from_the_archive() {
-        use {crate::codes, krabka_log::Offset};
+        use crate::codes;
 
         let tiered = committed_tiered_fixture().await;
-        {
-            let mut log = tiered.part.log.lock().expect("log mutex poisoned");
-            log.set_log_start_offset(Offset(5))
-                .expect("raise the floor too high");
-            log.follow_leader_log_start(Offset(0))
-                .expect("take the leader's start back");
-            let cut_epoch = log.epoch_checkpoint().epoch_for_offset(Offset(0));
-            drop(log);
-            assert!(cut_epoch == None);
-        }
-        tiered
-            .part
-            .current_leader_epoch
-            .store(7, atomic::Ordering::Release);
+        tiered.cut_epoch_cache_below_offset_5();
 
         let (served, bytes_served) = tiered.cold_read(0).await;
         check!(
@@ -1216,18 +1223,7 @@ mod tests {
         use krabka_log::Offset;
 
         let tiered = committed_tiered_fixture().await;
-        {
-            let mut log = tiered.part.log.lock().expect("log mutex poisoned");
-            log.set_log_start_offset(Offset(5))
-                .expect("raise the floor too high");
-            log.follow_leader_log_start(Offset(0))
-                .expect("take the leader's start back");
-            drop(log);
-        }
-        tiered
-            .part
-            .current_leader_epoch
-            .store(7, atomic::Ordering::Release);
+        tiered.cut_epoch_cache_below_offset_5();
         let reader = tiered.broker.remote_reader.clone().expect("remote reader");
         let tp = krabka_remote_storage::TopicIdPartition::new(tiered_topic_id(), TIERED_TOPIC, 0);
         let archived = reader
