@@ -16,9 +16,8 @@ use {
     crate::{blocking::spawn_blocking, metrics::RemoteTierPath, time_util::now_ms},
     krabka_log::{Offset, SegmentExport},
     krabka_remote_storage::{
-        RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadata,
-        RemoteLogSegmentState, RemoteStorageError, RemoteStorageManager, TopicIdPartition,
-        WormChainRecord,
+        RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
+        TopicIdPartition, WormChainRecord,
     },
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
     std::{collections::BTreeMap, sync::Arc},
@@ -193,7 +192,7 @@ async fn copy_one_inner(
     // that wait withdraws the record and leaves the tier untouched.
     if !fence.holds() {
         fenced(tp, ex, "before the upload");
-        rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
+        rollback(tier, &metadata, broker_id).await;
         return CopyOutcome::Fenced;
     }
 
@@ -241,14 +240,14 @@ async fn copy_one_inner(
             warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                   error = %e, "remote-log-manager: segment copy failed");
             seal_failed();
-            rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
+            rollback(tier, &metadata, broker_id).await;
             return CopyOutcome::Failed;
         }
         Ok(Err(e)) => {
             warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                   error = %e, "remote-log-manager: segment copy task panicked");
             seal_failed();
-            rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
+            rollback(tier, &metadata, broker_id).await;
             return CopyOutcome::Failed;
         }
     };
@@ -261,7 +260,7 @@ async fn copy_one_inner(
     // extends already runs through it, so it is published as usual.
     if chain == ChainPosition::Unchained && !fence.holds() {
         fenced(tp, ex, "after the upload");
-        rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
+        rollback(tier, &metadata, broker_id).await;
         return CopyOutcome::Fenced;
     }
 
@@ -327,7 +326,7 @@ async fn copy_one_inner(
                    end = ex.last_offset.0, error = %e,
                    "remote-log-manager: the segment was deleted while it was copied; \
                     withdrawing the copy");
-            rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
+            rollback(tier, &metadata, broker_id).await;
             return CopyOutcome::Withdrawn { next };
         }
         Err(e) => {
@@ -424,17 +423,11 @@ fn fenced(tp: &TopicIdPartition, ex: &SegmentExport, when: &str) {
 /// segment UUID, so its keys cannot collide with theirs. This residue is
 /// exactly what the WORM verifier reports as `orphan_objects`: unreferenced
 /// bytes are the standing cost of a tier that can take nothing back.
-async fn rollback(
-    metadata: &RemoteLogSegmentMetadata,
-    broker_id: i32,
-    archive: ArchiveMode,
-    rsm: &Arc<dyn RemoteStorageManager>,
-    rlmm: &Arc<dyn RemoteLogMetadataManager>,
-) {
+async fn rollback(tier: &RemoteTier<'_>, metadata: &RemoteLogSegmentMetadata, broker_id: i32) {
     let id = metadata.remote_log_segment_id().clone();
-    match archive {
+    match tier.archive {
         ArchiveMode::Mutable => {
-            let rsm_del = Arc::clone(rsm);
+            let rsm_del = Arc::clone(tier.rsm);
             let md_del = metadata.clone();
             let _ = spawn_blocking(move || rsm_del.delete_log_segment_data(&md_del)).await;
         }
@@ -450,7 +443,7 @@ async fn rollback(
         RemoteLogSegmentState::DeleteSegmentStarted,
         RemoteLogSegmentState::DeleteSegmentFinished,
     ] {
-        let _ = super::rlmm::update_segment(rlmm, id.clone(), None, state, broker_id).await;
+        let _ = super::rlmm::update_segment(tier.rlmm, id.clone(), None, state, broker_id).await;
     }
 }
 
@@ -470,7 +463,8 @@ mod tests {
         krabka_ids::LeaderEpoch,
         krabka_log::Offset,
         krabka_remote_storage::{
-            ChainHead, ChainStamp, CustomMetadata, EpochId, ManifestSeq, RemoteStorageError,
+            ChainHead, ChainStamp, CustomMetadata, EpochId, ManifestSeq, RemoteLogMetadataManager,
+            RemoteStorageError, RemoteStorageManager,
         },
         krabka_units::bytes,
         std::{
