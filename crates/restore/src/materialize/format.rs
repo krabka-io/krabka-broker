@@ -411,6 +411,33 @@ fn classify_snapshot<'a>(
     Ok(families)
 }
 
+/// One level-0 [`MetadataRecord::V1FeatureLevel`] for every registered feature the snapshot does not finalize.
+///
+/// A feature that the snapshot does not finalize is disabled in the restored
+/// cluster. `metadata.version` is never disabled: Kafka has no
+/// `MetadataVersion` at level 0, and the active controller refuses bootstrap
+/// records that remove it. So a snapshot without one keeps the level of the
+/// format.
+fn disabled_feature_records<'a>(
+    finalized_features: &'a HashSet<&str>,
+) -> impl Iterator<Item = MetadataRecord> + 'a {
+    krabka_metadata::feature_registry()
+        .iter()
+        .filter(|feature| {
+            !matches!(
+                feature.name(),
+                metadata_version::KRAFT_VERSION_FEATURE
+                    | metadata_version::METADATA_VERSION_FEATURE
+            ) && !finalized_features.contains(feature.name())
+        })
+        .map(|feature| {
+            MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
+                name: feature.name().to_owned(),
+                level: 0,
+            })
+        })
+}
+
 /// Build the topic and partition records a restore seeds into the target formatter, from what the archive scan recovered.
 ///
 /// Every topic's [`MetadataRecord::V1Topic`] precedes every [`MetadataRecord::V1Partition`], which is the ordering `krabka_format::run_with_records`'s own doc requires: a `MetadataImage` derives a topic's partition count from the partition records that apply after it, so a partition can only follow its own topic.
@@ -476,28 +503,7 @@ fn seed_metadata_records(
         &mut metadata,
     )?;
     if snapshot_records.is_some() {
-        // A feature that the snapshot does not finalize is disabled in the
-        // restored cluster. `metadata.version` is never disabled: Kafka has no
-        // `MetadataVersion` at level 0, and the active controller refuses
-        // bootstrap records that remove it. So a snapshot without one keeps
-        // the level of the format.
-        features.extend(
-            krabka_metadata::feature_registry()
-                .iter()
-                .filter(|feature| {
-                    !matches!(
-                        feature.name(),
-                        metadata_version::KRAFT_VERSION_FEATURE
-                            | metadata_version::METADATA_VERSION_FEATURE
-                    ) && !snapshot_features.contains(feature.name())
-                })
-                .map(|feature| {
-                    MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
-                        name: feature.name().to_owned(),
-                        level: 0,
-                    })
-                }),
-        );
+        features.extend(disabled_feature_records(&snapshot_features));
     }
 
     let mut records = Vec::with_capacity(
