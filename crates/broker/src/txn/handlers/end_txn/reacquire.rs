@@ -66,148 +66,93 @@ mod tests {
         crate::txn::{
             handlers::end_txn::test_support::entry, state::TxnState, util::ProducerIdentity,
         },
-        assert2::assert,
         krabka_log::ProducerId,
     };
 
-    /// The expectation of a handler that prepared under `(prepared_pid,
-    /// prepared_epoch)` and staged `(completion_pid, completion_epoch)`.
-    fn expectation(
-        (prepared_pid, prepared_epoch): (i64, i16),
-        (completion_pid, completion_epoch): (i64, i16),
-        prepare: TxnState,
-        complete: TxnState,
-    ) -> CompletionExpectation {
+    fn identity(producer_id: i64, producer_epoch: i16) -> ProducerIdentity {
+        ProducerIdentity {
+            producer_id: ProducerId(producer_id),
+            producer_epoch,
+        }
+    }
+
+    /// Phase 1 left (pid=7, epoch=3) in `prepare` and staged the same identity
+    /// for the completion.
+    fn unrolled(prepare: TxnState, complete: TxnState) -> CompletionExpectation {
         CompletionExpectation {
-            prepared: ProducerIdentity {
-                producer_id: ProducerId(prepared_pid),
-                producer_epoch: prepared_epoch,
-            },
-            completion: ProducerIdentity {
-                producer_id: ProducerId(completion_pid),
-                producer_epoch: completion_epoch,
-            },
+            prepared: identity(7, 3),
+            completion: identity(7, 3),
             prepare,
             complete,
         }
     }
 
-    #[test]
-    fn commit_reacquire_decision_matrix() {
-        // Phase 1 left (pid=7, epoch=3, PrepareCommit); the reacquire always
-        // asks to drive PrepareCommit → CompleteCommit.
-        // (observed_pid, observed_epoch, observed_state, expected)
-        let cases = [
-            // Entry is exactly as Phase 1 left it: same pid/epoch, still in
-            // Prepare — proceed.
-            (7, 3, TxnState::PrepareCommit, ReacquireDecision::Proceed),
-            // A concurrent InitProducerId bumped the epoch during the marker
-            // fan-out. We must NOT overwrite with the stale epoch / Complete
-            // state.
-            (
-                7,
-                4,
-                TxnState::PrepareCommit,
-                ReacquireDecision::RejectStaleIdentity,
-            ),
-            // Producer id changed underneath us — fenced.
-            (
-                8,
-                3,
-                TxnState::PrepareCommit,
-                ReacquireDecision::RejectStaleIdentity,
-            ),
-            // Another caller (or an EndTxn retry that lost the race) already
-            // drove this exact transition. Report success, do not re-write.
-            (
-                7,
-                3,
-                TxnState::CompleteCommit,
-                ReacquireDecision::AlreadyComplete,
-            ),
-            // A concurrent AddPartitionsToTxn re-opened the txn
-            // (Complete→Ongoing reuse, or some other interleave). Our marker
-            // fan-out no longer reflects the live transaction; refuse to
-            // finalise.
-            (7, 3, TxnState::Ongoing, ReacquireDecision::RejectState),
-            // We prepared a Commit, but the entry is now in PrepareAbort — a
-            // different finalisation kind raced us. Refuse to write
-            // CompleteCommit.
-            (7, 3, TxnState::PrepareAbort, ReacquireDecision::RejectState),
-        ];
-        for (pid, epoch, state, expected) in cases {
-            let e = entry(pid, epoch, state);
-            let decision = validate_complete_reacquire(
-                &e,
-                &expectation(
-                    (7, 3),
-                    (7, 3),
-                    TxnState::PrepareCommit,
-                    TxnState::CompleteCommit,
-                ),
-            );
-            assert!(
-                decision == expected,
-                "observed pid {pid}, epoch {epoch}, state {state:?}"
-            );
+    fn commit() -> CompletionExpectation {
+        unrolled(TxnState::PrepareCommit, TxnState::CompleteCommit)
+    }
+
+    fn abort() -> CompletionExpectation {
+        unrolled(TxnState::PrepareAbort, TxnState::CompleteAbort)
+    }
+
+    /// Phase 1 prepared a commit at the last epoch of pid 7, so the completion
+    /// rotates to pid 11 at epoch 0.
+    fn rolled_commit() -> CompletionExpectation {
+        CompletionExpectation {
+            prepared: identity(7, i16::MAX),
+            completion: identity(11, 0),
+            prepare: TxnState::PrepareCommit,
+            complete: TxnState::CompleteCommit,
         }
     }
 
-    #[test]
-    fn abort_path_proceeds_and_is_idempotent() {
-        // Mirror the abort branch: prepare=PrepareAbort, complete=CompleteAbort.
-        let prep = entry(7, 3, TxnState::PrepareAbort);
-        assert!(
-            validate_complete_reacquire(
-                &prep,
-                &expectation(
-                    (7, 3),
-                    (7, 3),
-                    TxnState::PrepareAbort,
-                    TxnState::CompleteAbort
-                )
-            ) == ReacquireDecision::Proceed
-        );
-        let done = entry(7, 3, TxnState::CompleteAbort);
-        assert!(
-            validate_complete_reacquire(
-                &done,
-                &expectation(
-                    (7, 3),
-                    (7, 3),
-                    TxnState::PrepareAbort,
-                    TxnState::CompleteAbort
-                )
-            ) == ReacquireDecision::AlreadyComplete
-        );
-    }
-
-    #[test]
-    fn rolled_completion_is_idempotent_only_under_the_new_identity() {
-        let completed = entry(11, 0, TxnState::CompleteCommit);
-        assert!(
-            validate_complete_reacquire(
-                &completed,
-                &expectation(
-                    (7, i16::MAX),
-                    (11, 0),
-                    TxnState::PrepareCommit,
-                    TxnState::CompleteCommit
-                )
-            ) == ReacquireDecision::AlreadyComplete
-        );
-
-        let stale = entry(7, i16::MAX, TxnState::CompleteCommit);
-        assert!(
-            validate_complete_reacquire(
-                &stale,
-                &expectation(
-                    (7, i16::MAX),
-                    (11, 0),
-                    TxnState::PrepareCommit,
-                    TxnState::CompleteCommit
-                )
-            ) == ReacquireDecision::RejectState
-        );
+    #[yare::parameterized(
+        // Entry is exactly as Phase 1 left it: same pid/epoch, still in
+        // Prepare — proceed.
+        commit_unchanged = { (7, 3, TxnState::PrepareCommit), commit(), ReacquireDecision::Proceed },
+        // A concurrent InitProducerId bumped the epoch during the marker
+        // fan-out. We must NOT overwrite with the stale epoch / Complete state.
+        commit_epoch_bumped = {
+            (7, 4, TxnState::PrepareCommit), commit(), ReacquireDecision::RejectStaleIdentity
+        },
+        // Producer id changed underneath us — fenced.
+        commit_pid_changed = {
+            (8, 3, TxnState::PrepareCommit), commit(), ReacquireDecision::RejectStaleIdentity
+        },
+        // Another caller (or an EndTxn retry that lost the race) already drove
+        // this exact transition. Report success, do not re-write.
+        commit_already_complete = {
+            (7, 3, TxnState::CompleteCommit), commit(), ReacquireDecision::AlreadyComplete
+        },
+        // A concurrent AddPartitionsToTxn re-opened the txn (Complete→Ongoing
+        // reuse, or some other interleave). Our marker fan-out no longer
+        // reflects the live transaction; refuse to finalise.
+        commit_reopened = { (7, 3, TxnState::Ongoing), commit(), ReacquireDecision::RejectState },
+        // We prepared a Commit, but the entry is now in PrepareAbort — a
+        // different finalisation kind raced us. Refuse to write CompleteCommit.
+        commit_raced_by_abort = {
+            (7, 3, TxnState::PrepareAbort), commit(), ReacquireDecision::RejectState
+        },
+        // The abort branch mirrors the commit branch.
+        abort_unchanged = { (7, 3, TxnState::PrepareAbort), abort(), ReacquireDecision::Proceed },
+        abort_already_complete = {
+            (7, 3, TxnState::CompleteAbort), abort(), ReacquireDecision::AlreadyComplete
+        },
+        // A rolled completion is idempotent only under the new identity.
+        rolled_complete_under_new_identity = {
+            (11, 0, TxnState::CompleteCommit), rolled_commit(), ReacquireDecision::AlreadyComplete
+        },
+        rolled_complete_under_old_identity = {
+            (7, i16::MAX, TxnState::CompleteCommit), rolled_commit(), ReacquireDecision::RejectState
+        },
+    )]
+    fn reacquire_decision(
+        observed: (i64, i16, TxnState),
+        expectation: CompletionExpectation,
+        want: ReacquireDecision,
+    ) {
+        let (pid, epoch, state) = observed;
+        let observed = entry(pid, epoch, state);
+        assert2::assert!(validate_complete_reacquire(&observed, &expectation) == want);
     }
 }
