@@ -41,6 +41,13 @@ mod tests {
             codes::UNKNOWN_SERVER_ERROR,
             codes::UNKNOWN_SERVER_ERROR,
         },
+        // A controller that refuses the version of a forwarded write answers
+        // the handler's own failure code, not the retriable NOT_CONTROLLER.
+        unsupported_private_version_keeps_default = {
+            RaftError::UnsupportedPrivateVersion { api_key: 1003, version: 1 },
+            codes::UNKNOWN_SERVER_ERROR,
+            codes::UNKNOWN_SERVER_ERROR,
+        },
         shutdown_keeps_default = {
             RaftError::Shutdown,
             codes::COORDINATOR_NOT_AVAILABLE,

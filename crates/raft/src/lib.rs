@@ -101,7 +101,7 @@ pub use {
     },
     controller::{
         Controller, ControllerHandle, QuorumState, QuorumStateSnapshot, SnapshotRange,
-        SnapshotSlice, metadata_log_nonempty,
+        SnapshotSlice, metadata_log_nonempty, translate_submit_change_response,
     },
     error::{MetadataReplayError, PersistedFormatError, RaftError},
     event_queue::{EventQueueRecorder, NoEventQueueRecorder},

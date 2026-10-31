@@ -67,7 +67,7 @@ impl QuorumForwarder {
         addr: &str,
         rpc: PrivateRpc,
         body: &[u8],
-    ) -> Result<krabka_raft::KrabkaSubmitChangeResponse, RaftError> {
+    ) -> Result<SubmitChangeResult, RaftError> {
         let version = self.request_version(rpc);
         let conn = self
             .dialer
@@ -79,8 +79,34 @@ impl QuorumForwarder {
             .await
             .map_err(RaftError::Network)?;
         conn.close();
-        let mut cur: &[u8] = &resp_body;
-        krabka_raft::KrabkaSubmitChangeResponse::decode_v0(&mut cur).map_err(RaftError::Protocol)
+        krabka_raft::translate_submit_change_response(&resp_body, target, rpc.api_key(), version)
+    }
+
+    /// Send `body` as `rpc` to the hinted leader, then to each other voter
+    /// while the one asked is not the leader, cannot be reached, or answers a
+    /// response this node cannot decode. Every other answer, such as a
+    /// refused version, comes from the leader or would come from every voter
+    /// alike, so the forward ends there.
+    async fn forward_submit(
+        &self,
+        rpc: PrivateRpc,
+        body: &[u8],
+    ) -> Result<SubmitChangeResult, RaftError> {
+        let hint = *self.leader.borrow();
+        let mut last_err = RaftError::NotLeader {
+            current_leader: hint,
+        };
+        for (target, addr) in build_forward_order(&self.targets(), hint) {
+            match self.try_submit(target, &addr, rpc, body).await {
+                Err(
+                    error @ (RaftError::NotLeader { .. }
+                    | RaftError::Network(_)
+                    | RaftError::Protocol(_)),
+                ) => last_err = error,
+                outcome => return outcome,
+            }
+        }
+        Err(last_err)
     }
 }
 
@@ -122,55 +148,7 @@ impl MetadataWriter for QuorumForwarder {
         let mut body = Vec::with_capacity(req.records.len() + 4);
         req.encode_v0(&mut body).map_err(RaftError::Protocol)?;
 
-        let hint = *self.leader.borrow();
-        let order = build_forward_order(&self.targets(), hint);
-
-        let mut last_err = RaftError::NotLeader {
-            current_leader: hint,
-        };
-        for (target, addr) in order {
-            match self
-                .try_submit(target, &addr, PrivateRpc::SubmitChange, &body)
-                .await
-            {
-                Ok(resp) if resp.error_code == 0 => {
-                    return <serde_wincode::SerdeCompat<SubmitChangeResult> as wincode::Deserialize>::deserialize(
-                        &resp.result,
-                    )
-                    .map_err(RaftError::from);
-                }
-                // error_code 2 => leader rejected at apply-time. Match the
-                // controller's own forward path (`forward_submit_to`), which
-                // collapses the typed `MetadataError` into `TopicExists` since
-                // the wire carries only an error code and the forwarded write
-                // of record is CreateTopics (-> Kafka TOPIC_ALREADY_EXISTS).
-                Ok(resp) if resp.error_code == 2 => {
-                    return Err(RaftError::Metadata(
-                        krabka_metadata::MetadataError::TopicExists(String::new()),
-                    ));
-                }
-                // The leader answered, and it refused until its tail commits.
-                // Another voter is not the leader, so stop here.
-                Ok(resp) if resp.error_code == krabka_raft::SUBMIT_CHANGE_UNCOMMITTED_TAIL => {
-                    return Err(RaftError::UncommittedTail);
-                }
-                // Every controller authorizes the same principal the same
-                // way, so another voter would refuse too.
-                Ok(resp)
-                    if resp.error_code == krabka_raft::PRIVATE_CLUSTER_AUTHORIZATION_FAILED =>
-                {
-                    return Err(RaftError::ClusterAuthorizationFailed);
-                }
-                Ok(resp) => {
-                    last_err = RaftError::NotLeader {
-                        current_leader: (resp.leader_hint >= 0)
-                            .then(|| NodeId(u64::try_from(resp.leader_hint).unwrap_or(0))),
-                    };
-                }
-                Err(e) => last_err = e,
-            }
-        }
-        Err(last_err)
+        self.forward_submit(PrivateRpc::SubmitChange, &body).await
     }
 
     async fn forward_raw(
@@ -224,36 +202,8 @@ impl MetadataWriter for QuorumForwarder {
         let mut body = Vec::with_capacity(request.records.len() + 4);
         request.encode_v0(&mut body).map_err(RaftError::Protocol)?;
 
-        let hint = *self.leader.borrow();
-        let mut last_error = RaftError::NotLeader {
-            current_leader: hint,
-        };
-        for (target, addr) in build_forward_order(&self.targets(), hint) {
-            match self
-                .try_submit(target, &addr, PrivateRpc::DelegationTokenMutation, &body)
-                .await
-            {
-                Ok(response) if response.error_code == 0 => {
-                    return <serde_wincode::SerdeCompat<SubmitChangeResult> as wincode::Deserialize>::deserialize(
-                        &response.result,
-                    )
-                    .map_err(RaftError::from);
-                }
-                Ok(response)
-                    if response.error_code == krabka_raft::PRIVATE_CLUSTER_AUTHORIZATION_FAILED =>
-                {
-                    return Err(RaftError::ClusterAuthorizationFailed);
-                }
-                Ok(response) => {
-                    last_error = RaftError::NotLeader {
-                        current_leader: (response.leader_hint >= 0)
-                            .then(|| NodeId(u64::try_from(response.leader_hint).unwrap_or(0))),
-                    };
-                }
-                Err(error) => last_error = error,
-            }
-        }
-        Err(last_error)
+        self.forward_submit(PrivateRpc::DelegationTokenMutation, &body)
+            .await
     }
 }
 
@@ -535,5 +485,138 @@ mod tests {
         assert2::assert!(matches!(err, RaftError::NotLeader {
             current_leader: None
         }));
+    }
+
+    /// What a forwarded write ended with, in a shape a test can compare whole.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Forwarded {
+        Applied,
+        TopicExists,
+        UncommittedTail,
+        ClusterAuthorizationFailed,
+        UnsupportedPrivateVersion { api_key: i16, version: i16 },
+        NotLeader(Option<NodeId>),
+        Other(String),
+    }
+
+    impl From<Result<SubmitChangeResult, RaftError>> for Forwarded {
+        fn from(outcome: Result<SubmitChangeResult, RaftError>) -> Self {
+            match outcome {
+                Ok(_) => Self::Applied,
+                Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {
+                    Self::TopicExists
+                }
+                Err(RaftError::UncommittedTail) => Self::UncommittedTail,
+                Err(RaftError::ClusterAuthorizationFailed) => Self::ClusterAuthorizationFailed,
+                Err(RaftError::UnsupportedPrivateVersion { api_key, version }) => {
+                    Self::UnsupportedPrivateVersion { api_key, version }
+                }
+                Err(RaftError::NotLeader { current_leader }) => Self::NotLeader(current_leader),
+                Err(other) => Self::Other(format!("{other:?}")),
+            }
+        }
+    }
+
+    /// One forwarded write of `rpc` to a quorum of three voters that each
+    /// answer `response`: what it ended with, and how many voters it asked.
+    async fn forward_to_three_voters(
+        rpc: PrivateRpc,
+        response: Vec<u8>,
+    ) -> (Result<SubmitChangeResult, RaftError>, usize) {
+        let asked = Arc::new(AtomicUsize::new(0));
+        let asked_for_mock = sync::Arc::clone(&asked);
+        let mock = mock_request_broker(
+            rpc.api_key(),
+            move || {
+                asked_for_mock.fetch_add(1, Ordering::SeqCst);
+                response.clone()
+            },
+            api_versions_response_v0,
+        )
+        .await;
+        let forwarder = QuorumForwarder {
+            voters: (1..=3)
+                .map(|id| (NodeId(id), mock.addr.to_string()))
+                .collect(),
+            ..forwarder(mock.addr, Arc::new(Mutex::new(Vec::new())), Some(NodeId(1)))
+        };
+        let outcome = match rpc {
+            PrivateRpc::DelegationTokenMutation => {
+                forwarder.submit_delegation_token_mutations(vec![]).await
+            }
+            _ => {
+                forwarder
+                    .submit_change(vec![topic_record("forwarded")])
+                    .await
+            }
+        };
+        mock.stop();
+        (outcome, asked.load(Ordering::SeqCst))
+    }
+
+    /// Each response code of both forwarded writes ends as the controller's
+    /// own forward path (`translate_submit_change_response`) ends it. Only a
+    /// voter that is not the leader sends the write on to the next voter. A
+    /// leader that refuses the version it was sent answers the same way on
+    /// every voter, so the forward stops at the first: the write fails with
+    /// `UnsupportedPrivateVersion`, not the retriable `NotLeader`.
+    #[tokio::test]
+    async fn quorum_forwarder_maps_each_response_code_like_the_controller() {
+        let unsupported = |rpc: PrivateRpc| Forwarded::UnsupportedPrivateVersion {
+            api_key: rpc.api_key(),
+            version: 0,
+        };
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for rpc in [
+            PrivateRpc::SubmitChange,
+            PrivateRpc::DelegationTokenMutation,
+        ] {
+            let table = [
+                (0, -1, Forwarded::Applied, 1),
+                (2, -1, Forwarded::TopicExists, 1),
+                (
+                    krabka_raft::SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+                    -1,
+                    Forwarded::UncommittedTail,
+                    1,
+                ),
+                (
+                    krabka_raft::PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
+                    -1,
+                    Forwarded::ClusterAuthorizationFailed,
+                    1,
+                ),
+                (
+                    krabka_raft::PRIVATE_UNSUPPORTED_VERSION,
+                    -1,
+                    unsupported(rpc),
+                    1,
+                ),
+                (1, 7, Forwarded::NotLeader(Some(NodeId(7))), 3),
+                (3, -1, Forwarded::NotLeader(None), 3),
+            ];
+            for (code, leader_hint, outcome, asked) in table {
+                let (outcome_seen, asked_seen) =
+                    forward_to_three_voters(rpc, submit_change_response_body(code, leader_hint))
+                        .await;
+                actual.push((rpc, code, (Forwarded::from(outcome_seen), asked_seen)));
+                expected.push((rpc, code, (outcome, asked)));
+            }
+        }
+        assert2::assert!(actual == expected);
+    }
+
+    /// A truncated response is a protocol error, and the forward tries the
+    /// next voter, as it does for a voter it cannot reach.
+    #[tokio::test]
+    async fn quorum_forwarder_truncated_response_is_a_protocol_error() {
+        let (outcome, asked) = forward_to_three_voters(PrivateRpc::SubmitChange, vec![0, 0]).await;
+
+        assert2::assert!(
+            matches!(outcome, Err(RaftError::Protocol(_))),
+            "{outcome:?}"
+        );
+        assert2::assert!(asked == 3);
     }
 }

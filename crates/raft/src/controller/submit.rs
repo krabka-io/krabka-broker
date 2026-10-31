@@ -348,7 +348,12 @@ fn submit_change_frame(payload: Vec<u8>) -> Result<Vec<u8>, RaftError> {
 /// - anything else → collapse to `NotLeader` (`CreateTopics` maps that to the
 ///   retryable `NOT_CONTROLLER`), preferring the response's `leader_hint` when
 ///   non-negative and falling back to the dialed `leader`.
-fn translate_submit_change_response(
+///
+/// # Errors
+///
+/// Returns the error the response's `error_code` names, or a decode error
+/// when `resp_body` is not a whole response.
+pub fn translate_submit_change_response(
     resp_body: &[u8],
     leader: NodeId,
     api_key: i16,
