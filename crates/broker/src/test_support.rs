@@ -132,8 +132,8 @@ use {
         records::{Attributes, Record, RecordBatch},
     },
     krabka_raft::{
-        AddVoter, DelegationTokenMutation, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter,
-        SnapshotRange, SubmitChangeResult, UpdateVoter,
+        AddVoter, DelegationTokenMutation, Node, NodeId, QuorumState, RaftError, ReconfigOutcome,
+        RemoveVoter, SnapshotRange, SubmitChangeResult, UpdateVoter,
     },
     krabka_security::{AuthMethod, Principal},
     qubit_clock::{
@@ -1986,9 +1986,8 @@ type SubmitOutcome =
 /// The outcome a [`FakeMetadataSource`] returns from
 /// `submit_delegation_token_mutations`, as a function of the batch it was
 /// handed.
-type TokenMutationOutcome = Box<
-    dyn Fn(&[DelegationTokenMutation]) -> Result<SubmitChangeResult, RaftError> + Send + Sync,
->;
+type TokenMutationOutcome =
+    Box<dyn Fn(&[DelegationTokenMutation]) -> Result<SubmitChangeResult, RaftError> + Send + Sync>;
 
 /// One intervening metadata or leadership change before guarded admission.
 type BeforeGuardedSubmit = Box<dyn FnOnce(&FakeMetadataSource) + Send>;

@@ -9,7 +9,9 @@ use {
         time_util::now_ms,
     },
     assert2::assert,
-    krabka_metadata::{DelegationTokenRecord, FeatureLevelRecord, MetadataRecord, metadata_version},
+    krabka_metadata::{
+        DelegationTokenRecord, FeatureLevelRecord, MetadataRecord, metadata_version,
+    },
     krabka_raft::{Controller, ControllerConfig, ControllerHandle, NodeId, RaftError},
     krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism},
     std::{
@@ -617,7 +619,11 @@ pub(super) fn failed_write_cases() -> [(&'static str, fn() -> RaftError, i16); 5
             },
             NOT_CONTROLLER,
         ),
-        ("leader unknown", || RaftError::LeaderUnknown, NOT_CONTROLLER),
+        (
+            "leader unknown",
+            || RaftError::LeaderUnknown,
+            NOT_CONTROLLER,
+        ),
         (
             "uncommitted tail",
             || RaftError::UncommittedTail,
