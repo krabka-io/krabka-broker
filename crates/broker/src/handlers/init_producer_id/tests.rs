@@ -15,6 +15,8 @@ use {
         authorizer::SimpleAclAuthorizer,
         broker::{Broker, BrokerHandle},
         error::BrokerError,
+        partition_registry::PartitionRegistry,
+        producer_id_manager::ProducerIdManager,
         handlers::{
             acl_test_support as acl_fixtures, acl_wire, context::RequestContext,
             find_coordinator::handle as find_coordinator_handle,
@@ -1144,4 +1146,31 @@ async fn find_transaction_coordinator(
         context,
     )
     .await
+}
+
+/// A coordinator with no `__transaction_state` partition for the id answers
+/// `COORDINATOR_NOT_AVAILABLE`, at every request version. Config validation
+/// rejects a non-positive partition count, so a started broker never gets
+/// here, and the coordinator is built directly.
+#[test]
+fn a_coordinator_without_state_partitions_is_not_available() {
+    let coordinator = TxnCoordinator::new(
+        krabka_audit::NodeId(1),
+        Arc::new(PartitionRegistry::new()),
+        Arc::new(ProducerIdManager::new()),
+        0,
+        krabka_units::mebibytes(1),
+    );
+    for version in [0, init_producer_id_response::MAX_VERSION] {
+        assert!(
+            coordinator_partition(&coordinator, "tid", version)
+                == Err(InitProducerIdResponse {
+                    error_code: codes::COORDINATOR_NOT_AVAILABLE,
+                    producer_id: -1,
+                    producer_epoch: -1,
+                    ..Default::default()
+                }),
+            "version {version}"
+        );
+    }
 }

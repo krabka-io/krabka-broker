@@ -485,7 +485,12 @@ mod tests {
             producer_id_manager::ProducerIdManager,
             test_support::{open_partition, spawn_standalone_partition},
             txn::{
-                bootstrap, coordinator::completion::CompletionAttempt, state::TopicPartition,
+                bootstrap,
+                coordinator::{
+                    completion::{CompletionAttempt, apply_completion},
+                    fanout_gate::MarkerFanoutMode,
+                },
+                state::TopicPartition,
                 version::TxnVersion,
             },
         },
@@ -1717,5 +1722,69 @@ mod tests {
         check!(via_old_handle.producer_id == ProducerId(1000));
         check!(via_old_handle.producer_epoch == 4);
         check!(via_old_handle.state == TxnState::Empty);
+    }
+
+    /// The fence's `CompleteAbort` must not overwrite a write that landed
+    /// while its marker fan-out ran.
+    ///
+    /// The fence persists `PrepareAbort` and releases every lock for the
+    /// fan-out. Meanwhile the completion task can finish the same abort, and a
+    /// second `InitProducerId` can then bump the epoch and hand that identity
+    /// to its producer. Kafka's marker channel appends the `Complete*`
+    /// transition only while the coordinator still holds the metadata it was
+    /// prepared for (`TransactionMarkerChannelManager`'s `appendToLogCallback`
+    /// re-reads `getTransactionState`, and `TransactionMetadata.prepareComplete`
+    /// requires the pending `PrepareAbort`), so a late completion is dropped
+    /// and the bumped identity stays. The fence answers
+    /// `CONCURRENT_TRANSACTIONS`, as it does whenever it fences.
+    #[tokio::test]
+    async fn a_fenced_abort_keeps_a_write_made_during_its_marker_fan_out() {
+        const TID: &str = "tid-fence-race";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let SeededCoordinator { coordinator, .. } =
+            coordinator_with_ongoing_transaction(dir.path(), TID).await;
+
+        // Hold the fence at the start of its marker fan-out, with its
+        // `PrepareAbort` durable.
+        coordinator
+            .marker_fanout_gate
+            .set_mode(MarkerFanoutMode::Hold);
+        let fence = {
+            let coordinator = Arc::clone(&coordinator);
+            tokio::spawn(async move {
+                init_verified(&coordinator, TID, InitIdentity::default()).await
+            })
+        };
+        coordinator.marker_fanout_gate.wait_for_arrivals(1).await;
+        let prepared = coordinator.get(TID).expect("entry").lock().await.clone();
+        check!(prepared.state == TxnState::PrepareAbort);
+
+        // The completion task finishes the abort: the record
+        // `complete_prepared_transaction` appends.
+        let mut completed = prepared;
+        let identity = completion_producer_identity(&completed);
+        apply_completion(&mut completed, TxnState::CompleteAbort, identity, now_millis());
+        seed(&coordinator, completed).await;
+
+        // A producer that names no identity bumps the completed transaction.
+        let bumped = init_verified(&coordinator, TID, InitIdentity::Anonymous)
+            .await
+            .expect("init responds");
+        check!(bumped.error_code == codes::NONE);
+        let live = coordinator.get(TID).expect("entry").lock().await.clone();
+        check!((live.producer_id.get(), live.producer_epoch) == (bumped.producer_id, bumped.producer_epoch));
+
+        coordinator
+            .marker_fanout_gate
+            .set_mode(MarkerFanoutMode::Open);
+        let fenced = fence
+            .await
+            .expect("fence task")
+            .expect("init responds");
+
+        check!(fenced == concurrent_transactions_response());
+        let after = coordinator.get(TID).expect("entry").lock().await.clone();
+        assert!(after == live, "the fence's CompleteAbort overwrote the bumped identity");
     }
 }

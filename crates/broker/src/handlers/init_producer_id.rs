@@ -33,6 +33,7 @@ use {
             version::resolve_txn_version,
         },
     },
+    krabka_ids::PartitionIndex,
     krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::owned::{
         init_producer_id_request::InitProducerIdRequest,
@@ -54,7 +55,7 @@ use {
         codes,
         error::BrokerError,
         replicator_supervisor::materialize_partition,
-        txn::coordinator::leadership::LoadStatus,
+        txn::coordinator::{TxnCoordinator, leadership::LoadStatus},
     },
     std::{sync::Arc, time::Duration},
 };
@@ -228,8 +229,9 @@ pub async fn handle(
                 Err(error_code) => return Ok(refusal(version, error_code)),
             };
             drop(coord.refresh_leader_partitions(&image).await);
-            let Some(txn_partition) = coord.partition_for(tid) else {
-                return Ok(refusal(version, codes::COORDINATOR_NOT_AVAILABLE));
+            let txn_partition = match coordinator_partition(&coord, tid, version) {
+                Ok(partition) => partition,
+                Err(refused) => return Ok(refused),
             };
             if coord.load_status(txn_partition).await == Some(LoadStatus::Pending) {
                 // This broker leads the `__transaction_state` partition, but
@@ -317,6 +319,19 @@ pub async fn handle(
     };
 
     Ok(downgrade_producer_fenced(resp, version))
+}
+
+/// The `__transaction_state` partition that coordinates `tid`, or the
+/// `COORDINATOR_NOT_AVAILABLE` refusal when `coord` has none, which happens
+/// only when its partition count is not positive.
+fn coordinator_partition(
+    coord: &TxnCoordinator,
+    tid: &str,
+    version: ApiVersion,
+) -> Result<PartitionIndex, InitProducerIdResponse> {
+    coord
+        .partition_for(tid)
+        .ok_or_else(|| refusal(version, codes::COORDINATOR_NOT_AVAILABLE))
 }
 
 /// Whether exactly one half of the `(producer_id, producer_epoch)` pair is
