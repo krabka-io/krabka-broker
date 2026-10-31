@@ -445,6 +445,50 @@ mod tests {
         );
     }
 
+    /// Kafka's controller merges a broker `LIST` key as
+    /// `ConfigurationControlManager.incrementalAlterConfigResource` does:
+    /// the operation's value is split with Java's `String.split`, which drops
+    /// trailing empty items, and SUBTRACT removes one occurrence of each item
+    /// (`List.remove(Object)`). The broker's `ConfigAdminManager`
+    /// (`split` and Scala's `diff`) agrees on both.
+    #[rstest::rstest]
+    #[case::append_with_a_trailing_comma(OP_APPEND, "delete", "compact,", "delete,compact")]
+    #[case::append_of_only_commas(OP_APPEND, "delete", ",", "delete")]
+    #[case::subtract_removes_one_occurrence(
+        OP_SUBTRACT,
+        "delete,compact,delete",
+        "delete",
+        "compact,delete"
+    )]
+    #[case::subtract_with_a_trailing_comma(OP_SUBTRACT, "delete,compact", "delete,", "compact")]
+    fn a_broker_list_key_merges_as_kafkas_controller_does(
+        #[case] operation: i8,
+        #[case] stored: &str,
+        #[case] value: &str,
+        #[case] expected: &str,
+    ) {
+        let cluster = krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
+        let key = "log.cleanup.policy";
+        let image = image_with(
+            &[StoredConfig {
+                node: cluster,
+                key,
+                value: stored,
+            }],
+            false,
+        );
+        let resource = make_resource("", vec![AlterableConfig {
+            name: key.into(),
+            config_operation: operation,
+            value: Some(value.into()),
+            ..Default::default()
+        }]);
+
+        let records = broker_records(&resource, broker_config_context().image(&image).call());
+
+        check!(records == Ok(vec![record(cluster, key, Some(expected))]));
+    }
+
     #[test]
     fn controller_managed_broker_configs_are_rejected_as_read_only() {
         for key in config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS {
