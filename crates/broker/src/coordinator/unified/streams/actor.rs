@@ -81,6 +81,7 @@ use {
             actor::{CommitFence, SubscribedTopics},
             offsets_log::{OffsetsLog, write_failure_code},
         },
+        error::BrokerError,
         metadata_source::MetadataSource,
         task_util::spawn_mailbox,
     },
@@ -941,13 +942,9 @@ async fn handle_message(
                     });
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        group_id = %actor.state.group_id,
-                        error = %e,
-                        "streams-group actor exiting after log-write failure",
-                    );
+                    let code = exit_on_write_failure(&actor.state.group_id, &e);
                     let _ = reply.send(StreamsHeartbeatResult {
-                        response: response::error_resp(write_failure_code(&e), None),
+                        response: response::error_resp(code, None),
                         creatable_topics: Vec::new(),
                     });
                     return Step::Stop;
@@ -969,12 +966,8 @@ async fn handle_message(
                     let _ = reply.send(answer);
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        group_id = %actor.state.group_id,
-                        error = %e,
-                        "streams-group actor exiting after log-write failure",
-                    );
-                    let _ = reply.send((write_failure_code(&e), None));
+                    let code = exit_on_write_failure(&actor.state.group_id, &e);
+                    let _ = reply.send((code, None));
                     return Step::Stop;
                 }
             }
@@ -1022,6 +1015,17 @@ async fn handle_message(
         }
     }
     Step::Continue
+}
+
+/// Logs that the actor of `group_id` exits after `error`, a failed log write,
+/// and returns the error code that answers the request whose write failed.
+fn exit_on_write_failure(group_id: &str, error: &BrokerError) -> i16 {
+    tracing::warn!(
+        group_id = %group_id,
+        error = %error,
+        "streams-group actor exiting after log-write failure",
+    );
+    write_failure_code(error)
 }
 
 /// The streams config of `group_id` on `node`: the group config overrides in
