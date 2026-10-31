@@ -8,7 +8,7 @@
 //! apart from any one mechanism.
 
 use {
-    super::response::fail_authenticate_with,
+    super::response::{fail_authenticate_with, sasl_ok},
     crate::handlers::ApiKeyCode,
     krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse,
     krabka_security::{AuthMethod, Principal, SaslMechanism, ScramServerExchange},
@@ -158,6 +158,51 @@ pub(super) fn session_expiry(
         expires_at_ms,
         session_lifetime_ms,
     }
+}
+
+/// What a mechanism's last successful round established: the authenticated
+/// principal, the credential's own lifetime, and the server's final message.
+#[derive(Debug)]
+pub(super) struct CompletedAuthentication {
+    pub(super) principal: Principal,
+    pub(super) mechanism: SaslMechanism,
+    /// The credential's own expiry, as [`session_expiry`] takes it.
+    pub(super) credential_expires_at_ms: Option<i64>,
+    /// KIP-48: whether the credential was a delegation token.
+    pub(super) authenticated_via_token: bool,
+    /// The server's final message, possibly empty.
+    pub(super) server_bytes: bytes::Bytes,
+}
+
+/// Moves `auth` to `Authenticated` for a finished exchange and builds the
+/// success response that advertises the session's KIP-368 window.
+///
+/// `now_ms` is the moment the exchange completed, which together with the
+/// credential lifetime and `max_reauth` fixes the session's expiry.
+pub(super) fn complete_authentication(
+    auth: &mut ConnectionAuth,
+    completed: CompletedAuthentication,
+    now_ms: i64,
+    max_reauth: Option<krabka_units::Time>,
+) -> SaslAuthenticateResponse {
+    let CompletedAuthentication {
+        principal,
+        mechanism,
+        credential_expires_at_ms,
+        authenticated_via_token,
+        server_bytes,
+    } = completed;
+    let SessionExpiry {
+        expires_at_ms,
+        session_lifetime_ms,
+    } = session_expiry(now_ms, credential_expires_at_ms, max_reauth);
+    *auth = ConnectionAuth::Authenticated {
+        principal,
+        mechanism,
+        expires_at_ms,
+        authenticated_via_token,
+    };
+    sasl_ok(server_bytes, session_lifetime_ms)
 }
 
 /// The instant a session ends and the window the client is told to
@@ -1060,6 +1105,94 @@ mod tests {
                 Some(krabka_units::millis(30_000)),
             ) == expiry(Some(i64::MAX - 1), 0)
         );
+    }
+
+    /// `complete_authentication` records the session the exchange
+    /// established and advertises the window [`session_expiry`] gives it, for a
+    /// credential with and without a lifetime and a listener with and without
+    /// a re-authentication cap.
+    #[test]
+    fn complete_authentication_records_the_session_and_advertises_its_window() {
+        let now = 1_000_000_i64;
+        let cases = [
+            ("no credential lifetime and no cap", None, None, false, None, 0),
+            (
+                "the cap bounds a credential without a lifetime",
+                None,
+                Some(krabka_units::millis(30_000)),
+                false,
+                Some(now + 30_000),
+                30_000,
+            ),
+            (
+                "a token expiry bounds an uncapped session",
+                Some(now + 5_000),
+                None,
+                true,
+                Some(now + 5_000),
+                5_000,
+            ),
+            (
+                "the cap shortens a longer token expiry",
+                Some(now + 60_000),
+                Some(krabka_units::millis(30_000)),
+                true,
+                Some(now + 30_000),
+                30_000,
+            ),
+        ];
+        for (case, credential_expires_at_ms, cap, via_token, want_expires_at_ms, want_lifetime) in
+            cases
+        {
+            let mut auth = ConnectionAuth::Negotiating {
+                mechanism: SaslMechanism::ScramSha256,
+                exchange: SaslExchange::ScramPending,
+                pending_token_expiry_ms: credential_expires_at_ms,
+            };
+            let response = complete_authentication(
+                &mut auth,
+                CompletedAuthentication {
+                    principal: alice(),
+                    mechanism: SaslMechanism::ScramSha256,
+                    credential_expires_at_ms,
+                    authenticated_via_token: via_token,
+                    server_bytes: bytes::Bytes::from_static(b"v=final"),
+                },
+                now,
+                cap,
+            );
+
+            check!(
+                response
+                    == SaslAuthenticateResponse {
+                        error_code: 0,
+                        error_message: None,
+                        auth_bytes: bytes::Bytes::from_static(b"v=final"),
+                        session_lifetime_ms: want_lifetime,
+                        ..Default::default()
+                    },
+                "{case}"
+            );
+            let ConnectionAuth::Authenticated {
+                principal,
+                mechanism,
+                expires_at_ms,
+                authenticated_via_token,
+            } = auth
+            else {
+                panic!("{case}: expected an authenticated session, got {auth:?}");
+            };
+            check!(
+                (principal, mechanism, expires_at_ms, authenticated_via_token)
+                    == (
+                        alice(),
+                        SaslMechanism::ScramSha256,
+                        want_expires_at_ms,
+                        via_token
+                    ),
+                "{case}"
+            );
+        }
     }
 
     /// `begin_reauth` is the handlers' "is this a re-authentication?" test, so
