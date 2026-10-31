@@ -127,6 +127,24 @@ async fn classic_leave_consumer_log_failure_stops_the_actor() {
     check!(handle.tx.is_closed());
 }
 
+/// A hosted classic `LeaveGroup` that removes the last native member
+/// downgrades the group; when the downgrade's append fails, the leave answers
+/// the write-failure code and the actor stops.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn classic_leave_downgrade_append_failure_reports_error() {
+    let (_coord, log, handle, native) = bidirectional_with_members().await;
+    log.fail_next.store(true, Ordering::SeqCst);
+
+    let result = rpc::classic_leave_member(&handle, &native).await;
+    check!(result.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
+    check!(result.members.is_empty());
+
+    timeout(Duration::from_secs(1), handle.tx.closed())
+        .await
+        .expect("a failed downgrade stops the actor");
+    check!(handle.tx.is_closed());
+}
+
 #[test]
 fn consumer_classic_leave_resolves_batch_and_static_identities() {
     use krabka_protocol::owned::leave_group_request::MemberIdentity;
