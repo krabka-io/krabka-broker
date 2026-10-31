@@ -442,7 +442,7 @@ mod tests {
     use {
         super::*,
         crate::{
-            codes::{NONE, NOT_CONTROLLER},
+            codes::{CLUSTER_AUTHORIZATION_FAILED, NONE, NOT_CONTROLLER},
             cordoned_log_dirs::CordonedLogDirs,
             features::METADATA_VERSION,
             log_dir_id::LogDirIds,
@@ -482,6 +482,9 @@ mod tests {
         Accept,
         // `NOT_CONTROLLER`, as a controller that lost the leadership answers.
         NotController,
+        // `CLUSTER_AUTHORIZATION_FAILED`, as a controller that refuses the
+        // broker's principal answers.
+        Refuse,
         // No answer, so the heartbeat times out.
         Silent,
         // No answer, and the fake closes the connection.
@@ -545,6 +548,7 @@ mod tests {
                 let error_code = match mem::replace(&mut seen.next_answer, Answer::Accept) {
                     Answer::Accept => NONE,
                     Answer::NotController => NOT_CONTROLLER,
+                    Answer::Refuse => CLUSTER_AUTHORIZATION_FAILED,
                     Answer::Silent => return MockReply::Silent,
                     Answer::Close => return MockReply::Close,
                 };
@@ -607,7 +611,7 @@ mod tests {
     }
 
     // The heartbeat client of broker 7 against `controllers`, which are voters
-    // 1, 2, ... in order, with no log directories.
+    // 1, 2, ... in order, with `log_dirs` as its log directories.
     #[bon::builder]
     fn heartbeat_config(
         source: &Arc<FakeMetadataSource>,
@@ -616,8 +620,11 @@ mod tests {
         controllers: &[&FakeController],
         want_shutdown: Receiver<bool>,
         #[builder(default = Arc::new(watch::channel(false).0))] should_shutdown: Arc<Sender<bool>>,
+        #[builder(default = watch::channel(InitialUnfence::Pending).0)] unfenced: Sender<
+            InitialUnfence,
+        >,
+        #[builder(default)] log_dirs: Vec<PathBuf>,
     ) -> Config {
-        let no_dirs: Vec<PathBuf> = Vec::new();
         Config {
             broker_id: 7,
             broker_epoch: 11,
@@ -636,10 +643,10 @@ mod tests {
                 .collect(),
             want_shutdown,
             should_shutdown,
-            unfenced: watch::channel(InitialUnfence::Pending).0,
-            log_dir_status: LogDirRegistry::probe(&no_dirs),
-            log_dir_ids: LogDirIds::resolve(&no_dirs),
-            all_log_dirs: no_dirs.clone(),
+            unfenced,
+            log_dir_status: LogDirRegistry::probe(&log_dirs),
+            log_dir_ids: LogDirIds::resolve(&log_dirs),
+            all_log_dirs: log_dirs,
             supervisor_shutdown: CancellationToken::new(),
             cordoned_log_dirs: CordonedLogDirs::default(),
         }
@@ -732,6 +739,76 @@ mod tests {
 
         check!((answered, controller.heartbeats()) == (true, 3));
         check!(took < Duration::from_secs(5), "{took:?}");
+    }
+
+    /// Kafka's `BrokerLifecycleManager` completes `initialUnfenceFuture`
+    /// exceptionally on `CLUSTER_AUTHORIZATION_FAILED`. The refusal is not
+    /// `NOT_CONTROLLER`, so the connection stays open for the next heartbeat.
+    #[tokio::test]
+    async fn a_refused_heartbeat_stops_the_initial_unfence_and_keeps_the_connection() {
+        let controller = FakeController::start().await;
+        controller.answer_next(Answer::Refuse);
+        let source = registered_broker_source();
+        let (want_shutdown_tx, want_shutdown) = watch::channel(false);
+        let (unfenced, mut initial_unfence) = watch::channel(InitialUnfence::Pending);
+        let shutdown = CancellationToken::new();
+        let heartbeats = tokio::spawn(run(heartbeat_config()
+            .source(&source)
+            .shutdown(&shutdown)
+            .interval(secs(60))
+            .controllers(&[&controller])
+            .want_shutdown(want_shutdown)
+            .unfenced(unfenced)
+            .call()));
+
+        let settled = timeout(
+            Duration::from_secs(10),
+            initial_unfence.wait_for(|state| *state != InitialUnfence::Pending),
+        )
+        .await
+        .ok()
+        .and_then(|state| state.ok().map(|state| *state));
+        // A controlled shutdown heartbeats at once, without waiting out the
+        // minute-long interval.
+        want_shutdown_tx.send_replace(true);
+        controller.wait_for_heartbeats(1).await;
+        shutdown.cancel();
+        heartbeats.await.unwrap();
+
+        check!(settled == Some(InitialUnfence::Refused));
+        check!(controller.connections() == 1);
+    }
+
+    /// KIP-112: a broker whose every log directory is offline shuts itself
+    /// down at the next tick without a heartbeat.
+    #[tokio::test]
+    async fn every_log_dir_offline_shuts_the_broker_down_before_a_heartbeat() {
+        let controller = FakeController::start().await;
+        let (a, b, paths) = two_log_dirs();
+        let source = registered_broker_source();
+        let (_want_shutdown, want_shutdown) = watch::channel(false);
+        let should_shutdown = Arc::new(watch::channel(false).0);
+        let told = should_shutdown.subscribe();
+        let shutdown = CancellationToken::new();
+        let cfg = heartbeat_config()
+            .source(&source)
+            .shutdown(&shutdown)
+            .interval(millis(20))
+            .controllers(&[&controller])
+            .want_shutdown(want_shutdown)
+            .should_shutdown(should_shutdown)
+            .log_dirs(paths)
+            .call();
+        cfg.log_dir_status.mark_offline(a.path(), "test");
+        cfg.log_dir_status.mark_offline(b.path(), "test");
+        let supervisor = cfg.supervisor_shutdown.clone();
+
+        let stopped = timeout(Duration::from_secs(10), run(cfg)).await;
+
+        check!(stopped.is_ok());
+        check!(*told.borrow());
+        check!(supervisor.is_cancelled());
+        check!(controller.heartbeats() == 0);
     }
 
     #[test]
