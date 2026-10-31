@@ -456,16 +456,23 @@ mod tests {
     use {
         super::*,
         crate::{
+            api_catalog::UnstableApiVersions,
+            config_keys::{RETENTION_MS, SEGMENT_BYTES},
             handlers::{
+                forward_to_controller::guarded_operation_on_source,
                 incremental_alter_configs::test_support::{
-                    AlterableConfig, check, make_scoped_resource,
+                    AlterableConfig, StoredOverride, check, image_with_topic_config,
+                    make_scoped_resource, make_set_cfg, make_topic_resource, overrides_map,
                 },
                 test_support::{
                     assert_dispatch_response, config_resource_error_response, ordered_rows,
                 },
             },
-            test_support::start_broker_with_authorizer as start_broker,
+            metadata_source::MetadataSource,
+            test_support::{FakeMetadataSource, start_broker_with_authorizer as start_broker},
+            topic_policy::TopicPolicy,
         },
+        krabka_metadata::TopicConfigRecord,
     };
 
     krabka_macros::wire_codec_helpers! {
@@ -557,6 +564,56 @@ mod tests {
             .await;
         }
         handle.shutdown().await;
+    }
+
+    /// An incremental SET merges onto the image that the guarded retry reads
+    /// after a conflict, so an override committed between the first planning
+    /// attempt and the append survives in the submitted record.
+    #[tokio::test]
+    async fn topic_set_replans_onto_an_intervening_override() {
+        let initial =
+            image_with_topic_config("orders", &[StoredOverride::new(RETENTION_MS, "60000")]);
+        let newer =
+            image_with_topic_config("orders", &[StoredOverride::new(RETENTION_MS, "120000")]);
+        let source = FakeMetadataSource::builder()
+            .image(initial)
+            .leader(Some(krabka_raft::NodeId(1)))
+            .before_guarded_submit(move |source| source.set_image(newer))
+            .build();
+        let resource = make_topic_resource("orders", vec![make_set_cfg(SEGMENT_BYTES, "1048576")]);
+        let result =
+            guarded_operation_on_source(&source, Instant::now() + Duration::from_secs(1), |image| {
+                let resource = &resource;
+                let source = &source;
+                async move {
+                    let record = match topic_config_record(
+                        resource,
+                        &image,
+                        &TopicPolicy::default(),
+                        false,
+                        UnstableApiVersions::Disabled,
+                    ) {
+                        Ok(record) => record,
+                        Err(error) => return Ok(Err(error)),
+                    };
+                    source.submit_change_if_image(vec![record], image).await?;
+                    Ok(Ok(()))
+                }
+            })
+            .await
+            .expect("bounded retry")
+            .expect("guarded submission");
+        check!(result == Ok(()));
+        check!(
+            source.submitted_records()
+                == vec![MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                    topic: "orders".into(),
+                    overrides: overrides_map(&[
+                        StoredOverride::new(RETENTION_MS, "120000"),
+                        StoredOverride::new(SEGMENT_BYTES, "1048576"),
+                    ]),
+                })]
+        );
     }
 
     fn config(name: &str, operation: i8, value: Option<&str>) -> AlterableConfig {
