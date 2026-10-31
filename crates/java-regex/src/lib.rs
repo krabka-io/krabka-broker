@@ -223,7 +223,14 @@ impl JavaPattern {
         } else {
             compile_fancy(&translated)
         };
-        let names = tree.named_groups.into_iter().collect();
+        // `fancy_regex` lists every group of a name. Java refuses a second
+        // group of the same name, and the translation with it, so each name
+        // has one group. The last is the one `fancy_regex` resolves `\k` to.
+        let names = tree
+            .named_groups
+            .into_iter()
+            .filter_map(|(name, groups)| Some((name, *groups.last()?)))
+            .collect();
         let program = Program::new(ProgramInput {
             translated: &translated,
             groups,
