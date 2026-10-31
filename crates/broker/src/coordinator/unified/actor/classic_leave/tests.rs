@@ -117,14 +117,7 @@ async fn classic_leave_consumer_log_failure_stops_the_actor() {
     let native = joined.member_id.expect("native member id");
     log.fail_next.store(true, Ordering::SeqCst);
 
-    let result = rpc::classic_leave_member(&handle, &native).await;
-    check!(result.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
-    check!(result.members.is_empty());
-
-    timeout(Duration::from_secs(1), handle.tx.closed())
-        .await
-        .expect("consumer-kind log failure stops the actor");
-    check!(handle.tx.is_closed());
+    check_failed_leave_stops_the_actor(&handle, &native).await;
 }
 
 /// A hosted classic `LeaveGroup` that removes the last native member
@@ -135,13 +128,19 @@ async fn classic_leave_downgrade_append_failure_reports_error() {
     let (_coord, log, handle, native) = bidirectional_with_members().await;
     log.fail_next.store(true, Ordering::SeqCst);
 
-    let result = rpc::classic_leave_member(&handle, &native).await;
+    check_failed_leave_stops_the_actor(&handle, &native).await;
+}
+
+/// A classic `LeaveGroup` of `member_id` whose log write fails answers the
+/// write-failure code with no member responses, and the actor stops.
+async fn check_failed_leave_stops_the_actor(handle: &GroupActorHandle, member_id: &str) {
+    let result = rpc::classic_leave_member(handle, member_id).await;
     check!(result.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
     check!(result.members.is_empty());
 
     timeout(Duration::from_secs(1), handle.tx.closed())
         .await
-        .expect("a failed downgrade stops the actor");
+        .expect("a failed log write stops the actor");
     check!(handle.tx.is_closed());
 }
 
