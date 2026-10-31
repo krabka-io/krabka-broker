@@ -206,6 +206,27 @@ fn heartbeat_request(
     }
 }
 
+/// The heartbeat this tick sends: the registration it names, the metadata it
+/// has applied, whether it asks to shut down, and its log dirs.
+fn next_heartbeat(
+    cfg: &Config,
+    caught_up: bool,
+    image: &MetadataImage,
+    want_shut_down: bool,
+) -> BrokerHeartbeatRequest {
+    let log_dirs = HeartbeatLogDirs {
+        offline: offline_dir_uuids(&cfg.log_dir_status, &cfg.log_dir_ids),
+        cordoned: cordoned_dir_uuids(caught_up, image, &cfg.cordoned_log_dirs, &cfg.log_dir_ids),
+    };
+    heartbeat_request(
+        cfg.broker_id,
+        registered_epoch(cfg, image),
+        cfg.controller.current_metadata_offset(),
+        want_shut_down,
+        log_dirs,
+    )
+}
+
 /// Triggers the KIP-112 self-shutdown. It latches `should_shutdown` and
 /// cancels the supervisor. Every early-exit path calls it, so the check is not
 /// accidentally skipped when the controller is temporarily unreachable.
@@ -451,26 +472,8 @@ pub async fn run(mut cfg: Config) {
             continue;
         };
         let want_shut_down = *cfg.want_shutdown.borrow_and_update();
-        let log_dirs = HeartbeatLogDirs {
-            offline: offline_dir_uuids(&cfg.log_dir_status, &cfg.log_dir_ids),
-            cordoned: cordoned_dir_uuids(
-                state.caught_up,
-                &image,
-                &cfg.cordoned_log_dirs,
-                &cfg.log_dir_ids,
-            ),
-        };
-        let resp = time::timeout(
-            rpc_timeout.to_std(),
-            open.connection.send(heartbeat_request(
-                cfg.broker_id,
-                registered_epoch(&cfg, &image),
-                cfg.controller.current_metadata_offset(),
-                want_shut_down,
-                log_dirs,
-            )),
-        )
-        .await;
+        let request = next_heartbeat(&cfg, state.caught_up, &image, want_shut_down);
+        let resp = time::timeout(rpc_timeout.to_std(), open.connection.send(request)).await;
         match resp {
             Ok(Ok(r)) => match apply_response(&cfg, &mut state, want_shut_down, &r) {
                 ResponseOutcome::Rejected { keep_channel } => {
