@@ -14,7 +14,7 @@ use {
         record_limit::check_records_read,
         recovery::swap::cleaned_path,
         segment::{FrontierScan, SealedInput, TailScan},
-        txn_index::TxnIndex,
+        txn_index::{AbortedTxn, TxnIndex},
     },
     bytes::{Bytes, BytesMut},
     krabka_compression::CompressionType,
@@ -311,19 +311,7 @@ pub fn rewrite_segments(
     // across outputs. A read-committed fetch that scans several of a
     // multi-segment pass's outputs would otherwise see the same aborted
     // transaction once per output and inflate its response.
-    let retained = txn_meta.take_cleaned_index();
-    let txnindex_swap = if retained.is_empty() {
-        None
-    } else {
-        let path = swap_path(dir, new_base.0, "txnindex");
-        // Truncate any stale .cleaned file, then append the retained entries.
-        create_truncated(&path)?;
-        let mut idx = TxnIndex::open(path.clone())?;
-        for entry in retained {
-            idx.append(entry)?;
-        }
-        Some(path)
-    };
+    let txnindex_swap = write_cleaned_txnindex(dir, new_base, txn_meta.take_cleaned_index())?;
 
     tracing::Span::current().record("new_last_offset", last_kept_offset.0);
     Ok(RewriteOutput {
@@ -479,6 +467,27 @@ fn retained_batch(
         out_batch = out_batch.with_delete_horizon(h);
     }
     out_batch
+}
+
+/// Write the `.txnindex.cleaned` of the output at `new_base` with the
+/// `retained` aborted transactions, and return its path. Writes nothing and
+/// returns `None` when no aborted transaction survives.
+fn write_cleaned_txnindex(
+    dir: &Path,
+    new_base: Offset,
+    retained: Vec<AbortedTxn>,
+) -> Result<Option<PathBuf>, LogError> {
+    if retained.is_empty() {
+        return Ok(None);
+    }
+    let path = swap_path(dir, new_base.0, "txnindex");
+    // Truncate any stale .cleaned file, then append the retained entries.
+    create_truncated(&path)?;
+    let mut idx = TxnIndex::open(path.clone())?;
+    for entry in retained {
+        idx.append(entry)?;
+    }
+    Ok(Some(path))
 }
 
 /// The bare header a `RETAIN_EMPTY` batch leaves in the output, Kafka's
