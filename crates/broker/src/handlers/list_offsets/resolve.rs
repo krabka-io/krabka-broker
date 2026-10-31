@@ -257,12 +257,51 @@ async fn resolve_latest_tiered(
     } = topic;
     let topic_partition =
         krabka_remote_storage::TopicIdPartition::new(id, topic_name.to_owned(), index);
-    let answer = await_remote(remote_timeout, reader.latest_tiered_offset(&topic_partition)).await;
+    let answer = await_remote(
+        remote_timeout,
+        reader.latest_tiered_offset(&topic_partition),
+    )
+    .await;
     if let Some(Err(error)) = &answer {
         tracing::warn!(topic = topic_name, partition = index,
             error = %error, "list_offsets: remote latest_tiered_offset failed");
     }
     latest_tiered_candidate(answer.as_ref())
+}
+
+/// Resolve the KIP-734 `MAX_TIMESTAMP` sentinel from the local log: the
+/// offset and timestamp of the record with the largest timestamp, or the
+/// unknown pair when the log holds no record.
+///
+/// An empty log has no record to name, and Kafka's
+/// `UnifiedLog.fetchOffsetByTimestamp` answers it with an empty result rather
+/// than the log start: KIP-207 fences that empty result, and an unfenced one
+/// is the unknown row.
+///
+/// A compressed record above the topic's trunk
+/// `max.decompressed.message.bytes` in the batch Kafka reads to resolve the
+/// maximum fails the row, as an exception out of
+/// `UnifiedLog.fetchOffsetByTimestamp` does.
+fn resolve_max_timestamp(
+    partition: &Partition,
+    topic: TopicPartitionName<'_>,
+) -> Result<(i64, i64), i16> {
+    let found = partition
+        .log
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .max_timestamp_offset_and_ts();
+    match found {
+        Ok(found) => Ok(found.map_or(
+            (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
+            |(offset, timestamp)| (offset.0, timestamp),
+        )),
+        Err(error) => {
+            tracing::warn!(topic = topic.name, partition = topic.partition, error = %error,
+                "list_offsets: max timestamp lookup refused a record");
+            Err(codes::from_broker_error(&error.into()))
+        }
+    }
 }
 
 /// The local snapshot and archive lookup needed to resolve scheduled LATEST.
@@ -673,29 +712,13 @@ pub(super) async fn resolve_partition(
             }
         }
         ListOffsetsKind::MaxTimestamp => {
-            // An empty log has no record to name, and Kafka's
-            // `UnifiedLog.fetchOffsetByTimestamp` answers it with an empty
-            // result rather than the log start: KIP-207 fences that empty
-            // result, and an unfenced one is the unknown row.
-            let found = partition
-                .log
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .max_timestamp_offset_and_ts();
-            // A compressed record above the topic's trunk
-            // `max.decompressed.message.bytes` in the batch Kafka reads to
-            // resolve the maximum fails the row, as an exception out of
-            // `UnifiedLog.fetchOffsetByTimestamp` does.
-            let (offset, timestamp) = match found {
-                Ok(found) => found.map_or(
-                    (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
-                    |(offset, timestamp)| (offset.0, timestamp),
-                ),
-                Err(error) => {
-                    tracing::warn!(topic = topic_name, partition = index, error = %error,
-                        "list_offsets: max timestamp lookup refused a record");
-                    return error_response(index, codes::from_broker_error(&error.into()));
-                }
+            let topic = TopicPartitionName {
+                name: topic_name,
+                partition: index,
+            };
+            let (offset, timestamp) = match resolve_max_timestamp(&partition, topic) {
+                Ok(found) => found,
+                Err(error_code) => return error_response(index, error_code),
             };
             // Kafka fills the epoch with the resolved batch's own
             // `partitionLeaderEpoch`. `UnifiedLog.java:1742-1749`.
@@ -849,13 +872,12 @@ mod tests {
                 Some(Err(RemoteStorageError::Io(io::Error::other("boom")))),
                 Ok(None),
             ),
-            (
-                "the tier times out",
-                None,
-                Err(codes::REQUEST_TIMED_OUT),
-            ),
+            ("the tier times out", None, Err(codes::REQUEST_TIMED_OUT)),
         ] {
-            assert!(latest_tiered_candidate(answer.as_ref()) == expected, "{name}");
+            assert!(
+                latest_tiered_candidate(answer.as_ref()) == expected,
+                "{name}"
+            );
         }
     }
 
