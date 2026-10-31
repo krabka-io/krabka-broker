@@ -1239,6 +1239,45 @@ mod tests {
         tiered.owners.handle.shutdown().await;
     }
 
+    /// The share-fetch (KIP-932) and dead-letter (KIP-1191) reads of the tier
+    /// resolve the owning epoch as the Fetch read above does: below a cut
+    /// leader-epoch cache, the archive names the epoch, so they serve the
+    /// same archived batch a classic consumer gets rather than a miss under
+    /// the current epoch.
+    #[tokio::test]
+    async fn a_share_read_below_a_cut_epoch_cache_takes_the_epoch_from_the_archive() {
+        use krabka_log::Offset;
+
+        let tiered = committed_tiered_fixture().await;
+        {
+            let mut log = tiered.part.log.lock().expect("log mutex poisoned");
+            log.set_log_start_offset(Offset(5))
+                .expect("raise the floor too high");
+            log.follow_leader_log_start(Offset(0))
+                .expect("take the leader's start back");
+            drop(log);
+        }
+        tiered
+            .part
+            .current_leader_epoch
+            .store(7, atomic::Ordering::Release);
+        let reader = tiered.broker.remote_reader.clone().expect("remote reader");
+        let tp = krabka_remote_storage::TopicIdPartition::new(tiered_topic_id(), TIERED_TOPIC, 0);
+        let archived = reader
+            .fetch_raw(&tp, krabka_ids::LeaderEpoch(0), 0, 1)
+            .await
+            .expect("read the archive under the copy epoch");
+        assert!(archived.is_some(), "the archive holds offset 0");
+
+        let read = reader
+            .read_partition(&tiered.part, &tp, Offset(0), 1, &tiered.broker.metrics)
+            .await
+            .expect("the share read of offset 0");
+
+        check!(read == archived);
+        tiered.owners.handle.shutdown().await;
+    }
+
     /// A restart must not hide the archive.
     ///
     /// `Log::open` reads a global floor off the segments that survived on
