@@ -59,36 +59,7 @@ pub(super) fn handle_partition_with_recovery(
     let current_recovery_state = image.leader_recovery_state(topic_name, partition_index);
     let (effective_isr, proposed_states) = proposed_replicas(request);
     let effective_isr_i32 = effective_isr.as_slice();
-
-    // Kafka's `ineligibleReplicasForIsr`: a broker in the proposed ISR is
-    // ineligible if it is not registered, is in controlled shutdown, is
-    // fenced, or carries a broker epoch other than -1 that disagrees with its
-    // registration (KIP-903). The registration carries the fence and the
-    // controlled shutdown, and `active`, the controller's heartbeat registry,
-    // also refuses a broker whose change has not committed yet. Any
-    // ineligible replica fails the whole partition.
-    let replicas_eligible = proposed_states.iter().all(
-        |&ProposedReplica {
-             broker_id,
-             broker_epoch,
-         }| {
-            let Ok(id) = u64::try_from(broker_id) else {
-                return false;
-            };
-            image.broker(NodeId(id)).is_some_and(|registration| {
-                !registration.fenced
-                    && !registration.in_controlled_shutdown
-                    && active.contains(&id)
-                    && (broker_epoch == -1 || registration.broker_epoch == broker_epoch)
-            })
-        },
-    );
-
-    let requested_recovery_state = match request.leader_recovery_state {
-        0 => Some(LeaderRecoveryState::Recovered),
-        1 => Some(LeaderRecoveryState::Recovering),
-        _ => None,
-    };
+    let requested_recovery_state = requested_recovery_state(request.leader_recovery_state);
     let recovery_state_valid = requested_recovery_state.is_some_and(|requested| {
         requested == LeaderRecoveryState::Recovered
             || (effective_isr_i32.len() <= 1
@@ -103,21 +74,13 @@ pub(super) fn handle_partition_with_recovery(
         requester_is_leader: u64::try_from(requester).is_ok_and(|id| part_rec.leader.0 == id),
         proposed_isr: proposed_isr_shape(effective_isr_i32, part_rec),
         recovery_state_valid,
-        replicas_eligible,
+        replicas_eligible: replicas_eligible(image, active, &proposed_states),
     });
-    let error_code = match admission {
-        IsrAdmission::NotController => codes::NOT_CONTROLLER,
-        IsrAdmission::FencedLeaderEpoch => codes::FENCED_LEADER_EPOCH,
-        IsrAdmission::InvalidUpdateVersion => codes::INVALID_UPDATE_VERSION,
-        IsrAdmission::InvalidRequest => codes::INVALID_REQUEST,
-        IsrAdmission::IneligibleReplica => codes::INELIGIBLE_REPLICA,
-        IsrAdmission::Admit => codes::NONE,
-    };
     // An admitted row had a valid, hence known, recovery state.
     let Some(requested_recovery_state) =
         requested_recovery_state.filter(|_| admission == IsrAdmission::Admit)
     else {
-        return error_part(partition_index, error_code);
+        return error_part(partition_index, admission_error_code(admission));
     };
     // An admitted ISR is a valid replica subset, so every member converts.
     let proposed_isr: Vec<NodeId> = effective_isr_i32
@@ -193,6 +156,58 @@ fn proposed_replicas(request: &ReqPartitionData) -> (Vec<i32>, Vec<ProposedRepli
     };
     let broker_ids = replicas.iter().map(|replica| replica.broker_id).collect();
     (broker_ids, replicas)
+}
+
+/// Kafka's `ineligibleReplicasForIsr`: a broker in the proposed ISR is
+/// ineligible if it is not registered, is in controlled shutdown, is fenced,
+/// or carries a broker epoch other than -1 that disagrees with its
+/// registration (KIP-903). The registration carries the fence and the
+/// controlled shutdown, and `active`, the controller's heartbeat registry,
+/// also refuses a broker whose change has not committed yet. Any ineligible
+/// replica fails the whole partition.
+fn replicas_eligible(
+    image: &krabka_metadata::MetadataImage,
+    active: &HashSet<u64>,
+    proposed: &[ProposedReplica],
+) -> bool {
+    proposed.iter().all(
+        |&ProposedReplica {
+             broker_id,
+             broker_epoch,
+         }| {
+            let Ok(id) = u64::try_from(broker_id) else {
+                return false;
+            };
+            image.broker(NodeId(id)).is_some_and(|registration| {
+                !registration.fenced
+                    && !registration.in_controlled_shutdown
+                    && active.contains(&id)
+                    && (broker_epoch == -1 || registration.broker_epoch == broker_epoch)
+            })
+        },
+    )
+}
+
+/// The leader recovery state a request row asks for, or `None` for a code
+/// that names no state.
+const fn requested_recovery_state(code: i8) -> Option<LeaderRecoveryState> {
+    match code {
+        0 => Some(LeaderRecoveryState::Recovered),
+        1 => Some(LeaderRecoveryState::Recovering),
+        _ => None,
+    }
+}
+
+/// The response error code for an admission decision.
+const fn admission_error_code(admission: IsrAdmission) -> i16 {
+    match admission {
+        IsrAdmission::NotController => codes::NOT_CONTROLLER,
+        IsrAdmission::FencedLeaderEpoch => codes::FENCED_LEADER_EPOCH,
+        IsrAdmission::InvalidUpdateVersion => codes::INVALID_UPDATE_VERSION,
+        IsrAdmission::InvalidRequest => codes::INVALID_REQUEST,
+        IsrAdmission::IneligibleReplica => codes::INELIGIBLE_REPLICA,
+        IsrAdmission::Admit => codes::NONE,
+    }
 }
 
 /// Kafka's `Replicas.validateIsr` and its leader-membership check: every
