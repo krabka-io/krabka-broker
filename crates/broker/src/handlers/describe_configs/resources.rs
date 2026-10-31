@@ -120,75 +120,60 @@ pub(super) fn describe_one(
         ..Default::default()
     };
 
-    if r.resource_type == RESOURCE_TYPE_TOPIC {
-        // `Topic.validate` first, then `metadataCache.contains`: a name Kafka
-        // refuses is INVALID_TOPIC_EXCEPTION, and a topic that does not exist
-        // is UNKNOWN_TOPIC_OR_PARTITION with no message, never a list of
-        // defaults that look real.
-        if let Err(invalid) = topic_name::validate_topic_name(&r.resource_name) {
-            return failed(codes::INVALID_TOPIC_EXCEPTION, Some(invalid.to_string()));
+    match r.resource_type {
+        RESOURCE_TYPE_TOPIC => {
+            // `Topic.validate` first, then `metadataCache.contains`: a name
+            // Kafka refuses is INVALID_TOPIC_EXCEPTION, and a topic that does
+            // not exist is UNKNOWN_TOPIC_OR_PARTITION with no message, never a
+            // list of defaults that look real.
+            if let Err(invalid) = topic_name::validate_topic_name(&r.resource_name) {
+                return failed(codes::INVALID_TOPIC_EXCEPTION, Some(invalid.to_string()));
+            }
+            if image.topic(&r.resource_name).is_none() {
+                return failed(codes::UNKNOWN_TOPIC_OR_PARTITION, None);
+            }
+            let broker = TopicBrokerLayers {
+                node: serving.node,
+                statics: serving.static_broker.settings,
+                unstable: serving.unstable_api_versions,
+            };
+            ok(topic_configs(
+                image,
+                &r.resource_name,
+                broker,
+                &wanted,
+                options,
+            ))
         }
-        if image.topic(&r.resource_name).is_none() {
-            return failed(codes::UNKNOWN_TOPIC_OR_PARTITION, None);
+        RESOURCE_TYPE_BROKER => match broker_resource_node(&r.resource_name, serving.node) {
+            Ok(node_id) => ok(broker_configs(image, node_id, serving, &wanted, options)),
+            Err(message) => failed(codes::INVALID_REQUEST, Some(message)),
+        },
+        RESOURCE_TYPE_BROKER_LOGGER => {
+            match broker_logger::validate_resource_name(&r.resource_name, serving.loggers.node_id) {
+                Ok(()) => ok(broker_logger::logger_configs(
+                    serving.loggers.levels,
+                    &wanted,
+                )),
+                Err(message) => failed(codes::INVALID_REQUEST, Some(message)),
+            }
         }
-        let broker = TopicBrokerLayers {
-            node: serving.node,
-            statics: serving.static_broker.settings,
-            unstable: serving.unstable_api_versions,
-        };
-        return ok(topic_configs(
-            image,
-            &r.resource_name,
-            broker,
-            &wanted,
-            options,
-        ));
-    }
-
-    if r.resource_type == RESOURCE_TYPE_BROKER {
-        let node_id = match broker_resource_node(&r.resource_name, serving.node) {
-            Ok(node_id) => node_id,
-            Err(message) => return failed(codes::INVALID_REQUEST, Some(message)),
-        };
-        return ok(broker_configs(image, node_id, serving, &wanted, options));
-    }
-
-    if r.resource_type == RESOURCE_TYPE_BROKER_LOGGER {
-        if let Err(message) =
-            broker_logger::validate_resource_name(&r.resource_name, serving.loggers.node_id)
-        {
-            return failed(codes::INVALID_REQUEST, Some(message));
-        }
-        return ok(broker_logger::logger_configs(
-            serving.loggers.levels,
-            &wanted,
-        ));
-    }
-
-    if r.resource_type == RESOURCE_TYPE_CLIENT_METRICS {
-        if r.resource_name.is_empty() {
-            return failed(
-                codes::INVALID_REQUEST,
-                Some("Client metrics subscription name must not be empty".into()),
-            );
-        }
-        return ok(client_metrics_configs(
+        RESOURCE_TYPE_CLIENT_METRICS if r.resource_name.is_empty() => failed(
+            codes::INVALID_REQUEST,
+            Some("Client metrics subscription name must not be empty".into()),
+        ),
+        RESOURCE_TYPE_CLIENT_METRICS => ok(client_metrics_configs(
             image,
             &r.resource_name,
             client_metrics_default_interval_ms,
             &wanted,
             options,
-        ));
-    }
-
-    if r.resource_type == RESOURCE_TYPE_GROUP {
-        if r.resource_name.is_empty() {
-            return failed(
-                codes::INVALID_REQUEST,
-                Some("Group name must not be empty".into()),
-            );
-        }
-        return ok(group_configs(
+        )),
+        RESOURCE_TYPE_GROUP if r.resource_name.is_empty() => failed(
+            codes::INVALID_REQUEST,
+            Some("Group name must not be empty".into()),
+        ),
+        RESOURCE_TYPE_GROUP => ok(group_configs(
             image,
             &r.resource_name,
             GroupServing {
@@ -197,15 +182,15 @@ pub(super) fn describe_one(
             },
             &wanted,
             options,
-        ));
+        )),
+        // `handle` refuses a request naming any other type before it gets
+        // here; this is Kafka's own last `case` in
+        // `ConfigHelper.describeConfigs`.
+        _ => failed(
+            codes::INVALID_REQUEST,
+            Some(format!("Unsupported resource type: {}", r.resource_type)),
+        ),
     }
-
-    // `handle` refuses a request naming any other type before it gets here;
-    // this is Kafka's own last `case` in `ConfigHelper.describeConfigs`.
-    failed(
-        codes::INVALID_REQUEST,
-        Some(format!("Unsupported resource type: {}", r.resource_type)),
-    )
 }
 
 /// The node a `BROKER` resource name asks about: `None` for the empty name,
