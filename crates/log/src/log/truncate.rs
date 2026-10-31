@@ -49,6 +49,20 @@ impl Log {
         )
     }
 
+    /// Retire the files of the newest sealed segment, then forget the segment
+    /// and its cached transaction and stamp indexes. Does nothing when no
+    /// segment is sealed.
+    pub(super) fn drop_last_sealed_segment(&mut self) -> Result<(), LogError> {
+        let Some(base) = self.segments.last().map(Segment::base_offset) else {
+            return Ok(());
+        };
+        self.remove_truncated_segment_files(base)?;
+        self.segments.pop();
+        self.sealed_txn_indexes.remove(&base);
+        self.stamp_indexes.remove(&base);
+        Ok(())
+    }
+
     /// Truncate the log so that no record at offset `>= offset` remains.
     /// Replication and leader election use this method.
     ///
@@ -110,13 +124,8 @@ impl Log {
         );
 
         // Drop exactly the sealed suffix selected by the verified plan.
-        while self.segments.len() > plan.retained_sealed
-            && let Some(base) = self.segments.last().map(Segment::base_offset)
-        {
-            self.remove_truncated_segment_files(base)?;
-            self.segments.pop();
-            self.sealed_txn_indexes.remove(&base);
-            self.stamp_indexes.remove(&base);
+        while self.segments.len() > plan.retained_sealed {
+            self.drop_last_sealed_segment()?;
         }
 
         // Drop the active segment if its base_offset >= offset.

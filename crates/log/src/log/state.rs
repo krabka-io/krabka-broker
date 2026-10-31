@@ -359,12 +359,8 @@ impl Log {
         self.invalidate_delivery_schedule(new_base);
 
         // Drop every sealed segment + its on-disk files.
-        while let Some(segment) = self.segments.last() {
-            let base = segment.base_offset();
-            self.remove_truncated_segment_files(base)?;
-            self.segments.pop();
-            self.sealed_txn_indexes.remove(&base);
-            self.stamp_indexes.remove(&base);
+        while !self.segments.is_empty() {
+            self.drop_last_sealed_segment()?;
         }
 
         // Drop the active segment + its on-disk files.
