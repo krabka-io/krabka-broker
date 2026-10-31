@@ -66,6 +66,18 @@ pub const DEFAULT_READ_AHEAD_MAX: ByteSize = mebibytes(4);
 /// the same rate at 8 and 16 MiB and within 5% of 32 MiB.
 pub const DEFAULT_TAIL_CACHE_SIZE: ByteSize = mebibytes(8);
 
+/// Default for [`LogConfig::tail_cache_max`].
+///
+/// At the disk's rate a fixed 8 MiB window is 7 to 25 ms of a single
+/// partition's data, so any pause of its consumer sends its fetches to the
+/// disk, where they compete with the appends; a single-partition consumer at
+/// 1 KiB records then fell further behind for the rest of the run. With a
+/// 1 GiB window the same consumer kept up at 1.17M records/s with a 46 to
+/// 52 ms end-to-end p99, against 22 to 36 s. A window this large is held
+/// only by a partition busy enough to fill it, and only under the broker's
+/// budget.
+pub const DEFAULT_TAIL_CACHE_MAX: ByteSize = gibibytes(1);
+
 /// Default for [`LogConfig::writeback_window`].
 ///
 /// Linux lets a file's dirty pages pile up to `vm.dirty_ratio` of memory
@@ -371,6 +383,23 @@ pub struct LogConfig {
     #[default(DEFAULT_TAIL_CACHE_SIZE)]
     pub tail_cache_size: ByteSize,
 
+    /// The most an active segment that writes through `O_DIRECT` keeps in
+    /// memory once its window grows past [`LogConfig::tail_cache_size`].
+    /// A window grows only while the process's tail caches together hold
+    /// less than the budget set with [`crate::TailArena::set_budget`]; with
+    /// no budget, the default, every window holds `tail_cache_size`. Default
+    /// 1 GiB: see [`DEFAULT_TAIL_CACHE_MAX`].
+    #[default(DEFAULT_TAIL_CACHE_MAX)]
+    pub tail_cache_max: ByteSize,
+
+    /// The most memory the tail caches of every log in the process hold
+    /// together before a window stops growing past
+    /// [`LogConfig::tail_cache_size`]. Process-wide, like
+    /// [`LogConfig::page_cache_budget`]: the broker hands it to
+    /// [`crate::TailArena::set_budget`] at startup. The log's default is
+    /// none, which keeps every window at `tail_cache_size`.
+    pub tail_cache_budget: Option<ByteSize>,
+
     /// In a segment written through the page cache, start a background
     /// `fdatasync` of the active `.log` file after every this many appended
     /// bytes, and make an append wait while two such syncs are still running.
@@ -585,6 +614,8 @@ mod tests {
                     flush_on_append: false,
                     segment_allocation: SegmentAllocation::OnWrite,
                     tail_cache_size: mebibytes(8),
+                    tail_cache_max: gibibytes(1),
+                    tail_cache_budget: None,
                     writeback_window: mebibytes(2),
                     page_cache_budget: None,
                     validate_on_open: true,

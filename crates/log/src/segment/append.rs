@@ -28,13 +28,6 @@ enum BatchBytes<'a> {
     Split(&'a [u8], &'a [u8]),
 }
 
-/// The slices of one batch handed to the Direct I/O writer, and the joined
-/// bytes that go into the tail cache.
-struct DirectParts<'a> {
-    parts: &'a [&'a [u8]],
-    cached: Bytes,
-}
-
 impl BatchBytes<'_> {
     fn len(self) -> usize {
         match self {
@@ -219,22 +212,22 @@ impl Segment {
                 }
             };
         };
-        let DirectParts { parts, cached } = match batch {
-            BatchBytes::Whole(bytes) => DirectParts {
-                parts: &[bytes],
-                cached: bytes.clone(),
-            },
-            BatchBytes::Split(header, body) => DirectParts {
-                parts: &[header, body],
-                cached: Bytes::from([header, body].concat()),
-            },
+        let (whole, split);
+        let parts: &[&[u8]] = match batch {
+            BatchBytes::Whole(bytes) => {
+                whole = [bytes.as_ref()];
+                &whole
+            }
+            BatchBytes::Split(header, body) => {
+                split = [header, body];
+                &split
+            }
         };
         mode.writer.append(parts)?;
         mode.cache.set_written(mode.writer.written());
-        if chunk_ends.is_empty() {
-            mode.cache.push(cached);
-        } else {
-            mode.cache.push_group(&cached, chunk_ends);
+        match (chunk_ends.is_empty(), batch) {
+            (false, BatchBytes::Whole(group)) => mode.cache.push_group(group, chunk_ends),
+            _ => mode.cache.push(parts),
         }
         Ok(())
     }

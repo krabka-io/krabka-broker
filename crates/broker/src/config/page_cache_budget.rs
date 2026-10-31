@@ -21,9 +21,27 @@ use {
 /// operating system other than Linux.
 #[must_use]
 pub fn host_default() -> Option<ByteSize> {
-    let limit = cgroup_memory_limit().or_else(machine_memory)?;
-    Some(ByteSize::from_bytes(limit / 2))
+    memory_limit().map(|limit| ByteSize::from_bytes(limit / 2))
 }
+
+/// The default `log_tail_cache_budget`: an eighth of the memory the broker
+/// may use.
+///
+/// That holds one busy partition's full `log_tail_cache_max` window in a
+/// 10 GiB container. A quarter was too much beside what the broker already
+/// holds: 100 partitions with `preallocate=true` taking 1 KiB records peaked
+/// at 5.2 to 5.4 GiB resident with a quarter, 3.0 to 4.0 GiB with an
+/// eighth, against 2.4 to 2.7 GiB with fixed 8 MiB windows. `None` when the
+/// memory cannot be read, as for [`host_default`]; the tail caches then hold
+/// their floor.
+#[must_use]
+pub fn tail_cache_default() -> Option<ByteSize> {
+    memory_limit().map(|limit| ByteSize::from_bytes(limit / 8))
+}
+
+/// The memory limit of the cgroup this process is in, or the machine's
+/// memory when the cgroup has no limit.
+fn memory_limit() -> Option<u64> { cgroup_memory_limit().or_else(machine_memory) }
 
 /// The `memory.max` of the cgroup this process is in, when cgroup v2 limits
 /// it.

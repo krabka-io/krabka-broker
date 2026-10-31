@@ -24,7 +24,7 @@
 #[krabka_macros::sendfile_cfg]
 use std::sync::atomic::AtomicBool;
 use {
-    super::{Segment, direct::TailCache},
+    super::{Segment, direct::TailWindow},
     crate::{error::LogError, index::OffsetIndexEntry, io::LogIo},
     bytes::Bytes,
     krabka_ids::Offset,
@@ -78,7 +78,7 @@ pub trait ReadSource {
     #[krabka_macros::sendfile_cfg]
     fn wrote_direct(&self) -> bool;
     /// The newest bytes of a segment that writes directly, held in memory.
-    fn tail_cache(&self) -> Option<&TailCache>;
+    fn tail_cache(&self) -> Option<&TailWindow>;
     /// Whether the page-cache probe is known not to work on this segment's
     /// filesystem; see the descriptor read's `byte_is_cached`, its only user.
     #[krabka_macros::sendfile_cfg]
@@ -115,7 +115,9 @@ macro_rules! field_accessors {
 impl ReadSource for Segment {
     field_accessors!();
 
-    fn tail_cache(&self) -> Option<&TailCache> { self.direct.as_ref().map(|mode| &mode.cache) }
+    fn tail_cache(&self) -> Option<&TailWindow> {
+        self.direct.as_ref().map(|mode| mode.cache.window())
+    }
 
     #[krabka_macros::sendfile_cfg]
     fn cache_probe_unsupported(&self) -> &AtomicBool { &self.cache_probe_unsupported }
@@ -150,7 +152,7 @@ pub struct SegmentReadView {
         target_os = "dragonfly",
     ))]
     wrote_direct: bool,
-    tail: Option<TailCache>,
+    tail: Option<TailWindow>,
     #[cfg(any(
         target_os = "linux",
         target_os = "macos",
@@ -205,7 +207,7 @@ impl SegmentReadView {
 impl ReadSource for SegmentReadView {
     field_accessors!();
 
-    fn tail_cache(&self) -> Option<&TailCache> { self.tail.as_ref() }
+    fn tail_cache(&self) -> Option<&TailWindow> { self.tail.as_ref() }
 
     #[krabka_macros::sendfile_cfg]
     fn cache_probe_unsupported(&self) -> &AtomicBool { &self.cache_probe_unsupported }
@@ -234,6 +236,8 @@ impl Segment {
         cold_before: Option<u64>,
     ) -> Result<SegmentReadView, LogError> {
         let target_rel = relative_target(self.base_offset, fetch_offset, "read_view")?;
+        let hint = self.index_hint(target_rel);
+        let floor = hint.floor.map_or(0, |entry| u64::from(entry.position));
         Ok(SegmentReadView {
             log_file: Arc::clone(&self.log_file),
             io: Arc::clone(&self.io),
@@ -250,7 +254,12 @@ impl Segment {
                 target_os = "dragonfly",
             ))]
             wrote_direct: self.wrote_direct,
-            tail: self.direct.as_ref().map(|mode| mode.cache.clone()),
+            // Only the chunks from the read's index floor on: a reader near
+            // the end clones a few handles, whatever the window holds.
+            tail: self
+                .direct
+                .as_ref()
+                .map(|mode| mode.cache.window().suffix(floor)),
             #[cfg(any(
                 target_os = "linux",
                 target_os = "macos",
@@ -262,7 +271,7 @@ impl Segment {
             ))]
             cache_probe_unsupported: Arc::clone(&self.cache_probe_unsupported),
             target_rel,
-            hint: self.index_hint(target_rel),
+            hint,
             cold_before,
         })
     }

@@ -2,7 +2,10 @@
 
 use {
     super::{Log, VerbatimBatch, open::DataProducerAppend},
-    crate::{DeliveryPolicy, LogError, SegmentAllocation, segment::PlacedBatch},
+    crate::{
+        DeliveryPolicy, LogError, SegmentAllocation,
+        segment::{PlacedBatch, TailSizes},
+    },
     krabka_ids::Offset,
     krabka_protocol::records::{Attributes, CRC_COVERAGE_START, HEADER_LEN, TimestampType},
     krabka_units::prelude::{ByteSize, ByteSizeExt as _, mebibytes},
@@ -88,7 +91,7 @@ impl Log {
         }
         let active = self.active.as_mut()?;
         active.reserve(config.segment_size);
-        active.write_direct(config.tail_cache_size);
+        active.write_direct(TailSizes::of(&config));
         if !active.writes_direct() {
             return None;
         }

@@ -20,6 +20,7 @@ use {
         Segment,
         direct::{DioAlign, DirectWriter, TailCache},
         io::{read_full_at, seek_to_log_size},
+        tail_arena::TailArena,
     },
     crate::{error::LogError, io::DirectFile, name},
     krabka_ids::Offset,
@@ -30,6 +31,25 @@ use {
         sync::Arc,
     },
 };
+
+/// How much of its newest data a segment that writes directly keeps in
+/// memory: at least `floor`, and up to `max` while the process's tail caches
+/// are under their budget. See [`TailCache`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TailSizes {
+    pub(crate) floor: ByteSize,
+    pub(crate) max: ByteSize,
+}
+
+impl TailSizes {
+    /// The sizes `config` sets.
+    pub(crate) fn of(config: &crate::LogConfig) -> Self {
+        Self {
+            floor: config.tail_cache_size,
+            max: config.tail_cache_max,
+        }
+    }
+}
 
 /// The `O_DIRECT` writer of an active segment and the newest bytes it wrote.
 ///
@@ -97,12 +117,12 @@ impl Segment {
     /// segment has gone back to buffered writes. A refusal leaves the segment
     /// writing through the page cache, as it would without `preallocate`, so
     /// it is logged and not returned.
-    pub(crate) fn write_direct(&mut self, tail_cache: ByteSize) {
+    pub(crate) fn write_direct(&mut self, tail: TailSizes) {
         if self.direct.is_some() || self.direct_asked || self.sealed {
             return;
         }
         self.direct_asked = true;
-        match self.open_direct_mode(tail_cache) {
+        match self.open_direct_mode(tail) {
             Ok(mode) => {
                 self.direct = Some(Box::new(mode));
                 self.wrote_direct = true;
@@ -111,7 +131,7 @@ impl Segment {
         }
     }
 
-    fn open_direct_mode(&self, tail_cache: ByteSize) -> io::Result<DirectMode> {
+    fn open_direct_mode(&self, sizes: TailSizes) -> io::Result<DirectMode> {
         let DirectFile {
             file,
             mem_align,
@@ -132,7 +152,12 @@ impl Segment {
         )?;
         Ok(DirectMode {
             writer,
-            cache: TailCache::new(tail_cache.bytes_usize(), self.log_size),
+            cache: TailCache::in_arena(
+                sizes.floor.bytes_usize(),
+                sizes.max.bytes_usize(),
+                self.log_size,
+                Arc::clone(TailArena::global()),
+            ),
         })
     }
 

@@ -17,7 +17,8 @@ use {
         health, security_clients,
         telemetry::{self, OtlpConfig, OtlpProtocol, TelemetryGuard},
     },
-    krabka_units::{Time, convert::TimeExt as _},
+    krabka_log::TailArena,
+    krabka_units::{Time, convert::TimeExt as _, prelude::ByteSizeExt},
     rustix::process::Rlimit,
     std::{error::Error, future::Future, process, time::Duration},
     tokio::{sync::watch, time},
@@ -205,6 +206,17 @@ fn broker_config(
     if config.log_config.page_cache_budget.is_none() {
         config.log_config.page_cache_budget = page_cache_budget::host_default();
     }
+    // Likewise the tail caches' budget, an eighth of it. The budget is the
+    // process's, so it goes to the shared arena now, before any log opens.
+    if config.log_config.tail_cache_budget.is_none() {
+        config.log_config.tail_cache_budget = page_cache_budget::tail_cache_default();
+    }
+    TailArena::global().set_budget(
+        config
+            .log_config
+            .tail_cache_budget
+            .map(ByteSizeExt::bytes_u64),
+    );
     Ok(AssembledConfig {
         config,
         controlled_shutdown_drain_timeout,

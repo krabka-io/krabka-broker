@@ -34,8 +34,9 @@
 #[cfg(any(target_os = "linux", test))]
 use std::mem;
 use {
+    super::tail_arena::{FIRST_SLAB, Headroom, SLAB, TailArena},
     crate::io::LogIo,
-    bytes::Bytes,
+    bytes::{Bytes, BytesMut},
     std::{
         collections::{BTreeMap, VecDeque},
         fs::File,
@@ -903,114 +904,50 @@ fn check_tail(align: DioAlign, end: u64, tail: &[u8]) -> io::Result<()> {
 /// A `usize` widened to a `u64`; no supported target has a wider `usize`.
 fn to_u64(n: usize) -> u64 { n as u64 }
 
-/// The most recently appended bytes of an active segment, `[start, end)`, at
-/// most about `cap` bytes, and every byte at or past `written` whatever the
-/// size.
-///
-/// The window holds whole appends as shared [`Bytes`] chunks, so a push copies
-/// nothing, and eviction drops the oldest chunk. A chunk that is not on the
-/// disk yet is never evicted, so a read below [`Self::start`] can always go to
-/// the file.
-#[derive(Debug, Clone)]
-pub struct TailCache {
-    cap: usize,
+/// The newest bytes of a segment that writes directly, `[start, end)`, as
+/// shared slices: what a read takes from memory. A read view clones the part
+/// it needs with [`Self::suffix`], which copies slice handles, not bytes.
+#[derive(Debug, Clone, Default)]
+pub struct TailWindow {
     start: u64,
     len: usize,
-    written: u64,
     chunks: VecDeque<Bytes>,
 }
 
-impl TailCache {
-    /// An empty window that begins at `start`, the segment's logical end when
-    /// the cache is made.
-    pub(crate) fn new(cap: usize, start: u64) -> Self {
-        Self {
-            cap,
-            start,
-            len: 0,
-            written: start,
-            chunks: VecDeque::new(),
-        }
-    }
-
-    /// Learn that every byte below `written` is on the disk, so the chunks
-    /// below it can be evicted.
-    pub(crate) fn set_written(&mut self, written: u64) { self.written = self.written.max(written); }
-
+impl TailWindow {
     pub(crate) fn start(&self) -> u64 { self.start }
 
     pub(crate) fn end(&self) -> u64 { self.start + to_u64(self.len) }
 
-    /// Record `bytes` appended at [`Self::end`].
-    ///
-    /// Then drop the oldest chunks while the window is larger than `cap` and
-    /// the oldest chunk is on the disk. The newest chunk stays even when it
-    /// alone is larger than `cap`, so a reader right behind the producer
-    /// always finds the last append.
-    pub(crate) fn push(&mut self, bytes: Bytes) {
-        if bytes.is_empty() {
-            return;
-        }
-        self.len += bytes.len();
-        self.chunks.push_back(bytes);
-        while self.len > self.cap && self.chunks.len() > 1 {
-            let Some(oldest) = self.chunks.front().map(Bytes::len) else {
-                break;
-            };
-            if self.start + to_u64(oldest) > self.written {
-                break;
-            }
-            self.chunks.pop_front();
-            self.len -= oldest;
-            self.start += to_u64(oldest);
-        }
-    }
-
-    /// Record the batches of one coalesced write, `group[..ends[0]]`,
-    /// `group[ends[0]..ends[1]]` and so on, appended at [`Self::end`].
-    ///
-    /// A slice of `group` keeps the whole group allocation alive, so a batch
-    /// that stays in the window gets storage of its own: otherwise one small
-    /// cached batch would hold up to the group's full size and the window
-    /// would no longer be bounded by `cap`. A batch that this same push
-    /// evicts is pushed as a slice and dropped at once, so only the
-    /// survivors are copied.
-    pub(crate) fn push_group(&mut self, group: &Bytes, ends: &[usize]) {
-        // Walking back from the newest batch, the survivors are those whose
-        // bytes still fit in `cap`; the newest survives regardless.
-        let mut kept = 0usize;
-        let mut first_kept = ends.len();
-        for (i, &end) in ends.iter().enumerate().rev() {
-            let start = i
-                .checked_sub(1)
-                .and_then(|prev| ends.get(prev))
-                .copied()
-                .unwrap_or(0);
-            let len = end - start;
-            if first_kept != ends.len() && kept + len > self.cap {
-                break;
-            }
-            kept += len;
-            first_kept = i;
-        }
-        let mut start = 0;
-        for (i, &end) in ends.iter().enumerate() {
-            let batch = group.slice(start..end);
-            let batch = if i >= first_kept {
-                Bytes::copy_from_slice(&batch)
-            } else {
-                batch
-            };
-            self.push(batch);
-            start = end;
+    /// The window from the chunk that holds `pos` on: what a read that starts
+    /// at or after `pos` can use. Chunks wholly before `pos` are left out, so
+    /// a reader near the end clones a few handles whatever the window's size.
+    pub(crate) fn suffix(&self, pos: u64) -> Self {
+        let mut start = self.start;
+        let mut len = self.len;
+        let skipped = self
+            .chunks
+            .iter()
+            .take_while(|chunk| {
+                let past = start + to_u64(chunk.len()) <= pos;
+                if past {
+                    start += to_u64(chunk.len());
+                    len -= chunk.len();
+                }
+                past
+            })
+            .count();
+        Self {
+            start,
+            len,
+            chunks: self.chunks.iter().skip(skipped).cloned().collect(),
         }
     }
 
     /// The bytes from `pos` on: the rest of the chunk `pos` falls in, then
     /// whole chunks while the total stays within `max`. The first chunk comes
-    /// whatever its size. One chunk is a shared slice, with no copy, so a
-    /// fetch from the window holds the log lock only briefly; several are
-    /// copied into one buffer. `None` when `pos` is outside the window.
+    /// whatever its size. One chunk is a shared slice, with no copy; several
+    /// are copied into one buffer. `None` when `pos` is outside the window.
     pub(crate) fn bytes_from(&self, pos: u64, max: usize) -> Option<Bytes> {
         if pos < self.start || pos >= self.end() {
             return None;
@@ -1077,12 +1014,9 @@ impl TailCache {
         true
     }
 
-    /// Forget every byte at or past `end`, as a truncate of the segment does.
-    ///
-    /// When `end` is at or before the window's start, the window becomes
-    /// empty and begins at `end`.
-    pub(crate) fn truncate(&mut self, end: u64) {
-        self.written = self.written.min(end);
+    /// Forget every byte at or past `end`. When `end` is at or before the
+    /// window's start, the window becomes empty and begins at `end`.
+    fn truncate(&mut self, end: u64) {
         if end >= self.end() {
             return;
         }
@@ -1090,7 +1024,6 @@ impl TailCache {
             self.chunks.clear();
             self.len = 0;
             self.start = end;
-            self.written = end;
             return;
         }
         // `end` is below the window's end, so `keep` is below `self.len`.
@@ -1109,6 +1042,213 @@ impl TailCache {
         self.chunks.truncate(chunks);
         self.len = keep;
     }
+}
+
+/// A slab a cache copies its batches into, and the segment position its
+/// last batch ends at.
+#[derive(Debug)]
+struct Slab {
+    /// The slab's free space; its filled part was split off into chunks.
+    free: BytesMut,
+    /// What the arena counted for the slab.
+    capacity: usize,
+    end: u64,
+}
+
+/// The most recently appended bytes of an active segment, kept in memory to
+/// serve reads, and every byte at or past `written` whatever the size.
+///
+/// The window holds at least `floor` bytes when the segment has written that
+/// many. It grows towards `max` while the process's [`TailArena`] has a
+/// budget and the caches together are under it; at the budget a cache keeps
+/// the size it has, and with no budget it holds `floor`, as a fixed window
+/// did. Eviction drops the oldest chunk. A chunk that is not on the disk yet
+/// is never evicted, so a read below the window's start can always go to the
+/// file.
+///
+/// Each batch is copied into a slab from the arena, and the window holds
+/// shared slices of the slabs: see [`super::tail_arena`].
+#[derive(Debug)]
+pub struct TailCache {
+    floor: usize,
+    max: usize,
+    written: u64,
+    window: TailWindow,
+    slabs: VecDeque<Slab>,
+    arena: Arc<TailArena>,
+}
+
+impl Drop for TailCache {
+    fn drop(&mut self) {
+        for slab in self.slabs.drain(..) {
+            self.arena.give_back(slab.free, slab.capacity);
+        }
+    }
+}
+
+impl TailCache {
+    /// An empty window of `cap` bytes that begins at `start`, the segment's
+    /// logical end when the cache is made, in a test's own arena.
+    #[cfg(test)]
+    pub(crate) fn new(cap: usize, start: u64) -> Self {
+        Self::in_arena(cap, cap, start, Arc::new(TailArena::default()))
+    }
+
+    /// An empty window that begins at `start`, the segment's logical end when
+    /// the cache is made, holding `floor` to `max` bytes in `arena`.
+    pub(crate) fn in_arena(floor: usize, max: usize, start: u64, arena: Arc<TailArena>) -> Self {
+        Self {
+            floor,
+            max: max.max(floor),
+            written: start,
+            window: TailWindow {
+                start,
+                len: 0,
+                chunks: VecDeque::new(),
+            },
+            slabs: VecDeque::new(),
+            arena,
+        }
+    }
+
+    /// Learn that every byte below `written` is on the disk, so the chunks
+    /// below it can be evicted.
+    pub(crate) fn set_written(&mut self, written: u64) { self.written = self.written.max(written); }
+
+    pub(crate) fn start(&self) -> u64 { self.window.start }
+
+    pub(crate) fn end(&self) -> u64 { self.window.end() }
+
+    /// The bytes the cache holds, for reads.
+    pub(crate) fn window(&self) -> &TailWindow { &self.window }
+
+    /// Record the concatenation of `parts`, appended at [`Self::end`], as one
+    /// chunk.
+    ///
+    /// Then drop the oldest chunks while the window is larger than it may be
+    /// and the oldest chunk is on the disk. The newest chunk stays even when
+    /// it alone is larger, so a reader right behind the producer always finds
+    /// the last append.
+    pub(crate) fn push(&mut self, parts: &[&[u8]]) {
+        let len = parts.iter().map(|part| part.len()).sum();
+        if len == 0 {
+            return;
+        }
+        let before = self.window.len;
+        let chunk = self.copy_in(parts, len);
+        self.window.len += len;
+        self.window.chunks.push_back(chunk);
+        self.evict(before);
+    }
+
+    /// Record the batches of one coalesced write, `group[..ends[0]]`,
+    /// `group[ends[0]..ends[1]]` and so on, appended at [`Self::end`], one
+    /// chunk each.
+    pub(crate) fn push_group(&mut self, group: &[u8], ends: &[usize]) {
+        let mut start = 0;
+        for &end in ends {
+            if let Some(batch) = group.get(start..end) {
+                self.push(&[batch]);
+            }
+            start = end;
+        }
+    }
+
+    /// Copy `len` bytes, the concatenation of `parts`, into the newest slab,
+    /// or a new one when it has no room, and return them as a shared slice.
+    fn copy_in(&mut self, parts: &[&[u8]], len: usize) -> Bytes {
+        let end = self.window.end() + to_u64(len);
+        let room = self
+            .slabs
+            .back()
+            .is_some_and(|slab| slab.free.capacity() - slab.free.len() >= len);
+        if !room {
+            let mut wanted = self
+                .slabs
+                .back()
+                .map_or(FIRST_SLAB, |slab| slab.capacity.saturating_mul(2))
+                .clamp(FIRST_SLAB, SLAB);
+            while wanted < len && wanted < SLAB {
+                wanted *= 2;
+            }
+            let free = self.arena.take(wanted.min(SLAB), len);
+            let capacity = free.capacity();
+            self.slabs.push_back(Slab {
+                free,
+                capacity,
+                end,
+            });
+        }
+        let Some(slab) = self.slabs.back_mut() else {
+            return Bytes::new();
+        };
+        for part in parts {
+            slab.free.extend_from_slice(part);
+        }
+        slab.end = end;
+        slab.free.split().freeze()
+    }
+
+    /// The most bytes the window may hold after a push that found it holding
+    /// `before`: `max` while the arena's budget has room, the larger of
+    /// `floor` and `before` once the caches reach it, and `floor` with no
+    /// budget.
+    fn limit(&self, before: usize) -> usize {
+        match self.arena.headroom() {
+            Headroom::Unbudgeted => self.floor,
+            Headroom::Room => self.max,
+            Headroom::Full => self.floor.max(before),
+        }
+    }
+
+    fn evict(&mut self, before: usize) {
+        let limit = self.limit(before);
+        while self.window.len > limit && self.window.chunks.len() > 1 {
+            let Some(oldest) = self.window.chunks.front().map(Bytes::len) else {
+                break;
+            };
+            if self.window.start + to_u64(oldest) > self.written {
+                break;
+            }
+            self.window.chunks.pop_front();
+            self.window.len -= oldest;
+            self.window.start += to_u64(oldest);
+        }
+        self.release_slabs();
+    }
+
+    /// Give the arena back every slab, but the newest, that the window no
+    /// longer reaches.
+    fn release_slabs(&mut self) {
+        while self.slabs.len() > 1
+            && self
+                .slabs
+                .front()
+                .is_some_and(|slab| slab.end <= self.window.start)
+        {
+            if let Some(slab) = self.slabs.pop_front() {
+                self.arena.give_back(slab.free, slab.capacity);
+            }
+        }
+    }
+
+    /// Forget every byte at or past `end`, as a truncate of the segment does.
+    ///
+    /// When `end` is at or before the window's start, the window becomes
+    /// empty and begins at `end`.
+    pub(crate) fn truncate(&mut self, end: u64) {
+        self.written = self.written.min(end);
+        self.window.truncate(end);
+        for slab in &mut self.slabs {
+            slab.end = slab.end.min(end);
+        }
+        self.written = self.written.min(self.window.end());
+        self.release_slabs();
+    }
+
+    /// The bytes the cache's slabs hold, counted by the arena.
+    #[cfg(test)]
+    pub(crate) fn slab_bytes(&self) -> usize { self.slabs.iter().map(|slab| slab.capacity).sum() }
 }
 
 #[cfg(test)]
@@ -1816,14 +1956,14 @@ mod tests {
         for (seed, size) in [(1, 10), (2, 20), (3, 30)] {
             let bytes = pattern(seed, size);
             all.extend_from_slice(&bytes);
-            cache.push(Bytes::from(bytes));
+            cache.push(&[&bytes]);
         }
         ThreeChunks { cache, all }
     }
 
     fn read(cache: &TailCache, pos: u64, len: usize) -> Option<Vec<u8>> {
         let mut out = vec![0xAA; len];
-        if cache.read(pos, &mut out) {
+        if cache.window().read(pos, &mut out) {
             Some(out)
         } else {
             check!(
@@ -1953,15 +2093,15 @@ mod tests {
     #[test]
     fn tail_cache_bytes_from_slices_one_chunk_and_joins_several() {
         let ThreeChunks { cache, all } = three_chunks(1000);
-        let one = cache.bytes_from(1010, 5).unwrap();
+        let one = cache.window().bytes_from(1010, 5).unwrap();
         check!(one[..] == all[10..30]);
-        check!(one.as_ptr() == cache.chunks[1].as_ptr());
-        check!(cache.bytes_from(1015, 0).unwrap()[..] == all[15..30]);
-        check!(cache.bytes_from(1000, 30).unwrap()[..] == all[..30]);
-        check!(cache.bytes_from(1000, 60).unwrap()[..] == all[..]);
-        check!(cache.bytes_from(1000, 59).unwrap()[..] == all[..30]);
-        check!(cache.bytes_from(999, 10).is_none());
-        check!(cache.bytes_from(1060, 10).is_none());
+        check!(one.as_ptr() == cache.window().chunks[1].as_ptr());
+        check!(cache.window().bytes_from(1015, 0).unwrap()[..] == all[15..30]);
+        check!(cache.window().bytes_from(1000, 30).unwrap()[..] == all[..30]);
+        check!(cache.window().bytes_from(1000, 60).unwrap()[..] == all[..]);
+        check!(cache.window().bytes_from(1000, 59).unwrap()[..] == all[..30]);
+        check!(cache.window().bytes_from(999, 10).is_none());
+        check!(cache.window().bytes_from(1060, 10).is_none());
     }
 
     /// A chunk that is not on the disk yet stays, whatever the cap, so a read
@@ -1971,22 +2111,22 @@ mod tests {
     fn tail_cache_keeps_the_bytes_that_are_not_on_the_disk() {
         let mut cache = TailCache::new(0, 1000);
         for (seed, size) in [(1, 10), (2, 20), (3, 30)] {
-            cache.push(Bytes::from(pattern(seed, size)));
+            cache.push(&[&pattern(seed, size)]);
         }
         check!((cache.start(), cache.end()) == (1000, 1060));
 
         cache.set_written(1015);
-        cache.push(Bytes::from(pattern(4, 5)));
+        cache.push(&[&pattern(4, 5)]);
         check!(cache.start() == 1010);
 
         cache.set_written(1065);
-        cache.push(Bytes::from(pattern(5, 5)));
+        cache.push(&[&pattern(5, 5)]);
         check!((cache.start(), cache.end()) == (1065, 1070));
 
         cache.truncate(1062);
         check!((cache.start(), cache.end()) == (1062, 1062));
-        cache.push(Bytes::from(pattern(6, 5)));
-        cache.push(Bytes::from(pattern(7, 5)));
+        cache.push(&[&pattern(6, 5)]);
+        cache.push(&[&pattern(7, 5)]);
         check!(cache.start() == 1062);
     }
 
@@ -2012,7 +2152,7 @@ mod tests {
                 "cap {cap}"
             );
             let group_range = group.as_ptr().addr()..group.as_ptr().addr() + group.len();
-            for chunk in &grouped.chunks {
+            for chunk in &grouped.window().chunks {
                 check!(
                     !group_range.contains(&chunk.as_ptr().addr()),
                     "cap {cap}: a retained batch still points into the group"
@@ -2024,8 +2164,8 @@ mod tests {
     #[test]
     fn tail_cache_ignores_an_empty_push() {
         let mut cache = TailCache::new(0, 5);
-        cache.push(Bytes::from_static(b"abc"));
-        cache.push(Bytes::new());
+        cache.push(&[b"abc"]);
+        cache.push(&[&[]]);
         check!((cache.start(), cache.end()) == (5, 8));
         check!(read(&cache, 5, 3) == Some(b"abc".to_vec()));
     }
@@ -2056,9 +2196,120 @@ mod tests {
             check!(read(&cache, new_end, 1).is_none());
 
             // The window grows again from the new end.
-            cache.push(Bytes::from_static(b"xyz"));
+            cache.push(&[b"xyz"]);
             check!(cache.end() == new_end + 3);
             check!(read(&cache, new_end, 3) == Some(b"xyz".to_vec()));
         }
+    }
+
+    /// Push `count` written batches of `size` bytes into `cache`.
+    fn fill(cache: &mut TailCache, count: usize, size: usize) {
+        for seed in 0..count {
+            let batch = pattern(u8::try_from(seed % 251).unwrap(), size);
+            cache.push(&[&batch]);
+            cache.set_written(cache.end());
+        }
+    }
+
+    /// With no budget a window holds its floor; under a budget it grows to
+    /// its maximum; at the budget it keeps the size it has.
+    #[test]
+    fn tail_cache_grows_past_its_floor_only_under_a_budget() {
+        let batch = 1000;
+        let unbudgeted = Arc::new(TailArena::new(None));
+        let mut fixed = TailCache::in_arena(10 * batch, 100 * batch, 0, Arc::clone(&unbudgeted));
+        fill(&mut fixed, 300, batch);
+        check!(fixed.end() - fixed.start() == to_u64(10 * batch));
+
+        let roomy = Arc::new(TailArena::new(Some(1 << 30)));
+        let mut grown = TailCache::in_arena(10 * batch, 100 * batch, 0, Arc::clone(&roomy));
+        fill(&mut grown, 300, batch);
+        check!(grown.end() - grown.start() == to_u64(100 * batch));
+
+        // A budget the caches already exceed: a new window stops at what it
+        // holds once full, and stays at its floor.
+        let tight = Arc::new(TailArena::new(Some(to_u64(FIRST_SLAB))));
+        let mut held = TailCache::in_arena(10 * batch, 100 * batch, 0, Arc::clone(&tight));
+        fill(&mut held, 300, batch);
+        check!(held.end() - held.start() == to_u64(10 * batch));
+    }
+
+    /// Slabs the window no longer reaches go back to the arena, and dropping
+    /// the cache gives back the rest, so the arena counts what the windows
+    /// hold and nothing more.
+    #[test]
+    fn tail_cache_gives_its_slabs_back() {
+        let arena = Arc::new(TailArena::new(None));
+        let mut cache = TailCache::in_arena(64 * 1024, 64 * 1024, 0, Arc::clone(&arena));
+        fill(&mut cache, 2000, 10 * 1024);
+        check!(cache.end() == to_u64(2000 * 10 * 1024));
+        check!(to_u64(cache.slab_bytes()) == arena.held());
+        check!(
+            cache.slab_bytes() <= 2 * SLAB + 64 * 1024,
+            "a 64 KiB window keeps no more than the slabs it reaches: {}",
+            cache.slab_bytes()
+        );
+        drop(cache);
+        check!(arena.held() == 0);
+    }
+
+    /// A read view clones only the chunks from its position on.
+    #[test]
+    fn tail_window_suffix_keeps_the_chunks_from_a_position_on() {
+        let ThreeChunks { cache, all } = three_chunks(1 << 20);
+        let window = cache.window();
+        for (pos, start, chunks) in [
+            (0, 1000, 3),
+            (1000, 1000, 3),
+            (1009, 1000, 3),
+            (1010, 1010, 2),
+            (1045, 1030, 1),
+            (1060, 1060, 0),
+            (5000, 1060, 0),
+        ] {
+            let suffix = window.suffix(pos);
+            check!(
+                (suffix.start(), suffix.end(), suffix.chunks.len()) == (start, 1060, chunks),
+                "suffix from {pos}"
+            );
+            let from = usize::try_from(start - 1000).unwrap();
+            check!(
+                suffix
+                    .bytes_from(start, usize::MAX)
+                    .map(|bytes| bytes.to_vec())
+                    == (start < 1060).then(|| all[from..].to_vec())
+            );
+        }
+    }
+
+    /// A segment's cache takes the slabs the cache of the segment before it
+    /// gave back when it rolled, up to the budget.
+    #[test]
+    fn a_new_segment_cache_takes_the_rolled_caches_slabs() {
+        let arena = Arc::new(TailArena::new(Some(64 << 20)));
+        for _segment in 0..4 {
+            let mut cache = TailCache::in_arena(32 << 20, 32 << 20, 0, Arc::clone(&arena));
+            fill(&mut cache, 40, 1 << 20);
+        }
+        check!(
+            arena.fresh() <= 9,
+            "{} slabs made new for four 40 MiB segments with 32 MiB windows",
+            arena.fresh()
+        );
+        check!(arena.held() == 0);
+    }
+
+    /// A window that turns over many times reuses the same few slabs.
+    #[test]
+    fn tail_cache_reuses_its_slabs() {
+        let arena = Arc::new(TailArena::new(None));
+        let mut cache = TailCache::in_arena(16 << 20, 16 << 20, 0, Arc::clone(&arena));
+        fill(&mut cache, 1000, 1 << 20);
+        check!(
+            arena.fresh() <= 16,
+            "{} slabs made new for 1000 MiB through a 16 MiB window ({} pooled)",
+            arena.fresh(),
+            arena.pooled()
+        );
     }
 }

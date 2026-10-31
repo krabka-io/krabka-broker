@@ -28,6 +28,7 @@ mod read_raw;
 mod read_raw_desc;
 mod read_source;
 mod sealed_input;
+mod tail_arena;
 #[cfg(test)]
 mod test_support;
 mod timestamp_scan;
@@ -36,10 +37,12 @@ mod timestamp_scan;
 pub use self::read_raw_desc::RawDescSource;
 pub use self::{
     append::PlacedBatch,
+    direct_mode::TailSizes,
     open::{FrontierScan, TailScan},
     read_raw::RawReadSource,
     read_source::{ReadSource, SegmentReadView},
     sealed_input::SealedInput,
+    tail_arena::TailArena,
 };
 #[krabka_macros::sendfile_cfg]
 use krabka_protocol::records::FileRegion;

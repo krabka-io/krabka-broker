@@ -23,6 +23,10 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+### Fixed
+
+- A partition with `preallocate=true` keeps a consumer that pauses briefly reading from memory. Its tail cache held a fixed 8 MiB, 7 to 25 ms of one partition's data at the disk's rate, so any pause of the consumer sent its fetches to the disk, where they competed with the appends. Since #1825 released the log lock during those reads, the producer kept its rate and the consumer never caught up: on the OMB single-partition, single-consumer 1 KiB max-rate workload at RF1 the site's 1.1.4 run consumed 295K of 359K records/s with a 64.6 s end-to-end p99. A busy partition's window now grows to `log_tail_cache_max` (1 GiB) while the windows together hold less than `log_tail_cache_budget` (an eighth of the broker's memory limit); `log_tail_cache_size` (8 MiB) stays every partition's floor. The cache copies batches into 4 MiB slabs it reuses, including across a segment roll, instead of one allocation per batch, which glibc's arenas kept after they were freed: a 1 GiB window had held 2.25 GB of heap with 766 MB in use. Four alternating local trials of that workload: 1.30 to 1.32M records/s consumed with a 35 to 46 ms end-to-end p99 and 1.37 GiB peak resident, against 0.90M and 388 to 432 ms.
+
 ## [1.1.4] - 2026-10-30
 
 ### Changed
