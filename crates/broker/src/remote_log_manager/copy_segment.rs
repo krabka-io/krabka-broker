@@ -9,7 +9,7 @@ use {
         RemoteTier,
         archive::{ArchiveMode, ChainPosition},
         copy::CopyIdentity,
-        delete::delete_one_segment,
+        delete::delete_segment_metered,
         leader_epoch::leader_epoch_index_bytes,
         rlmm::rlmm_mutate,
     },
@@ -401,14 +401,7 @@ async fn delete_below_floor(
     debug!(topic = %tp.topic, partition = tp.partition, base = copied.start_offset(),
            end = copied.end_offset(), floor = floor.0,
            "remote-log-manager: copy finished below the established log start; deleting it");
-    tier.metrics
-        .record_remote_request(RemoteTierPath::Delete, &tp.topic);
-    let deleted = delete_one_segment(tier.delete_targets(), tp, broker_id, &current).await;
-    if !deleted {
-        tier.metrics
-            .record_remote_error(RemoteTierPath::Delete, &tp.topic);
-    }
-    deleted
+    delete_segment_metered(tier, tp, broker_id, &current).await
 }
 
 /// Log a copy withdrawn because the broker lost the partition `when`.

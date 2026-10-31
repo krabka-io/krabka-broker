@@ -3,8 +3,8 @@
 //! partition-wide cascade that a `DeleteTopics` request starts.
 
 use {
-    super::{archive::ArchiveMode, now_ms, rlmm::rlmm_mutate},
-    crate::blocking::spawn_blocking,
+    super::{RemoteTier, archive::ArchiveMode, now_ms, rlmm::rlmm_mutate},
+    crate::{blocking::spawn_blocking, metrics::RemoteTierPath},
     krabka_log::Offset,
     krabka_remote_storage::{
         RemoteIndexCache, RemoteLogMetadataManager, RemoteLogSegmentMetadata,
@@ -222,6 +222,25 @@ pub(super) async fn delete_one_segment(
            worm_retained = archive == ArchiveMode::WriteOnce,
            "remote-log-manager: remote segment reached DeleteSegmentFinished");
     true
+}
+
+/// [`delete_one_segment`] through `tier`, counted as KIP-405's
+/// `RemoteDeleteRequestsPerSec`, and as `RemoteDeleteErrorsPerSec` when the
+/// lifecycle does not complete. Returns whether it did.
+pub(super) async fn delete_segment_metered(
+    tier: &RemoteTier<'_>,
+    tp: &TopicIdPartition,
+    broker_id: i32,
+    md: &RemoteLogSegmentMetadata,
+) -> bool {
+    tier.metrics
+        .record_remote_request(RemoteTierPath::Delete, &tp.topic);
+    let deleted = delete_one_segment(tier.delete_targets(), tp, broker_id, md).await;
+    if !deleted {
+        tier.metrics
+            .record_remote_error(RemoteTierPath::Delete, &tp.topic);
+    }
+    deleted
 }
 
 /// Mark every segment of `tp` that lies wholly below `floor` as

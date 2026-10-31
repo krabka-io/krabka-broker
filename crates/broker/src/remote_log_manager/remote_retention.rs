@@ -5,7 +5,7 @@
 //! A write-once archive evicts nothing, so the pass ends before it lists.
 
 use {
-    super::{NO_BYTES, archive::ArchiveMode, delete::delete_one_segment},
+    super::{NO_BYTES, archive::ArchiveMode, delete::delete_segment_metered},
     crate::metrics::RemoteTierPath,
     krabka_ids::LeaderEpoch,
     krabka_log::{DeliveryPolicy, LogConfig, Offset, SegmentExport},
@@ -394,11 +394,7 @@ pub async fn remote_retention_pass(
     let mut floor = log_start_offset;
     let mut contiguous = true;
     for md in evict {
-        tier.metrics
-            .record_remote_request(RemoteTierPath::Delete, &tp.topic);
-        if !delete_one_segment(tier.delete_targets(), tp, broker_id, &md).await {
-            tier.metrics
-                .record_remote_error(RemoteTierPath::Delete, &tp.topic);
+        if !delete_segment_metered(tier, tp, broker_id, &md).await {
             // Stop at the first failure to preserve the contiguous-prefix
             // invariant — the next tick re-tries from the same base.
             break;
@@ -465,11 +461,7 @@ async fn delete_in_order(
 ) -> usize {
     let mut deleted = 0;
     for md in segments {
-        tier.metrics
-            .record_remote_request(RemoteTierPath::Delete, &tp.topic);
-        if !delete_one_segment(tier.delete_targets(), tp, broker_id, md).await {
-            tier.metrics
-                .record_remote_error(RemoteTierPath::Delete, &tp.topic);
+        if !delete_segment_metered(tier, tp, broker_id, md).await {
             break;
         }
         deleted += 1;
