@@ -49,64 +49,7 @@ pub async fn flush_once(
         return Ok(None);
     }
     metrics.diskless_wal_flush_attempts_total.inc();
-    let relative_key = format!("diskless-wal/{}/{}.ckwl", target.broker_id, Uuid::new_v4());
-    let object_key =
-        krabka_object_store::prefixed_key(config.object_prefix.as_deref(), &relative_key)
-            .to_string();
-    let object = match builder.finish() {
-        Ok(object) => object,
-        Err(error) => {
-            metrics.diskless_wal_flush_failures_total.inc();
-            return Err(BrokerError::Txn(format!("diskless wal object: {error}")));
-        }
-    };
-    // A different broker may list and reclaim this prefix while upload or
-    // index publication is delayed. Commit the reservation first; any failure
-    // from this point leaves it behind, which can leak an object but cannot
-    // make a live object appear reclaimable.
-    if target.reserve_objects
-        && let Err(error) = index_log.reserve_object(&object_key).await
-    {
-        metrics.diskless_wal_flush_failures_total.inc();
-        return Err(error);
-    }
-    if let Err(error) = target
-        .object_store
-        .put(
-            &Path::from(object_key.clone()),
-            PutPayload::from(object.clone()),
-        )
-        .await
-    {
-        metrics.diskless_wal_flush_failures_total.inc();
-        return Err(BrokerError::Txn(format!("diskless wal put: {error}")));
-    }
-    metrics
-        .diskless_wal_flush_bytes_total
-        .inc_by(u64::try_from(object.len()).unwrap_or(u64::MAX));
-
-    let entries = match batch_index_entries(&object, now_ms()) {
-        Ok(entries) => entries,
-        Err(error) => {
-            metrics.diskless_wal_flush_failures_total.inc();
-            return Err(error);
-        }
-    };
-    let record = WalFlushRecord {
-        object_key,
-        format_version: WalFlushRecord::FORMAT_VERSION,
-        entries,
-    };
-    if let Err(error) = index_log.publish_flush(&record).await {
-        metrics.diskless_wal_flush_failures_total.inc();
-        return Err(error);
-    }
-    if let Err(error) =
-        wait_for_committed_projection(index_log, &record, config.index_projection_timeout).await
-    {
-        metrics.diskless_wal_flush_failures_total.inc();
-        return Err(error);
-    }
+    let record = upload_and_publish(&target, metrics, index_log, config, builder).await?;
     // The ranges are committed and applied, so they protect the object from
     // here on. A release that fails leaves the reservation behind, which only
     // keeps the object longer; it must not hold back the trim below.
@@ -182,6 +125,77 @@ async fn build_object(
             .map_err(|error| BrokerError::Txn(format!("diskless wal object: {error}")))?;
     }
     Ok(builder)
+}
+
+/// Frame the object, reserve its key where the feature level asks for it,
+/// upload it, and publish its index ranges, returning once the projection has
+/// applied them. Bytes count as soon as the upload succeeds.
+async fn upload_and_publish(
+    target: &FlushTarget,
+    metrics: &BrokerMetrics,
+    index_log: &DisklessIndexLog,
+    config: &FlushConfig,
+    builder: WalObjectBuilder,
+) -> Result<WalFlushRecord, BrokerError> {
+    let relative_key = format!("diskless-wal/{}/{}.ckwl", target.broker_id, Uuid::new_v4());
+    let object_key =
+        krabka_object_store::prefixed_key(config.object_prefix.as_deref(), &relative_key)
+            .to_string();
+    let object = match builder.finish() {
+        Ok(object) => object,
+        Err(error) => {
+            metrics.diskless_wal_flush_failures_total.inc();
+            return Err(BrokerError::Txn(format!("diskless wal object: {error}")));
+        }
+    };
+    // A different broker may list and reclaim this prefix while upload or
+    // index publication is delayed. Commit the reservation first; any failure
+    // from this point leaves it behind, which can leak an object but cannot
+    // make a live object appear reclaimable.
+    if target.reserve_objects
+        && let Err(error) = index_log.reserve_object(&object_key).await
+    {
+        metrics.diskless_wal_flush_failures_total.inc();
+        return Err(error);
+    }
+    if let Err(error) = target
+        .object_store
+        .put(
+            &Path::from(object_key.clone()),
+            PutPayload::from(object.clone()),
+        )
+        .await
+    {
+        metrics.diskless_wal_flush_failures_total.inc();
+        return Err(BrokerError::Txn(format!("diskless wal put: {error}")));
+    }
+    metrics
+        .diskless_wal_flush_bytes_total
+        .inc_by(u64::try_from(object.len()).unwrap_or(u64::MAX));
+
+    let entries = match batch_index_entries(&object, now_ms()) {
+        Ok(entries) => entries,
+        Err(error) => {
+            metrics.diskless_wal_flush_failures_total.inc();
+            return Err(error);
+        }
+    };
+    let record = WalFlushRecord {
+        object_key,
+        format_version: WalFlushRecord::FORMAT_VERSION,
+        entries,
+    };
+    if let Err(error) = index_log.publish_flush(&record).await {
+        metrics.diskless_wal_flush_failures_total.inc();
+        return Err(error);
+    }
+    if let Err(error) =
+        wait_for_committed_projection(index_log, &record, config.index_projection_timeout).await
+    {
+        metrics.diskless_wal_flush_failures_total.inc();
+        return Err(error);
+    }
+    Ok(record)
 }
 
 /// Record each led partition's projection lag behind the durable frontier
