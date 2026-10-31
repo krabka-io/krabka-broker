@@ -71,16 +71,20 @@ pub(super) fn absolute_path(dir: &Path) -> String {
 /// `total_bytes` is the capacity of the filesystem. `usable_bytes` is the space
 /// available to a non-root caller, so it respects the typical 5 % root reserve.
 ///
-/// Returns `(-1, -1)`, the Kafka "unknown" sentinel, when the platform has no
-/// `statvfs`, as on Windows. The JVM admin tools tolerate `-1` and skip the
-/// column.
+/// Returns `(-1, -1)`, the Kafka "unknown" sentinel, when the platform cannot
+/// report capacity: it has no `statvfs`, as on Windows, or the call answers
+/// `Unsupported`. The JVM admin tools tolerate `-1` and skip the column.
 ///
 /// # Errors
 ///
 /// The `statvfs` error, as when the path has vanished or cannot be reached.
 /// This is the `IOException` that Kafka's `Files.getFileStore` raises.
 pub(super) fn log_dir_capacity(dir: &Path) -> io::Result<(i64, i64)> {
-    Ok(disk_stats(dir)?.map_or((-1, -1), |stats| (stats.total, stats.usable)))
+    match disk_stats(dir) {
+        Ok(stats) => Ok((stats.total, stats.usable)),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok((-1, -1)),
+        Err(error) => Err(error),
+    }
 }
 
 /// The capacity of a filesystem, in bytes.
@@ -90,7 +94,7 @@ struct DiskStats {
 }
 
 #[cfg(unix)]
-fn disk_stats(dir: &Path) -> io::Result<Option<DiskStats>> {
+fn disk_stats(dir: &Path) -> io::Result<DiskStats> {
     let stat = fs::statvfs(dir)?;
     // `f_frsize` is the fragment size in bytes; multiplying by the
     // block counts yields capacity in bytes. Both fields come back as
@@ -103,11 +107,11 @@ fn disk_stats(dir: &Path) -> io::Result<Option<DiskStats>> {
     let usable = i64::try_from(stat.f_bavail)
         .unwrap_or(i64::MAX)
         .saturating_mul(frsize);
-    Ok(Some(DiskStats { total, usable }))
+    Ok(DiskStats { total, usable })
 }
 
 #[cfg(not(unix))]
-fn disk_stats(_dir: &Path) -> io::Result<Option<DiskStats>> { Ok(None) }
+fn disk_stats(_dir: &Path) -> io::Result<DiskStats> { Err(io::ErrorKind::Unsupported.into()) }
 
 // Both tests below are unix-only, so the module itself is gated: on another
 // platform there would be no test left to use the `assert2` imports.
