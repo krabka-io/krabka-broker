@@ -9,7 +9,7 @@
 use {
     super::{
         group_coordinator::GroupCoordinator,
-        seeds::{GroupSeed, ReplaySeed, ShareGroupSeed},
+        seeds::{GroupSeed, ReplaySeed, ShareGroupSeed, StreamsGroupSeed},
     },
     crate::error::BrokerError,
     dashmap::DashMap,
@@ -95,6 +95,14 @@ impl GroupCoordinator {
         SeedMaps {
             live: &self.share_seeds,
             cache: &self.share_seeds_cache,
+        }
+    }
+
+    /// The streams groups' replayed seeds and cached copies.
+    pub(super) fn streams_replay(&self) -> SeedMaps<'_, StreamsGroupSeed> {
+        SeedMaps {
+            live: &self.streams_seeds,
+            cache: &self.streams_seeds_cache,
         }
     }
 }
@@ -826,6 +834,7 @@ mod tests {
         c.consumer_replay().update("g", |seed| seed.group_epoch = 7);
         c.share_replay()
             .update_with("g", 8, |seed, epoch| seed.group_epoch = epoch);
+        c.streams_replay().update("g", |seed| seed.group_epoch = 9);
         check!(
             (c.seeds.get("g").is_none(), c.cached_seed("g"))
                 == (true, Some(consumer(|seed| seed.group_epoch = 7)))
@@ -833,6 +842,12 @@ mod tests {
         check!(
             (c.share_seeds.get("g").is_none(), c.cached_share_seed("g"))
                 == (true, Some(share(|seed| seed.group_epoch = 8)))
+        );
+        check!(
+            (
+                c.streams_seeds.get("g").is_none(),
+                c.cached_streams_seed("g")
+            ) == (true, Some(streams(|seed| seed.group_epoch = 9)))
         );
         let read = c.consumer_replay().read("g", |seed| seed.group_epoch);
         assert!(let Err(BrokerError::Startup(message)) = read);
