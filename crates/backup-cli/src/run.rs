@@ -1751,6 +1751,39 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_capture_that_finds_nothing_reports_the_exact_reasons() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+        let empty = tempfile::tempdir().expect("an empty log dir");
+
+        let cases = [
+            (
+                None,
+                "captured nothing: pass --log-dir, --bootstrap-server, or both".to_owned(),
+            ),
+            (
+                Some(empty.path()),
+                format!(
+                    "captured nothing: {} is absent; {} holds no controller or observer \
+                     metadata checkpoint",
+                    empty.path().join(RLMM_SNAPSHOT_RELATIVE).display(),
+                    empty.path().display(),
+                ),
+            ),
+        ];
+        for (log_dir, expected) in cases {
+            let error = capture(log_dir, None, &args)
+                .await
+                .result
+                .expect_err("a capture that found nothing fails");
+            assert!(let BackupError::Io(error) = &error);
+            check!(error.kind() == ErrorKind::NotFound);
+            check!(error.to_string() == expected);
+        }
+        check!(list(&args).await.result.unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn an_unreadable_snapshot_is_reported_rather_than_treated_as_absent() {
         let log_dir = tempfile::tempdir().expect("log dir");
         // A directory where the snapshot file belongs: the read fails with
