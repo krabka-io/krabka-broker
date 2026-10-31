@@ -11,10 +11,9 @@
 mod support;
 
 use {
-    crate::support::configs::describe_resource,
+    crate::support::{client::raw_connection, configs::describe_resource},
     assert2::check,
     krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId, config::NodeRole},
-    krabka_client_core::{Connection, ConnectionOptions},
     krabka_protocol::{
         UnknownTaggedFields,
         owned::{
@@ -108,12 +107,7 @@ async fn start_node(node: NodeId, roles: &[NodeRole], controller: Option<&Broker
 // Sends `DescribeConfigs` for the listener keys of `node` to `address`, with
 // the synonyms, the way `kafka-configs --describe --all` asks.
 async fn describe_listener_keys(address: SocketAddr, node: u64) -> DescribeConfigsResult {
-    let connection = Connection::connect(address, ConnectionOptions {
-        client_id: "describe-configs-listeners".to_owned(),
-        ..ConnectionOptions::default()
-    })
-    .await
-    .expect("connect");
+    let connection = raw_connection(address, "describe-configs-listeners").await;
     let response = connection
         .send(DescribeConfigsRequest {
             resources: vec![describe_resource(

@@ -22,6 +22,7 @@ mod support;
 use {
     crate::support::{
         admin,
+        client::raw_connection_with_context,
         configs::{controller_registration, feature_update},
         discovery::api_versions_request_for,
         sasl::{ScramAlgorithm, scram_upsertion},
@@ -33,7 +34,7 @@ use {
     krabka_broker::{
         BrokerConfig, BrokerHandle, NodeId, api_catalog::UnstableApiVersions, config::NodeRole,
     },
-    krabka_client_core::{Connection, ConnectionOptions},
+    krabka_client_core::Connection,
     krabka_metadata::metadata_version,
     krabka_protocol::{
         UnknownTaggedFields,
@@ -169,12 +170,12 @@ fn api_versions_request() -> ApiVersionsRequest { api_versions_request_for("krab
 /// bootstrap, so every later `send` negotiates against what this listener
 /// advertises rather than against the client's own codec range.
 async fn dial_controller(broker: &BrokerHandle) -> Connection {
-    Connection::connect(broker.controller_addr(), ConnectionOptions {
-        client_id: "controller-admin-surface".to_owned(),
-        ..ConnectionOptions::default()
-    })
+    raw_connection_with_context(
+        broker.controller_addr(),
+        "controller-admin-surface",
+        "dial the controller listener",
+    )
     .await
-    .expect("dial the controller listener")
 }
 
 /// The versions of one api key that a listener advertises, inclusive.
