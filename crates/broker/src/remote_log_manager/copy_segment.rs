@@ -486,6 +486,10 @@ mod tests {
         crate::remote_log_manager::{
             copy::CopyFence,
             copy_eligible,
+            remote_retention::{
+                LocalLogFootprint, RemoteRetentionBounds, RemoteRetentionOutcome,
+                remote_retention_pass,
+            },
             test_support::{
                 self as fixtures, FakeWormArchive, copy_exports, local_backends, rolled_log,
                 synth_export, tier, tp,
@@ -493,7 +497,7 @@ mod tests {
         },
         assert2::{assert, check},
         krabka_ids::LeaderEpoch,
-        krabka_log::Offset,
+        krabka_log::{LogConfig, Offset},
         krabka_remote_storage::{
             ChainHead, ChainStamp, CustomMetadata, EpochId, ManifestSeq, RemoteLogMetadataManager,
             RemoteStorageError, RemoteStorageManager,
@@ -501,7 +505,10 @@ mod tests {
         krabka_units::bytes,
         std::{
             fs,
-            sync::{Mutex, PoisonError},
+            sync::{
+                Mutex, PoisonError,
+                atomic::{AtomicBool, Ordering as AtomicOrdering},
+            },
         },
     };
 
@@ -815,6 +822,125 @@ mod tests {
                 .is_empty()
         );
         check!(owned.delete_counts() == (1, errors));
+    }
+
+    /// An RSM whose copy always fails and whose delete fails while
+    /// `refusing` is set, as when the object store is down. It records the
+    /// segment of every copy it was handed and of every delete that went.
+    #[derive(Default)]
+    struct FlakyStoreRsm {
+        refusing: AtomicBool,
+        copied: Mutex<Vec<Uuid>>,
+        deleted: Mutex<Vec<Uuid>>,
+    }
+
+    #[krabka_macros::missing_remote_reads]
+    impl RemoteStorageManager for FlakyStoreRsm {
+        fn copy_log_segment_data(
+            &self,
+            metadata: &RemoteLogSegmentMetadata,
+            _data: &LogSegmentData,
+        ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
+            self.copied
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(metadata.remote_log_segment_id().id);
+            Err(RemoteStorageError::Backend("upload failed".into()))
+        }
+
+        fn delete_log_segment_data(
+            &self,
+            metadata: &RemoteLogSegmentMetadata,
+        ) -> Result<(), RemoteStorageError> {
+            if self.refusing.load(AtomicOrdering::Relaxed) {
+                return Err(RemoteStorageError::Backend("store unavailable".into()));
+            }
+            self.deleted
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(metadata.remote_log_segment_id().id);
+            Ok(())
+        }
+    }
+
+    /// A failed copy whose rollback delete the store refuses leaves its
+    /// segment in `DeleteSegmentStarted`, and the next remote-retention pass
+    /// retries the delete once the store answers again, as Kafka's
+    /// `RLMExpirationTask` retries a dangling `DELETE_SEGMENT_STARTED`
+    /// segment. No floor and no retention setting is in play, so the retry
+    /// is the only work the pass has.
+    #[tokio::test]
+    async fn the_next_retention_pass_retries_a_refused_rollback_delete() {
+        let rsm_impl = Arc::new(FlakyStoreRsm {
+            refusing: AtomicBool::new(true),
+            ..FlakyStoreRsm::default()
+        });
+        let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
+        let owned = fixtures::owned_tier_resources();
+        let tier = owned.tier(&rsm);
+
+        let outcome = copy_one(
+            &tier,
+            &tp(),
+            CopyIdentity {
+                broker_id: 1,
+                leader_epoch: LeaderEpoch(0),
+                fence: &FloorFence(None),
+            },
+            &synth_export().call(),
+            ChainPosition::Unchained,
+        )
+        .await;
+        check!(outcome == CopyOutcome::Failed);
+        let copied = rsm_impl
+            .copied
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        assert!(copied.len() == 1);
+
+        rsm_impl.refusing.store(false, AtomicOrdering::Relaxed);
+        let cfg = LogConfig {
+            retention: None,
+            retention_size: None,
+            ..LogConfig::default()
+        };
+        let retention = remote_retention_pass(
+            &tp(),
+            1,
+            RemoteRetentionBounds {
+                log_config: &cfg,
+                log_start_offset: Offset(0),
+                deleted_below: None,
+                earliest_epoch: None,
+                now_ms: now_ms(),
+                local: LocalLogFootprint::EMPTY,
+            },
+            &tier,
+        )
+        .await;
+
+        check!(
+            retention
+                == RemoteRetentionOutcome {
+                    deleted: 1,
+                    log_start: None,
+                }
+        );
+        check!(
+            *rsm_impl
+                .deleted
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                == copied
+        );
+        check!(
+            owned
+                .rlmm
+                .list_remote_log_segments(&tp())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
