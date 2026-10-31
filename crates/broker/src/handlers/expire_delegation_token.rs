@@ -25,7 +25,7 @@
 use {
     crate::{
         codes::{DELEGATION_TOKEN_EXPIRED, DELEGATION_TOKEN_OWNER_MISMATCH, INVALID_REQUEST},
-        handlers::{ErrorCodeResponse as _, renew_delegation_token::admit_token_request},
+        handlers::{ErrorCodeResponse as _, delegation_token_admission::admit_token_request},
         metadata_source::MetadataSource,
         network::auth::ConnectionAuth,
         time_util::now_ms,
