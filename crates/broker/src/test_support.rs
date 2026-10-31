@@ -1508,6 +1508,18 @@ pub async fn capture_server_name() -> ServerNameCapture {
     }
 }
 
+/// Assert that a dial to a [`ServerNameCapture`] failed, since the capture
+/// drops the connection after the `ClientHello`, and that it asked for
+/// `expected` as the server name.
+pub async fn assert_dialed_with<T, E>(
+    result: &Result<T, E>,
+    server_name: JoinHandle<Option<String>>,
+    expected: &str,
+) {
+    assert2::assert!(let Err(_) = result, "the capture stops after the ClientHello");
+    assert2::assert!(server_name.await.expect("join the capture").as_deref() == Some(expected));
+}
+
 /// Wait up to five seconds for `broker` to become the controller leader.
 pub async fn wait_for_controller_leader(broker: &Broker) {
     let deadline = Instant::now() + Duration::from_secs(5);

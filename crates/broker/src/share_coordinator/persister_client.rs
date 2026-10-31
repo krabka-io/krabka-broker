@@ -781,7 +781,7 @@ mod tests {
             },
             partition_registry::PartitionRegistry,
             share_coordinator::{config::ShareCoordinatorConfig, coordinator::message},
-            test_support::{FakeMetadataSource, capture_server_name},
+            test_support::{FakeMetadataSource, assert_dialed_with, capture_server_name},
         },
         krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord},
         krabka_protocol::{
@@ -971,15 +971,7 @@ mod tests {
             .initialize("g", uuid::Uuid::from_u128(3), 0, 1, Offset(0))
             .await;
 
-        assert2::assert!(let Err(_) = result, "the capture stops after the ClientHello");
-        assert2::assert!(
-            capture
-                .server_name
-                .await
-                .expect("join the capture")
-                .as_deref()
-                == Some("broker.internal")
-        );
+        assert_dialed_with(&result, capture.server_name, "broker.internal").await;
     }
 
     #[test]

@@ -384,7 +384,7 @@ mod tests {
                 coordinator::ShareCoordinator,
                 persister_client::{InterBrokerListener, SharePersister},
             },
-            test_support::{FakeMetadataSource, capture_server_name},
+            test_support::{FakeMetadataSource, assert_dialed_with, capture_server_name},
         },
         krabka_ids::LeaderEpoch,
         krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord},
@@ -484,15 +484,7 @@ mod tests {
 
         let result = poller.remote_offsets(&image, NodeId(2), "work", 0).await;
 
-        assert2::assert!(let Err(_) = result, "the capture stops after the ClientHello");
-        assert2::assert!(
-            capture
-                .server_name
-                .await
-                .expect("join the capture")
-                .as_deref()
-                == Some("broker.internal")
-        );
+        assert_dialed_with(&result, capture.server_name, "broker.internal").await;
     }
 
     #[test]
