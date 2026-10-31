@@ -20,7 +20,6 @@ use {
     krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::owned::find_coordinator_response::Coordinator,
     krabka_verified::broker::{FindCoordinatorAdmission, find_coordinator_admission},
-    std::net::SocketAddr,
 };
 
 pub(super) enum KeySlot {
@@ -58,8 +57,7 @@ pub(super) fn cluster_action_allowed(
 fn key_admission(
     authorizer: &dyn Authorizer,
     image: &krabka_metadata::MetadataImage,
-    principal: &krabka_security::Principal,
-    host: &SocketAddr,
+    context: &RequestContext<'_>,
     api_version: i16,
     key_type: i8,
     key: &str,
@@ -72,8 +70,8 @@ fn key_admission(
         return find_coordinator_admission(api_version, key_type, true, share_key_valid);
     };
     let acl_allowed = authorizer.authorize(image, &AuthorizationRequest {
-        principal,
-        host,
+        principal: context.principal,
+        host: context.peer,
         resource_type,
         resource_name: key,
         operation,
@@ -94,8 +92,7 @@ pub(super) fn authorize_keys(
             let admission = key_admission(
                 broker.config.authorizer.as_ref(),
                 image,
-                context.principal,
-                context.peer,
+                context,
                 api_version,
                 key_type,
                 &key,
@@ -125,7 +122,6 @@ mod tests {
         crate::{
             handlers::find_coordinator::{KEY_TYPE_GROUP, KEY_TYPE_SHARE, KEY_TYPE_TRANSACTION},
             authorizer::SimpleAclAuthorizer,
-            test_support::{peer, principal},
         },
         assert2::assert,
         std::collections::HashSet,
@@ -135,8 +131,6 @@ mod tests {
 
     fn deny_authorizer() -> SimpleAclAuthorizer { SimpleAclAuthorizer::new(HashSet::new()) }
 
-    fn anon() -> krabka_security::Principal { principal("ANONYMOUS") }
-
     /// (version, key type, key, expected admission) under an authorizer that
     /// denies everything. The SHARE rows never consult the authorizer: the
     /// handler checks `ClusterAction` for the request before this runs.
@@ -144,7 +138,11 @@ mod tests {
     fn key_admission_follows_get_coordinator() {
         let authz = deny_authorizer();
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let peer = peer();
+        krabka_macros::request_test_identity! {
+            bind(principal, peer, context);
+            user ["ANONYMOUS"];
+            client ["find-client"];
+        };
         let rows = [
             (6, KEY_TYPE_GROUP, "g", FindCoordinatorAdmission::DenyGroup),
             (
@@ -174,7 +172,7 @@ mod tests {
             (6, i8::MAX, "g", FindCoordinatorAdmission::InvalidRequest),
         ];
         for (version, key_type, key, expected) in rows {
-            let got = key_admission(&authz, &image, &anon(), &peer, version, key_type, key);
+            let got = key_admission(&authz, &image, &context, version, key_type, key);
             assert!(got == expected, "v{version} type {key_type} key {key:?}");
         }
     }
