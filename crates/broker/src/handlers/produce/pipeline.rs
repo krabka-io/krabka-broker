@@ -41,7 +41,7 @@ use {
         BatchIndexAndErrorMessage, PartitionProduceResponse,
     },
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
-    std::sync::{Arc, atomic},
+    std::sync::{Arc, PoisonError, atomic},
     tokio::sync::OwnedRwLockReadGuard,
 };
 
@@ -650,6 +650,9 @@ fn exceeds_wire_size(payload: &PartitionPayload, max_message_bytes: ByteSize) ->
 
 /// The partition's log config when the batch took the owned path, which
 /// re-encodes it, or `None` on the verbatim path.
+///
+/// A log poisoned by a panic elsewhere is read the way the writer reads it,
+/// by recovering the guard, so the gate measures what the writer stores.
 fn owned_log_config(
     prepared: &PreparedBatch,
     partitions: &PartitionRegistry,
@@ -659,7 +662,12 @@ fn owned_log_config(
     matches!(prepared.source, super::prepare::PreparedSource::Owned(_))
         .then(|| {
             let part = partitions.get(topic_name, krabka_ids::PartitionIndex(idx))?;
-            part.log.lock().ok().map(|log| log.config_snapshot())
+            Some(
+                part.log
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .config_snapshot(),
+            )
         })
         .flatten()
 }
@@ -767,12 +775,15 @@ async fn leader_partition(
 /// whether the topic set it or inherited the broker's. An owned batch the
 /// `max.message.bytes` gate already encoded under the same codec and level is
 /// measured from those bytes rather than encoded again.
+///
+/// A log poisoned by a panic elsewhere still has its guard recovered: the
+/// writer appends to it, so the gate must still refuse an oversize batch.
 fn exceeds_segment_size(prepared: &mut PreparedBatch, part: &Partition) -> bool {
-    let Ok(log) = part.log.lock() else {
-        return false;
-    };
-    let config = log.config_snapshot();
-    drop(log);
+    let config = part
+        .log
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .config_snapshot();
     prepared.appended_len(&config) > config.segment_size.bytes_usize()
 }
 
