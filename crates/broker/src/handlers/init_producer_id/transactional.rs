@@ -14,7 +14,10 @@ use {
         codes,
         error::BrokerError,
         txn::{
-            coordinator::{TxnCoordinator, completion::completion_for},
+            coordinator::{
+                TxnCoordinator,
+                completion::{apply_completion_from, completion_for},
+            },
             handlers::end_txn::{
                 client_producer_identity, completion_producer_identity,
                 prepare_server_abort_identities,
@@ -311,20 +314,16 @@ async fn complete_fenced_abort(
 ) {
     let tid = init.tid;
     let mut completed = published.lock().await.clone();
-    completed.state = TxnState::CompleteAbort;
-    completed.last_update_ms = now_millis();
-    let (completed_pid, completed_epoch) = completion_producer_identity(&completed);
-    if completed_pid != request_pid {
-        completed.prev_producer_id = request_pid;
-    }
-    completed.producer_id = completed_pid;
-    completed.producer_epoch = completed_epoch;
-    completed.next_producer_id = ProducerId(-1);
-    completed.next_producer_epoch = -1;
-    // Kafka's `prepareComplete`: the abort of a failed epoch
-    // fence has now been written.
-    completed.has_failed_epoch_fence = false;
-    completed.partitions.clear();
+    let identity = completion_producer_identity(&completed);
+    // Kafka's `prepareComplete`, which also clears the failed epoch fence
+    // whose abort has now been written.
+    apply_completion_from(
+        &mut completed,
+        TxnState::CompleteAbort,
+        identity,
+        request_pid,
+        now_millis(),
+    );
     if let Err(error) = coord.put(completed, init.txnv).await {
         tracing::warn!(
             tid,
