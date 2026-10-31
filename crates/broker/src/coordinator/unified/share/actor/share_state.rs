@@ -746,4 +746,69 @@ mod tests {
             );
         }
     }
+
+    /// The share-state partition metadata sets that a failed write must
+    /// leave as they were.
+    #[derive(Debug, PartialEq, Eq)]
+    struct MetadataSets {
+        initialized: HashSet<TopicIdPartition>,
+        initializing: HashMap<TopicIdPartition, i64>,
+        deleting: HashMap<Uuid, String>,
+        topic_names: HashMap<Uuid, String>,
+    }
+
+    fn metadata_sets(state: &ShareGroupState) -> MetadataSets {
+        MetadataSets {
+            initialized: state.initialized.clone(),
+            initializing: state.initializing.clone(),
+            deleting: state.deleting.clone(),
+            topic_names: state.topic_names.clone(),
+        }
+    }
+
+    /// Kafka's `initializeShareGroupState` and `maybeCleanupShareGroupState`
+    /// run as coordinator write operations, and a failed append reverts the
+    /// timeline to the last committed offset. A
+    /// `ShareGroupStatePartitionMetadata` record that does not reach the log
+    /// leaves the group's in-memory sets as the log last recorded them.
+    #[tokio::test]
+    async fn a_failed_metadata_write_leaves_every_set() {
+        enum Change {
+            ApplyInitialized,
+            CleanupDeletedTopics,
+        }
+
+        let gone = Uuid([6; 16]);
+        for (row, change) in [
+            ("an initialize outcome", Change::ApplyInitialized),
+            ("a deleted topic", Change::CleanupDeletedTopics),
+        ] {
+            let (metadata, topic_id) = metadata_with_topic().partitions(2).call();
+            let (coordinator, log) = make_coordinator(metadata);
+            let mut state = ShareGroupState::new("g");
+            state.initializing.insert(share_partition(topic_id, 0), 5);
+            state.initialized.insert(share_partition(gone, 0));
+            state.deleting.insert(gone, "gone".to_owned());
+            state.topic_names.insert(topic_id, "t".to_owned());
+            state.topic_names.insert(gone, "gone".to_owned());
+            let before = metadata_sets(&state);
+            log.fail_next_append(None);
+
+            match change {
+                Change::ApplyInitialized => {
+                    let outcomes = [InitializeOutcome {
+                        partition: share_partition(topic_id, 0),
+                        initialized: true,
+                    }];
+                    apply_initialized(&mut state, &outcomes, &coordinator, 1_000).await;
+                }
+                Change::CleanupDeletedTopics => {
+                    cleanup_deleted_topics(&mut state, &coordinator, 1_000).await;
+                }
+            }
+
+            assert!(metadata_sets(&state) == before, "{row}");
+            assert!(log.batches().await.is_empty(), "{row}");
+        }
+    }
 }
