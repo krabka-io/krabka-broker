@@ -103,15 +103,16 @@ pub async fn capture(
     archive: &ArchiveArgs,
 ) -> OperationReport<String> {
     let mut events = Vec::new();
-    let result = capture_secured_inner(
+    let signing = CaptureSigningArgs::default();
+    let request = CaptureRequest {
         log_dir,
         bootstrap_server,
-        None,
-        &CaptureSigningArgs::default(),
+        security: None,
+        signing: &signing,
         archive,
-        &mut events,
-    )
-    .await;
+        captured_at_ms: now_ms(),
+    };
+    let result = run_capture(request, &mut events).await;
     OperationReport { result, events }
 }
 
@@ -134,38 +135,29 @@ pub async fn capture_configured(
             Some(_) => security.load().await?,
             None => None,
         };
-        capture_secured_inner(
+        let request = CaptureRequest {
             log_dir,
             bootstrap_server,
-            client_security,
+            security: client_security,
             signing,
             archive,
-            &mut events,
-        )
-        .await
+            captured_at_ms: now_ms(),
+        };
+        run_capture(request, &mut events).await
     }
     .await;
     OperationReport { result, events }
 }
 
-async fn capture_secured_inner(
-    log_dir: Option<&Path>,
-    bootstrap_server: Option<&str>,
+/// Everything one capture reads: where to take artifacts from, how to reach
+/// and sign for the cluster, where to put them, and the capture's timestamp.
+struct CaptureRequest<'a> {
+    log_dir: Option<&'a Path>,
+    bootstrap_server: Option<&'a str>,
     security: Option<ClientSecurity>,
-    signing: &CaptureSigningArgs,
-    archive: &ArchiveArgs,
-    events: &mut Vec<BackupEvent>,
-) -> Result<String, BackupError> {
-    capture_secured_at_inner(
-        log_dir,
-        bootstrap_server,
-        security,
-        signing,
-        archive,
-        now_ms(),
-        events,
-    )
-    .await
+    signing: &'a CaptureSigningArgs,
+    archive: &'a ArchiveArgs,
+    captured_at_ms: u64,
 }
 
 #[cfg(test)]
@@ -178,139 +170,191 @@ async fn capture_secured_at(
     captured_at_ms: u64,
 ) -> OperationReport<String> {
     let mut events = Vec::new();
-    let result = capture_secured_at_inner(
+    let request = CaptureRequest {
         log_dir,
         bootstrap_server,
         security,
         signing,
         archive,
         captured_at_ms,
-        &mut events,
-    )
-    .await;
+    };
+    let result = run_capture(request, &mut events).await;
     OperationReport { result, events }
 }
 
-async fn capture_secured_at_inner(
-    log_dir: Option<&Path>,
-    bootstrap_server: Option<&str>,
-    security: Option<ClientSecurity>,
-    signing: &CaptureSigningArgs,
-    archive: &ArchiveArgs,
-    captured_at_ms: u64,
+async fn run_capture(
+    request: CaptureRequest<'_>,
     events: &mut Vec<BackupEvent>,
 ) -> Result<String, BackupError> {
-    let store = Archive::open(archive)?;
-    let id = capture_id(captured_at_ms);
-    let mut artifacts: Vec<Artifact> = Vec::new();
-    let mut absent: Vec<String> = Vec::new();
-    let mut metadata_snapshot_sha256 = None;
-    let mut rlmm_snapshot_sha256 = None;
-    let mut notes: Vec<String> = Vec::new();
+    let store = Archive::open(request.archive)?;
+    let id = capture_id(request.captured_at_ms);
+    let mut progress = CaptureProgress::default();
+    capture_log_dir_artifacts(&store, &id, &request, &mut progress).await?;
+    capture_cluster_artifacts(&store, &id, &request, &mut progress, events).await?;
+    if progress.artifacts.is_empty() {
+        return Err(captured_nothing(&progress.absent));
+    }
+    let manifest = write_manifest(&store, &id, &request, progress.artifacts).await?;
+    events.push(BackupEvent::Capture {
+        manifest,
+        notes: progress.notes,
+        missing: progress.absent,
+    });
+    Ok(id)
+}
 
-    if let Some(log_dir) = log_dir {
-        // Read and vet the checkpoint before anything is uploaded. A refused
-        // capture then leaves no orphan artifact in the archive, and the
-        // controller cannot delete the chosen file while the RLMM snapshot
-        // uploads.
-        let checkpoint = match newest_metadata_checkpoint(log_dir) {
-            Some(checkpoint) => {
-                let bytes = read_capture_file(&checkpoint.path, METADATA_CHECKPOINT).await?;
-                refuse_format_time_checkpoint(&checkpoint, &bytes)?;
-                Some((checkpoint, bytes))
-            }
-            None => None,
-        };
+/// What the capture phases have collected so far.
+#[derive(Default)]
+struct CaptureProgress {
+    artifacts: Vec<Artifact>,
+    absent: Vec<String>,
+    notes: Vec<String>,
+    metadata_snapshot_sha256: Option<Sha256Digest>,
+    rlmm_snapshot_sha256: Option<Sha256Digest>,
+}
 
-        let rlmm = log_dir.join(RLMM_SNAPSHOT_RELATIVE);
-        match read_capture_file(&rlmm, RLMM_SNAPSHOT).await {
-            Ok(bytes) => {
-                rlmm_snapshot_sha256 = Some(Sha256Digest::of(&bytes));
-                artifacts.push(
-                    upload(
-                        &store,
-                        &id,
-                        RLMM_SNAPSHOT,
-                        &rlmm.display().to_string(),
-                        bytes,
-                    )
-                    .await?,
-                );
-            }
-            Err(BackupError::Io(error)) if error.kind() == ErrorKind::NotFound => {
-                absent.push(format!("{} is absent", rlmm.display()));
-            }
-            Err(error) => return Err(error),
+/// Uploads the RLMM snapshot and the newest metadata checkpoint from the
+/// request's log directory, if it names one.
+async fn capture_log_dir_artifacts(
+    store: &Archive,
+    id: &str,
+    request: &CaptureRequest<'_>,
+    progress: &mut CaptureProgress,
+) -> Result<(), BackupError> {
+    let Some(log_dir) = request.log_dir else {
+        return Ok(());
+    };
+    // Read and vet the checkpoint before anything is uploaded. A refused
+    // capture then leaves no orphan artifact in the archive, and the
+    // controller cannot delete the chosen file while the RLMM snapshot
+    // uploads.
+    let checkpoint = read_vetted_checkpoint(log_dir).await?;
+
+    let rlmm = log_dir.join(RLMM_SNAPSHOT_RELATIVE);
+    match read_capture_file(&rlmm, RLMM_SNAPSHOT).await {
+        Ok(bytes) => {
+            progress.rlmm_snapshot_sha256 = Some(Sha256Digest::of(&bytes));
+            progress
+                .artifacts
+                .push(upload(store, id, RLMM_SNAPSHOT, &rlmm.display().to_string(), bytes).await?);
         }
-
-        match checkpoint {
-            Some((MetadataCheckpoint { path, .. }, bytes)) => {
-                notes.push(checkpoint_note(&bytes, captured_at_ms));
-                metadata_snapshot_sha256 = Some(Sha256Digest::of(&bytes));
-                artifacts.push(
-                    upload(
-                        &store,
-                        &id,
-                        METADATA_CHECKPOINT,
-                        &path.display().to_string(),
-                        bytes,
-                    )
-                    .await?,
-                );
-            }
-            None => absent.push(format!(
-                "{} holds no controller or observer metadata checkpoint",
-                log_dir.display()
-            )),
+        Err(BackupError::Io(error)) if error.kind() == ErrorKind::NotFound => {
+            progress
+                .absent
+                .push(format!("{} is absent", rlmm.display()));
         }
+        Err(error) => return Err(error),
     }
 
-    if let Some(bootstrap) = bootstrap_server {
-        let offsets = fetch_group_offsets(bootstrap, security.clone()).await?;
-        let bytes = serde_json::to_vec_pretty(&offsets).map_err(|source| BackupError::Json {
-            context: GROUP_OFFSETS.to_owned(),
-            source,
-        })?;
-        let group_offsets_sha256 = Some(Sha256Digest::of(&bytes));
-        artifacts.push(upload(&store, &id, GROUP_OFFSETS, bootstrap, bytes).await?);
-        if let Some(bytes) = capture_diskless_index(
-            &store,
-            bootstrap,
-            security.clone(),
-            signing,
-            CaptureDigests {
-                metadata_snapshot: metadata_snapshot_sha256,
-                rlmm_snapshot: rlmm_snapshot_sha256,
-                group_offsets: group_offsets_sha256,
-            },
-            events,
-        )
-        .await?
-        {
-            artifacts.push(upload(&store, &id, DISKLESS_WAL_INDEX, bootstrap, bytes).await?);
+    match checkpoint {
+        Some((MetadataCheckpoint { path, .. }, bytes)) => {
+            progress
+                .notes
+                .push(checkpoint_note(&bytes, request.captured_at_ms));
+            progress.metadata_snapshot_sha256 = Some(Sha256Digest::of(&bytes));
+            progress.artifacts.push(
+                upload(
+                    store,
+                    id,
+                    METADATA_CHECKPOINT,
+                    &path.display().to_string(),
+                    bytes,
+                )
+                .await?,
+            );
         }
+        None => progress.absent.push(format!(
+            "{} holds no controller or observer metadata checkpoint",
+            log_dir.display()
+        )),
     }
+    Ok(())
+}
 
-    if artifacts.is_empty() {
-        return Err(BackupError::Io(Error::new(
-            ErrorKind::NotFound,
-            format!(
-                "captured nothing: {}",
-                if absent.is_empty() {
-                    "pass --log-dir, --bootstrap-server, or both".to_owned()
-                } else {
-                    absent.join("; ")
-                }
-            ),
-        )));
+/// Reads the newest metadata checkpoint in `log_dir` and refuses it if it is
+/// the one `krabka format` wrote.
+async fn read_vetted_checkpoint(
+    log_dir: &Path,
+) -> Result<Option<(MetadataCheckpoint, Vec<u8>)>, BackupError> {
+    let Some(checkpoint) = newest_metadata_checkpoint(log_dir) else {
+        return Ok(None);
+    };
+    let bytes = read_capture_file(&checkpoint.path, METADATA_CHECKPOINT).await?;
+    refuse_format_time_checkpoint(&checkpoint, &bytes)?;
+    Ok(Some((checkpoint, bytes)))
+}
+
+/// Uploads the group offsets and, when the cluster has one, the diskless WAL
+/// index, if the request names a bootstrap server.
+async fn capture_cluster_artifacts(
+    store: &Archive,
+    id: &str,
+    request: &CaptureRequest<'_>,
+    progress: &mut CaptureProgress,
+    events: &mut Vec<BackupEvent>,
+) -> Result<(), BackupError> {
+    let Some(bootstrap) = request.bootstrap_server else {
+        return Ok(());
+    };
+    let offsets = fetch_group_offsets(bootstrap, request.security.clone()).await?;
+    let bytes = serde_json::to_vec_pretty(&offsets).map_err(|source| BackupError::Json {
+        context: GROUP_OFFSETS.to_owned(),
+        source,
+    })?;
+    let group_offsets_sha256 = Some(Sha256Digest::of(&bytes));
+    progress
+        .artifacts
+        .push(upload(store, id, GROUP_OFFSETS, bootstrap, bytes).await?);
+    if let Some(bytes) = capture_diskless_index(
+        store,
+        bootstrap,
+        request.security.clone(),
+        request.signing,
+        CaptureDigests {
+            metadata_snapshot: progress.metadata_snapshot_sha256,
+            rlmm_snapshot: progress.rlmm_snapshot_sha256,
+            group_offsets: group_offsets_sha256,
+        },
+        events,
+    )
+    .await?
+    {
+        progress
+            .artifacts
+            .push(upload(store, id, DISKLESS_WAL_INDEX, bootstrap, bytes).await?);
     }
+    Ok(())
+}
 
+/// The error for a capture that took no artifact, naming what was absent or,
+/// when nothing was even looked for, the flags that would have helped.
+fn captured_nothing(absent: &[String]) -> BackupError {
+    BackupError::Io(Error::new(
+        ErrorKind::NotFound,
+        format!(
+            "captured nothing: {}",
+            if absent.is_empty() {
+                "pass --log-dir, --bootstrap-server, or both".to_owned()
+            } else {
+                absent.join("; ")
+            }
+        ),
+    ))
+}
+
+/// Writes the manifest that commits a capture, after all its artifacts.
+async fn write_manifest(
+    store: &Archive,
+    id: &str,
+    request: &CaptureRequest<'_>,
+    artifacts: Vec<Artifact>,
+) -> Result<Manifest, BackupError> {
     let manifest = Manifest {
         version: MANIFEST_VERSION,
-        capture_id: id.clone(),
-        captured_at_ms,
-        log_dir: log_dir.map(|dir| dir.display().to_string()),
-        bootstrap_server: bootstrap_server.map(ToOwned::to_owned),
+        capture_id: id.to_owned(),
+        captured_at_ms: request.captured_at_ms,
+        log_dir: request.log_dir.map(|dir| dir.display().to_string()),
+        bootstrap_server: request.bootstrap_server.map(ToOwned::to_owned),
         artifacts,
     };
     let encoded = serde_json::to_vec_pretty(&manifest).map_err(|source| BackupError::Json {
@@ -318,14 +362,8 @@ async fn capture_secured_at_inner(
         source,
     })?;
     check_capture_size(MANIFEST, encoded.len() as u64, MAX_MANIFEST_BYTES)?;
-    store.put_new(&capture_key(&id, MANIFEST), encoded).await?;
-
-    events.push(BackupEvent::Capture {
-        manifest,
-        notes,
-        missing: absent,
-    });
-    Ok(id)
+    store.put_new(&capture_key(id, MANIFEST), encoded).await?;
+    Ok(manifest)
 }
 
 /// Refuses a capture whose newest metadata checkpoint is the one `krabka
@@ -408,7 +446,6 @@ async fn capture_diskless_index(
     events: &mut Vec<BackupEvent>,
 ) -> Result<Option<Vec<u8>>, BackupError> {
     const TOPIC: &str = "__diskless_wal_index";
-    const MAX_WAL_OBJECT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
     let mut admin = connect_admin(bootstrap, security.clone()).await?;
     let index_metadata = admin
         .metadata(&[TOPIC])
@@ -421,37 +458,7 @@ async fn capture_diskless_index(
         .metadata(&[])
         .await
         .map_err(|error| BackupError::Cluster(format!("Metadata: {error}")))?;
-    let topic_names = metadata
-        .topics
-        .iter()
-        .filter(|topic| topic.name != TOPIC)
-        .map(|topic| topic.name.as_str())
-        .collect::<Vec<_>>();
-    let resources = topic_names
-        .iter()
-        .map(|name| ConfigResource::topic(*name))
-        .collect::<Vec<_>>();
-    let configs = admin
-        .describe_configs(&resources, DescribeConfigsOptions::default())
-        .await
-        .map_err(|error| BackupError::Cluster(format!("DescribeConfigs: {error}")))?
-        .into_iter()
-        .map(|(resource, config)| {
-            // The client used to fail the whole call on a resource error, as
-            // this `Broker` error; keep that text.
-            let config = config.map_err(|error| {
-                let error = AdminError::Broker {
-                    api: "DescribeConfigs",
-                    code: error.code,
-                    name: error.name,
-                    message: error.message,
-                };
-                BackupError::Cluster(format!("DescribeConfigs: {error}"))
-            })?;
-            let overrides = config.dynamic_overrides(&resource);
-            Ok((resource.name, overrides))
-        })
-        .collect::<Result<BTreeMap<_, _>, BackupError>>()?;
+    let configs = topic_overrides(&admin, &metadata, TOPIC).await?;
     let topics = diskless_topic_topology(&metadata, &configs, TOPIC)?;
     let mut config = KafkaMetadataLogConfig::new(bootstrap);
     TOPIC.clone_into(&mut config.topic);
@@ -472,48 +479,97 @@ async fn capture_diskless_index(
     capture.group_offsets_sha256 = digests.group_offsets;
     log.shutdown().await;
     drop(log);
-    if let (Some(key_id), Some(key_path)) = (
-        signing.worm_signing_key_id.as_ref(),
-        signing.worm_signing_key.as_ref(),
-    ) {
-        let signer = FileEd25519Signer::from_pkcs8_file(key_path, key_id.clone())
-            .map_err(|error| BackupError::InvalidArgument(error.to_string()))?;
-        let keys = capture
-            .partitions
-            .iter()
-            .flat_map(|partition| &partition.ranges)
-            .map(|range| range.object_key.clone())
-            .collect::<BTreeSet<_>>();
-        let mut claims = Vec::with_capacity(keys.len());
-        for key in keys {
-            let bytes = store
-                .get_absolute_capped(&key, MAX_WAL_OBJECT_BYTES)
-                .await?;
-            claims.push(ObjectEntry {
-                suffix: Path::new(&key)
-                    .extension()
-                    .map_or_else(String::new, |extension| {
-                        format!(".{}", extension.to_string_lossy())
-                    }),
-                key,
-                size_bytes: bytes.len() as u64,
-                sha256: Sha256Digest::of(&bytes),
-                e_tag: None,
-                version_id: None,
-                create_precondition: false,
-            });
-        }
-        let head = capture
-            .seal(claims, &signer)
-            .map_err(BackupError::Integrity)?;
-        events.push(BackupEvent::DisklessSealed { head });
-    }
+    seal_capture(store, signing, &mut capture, events).await?;
     serde_json::to_vec_pretty(&capture)
         .map(Some)
         .map_err(|source| BackupError::Json {
             context: DISKLESS_WAL_INDEX.to_owned(),
             source,
         })
+}
+
+/// Each non-index topic's dynamic config overrides, by topic name.
+async fn topic_overrides(
+    admin: &AdminClient,
+    metadata: &TopicMetadata,
+    index_topic: &str,
+) -> Result<BTreeMap<String, BTreeMap<String, String>>, BackupError> {
+    let resources = metadata
+        .topics
+        .iter()
+        .filter(|topic| topic.name != index_topic)
+        .map(|topic| ConfigResource::topic(topic.name.as_str()))
+        .collect::<Vec<_>>();
+    admin
+        .describe_configs(&resources, DescribeConfigsOptions::default())
+        .await
+        .map_err(|error| BackupError::Cluster(format!("DescribeConfigs: {error}")))?
+        .into_iter()
+        .map(|(resource, config)| {
+            // The client used to fail the whole call on a resource error, as
+            // this `Broker` error; keep that text.
+            let config = config.map_err(|error| {
+                let error = AdminError::Broker {
+                    api: "DescribeConfigs",
+                    code: error.code,
+                    name: error.name,
+                    message: error.message,
+                };
+                BackupError::Cluster(format!("DescribeConfigs: {error}"))
+            })?;
+            let overrides = config.dynamic_overrides(&resource);
+            Ok((resource.name, overrides))
+        })
+        .collect()
+}
+
+/// Seals `capture` with an Ed25519 signature over every WAL object it names,
+/// when `signing` holds both a key id and a key. Without both it does nothing.
+async fn seal_capture(
+    store: &Archive,
+    signing: &CaptureSigningArgs,
+    capture: &mut DisklessWalCapture,
+    events: &mut Vec<BackupEvent>,
+) -> Result<(), BackupError> {
+    const MAX_WAL_OBJECT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+    let (Some(key_id), Some(key_path)) = (
+        signing.worm_signing_key_id.as_ref(),
+        signing.worm_signing_key.as_ref(),
+    ) else {
+        return Ok(());
+    };
+    let signer = FileEd25519Signer::from_pkcs8_file(key_path, key_id.clone())
+        .map_err(|error| BackupError::InvalidArgument(error.to_string()))?;
+    let keys = capture
+        .partitions
+        .iter()
+        .flat_map(|partition| &partition.ranges)
+        .map(|range| range.object_key.clone())
+        .collect::<BTreeSet<_>>();
+    let mut claims = Vec::with_capacity(keys.len());
+    for key in keys {
+        let bytes = store
+            .get_absolute_capped(&key, MAX_WAL_OBJECT_BYTES)
+            .await?;
+        claims.push(ObjectEntry {
+            suffix: Path::new(&key)
+                .extension()
+                .map_or_else(String::new, |extension| {
+                    format!(".{}", extension.to_string_lossy())
+                }),
+            key,
+            size_bytes: bytes.len() as u64,
+            sha256: Sha256Digest::of(&bytes),
+            e_tag: None,
+            version_id: None,
+            create_precondition: false,
+        });
+    }
+    let head = capture
+        .seal(claims, &signer)
+        .map_err(BackupError::Integrity)?;
+    events.push(BackupEvent::DisklessSealed { head });
+    Ok(())
 }
 
 fn diskless_topic_topology(
@@ -1748,6 +1804,39 @@ mod tests {
             .to_string();
         check!(message.contains("is absent"), "got: {message}");
         check!(message.contains("checkpoint"), "got: {message}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_capture_that_finds_nothing_reports_the_exact_reasons() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+        let empty = tempfile::tempdir().expect("an empty log dir");
+
+        let cases = [
+            (
+                None,
+                "captured nothing: pass --log-dir, --bootstrap-server, or both".to_owned(),
+            ),
+            (
+                Some(empty.path()),
+                format!(
+                    "captured nothing: {} is absent; {} holds no controller or observer \
+                     metadata checkpoint",
+                    empty.path().join(RLMM_SNAPSHOT_RELATIVE).display(),
+                    empty.path().display(),
+                ),
+            ),
+        ];
+        for (log_dir, expected) in cases {
+            let error = capture(log_dir, None, &args)
+                .await
+                .result
+                .expect_err("a capture that found nothing fails");
+            assert!(let BackupError::Io(error) = &error);
+            check!(error.kind() == ErrorKind::NotFound);
+            check!(error.to_string() == expected);
+        }
+        check!(list(&args).await.result.unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]
