@@ -49,8 +49,8 @@
 
 use {
     krabka_metadata::{
-        AclEntry, KRaftVersionRecord, MetadataRecord, ScramCredentialRecord, VoterSet, VotersRecord,
-        metadata_version,
+        AclEntry, KRaftVersionRecord, MetadataRecord, ScramCredentialRecord, VoterSet,
+        VotersRecord, metadata_version,
     },
     krabka_security::scram::{MIN_SCRAM_ITERATIONS, hash_scram_password_with_salt},
     ring::rand::{SecureRandom, SystemRandom},
