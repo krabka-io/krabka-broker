@@ -47,43 +47,15 @@ pub async fn handle(
         Ok(id) => NodeId(id),
         Err(_) => return Ok(response(codes::INVALID_REGISTRATION, -1)),
     };
-    // The checks run in the order of `ClusterControlManager.registerBroker`,
-    // so a request with more than one fault gets Kafka's error code.
-    if !cluster_id_matches(&req.cluster_id, image.cluster_id()) {
-        return Ok(response(codes::INCONSISTENT_CLUSTER_ID, -1));
-    }
-    let incarnation_id = uuid::Uuid::from_bytes(req.incarnation_id.0);
-    let existing = image.broker(node_id);
-    // A new incarnation is refused only while the previous one still holds a
-    // heartbeat session. A restarted broker has a new incarnation id, and it
-    // registers once the session of the process it replaced expires.
-    if let Some(existing) = existing
-        && existing.incarnation_id != incarnation_id
-        && broker.liveness.has_valid_session(node_id.0).await
-    {
-        return Ok(response(codes::DUPLICATE_BROKER_REGISTRATION, -1));
-    }
-    if req.is_migrating_zk_broker {
-        return Ok(response(codes::BROKER_ID_NOT_REGISTERED, -1));
-    }
-    let directory_assignment = image
-        .finalized_metadata_version()
-        .is_some_and(|level| level >= metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL);
-    if directory_assignment && let Err(code) = validate_log_dirs(&req, &image, node_id) {
-        return Ok(response(code, -1));
-    }
-    let endpoints = match decode_listeners(&req.listeners) {
-        Ok(endpoints) => endpoints,
+    let admitted = match check_registration(broker, &req, &image, node_id).await {
+        Ok(admitted) => admitted,
         Err(code) => return Ok(response(code, -1)),
     };
-    if let Err(code) = validate_features(&req, &image) {
-        return Ok(response(code, -1));
-    }
-
-    // `decode_listeners` refuses an empty listener list with this code.
-    let Some(first) = endpoints.first() else {
-        return Ok(response(codes::INVALID_REGISTRATION, -1));
-    };
+    let incarnation_id = admitted.incarnation_id;
+    let existing = admitted.existing;
+    let directory_assignment = admitted.directory_assignment;
+    let endpoints = admitted.endpoints;
+    let (host, port) = admitted.advertised;
     let features = req
         .features
         .iter()
@@ -117,8 +89,8 @@ pub async fn handle(
         // stamps the offset it commits at.
         broker_epoch: amended.map_or(-1, |existing| existing.broker_epoch),
         incarnation_id,
-        host: first.host.clone(),
-        port: first.port,
+        host,
+        port,
         rack: req.rack.clone(),
         endpoints,
         log_dirs,
@@ -187,6 +159,68 @@ pub async fn handle(
         .await;
 
     Ok(answer)
+}
+
+/// What a registration that passed every refusal check is admitted with.
+struct Admitted<'a> {
+    incarnation_id: uuid::Uuid,
+    /// The registration the image holds for this broker id, if any.
+    existing: Option<&'a BrokerRegistrationRecord>,
+    /// Whether the finalized `metadata.version` applies KIP-858's directory
+    /// checks and carries the directories in the record.
+    directory_assignment: bool,
+    endpoints: Vec<BrokerEndpoint>,
+    /// The host and port of the first listener, which the record also
+    /// carries on their own.
+    advertised: (String, u16),
+}
+
+/// The refusal checks of a registration, in the order of
+/// `ClusterControlManager.registerBroker`, so a request with more than one
+/// fault gets Kafka's error code.
+async fn check_registration<'a>(
+    broker: &Broker,
+    req: &BrokerRegistrationRequest,
+    image: &'a krabka_metadata::MetadataImage,
+    node_id: NodeId,
+) -> Result<Admitted<'a>, i16> {
+    if !cluster_id_matches(&req.cluster_id, image.cluster_id()) {
+        return Err(codes::INCONSISTENT_CLUSTER_ID);
+    }
+    let incarnation_id = uuid::Uuid::from_bytes(req.incarnation_id.0);
+    let existing = image.broker(node_id);
+    // A new incarnation is refused only while the previous one still holds a
+    // heartbeat session. A restarted broker has a new incarnation id, and it
+    // registers once the session of the process it replaced expires.
+    if let Some(existing) = existing
+        && existing.incarnation_id != incarnation_id
+        && broker.liveness.has_valid_session(node_id.0).await
+    {
+        return Err(codes::DUPLICATE_BROKER_REGISTRATION);
+    }
+    if req.is_migrating_zk_broker {
+        return Err(codes::BROKER_ID_NOT_REGISTERED);
+    }
+    let directory_assignment = image
+        .finalized_metadata_version()
+        .is_some_and(|level| level >= metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL);
+    if directory_assignment {
+        validate_log_dirs(req, image, node_id)?;
+    }
+    let endpoints = decode_listeners(&req.listeners)?;
+    validate_features(req, image)?;
+    // `decode_listeners` refuses an empty listener list with this code.
+    let Some(first) = endpoints.first() else {
+        return Err(codes::INVALID_REGISTRATION);
+    };
+    let advertised = (first.host.clone(), first.port);
+    Ok(Admitted {
+        incarnation_id,
+        existing,
+        directory_assignment,
+        endpoints,
+        advertised,
+    })
 }
 
 /// The answer to an accepted registration: the epoch the image now holds for
