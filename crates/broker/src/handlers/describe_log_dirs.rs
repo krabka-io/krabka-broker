@@ -203,10 +203,13 @@ mod tests {
 
     use {
         super::*,
-        crate::test_support::{DenyAll, start_broker_with_authorizer},
+        crate::{
+            authorizer::AllowAllAuthorizer,
+            test_support::{DenyAll, start_broker_with, start_broker_with_authorizer},
+        },
         assert2::assert,
         krabka_protocol::owned::describe_log_dirs_response,
-        std::sync::Arc,
+        std::{fs, sync::Arc},
     };
 
     krabka_macros::wire_codec_helpers! {
@@ -235,6 +238,50 @@ mod tests {
             ..Default::default()
         };
         assert!(resp == expected);
+        broker_handle.shutdown().await;
+    }
+
+    /// A log dir that can no longer be read is a storage failure, as Kafka's
+    /// `ReplicaManager.describeLogDirs` answers it: the dir goes offline and
+    /// its row is `KAFKA_STORAGE_ERROR` with unknown capacity, not an empty
+    /// healthy directory.
+    #[tokio::test]
+    async fn handle_reports_an_unreadable_log_dir_as_a_storage_error() {
+        let version = describe_log_dirs_response::MAX_VERSION;
+        let extra = tempfile::tempdir().expect("extra log dir");
+        let extra_dir = extra.path().join("data");
+        fs::create_dir(&extra_dir).expect("create extra log dir");
+        krabka_macros::broker_test_setup! {
+            bind(broker_handle, _dir, broker, ctx);
+            boot [start_broker_with(|config| {
+                config.authorizer = Arc::new(AllowAllAuthorizer);
+                config.extra_log_dirs = vec![extra_dir.clone()];
+            })];
+            user ["admin"];
+        };
+        // A file where the directory was: listing it fails with `ENOTDIR`,
+        // whoever the test runs as.
+        fs::remove_dir_all(&extra_dir).expect("remove extra log dir");
+        fs::write(&extra_dir, b"").expect("put a file in its place");
+
+        let resp = handle(&broker, DescribeLogDirsRequest::default(), version, &ctx)
+            .await
+            .expect("handle");
+
+        let failed = resp
+            .results
+            .iter()
+            .find(|result| result.log_dir == extra_dir.display().to_string());
+        let expected = DescribeLogDirsResult {
+            error_code: codes::KAFKA_STORAGE_ERROR,
+            log_dir: extra_dir.display().to_string(),
+            topics: Vec::new(),
+            total_bytes: -1,
+            usable_bytes: -1,
+            ..Default::default()
+        };
+        assert!(failed == Some(&expected));
+        assert!(broker.log_dir_status.is_offline(&extra_dir));
         broker_handle.shutdown().await;
     }
 }
