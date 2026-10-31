@@ -36,6 +36,7 @@ mod offset_batch;
 mod registry;
 mod replay_next_gen;
 pub(crate) mod replay_policy;
+mod replay_seed_maps;
 mod replay_share;
 mod replay_streams;
 mod seed_cache;
