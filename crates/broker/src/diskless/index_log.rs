@@ -11,7 +11,9 @@ use {
     krabka_remote_storage::diskless::index::{
         REPLAY_FENCE_KEY, WAL_OBJECT_RESERVATION_PARTITION, wal_index_key_version,
     },
-    krabka_remote_storage_topic::{KeyedEvent, MetadataEventLog, PartitionStart},
+    krabka_remote_storage_topic::{
+        KeyedEvent, MetadataEventLog, MetadataEventRecord, PartitionStart,
+    },
     std::{
         collections::HashMap,
         num::NonZeroU32,
@@ -117,36 +119,18 @@ impl DisklessIndexLog {
             let mut delivered: HashMap<i32, u64> =
                 pending.keys().map(|partition| (*partition, 0)).collect();
             while let Some(event) = stream.next().await {
-                // A floor key and a range key never decode as each other, so
-                // the two projections stay independent however the index
-                // topic's partitions interleave them.
-                let floor_key = event.key.as_deref().and_then(WalDeleteFloorKey::from_bytes);
-                let reservation_key = event
-                    .key
-                    .as_deref()
-                    .and_then(WalObjectReservationKey::from_bytes);
-                let range_key = event.key.as_deref().and_then(WalIndexKey::from_bytes);
-                // A key that is neither, and not the replay fence, is of a key
-                // version this build does not read. Skipping it would leave a
-                // range or floor out of the projection, so it is as unsafe as
-                // an unkeyed record.
-                let unknown_key = event.key.as_deref().filter(|key| {
-                    *key != REPLAY_FENCE_KEY
-                        && floor_key.is_none()
-                        && reservation_key.is_none()
-                        && range_key.is_none()
-                });
-                if let Some(key) = unknown_key {
-                    invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                    tracing::error!(
-                        partition = event.partition,
-                        offset = event.offset,
-                        key_version = ?wal_index_key_version(key),
-                        "diskless WAL index record has an unknown key version; projection is \
-                         unsafe"
-                    );
-                } else if event.tombstone {
-                    if let Some(key) = reservation_key {
+                match classify(&event) {
+                    IndexEvent::UnknownKeyVersion { key_version } => {
+                        invalidate_projection(&metrics, &pump_valid, &progress_tx);
+                        tracing::error!(
+                            partition = event.partition,
+                            offset = event.offset,
+                            key_version = ?key_version,
+                            "diskless WAL index record has an unknown key version; projection is \
+                             unsafe"
+                        );
+                    }
+                    IndexEvent::ReleaseReservation(key) => {
                         pump_cache
                             .lock()
                             .await
@@ -154,96 +138,60 @@ impl DisklessIndexLog {
                         applied_tx.send_modify(|generation| {
                             *generation = generation.wrapping_add(1);
                         });
-                    } else if let Some(key) = floor_key {
-                        pump_cache.lock().await.clear_delete_floor(key);
-                    } else if let Some(key) = range_key {
-                        pump_cache.lock().await.remove(key);
                     }
-                } else if event.key.as_deref() != Some(REPLAY_FENCE_KEY) {
-                    let result = if let Some(key) = floor_key {
-                        WalDeleteFloorRecord::from_bytes(&event.payload)
-                            .map(|record| (Some((key, record.floor)), reservation_key, None))
-                    } else {
-                        WalFlushRecord::from_bytes(&event.payload)
-                            .map(|record| (None, None, Some(record)))
-                    };
-                    match result {
-                        Ok((Some((key, floor)), reservation_key, None)) => {
-                            if let Some(reservation_key) = reservation_key {
-                                if key.partition != WAL_OBJECT_RESERVATION_PARTITION || floor != 0 {
-                                    invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                                } else {
-                                    // The value must match its compacted key;
-                                    // this namespace is otherwise a normal v1
-                                    // delete-floor record to old readers.
-                                    let Ok(record) =
-                                        WalDeleteFloorRecord::from_bytes(&event.payload)
-                                    else {
-                                        unreachable!("the record was decoded above")
-                                    };
-                                    if record.topic_id != key.topic_id
-                                        || record.partition != key.partition
-                                        || WalObjectReservationKey::new(reservation_key.object_id())
-                                            .to_bytes()
-                                            .as_ref()
-                                            != event.key.as_deref().unwrap_or_default()
-                                    {
-                                        invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                                        continue;
-                                    }
-                                    pump_cache
-                                        .lock()
-                                        .await
-                                        .reserve_object(reservation_key.object_id());
-                                    applied_tx.send_modify(|generation| {
-                                        *generation = generation.wrapping_add(1);
-                                    });
-                                }
-                            } else {
-                                pump_cache.lock().await.raise_delete_floor(
-                                    key.topic_id,
-                                    key.partition,
-                                    floor,
-                                );
-                                applied_tx.send_modify(|generation| {
-                                    *generation = generation.wrapping_add(1);
-                                });
-                            }
-                        }
-                        Ok((None, None, Some(record))) => {
-                            // Every index record is keyed (`publish_flush`);
-                            // an unkeyed one has no range it is the latest
-                            // for, so the projection can no longer be trusted.
-                            if let Some(key) = range_key {
-                                // An object-local fence serializes additions
-                                // with the reclaimer's final check and DELETE,
-                                // without blocking unrelated cache traffic.
-                                let _object_fence =
-                                    lock_object_fence(&pump_object_fences, &record.object_key)
-                                        .await;
-                                pump_cache.lock().await.apply_keyed(key, &record);
-                                applied_tx.send_modify(|generation| {
-                                    *generation = generation.wrapping_add(1);
-                                });
-                            } else {
-                                invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                                tracing::error!(
-                                    partition = event.partition,
-                                    offset = event.offset,
-                                    "unkeyed diskless WAL index record; projection is unsafe"
-                                );
-                            }
-                        }
-                        Err(error) => {
-                            invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                            tracing::error!(
-                                partition = event.partition,
-                                offset = event.offset,
-                                %error,
-                                "diskless WAL index record rejected; projection is unsafe"
-                            );
-                        }
-                        _ => unreachable!("decode result has exactly one record kind"),
+                    IndexEvent::ClearFloor(key) => pump_cache.lock().await.clear_delete_floor(key),
+                    IndexEvent::RemoveRange(key) => pump_cache.lock().await.remove(key),
+                    IndexEvent::TombstoneNoop | IndexEvent::ReplayFence => {}
+                    IndexEvent::InvalidReservation => {
+                        invalidate_projection(&metrics, &pump_valid, &progress_tx);
+                    }
+                    IndexEvent::MismatchedReservation => {
+                        invalidate_projection(&metrics, &pump_valid, &progress_tx);
+                        continue;
+                    }
+                    IndexEvent::Reserve(key) => {
+                        pump_cache.lock().await.reserve_object(key.object_id());
+                        applied_tx.send_modify(|generation| {
+                            *generation = generation.wrapping_add(1);
+                        });
+                    }
+                    IndexEvent::RaiseFloor { key, floor } => {
+                        pump_cache.lock().await.raise_delete_floor(
+                            key.topic_id,
+                            key.partition,
+                            floor,
+                        );
+                        applied_tx.send_modify(|generation| {
+                            *generation = generation.wrapping_add(1);
+                        });
+                    }
+                    IndexEvent::ApplyRange { key, record } => {
+                        // An object-local fence serializes additions with the
+                        // reclaimer's final check and DELETE, without blocking
+                        // unrelated cache traffic.
+                        let _object_fence =
+                            lock_object_fence(&pump_object_fences, &record.object_key).await;
+                        pump_cache.lock().await.apply_keyed(key, &record);
+                        applied_tx.send_modify(|generation| {
+                            *generation = generation.wrapping_add(1);
+                        });
+                    }
+                    IndexEvent::Unkeyed => {
+                        invalidate_projection(&metrics, &pump_valid, &progress_tx);
+                        tracing::error!(
+                            partition = event.partition,
+                            offset = event.offset,
+                            "unkeyed diskless WAL index record; projection is unsafe"
+                        );
+                    }
+                    IndexEvent::Rejected(error) => {
+                        invalidate_projection(&metrics, &pump_valid, &progress_tx);
+                        tracing::error!(
+                            partition = event.partition,
+                            offset = event.offset,
+                            %error,
+                            "diskless WAL index record rejected; projection is unsafe"
+                        );
                     }
                 }
                 consumed_tx.send_modify(|offsets| {
@@ -723,6 +671,125 @@ fn invalidate_projection(
     metrics.diskless_wal_index_decode_failures_total.inc();
     valid.store(false, Ordering::Release);
     progress.send_modify(|progress| progress.invalid = true);
+}
+
+/// What one committed index record asks of the projection.
+#[derive(Debug)]
+enum IndexEvent {
+    /// A key that is no index key this build reads, and not the replay
+    /// fence: a key version this build does not read. Skipping it would
+    /// leave a range or floor out of the projection, so it is as unsafe as
+    /// an unkeyed record.
+    UnknownKeyVersion { key_version: Option<i16> },
+    /// A tombstone of an object reservation.
+    ReleaseReservation(WalObjectReservationKey),
+    /// A tombstone of a partition's delete floor.
+    ClearFloor(WalDeleteFloorKey),
+    /// A tombstone of a range.
+    RemoveRange(WalIndexKey),
+    /// A tombstone of the replay fence, or of no key the projection holds.
+    TombstoneNoop,
+    /// A replay fence. It marks a position and projects nothing.
+    ReplayFence,
+    /// A committed object reservation.
+    Reserve(WalObjectReservationKey),
+    /// A reservation-key record that is not on the reservation partition or
+    /// does not carry floor zero.
+    InvalidReservation,
+    /// A reservation-key record whose value names another key.
+    MismatchedReservation,
+    /// A partition's delete floor.
+    RaiseFloor { key: WalDeleteFloorKey, floor: i64 },
+    /// The latest value for a range.
+    ApplyRange {
+        key: WalIndexKey,
+        record: WalFlushRecord,
+    },
+    /// A flush record with no range key. Every index record is keyed
+    /// (`publish_flush`); an unkeyed one has no range it is the latest for,
+    /// so the projection can no longer be trusted.
+    Unkeyed,
+    /// A value that does not decode.
+    Rejected(String),
+}
+
+/// Decode one index record, each part once, into what it asks of the
+/// projection.
+fn classify(event: &MetadataEventRecord) -> IndexEvent {
+    let key = event.key.as_deref();
+    // A floor key and a range key never decode as each other, so the two
+    // projections stay independent however the index topic's partitions
+    // interleave them. A reservation key decodes as a floor key too.
+    let floor_key = key.and_then(WalDeleteFloorKey::from_bytes);
+    let reservation_key = key.and_then(WalObjectReservationKey::from_bytes);
+    let range_key = key.and_then(WalIndexKey::from_bytes);
+    if let Some(key) = key
+        && key != REPLAY_FENCE_KEY
+        && floor_key.is_none()
+        && reservation_key.is_none()
+        && range_key.is_none()
+    {
+        return IndexEvent::UnknownKeyVersion {
+            key_version: wal_index_key_version(key),
+        };
+    }
+    if event.tombstone {
+        return match (reservation_key, floor_key, range_key) {
+            (Some(key), _, _) => IndexEvent::ReleaseReservation(key),
+            (None, Some(key), _) => IndexEvent::ClearFloor(key),
+            (None, None, Some(key)) => IndexEvent::RemoveRange(key),
+            (None, None, None) => IndexEvent::TombstoneNoop,
+        };
+    }
+    if key == Some(REPLAY_FENCE_KEY) {
+        return IndexEvent::ReplayFence;
+    }
+    match floor_key {
+        Some(floor_key) => classify_floor_value(event, floor_key, reservation_key),
+        None => classify_flush_value(&event.payload, range_key),
+    }
+}
+
+/// Classify the value of a delete-floor key, which an object reservation
+/// shares.
+fn classify_floor_value(
+    event: &MetadataEventRecord,
+    key: WalDeleteFloorKey,
+    reservation_key: Option<WalObjectReservationKey>,
+) -> IndexEvent {
+    let record = match WalDeleteFloorRecord::from_bytes(&event.payload) {
+        Ok(record) => record,
+        Err(error) => return IndexEvent::Rejected(error),
+    };
+    let Some(reservation_key) = reservation_key else {
+        return IndexEvent::RaiseFloor {
+            key,
+            floor: record.floor,
+        };
+    };
+    if key.partition != WAL_OBJECT_RESERVATION_PARTITION || record.floor != 0 {
+        return IndexEvent::InvalidReservation;
+    }
+    // The value must match its compacted key; this namespace is otherwise a
+    // normal v1 delete-floor record to old readers.
+    if record.topic_id != key.topic_id
+        || record.partition != key.partition
+        || reservation_key.to_bytes().as_ref() != event.key.as_deref().unwrap_or_default()
+    {
+        return IndexEvent::MismatchedReservation;
+    }
+    IndexEvent::Reserve(reservation_key)
+}
+
+/// Classify a value that is not a delete floor's: a flush record.
+fn classify_flush_value(payload: &[u8], range_key: Option<WalIndexKey>) -> IndexEvent {
+    match WalFlushRecord::from_bytes(payload) {
+        Ok(record) => match range_key {
+            Some(key) => IndexEvent::ApplyRange { key, record },
+            None => IndexEvent::Unkeyed,
+        },
+        Err(error) => IndexEvent::Rejected(error),
+    }
 }
 
 /// Most index records that [`DisklessIndexLog::publish_flush`] submits before
