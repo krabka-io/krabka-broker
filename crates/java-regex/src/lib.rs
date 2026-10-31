@@ -232,26 +232,8 @@ impl JavaPattern {
             group_repeats: &group_repeats,
             windows: &windows,
         });
-        // A pattern `fancy_regex` reads as Java does, or one with a node the
-        // matcher does not know, keeps `fancy_regex`. The matcher answers
-        // for one `fancy_regex` cannot build.
         let counts_units = windows.iter().any(|window| !window.code_points);
-        let (engine, wide_input) = match (fancy, program) {
-            (Ok(_), Some(program)) if program.differs_from_fancy() => {
-                (Engine::Backtrack(program), WideInput::Engine)
-            }
-            (Ok((search, whole)), program) => (Engine::Fancy { search, whole }, match program {
-                _ if !counts_units => WideInput::Engine,
-                Some(program) => WideInput::Program(program),
-                None => WideInput::Refused,
-            }),
-            (Err(FancyFailure::Unbuilt(_)), Some(program)) => {
-                (Engine::Backtrack(program), WideInput::Engine)
-            }
-            (Err(FancyFailure::Unbuilt(error) | FancyFailure::Refused(error)), _) => {
-                return Err(error);
-            }
-        };
+        let (engine, wide_input) = select_engine(fancy, program, counts_units)?;
         Ok(Self(Arc::new(Compiled {
             engine,
             groups,
@@ -499,6 +481,35 @@ fn compile_fancy(translated: &str) -> Result<(Regex, Regex), FancyFailure> {
         compile(translated)?,
         compile(&format!("\\A(?:{translated})\\z"))?,
     ))
+}
+
+/// The engine that answers for a pattern, and what answers an input with a
+/// char past U+FFFF, from `fancy_regex`'s pair and the matcher's `program`.
+/// `counts_units` is whether a look-behind of the pattern is one Java counts
+/// in UTF-16 units.
+///
+/// A pattern `fancy_regex` reads as Java does, or one with a node the matcher
+/// does not know, keeps `fancy_regex`. The matcher answers for one
+/// `fancy_regex` cannot build.
+fn select_engine(
+    fancy: Result<(Regex, Regex), FancyFailure>,
+    program: Option<Program>,
+    counts_units: bool,
+) -> Result<(Engine, WideInput), PatternError> {
+    match (fancy, program) {
+        (Ok(_), Some(program)) if program.differs_from_fancy() => {
+            Ok((Engine::Backtrack(program), WideInput::Engine))
+        }
+        (Ok((search, whole)), program) => Ok((Engine::Fancy { search, whole }, match program {
+            _ if !counts_units => WideInput::Engine,
+            Some(program) => WideInput::Program(program),
+            None => WideInput::Refused,
+        })),
+        (Err(FancyFailure::Unbuilt(_)), Some(program)) => {
+            Ok((Engine::Backtrack(program), WideInput::Engine))
+        }
+        (Err(FancyFailure::Unbuilt(error) | FancyFailure::Refused(error)), _) => Err(error),
+    }
 }
 
 /// The first group past the last of `groups`, group 0 included, that a
