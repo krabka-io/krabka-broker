@@ -234,19 +234,14 @@ async fn capture_log_dir_artifacts(
     match read_capture_file(&rlmm, RLMM_SNAPSHOT).await {
         Ok(bytes) => {
             progress.rlmm_snapshot_sha256 = Some(Sha256Digest::of(&bytes));
-            progress.artifacts.push(
-                upload(
-                    store,
-                    id,
-                    RLMM_SNAPSHOT,
-                    &rlmm.display().to_string(),
-                    bytes,
-                )
-                .await?,
-            );
+            progress
+                .artifacts
+                .push(upload(store, id, RLMM_SNAPSHOT, &rlmm.display().to_string(), bytes).await?);
         }
         Err(BackupError::Io(error)) if error.kind() == ErrorKind::NotFound => {
-            progress.absent.push(format!("{} is absent", rlmm.display()));
+            progress
+                .absent
+                .push(format!("{} is absent", rlmm.display()));
         }
         Err(error) => return Err(error),
     }
@@ -463,7 +458,7 @@ async fn capture_diskless_index(
         .metadata(&[])
         .await
         .map_err(|error| BackupError::Cluster(format!("Metadata: {error}")))?;
-    let configs = topic_overrides(&mut admin, &metadata, TOPIC).await?;
+    let configs = topic_overrides(&admin, &metadata, TOPIC).await?;
     let topics = diskless_topic_topology(&metadata, &configs, TOPIC)?;
     let mut config = KafkaMetadataLogConfig::new(bootstrap);
     TOPIC.clone_into(&mut config.topic);
@@ -495,7 +490,7 @@ async fn capture_diskless_index(
 
 /// Each non-index topic's dynamic config overrides, by topic name.
 async fn topic_overrides(
-    admin: &mut AdminClient,
+    admin: &AdminClient,
     metadata: &TopicMetadata,
     index_topic: &str,
 ) -> Result<BTreeMap<String, BTreeMap<String, String>>, BackupError> {
