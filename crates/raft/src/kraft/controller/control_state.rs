@@ -70,21 +70,16 @@ impl KraftControlState {
             .map_or(self.committed_version, |version| *version)
     }
 
-    pub fn apply(&mut self, offset: i64, record: &ControlRecord) -> Result<(), RaftError> {
-        match record {
-            ControlRecord::KRaftVersion(record) => {
-                let version = u16::try_from(record.k_raft_version).map_err(|_| {
-                    RaftError::ChangeRejected("negative kraft.version control record".into())
-                })?;
+    /// Record a checked control change at `offset`.
+    pub fn apply(&mut self, offset: i64, change: ControlChange) {
+        match change {
+            ControlChange::KRaftVersion(version) => {
                 self.version_history.insert(offset, version);
             }
-            ControlRecord::Voters(record) => {
-                self.voter_history
-                    .insert(offset, voter_set_from_wire(record)?);
+            ControlChange::Voters(voters) => {
+                self.voter_history.insert(offset, voters);
             }
-            _ => {}
         }
-        Ok(())
     }
 
     pub fn truncate_to(&mut self, offset: i64) {
@@ -102,6 +97,52 @@ impl KraftControlState {
         self.committed_version = version;
         changed
     }
+}
+
+/// A KIP-853 control record, checked and ready for
+/// [`KraftControlState::apply`].
+#[derive(Debug)]
+pub enum ControlChange {
+    KRaftVersion(u16),
+    Voters(VoterSet),
+}
+
+/// The change `record` makes to the control state, or `None` for a control
+/// record that changes none of it.
+///
+/// # Errors
+/// Returns [`RaftError`] for a negative `kraft.version` or a `VotersRecord`
+/// that [`voter_set_from_wire`] refuses.
+pub fn control_change(record: &ControlRecord) -> Result<Option<ControlChange>, RaftError> {
+    match record {
+        ControlRecord::KRaftVersion(record) => u16::try_from(record.k_raft_version)
+            .map(|version| Some(ControlChange::KRaftVersion(version)))
+            .map_err(|_| RaftError::ChangeRejected("negative kraft.version control record".into())),
+        ControlRecord::Voters(record) => {
+            voter_set_from_wire(record).map(|voters| Some(ControlChange::Voters(voters)))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Every control change `batch` makes, each with its record's offset delta.
+/// A data batch makes none. The whole batch is checked before any change is
+/// returned, so a batch with one bad record applies nothing.
+///
+/// # Errors
+/// Returns [`RaftError`] for a record that does not decode, or that
+/// [`control_change`] refuses.
+pub fn control_changes(batch: &RecordBatch) -> Result<Vec<(i32, ControlChange)>, RaftError> {
+    if !batch.attributes.is_control_batch() {
+        return Ok(Vec::new());
+    }
+    let mut changes = Vec::new();
+    for record in &batch.records {
+        if let Some(change) = control_change(&decode_control_record(record)?)? {
+            changes.push((record.offset_delta, change));
+        }
+    }
+    Ok(changes)
 }
 
 pub fn voter_supports_version(voter: &Voter, version: u16) -> bool {

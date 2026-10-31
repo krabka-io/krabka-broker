@@ -139,6 +139,23 @@ fn direct_single_voter_submit_applies_image_and_resolves_waiter() {
     check!(engine.commit_waiters.is_empty());
 }
 
+/// A submission the log would place anywhere but its own end is refused
+/// before anything is written: a requester told it failed leaves nothing in
+/// the log that could still commit.
+#[test]
+fn a_submit_the_log_cannot_place_at_its_end_writes_nothing() {
+    let (mut engine, _dir) = single_voter_leader_engine();
+    let end = engine.log.log_end_offset();
+    engine.log.reconcile_next_offset(end + 5);
+
+    let mut rx = submit_on_engine(&mut engine, &topic_record("misplaced"));
+
+    check!(matches!(rx.try_recv(), Ok(Err(_))));
+    check!(engine.log.log_end_offset() == end);
+    check!(engine.commit_waiters.is_empty());
+    check!(engine.image.topic("misplaced").is_none());
+}
+
 /// A deletion admitted for an old generation cannot delete its replacement.
 #[test]
 fn guarded_delete_rejects_a_recreated_topic() {
