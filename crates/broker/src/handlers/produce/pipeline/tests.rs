@@ -187,3 +187,9 @@ pub(super) fn seed_batch() -> RecordBatch {
         ..Default::default()
     }
 }
+
+// ── poisoned partition log ────────────────────────────────────────
+//
+// The size gates when a panic elsewhere has poisoned the partition's log
+// mutex.
+mod poisoned_log;
