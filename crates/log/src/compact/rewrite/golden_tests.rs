@@ -175,41 +175,52 @@ fn rewrite_fixture(dir: &Path) -> CleanedFiles {
     }
 }
 
-/// The `.log.cleaned` bytes the rewrite of the fixture wrote before its phases
-/// were extracted.
-const GOLDEN_LOG: &[u8] = &[
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 71, 0, 0, 0, 0, 2, 77, 156, 222, 177, 0, 0, 0, 0, 0, 2, 0, 0,
-    0, 0, 0, 0, 3, 232, 0, 0, 0, 0, 0, 0, 3, 252, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-    255, 255, 255, 255, 0, 0, 0, 2, 20, 0, 40, 2, 4, 107, 50, 4, 118, 50, 0, 20, 0, 20, 4, 4, 107,
-    51, 4, 118, 51, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 71, 0, 0, 0, 0, 2, 79, 88, 63, 69, 0, 72,
-    0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 42, 248, 0, 0, 0, 0, 0, 0, 19, 136, 255, 255, 255, 255, 255, 255,
-    255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 2, 22, 0, 175, 109, 0, 4, 107, 49, 4, 118, 52,
-    0, 18, 0, 165, 109, 2, 4, 107, 52, 1, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 60, 0, 0, 0, 0, 2,
-    191, 194, 226, 81, 0, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 7, 208, 255, 255, 255, 255, 255, 255, 0, 0, 0, 1, 20, 0, 0, 0, 8, 0, 0, 0, 0, 1, 0, 0,
-    0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 49, 0, 0, 0, 0, 2, 75, 208, 196, 61, 0, 0, 0, 0, 0, 0, 255, 255,
-    255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 184, 0, 4, 0, 0, 0,
-    11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 61, 0, 0, 0, 0, 2, 237, 211, 246, 117, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255,
-    255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 1, 22, 0, 0, 0, 4, 107, 55, 6, 110, 101, 119, 0, 0,
-    0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 67, 0, 0, 0, 0, 2, 108, 236, 183, 28, 0, 16, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 232, 255, 255, 255, 255, 255,
-    255, 0, 0, 0, 1, 34, 0, 0, 0, 4, 107, 56, 18, 99, 111, 109, 109, 105, 116, 116, 101, 100, 0, 0,
-    0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 60, 0, 0, 0, 0, 2, 83, 190, 226, 18, 0, 48, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 232, 255, 255, 255, 255, 255, 255,
-    0, 0, 0, 1, 20, 0, 0, 0, 8, 0, 0, 0, 1, 1, 0,
-];
+/// The `.log.cleaned` bytes, in base64, that the rewrite of the fixture wrote
+/// before its phases were extracted.
+const GOLDEN_LOG: &str = concat!(
+    "AAAAAAAAAAAAAABHAAAAAAJNnN6xAAAAAAACAAAAAAAAA+gAAAAAAAAD/P//////////////////",
+    "AAAAAhQAKAIEazIEdjIAFAAUBARrMwR2MwAAAAAAAAAAAwAAAEcAAAAAAk9YP0UASAAAAAEAAAAA",
+    "AAAq+AAAAAAAABOI//////////////////8AAAACFgCvbQAEazEEdjQAEgClbQIEazQBAAAAAAAA",
+    "AAAHAAAAPAAAAAACv8LiUQAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH0P///////wAAAAEU",
+    "AAAACAAAAAABAAAAAAAAAAAIAAAAMQAAAAACS9DEPQAAAAAAAP//////////AAAAAAAAAAAAAAAA",
+    "AAALuAAEAAAACwAAAAAAAAAAAAAACQAAAD0AAAAAAu3T9nUAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "//////////////////8AAAABFgAAAARrNwZuZXcAAAAAAAAAAAoAAABDAAAAAAJs7LccABAAAAAA",
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPo////////AAAAASIAAAAEazgSY29tbWl0dGVkAAAAAAAA",
+    "AAALAAAAPAAAAAACU77iEgAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD6P///////wAAAAEU",
+    "AAAACAAAAAEBAA==",
+);
 
-/// The `.timeindex.cleaned` bytes: one entry, timestamp 5000 at offset 4.
-/// The `.index.cleaned` stays empty, because the output is shorter than one
-/// `index.interval.bytes`.
-const GOLDEN_TIMEINDEX: &[u8] = &[0, 0, 0, 0, 0, 0, 19, 136, 0, 0, 0, 4];
+/// The `.timeindex.cleaned` bytes, in base64: one entry, timestamp 5000 at
+/// offset 4. The `.index.cleaned` stays empty, because the output is shorter
+/// than one `index.interval.bytes`.
+const GOLDEN_TIMEINDEX: &str = "AAAAAAAAE4gAAAAE";
 
-/// The `.txnindex.cleaned` bytes: the aborted transaction whose marker stays.
-const GOLDEN_TXNINDEX: &[u8] = &[
-    0, 0, 0, 0, 0, 0, 0, 0, 7, 208, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0,
-    0, 0, 8,
-];
+/// The `.txnindex.cleaned` bytes, in base64: the aborted transaction whose
+/// marker stays.
+const GOLDEN_TXNINDEX: &str = "AAAAAAAAAAAH0AAAAAAAAAAGAAAAAAAAAAcAAAAAAAAACA==";
+
+/// Decode standard-alphabet base64 `text`, padded or not. The crate has no
+/// base64 dependency, and the golden comparison checks this decoder too: a
+/// wrong decode would not match the rewrite's output.
+fn decode_base64(text: &str) -> Vec<u8> {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for c in text.bytes().filter(|&c| c != b'=') {
+        let sextet = ALPHABET
+            .iter()
+            .position(|&a| a == c)
+            .expect("a base64 character");
+        acc = ((acc << 6) | u32::try_from(sextet).unwrap()) & 0xFFFF;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(u8::try_from((acc >> bits) & 0xFF).unwrap());
+        }
+    }
+    out
+}
 
 /// The rewrite's output files are a persisted format: the bytes stay the same
 /// across a refactor of the rewrite.
@@ -219,10 +230,10 @@ fn the_rewrite_of_the_fixture_writes_the_golden_bytes() {
     assert2::assert!(
         rewrite_fixture(dir.path())
             == CleanedFiles {
-                log: GOLDEN_LOG.to_vec(),
+                log: decode_base64(GOLDEN_LOG),
                 index: vec![],
-                timeindex: GOLDEN_TIMEINDEX.to_vec(),
-                txnindex: Some(GOLDEN_TXNINDEX.to_vec()),
+                timeindex: decode_base64(GOLDEN_TIMEINDEX),
+                txnindex: Some(decode_base64(GOLDEN_TXNINDEX)),
             }
     );
 }
