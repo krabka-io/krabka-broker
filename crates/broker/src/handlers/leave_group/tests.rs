@@ -211,7 +211,11 @@ async fn dropped_reply_answers_coordinator_not_available(#[case] version: i16) {
     );
     let request = LeaveGroupRequest {
         group_id: "stopping".into(),
-        member_id: if version < 3 { "m-a".into() } else { String::new() },
+        member_id: if version < 3 {
+            "m-a".into()
+        } else {
+            String::new()
+        },
         members: if version < 3 {
             Vec::new()
         } else {
