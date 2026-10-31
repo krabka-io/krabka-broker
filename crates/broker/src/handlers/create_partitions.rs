@@ -28,7 +28,6 @@ use {
     krabka_raft::{NodeId, RaftError},
     krabka_units::Time,
     std::{
-        collections::HashSet,
         sync::{
             Arc,
             atomic::{AtomicU64, Ordering},
@@ -58,20 +57,19 @@ use {
     crate::{
         broker::Broker,
         codes,
-        config_keys::{resolve_diskless, resolve_preferred_leader_site, witness_node_ids},
+        config_keys::{resolve_diskless, resolve_preferred_leader_site},
         handlers::{
             RequestContext,
             create_topics::{
-                InitialLeadership, automatic_leaderships, automatic_placement_exclusions,
-                diskless_wal_placement_error, inactive_brokers, manual_leaderships,
-                site_broker_views,
+                InitialLeadership, PlacementCandidates, choose_leaderships,
+                diskless_wal_placement_error, placement_candidates,
             },
             denied_topics, encode_response,
             forward_to_controller::{
                 forward_if_not_controller, guarded_operation_on_source, is_active_controller,
             },
-            offline_replicas::unavailable_brokers,
             partition_materialization::PartitionMaterialization,
+            submit_failure::{GuardedFailure, classify_guarded},
         },
         quota::ControllerMutationQuota,
         site_placement::PlacementRng,
@@ -199,23 +197,15 @@ pub async fn handle(
             grow_topic(&growth, &t, image)
         })
         .await;
-        let out = match attempt {
-            Ok(Ok(row)) => row,
-            failure => {
-                let code = match failure {
-                    Err(_) => codes::REQUEST_TIMED_OUT,
-                    Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => {
-                        codes::NOT_CONTROLLER
-                    }
-                    Ok(Err(error)) => {
-                        tracing::error!(%error, topic = %t.name, "CreatePartitions guarded submission failed");
-                        codes::UNKNOWN_SERVER_ERROR
-                    }
-                    Ok(Ok(_)) => unreachable!("successful response handled above"),
-                };
+        let out = match classify_guarded(attempt) {
+            Ok(row) => row,
+            Err(failure) => {
+                if let GuardedFailure::Failed(error) = &failure {
+                    tracing::error!(%error, topic = %t.name, "CreatePartitions guarded submission failed");
+                }
                 CreatePartitionsTopicResult {
                     name: t.name,
-                    error_code: code,
+                    error_code: failure.code(codes::UNKNOWN_SERVER_ERROR),
                     ..Default::default()
                 }
             }
@@ -415,28 +405,9 @@ async fn place_growth(
     image: &MetadataImage,
     topic_rec: &TopicRecord,
 ) -> Result<GrowthPlacement, PlacementRefusal> {
-    // The automatic placement leaves out a broker that is in controlled
-    // shutdown and not fenced, and one whose log directories are all
-    // cordoned (KIP-1066). It takes a fenced broker only as a last resort,
-    // as Kafka's placer does. A broker that a controlled shutdown stopped
-    // is fenced, so it is such a last resort. The ISR below leaves that
-    // broker out. A manual assignment may name any registered broker,
-    // because Kafka 4.3.1 checks only that the broker is registered, and
-    // the ISR again leaves out the inactive ones.
-    let unavailable = unavailable_brokers(broker, image).await;
-    let inactive = inactive_brokers(image, &unavailable);
-    let no_exclusion = HashSet::new();
-    let unusable = automatic_placement_exclusions(image, &unavailable);
-    let brokers = site_broker_views(
-        image,
-        broker.config.is_broker().then_some(broker.config.node_id),
-        if t.assignments.is_some() {
-            &no_exclusion
-        } else {
-            &unusable
-        },
-        &unavailable,
-    );
+    let manual = t.assignments.is_some();
+    let PlacementCandidates { brokers, inactive } =
+        placement_candidates(broker, image, manual).await;
     let rf = topic_rec.replication_factor;
     let preferred_site = resolve_preferred_leader_site(image);
     let new_assignments = resolve_new_partition_assignments(
@@ -448,23 +419,20 @@ async fn place_growth(
         &mut PlacementRng::from_entropy(),
     )?;
 
-    let leaderships = if t.assignments.is_some() {
-        match manual_leaderships(
-            &new_assignments,
-            &inactive,
-            &witness_node_ids(image),
-            topic_rec.partitions,
-        ) {
-            Ok(leaderships) => leaderships,
-            Err(message) => {
-                return Err(PlacementRefusal {
-                    code: codes::INVALID_REPLICA_ASSIGNMENT,
-                    message,
-                });
-            }
+    let leaderships = match choose_leaderships(
+        &new_assignments,
+        &inactive,
+        image,
+        manual,
+        topic_rec.partitions,
+    ) {
+        Ok(leaderships) => leaderships,
+        Err(message) => {
+            return Err(PlacementRefusal {
+                code: codes::INVALID_REPLICA_ASSIGNMENT,
+                message,
+            });
         }
-    } else {
-        automatic_leaderships(&new_assignments, &inactive)
     };
     Ok(GrowthPlacement {
         assignments: new_assignments,

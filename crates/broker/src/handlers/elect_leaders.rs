@@ -44,7 +44,9 @@ use {
                 guarded_operation_on_source, is_active_controller, to_active_controller,
             },
             offline_replicas::live_brokers,
-            stamp_unset, submit_failure_code,
+            stamp_unset,
+            submit_failure::{GuardedFailure, classify_guarded},
+            submit_failure_code,
         },
         leader_election::ElectionType,
         metadata_source::MetadataSource,
@@ -131,17 +133,19 @@ pub async fn handle(
         |image| elect_leaders_once(broker, &req, ctx, image),
     )
     .await;
-    Ok(match result {
-        Ok(Ok(response)) => response,
-        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => {
-            request_refusal(&req, codes::NOT_CONTROLLER, None)
+    Ok(match classify_guarded(result) {
+        Ok(response) => response,
+        Err(failure) => {
+            let message = match &failure {
+                GuardedFailure::Failed(error) => Some(error.to_string()),
+                GuardedFailure::TimedOut | GuardedFailure::NotController => None,
+            };
+            request_refusal(
+                &req,
+                failure.code(codes::COORDINATOR_NOT_AVAILABLE),
+                message.as_deref(),
+            )
         }
-        Ok(Err(error)) => request_refusal(
-            &req,
-            submit_failure_code(&error, codes::COORDINATOR_NOT_AVAILABLE),
-            Some(&error.to_string()),
-        ),
-        Err(_) => request_refusal(&req, codes::REQUEST_TIMED_OUT, None),
     })
 }
 

@@ -9,24 +9,22 @@
 
 use {
     super::{
-        THROTTLING_QUOTA_EXCEEDED_MESSAGE, automatic_leaderships, diskless_wal_placement_error,
-        inactive_brokers, invalid_topic_shape, manual_leaderships,
+        THROTTLING_QUOTA_EXCEEDED_MESSAGE, diskless_wal_placement_error, invalid_topic_shape,
         name::topic_name_error,
-        placement::{automatic_placement_exclusions, resolve_assignments},
+        placement::{
+            PlacementCandidates, choose_leaderships, placement_candidates, resolve_assignments,
+        },
         placement_failure_message,
         records::{null_config_error, topic_config_overrides, topic_records},
         resolve_default,
         response::topic_error_result,
-        site_broker_views, topic_exists_result,
+        topic_exists_result,
     },
     crate::{
         broker::Broker,
         codes,
         config_keys::{self, resolve_preferred_leader_site},
-        handlers::{
-            offline_replicas::unavailable_brokers,
-            partition_materialization::PartitionMaterialization,
-        },
+        handlers::partition_materialization::PartitionMaterialization,
         quota::ControllerMutationQuota,
         site_placement::PlacementRng,
         topic_policy::check,
@@ -35,7 +33,7 @@ use {
         create_topics_request::CreatableTopic, create_topics_response::CreatableTopicResult,
     },
     krabka_raft::RaftError,
-    std::collections::{BTreeMap, HashSet},
+    std::collections::BTreeMap,
     uuid::Uuid,
 };
 
@@ -95,7 +93,6 @@ impl<'a> TopicCreation<'a> {
         let mut topic_req = topic_req;
         let broker = self.broker;
         let image = self.image;
-        let node_id = broker.config.node_id;
         let name = topic_req.name.clone();
 
         // Kafka checks the name before anything else. The name becomes part
@@ -196,29 +193,9 @@ impl<'a> TopicCreation<'a> {
             );
         }
 
-        // Read the current broker set from the controller's image, with the
-        // site and the witness role of each broker. `site_broker_views` sorts
-        // by node id for determinism, and it covers the race in which the
-        // self-registration record has not reached the local image yet.
-        // The automatic placement leaves out a broker that is in controlled
-        // shutdown and not fenced, and one whose log directories are all
-        // cordoned (KIP-1066). It takes a fenced broker only as a last resort,
-        // as Kafka's placer does. A broker that a controlled shutdown stopped
-        // is fenced, so it is such a last resort. The ISR below leaves that
-        // broker out. A manual assignment may name any registered broker,
-        // because Kafka 4.3.1 checks only that the broker is registered, and
-        // the ISR again leaves out the inactive ones.
-        let unavailable = unavailable_brokers(broker, image).await;
-        let inactive = inactive_brokers(image, &unavailable);
         let manual = !topic_req.assignments.is_empty();
-        let no_exclusion = HashSet::new();
-        let unusable = automatic_placement_exclusions(image, &unavailable);
-        let brokers = site_broker_views(
-            image,
-            broker.config.is_broker().then_some(node_id),
-            if manual { &no_exclusion } else { &unusable },
-            &unavailable,
-        );
+        let PlacementCandidates { brokers, inactive } =
+            placement_candidates(broker, image, manual).await;
 
         let assignments = match resolve_assignments(
             &topic_req,
@@ -247,24 +224,15 @@ impl<'a> TopicCreation<'a> {
             )));
         }
 
-        let leaderships = if manual {
-            match manual_leaderships(
-                &assignments,
-                &inactive,
-                &config_keys::witness_node_ids(image),
-                0,
-            ) {
-                Ok(leaderships) => leaderships,
-                Err(message) => {
-                    return Err(Box::new(topic_error_result(
-                        name,
-                        codes::INVALID_REPLICA_ASSIGNMENT,
-                        Some(message),
-                    )));
-                }
+        let leaderships = match choose_leaderships(&assignments, &inactive, image, manual, 0) {
+            Ok(leaderships) => leaderships,
+            Err(message) => {
+                return Err(Box::new(topic_error_result(
+                    name,
+                    codes::INVALID_REPLICA_ASSIGNMENT,
+                    Some(message),
+                )));
             }
-        } else {
-            automatic_leaderships(&assignments, &inactive)
         };
 
         if diskless
