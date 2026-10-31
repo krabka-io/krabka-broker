@@ -739,6 +739,50 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
+    /// Kafka's `GroupCoordinatorService.consumerGroupDescribe` answers an
+    /// empty id with a completed `INVALID_GROUP_ID` future that goes ahead of
+    /// the shard futures, so its row comes before the coordinator rows,
+    /// whether or not this broker leads the partition `""` hashes to.
+    #[yare::parameterized(
+        leads_empty_id_partition = { true },
+        does_not_lead_empty_id_partition = { false },
+    )]
+    #[test_macro(tokio::test)]
+    async fn handle_puts_the_empty_id_row_ahead_of_the_coordinator_rows(leads: bool) {
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_group_broker_with(|_| {}).await;
+        let broker = broker_handle.broker_arc_for_test();
+        if !leads {
+            handler_fixture_support::lead_group_partition_elsewhere(&broker_handle, &broker, "")
+                .await;
+        }
+        krabka_macros::request_test_identity! {
+            bind(principal, peer, ctx);
+            user ["admin"];
+            client ["admin-client"];
+        };
+
+        let resp = handle(&broker, request(vec!["missing-group", ""]), VERSION, &ctx)
+            .await
+            .expect("ConsumerGroupDescribe handler");
+
+        assert2::assert!(
+            resp == krabka_macros::unthrottled_wire!(ConsumerGroupDescribeResponse {
+                groups: vec![
+                    error_group_row("", codes::INVALID_GROUP_ID, None),
+                    error_group_row(
+                        "missing-group",
+                        codes::GROUP_ID_NOT_FOUND,
+                        Some("Group missing-group not found."),
+                    ),
+                ],
+            })
+        );
+        broker_handle.shutdown().await;
+    }
+
     /// Request `include_authorized_operations` on a request built with
     /// [`request`], which does not set it — [`request_with_ops`] below sets
     /// it explicitly.

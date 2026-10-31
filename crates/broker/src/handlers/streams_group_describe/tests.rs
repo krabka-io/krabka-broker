@@ -25,6 +25,7 @@ use {
         handlers::{
             authorized_operations::authorized_operations_bits,
             group_heartbeat_test_support::streams_request_with_topology,
+            test_support::lead_group_partition_elsewhere,
         },
         test_support::{DenyAll, allow_acl, peer, principal, request_context, start_broker_with},
     },
@@ -100,6 +101,37 @@ async fn enabled_missing_group_returns_not_found_rows() {
         ],
     });
     assert!(resp == expected);
+    broker_handle.shutdown().await;
+}
+
+/// Kafka's `GroupCoordinatorService.streamsGroupDescribe` answers an empty id
+/// with a completed `INVALID_GROUP_ID` future, before any routing and ahead
+/// of the shard futures. The answer must not depend on whether this broker
+/// leads the partition `""` hashes to.
+#[yare::parameterized(
+    leads_empty_id_partition = { true },
+    does_not_lead_empty_id_partition = { false },
+)]
+#[test_macro(tokio::test)]
+async fn empty_group_id_is_invalid_and_comes_ahead_of_the_coordinator_rows(leads: bool) {
+    krabka_macros::broker_test_setup! {
+        bind(broker_handle, _dir, broker);
+        boot [start_broker(true)];
+    };
+    finalize_streams_version(&broker).await;
+    if !leads {
+        lead_group_partition_elsewhere(&broker_handle, &broker, "").await;
+    }
+
+    let resp = describe(&broker, &["missing-a", ""]).await;
+
+    let expected = krabka_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
+        groups: vec![
+            error_group("", codes::INVALID_GROUP_ID),
+            error_group("missing-a", codes::GROUP_ID_NOT_FOUND),
+        ],
+    });
+    assert2::assert!(resp == expected);
     broker_handle.shutdown().await;
 }
 

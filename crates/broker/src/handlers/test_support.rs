@@ -1642,3 +1642,34 @@ pub fn broker_config_context<'a>(
         unstable: setup.unstable,
     }
 }
+
+/// Hand the `__consumer_offsets` partition that `group_id` hashes to over to
+/// another node, so `handle`'s broker no longer coordinates that group and
+/// routing answers `NOT_COORDINATOR` for it.
+pub async fn lead_group_partition_elsewhere(
+    handle: &BrokerHandle,
+    broker: &Broker,
+    group_id: &str,
+) {
+    use crate::coordinator::{bootstrap::OFFSETS_TOPIC, partitioner::partition_for_group};
+
+    let image = broker.controller.current_image();
+    let partition = partition_for_group(&image, group_id).expect("offsets topic exists");
+    let elsewhere = krabka_metadata::NodeId(broker.config.node_id.0 + 1);
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1Partition(single_replica_partition(
+            OFFSETS_TOPIC,
+            krabka_ids::PartitionIndex(partition),
+            elsewhere,
+        ))])
+        .await
+        .expect("the leader change commits");
+    handle
+        .wait_for_image(|image| {
+            image
+                .partition(OFFSETS_TOPIC, partition)
+                .is_some_and(|record| record.leader == elsewhere)
+        })
+        .await;
+}
