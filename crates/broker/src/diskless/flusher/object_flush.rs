@@ -43,55 +43,7 @@ pub async fn flush_once(
     config: &FlushConfig,
     is_current_leader: impl Fn(&FlushPartition) -> bool,
 ) -> Result<Option<WalFlushRecord>, BrokerError> {
-    let cache = index_log.cache();
-    let mut builder = WalObjectBuilder::new();
-    for partition in partitions {
-        if !is_current_leader(partition) {
-            continue;
-        }
-        let remaining = config
-            .max_size
-            .bytes_usize()
-            .saturating_sub(builder.body_len());
-        if remaining == 0 {
-            break;
-        }
-        let start = cache
-            .lock()
-            .await
-            .flushed_frontier(partition.topic_id, partition.handle.index.get());
-        let raw = {
-            let log = partition
-                .handle
-                .log
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            let start = start.unwrap_or_else(|| log.log_start_offset().0);
-            metrics.record_diskless_wal_projection_lag(
-                partition.topic_id,
-                partition.handle.index,
-                partition.high_watermark.0.saturating_sub(start),
-            );
-            log.read_raw(
-                Offset(start),
-                partition.high_watermark,
-                ByteSize::from_bytes(u64::try_from(remaining).unwrap_or(u64::MAX)),
-            )
-            .map_err(BrokerError::from)?
-        };
-        let Some(last_offset) = raw.last_offset else {
-            continue;
-        };
-        builder
-            .append_run(
-                partition.topic_id,
-                partition.handle.index.get(),
-                raw.start_offset.0,
-                last_offset.0,
-                &raw.bytes,
-            )
-            .map_err(|error| BrokerError::Txn(format!("diskless wal object: {error}")))?;
-    }
+    let builder = build_object(metrics, index_log, partitions, config, &is_current_leader).await?;
 
     if builder.is_empty() {
         return Ok(None);
@@ -166,6 +118,7 @@ pub async fn flush_once(
         tracing::warn!(object_key = %record.object_key, %error, "diskless object reservation release failed");
     }
 
+    let cache = index_log.cache();
     for partition in partitions {
         if !is_current_leader(partition) {
             continue;
@@ -221,6 +174,67 @@ pub async fn flush_once(
     }
 
     Ok(Some(record))
+}
+
+/// Append each led partition's unflushed committed records to one WAL object,
+/// up to the configured size budget. An empty builder means nothing to flush.
+async fn build_object(
+    metrics: &BrokerMetrics,
+    index_log: &DisklessIndexLog,
+    partitions: &[FlushPartition],
+    config: &FlushConfig,
+    is_current_leader: &impl Fn(&FlushPartition) -> bool,
+) -> Result<WalObjectBuilder, BrokerError> {
+    let cache = index_log.cache();
+    let mut builder = WalObjectBuilder::new();
+    for partition in partitions {
+        if !is_current_leader(partition) {
+            continue;
+        }
+        let remaining = config
+            .max_size
+            .bytes_usize()
+            .saturating_sub(builder.body_len());
+        if remaining == 0 {
+            break;
+        }
+        let start = cache
+            .lock()
+            .await
+            .flushed_frontier(partition.topic_id, partition.handle.index.get());
+        let raw = {
+            let log = partition
+                .handle
+                .log
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let start = start.unwrap_or_else(|| log.log_start_offset().0);
+            metrics.record_diskless_wal_projection_lag(
+                partition.topic_id,
+                partition.handle.index,
+                partition.high_watermark.0.saturating_sub(start),
+            );
+            log.read_raw(
+                Offset(start),
+                partition.high_watermark,
+                ByteSize::from_bytes(u64::try_from(remaining).unwrap_or(u64::MAX)),
+            )
+            .map_err(BrokerError::from)?
+        };
+        let Some(last_offset) = raw.last_offset else {
+            continue;
+        };
+        builder
+            .append_run(
+                partition.topic_id,
+                partition.handle.index.get(),
+                raw.start_offset.0,
+                last_offset.0,
+                &raw.bytes,
+            )
+            .map_err(|error| BrokerError::Txn(format!("diskless wal object: {error}")))?;
+    }
+    Ok(builder)
 }
 
 /// One index entry per v2 batch in the object.
