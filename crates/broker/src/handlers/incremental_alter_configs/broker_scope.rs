@@ -8,7 +8,7 @@
 //! live in [`crate::config_keys::broker_dynamic`].
 
 use {
-    super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT, topic_scope::merge_list_op},
+    super::{OP_APPEND, OP_DELETE, OP_SET, is_known_operation, topic_scope::merge_list_op},
     crate::{
         api_catalog::UnstableApiVersions,
         codes,
@@ -89,6 +89,22 @@ fn apply_operations(
     Ok(())
 }
 
+/// Kafka's `ConfigAdminManager.validateBrokerConfigChange` maps every
+/// operation through `AlterConfigOp.OpType.forId` before it looks at any key,
+/// so an unknown operation code answers ahead of every key check.
+fn unknown_operation_error(resource: &AlterConfigsResource) -> Result<(), (i16, String)> {
+    resource
+        .configs
+        .iter()
+        .find(|cfg| !is_known_operation(cfg.config_operation))
+        .map_or(Ok(()), |cfg| {
+            Err((
+                codes::INVALID_REQUEST,
+                format!("Unknown operations type {}", cfg.config_operation),
+            ))
+        })
+}
+
 /// The records one `BROKER` resource stages, or the error it answers with.
 /// `log_dirs` are this node's log directories, which a named-broker
 /// `cordoned.log.dirs` must name, and are empty on a node without the broker
@@ -98,17 +114,7 @@ pub(super) fn broker_records(
     context: BrokerConfigContext<'_>,
 ) -> Result<Vec<MetadataRecord>, (i16, String)> {
     let node_id = context.resource_node(&resource.resource_name)?;
-    if let Some(cfg) = resource.configs.iter().find(|cfg| {
-        !matches!(
-            cfg.config_operation,
-            OP_SET | OP_DELETE | OP_APPEND | OP_SUBTRACT
-        )
-    }) {
-        return Err((
-            codes::INVALID_REQUEST,
-            format!("Unknown operations type {}", cfg.config_operation),
-        ));
-    }
+    unknown_operation_error(resource)?;
     for cfg in &resource.configs {
         // krabka's controller-published keys stand outside the alter paths.
         if config_keys::is_controller_managed_broker_config(&cfg.name) {
@@ -178,7 +184,9 @@ pub(super) fn preprocess_broker_resource(
     context: BrokerConfigContext<'_>,
     checks: OwnBrokerChecks<'_>,
 ) -> Result<(), (i16, String)> {
-    if context.is_cluster_default_resource(&resource.resource_name)? {
+    let cluster_default = context.is_cluster_default_resource(&resource.resource_name)?;
+    unknown_operation_error(resource)?;
+    if cluster_default {
         return Ok(());
     }
     // Check only newly introduced directories. Existing stored values may be
@@ -207,8 +215,11 @@ mod tests {
         crate::{
             features::{ELR_VERSION, METADATA_VERSION},
             handlers::{
-                incremental_alter_configs::test_support::{
-                    make_del_cfg, make_image_with_broker, make_resource, make_set_cfg,
+                incremental_alter_configs::{
+                    OP_SUBTRACT,
+                    test_support::{
+                        make_del_cfg, make_image_with_broker, make_resource, make_set_cfg,
+                    },
                 },
                 test_support::broker_config_context,
             },
