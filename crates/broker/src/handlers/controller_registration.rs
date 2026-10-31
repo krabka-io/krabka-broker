@@ -108,15 +108,28 @@ pub async fn handle(
             .await
         {
             Ok(_) => success(),
-            Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-                response(codes::NOT_CONTROLLER, None)
-            }
-            Err(RaftError::Metadata(error)) => {
-                response(codes::INVALID_REGISTRATION, Some(error.to_string()))
-            }
-            Err(error) => response(codes::UNKNOWN_SERVER_ERROR, Some(error.to_string())),
+            Err(error) => submit_error_response(&error),
         },
     )
+}
+
+/// The answer to a registration whose controller write failed with `error`.
+///
+/// A controller that is not active answers `NOT_CONTROLLER` with no message,
+/// as Kafka's `ApiError` does for a `NotControllerException`. That includes a
+/// new leader that has not committed its own epoch, which refuses with
+/// [`RaftError::UncommittedTail`]: see
+/// [`submit_failure_code`](crate::handlers::submit_failure_code).
+fn submit_error_response(error: &RaftError) -> ControllerRegistrationResponse {
+    match error {
+        RaftError::NotLeader { .. } | RaftError::LeaderUnknown | RaftError::UncommittedTail => {
+            response(codes::NOT_CONTROLLER, None)
+        }
+        RaftError::Metadata(error) => {
+            response(codes::INVALID_REGISTRATION, Some(error.to_string()))
+        }
+        error => response(codes::UNKNOWN_SERVER_ERROR, Some(error.to_string())),
+    }
 }
 
 fn decode_listeners(listeners: &[Listener]) -> Result<Vec<BrokerEndpoint>, String> {
@@ -245,5 +258,37 @@ mod tests {
                 })
         );
         broker_handle.shutdown().await;
+    }
+
+    #[yare::parameterized(
+        not_leader = {
+            RaftError::NotLeader { current_leader: None },
+            response(codes::NOT_CONTROLLER, None),
+        },
+        leader_unknown = {
+            RaftError::LeaderUnknown,
+            response(codes::NOT_CONTROLLER, None),
+        },
+        uncommitted_tail = {
+            RaftError::UncommittedTail,
+            response(codes::NOT_CONTROLLER, None),
+        },
+        metadata_refusal = {
+            RaftError::Metadata(krabka_metadata::MetadataError::TopicExists("t".to_owned())),
+            response(
+                codes::INVALID_REGISTRATION,
+                Some(krabka_metadata::MetadataError::TopicExists("t".to_owned()).to_string()),
+            ),
+        },
+        shutdown = {
+            RaftError::Shutdown,
+            response(codes::UNKNOWN_SERVER_ERROR, Some(RaftError::Shutdown.to_string())),
+        },
+    )]
+    fn a_failed_registration_write_answers_kafkas_code(
+        error: RaftError,
+        expected: ControllerRegistrationResponse,
+    ) {
+        assert2::assert!(submit_error_response(&error) == expected);
     }
 }

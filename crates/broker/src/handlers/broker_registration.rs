@@ -10,6 +10,7 @@ use {
         handlers::{
             ApiVersion, RequestContext,
             registration_listeners::{self, ListenerFields},
+            submit_failure_code,
         },
         leader_election::{compute_failover_changes, compute_unclean_restart_changes},
     },
@@ -409,11 +410,16 @@ fn validate_features(
     Ok(())
 }
 
+/// The error code for a registration whose controller write failed.
+///
+/// A controller that is not active answers `NOT_CONTROLLER`, which the broker
+/// retries against the active controller. That includes a new leader that has
+/// not committed its own epoch: see [`submit_failure_code`].
 fn raft_error_code(error: &RaftError) -> i16 {
     match error {
         RaftError::NotLeader { .. } | RaftError::LeaderUnknown => codes::NOT_CONTROLLER,
         RaftError::Metadata(_) => codes::INVALID_REGISTRATION,
-        _ => codes::UNKNOWN_SERVER_ERROR,
+        other => submit_failure_code(other, codes::UNKNOWN_SERVER_ERROR),
     }
 }
 
@@ -683,6 +689,27 @@ mod tests {
             ..Default::default()
         };
         assert2::check!(validate_features(&old_broker, &image) == Err(codes::UNSUPPORTED_VERSION));
+    }
+
+    #[yare::parameterized(
+        not_leader = {
+            RaftError::NotLeader { current_leader: None },
+            codes::NOT_CONTROLLER,
+        },
+        leader_unknown = { RaftError::LeaderUnknown, codes::NOT_CONTROLLER },
+        uncommitted_tail = { RaftError::UncommittedTail, codes::NOT_CONTROLLER },
+        metadata_refusal = {
+            RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(String::new())),
+            codes::INVALID_REGISTRATION,
+        },
+        shutdown = { RaftError::Shutdown, codes::UNKNOWN_SERVER_ERROR },
+        change_rejected = {
+            RaftError::ChangeRejected("stale".to_owned()),
+            codes::UNKNOWN_SERVER_ERROR,
+        },
+    )]
+    fn a_failed_registration_write_answers_kafkas_code(error: RaftError, expected: i16) {
+        assert2::assert!(raft_error_code(&error) == expected);
     }
 }
 
