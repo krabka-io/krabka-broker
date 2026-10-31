@@ -17,7 +17,6 @@ use {
             ClientIdentity, GroupCoordinator,
             actor::MetadataProvider,
             member_helpers::update_present,
-            offsets_log::OffsetsLog,
             share::{
                 config::ShareGroupConfig,
                 state::{ShareGroupState, ShareMemberState},
@@ -37,7 +36,6 @@ pub(super) async fn handle_heartbeat(
     state: &mut ShareGroupState,
     config: &ShareGroupConfig,
     metadata: &dyn MetadataProvider,
-    offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
     req: &ShareGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
@@ -47,16 +45,7 @@ pub(super) async fn handle_heartbeat(
 
     // ─── Leave path ──────────────────────────────────────────────
     if req.member_epoch == -1 {
-        return handle_leave(
-            state,
-            config,
-            metadata,
-            offsets_log,
-            coordinator,
-            req,
-            now_ms,
-        )
-        .await;
+        return handle_leave(state, config, metadata, coordinator, req, now_ms).await;
     }
 
     // ─── Member lookup ───────────────────────────────────────────
@@ -108,11 +97,18 @@ pub(super) async fn handle_heartbeat(
             pending.state_partition_metadata = Some(value);
             initialize
         });
-    flush_pending(state, pending, offsets_log, coordinator, now_ms).await?;
+    flush_pending(
+        state,
+        pending,
+        &*coordinator.offsets_log,
+        coordinator,
+        now_ms,
+    )
+    .await?;
     if let Some(initialize) = initialize {
         start_initialize(state, coordinator, initialize);
     }
-    cleanup_deleted_topics(state, offsets_log, coordinator, now_ms).await;
+    cleanup_deleted_topics(state, coordinator, now_ms).await;
     // Kafka sends the assignment only on a full request (a rejoin at epoch 0
     // or a request that carries the subscription) or when it changed.
     let assigned_changed = state
@@ -166,7 +162,6 @@ async fn handle_leave(
     state: &mut ShareGroupState,
     config: &ShareGroupConfig,
     metadata: &dyn MetadataProvider,
-    offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
     req: &ShareGroupHeartbeatRequest,
     now_ms: i64,
@@ -184,7 +179,14 @@ async fn handle_leave(
     let Some(pending) = fence_member(state, metadata, &req.member_id) else {
         return Ok(error_resp(codes::INVALID_REQUEST, config));
     };
-    flush_pending(state, pending, offsets_log, coordinator, now_ms).await?;
+    flush_pending(
+        state,
+        pending,
+        &*coordinator.offsets_log,
+        coordinator,
+        now_ms,
+    )
+    .await?;
     Ok(leave_resp(&req.member_id, req.member_epoch))
 }
 

@@ -13,7 +13,6 @@ use {
         coordinator::unified::{
             GroupCoordinator,
             actor::MetadataProvider,
-            offsets_log::OffsetsLog,
             share::{config::ShareGroupConfig, state::ShareGroupState},
         },
         error::BrokerError,
@@ -32,7 +31,6 @@ pub(super) async fn handle_session_tick(
     state: &mut ShareGroupState,
     config: &ShareGroupConfig,
     metadata: &dyn MetadataProvider,
-    offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
 ) -> Result<(), BrokerError> {
     let expired = state.expired_members(Instant::now(), config.session_timeout);
@@ -40,8 +38,14 @@ pub(super) async fn handle_session_tick(
         let Some(pending) = fence_member(state, metadata, &member_id) else {
             return Err(BrokerError::Share("group epoch is exhausted".to_owned()));
         };
-        if let Err(e) =
-            flush_pending(state, pending, offsets_log, coordinator, chrono_now_ms()).await
+        if let Err(e) = flush_pending(
+            state,
+            pending,
+            &*coordinator.offsets_log,
+            coordinator,
+            chrono_now_ms(),
+        )
+        .await
         {
             tracing::warn!(
                 group_id = %state.group_id,
@@ -51,7 +55,7 @@ pub(super) async fn handle_session_tick(
             return Err(e);
         }
     }
-    cleanup_deleted_topics(state, offsets_log, coordinator, chrono_now_ms()).await;
+    cleanup_deleted_topics(state, coordinator, chrono_now_ms()).await;
     Ok(())
 }
 
@@ -106,7 +110,7 @@ mod tests {
         state.group_epoch = 2;
         state.target.epoch = 2;
 
-        handle_session_tick(&mut state, &config, &*metadata, &*log, &coord)
+        handle_session_tick(&mut state, &config, &*metadata, &coord)
             .await
             .expect("tick should succeed");
 
@@ -166,7 +170,7 @@ mod tests {
         state.topic_names.insert(gone, "gone".to_owned());
 
         for _ in 0..2 {
-            handle_session_tick(&mut state, &config, &*metadata, &*log, &coord)
+            handle_session_tick(&mut state, &config, &*metadata, &coord)
                 .await
                 .expect("tick should succeed");
         }
