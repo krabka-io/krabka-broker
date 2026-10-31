@@ -464,9 +464,28 @@ impl Log {
     #[must_use]
     pub fn read_may_block(&self, fetch_offset: Offset) -> bool {
         self.active.as_ref().is_none_or(|active| {
-            fetch_offset < active.base_offset()
-                || active.read_may_block(fetch_offset, self.opened_end)
+            if fetch_offset < active.base_offset() {
+                // A read of the segment that sealed last stays in memory when
+                // the window it kept there covers it.
+                return !self.segments.last().is_some_and(|sealed| {
+                    sealed.base_offset() <= fetch_offset && sealed.sealed_tail_serves(fetch_offset)
+                });
+            }
+            active.read_may_block(fetch_offset, self.opened_end)
         })
+    }
+
+    /// Give back the window the last sealed segment kept once the active
+    /// segment's own window holds as much: a reader that far behind is then
+    /// as far behind as the kept window would serve.
+    pub(super) fn release_covered_sealed_tail(&mut self) {
+        let active = self.active.as_ref().map_or(0, Segment::direct_window_len);
+        if let Some(sealed) = self.segments.last_mut()
+            && sealed.sealed_tail_len() > 0
+            && active >= sealed.sealed_tail_len()
+        {
+            sealed.release_sealed_tail();
+        }
     }
 
     /// Whether appending `incoming_size` bytes whose newest record is stamped

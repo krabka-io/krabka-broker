@@ -31,8 +31,6 @@
 //! appended bytes in memory to serve those reads, and every byte that is not
 //! on the disk yet.
 
-#[cfg(any(target_os = "linux", test))]
-use std::mem;
 use {
     super::tail_arena::{FIRST_SLAB, Headroom, SLAB, TailArena},
     crate::io::LogIo,
@@ -41,6 +39,7 @@ use {
         collections::{BTreeMap, VecDeque},
         fs::File,
         io::{self, Error, ErrorKind},
+        mem,
         panic::{self, AssertUnwindSafe},
         sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
         thread,
@@ -1126,6 +1125,13 @@ impl TailCache {
 
     /// The bytes the cache holds, for reads.
     pub(crate) fn window(&self) -> &TailWindow { &self.window }
+
+    /// Take the window and its slabs, leaving an empty cache that begins at
+    /// [`Self::end`] in the same arena.
+    pub(crate) fn detach(&mut self) -> Self {
+        let empty = Self::in_arena(self.floor, self.max, self.end(), Arc::clone(&self.arena));
+        mem::replace(self, empty)
+    }
 
     /// Record the concatenation of `parts`, appended at [`Self::end`], as one
     /// chunk.
@@ -2347,5 +2353,19 @@ mod tests {
         cache.push(&[b"after the cut"]);
         check!(cache.end() == (2 << 20) + 13);
         check!(read(&cache, 2 << 20, 13) == Some(b"after the cut".to_vec()));
+    }
+
+    /// A window at the budget takes a slab for each push before it gives an
+    /// old one back, and still reuses the slabs it gives back.
+    #[test]
+    fn a_window_at_the_budget_reuses_its_slabs() {
+        let arena = Arc::new(TailArena::new(Some(32 << 20)));
+        let mut cache = TailCache::in_arena(1 << 20, 1 << 30, 0, Arc::clone(&arena));
+        fill(&mut cache, 400, 1 << 20);
+        check!(
+            arena.fresh() <= 12,
+            "{} slabs made new for 400 MiB through a window held at a 32 MiB budget",
+            arena.fresh()
+        );
     }
 }

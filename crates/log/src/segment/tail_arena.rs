@@ -32,10 +32,13 @@ pub const SLAB: usize = 4 * 1024 * 1024;
 /// to [`SLAB`], so a partition that takes little traffic holds little.
 pub const FIRST_SLAB: usize = 64 * 1024;
 
-/// How many full slabs the arena keeps for reuse with no budget. Under a
-/// budget it keeps as many as the budget has room for beside what the caches
+/// How many full slabs the arena always keeps for reuse. Under a budget it
+/// keeps more, as many as the budget has room for beside what the caches
 /// hold: a segment's cache is dropped when the segment rolls, every second or
 /// so for a busy partition, and the next segment's cache takes its slabs.
+/// The floor covers a cache at the budget, which takes a slab for a push
+/// before it evicts and gives one back, so the budget has no room just when
+/// the slab comes back.
 const POOL_SLABS: usize = 16;
 
 /// A `usize` widened to a `u64`; no supported target has a wider `usize`.
@@ -148,7 +151,9 @@ impl TailArena {
         let room = if budget == u64::MAX {
             POOL_SLABS
         } else {
-            usize::try_from(budget.saturating_sub(self.held()) / to_u64(SLAB)).unwrap_or(usize::MAX)
+            usize::try_from(budget.saturating_sub(self.held()) / to_u64(SLAB))
+                .unwrap_or(usize::MAX)
+                .max(POOL_SLABS)
         };
         if pool.len() < room {
             pool.push(slab);

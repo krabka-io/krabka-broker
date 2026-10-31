@@ -99,7 +99,12 @@ impl Segment {
     /// The segment stays open then.
     pub fn seal(&mut self) -> Result<(), LogError> {
         self.append_running_max_time_entry()?;
+        // A segment that wrote directly keeps its window for reads: none of
+        // its bytes are in the page cache, and the consumer of a busy
+        // partition is often a little behind when it rolls.
+        let tail = self.direct.as_mut().map(|mode| mode.cache.detach());
         self.write_buffered()?;
+        self.sealed_tail = tail;
         self.sealed = true;
         self.release_reservation();
         Ok(())
@@ -256,6 +261,7 @@ impl Segment {
             max_timestamp_offset,
         } = snapshot;
         self.settle_direct();
+        self.sealed_tail = None;
         self.log_file.set_len(position)?;
         self.first_timestamp = None;
         seek_to_log_size(&self.log_file, position)?;
@@ -346,6 +352,7 @@ impl Segment {
         }
 
         self.settle_direct();
+        self.sealed_tail = None;
         self.log_file.set_len(pos)?;
         self.first_timestamp = None;
         seek_to_log_size(&self.log_file, pos)?;

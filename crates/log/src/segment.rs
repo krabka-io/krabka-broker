@@ -121,6 +121,12 @@ pub struct Segment {
     /// segment writes through `O_DIRECT`. See [`direct_mode`]. Boxed: every
     /// sealed segment carries the field, and a log is held across `await`s.
     direct: Option<Box<direct_mode::DirectMode>>,
+    /// The newest bytes the segment held in memory when it sealed after
+    /// writing directly, kept so a reader a little behind at the roll reads
+    /// the segment's end from memory. The log drops it once the next
+    /// segment's window holds as much, and at the next roll. See
+    /// [`Segment::seal`].
+    sealed_tail: Option<direct::TailCache>,
     /// Whether [`Segment::write_direct`] has asked for an `O_DIRECT` handle
     /// since the segment last wrote through the page cache, granted or not.
     direct_asked: bool,

@@ -252,7 +252,12 @@ impl Log {
             (window, config.page_cache_budget.map(ByteSizeExt::bytes_u64))
         };
         let active = self.active.as_ref().ok_or_else(super::no_active_segment)?;
-        if window == 0 || active.writes_direct() {
+        if active.writes_direct() {
+            self.writeback_unsynced = 0;
+            self.release_covered_sealed_tail();
+            return Ok(());
+        }
+        if window == 0 {
             self.writeback_unsynced = 0;
             return Ok(());
         }

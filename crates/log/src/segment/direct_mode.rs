@@ -225,3 +225,44 @@ impl Segment {
         Ok(tail)
     }
 }
+
+impl Segment {
+    /// The bytes the segment holds in memory for reads: its direct-write
+    /// window while it writes directly, the window it kept at its seal after.
+    pub(super) fn memory_window(&self) -> Option<&super::direct::TailWindow> {
+        self.direct
+            .as_ref()
+            .map(|mode| mode.cache.window())
+            .or_else(|| self.sealed_tail.as_ref().map(TailCache::window))
+    }
+
+    /// Whether the window the segment kept at its seal serves a read from
+    /// `offset` whole: it reaches the segment's end and starts at or before
+    /// the offset's index floor, where the read starts.
+    pub(crate) fn sealed_tail_serves(&self, offset: Offset) -> bool {
+        self.sealed_tail.as_ref().is_some_and(|tail| {
+            tail.end() == self.log_size
+                && self
+                    .position_for(offset)
+                    .is_ok_and(|position| position >= tail.start())
+        })
+    }
+
+    /// The bytes of the window the segment kept at its seal; 0 without one.
+    pub(crate) fn sealed_tail_len(&self) -> u64 {
+        self.sealed_tail
+            .as_ref()
+            .map_or(0, |tail| tail.end() - tail.start())
+    }
+
+    /// The bytes of the direct-write window; 0 when the segment writes
+    /// through the page cache.
+    pub(crate) fn direct_window_len(&self) -> u64 {
+        self.direct
+            .as_ref()
+            .map_or(0, |mode| mode.cache.end() - mode.cache.start())
+    }
+
+    /// Give the window kept at the seal back to the arena.
+    pub(crate) fn release_sealed_tail(&mut self) { self.sealed_tail = None; }
+}

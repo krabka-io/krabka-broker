@@ -109,6 +109,7 @@ impl Log {
             .as_mut()
             .ok_or_else(super::no_active_segment)?
             .append_verbatim_group(batches, index_interval)?;
+        self.release_covered_sealed_tail();
         let result = (|| {
             for &PlacedBatch { batch, base } in batches {
                 self.flush_after_append(batch.last_offset_delta, false)?;

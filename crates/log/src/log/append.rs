@@ -676,6 +676,10 @@ impl Log {
         }
         let old = self.active.take().ok_or_else(super::no_active_segment)?;
         let old_base = old.base_offset();
+        // Only the segment that sealed last keeps its window.
+        if let Some(previous) = self.segments.last_mut() {
+            previous.release_sealed_tail();
+        }
         self.segments.push(old);
         let mut new_seg = Segment::create(&self.dir, new_base)?;
         new_seg.set_io(Arc::clone(&self.io));

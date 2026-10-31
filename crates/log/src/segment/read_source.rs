@@ -115,9 +115,7 @@ macro_rules! field_accessors {
 impl ReadSource for Segment {
     field_accessors!();
 
-    fn tail_cache(&self) -> Option<&TailWindow> {
-        self.direct.as_ref().map(|mode| mode.cache.window())
-    }
+    fn tail_cache(&self) -> Option<&TailWindow> { self.memory_window() }
 
     #[krabka_macros::sendfile_cfg]
     fn cache_probe_unsupported(&self) -> &AtomicBool { &self.cache_probe_unsupported }
@@ -184,6 +182,9 @@ impl SegmentReadView {
     pub fn starts_cold(&self) -> bool {
         self.cold_before
             .is_some_and(|cold| self.floor_position() < cold)
+            && !self.tail.as_ref().is_some_and(|tail| {
+                tail.start() <= self.floor_position() && tail.end() == self.log_size
+            })
     }
 
     /// The `.log` position of the index floor of the view's target, or 0.
@@ -256,10 +257,7 @@ impl Segment {
             wrote_direct: self.wrote_direct,
             // Only the chunks from the read's index floor on: a reader near
             // the end clones a few handles, whatever the window holds.
-            tail: self
-                .direct
-                .as_ref()
-                .map(|mode| mode.cache.window().suffix(floor)),
+            tail: self.memory_window().map(|window| window.suffix(floor)),
             #[cfg(any(
                 target_os = "linux",
                 target_os = "macos",

@@ -246,6 +246,7 @@ impl Segment {
             reserved_end: 0,
             reserve_requested: ReserveRequest::None,
             direct: None,
+            sealed_tail: None,
             direct_asked: false,
             wrote_direct: false,
             cache_probe_unsupported: Arc::new(AtomicBool::new(false)),
