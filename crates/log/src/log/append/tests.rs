@@ -441,13 +441,17 @@ fn invalid_interval_is_write_free_and_a_corrected_retry_succeeds() {
 }
 
 /// Append a batch at a caller-supplied offset through the owned path.
-fn append_owned_at(log: &mut Log, mut batch: RecordBatch, base: Offset) -> Result<(), LogError> {
-    log.append_at(&mut batch, base)
+fn append_owned_at(log: &mut Log, batch: &mut RecordBatch, base: Offset) -> Result<(), LogError> {
+    log.append_at(batch, base)
 }
 
 /// Append a batch at a caller-supplied offset through the verbatim path.
-fn append_verbatim_at(log: &mut Log, batch: RecordBatch, base: Offset) -> Result<(), LogError> {
-    let EncodedVerbatim { batch, .. } = verbatim_from(&batch, LeaderEpoch(0));
+fn append_verbatim_at(
+    log: &mut Log,
+    batch: &mut RecordBatch,
+    base: Offset,
+) -> Result<(), LogError> {
+    let EncodedVerbatim { batch, .. } = verbatim_from(batch, LeaderEpoch(0));
     log.append_verbatim_at(&batch, base).map(drop)
 }
 
@@ -456,7 +460,7 @@ fn append_verbatim_at(log: &mut Log, batch: RecordBatch, base: Offset) -> Result
 /// write nothing.
 #[test]
 fn offset_preserving_appends_refuse_an_interval_off_the_append_frontier() {
-    type Append = fn(&mut Log, RecordBatch, Offset) -> Result<(), LogError>;
+    type Append = fn(&mut Log, &mut RecordBatch, Offset) -> Result<(), LogError>;
     let paths: [(&str, Append); 2] = [("owned", append_owned_at), ("verbatim", append_verbatim_at)];
     let intervals = [
         ("negative last offset delta", Offset(0), -1),
@@ -468,7 +472,7 @@ fn offset_preserving_appends_refuse_an_interval_off_the_append_frontier() {
             let mut batch = sample_batch(1);
             batch.last_offset_delta = last_offset_delta;
 
-            let error = append(&mut log, batch, base).unwrap_err();
+            let error = append(&mut log, &mut batch, base).unwrap_err();
 
             assert!(
                 let LogError::InvalidArgument(message) = error,
