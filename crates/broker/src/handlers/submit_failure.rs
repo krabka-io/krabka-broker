@@ -100,34 +100,51 @@ mod tests {
         tokio::time::{error::Elapsed, timeout},
     };
 
+    /// Each row: the error, the handler's `otherwise` code, then what
+    /// [`submit_failure_code`] and [`controller_write_code`] answer.
     #[yare::parameterized(
         uncommitted_unknown_server_default = {
             RaftError::UncommittedTail,
             codes::UNKNOWN_SERVER_ERROR,
-            codes::NOT_CONTROLLER,
+            (codes::NOT_CONTROLLER, codes::NOT_CONTROLLER),
         },
         uncommitted_coordinator_default = {
             RaftError::UncommittedTail,
             codes::COORDINATOR_NOT_AVAILABLE,
-            codes::NOT_CONTROLLER,
+            (codes::NOT_CONTROLLER, codes::NOT_CONTROLLER),
+        },
+        not_leader = {
+            RaftError::NotLeader { current_leader: None },
+            codes::UNKNOWN_SERVER_ERROR,
+            (codes::UNKNOWN_SERVER_ERROR, codes::NOT_CONTROLLER),
+        },
+        unknown_leader = {
+            RaftError::LeaderUnknown,
+            codes::COORDINATOR_NOT_AVAILABLE,
+            (codes::COORDINATOR_NOT_AVAILABLE, codes::NOT_CONTROLLER),
         },
         refusal_keeps_default = {
             RaftError::ChangeRejected("stale".to_owned()),
             codes::UNKNOWN_SERVER_ERROR,
-            codes::UNKNOWN_SERVER_ERROR,
+            (codes::UNKNOWN_SERVER_ERROR, codes::UNKNOWN_SERVER_ERROR),
         },
         shutdown_keeps_default = {
             RaftError::Shutdown,
             codes::COORDINATOR_NOT_AVAILABLE,
-            codes::COORDINATOR_NOT_AVAILABLE,
+            (codes::COORDINATOR_NOT_AVAILABLE, codes::COORDINATOR_NOT_AVAILABLE),
         },
     )]
-    fn an_uncommitted_controller_tail_answers_not_controller(
+    fn a_failed_controller_write_maps_to_its_error_code(
         error: RaftError,
         otherwise: i16,
-        expected: i16,
+        expected: (i16, i16),
     ) {
-        check!(submit_failure_code(&error, otherwise) == expected);
+        check!(
+            (
+                submit_failure_code(&error, otherwise),
+                controller_write_code(&error, otherwise)
+            ) == expected
+        );
     }
 
     /// A guarded result: `None` stands for a passed deadline.
@@ -172,40 +189,5 @@ mod tests {
     ) {
         let classified = classify_guarded(guarded(outcome).await);
         check!(classified.map_err(|failure| failure.code(otherwise)) == expected);
-    }
-
-    #[yare::parameterized(
-        not_leader = {
-            RaftError::NotLeader { current_leader: None },
-            codes::UNKNOWN_SERVER_ERROR,
-            codes::NOT_CONTROLLER,
-        },
-        unknown_leader = {
-            RaftError::LeaderUnknown,
-            codes::COORDINATOR_NOT_AVAILABLE,
-            codes::NOT_CONTROLLER,
-        },
-        uncommitted_tail = {
-            RaftError::UncommittedTail,
-            codes::UNKNOWN_SERVER_ERROR,
-            codes::NOT_CONTROLLER,
-        },
-        refusal_keeps_default = {
-            RaftError::ChangeRejected("stale".to_owned()),
-            codes::UNKNOWN_SERVER_ERROR,
-            codes::UNKNOWN_SERVER_ERROR,
-        },
-        shutdown_keeps_default = {
-            RaftError::Shutdown,
-            codes::COORDINATOR_NOT_AVAILABLE,
-            codes::COORDINATOR_NOT_AVAILABLE,
-        },
-    )]
-    fn a_failed_controller_write_answers_not_controller_for_leadership(
-        error: RaftError,
-        otherwise: i16,
-        expected: i16,
-    ) {
-        check!(controller_write_code(&error, otherwise) == expected);
     }
 }
