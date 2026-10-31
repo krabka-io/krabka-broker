@@ -57,12 +57,10 @@ impl ControllerHandle {
         match submission {
             Err(RaftError::NotLeader {
                 current_leader: Some(leader),
-            }) => match self.voter_addr(leader) {
-                Some(addr) => self.forward_submit_to(leader, &addr, &records).await,
-                None => Err(RaftError::NotLeader {
-                    current_leader: Some(leader),
-                }),
-            },
+            }) => {
+                let addr = self.leader_addr_or_not_leader(leader)?;
+                self.forward_submit_to(leader, &addr, &records).await
+            }
             other => other,
         }
     }
@@ -82,20 +80,14 @@ impl ControllerHandle {
             .submit_delegation_token_mutations(mutations.clone())
             .await
         {
-            Ok(result) => Ok(result),
             Err(RaftError::NotLeader {
                 current_leader: Some(leader),
             }) => {
-                if let Some(addr) = self.voter_addr(leader) {
-                    self.forward_delegation_token_mutations_to(leader, &addr, &mutations)
-                        .await
-                } else {
-                    Err(RaftError::NotLeader {
-                        current_leader: Some(leader),
-                    })
-                }
+                let addr = self.leader_addr_or_not_leader(leader)?;
+                self.forward_delegation_token_mutations_to(leader, &addr, &mutations)
+                    .await
             }
-            Err(error) => Err(error),
+            other => other,
         }
     }
 
@@ -148,11 +140,7 @@ impl ControllerHandle {
                 current_leader: None,
             });
         };
-        let Some(addr) = self.voter_addr(leader) else {
-            return Err(RaftError::NotLeader {
-                current_leader: Some(leader),
-            });
-        };
+        let addr = self.leader_addr_or_not_leader(leader)?;
         forward_raw_via(
             &self.round_trip_transport(),
             leader,
@@ -162,6 +150,15 @@ impl ControllerHandle {
             body,
         )
         .await
+    }
+
+    /// Resolve `leader`'s controller listener `<host>:<port>` to forward to,
+    /// or reject with `NotLeader` naming `leader` when it has no known
+    /// address.
+    fn leader_addr_or_not_leader(&self, leader: NodeId) -> Result<String, RaftError> {
+        self.voter_addr(leader).ok_or(RaftError::NotLeader {
+            current_leader: Some(leader),
+        })
     }
 
     /// Resolve a voter's controller listener `<host>:<port>` from the static
