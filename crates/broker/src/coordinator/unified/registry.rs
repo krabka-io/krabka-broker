@@ -91,34 +91,44 @@ impl RegisteredActor for StreamsGroupActorHandle {
 /// The guard is a write lock on the shard of `map` that holds `group_id`,
 /// and the lock is not reentrant. So `seed`, which reads the seed caches, runs
 /// before the guard is taken, and an undelivered seed is logged after it is
-/// released. Under the guard run only an atomic `is_closed` read, `spawn`, a
-/// non-blocking `try_seed` and the insert. Every `spawn` this module passes
-/// clones `Arc`s, builds an mpsc channel and hands an `async fn` future,
-/// unpolled, to `tokio::spawn`. None of that touches a registry map, takes a
-/// lock a registry caller holds, blocks or awaits.
+/// released. The seed is used only when the entry under the guard still holds
+/// the actor (or the absence) seen before `seed` ran. Otherwise another
+/// caller replaced it meanwhile, its actor may have made newer writes, and the
+/// lookup and `seed` run again. Under the guard run only an atomic
+/// `is_closed` read, `spawn`, a non-blocking `try_seed` and the insert. Every
+/// `spawn` this module passes clones `Arc`s, builds an mpsc channel and hands
+/// an `async fn` future, unpolled, to `tokio::spawn`. None of that touches a
+/// registry map, takes a lock a registry caller holds, blocks or awaits.
 fn get_or_spawn<H: RegisteredActor, S: BuildHasher + Clone>(
     map: &DashMap<String, Arc<H>, S>,
     group_id: &str,
     spawn: impl FnOnce() -> H,
-    seed: impl FnOnce() -> Option<H::Seed>,
+    seed: impl Fn() -> Option<H::Seed>,
 ) -> Arc<H> {
-    // Dead-actor detection: a closed mpsc sender means the actor exited
-    // (typically after a log-write failure), and the entry is replaced.
-    if let Some(h) = map.get(group_id)
-        && !h.value().is_closed()
-    {
-        return Arc::clone(h.value());
-    }
-    let seed = seed();
-    let (spawned, undelivered) = match map.entry(group_id.into()) {
-        Entry::Occupied(entry) if !entry.get().is_closed() => return Arc::clone(entry.get()),
-        entry => {
-            let spawned = Arc::new(spawn());
-            let undelivered = seed.and_then(|seed| spawned.try_seed(seed).err());
-            entry.insert(Arc::clone(&spawned));
-            (spawned, undelivered)
+    let (entry, cached) = loop {
+        // Dead-actor detection: a closed mpsc sender means the actor exited
+        // (typically after a log-write failure), and the entry is replaced.
+        let observed = match map.get(group_id) {
+            Some(h) if !h.value().is_closed() => return Arc::clone(h.value()),
+            found => found.map(|h| Arc::clone(h.value())),
+        };
+        let cached = seed();
+        let entry = map.entry(group_id.into());
+        let unchanged = match (&entry, &observed) {
+            (Entry::Occupied(entry), _) if !entry.get().is_closed() => {
+                return Arc::clone(entry.get());
+            }
+            (Entry::Occupied(entry), Some(observed)) => Arc::ptr_eq(entry.get(), observed),
+            (Entry::Vacant(_), None) => true,
+            (Entry::Occupied(_), None) | (Entry::Vacant(_), Some(_)) => false,
+        };
+        if unchanged {
+            break (entry, cached);
         }
     };
+    let spawned = Arc::new(spawn());
+    let undelivered = cached.and_then(|cached| spawned.try_seed(cached).err());
+    entry.insert(Arc::clone(&spawned));
     if let Some(error) = undelivered {
         tracing::warn!(group_id, %error, "dropped the seed of a respawned group actor");
     }
@@ -668,6 +678,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_seed_read_while_another_caller_replaced_the_actor_is_read_again() {
+        let map = DashMap::new();
+        map.insert("g".to_owned(), Arc::new(FakeActor::closed()));
+        let reads = AtomicUsize::new(0);
+
+        // While the first seed is read, another caller respawns the group, its
+        // actor commits newer state and then exits after a failed write.
+        let seed = || {
+            if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                map.insert("g".to_owned(), Arc::new(FakeActor::closed()));
+                Some(1)
+            } else {
+                Some(2)
+            }
+        };
+        let answer = get_or_spawn(&map, "g", FakeActor::default, seed);
+
+        check!(reads.load(Ordering::SeqCst) == 2);
+        check!(
+            map.get("g")
+                .is_some_and(|r| Arc::ptr_eq(r.value(), &answer))
+        );
+        assert!(answer.seeds() == vec![2]);
+    }
+
     /// A hasher that sends every key to the same `DashMap` shard, so a test
     /// can race keys whose entries contend for one shard lock.
     #[derive(Debug, Default)]
@@ -688,7 +724,8 @@ mod tests {
             work();
             done.send(()).unwrap_or_default();
         });
-        check!(finished.recv_timeout(limit).is_ok(), "the racers hung");
+        // Fatal, so a hung run fails here instead of joining a stuck thread.
+        assert!(finished.recv_timeout(limit).is_ok(), "the racers hung");
         worker.join().expect("the racers finish without a panic");
     }
 
