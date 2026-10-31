@@ -9,8 +9,8 @@
 use {
     super::{
         super::{RemoteFetchWait, refused_read, try_remote_read, wait::remote_fetch_max_wait},
-        TIERED_HIGH_WATERMARK, TieredBroker, committed_tiered_partition, out_of_range_at,
-        tiered_broker_with,
+        PARTITION_MAX_BYTES, TIERED_HIGH_WATERMARK, TieredBroker, committed_tiered_partition,
+        out_of_range_at, tiered_broker_with,
     },
     crate::{
         broker::Broker,
@@ -106,6 +106,7 @@ async fn the_remote_fetch_wait_bounds_a_read_that_cannot_start_and_follows_an_al
             &broker,
             &mut queued_read,
             &part,
+            PARTITION_MAX_BYTES,
             &mut RemoteFetchWait::default(),
         ),
     )
@@ -134,7 +135,7 @@ async fn the_remote_fetch_wait_bounds_a_read_that_cannot_start_and_follows_an_al
     let mut waiting = out_of_range_at(&part, 0);
     let mut wait = RemoteFetchWait::default();
     let (served, ()) = tokio::join!(
-        try_remote_read(&broker, &mut waiting, &part, &mut wait),
+        try_remote_read(&broker, &mut waiting, &part, PARTITION_MAX_BYTES, &mut wait),
         async {
             time::sleep(Duration::from_millis(500)).await;
             drop(held);
@@ -173,6 +174,7 @@ async fn expired_queued_reads_give_their_queue_slots_back() {
             &broker,
             &mut expired,
             &part,
+            PARTITION_MAX_BYTES,
             &mut RemoteFetchWait::default(),
         )
         .await;
@@ -189,8 +191,14 @@ async fn expired_queued_reads_give_their_queue_slots_back() {
     alter_remote_fetch_max_wait(&broker, 30_000).await;
     for _ in 0..2 {
         let mut cold = out_of_range_at(&part, 0);
-        let served =
-            try_remote_read(&broker, &mut cold, &part, &mut RemoteFetchWait::default()).await;
+        let served = try_remote_read(
+            &broker,
+            &mut cold,
+            &part,
+            PARTITION_MAX_BYTES,
+            &mut RemoteFetchWait::default(),
+        )
+        .await;
         check!(served.is_some_and(|bytes| bytes > 0));
         check!(cold.out.error_code == codes::NONE);
     }

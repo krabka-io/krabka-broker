@@ -10,7 +10,7 @@
 use {
     super::{
         super::{RemoteFetchWait, refused_read, try_remote_read},
-        TIERED_HIGH_WATERMARK, committed_tiered_fixture, out_of_range_at,
+        PARTITION_MAX_BYTES, TIERED_HIGH_WATERMARK, committed_tiered_fixture, out_of_range_at,
         remote_wait::{alter_broker_config, eventually},
     },
     crate::{
@@ -44,15 +44,28 @@ async fn a_cold_read_over_the_fetch_quota_is_skipped_until_the_quota_is_raised()
 
     // Nothing has been read yet, so the first read goes ahead and is counted.
     let mut first = out_of_range_at(&tiered.part, 0);
-    let first_served = try_remote_read(&tiered.broker, &mut first, &tiered.part, &mut wait).await;
+    let first_served = try_remote_read(
+        &tiered.broker,
+        &mut first,
+        &tiered.part,
+        PARTITION_MAX_BYTES,
+        &mut wait,
+    )
+    .await;
     check!(first_served.is_some_and(|bytes| bytes > 0));
 
     // Those bytes are far over one byte a second: the next read is skipped,
     // and the partition goes out as `handleOffsetOutOfRangeError`'s throttled
     // row, without an error.
     let mut throttled = out_of_range_at(&tiered.part, 0);
-    let throttled_served =
-        try_remote_read(&tiered.broker, &mut throttled, &tiered.part, &mut wait).await;
+    let throttled_served = try_remote_read(
+        &tiered.broker,
+        &mut throttled,
+        &tiered.part,
+        PARTITION_MAX_BYTES,
+        &mut wait,
+    )
+    .await;
     check!(throttled_served == Some(0));
     check!(
         throttled.out
@@ -67,8 +80,14 @@ async fn a_cold_read_over_the_fetch_quota_is_skipped_until_the_quota_is_raised()
     // A raised bound applies to the bytes already recorded.
     alter_fetch_quota(&tiered.broker, UNLIMITED_BYTES_PER_SECOND).await;
     let mut restored = out_of_range_at(&tiered.part, 0);
-    let restored_served =
-        try_remote_read(&tiered.broker, &mut restored, &tiered.part, &mut wait).await;
+    let restored_served = try_remote_read(
+        &tiered.broker,
+        &mut restored,
+        &tiered.part,
+        PARTITION_MAX_BYTES,
+        &mut wait,
+    )
+    .await;
     check!(restored_served.is_some_and(|bytes| bytes > 0));
     check!(restored.out.error_code == codes::NONE);
 }

@@ -432,54 +432,13 @@ pub(super) async fn execute_pending_reads(
             read.out = refused;
             continue;
         }
-        // Cap this partition's read at what the response has left. The
-        // original per-partition request stays in `read.max_bytes`, which a
-        // later long-poll re-read of this same partition still consults;
-        // only the current pass's own budget is capped here.
-        let requested_max_bytes = read.max_bytes;
-        let budget = state.partition_read_budget(requested_max_bytes);
-        let min_one_batch = state.total() == 0;
-        let started = Instant::now();
         // Kafka's `Partition.readRecords` takes the log end offset with the
         // high watermark before it reads. The follower update after the read
         // compares the fetch offset with that log end offset.
         let follower_update = read
             .follower_position
             .map(|position| (position, partition.log_end_offset()));
-        let local_bytes = do_read(
-            &partition,
-            planned_read_request(broker, read, budget, sendfile_capable),
-            &broker.log_dir_status,
-            &mut read.out,
-        )
-        .await;
-        let elapsed = started.elapsed();
-        read.cpu_micros = read
-            .cpu_micros
-            .saturating_add(u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX));
-        // The same interval, on the request's local phase. The two accounts
-        // differ in what they roll up to: `cpu_micros` is per partition and
-        // feeds the rebalancer, while the phase is per request and is the
-        // Fetch half of `request_local_duration_seconds`.
-        phases.add_local(elapsed);
-        // `serve_from_cold_tier` reads its budget off `read.max_bytes`
-        // itself, so this pass's capped budget is loaned to it here and
-        // given back immediately after: the field's steady-state value stays
-        // the original per-partition request, which is what a later
-        // long-poll re-read of this partition (or an epoch recheck) must
-        // still see.
-        read.max_bytes = budget;
-        let cold =
-            serve_from_cold_tier(broker, read, &partition, phases, &mut state.remote_wait).await;
-        read.max_bytes = requested_max_bytes;
-        let withheld = withheld_by_leader_throttle(broker, read);
-        state.record_read(index, read, ReadAccounting {
-            local_bytes,
-            cold_bytes: cold,
-            budget,
-            allow_first_batch_overrun: min_one_batch,
-            withheld,
-        });
+        read_and_account(broker, read, &partition, index, &mut state, phases).await;
         // Kafka's `Partition.fetchRecords` records the follower's position
         // only after its read succeeded, so the row this read just filled
         // reports the high watermark from before that position counted.
@@ -729,38 +688,61 @@ async fn reread_woken(
     // total of every read this partition has ever produced.
     state.bytes.set(index, 0);
     state.remaining_response_bytes = state.response_max_bytes.saturating_sub(state.total());
-    let requested_max_bytes = read.max_bytes;
-    let read_budget = state.partition_read_budget(requested_max_bytes);
+    read_and_account(broker, read, &part, index, state, phases).await;
+}
+
+/// Read one partition locally, fall back to the cold tier when the local log
+/// no longer holds the offset, and charge what the read served to entry
+/// `index` of the response.
+///
+/// The read is capped at what the response has left, while `read.max_bytes`
+/// keeps the original per-partition request, which a later long-poll re-read
+/// of this same partition still consults. The first nonempty partition of the
+/// response may still exceed that cap by its first batch.
+async fn read_and_account(
+    broker: &Broker,
+    read: &mut PendingRead,
+    partition: &Partition,
+    index: usize,
+    state: &mut LongPollState,
+    phases: &RequestPhases,
+) {
+    let budget = state.partition_read_budget(read.max_bytes);
     let min_one_batch = state.total() == 0;
-    // Time the re-read so its duration accumulates into the same
-    // per-partition CPU counter as the first pass (wall-clock delta;
-    // see the first-pass comment for why this replaces TaskMonitor).
-    let read_start = Instant::now();
-    let bytes = do_read(
-        &part,
-        planned_read_request(broker, read, read_budget, state.sendfile_capable),
+    let started = Instant::now();
+    let local_bytes = do_read(
+        partition,
+        planned_read_request(broker, read, budget, state.sendfile_capable),
         &broker.log_dir_status,
         &mut read.out,
     )
     .await;
-    let micros = u64::try_from(read_start.elapsed().as_micros()).unwrap_or(u64::MAX);
-    read.cpu_micros = read.cpu_micros.saturating_add(micros);
-    // The re-read is local work like the first pass, so it accumulates on
-    // the same phase.
-    phases.add_local(read_start.elapsed());
-
-    // The partition may have aged past this offset while the fetch was parked,
-    // in which case the cold tier is where the records now are. Loan the
-    // capped budget to it the same way the first pass does, and give the
-    // original per-partition request back afterward.
-    read.max_bytes = read_budget;
-    let cold = serve_from_cold_tier(broker, read, &part, phases, &mut state.remote_wait).await;
-    read.max_bytes = requested_max_bytes;
+    let elapsed = started.elapsed();
+    read.cpu_micros = read
+        .cpu_micros
+        .saturating_add(u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX));
+    // The same interval, on the request's local phase. The two accounts
+    // differ in what they roll up to: `cpu_micros` is per partition and
+    // feeds the rebalancer, while the phase is per request and is the
+    // Fetch half of `request_local_duration_seconds`.
+    phases.add_local(elapsed);
+    // The partition may have aged past this offset, for a re-read while the
+    // fetch was parked, in which case the cold tier is where the records now
+    // are.
+    let cold = serve_from_cold_tier(
+        broker,
+        read,
+        partition,
+        budget,
+        phases,
+        &mut state.remote_wait,
+    )
+    .await;
     let withheld = withheld_by_leader_throttle(broker, read);
     state.record_read(index, read, ReadAccounting {
-        local_bytes: bytes,
+        local_bytes,
         cold_bytes: cold,
-        budget: read_budget,
+        budget,
         allow_first_batch_overrun: min_one_batch,
         withheld,
     });
@@ -813,25 +795,6 @@ fn withheld_by_leader_throttle(broker: &Broker, read: &PendingRead) -> bool {
     withheld
 }
 
-/// Serve `read`'s offset out of the cold tier when the local log no longer
-/// holds it, charging the object-store round trip to the request's remote
-/// phase.
-///
-/// A KIP-405 tiered read and a diskless WAL cold read are both a network round
-/// trip to an object store rather than work on this broker's own log, so they
-/// belong beside the long poll and the Produce `acks=all` gate and not beside
-/// `do_read`. Kafka accounts them the same way: a fetch that misses the local
-/// log becomes a `DelayedRemoteFetch` in the purgatory, and the purgatory wait
-/// is what `RequestMetrics.RemoteTimeMs` measures.
-///
-/// Returns the bytes the cold tier served, and zero when the local log already
-/// answered, when no tier holds the offset, or when the tier failed the read
-/// -- a failure the remote path has already answered with
-/// `UNKNOWN_SERVER_ERROR`, so the `OFFSET_OUT_OF_RANGE` gate above is what
-/// keeps the failed partition from being handed to a second tier. A read the
-/// local log answered charges nothing at all: the clock is only read once the
-/// fallback is entered, so a cluster with no tiered or diskless topic sees an
-/// unchanged remote phase.
 /// Turns a read the response budget had no room for into the row an empty
 /// read produces: the watermarks and log start the read just filled in, no
 /// records, and the aborted-transaction list an empty read carries.
@@ -848,10 +811,33 @@ fn discard_to_metadata_only(read: &mut PendingRead) {
     read.out.aborted_transactions = (read.read_committed && !read.is_follower_fetch).then(Vec::new);
 }
 
+/// Serve `read`'s offset out of the cold tier when the local log no longer
+/// holds it, charging the object-store round trip to the request's remote
+/// phase.
+///
+/// A KIP-405 tiered read and a diskless WAL cold read are both a network round
+/// trip to an object store rather than work on this broker's own log, so they
+/// belong beside the long poll and the Produce `acks=all` gate and not beside
+/// `do_read`. Kafka accounts them the same way: a fetch that misses the local
+/// log becomes a `DelayedRemoteFetch` in the purgatory, and the purgatory wait
+/// is what `RequestMetrics.RemoteTimeMs` measures.
+///
+/// `max_bytes` is the partition's budget for this read: its
+/// `partition_max_bytes`, capped at what the response has left.
+///
+/// Returns the bytes the cold tier served, and zero when the local log already
+/// answered, when no tier holds the offset, or when the tier failed the read
+/// -- a failure the remote path has already answered with
+/// `UNKNOWN_SERVER_ERROR`, so the `OFFSET_OUT_OF_RANGE` gate above is what
+/// keeps the failed partition from being handed to a second tier. A read the
+/// local log answered charges nothing at all: the clock is only read once the
+/// fallback is entered, so a cluster with no tiered or diskless topic sees an
+/// unchanged remote phase.
 async fn serve_from_cold_tier(
     broker: &Broker,
     read: &mut PendingRead,
     part: &Partition,
+    max_bytes: i32,
     phases: &RequestPhases,
     remote_wait: &mut RemoteFetchWait,
 ) -> usize {
@@ -862,9 +848,11 @@ async fn serve_from_cold_tier(
     // Boxed: the cold read holds the remote-wait deadline and the reader
     // permit across several awaits, and inline it would make every fetch
     // future, local or cold, carry its whole state.
-    let served = match Box::pin(try_remote_read(broker, read, part, remote_wait)).await {
+    let served = match Box::pin(try_remote_read(broker, read, part, max_bytes, remote_wait)).await {
         Some(remote_bytes) => remote_bytes,
-        None => try_diskless_read(broker, read, part).await.unwrap_or(0),
+        None => try_diskless_read(broker, read, part, max_bytes)
+            .await
+            .unwrap_or(0),
     };
     phases.add_remote(started.elapsed());
     served
@@ -1835,10 +1823,12 @@ mod tests {
         };
 
         let phases = RequestPhases::default();
+        let max_bytes = pending.max_bytes;
         let served = super::serve_from_cold_tier(
             &broker,
             &mut pending,
             &part,
+            max_bytes,
             &phases,
             &mut super::RemoteFetchWait::default(),
         )
@@ -1859,6 +1849,7 @@ mod tests {
             &broker,
             &mut pending,
             &part,
+            max_bytes,
             &local_only,
             &mut super::RemoteFetchWait::default(),
         )
@@ -2351,6 +2342,60 @@ mod tests {
         assert!(served_base_offsets(&pending[0].out) == vec![0]);
         broker_handle.shutdown().await;
     }
+    /// A read the response budget capped does not shrink the partition's own
+    /// `partition_max_bytes`: once the response has room again, the next
+    /// re-read of the same partition is budgeted from the original request.
+    ///
+    /// Entry 0 stands for an earlier partition that held most of the response
+    /// and later gave all but one byte of it back. That byte keeps the
+    /// response nonempty, so the re-read gets no first-batch allowance and
+    /// its budget alone decides whether the batch goes out.
+    #[tokio::test]
+    async fn a_reread_after_a_capped_read_uses_the_original_partition_max_bytes() {
+        const TOPIC: &str = "capped-then-reread";
+        const PAYLOAD: &[u8; 64] = &[b'c'; 64];
+
+        // A follower fetch reads only from the leader.
+        let ReadSetup {
+            broker_handle,
+            dir: _dir,
+            broker,
+            part,
+        } = leader_read_setup(TOPIC).await;
+        part.produce_batch(sized_batch(PAYLOAD))
+            .await
+            .expect("append");
+        let mut sized = BytesMut::new();
+        sized_batch(PAYLOAD)
+            .encode(&mut sized)
+            .expect("encode one batch");
+        let one_batch = sized.len();
+
+        let earlier = follower_read(TOPIC, &part, NONE);
+        let request = super::EffectivePartition {
+            partition_max_bytes: 1 << 20,
+            ..wide_partition_fetch_request()
+        };
+        let mut pending = [earlier, planned_follower(TOPIC, &part, &request, NONE)];
+        let mut state = state_for().pending(&pending).call();
+        state.response_max_bytes = 2 * one_batch;
+        state.bytes = super::PartitionBytes::from(vec![2 * one_batch - 1, 0]);
+        let phases = RequestPhases::default();
+
+        // One byte of room left: the batch does not fit and goes out as a
+        // metadata-only row.
+        super::reread_woken(&broker, &mut pending, 1, &mut state, &phases).await;
+        let capped = (served_base_offsets(&pending[1].out), state.bytes.get(1));
+
+        // The earlier partition gives back all but one byte.
+        state.bytes.set(0, 1);
+        super::reread_woken(&broker, &mut pending, 1, &mut state, &phases).await;
+        let reread = (served_base_offsets(&pending[1].out), state.bytes.get(1));
+
+        assert!((capped, reread) == ((Vec::new(), 0), (vec![0], one_batch)));
+        broker_handle.shutdown().await;
+    }
+
     /// Read `pending` under an 8 byte response budget and return the topics.
     async fn read_with_tiny_budget(
         broker: &Broker,
