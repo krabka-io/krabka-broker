@@ -21,7 +21,7 @@ use {
     },
     std::{io, net::SocketAddr, sync::Arc, time::Duration},
     tokio::{net::TcpStream, time},
-    tokio_rustls::server::TlsStream,
+    tokio_rustls::{TlsAcceptor, server::TlsStream},
 };
 
 /// Per-listener entrypoint.
@@ -42,46 +42,8 @@ pub async fn serve_connection_on_listener(
     // non-matching host.
     let peer = Sockets::TARGET.peer_address(&stream);
     if spec.protocol.requires_tls() {
-        // A listener's dynamic `listener.name.<listener>.ssl.*` keys, set
-        // for this node, win over its static `tls_config` while set: Kafka's
-        // `SslFactory.reconfigure` serves new handshakes from the new stores.
-        let dynamic = spec
-            .tls_config
-            .as_ref()
-            .or(broker.config.tls_config.as_ref())
-            .and_then(|static_tls| {
-                broker.listener_tls.server_config(
-                    &broker.controller.current_image(),
-                    broker.config.node_id,
-                    &spec.name,
-                    static_tls,
-                )
-            });
-        let acceptor = if let Some(config) = dynamic {
-            tokio_rustls::TlsAcceptor::from(config)
-        } else if let Some(per_tls) = spec.tls_config.as_ref() {
-            match per_tls.build_server_config() {
-                Ok(sc) => tokio_rustls::TlsAcceptor::from(sc),
-                Err(e) => {
-                    tracing::error!(
-                        listener = %spec.name,
-                        error = %e,
-                        "failed to build TlsAcceptor from per-listener tls_config"
-                    );
-                    return;
-                }
-            }
-        } else {
-            // Use DynamicServerConfig so hot-reload keeps working.
-            let Some(dynamic) = broker.tls_dynamic.as_ref() else {
-                tracing::error!(
-                    listener = %spec.name,
-                    "TLS listener without per-listener tls_config and no broker-wide tls_dynamic"
-                );
-                return;
-            };
-            // Snapshot per accept; an in-flight handshake keeps its captured config.
-            tokio_rustls::TlsAcceptor::from(dynamic.current())
+        let Some(acceptor) = listener_tls_acceptor(&broker, &spec) else {
+            return;
         };
         // The handshake is held to the same `connections.max.idle.ms` the
         // serve loop holds a connected peer to: a peer that opens the socket
@@ -161,6 +123,54 @@ pub async fn serve_connection_on_listener(
     } else {
         serve_connection_plaintext(broker, stream, spec, peer).await;
     }
+}
+
+/// The TLS acceptor for a new connection on `spec`'s listener, or `None`
+/// when the listener has no server config to serve; that case is logged.
+///
+/// A listener's dynamic `listener.name.<listener>.ssl.*` keys, set for this
+/// node, win over its static `tls_config` while set: Kafka's
+/// `SslFactory.reconfigure` serves new handshakes from the new stores. A
+/// listener without either serves the broker-wide config.
+fn listener_tls_acceptor(broker: &Broker, spec: &ListenerSpec) -> Option<TlsAcceptor> {
+    let dynamic = spec
+        .tls_config
+        .as_ref()
+        .or(broker.config.tls_config.as_ref())
+        .and_then(|static_tls| {
+            broker.listener_tls.server_config(
+                &broker.controller.current_image(),
+                broker.config.node_id,
+                &spec.name,
+                static_tls,
+            )
+        });
+    if let Some(config) = dynamic {
+        return Some(TlsAcceptor::from(config));
+    }
+    if let Some(per_tls) = spec.tls_config.as_ref() {
+        return match per_tls.build_server_config() {
+            Ok(sc) => Some(TlsAcceptor::from(sc)),
+            Err(e) => {
+                tracing::error!(
+                    listener = %spec.name,
+                    error = %e,
+                    "failed to build TlsAcceptor from per-listener tls_config"
+                );
+                None
+            }
+        };
+    }
+    // Use DynamicServerConfig so hot-reload keeps working.
+    let Some(dynamic) = broker.tls_dynamic.as_ref() else {
+        tracing::error!(
+            listener = %spec.name,
+            "TLS listener without per-listener tls_config and no broker-wide tls_dynamic"
+        );
+        return None;
+    };
+    // Snapshot per accept; an in-flight handshake keeps its captured config.
+    Some(TlsAcceptor::from(dynamic.current()))
 }
 
 /// Drives a TLS handshake, giving up once the listener's idle window passes.
