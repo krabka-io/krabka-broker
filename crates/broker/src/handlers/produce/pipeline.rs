@@ -717,12 +717,12 @@ fn exceeds_stored_size(
 /// reflects committed leadership, so a just-elected leader's own image
 /// already names it the leader; the only residual window is a follower
 /// whose image hasn't yet caught up to a leadership change, which
-/// correctly returns NOT_LEADER (the client retries against the new
+/// correctly returns `NOT_LEADER` (the client retries against the new
 /// leader) rather than appending to the wrong replica.
 ///
 /// Partition-level absence in the image (topic exists but this index
-/// doesn't, or the topic is unknown) maps to UNKNOWN_TOPIC_OR_PARTITION
-/// (3); presence-but-not-leader maps to NOT_LEADER_OR_FOLLOWER (6) with
+/// doesn't, or the topic is unknown) maps to `UNKNOWN_TOPIC_OR_PARTITION`
+/// (3); presence-but-not-leader maps to `NOT_LEADER_OR_FOLLOWER` (6) with
 /// a `current_leader` hint (encodes at Produce v10+, KIP-951) so the
 /// client re-routes without a full Metadata round-trip. The hint names a
 /// node id, and the response's `NodeEndpoints` carries that node's
