@@ -813,6 +813,83 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
+    /// When topic denial and the unknown-topic lookup leave no partition for
+    /// the actor and the group does not exist yet, the handler answers
+    /// straight away with every row's final code and does not lock the group
+    /// id as `Share`.
+    #[tokio::test]
+    async fn filtered_out_batch_for_an_absent_group_answers_without_locking_the_id() {
+        let authorizer = Arc::new(ScenarioAuthorizer {
+            group_read: true,
+            group_alter: false,
+            denied_topics: vec!["denied-topic".into()],
+        });
+        let started = start_share_broker().authorizer(authorizer).call().await;
+        let broker = started.broker.broker_arc_for_test();
+        krabka_macros::request_test_identity! { bind(ctx); user ["alice"]; };
+        let partition = |partition_index| AlterShareGroupOffsetsRequestPartition {
+            partition_index,
+            start_offset: 42,
+            ..Default::default()
+        };
+        let req = AlterShareGroupOffsetsRequest {
+            group_id: "g-phantom".into(),
+            topics: vec![
+                AlterShareGroupOffsetsRequestTopic {
+                    topic_name: "denied-topic".into(),
+                    partitions: vec![partition(1)],
+                    ..Default::default()
+                },
+                AlterShareGroupOffsetsRequestTopic {
+                    topic_name: "missing-topic".into(),
+                    partitions: vec![partition(0), partition(2)],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let response = alter_share_group_offsets_handle(
+            &broker,
+            req,
+            alter_share_group_offsets_response::MAX_VERSION,
+            &ctx,
+        )
+        .await
+        .expect("handle reset");
+
+        let unknown = |partition_index| AlterShareGroupOffsetsResponsePartition {
+            partition_index,
+            error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+            error_message: Some("This server does not host this topic-partition.".to_owned()),
+            ..Default::default()
+        };
+        let expected = AlterShareGroupOffsetsResponse {
+            throttle_time_ms: 0,
+            error_code: codes::NONE,
+            responses: vec![
+                AlterShareGroupOffsetsResponseTopic {
+                    topic_name: "denied-topic".into(),
+                    partitions: vec![AlterShareGroupOffsetsResponsePartition {
+                        partition_index: 1,
+                        error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                AlterShareGroupOffsetsResponseTopic {
+                    topic_name: "missing-topic".into(),
+                    partitions: vec![unknown(0), unknown(2)],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(response == expected);
+        assert!(broker.group_coordinator.group_type("g-phantom").is_none());
+        started.broker.shutdown().await;
+    }
+
     #[tokio::test]
     async fn active_group_rejects_the_whole_reset_batch() {
         krabka_macros::broker_test_setup! {
