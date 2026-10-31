@@ -9,7 +9,7 @@
 use {
     super::test_support::{LogRecord, ReplayedCoordinator, replay_log},
     crate::coordinator::unified::{
-        GroupSeed,
+        GroupSeed, ReplaySeed,
         persistence_next_gen::{
             GroupMetadataValue, NextGenKey, PartitionMetadataValue, SubscribedTopicMetadata,
             encode_key,
