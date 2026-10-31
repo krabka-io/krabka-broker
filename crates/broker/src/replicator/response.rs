@@ -948,6 +948,39 @@ mod tests {
         assert!(listener.accept().is_err(), "unexpected epoch lookup");
     }
 
+    /// Every error code a `Retry` row can carry maps to one action. With no
+    /// local partition, the out-of-range and tiered-storage recoveries and the
+    /// epoch-fence lookup all stop before asking the leader anything, so each
+    /// row's action depends on its error code alone. Each delay is distinct so
+    /// the table shows which one a row picked.
+    #[yare::parameterized(
+        offset_out_of_range = { codes::OFFSET_OUT_OF_RANGE, RowAction::Continue },
+        offset_moved_to_tiered_storage = {
+            codes::OFFSET_MOVED_TO_TIERED_STORAGE, RowAction::Continue
+        },
+        unknown_topic_or_partition = {
+            codes::UNKNOWN_TOPIC_OR_PARTITION, RowAction::Backoff(secs(11))
+        },
+        not_leader_or_follower = { codes::NOT_LEADER_OR_FOLLOWER, RowAction::Drop },
+        fenced_leader_epoch = { codes::FENCED_LEADER_EPOCH, RowAction::Backoff(secs(13)) },
+        unknown_leader_epoch = { codes::UNKNOWN_LEADER_EPOCH, RowAction::Backoff(secs(13)) },
+        other = { codes::INVALID_REQUEST, RowAction::Backoff(secs(17)) },
+    )]
+    #[test_macro(tokio::test(start_paused = true))]
+    async fn each_retry_error_code_maps_to_its_row_action(error_code: i16, expected: RowAction) {
+        let (mut cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        cfg.connection.replication.unknown_topic_retry_delay = secs(11);
+        cfg.connection.replication.epoch_fence_backoff = secs(13);
+        cfg.connection.replication.unexpected_error_backoff = secs(17);
+        let response = fetch_response(
+            TOPIC,
+            WIRE_TOPIC_ID,
+            partition_response(PARTITION, error_code),
+        );
+
+        assert2::assert!(handle_response(response, &cfg, cfg.leader_epoch.0).await == expected);
+    }
+
     #[yare::parameterized(
         by_name = { TOPIC, WireUuid::ZERO },
         by_id = { "", WIRE_TOPIC_ID },
