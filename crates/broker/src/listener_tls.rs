@@ -21,7 +21,7 @@
 //! force, as Kafka keeps its old `SslEngineFactory`.
 
 use {
-    crate::{codes, config::ListenerSpec, network::auth},
+    crate::{codes, config::ListenerSpec, network::auth, tls_reload::read_mtime},
     krabka_metadata::{MetadataImage, NodeId},
     krabka_security::{ClientAuthMode, TlsConfig},
     rustls::{
@@ -34,7 +34,7 @@ use {
         fmt::{Display, Write as _},
         fs,
         net::Ipv4Addr,
-        path::{Path, PathBuf},
+        path::PathBuf,
         sync::{Arc, Mutex, PoisonError},
         time::SystemTime,
     },
@@ -182,8 +182,6 @@ fn store_files(static_tls: &TlsConfig, ssl: &ListenerSsl) -> Vec<PathBuf> {
     }
     files
 }
-
-fn modified(path: &Path) -> Option<SystemTime> { fs::metadata(path).ok()?.modified().ok() }
 
 impl Material {
     /// The keystore: the dynamic one, checked as Kafka's
@@ -541,7 +539,7 @@ fn refresh_built(
     let files: Vec<_> = store_files(static_tls, &ssl)
         .into_iter()
         .map(|path| {
-            let at = modified(&path);
+            let at = read_mtime(&path);
             (path, at)
         })
         .collect();

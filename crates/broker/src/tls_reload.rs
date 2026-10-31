@@ -26,7 +26,9 @@ struct PathMtimes {
     client_ca: Option<SystemTime>,
 }
 
-fn read_mtime(p: &Path) -> Option<SystemTime> { metadata(p).ok()?.modified().ok() }
+/// The modification time of the file at `p`, or `None` when it cannot be
+/// read. A store watcher compares it between polls to spot a changed file.
+pub(crate) fn read_mtime(p: &Path) -> Option<SystemTime> { metadata(p).ok()?.modified().ok() }
 
 fn snapshot_mtimes(cfg: &TlsConfig) -> PathMtimes {
     PathMtimes {
