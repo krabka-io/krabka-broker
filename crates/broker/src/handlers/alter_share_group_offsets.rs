@@ -48,7 +48,7 @@ use {
         },
         primitives::uuid::Uuid,
     },
-    std::{collections::HashSet, ops::ControlFlow},
+    std::{collections::HashSet, mem, ops::ControlFlow},
 };
 
 pub async fn handle(
@@ -76,11 +76,7 @@ pub async fn handle(
         req.topics.iter().map(|t| t.topic_name.as_str()),
     );
 
-    let ResetPlan {
-        mut responses,
-        requests,
-        slots,
-    } = plan_resets(&image, &denied_topics, req.topics);
+    let mut plan = plan_resets(&image, &denied_topics, req.topics);
 
     // No partition survived denial/unknown-topic filtering, and the group id
     // does not exist yet: every response row already carries its final error
@@ -92,8 +88,8 @@ pub async fn handle(
     // exists as a share group still goes to the actor below even with an
     // empty batch, so its own emptiness/existence checks (e.g.
     // `NON_EMPTY_GROUP`) still run.
-    if requests.is_empty() && !group_already_exists {
-        return Ok(ok_response(responses));
+    if plan.requests.is_empty() && !group_already_exists {
+        return Ok(ok_response(plan.responses));
     }
 
     // The actor checks emptiness and applies the complete requested batch in
@@ -107,6 +103,7 @@ pub async fn handle(
     let ng = &broker.group_coordinator;
     ng.mark_share(&gid);
     let actor = ng.get_or_create_share(&gid);
+    let requests = mem::take(&mut plan.requests);
     let asked = ask(&actor.tx, |reply| ShareGroupActorMessage::ResetOffsets {
         requests,
         reply,
@@ -128,11 +125,26 @@ pub async fn handle(
         Ok(result_codes) => result_codes,
         Err(error_code) => return Ok(AlterShareGroupOffsetsResponse::error(error_code, None)),
     };
+    Ok(apply_reset_codes(broker, &gid, plan, result_codes))
+}
+
+/// Writes the actor's code for each request into the response row its slot
+/// names, and drops the cached share-partition leader of every partition the
+/// actor reset. Answers `COORDINATOR_NOT_AVAILABLE` for the whole request
+/// when the actor did not return exactly one code per request.
+fn apply_reset_codes(
+    broker: &Broker,
+    gid: &str,
+    plan: ResetPlan,
+    result_codes: Vec<i16>,
+) -> AlterShareGroupOffsetsResponse {
+    let ResetPlan {
+        mut responses,
+        slots,
+        ..
+    } = plan;
     if result_codes.len() != slots.len() {
-        return Ok(AlterShareGroupOffsetsResponse::error(
-            codes::COORDINATOR_NOT_AVAILABLE,
-            None,
-        ));
+        return AlterShareGroupOffsetsResponse::error(codes::COORDINATOR_NOT_AVAILABLE, None);
     }
     for ((topic_slot, partition_slot), error_code) in
         slots.into_iter().zip(result_codes)
@@ -148,11 +160,11 @@ pub async fn handle(
         if error_code == codes::NONE {
             broker
                 .share_partition_leaders
-                .invalidate(&gid, topic_id, partition.partition_index);
+                .invalidate(gid, topic_id, partition.partition_index);
         }
     }
 
-    Ok(ok_response(responses))
+    ok_response(responses)
 }
 
 /// The response rows for every requested partition, and the partitions to
