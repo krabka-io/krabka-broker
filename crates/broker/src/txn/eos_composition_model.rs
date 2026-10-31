@@ -50,8 +50,12 @@
 
 use {
     super::{
-        decision::{CompletionDecision, decide_end_txn_completion, decide_phase1_transition},
+        decision::{
+            CompletionDecision, CompletionExpectation, decide_end_txn_completion,
+            decide_phase1_transition,
+        },
         state::{TxnEntry, TxnState},
+        util::ProducerIdentity,
         version::TxnVersion,
     },
     crate::{
@@ -336,17 +340,21 @@ impl Model for EosModel {
                     None,
                 )
                 .expect("model epochs never reach the rotation boundary");
-                let completion =
+                let (completion_pid, completion_epoch) =
                     completion_producer_identity(&entry);
-                match decide_end_txn_completion(
-                    &entry,
-                    ProducerId(PID0 + i64::from(p)),
-                    entry.producer_epoch,
-                    completion.0,
-                    completion.1,
+                let expectation = CompletionExpectation {
+                    prepared: ProducerIdentity {
+                        producer_id: ProducerId(PID0 + i64::from(p)),
+                        producer_epoch: entry.producer_epoch,
+                    },
+                    completion: ProducerIdentity {
+                        producer_id: completion_pid,
+                        producer_epoch: completion_epoch,
+                    },
                     prepare,
                     complete,
-                ) {
+                };
+                match decide_end_txn_completion(&entry, &expectation) {
                     CompletionDecision::Proceed {
                         next_state,
                         response_epoch,

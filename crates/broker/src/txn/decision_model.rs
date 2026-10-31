@@ -77,9 +77,11 @@ use {
                 completion_producer_identity, prepare_completion_identities_with_fresh,
             },
             state::{TxnEntry, TxnState},
+            util::ProducerIdentity,
             version::TxnVersion,
         },
-        CompletionDecision, decide_end_txn_completion, decide_phase1_transition,
+        CompletionDecision, CompletionExpectation, decide_end_txn_completion,
+        decide_phase1_transition,
     },
     crate::{
         coordinator::unified::actor::reconciliation_model_support::record_epoch_regression,
@@ -266,15 +268,19 @@ impl TxnModel {
             && s.epoch == p.expected_epoch
             && s.state == p.prepare
             && s.generation == p.generation;
-        match decide_end_txn_completion(
-            &entry,
-            ProducerId(p.expected_pid),
-            p.expected_epoch,
-            ProducerId(p.completion_pid),
-            p.completion_epoch,
-            st(p.prepare),
-            st(p.complete),
-        ) {
+        let expectation = CompletionExpectation {
+            prepared: ProducerIdentity {
+                producer_id: ProducerId(p.expected_pid),
+                producer_epoch: p.expected_epoch,
+            },
+            completion: ProducerIdentity {
+                producer_id: ProducerId(p.completion_pid),
+                producer_epoch: p.completion_epoch,
+            },
+            prepare: st(p.prepare),
+            complete: st(p.complete),
+        };
+        match decide_end_txn_completion(&entry, &expectation) {
             CompletionDecision::Proceed {
                 next_state,
                 response_pid,

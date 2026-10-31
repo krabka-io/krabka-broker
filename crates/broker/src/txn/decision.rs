@@ -105,30 +105,13 @@ pub enum CompletionDecision {
 /// The decision does not allocate or increment an identity.
 pub fn decide_end_txn_completion(
     entry: &TxnEntry,
-    expected_pid: ProducerId,
-    expected_epoch: i16,
-    expected_completion_pid: ProducerId,
-    expected_completion_epoch: i16,
-    prepare: TxnState,
-    complete: TxnState,
+    expectation: &CompletionExpectation,
 ) -> CompletionDecision {
-    let expectation = CompletionExpectation {
-        prepared: ProducerIdentity {
-            producer_id: expected_pid,
-            producer_epoch: expected_epoch,
-        },
-        completion: ProducerIdentity {
-            producer_id: expected_completion_pid,
-            producer_epoch: expected_completion_epoch,
-        },
-        prepare,
-        complete,
-    };
-    match validate_complete_reacquire(entry, &expectation) {
+    match validate_complete_reacquire(entry, expectation) {
         ReacquireDecision::Proceed => CompletionDecision::Proceed {
-            next_state: complete,
-            response_pid: expected_completion_pid,
-            response_epoch: expected_completion_epoch,
+            next_state: expectation.complete,
+            response_pid: expectation.completion.producer_id,
+            response_epoch: expectation.completion.producer_epoch,
         },
         ReacquireDecision::AlreadyComplete => CompletionDecision::AlreadyComplete {
             response_pid: entry.producer_id,
@@ -139,8 +122,8 @@ pub fn decide_end_txn_completion(
             // neither the one that prepared the transaction nor the one the
             // completion rotates to is a lost mapping, and any other stale
             // identity is a fenced producer.
-            let mapping_lost =
-                entry.producer_id != expected_pid && entry.producer_id != expected_completion_pid;
+            let mapping_lost = entry.producer_id != expectation.prepared.producer_id
+                && entry.producer_id != expectation.completion.producer_id;
             CompletionDecision::Reject(if mapping_lost {
                 codes::INVALID_PRODUCER_ID_MAPPING
             } else {
