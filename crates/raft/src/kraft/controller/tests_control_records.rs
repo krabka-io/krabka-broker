@@ -1081,3 +1081,47 @@ async fn local_add_admission_order(
     let _ = admission;
     let _ = (version, pending, id, directory, outcome);
 }
+
+/// `AddRaftVoter` v1 can ask for an acknowledgement on append: the leader
+/// answers as soon as the voters batch is in its log, and still tracks the
+/// change until it commits. Without that request the answer waits for the
+/// commit.
+#[yare::parameterized(
+    on_append = { false, true },
+    on_commit = { true, false },
+)]
+#[test_macro(tokio::test)]
+async fn an_add_answers_on_append_only_when_asked(ack_when_committed: bool, answered: bool) {
+    use crate::reconfig::{ReconfigOutcome, VoterChange};
+
+    let EngineInDir {
+        engine: mut leader,
+        dir: _dir,
+    } = kraft_version_one_leader();
+    let candidate = ReplicaKey {
+        id: NodeId(4),
+        directory_id: uuid::Uuid::from_u128(7),
+    };
+    let end_before = leader.log.log_end_offset();
+    leader.record_observer_fetch(candidate, end_before.0);
+    let (reply, mut rx) = oneshot::channel();
+    let request = AddVoter {
+        ack_when_committed,
+        ..add_request(4, 7)
+    };
+
+    leader.on_reconfigure(VoterChange::Add(request), reply);
+
+    check!(leader.log.log_end_offset() > end_before);
+    check!(
+        leader
+            .pending_reconfig
+            .as_ref()
+            .is_some_and(|pending| pending.reply.is_some() == !answered)
+    );
+    if answered {
+        check!(matches!(rx.try_recv(), Ok(Ok(ReconfigOutcome::Committed))));
+    } else {
+        check!(rx.try_recv().is_err());
+    }
+}
