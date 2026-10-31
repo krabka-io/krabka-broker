@@ -32,6 +32,8 @@ use {
 };
 
 #[cfg(test)]
+mod golden_tests;
+#[cfg(test)]
 mod record_limit_tests;
 #[cfg(test)]
 mod tests;
