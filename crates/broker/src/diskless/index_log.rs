@@ -11,7 +11,9 @@ use {
     krabka_remote_storage::diskless::index::{
         REPLAY_FENCE_KEY, WAL_OBJECT_RESERVATION_PARTITION, wal_index_key_version,
     },
-    krabka_remote_storage_topic::{KeyedEvent, MetadataEventLog, PartitionStart},
+    krabka_remote_storage_topic::{
+        KeyedEvent, MetadataEventLog, MetadataEventRecord, MetadataEventStream, PartitionStart,
+    },
     std::{
         collections::HashMap,
         num::NonZeroU32,
@@ -90,9 +92,9 @@ impl DisklessIndexLog {
                 start_offset: 0,
             })
             .collect();
-        let (mut stream, _assignment) = log.subscribe(starts);
+        let (stream, _assignment) = log.subscribe(starts);
 
-        let mut pending = publish_replay_fences(&*log).await?;
+        let pending = publish_replay_fences(&*log).await?;
         let (progress_tx, progress_rx) = watch::channel(ReplayProgress {
             slowest_pending: 0,
             caught_up: pending.is_empty(),
@@ -108,174 +110,20 @@ impl DisklessIndexLog {
         let (consumed_tx, consumed_rx) = watch::channel(vec![-1; partition_count]);
         let valid = Arc::new(AtomicBool::new(true));
 
-        let pump_cache = Arc::clone(&cache);
-        let pump_valid = Arc::clone(&valid);
         let object_fences = Arc::new(StdMutex::new(ObjectFences::default()));
-        let pump_object_fences = Arc::clone(&object_fences);
-        tokio::spawn(async move {
-            let consumed_tx = consumed_tx.clone();
-            let mut delivered: HashMap<i32, u64> =
-                pending.keys().map(|partition| (*partition, 0)).collect();
-            while let Some(event) = stream.next().await {
-                // A floor key and a range key never decode as each other, so
-                // the two projections stay independent however the index
-                // topic's partitions interleave them.
-                let floor_key = event.key.as_deref().and_then(WalDeleteFloorKey::from_bytes);
-                let reservation_key = event
-                    .key
-                    .as_deref()
-                    .and_then(WalObjectReservationKey::from_bytes);
-                let range_key = event.key.as_deref().and_then(WalIndexKey::from_bytes);
-                // A key that is neither, and not the replay fence, is of a key
-                // version this build does not read. Skipping it would leave a
-                // range or floor out of the projection, so it is as unsafe as
-                // an unkeyed record.
-                let unknown_key = event.key.as_deref().filter(|key| {
-                    *key != REPLAY_FENCE_KEY
-                        && floor_key.is_none()
-                        && reservation_key.is_none()
-                        && range_key.is_none()
-                });
-                if let Some(key) = unknown_key {
-                    invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                    tracing::error!(
-                        partition = event.partition,
-                        offset = event.offset,
-                        key_version = ?wal_index_key_version(key),
-                        "diskless WAL index record has an unknown key version; projection is \
-                         unsafe"
-                    );
-                } else if event.tombstone {
-                    if let Some(key) = reservation_key {
-                        pump_cache
-                            .lock()
-                            .await
-                            .release_object_reservation(key.object_id());
-                        applied_tx.send_modify(|generation| {
-                            *generation = generation.wrapping_add(1);
-                        });
-                    } else if let Some(key) = floor_key {
-                        pump_cache.lock().await.clear_delete_floor(key);
-                    } else if let Some(key) = range_key {
-                        pump_cache.lock().await.remove(key);
-                    }
-                } else if event.key.as_deref() != Some(REPLAY_FENCE_KEY) {
-                    let result = if let Some(key) = floor_key {
-                        WalDeleteFloorRecord::from_bytes(&event.payload)
-                            .map(|record| (Some((key, record.floor)), reservation_key, None))
-                    } else {
-                        WalFlushRecord::from_bytes(&event.payload)
-                            .map(|record| (None, None, Some(record)))
-                    };
-                    match result {
-                        Ok((Some((key, floor)), reservation_key, None)) => {
-                            if let Some(reservation_key) = reservation_key {
-                                if key.partition != WAL_OBJECT_RESERVATION_PARTITION || floor != 0 {
-                                    invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                                } else {
-                                    // The value must match its compacted key;
-                                    // this namespace is otherwise a normal v1
-                                    // delete-floor record to old readers.
-                                    let Ok(record) =
-                                        WalDeleteFloorRecord::from_bytes(&event.payload)
-                                    else {
-                                        unreachable!("the record was decoded above")
-                                    };
-                                    if record.topic_id != key.topic_id
-                                        || record.partition != key.partition
-                                        || WalObjectReservationKey::new(reservation_key.object_id())
-                                            .to_bytes()
-                                            .as_ref()
-                                            != event.key.as_deref().unwrap_or_default()
-                                    {
-                                        invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                                        continue;
-                                    }
-                                    pump_cache
-                                        .lock()
-                                        .await
-                                        .reserve_object(reservation_key.object_id());
-                                    applied_tx.send_modify(|generation| {
-                                        *generation = generation.wrapping_add(1);
-                                    });
-                                }
-                            } else {
-                                pump_cache.lock().await.raise_delete_floor(
-                                    key.topic_id,
-                                    key.partition,
-                                    floor,
-                                );
-                                applied_tx.send_modify(|generation| {
-                                    *generation = generation.wrapping_add(1);
-                                });
-                            }
-                        }
-                        Ok((None, None, Some(record))) => {
-                            // Every index record is keyed (`publish_flush`);
-                            // an unkeyed one has no range it is the latest
-                            // for, so the projection can no longer be trusted.
-                            if let Some(key) = range_key {
-                                // An object-local fence serializes additions
-                                // with the reclaimer's final check and DELETE,
-                                // without blocking unrelated cache traffic.
-                                let _object_fence =
-                                    lock_object_fence(&pump_object_fences, &record.object_key)
-                                        .await;
-                                pump_cache.lock().await.apply_keyed(key, &record);
-                                applied_tx.send_modify(|generation| {
-                                    *generation = generation.wrapping_add(1);
-                                });
-                            } else {
-                                invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                                tracing::error!(
-                                    partition = event.partition,
-                                    offset = event.offset,
-                                    "unkeyed diskless WAL index record; projection is unsafe"
-                                );
-                            }
-                        }
-                        Err(error) => {
-                            invalidate_projection(&metrics, &pump_valid, &progress_tx);
-                            tracing::error!(
-                                partition = event.partition,
-                                offset = event.offset,
-                                %error,
-                                "diskless WAL index record rejected; projection is unsafe"
-                            );
-                        }
-                        _ => unreachable!("decode result has exactly one record kind"),
-                    }
-                }
-                consumed_tx.send_modify(|offsets| {
-                    // A negative partition addresses no slot, as one past the end does.
-                    if let Ok(index) = usize::try_from(event.partition)
-                        && let Some(offset) = offsets.get_mut(index)
-                    {
-                        *offset = (*offset).max(event.offset);
-                    }
-                });
-                let Some(target) = pending.get(&event.partition).copied() else {
-                    continue;
-                };
-                *delivered.entry(event.partition).or_default() += 1;
-                if event.offset >= target {
-                    pending.remove(&event.partition);
-                    delivered.remove(&event.partition);
-                }
-                let next = ReplayProgress {
-                    slowest_pending: delivered.values().copied().min().unwrap_or(u64::MAX),
-                    caught_up: pending.is_empty(),
-                    invalid: !pump_valid.load(Ordering::Acquire),
-                };
-                // Notify only on a real change, so a waiter's stall timer is
-                // not reset by a busy partition while another one is stuck.
-                progress_tx.send_if_modified(|progress| {
-                    let changed = *progress != next;
-                    *progress = next;
-                    changed
-                });
-            }
-        });
+        let delivered = pending.keys().map(|partition| (*partition, 0)).collect();
+        let pump = IndexPump {
+            cache: Arc::clone(&cache),
+            valid: Arc::clone(&valid),
+            object_fences: Arc::clone(&object_fences),
+            metrics,
+            progress_tx,
+            applied_tx,
+            consumed_tx,
+            pending,
+            delivered,
+        };
+        tokio::spawn(pump.run(stream));
         Ok(Self {
             log,
             cache,
@@ -648,6 +496,151 @@ impl DisklessIndexLog {
     }
 }
 
+/// The task that applies the index topic's records to the projection, in
+/// the order the subscription delivers them.
+struct IndexPump {
+    cache: Arc<Mutex<WalIndexCache>>,
+    valid: Arc<AtomicBool>,
+    object_fences: Arc<StdMutex<ObjectFences>>,
+    metrics: BrokerMetrics,
+    progress_tx: watch::Sender<ReplayProgress>,
+    applied_tx: watch::Sender<u64>,
+    consumed_tx: watch::Sender<Vec<i64>>,
+    /// The replay fence offset of each partition still being replayed.
+    pending: HashMap<i32, i64>,
+    /// Records delivered so far for each partition in `pending`.
+    delivered: HashMap<i32, u64>,
+}
+
+impl IndexPump {
+    async fn run(mut self, mut stream: MetadataEventStream) {
+        while let Some(event) = stream.next().await {
+            self.apply(event).await;
+        }
+    }
+
+    async fn apply(&mut self, event: MetadataEventRecord) {
+        match classify(&event) {
+            IndexEvent::UnknownKeyVersion { key_version } => {
+                self.invalidate();
+                tracing::error!(
+                    partition = event.partition,
+                    offset = event.offset,
+                    key_version = ?key_version,
+                    "diskless WAL index record has an unknown key version; projection is unsafe"
+                );
+            }
+            IndexEvent::ReleaseReservation(key) => {
+                self.cache
+                    .lock()
+                    .await
+                    .release_object_reservation(key.object_id());
+                self.bump_applied();
+            }
+            IndexEvent::ClearFloor(key) => self.cache.lock().await.clear_delete_floor(key),
+            IndexEvent::RemoveRange(key) => self.cache.lock().await.remove(key),
+            IndexEvent::TombstoneNoop | IndexEvent::ReplayFence => {}
+            IndexEvent::Reserve(key) => {
+                self.cache.lock().await.reserve_object(key.object_id());
+                self.bump_applied();
+            }
+            IndexEvent::InvalidReservation => self.invalidate(),
+            IndexEvent::MismatchedReservation => {
+                self.invalidate();
+                // Deliberate: unlike every other record, this one is neither
+                // recorded as consumed nor counted toward the replay. Kept
+                // as the pump has always behaved; see the characterization
+                // test before changing it.
+                return;
+            }
+            IndexEvent::RaiseFloor { key, floor } => {
+                self.cache
+                    .lock()
+                    .await
+                    .raise_delete_floor(key.topic_id, key.partition, floor);
+                self.bump_applied();
+            }
+            IndexEvent::ApplyRange { key, record } => {
+                // An object-local fence serializes additions with the
+                // reclaimer's final check and DELETE, without blocking
+                // unrelated cache traffic.
+                let _object_fence =
+                    lock_object_fence(&self.object_fences, &record.object_key).await;
+                self.cache.lock().await.apply_keyed(key, &record);
+                self.bump_applied();
+            }
+            IndexEvent::Unkeyed => {
+                self.invalidate();
+                tracing::error!(
+                    partition = event.partition,
+                    offset = event.offset,
+                    "unkeyed diskless WAL index record; projection is unsafe"
+                );
+            }
+            IndexEvent::Rejected(error) => {
+                self.invalidate();
+                tracing::error!(
+                    partition = event.partition,
+                    offset = event.offset,
+                    %error,
+                    "diskless WAL index record rejected; projection is unsafe"
+                );
+            }
+        }
+        self.record_consumed(&event);
+        self.report_progress(&event);
+    }
+
+    /// Tell projection waiters the cache changed.
+    fn bump_applied(&self) {
+        self.applied_tx
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
+    }
+
+    /// Mark the projection unsafe to read, and count the record that made it
+    /// so.
+    fn invalidate(&self) {
+        self.metrics.diskless_wal_index_decode_failures_total.inc();
+        self.valid.store(false, Ordering::Release);
+        self.progress_tx
+            .send_modify(|progress| progress.invalid = true);
+    }
+
+    fn record_consumed(&self, event: &MetadataEventRecord) {
+        self.consumed_tx.send_modify(|offsets| {
+            // A negative partition addresses no slot, as one past the end does.
+            if let Ok(index) = usize::try_from(event.partition)
+                && let Some(offset) = offsets.get_mut(index)
+            {
+                *offset = (*offset).max(event.offset);
+            }
+        });
+    }
+
+    fn report_progress(&mut self, event: &MetadataEventRecord) {
+        let Some(target) = self.pending.get(&event.partition).copied() else {
+            return;
+        };
+        *self.delivered.entry(event.partition).or_default() += 1;
+        if event.offset >= target {
+            self.pending.remove(&event.partition);
+            self.delivered.remove(&event.partition);
+        }
+        let next = ReplayProgress {
+            slowest_pending: self.delivered.values().copied().min().unwrap_or(u64::MAX),
+            caught_up: self.pending.is_empty(),
+            invalid: !self.valid.load(Ordering::Acquire),
+        };
+        // Notify only on a real change, so a waiter's stall timer is not
+        // reset by a busy partition while another one is stuck.
+        self.progress_tx.send_if_modified(|progress| {
+            let changed = *progress != next;
+            *progress = next;
+            changed
+        });
+    }
+}
+
 #[derive(Default)]
 struct ObjectFences {
     entries: HashMap<String, Weak<Mutex<()>>>,
@@ -715,14 +708,124 @@ async fn publish_replay_fences(
     Ok(pending)
 }
 
-fn invalidate_projection(
-    metrics: &BrokerMetrics,
-    valid: &AtomicBool,
-    progress: &watch::Sender<ReplayProgress>,
-) {
-    metrics.diskless_wal_index_decode_failures_total.inc();
-    valid.store(false, Ordering::Release);
-    progress.send_modify(|progress| progress.invalid = true);
+/// What one committed index record asks of the projection.
+#[derive(Debug)]
+enum IndexEvent {
+    /// A key that is no index key this build reads, and not the replay
+    /// fence: a key version this build does not read. Skipping it would
+    /// leave a range or floor out of the projection, so it is as unsafe as
+    /// an unkeyed record.
+    UnknownKeyVersion { key_version: Option<i16> },
+    /// A tombstone of an object reservation.
+    ReleaseReservation(WalObjectReservationKey),
+    /// A tombstone of a partition's delete floor.
+    ClearFloor(WalDeleteFloorKey),
+    /// A tombstone of a range.
+    RemoveRange(WalIndexKey),
+    /// A tombstone of the replay fence, or of no key the projection holds.
+    TombstoneNoop,
+    /// A replay fence. It marks a position and projects nothing.
+    ReplayFence,
+    /// A committed object reservation.
+    Reserve(WalObjectReservationKey),
+    /// A reservation-key record that is not on the reservation partition or
+    /// does not carry floor zero.
+    InvalidReservation,
+    /// A reservation-key record whose value names another key.
+    MismatchedReservation,
+    /// A partition's delete floor.
+    RaiseFloor { key: WalDeleteFloorKey, floor: i64 },
+    /// The latest value for a range.
+    ApplyRange {
+        key: WalIndexKey,
+        record: WalFlushRecord,
+    },
+    /// A flush record with no range key. Every index record is keyed
+    /// (`publish_flush`); an unkeyed one has no range it is the latest for,
+    /// so the projection can no longer be trusted.
+    Unkeyed,
+    /// A value that does not decode.
+    Rejected(String),
+}
+
+/// Decode one index record, each part once, into what it asks of the
+/// projection.
+fn classify(event: &MetadataEventRecord) -> IndexEvent {
+    let key = event.key.as_deref();
+    // A floor key and a range key never decode as each other, so the two
+    // projections stay independent however the index topic's partitions
+    // interleave them. A reservation key decodes as a floor key too.
+    let floor_key = key.and_then(WalDeleteFloorKey::from_bytes);
+    let reservation_key = key.and_then(WalObjectReservationKey::from_bytes);
+    let range_key = key.and_then(WalIndexKey::from_bytes);
+    if let Some(key) = key
+        && key != REPLAY_FENCE_KEY
+        && floor_key.is_none()
+        && reservation_key.is_none()
+        && range_key.is_none()
+    {
+        return IndexEvent::UnknownKeyVersion {
+            key_version: wal_index_key_version(key),
+        };
+    }
+    if event.tombstone {
+        return match (reservation_key, floor_key, range_key) {
+            (Some(key), _, _) => IndexEvent::ReleaseReservation(key),
+            (None, Some(key), _) => IndexEvent::ClearFloor(key),
+            (None, None, Some(key)) => IndexEvent::RemoveRange(key),
+            (None, None, None) => IndexEvent::TombstoneNoop,
+        };
+    }
+    if key == Some(REPLAY_FENCE_KEY) {
+        return IndexEvent::ReplayFence;
+    }
+    floor_key.map_or_else(
+        || classify_flush_value(&event.payload, range_key),
+        |floor_key| classify_floor_value(event, floor_key, reservation_key),
+    )
+}
+
+/// Classify the value of a delete-floor key, which an object reservation
+/// shares.
+fn classify_floor_value(
+    event: &MetadataEventRecord,
+    key: WalDeleteFloorKey,
+    reservation_key: Option<WalObjectReservationKey>,
+) -> IndexEvent {
+    let record = match WalDeleteFloorRecord::from_bytes(&event.payload) {
+        Ok(record) => record,
+        Err(error) => return IndexEvent::Rejected(error),
+    };
+    let Some(reservation_key) = reservation_key else {
+        return IndexEvent::RaiseFloor {
+            key,
+            floor: record.floor,
+        };
+    };
+    if key.partition != WAL_OBJECT_RESERVATION_PARTITION || record.floor != 0 {
+        return IndexEvent::InvalidReservation;
+    }
+    // The value must match its compacted key; this namespace is otherwise a
+    // normal v1 delete-floor record to old readers.
+    if record.topic_id != key.topic_id
+        || record.partition != key.partition
+        || reservation_key.to_bytes().as_ref() != event.key.as_deref().unwrap_or_default()
+    {
+        return IndexEvent::MismatchedReservation;
+    }
+    IndexEvent::Reserve(reservation_key)
+}
+
+/// Classify a value that is not a delete floor's: a flush record.
+fn classify_flush_value(payload: &[u8], range_key: Option<WalIndexKey>) -> IndexEvent {
+    let record = match WalFlushRecord::from_bytes(payload) {
+        Ok(record) => record,
+        Err(error) => return IndexEvent::Rejected(error),
+    };
+    range_key.map_or(IndexEvent::Unkeyed, |key| IndexEvent::ApplyRange {
+        key,
+        record,
+    })
 }
 
 /// Most index records that [`DisklessIndexLog::publish_flush`] submits before
@@ -1506,5 +1609,446 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+}
+
+/// One event at a time through the pump, each case checked against the whole
+/// observable state it leaves behind.
+#[cfg(test)]
+mod pump_tests {
+    use {
+        super::*,
+        crate::diskless::wal_index::IndexedRange,
+        assert2::assert,
+        async_trait::async_trait,
+        futures_util::stream,
+        krabka_remote_storage_topic::{
+            AssignmentHandle, InProcessMetadataEventLog, MetadataLogError,
+        },
+        tokio::{sync::mpsc, time::timeout},
+        uuid::Uuid,
+    };
+
+    /// The offset of the replay fence the scripted log reports for
+    /// partition 0, the only partition with a backlog.
+    const REPLAY_TARGET: i64 = 100;
+    const TOPIC: Uuid = Uuid::from_u128(7);
+    const OTHER_TOPIC: Uuid = Uuid::from_u128(8);
+    /// A `UUIDv4`, as diskless object names are.
+    const OBJECT: Uuid = Uuid::from_u128(0x0000_0000_0000_4000_8000_0000_0000_0001);
+
+    /// A two-partition log whose subscription delivers exactly what the test
+    /// sends. Partition 0 reports a backlog, so its replay is pending until
+    /// [`REPLAY_TARGET`]; partition 1 is empty and carries the probe.
+    struct ScriptedLog {
+        inner: Arc<InProcessMetadataEventLog>,
+        events: StdMutex<Option<mpsc::UnboundedReceiver<MetadataEventRecord>>>,
+    }
+
+    #[async_trait]
+    impl MetadataEventLog for ScriptedLog {
+        fn partition_count(&self) -> i32 { 2 }
+
+        async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
+            self.inner.publish(partition, event).await
+        }
+
+        async fn publish_keyed(
+            &self,
+            _partition: i32,
+            _key: Bytes,
+            _event: Option<Bytes>,
+        ) -> Result<i64, MetadataLogError> {
+            Ok(REPLAY_TARGET)
+        }
+
+        fn subscribe(
+            &self,
+            assignment: Vec<PartitionStart>,
+        ) -> (MetadataEventStream, Arc<dyn AssignmentHandle>) {
+            let (_, handle) = self.inner.subscribe(assignment);
+            let events = self.events.lock().unwrap().take().expect("subscribed once");
+            let scripted = stream::unfold(events, |mut events| async move {
+                events.recv().await.map(|event| (event, events))
+            });
+            (Box::pin(scripted), handle)
+        }
+
+        async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> { Ok(vec![1, 0]) }
+    }
+
+    /// Everything the pump's work can be observed through.
+    #[derive(Debug, PartialEq)]
+    struct PumpState {
+        ranges: Vec<IndexedRange>,
+        /// `(topic, partition, floor)` for [`TOPIC`] and the reservation
+        /// namespace.
+        floors: Vec<(Uuid, i32, i64)>,
+        reservations: Vec<Uuid>,
+        valid: bool,
+        decode_failures: u64,
+        applied: u64,
+        consumed: Vec<i64>,
+        progress: ReplayProgress,
+    }
+
+    #[bon::builder]
+    fn pump_state(
+        #[builder(default)] ranges: Vec<IndexedRange>,
+        #[builder(default)] floors: Vec<(Uuid, i32, i64)>,
+        #[builder(default)] reservations: Vec<Uuid>,
+        #[builder(default)] decode_failures: u64,
+        #[builder(default)] applied: u64,
+        /// The highest offset consumed on partition 0.
+        #[builder(default = -1)]
+        consumed: i64,
+        /// Partition 0 events delivered before the replay target.
+        #[builder(default)]
+        delivered: u64,
+        #[builder(default)] caught_up: bool,
+    ) -> PumpState {
+        PumpState {
+            ranges,
+            floors,
+            reservations,
+            valid: decode_failures == 0,
+            decode_failures,
+            applied,
+            // The probe always lands on partition 1 at offset 0.
+            consumed: vec![consumed, 0],
+            progress: ReplayProgress {
+                slowest_pending: if caught_up { u64::MAX } else { delivered },
+                caught_up,
+                invalid: decode_failures != 0,
+            },
+        }
+    }
+
+    fn reservation_topic() -> Uuid {
+        WalDeleteFloorKey::from_bytes(&WalObjectReservationKey::new(OBJECT).to_bytes())
+            .unwrap()
+            .topic_id
+    }
+
+    async fn snapshot(index: &DisklessIndexLog, decode_failures: u64) -> PumpState {
+        let cache = index.cache();
+        let cache = cache.lock().await;
+        let mut floors = Vec::new();
+        for topic in [TOPIC, reservation_topic()] {
+            let mut partitions = cache.delete_floor_partitions(topic);
+            partitions.sort_unstable();
+            floors.extend(
+                partitions
+                    .into_iter()
+                    .map(|partition| (topic, partition, cache.delete_floor(topic, partition))),
+            );
+        }
+        let mut reservations: Vec<Uuid> = cache.reserved_objects().into_iter().collect();
+        reservations.sort_unstable();
+        PumpState {
+            ranges: cache.timestamp_ranges(TOPIC, 0),
+            floors,
+            reservations,
+            valid: index.is_valid(),
+            decode_failures,
+            applied: *index.applied.borrow(),
+            consumed: index.consumed_offsets.borrow().clone(),
+            progress: *index.progress.borrow(),
+        }
+    }
+
+    /// Feed `events` to a fresh pump, then a no-op probe on partition 1, and
+    /// report the state once the probe is consumed: the pump handles events in
+    /// order, so every earlier event has been handled by then.
+    async fn pump_state_after(events: Vec<MetadataEventRecord>) -> PumpState {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let log = Arc::new(ScriptedLog {
+            inner: InProcessMetadataEventLog::new(2),
+            events: StdMutex::new(Some(receiver)),
+        });
+        let metrics = BrokerMetrics::new();
+        let failures = metrics.diskless_wal_index_decode_failures_total.clone();
+        let index = DisklessIndexLog::start_with_cache(
+            log,
+            Arc::new(Mutex::new(WalIndexCache::default())),
+            metrics,
+        )
+        .await
+        .unwrap();
+        for event in events {
+            sender.send(event).unwrap();
+        }
+        sender
+            .send(MetadataEventRecord {
+                partition: 1,
+                offset: 0,
+                key: Some(Bytes::from_static(REPLAY_FENCE_KEY)),
+                payload: Bytes::new(),
+                tombstone: false,
+            })
+            .unwrap();
+        let mut consumed = index.consumed_offsets.clone();
+        timeout(
+            Duration::from_secs(5),
+            consumed.wait_for(|offsets| offsets[1] >= 0),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        snapshot(&index, failures.get()).await
+    }
+
+    /// A partition-0 record at `offset`; `None` payload is a tombstone.
+    fn event(offset: i64, key: Option<Bytes>, payload: Option<Bytes>) -> MetadataEventRecord {
+        MetadataEventRecord {
+            partition: 0,
+            offset,
+            key,
+            tombstone: payload.is_none(),
+            payload: payload.unwrap_or_default(),
+        }
+    }
+
+    fn entry() -> WalIndexEntry {
+        WalIndexEntry {
+            topic_id: TOPIC,
+            partition: 0,
+            first_offset: 0,
+            last_offset: 3,
+            byte_start: 0,
+            byte_len: 4,
+            max_timestamp_ms: 0,
+        }
+    }
+
+    fn range_key() -> Bytes { WalIndexKey::from(&entry()).to_bytes() }
+
+    fn range_value() -> Bytes { WalFlushRecord::keyed_entry("object-a", entry()).unwrap().1 }
+
+    fn indexed_range() -> IndexedRange {
+        IndexedRange {
+            object_key: "object-a".into(),
+            entry: entry(),
+        }
+    }
+
+    fn floor_key() -> Bytes {
+        WalDeleteFloorKey {
+            topic_id: TOPIC,
+            partition: 0,
+        }
+        .to_bytes()
+    }
+
+    fn floor_value(topic_id: Uuid, partition: i32, floor: i64) -> Bytes {
+        WalDeleteFloorRecord {
+            topic_id,
+            partition,
+            floor,
+        }
+        .to_bytes()
+        .unwrap()
+    }
+
+    fn reservation_key() -> Bytes { WalObjectReservationKey::new(OBJECT).to_bytes() }
+
+    fn reservation_value(topic_id: Uuid, floor: i64) -> Bytes {
+        floor_value(topic_id, WAL_OBJECT_RESERVATION_PARTITION, floor)
+    }
+
+    fn fence_key() -> Bytes { Bytes::from_static(REPLAY_FENCE_KEY) }
+
+    /// A range key of key version 7, which this build does not read.
+    fn unknown_version_key() -> Bytes {
+        let mut key = range_key().to_vec();
+        key[..2].copy_from_slice(&7_i16.to_be_bytes());
+        Bytes::from(key)
+    }
+
+    #[tokio::test]
+    async fn each_index_event_leaves_the_expected_pump_state() {
+        struct Case {
+            name: &'static str,
+            events: Vec<MetadataEventRecord>,
+            expected: PumpState,
+        }
+        let reservation = reservation_value(reservation_topic(), 0);
+        let cases = [
+            Case {
+                name: "range",
+                events: vec![event(0, Some(range_key()), Some(range_value()))],
+                expected: pump_state()
+                    .ranges(vec![indexed_range()])
+                    .applied(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "floor",
+                events: vec![event(0, Some(floor_key()), Some(floor_value(TOPIC, 0, 5)))],
+                expected: pump_state()
+                    .floors(vec![(TOPIC, 0, 5)])
+                    .applied(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "reservation",
+                events: vec![event(0, Some(reservation_key()), Some(reservation.clone()))],
+                expected: pump_state()
+                    .reservations(vec![OBJECT])
+                    .applied(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "reservation with a nonzero floor",
+                events: vec![event(
+                    0,
+                    Some(reservation_key()),
+                    Some(reservation_value(reservation_topic(), 1)),
+                )],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                // Quirk kept: the pump returns before it records the offset as
+                // consumed or counts it toward the replay.
+                name: "reservation whose record names another key",
+                events: vec![event(
+                    0,
+                    Some(reservation_key()),
+                    Some(reservation_value(OTHER_TOPIC, 0)),
+                )],
+                expected: pump_state().decode_failures(1).call(),
+            },
+            Case {
+                name: "range tombstone",
+                events: vec![
+                    event(0, Some(range_key()), Some(range_value())),
+                    event(1, Some(range_key()), None),
+                ],
+                expected: pump_state().applied(1).consumed(1).delivered(2).call(),
+            },
+            Case {
+                name: "floor tombstone",
+                events: vec![
+                    event(0, Some(floor_key()), Some(floor_value(TOPIC, 0, 5))),
+                    event(1, Some(floor_key()), None),
+                ],
+                expected: pump_state().applied(1).consumed(1).delivered(2).call(),
+            },
+            Case {
+                name: "reservation tombstone",
+                events: vec![
+                    event(0, Some(reservation_key()), Some(reservation.clone())),
+                    event(1, Some(reservation_key()), None),
+                ],
+                expected: pump_state().applied(2).consumed(1).delivered(2).call(),
+            },
+            Case {
+                name: "replay fence",
+                events: vec![event(0, Some(fence_key()), Some(Bytes::new()))],
+                expected: pump_state().consumed(0).delivered(1).call(),
+            },
+            Case {
+                name: "replay fence at the replay target",
+                events: vec![event(REPLAY_TARGET, Some(fence_key()), Some(Bytes::new()))],
+                expected: pump_state().consumed(REPLAY_TARGET).caught_up(true).call(),
+            },
+            Case {
+                name: "replay fence tombstone",
+                events: vec![event(0, Some(fence_key()), None)],
+                expected: pump_state().consumed(0).delivered(1).call(),
+            },
+            Case {
+                name: "unkeyed tombstone",
+                events: vec![event(0, None, None)],
+                expected: pump_state().consumed(0).delivered(1).call(),
+            },
+            Case {
+                name: "unknown key version",
+                events: vec![event(0, Some(unknown_version_key()), Some(range_value()))],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "unknown key version tombstone",
+                events: vec![event(0, Some(unknown_version_key()), None)],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "unkeyed record",
+                events: vec![event(0, None, Some(range_value()))],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "undecodable range payload",
+                events: vec![event(0, Some(range_key()), Some(Bytes::from_static(b"xx")))],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "undecodable floor payload",
+                events: vec![event(0, Some(floor_key()), Some(range_value()))],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "undecodable reservation payload",
+                events: vec![event(0, Some(reservation_key()), Some(range_value()))],
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
+            },
+            Case {
+                name: "invalid projection keeps applying later records",
+                events: vec![
+                    event(0, None, Some(range_value())),
+                    event(1, Some(floor_key()), Some(floor_value(TOPIC, 0, 5))),
+                ],
+                expected: pump_state()
+                    .floors(vec![(TOPIC, 0, 5)])
+                    .decode_failures(1)
+                    .applied(1)
+                    .consumed(1)
+                    .delivered(2)
+                    .call(),
+            },
+        ];
+        for Case {
+            name,
+            events,
+            expected,
+        } in cases
+        {
+            let actual = pump_state_after(events).await;
+            assert!(actual == expected, "case {name}");
+        }
     }
 }
