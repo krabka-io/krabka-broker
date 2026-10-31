@@ -57,6 +57,7 @@ use {
     },
     krabka_raft::RaftError,
     std::time::Duration,
+    tokio::time::{Instant, error::Elapsed},
 };
 
 mod audit;
@@ -75,17 +76,14 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-use {
-    self::{
-        authz::{Admission, admit_row, topic_access},
-        operation::{delete_topic_once, generation_refusal, vanished_code},
-        request::{ValidatedTopics, resolve_topic_names},
-        wire::{
-            delete_topic_result, delete_topics_response, random_seed, request_error_results,
-            shuffle_rows,
-        },
+use self::{
+    authz::{Admission, admit_row, topic_access},
+    operation::{delete_topic_once, generation_refusal, vanished_code},
+    request::{ValidatedTopics, resolve_topic_names},
+    wire::{
+        delete_topic_result, delete_topics_response, random_seed, request_error_results,
+        shuffle_rows,
     },
-    tokio::time::{Instant, error::Elapsed},
 };
 
 krabka_macros::decoded_dispatch! {
