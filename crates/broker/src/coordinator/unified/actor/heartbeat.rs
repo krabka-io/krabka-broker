@@ -20,9 +20,7 @@ use {
         },
         pending_records::PendingRecords,
         persistence::{Recorder, current_assignment_value, target_assignment_value},
-        regex_resolution::{
-            RegexResolution, Resolutions, apply_regex_result, delete_unsubscribed_regexes,
-        },
+        regex_resolution::{RegexResolution, Resolutions, delete_unsubscribed_regexes},
     },
     crate::{
         codes,
@@ -569,11 +567,11 @@ async fn handle_heartbeat(
         Some(prefix) => prefix.followed_by(step.pending),
         None => step.pending,
     };
-    services.flush(state, pending, now_ms).await?;
-    if let Some(resolved) = step.resolutions {
-        let result = apply_regex_result(state, resolved, &services.metadata.snapshot());
-        services.flush(state, result, chrono_now_ms()).await?;
-    }
+    services
+        .flush_with_regex_result(state, pending, now_ms, step.resolutions, || {
+            services.metadata.snapshot()
+        })
+        .await?;
     Ok(step.response)
 }
 
