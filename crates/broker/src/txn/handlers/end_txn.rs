@@ -31,12 +31,12 @@ use {
         error::BrokerError,
         handlers::RequestContext,
         txn::{
+            coordinator::completion::apply_completion,
             decision::{CompletionDecision, CompletionExpectation, decide_end_txn_completion},
             util::{ProducerIdentity, now_millis},
             version::{TxnVersion, resolve_txn_version},
         },
     },
-    krabka_log::ProducerId,
     krabka_protocol::owned::{end_txn_request::EndTxnRequest, end_txn_response::EndTxnResponse},
     std::sync::Arc,
 };
@@ -52,6 +52,8 @@ mod validation;
 
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod tests;
 
 // Only the #[cfg(test)] stateright models in txn/ reach these variants.
 #[cfg(test)]
@@ -221,23 +223,11 @@ pub async fn handle(
             response_epoch: new_epoch,
         } => {
             // Stage on a clone: until the Complete record is durable, other
-            // callers must still see the Prepare state.
+            // callers must still see the Prepare state. The previous producer
+            // id is the entry's own, as in Kafka's `prepareComplete`, not the
+            // staged identity the request names.
             let mut staged = entry.clone();
-            if new_pid != ProducerId(req.producer_id) {
-                // Epoch rolled over to a new producer_id: record the prior id
-                // so the transition is traceable (KIP-890 PreviousProducerId).
-                staged.prev_producer_id = ProducerId(req.producer_id);
-            }
-            staged.state = next_state;
-            staged.last_update_ms = now_millis();
-            staged.producer_id = new_pid;
-            staged.producer_epoch = new_epoch;
-            staged.next_producer_id = ProducerId(-1);
-            staged.next_producer_epoch = -1;
-            // Kafka's `prepareComplete`: the abort of a failed epoch fence has
-            // now been written.
-            staged.has_failed_epoch_fence = false;
-            staged.partitions.clear();
+            apply_completion(&mut staged, next_state, (new_pid, new_epoch), now_millis());
             (staged, new_pid, new_epoch)
         }
         CompletionDecision::AlreadyComplete {
