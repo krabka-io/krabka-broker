@@ -99,6 +99,13 @@ fn decode_high_watermark(text: &str) -> Result<Offset, PersistedFormatError> {
         .ok_or_else(malformed)
 }
 
+/// Stamp an engine-built batch with its create-time. Every record in one
+/// carries `timestamp_delta` 0, so one stamp is the create-time of all of them.
+fn stamp_create_time(batch: &mut RecordBatch, append_timestamp_ms: i64) {
+    batch.base_timestamp = append_timestamp_ms;
+    batch.max_timestamp = append_timestamp_ms;
+}
+
 /// The high watermark [`KraftLog::open`] starts from: the one `hwm_path`
 /// records, or `log_start` when there is none.
 ///
@@ -235,15 +242,49 @@ impl KraftLog {
         batch: &mut RecordBatch,
         append_timestamp_ms: i64,
     ) -> Result<Offset, RaftError> {
-        // Every record in an engine-built batch carries `timestamp_delta` 0,
-        // so one stamp is the create-time of all of them.
-        batch.base_timestamp = append_timestamp_ms;
-        batch.max_timestamp = append_timestamp_ms;
+        stamp_create_time(batch, append_timestamp_ms);
         // The metadata log is always `CreateTime`, so the log stamps nothing
         // and the second element of the append result is always `None`.
         let appended = self.log.append(batch);
         let (base_offset, _log_append_time_ms) = self.checked(appended)?;
         Ok(base_offset)
+    }
+
+    /// Leader path for a batch whose records were built against `base`:
+    /// appends it at `base`, stamped as [`Self::append`] stamps it, or
+    /// writes nothing.
+    ///
+    /// [`Self::append`] takes whatever base the log assigns, so a caller can
+    /// only compare it with the one it expected once the batch is written.
+    /// This refuses the batch first.
+    ///
+    /// # Errors
+    /// Returns [`RaftError`] with nothing written when `base` is not the log
+    /// end offset or the log would place the batch elsewhere, and
+    /// [`RaftError`] if the underlying append fails.
+    pub fn append_at_end(
+        &mut self,
+        batch: &mut RecordBatch,
+        append_timestamp_ms: i64,
+        base: Offset,
+    ) -> Result<(), RaftError> {
+        let log_end = self.log.log_end_offset();
+        if base != log_end {
+            return Err(RaftError::ChangeRejected(format!(
+                "append expected base {base}, log end {log_end}"
+            )));
+        }
+        stamp_create_time(batch, append_timestamp_ms);
+        let appended = self.log.append_at(batch, base);
+        self.checked(appended)
+    }
+
+    /// Test hook: make the underlying log assign the next leader append at
+    /// `frontier` or later, the state in which an append lands past the log
+    /// end.
+    #[cfg(test)]
+    pub fn reconcile_next_offset(&mut self, frontier: Offset) {
+        self.log.reconcile_next_offset(frontier);
     }
 
     /// Follower path: appends a batch at the leader-assigned `offset`.
