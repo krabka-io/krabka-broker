@@ -1,5 +1,8 @@
 use {
-    super::{TIERED_TOPIC, TieredBroker, out_of_range_at, tiered_broker, tiered_topic_id},
+    super::{
+        PARTITION_MAX_BYTES, TIERED_TOPIC, TieredBroker, out_of_range_at, tiered_broker,
+        tiered_topic_id,
+    },
     crate::{
         broker::spawn_partition,
         remote_log_manager::{ArchiveMode, copy_eligible, test_support::tier},
@@ -113,6 +116,7 @@ async fn remote_fetch_reports_an_abort_in_a_later_segment_or_the_local_tail() {
                 &broker,
                 &mut pending,
                 &part,
+                PARTITION_MAX_BYTES,
                 &mut super::super::RemoteFetchWait::default()
             )
             .await

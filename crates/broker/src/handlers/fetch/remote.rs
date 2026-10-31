@@ -473,8 +473,8 @@ fn tier_config(part: &Partition) -> Option<TierConfig> {
 /// reports the live bounds beside them (see [`LiveOffsets`]), and returns the
 /// size of the records it served. Those records are the segment's own bytes,
 /// as `RemoteLogManager.read` returns them: whole batches from the one that
-/// holds the offset, up to the partition's budget, and never fewer than the
-/// first. They are never decoded and encoded again, because a compressed
+/// holds the offset, up to `max_bytes`, the partition's budget for this read,
+/// and never fewer than the first. They are never decoded and encoded again, because a compressed
 /// batch encoded again need not have the length the response frame
 /// announced for it. On a genuine miss -- an offset below the established
 /// log start, or one no remote segment holds -- and for a non-tiered topic, it
@@ -515,6 +515,7 @@ pub(super) async fn try_remote_read(
     broker: &Broker,
     p: &mut PendingRead,
     part: &Partition,
+    max_bytes: i32,
     wait: &mut RemoteFetchWait,
 ) -> Option<usize> {
     let reader = broker.remote_reader.clone()?;
@@ -617,7 +618,7 @@ pub(super) async fn try_remote_read(
     };
     // A remote read with no cap reads the whole segment, so the smallest
     // budget is one byte, which still returns the first batch whole.
-    let max_bytes = usize::try_from(p.max_bytes.max(1)).unwrap_or(usize::MAX);
+    let max_bytes = usize::try_from(max_bytes.max(1)).unwrap_or(usize::MAX);
 
     // KIP-405's `remote.log.reader.threads` / `.max.pending.tasks` cap. The
     // permit is held for the batch read and the `.txnindex` read below, so one
@@ -770,6 +771,9 @@ mod tests {
     /// The topic every tiered-read case below uses.
     const TIERED_TOPIC: &str = "tiered-delete-records";
 
+    /// The `partition_max_bytes` every tiered-read case asks for.
+    const PARTITION_MAX_BYTES: i32 = 1_048_576;
+
     /// KIP-405's `remote.log.reader.max.pending.tasks`: a cold read that
     /// arrives with the reader pool's queue already full is answered with an
     /// error for that partition rather than parked behind the running reads.
@@ -917,6 +921,7 @@ mod tests {
                 &self.broker,
                 &mut read,
                 &self.part,
+                PARTITION_MAX_BYTES,
                 &mut super::RemoteFetchWait::default(),
             )
             .await;
@@ -1016,7 +1021,7 @@ mod tests {
             current_leader_epoch: 0,
             last_fetched_epoch: -1,
             fetch_offset,
-            max_bytes: 1_048_576,
+            max_bytes: PARTITION_MAX_BYTES,
             read_committed: false,
             is_follower_fetch: false,
             fetch_only_leader: false,
@@ -1056,6 +1061,7 @@ mod tests {
             &tiered.broker,
             &mut refused,
             &tiered.part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1069,6 +1075,7 @@ mod tests {
             &tiered.broker,
             &mut at_floor,
             &tiered.part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1117,6 +1124,7 @@ mod tests {
             &tiered.broker,
             &mut follower,
             &tiered.part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1139,6 +1147,7 @@ mod tests {
             &tiered.broker,
             &mut consumer,
             &tiered.part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1163,6 +1172,7 @@ mod tests {
             &tiered.broker,
             &mut ahead,
             &tiered.part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1182,6 +1192,7 @@ mod tests {
             &tiered.broker,
             &mut deleted,
             &tiered.part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1264,6 +1275,7 @@ mod tests {
             &broker,
             &mut served,
             &part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1283,6 +1295,7 @@ mod tests {
                 &broker,
                 &mut follower,
                 &part,
+                PARTITION_MAX_BYTES,
                 &mut super::RemoteFetchWait::default()
             )
             .await
@@ -1352,6 +1365,7 @@ mod tests {
                 &broker,
                 &mut read,
                 &part,
+                PARTITION_MAX_BYTES,
                 &mut super::RemoteFetchWait::default(),
             )
             .await;
@@ -1632,6 +1646,7 @@ mod tests {
             &broker,
             &mut missing,
             &part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;
@@ -1647,6 +1662,7 @@ mod tests {
             &broker,
             &mut failed,
             &part,
+            PARTITION_MAX_BYTES,
             &mut super::RemoteFetchWait::default(),
         )
         .await;

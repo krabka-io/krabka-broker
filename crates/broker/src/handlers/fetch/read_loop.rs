@@ -862,7 +862,8 @@ async fn serve_from_cold_tier(
     // Boxed: the cold read holds the remote-wait deadline and the reader
     // permit across several awaits, and inline it would make every fetch
     // future, local or cold, carry its whole state.
-    let served = match Box::pin(try_remote_read(broker, read, part, remote_wait)).await {
+    let max_bytes = read.max_bytes;
+    let served = match Box::pin(try_remote_read(broker, read, part, max_bytes, remote_wait)).await {
         Some(remote_bytes) => remote_bytes,
         None => try_diskless_read(broker, read, part).await.unwrap_or(0),
     };
