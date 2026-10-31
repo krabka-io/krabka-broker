@@ -35,7 +35,7 @@ use {
         share_coordinator::coordinator::message::UNKNOWN_TOPIC_OR_PARTITION,
         task_util::{AskError, ask},
     },
-    krabka_metadata::AclOperation,
+    krabka_metadata::{AclOperation, MetadataImage},
     krabka_protocol::{
         owned::{
             alter_share_group_offsets_request::AlterShareGroupOffsetsRequest,
@@ -46,6 +46,7 @@ use {
         },
         primitives::uuid::Uuid,
     },
+    std::ops::ControlFlow,
 };
 
 pub async fn handle(
@@ -54,58 +55,12 @@ pub async fn handle(
     _version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<AlterShareGroupOffsetsResponse, BrokerError> {
-    // Feature gate: share groups are on from a finalized `share.version` of 1,
-    // and below it the RPC is unsupported.
     let image = broker.controller.current_image();
-    if !share_groups_enabled(&image) {
-        return Ok(AlterShareGroupOffsetsResponse::error(
-            codes::UNSUPPORTED_VERSION,
-            None,
-        ));
-    }
-
+    let group_already_exists = match precheck(broker, &image, ctx, &req.group_id) {
+        ControlFlow::Continue(group_already_exists) => group_already_exists,
+        ControlFlow::Break(refusal) => return Ok(refusal),
+    };
     let gid = req.group_id;
-
-    // ── ACL preamble ────────────────────────────────────
-    // Per-group `Read` check, per Kafka's `handleAlterShareGroupOffsetsRequest`
-    // (krabka previously checked `Alter`, which neither refuses a plain
-    // `Alter` grant nor accepts the normal `Read`-only share-consumer grant).
-    // On Deny → top-level `error_code = 30`.
-    if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &gid) {
-        return Ok(AlterShareGroupOffsetsResponse::error(
-            codes::GROUP_AUTHORIZATION_FAILED,
-            None,
-        ));
-    }
-    // Kafka's `GroupCoordinatorService.alterShareGroupOffsets` refuses the
-    // empty group id before any group lookup. This structural check runs
-    // before coordinator routing: an empty id hashes to some partition, and a
-    // broker that does not lead it would otherwise answer `NOT_COORDINATOR`
-    // instead of `INVALID_GROUP_ID`, so the error a client sees would depend
-    // on which broker happened to receive the request.
-    if gid.is_empty() {
-        return Ok(AlterShareGroupOffsetsResponse::error(
-            codes::INVALID_GROUP_ID,
-            None,
-        ));
-    }
-    if let Some(error_code) = group_coordinator_error(broker, &gid) {
-        return Ok(AlterShareGroupOffsetsResponse::error(error_code, None));
-    }
-    // `GroupMetadataManager.getOrMaybeCreateShareGroup` throws
-    // `GroupIdNotFoundException` for a group id already locked to another
-    // protocol type. A share group not yet created (`None`) is fine: the
-    // actor below creates and persists it.
-    let existing_type = broker.group_coordinator.group_type(&gid);
-    if let Some(existing_type) = existing_type
-        && existing_type != GroupType::Share
-    {
-        return Ok(AlterShareGroupOffsetsResponse::error(
-            codes::GROUP_ID_NOT_FOUND,
-            None,
-        ));
-    }
-    let group_already_exists = existing_type.is_some();
 
     // Per-topic `Read` ACL — per-partition `TOPIC_AUTHORIZATION_FAILED` on
     // Deny, checked BEFORE the unknown-topic lookup below. Decided up front
@@ -257,6 +212,69 @@ pub async fn handle(
     }
 
     Ok(ok_response(responses))
+}
+
+/// Runs the checks that refuse the whole request before any partition is
+/// looked at: the feature gate, the group `Read` ACL, the empty group id,
+/// coordinator routing and the group type lock, in that order.
+///
+/// Breaks with the top-level refusal, or continues with whether the group id
+/// already exists (as a share group).
+fn precheck(
+    broker: &Broker,
+    image: &MetadataImage,
+    ctx: &RequestContext<'_>,
+    gid: &str,
+) -> ControlFlow<AlterShareGroupOffsetsResponse, bool> {
+    // Feature gate: share groups are on from a finalized `share.version` of 1,
+    // and below it the RPC is unsupported.
+    if !share_groups_enabled(image) {
+        return ControlFlow::Break(AlterShareGroupOffsetsResponse::error(
+            codes::UNSUPPORTED_VERSION,
+            None,
+        ));
+    }
+
+    // ── ACL preamble ────────────────────────────────────
+    // Per-group `Read` check, per Kafka's `handleAlterShareGroupOffsetsRequest`
+    // (krabka previously checked `Alter`, which neither refuses a plain
+    // `Alter` grant nor accepts the normal `Read`-only share-consumer grant).
+    // On Deny → top-level `error_code = 30`.
+    if group_read_denied(broker.config.authorizer.as_ref(), image, ctx, gid) {
+        return ControlFlow::Break(AlterShareGroupOffsetsResponse::error(
+            codes::GROUP_AUTHORIZATION_FAILED,
+            None,
+        ));
+    }
+    // Kafka's `GroupCoordinatorService.alterShareGroupOffsets` refuses the
+    // empty group id before any group lookup. This structural check runs
+    // before coordinator routing: an empty id hashes to some partition, and a
+    // broker that does not lead it would otherwise answer `NOT_COORDINATOR`
+    // instead of `INVALID_GROUP_ID`, so the error a client sees would depend
+    // on which broker happened to receive the request.
+    if gid.is_empty() {
+        return ControlFlow::Break(AlterShareGroupOffsetsResponse::error(
+            codes::INVALID_GROUP_ID,
+            None,
+        ));
+    }
+    if let Some(error_code) = group_coordinator_error(broker, gid) {
+        return ControlFlow::Break(AlterShareGroupOffsetsResponse::error(error_code, None));
+    }
+    // `GroupMetadataManager.getOrMaybeCreateShareGroup` throws
+    // `GroupIdNotFoundException` for a group id already locked to another
+    // protocol type. A share group not yet created (`None`) is fine: the
+    // reset actor creates and persists it.
+    let existing_type = broker.group_coordinator.group_type(gid);
+    if let Some(existing_type) = existing_type
+        && existing_type != GroupType::Share
+    {
+        return ControlFlow::Break(AlterShareGroupOffsetsResponse::error(
+            codes::GROUP_ID_NOT_FOUND,
+            None,
+        ));
+    }
+    ControlFlow::Continue(existing_type.is_some())
 }
 
 /// The top-level success response carrying each topic's per-partition codes.
