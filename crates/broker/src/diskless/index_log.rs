@@ -537,8 +537,14 @@ impl IndexPump {
                     .release_object_reservation(key.object_id());
                 self.bump_applied();
             }
-            IndexEvent::ClearFloor(key) => self.cache.lock().await.clear_delete_floor(key),
-            IndexEvent::RemoveRange(key) => self.cache.lock().await.remove(key),
+            IndexEvent::ClearFloor(key) => {
+                self.cache.lock().await.clear_delete_floor(key);
+                self.bump_applied();
+            }
+            IndexEvent::RemoveRange(key) => {
+                self.cache.lock().await.remove(key);
+                self.bump_applied();
+            }
             IndexEvent::TombstoneNoop | IndexEvent::ReplayFence => {}
             IndexEvent::Reserve(key) => {
                 self.cache.lock().await.reserve_object(key.object_id());
@@ -1655,6 +1661,43 @@ mod tests {
         assert!(!fresh);
         assert!(!index.is_valid());
     }
+    /// A removal that another broker publishes bumps the applied generation,
+    /// so a projection waiter wakes for it as it does for an addition.
+    #[tokio::test(start_paused = true)]
+    async fn a_consumed_removal_wakes_a_projection_waiter() {
+        type Removed = fn(&WalIndexCache) -> bool;
+
+        let topic_id = Uuid::from_u128(7);
+        let range = WalIndexKey::from(&flush_record().topic_id(topic_id).call().entries[0]);
+        let floor = WalDeleteFloorKey {
+            topic_id,
+            partition: 0,
+        };
+        let cases: [(&str, Bytes, Removed); 2] = [
+            ("range", range.to_bytes(), |cache| {
+                cache.lookup(Uuid::from_u128(7), 0, 0).is_none()
+            }),
+            ("floor", floor.to_bytes(), |cache| {
+                cache.delete_floor(Uuid::from_u128(7), 0) == 0
+            }),
+        ];
+        for (case, tombstone, removed) in cases {
+            let transport = InProcessMetadataEventLog::new(1);
+            let ProjectedObject { index, .. } =
+                projected_first_object(Arc::<InProcessMetadataEventLog>::clone(&transport)).await;
+            index
+                .publish_delete_floor(topic_id, 0, 5, Duration::from_secs(1))
+                .await
+                .unwrap();
+
+            let (woke, published) = tokio::join!(
+                index.wait_for_projection(Duration::from_secs(5), removed),
+                transport.publish_keyed(0, tombstone, None),
+            );
+            published.unwrap();
+            assert!(woke, "case {case}");
+        }
+    }
 }
 
 /// One event at a time through the pump, each case checked against the whole
@@ -1981,7 +2024,7 @@ mod pump_tests {
                     event(0, Some(range_key()), Some(range_value())),
                     event(1, Some(range_key()), None),
                 ],
-                expected: pump_state().applied(1).consumed(1).delivered(2).call(),
+                expected: pump_state().applied(2).consumed(1).delivered(2).call(),
             },
             Case {
                 name: "floor tombstone",
@@ -1989,7 +2032,7 @@ mod pump_tests {
                     event(0, Some(floor_key()), Some(floor_value(TOPIC, 0, 5))),
                     event(1, Some(floor_key()), None),
                 ],
-                expected: pump_state().applied(1).consumed(1).delivered(2).call(),
+                expected: pump_state().applied(2).consumed(1).delivered(2).call(),
             },
             Case {
                 name: "reservation tombstone",
