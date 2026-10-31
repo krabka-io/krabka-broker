@@ -8,13 +8,12 @@ use {
     crate::{
         authorizer::AllowAllAuthorizer,
         broker::Broker,
-        config_keys::MIN_INSYNC_REPLICAS,
         features::{
             ELR_VERSION, LATEST_PRODUCTION_METADATA_VERSION, METADATA_VERSION, METADATA_VERSION_MAX,
         },
         handlers::update_features::test_support::{
-            apply_request, call, call_with, elr_update, metadata_update, named_update,
-            start_broker, validate_only, wait_for_finalized_feature,
+            apply_request, call, call_with, elr_update, metadata_update, min_isr_config_record,
+            named_update, start_broker, validate_only, wait_for_finalized_feature,
         },
         test_support::{DenyAll, FakeMetadataSource, start_broker_no_audit_with},
     },
@@ -312,14 +311,6 @@ async fn handle_persists_a_lossless_metadata_downgrade() {
     broker_handle.shutdown().await;
 }
 
-fn min_isr_record(node_id: krabka_metadata::NodeId, value: Option<&str>) -> MetadataRecord {
-    MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
-        node_id,
-        config_name: MIN_INSYNC_REPLICAS.into(),
-        config_value: value.map(str::to_owned),
-    })
-}
-
 /// A broker-level `min.insync.replicas` committed between planning and the
 /// submit must be removed when the request turns ELR on. A plan built from
 /// the older image leaves it in place. Kafka's `QuorumController.updateFeatures`
@@ -334,12 +325,15 @@ async fn submit_replans_after_an_intervening_config_commit() {
             level: 30,
         },
     ));
-    initial.apply(&min_isr_record(
+    initial.apply(&min_isr_config_record(
         krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
         Some("2"),
     ));
     let mut newer = initial.clone();
-    newer.apply(&min_isr_record(krabka_metadata::NodeId(5), Some("1")));
+    newer.apply(&min_isr_config_record(
+        krabka_metadata::NodeId(5),
+        Some("1"),
+    ));
     let source = FakeMetadataSource::builder()
         .image(initial)
         .leader(Some(krabka_metadata::NodeId(1)))
@@ -362,7 +356,7 @@ async fn submit_replans_after_an_intervening_config_commit() {
     assert!(
         source.submitted_records()
             == vec![
-                min_isr_record(krabka_metadata::NodeId(5), None),
+                min_isr_config_record(krabka_metadata::NodeId(5), None),
                 MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
                     name: ELR_VERSION.into(),
                     level: 1,

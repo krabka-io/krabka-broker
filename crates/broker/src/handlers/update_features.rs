@@ -41,7 +41,9 @@ use {
         codes,
         handlers::{
             RequestContext, audit_admin_success, audit_resource, cluster_alter_denied,
-            forward_to_controller::{guarded_operation_on_source, to_active_controller_or_handle},
+            forward_to_controller::{
+                ends_guarded_attempt, guarded_operation_on_source, to_active_controller_or_handle,
+            },
         },
         metadata_source::MetadataSource,
     },
@@ -261,12 +263,7 @@ async fn apply_updates(
             if !plan.records.is_empty() {
                 match source.submit_change_if_image(plan.records, image).await {
                     Ok(_) => {}
-                    Err(
-                        error @ (RaftError::StaleMetadataImage
-                        | RaftError::UncommittedTail
-                        | RaftError::NotLeader { .. }
-                        | RaftError::LeaderUnknown),
-                    ) => return Err(error),
+                    Err(error) if ends_guarded_attempt(&error) => return Err(error),
                     Err(error) => {
                         tracing::warn!(%error, "UpdateFeatures: submit_change failed");
                         return Ok(Err(top_level_error(

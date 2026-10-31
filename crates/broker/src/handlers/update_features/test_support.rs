@@ -12,10 +12,12 @@ use {
     crate::{
         authorizer::Authorizer,
         broker::{Broker, BrokerHandle},
+        config_keys::MIN_INSYNC_REPLICAS,
         features::{ELR_VERSION, METADATA_VERSION},
         handlers::RequestContext,
         test_support::{request_context, start_broker_no_audit_with},
     },
+    krabka_metadata::MetadataRecord,
     krabka_protocol::owned::{
         update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
         update_features_response::UpdateFeaturesResponse,
@@ -46,6 +48,19 @@ pub(super) fn metadata_update(level: i16, upgrade_type: i8) -> FeatureUpdateKey 
 
 pub(super) fn elr_update(level: i16, upgrade_type: i8) -> FeatureUpdateKey {
     feature_update(ELR_VERSION, level, upgrade_type)
+}
+
+/// A `min.insync.replicas` broker config record for `node_id`, which a `None`
+/// value removes.
+pub(super) fn min_isr_config_record(
+    node_id: krabka_metadata::NodeId,
+    value: Option<&str>,
+) -> MetadataRecord {
+    MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
+        node_id,
+        config_name: MIN_INSYNC_REPLICAS.into(),
+        config_value: value.map(str::to_owned),
+    })
 }
 
 pub(super) fn validate_only(updates: Vec<FeatureUpdateKey>) -> UpdateFeaturesRequest {

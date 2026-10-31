@@ -42,7 +42,7 @@ use {
             UNKNOWN_SERVER_ERROR,
         },
         handlers::forward_to_controller::{
-            guarded_operation_on_source, to_active_controller_or_handle,
+            ends_guarded_attempt, guarded_operation_on_source, to_active_controller_or_handle,
         },
         metadata_source::MetadataSource,
         quota::parse_ip_literal,
@@ -152,12 +152,7 @@ async fn alter_and_submit(
             }
             match source.submit_change_if_image(records, image).await {
                 Ok(_) => {}
-                Err(
-                    error @ (RaftError::StaleMetadataImage
-                    | RaftError::UncommittedTail
-                    | RaftError::NotLeader { .. }
-                    | RaftError::LeaderUnknown),
-                ) => return Err(error),
+                Err(error) if ends_guarded_attempt(&error) => return Err(error),
                 Err(error) => {
                     tracing::warn!(%error, "alter-client-quotas submit failed");
                     apply_submit_error(&mut entry_results, error);
