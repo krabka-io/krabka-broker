@@ -48,7 +48,7 @@ mod transactional;
 mod tests;
 
 use {
-    self::transactional::handle_transactional,
+    self::transactional::{TransactionalInit, handle_transactional},
     crate::{
         authorizer::{AuthorizationRequest, AuthorizationResult},
         codes,
@@ -274,14 +274,16 @@ pub async fn handle(
             }
             let handled = handle_transactional(
                 &coord,
-                tid,
-                txnv,
-                txn_timeout,
-                req.enable2_pc,
-                req.keep_prepared_txn,
-                // KIP-360: the identity the caller believes it holds. It
-                // is `(-1, -1)` below v3 and for a first initialisation.
-                (req.producer_id, req.producer_epoch),
+                TransactionalInit::builder()
+                    .tid(tid)
+                    .txnv(txnv)
+                    .txn_timeout(txn_timeout)
+                    .enable_2pc(req.enable2_pc)
+                    .keep_prepared_txn(req.keep_prepared_txn)
+                    // KIP-360: the identity the caller believes it holds. It
+                    // is `(-1, -1)` below v3 and for a first initialisation.
+                    .request_identity((req.producer_id, req.producer_epoch))
+                    .build(),
             )
             .await;
             match handled {

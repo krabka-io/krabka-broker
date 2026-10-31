@@ -30,6 +30,23 @@ use {
     std::sync::Arc,
 };
 
+/// One transactional `InitProducerId` call, as [`handle_transactional`] runs
+/// it.
+#[derive(bon::Builder)]
+pub(super) struct TransactionalInit<'a> {
+    tid: &'a str,
+    txnv: TxnVersion,
+    txn_timeout: i32,
+    #[builder(default = false)]
+    enable_2pc: bool,
+    #[builder(default = false)]
+    keep_prepared_txn: bool,
+    /// KIP-360: the identity the caller believes it holds,
+    /// [`RequestedIdentity::NONE`] when it claims none.
+    #[builder(default = RequestedIdentity::NONE, into)]
+    request_identity: RequestedIdentity,
+}
+
 /// Transactional sub-path: allocate or bump-epoch for `tid`.
 ///
 /// `request_identity` is the `(producer_id, producer_epoch)` the caller
@@ -49,19 +66,17 @@ use {
 /// is what it gets back.
 pub(super) async fn handle_transactional(
     coord: &Arc<TxnCoordinator>,
-    tid: &str,
-    txnv: TxnVersion,
-    txn_timeout: i32,
-    enable_2pc: bool,
-    keep_prepared_txn: bool,
-    request_identity: (i64, i16),
+    init: TransactionalInit<'_>,
 ) -> Result<InitProducerIdResponse, BrokerError> {
+    let TransactionalInit {
+        tid,
+        txnv,
+        txn_timeout,
+        enable_2pc,
+        keep_prepared_txn,
+        request_identity,
+    } = init;
     let now_ms = now_millis();
-    let (requested_pid, requested_epoch) = request_identity;
-    let request_identity = RequestedIdentity {
-        producer_id: requested_pid,
-        producer_epoch: requested_epoch,
-    };
 
     match coord.get(tid) {
         None => {
@@ -356,10 +371,19 @@ pub(super) async fn handle_transactional(
 
 /// The producer id and epoch that an `InitProducerId` request names, as the
 /// wire carries them. A producer that names no identity sends `-1` for both.
-#[derive(Clone, Copy)]
-struct RequestedIdentity {
+#[derive(Clone, Copy, derive_more::From)]
+pub(super) struct RequestedIdentity {
     producer_id: i64,
     producer_epoch: i16,
+}
+
+impl RequestedIdentity {
+    /// The identity of a producer that names none. It is not `(0, 0)`, which
+    /// names a real producer and would be fenced against the entry.
+    pub(super) const NONE: Self = Self {
+        producer_id: -1,
+        producer_epoch: -1,
+    };
 }
 
 /// What `request_identity` may do to `entry` (KIP-360).
@@ -556,12 +580,12 @@ mod tests {
         };
         handle_transactional(
             coordinator,
-            tid,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            identity,
+            TransactionalInit::builder()
+                .tid(tid)
+                .txnv(TxnVersion::Verified)
+                .txn_timeout(60_000)
+                .request_identity(identity)
+                .build(),
         )
         .await
     }
@@ -905,12 +929,12 @@ mod tests {
 
             let fenced = handle_transactional(
                 &coordinator,
-                "tid-fenced",
-                case.txnv,
-                60_000,
-                false,
-                false,
-                (1000, 3),
+                TransactionalInit::builder()
+                    .tid("tid-fenced")
+                    .txnv(case.txnv)
+                    .txn_timeout(60_000)
+                    .request_identity((1000, 3))
+                    .build(),
             )
             .await
             .expect("init responds");
@@ -956,12 +980,12 @@ mod tests {
             // that epoch is the last one.
             let stale = handle_transactional(
                 &coordinator,
-                "tid-fenced",
-                case.txnv,
-                60_000,
-                false,
-                false,
-                (1000, 3),
+                TransactionalInit::builder()
+                    .tid("tid-fenced")
+                    .txnv(case.txnv)
+                    .txn_timeout(60_000)
+                    .request_identity((1000, 3))
+                    .build(),
             )
             .await
             .expect("init responds");
@@ -982,12 +1006,11 @@ mod tests {
             // `prepareInitProducerIdTransit` says.
             let retried = handle_transactional(
                 &coordinator,
-                "tid-fenced",
-                case.txnv,
-                60_000,
-                false,
-                false,
-                (-1, -1),
+                TransactionalInit::builder()
+                    .tid("tid-fenced")
+                    .txnv(case.txnv)
+                    .txn_timeout(60_000)
+                    .build(),
             )
             .await
             .expect("init responds");
@@ -1124,12 +1147,12 @@ mod tests {
             let before = part.log_end_offset().0;
             let response = handle_transactional(
                 &coordinator,
-                TID,
-                TxnVersion::Verified,
-                60_000,
-                false,
-                false,
-                (step.request.producer_id, step.request.producer_epoch),
+                TransactionalInit::builder()
+                    .tid(TID)
+                    .txnv(TxnVersion::Verified)
+                    .txn_timeout(60_000)
+                    .request_identity((step.request.producer_id, step.request.producer_epoch))
+                    .build(),
             )
             .await
             .expect("init responds");
@@ -1325,12 +1348,20 @@ mod tests {
             });
             seed(&coordinator, ongoing).await;
 
-            let init = |identity| {
+            let init = |identity: (i64, i16)| {
                 let coordinator = Arc::clone(&coordinator);
                 async move {
-                    handle_transactional(&coordinator, TID, txnv, 60_000, false, false, identity)
-                        .await
-                        .expect("InitProducerId responds")
+                    handle_transactional(
+                        &coordinator,
+                        TransactionalInit::builder()
+                            .tid(TID)
+                            .txnv(txnv)
+                            .txn_timeout(60_000)
+                            .request_identity(identity)
+                            .build(),
+                    )
+                    .await
+                    .expect("InitProducerId responds")
                 }
             };
             let concurrent = concurrent_transactions_response();
@@ -1786,16 +1817,19 @@ mod tests {
 
             let fenced = handle_transactional(
                 &coordinator,
-                TID,
-                case.txnv,
-                60_000,
-                false,
-                false,
-                (-1, -1),
+                TransactionalInit::builder()
+                    .tid(TID)
+                    .txnv(case.txnv)
+                    .txn_timeout(60_000)
+                    .build(),
             )
             .await
             .expect("init responds");
-            check!(fenced == concurrent_transactions_response(), "{}", case.name);
+            check!(
+                fenced == concurrent_transactions_response(),
+                "{}",
+                case.name
+            );
 
             let entry = coordinator.get(TID).expect("entry").lock().await.clone();
             let expected = TxnEntry {
@@ -1815,13 +1849,10 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let SeededCoordinator { coordinator, .. } =
             coordinator_with_completed_transaction(tmp.path(), TID).await;
-        seed(
-            &coordinator,
-            TxnEntry {
-                state: TxnState::Ongoing,
-                ..TxnEntry::new_empty(TID.to_owned(), ProducerId(1000), i16::MAX - 1, 60_000, 0)
-            },
-        )
+        seed(&coordinator, TxnEntry {
+            state: TxnState::Ongoing,
+            ..TxnEntry::new_empty(TID.to_owned(), ProducerId(1000), i16::MAX - 1, 60_000, 0)
+        })
         .await;
 
         let fenced = init_verified(&coordinator, TID, InitIdentity::Anonymous)
