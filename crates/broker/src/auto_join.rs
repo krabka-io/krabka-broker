@@ -24,7 +24,7 @@
 //! (identity and request construction), `rpc` (the one-shot wire calls) and
 //! `outcome` (reply classification).
 
-use {krabka_units::Time, std::sync::Arc};
+use {krabka_units::Time, std::sync::Arc, tokio_util::sync::CancellationToken};
 
 mod join_loop;
 mod outcome;
@@ -64,4 +64,7 @@ pub struct AutoJoinParams {
     pub inter_broker_server_name: String,
     pub controller: Arc<dyn MetadataSource>,
     pub inter_broker_client: Arc<InterBrokerClient>,
+    /// Ends both loops when cancelled. The broker cancels it when it stops,
+    /// or when its start fails after the loops were spawned.
+    pub shutdown: CancellationToken,
 }

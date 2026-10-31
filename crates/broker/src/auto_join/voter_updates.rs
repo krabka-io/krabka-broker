@@ -458,4 +458,33 @@ mod tests {
 
         assert2::assert!(count.load(Ordering::Relaxed) == 0);
     }
+
+    /// A stopped broker must stop advertising itself. The leader keeps
+    /// rejecting the update, so the loop would retry for ever; cancelling the
+    /// shutdown token ends it, and no request follows.
+    #[tokio::test]
+    async fn run_voter_updates_returns_when_shutdown_is_cancelled() {
+        let MockUpdateServer { addr, count } =
+            spawn_mock_update_server(codes::UNKNOWN_SERVER_ERROR).await;
+        let params = voter_update_params(addr, Some(NodeId(1)));
+        let shutdown = params.shutdown.clone();
+        let task = tokio::spawn(run_voter_updates(params));
+        timeout(Duration::from_secs(10), async {
+            while count.load(Ordering::Relaxed) == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the loop sends a first UpdateRaftVoter");
+
+        shutdown.cancel();
+
+        timeout(Duration::from_secs(2), task)
+            .await
+            .expect("the loop returns once shutdown is cancelled")
+            .expect("the loop does not panic");
+        let sent = count.load(Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert2::assert!(count.load(Ordering::Relaxed) == sent);
+    }
 }

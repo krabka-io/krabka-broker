@@ -308,4 +308,45 @@ mod tests {
         join.abort();
         assert2::assert!(key == remove_raft_voter_request::API_KEY);
     }
+
+    /// A stopped broker must stop trying to join. The bootstrap server never
+    /// answers, so the loop would retry for ever; cancelling the shutdown
+    /// token ends it.
+    #[tokio::test]
+    async fn run_returns_when_shutdown_is_cancelled() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (dialed_tx, dialed_rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let mut dialed = Some(dialed_tx);
+            while let Ok((socket, _)) = listener.accept().await {
+                if let Some(tx) = dialed.take() {
+                    let _ = tx.send(());
+                }
+                drop(socket);
+            }
+        });
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .controller_bound_addr(addr)
+                .build(),
+        );
+        let params = AutoJoinParams {
+            bootstrap_servers: vec![addr.to_string()],
+            ..voter_params(source)
+        };
+        let shutdown = params.shutdown.clone();
+        let join = tokio::spawn(run(params));
+        time::timeout(Duration::from_secs(10), dialed_rx)
+            .await
+            .expect("the join loop dials the bootstrap server within 10s")
+            .expect("the fake controller sees the dial");
+
+        shutdown.cancel();
+
+        time::timeout(Duration::from_secs(2), join)
+            .await
+            .expect("the join loop returns once shutdown is cancelled")
+            .expect("the join loop does not panic");
+    }
 }

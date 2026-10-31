@@ -367,6 +367,7 @@ fn spawn_auto_join(
             .unwrap_or_else(|| config.inter_broker_server_name.clone()),
         controller: Arc::clone(controller),
         inter_broker_client: Arc::clone(inter_broker_client),
+        shutdown: tokio_util::sync::CancellationToken::new(),
     };
     tokio::spawn(run(params.clone()));
     tokio::spawn(run_voter_updates(params));
