@@ -336,6 +336,81 @@ fn tally_topics(inventory: &ArchiveInventory) -> TopicTallies<'_> {
     TopicTallies { order, by_name }
 }
 
+/// The snapshot records a restore carries over, sorted by family.
+#[derive(Default)]
+struct SnapshotFamilies<'a> {
+    features: Vec<MetadataRecord>,
+    feature_epoch: Vec<MetadataRecord>,
+    topic_configs: Vec<MetadataRecord>,
+    scram: Vec<MetadataRecord>,
+    acls: Vec<MetadataRecord>,
+    quotas: Vec<MetadataRecord>,
+    /// The name of every feature the snapshot finalizes a level for.
+    finalized_features: HashSet<&'a str>,
+}
+
+/// Sort the snapshot's `records` into the families a restore carries over, counting each one in `report`.
+///
+/// A topic configuration comes back only for a topic the archive holds, and only when the snapshot names that topic under the archive's topic id.
+///
+/// # Errors
+///
+/// Returns [`RestoreError::MetadataSnapshotTopicMismatch`] when the snapshot configures an archived topic that it holds under another topic id, or does not hold at all.
+fn classify_snapshot<'a>(
+    records: &'a [MetadataRecord],
+    topics: &HashMap<&str, TopicTally>,
+    snapshot_topics: &HashMap<&str, Uuid>,
+    report: &mut MetadataRestoreReport,
+) -> Result<SnapshotFamilies<'a>, RestoreError> {
+    let mut families = SnapshotFamilies::default();
+    for record in records {
+        match record {
+            MetadataRecord::V1FeatureLevel(feature) => {
+                report.feature_levels += 1;
+                families.finalized_features.insert(feature.name.as_str());
+                families.features.push(record.clone());
+            }
+            MetadataRecord::V1FeaturesEpoch(_) => families.feature_epoch.push(record.clone()),
+            MetadataRecord::V1TopicConfig(config) => {
+                if let Some(TopicTally {
+                    topic_id: archive_topic_id,
+                    ..
+                }) = topics.get(config.topic.as_str())
+                {
+                    match snapshot_topics.get(config.topic.as_str()) {
+                        Some(snapshot_topic_id) if snapshot_topic_id == archive_topic_id => {
+                            report.topic_configs += 1;
+                            families.topic_configs.push(record.clone());
+                        }
+                        snapshot_topic_id => {
+                            return Err(RestoreError::MetadataSnapshotTopicMismatch {
+                                topic: config.topic.clone(),
+                                archive_topic_id: *archive_topic_id,
+                                snapshot_topic_id: snapshot_topic_id
+                                    .map_or_else(|| "absent".to_owned(), ToString::to_string),
+                            });
+                        }
+                    }
+                }
+            }
+            MetadataRecord::V1ScramCredential(_) => {
+                report.scram_credentials += 1;
+                families.scram.push(record.clone());
+            }
+            MetadataRecord::V1AccessControlEntry(_) => {
+                report.access_control_entries += 1;
+                families.acls.push(record.clone());
+            }
+            MetadataRecord::V1ClientQuota(_) => {
+                report.client_quotas += 1;
+                families.quotas.push(record.clone());
+            }
+            _ => {}
+        }
+    }
+    Ok(families)
+}
+
 /// Build the topic and partition records a restore seeds into the target formatter, from what the archive scan recovered.
 ///
 /// Every topic's [`MetadataRecord::V1Topic`] precedes every [`MetadataRecord::V1Partition`], which is the ordering `krabka_format::run_with_records`'s own doc requires: a `MetadataImage` derives a topic's partition count from the partition records that apply after it, so a partition can only follow its own topic.
@@ -365,12 +440,6 @@ fn seed_metadata_records(
         feature_levels: 0,
         topics_without_configuration: Vec::new(),
     };
-    let mut features = Vec::new();
-    let mut feature_epoch = Vec::new();
-    let mut topic_configs = Vec::new();
-    let mut scram = Vec::new();
-    let mut acls = Vec::new();
-    let mut quotas = Vec::new();
     let snapshot_topics: HashMap<&str, Uuid> = snapshot_records
         .into_iter()
         .flatten()
@@ -392,52 +461,20 @@ fn seed_metadata_records(
         })
         .map(|topic| (*topic).to_owned())
         .collect();
-    let mut snapshot_features = HashSet::new();
-    for record in snapshot_records.into_iter().flatten() {
-        match record {
-            MetadataRecord::V1FeatureLevel(feature) => {
-                metadata.feature_levels += 1;
-                snapshot_features.insert(feature.name.as_str());
-                features.push(record.clone());
-            }
-            MetadataRecord::V1FeaturesEpoch(_) => feature_epoch.push(record.clone()),
-            MetadataRecord::V1TopicConfig(config) => {
-                if let Some(TopicTally {
-                    topic_id: archive_topic_id,
-                    ..
-                }) = topics.get(config.topic.as_str())
-                {
-                    match snapshot_topics.get(config.topic.as_str()) {
-                        Some(snapshot_topic_id) if snapshot_topic_id == archive_topic_id => {
-                            metadata.topic_configs += 1;
-                            topic_configs.push(record.clone());
-                        }
-                        snapshot_topic_id => {
-                            return Err(RestoreError::MetadataSnapshotTopicMismatch {
-                                topic: config.topic.clone(),
-                                archive_topic_id: *archive_topic_id,
-                                snapshot_topic_id: snapshot_topic_id
-                                    .map_or_else(|| "absent".to_owned(), ToString::to_string),
-                            });
-                        }
-                    }
-                }
-            }
-            MetadataRecord::V1ScramCredential(_) => {
-                metadata.scram_credentials += 1;
-                scram.push(record.clone());
-            }
-            MetadataRecord::V1AccessControlEntry(_) => {
-                metadata.access_control_entries += 1;
-                acls.push(record.clone());
-            }
-            MetadataRecord::V1ClientQuota(_) => {
-                metadata.client_quotas += 1;
-                quotas.push(record.clone());
-            }
-            _ => {}
-        }
-    }
+    let SnapshotFamilies {
+        mut features,
+        mut feature_epoch,
+        mut topic_configs,
+        mut scram,
+        mut acls,
+        mut quotas,
+        finalized_features: snapshot_features,
+    } = classify_snapshot(
+        snapshot_records.unwrap_or_default(),
+        &topics,
+        &snapshot_topics,
+        &mut metadata,
+    )?;
     if snapshot_records.is_some() {
         // A feature that the snapshot does not finalize is disabled in the
         // restored cluster. `metadata.version` is never disabled: Kafka has no
