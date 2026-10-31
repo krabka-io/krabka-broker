@@ -77,6 +77,7 @@ use {
     crate::{
         codes,
         coordinator::unified::{
+            GroupCoordinator,
             actor::{CommitFence, SubscribedTopics},
             offsets_log::{OffsetsLog, write_failure_code},
         },
@@ -707,7 +708,6 @@ async fn actor_loop(
     coordinator: Arc<super::super::GroupCoordinator>,
     mut rx: mpsc::Receiver<StreamsGroupActorMessage>,
 ) {
-    let offsets_log = Arc::clone(&coordinator.offsets_log);
     let node = coordinator.node_id();
     let mut metadata = MetadataLink::default();
     let mut config = metadata.attach(&coordinator).map_or_else(
@@ -736,19 +736,14 @@ async fn actor_loop(
         if let Some(image) = metadata.attach(&coordinator) {
             actor.refresh_configuration(&default_config, (&image, node), &mut config, &mut tick);
         }
-        let metadata_source = metadata.source.as_ref();
+        let turn = StreamsTurn {
+            config: &config,
+            metadata_source: metadata.source.as_ref(),
+            coordinator: &coordinator,
+        };
         match wake {
             Wake::Message(msg) => {
-                let refused = match handle_message(
-                    &mut actor,
-                    &config,
-                    &*offsets_log,
-                    metadata_source,
-                    &coordinator,
-                    *msg,
-                )
-                .await
-                {
+                let refused = match handle_message(&mut actor, turn, *msg).await {
                     Step::Continue => continue,
                     Step::Stop => break,
                     Step::RefusedJoin(refused) => refused,
@@ -764,16 +759,7 @@ async fn actor_loop(
                 }
                 rx.close();
                 while let Some(msg) = rx.recv().await {
-                    if let Step::RefusedJoin(other) = handle_message(
-                        &mut actor,
-                        &config,
-                        &*offsets_log,
-                        metadata_source,
-                        &coordinator,
-                        msg,
-                    )
-                    .await
-                    {
+                    if let Step::RefusedJoin(other) = handle_message(&mut actor, turn, msg).await {
                         other.send();
                     }
                 }
@@ -784,10 +770,7 @@ async fn actor_loop(
                 break;
             }
             Wake::SessionCheck => {
-                if handle_session_tick(&mut actor, &config, &*offsets_log, &coordinator)
-                    .await
-                    .is_err()
-                {
+                if handle_session_tick(&mut actor, turn).await.is_err() {
                     break;
                 }
             }
@@ -797,16 +780,7 @@ async fn actor_loop(
                 if actor.state.members.is_empty() || !actor.assignment_pending() {
                     continue;
                 }
-                if reconcile_and_flush(
-                    &mut actor,
-                    &config,
-                    metadata_source,
-                    &*offsets_log,
-                    &coordinator,
-                )
-                .await
-                .is_err()
-                {
+                if reconcile_and_flush(&mut actor, turn).await.is_err() {
                     break;
                 }
             }
@@ -828,6 +802,21 @@ async fn actor_loop(
             }
         }
     }
+}
+
+/// What one wake-up of the actor loop hands to the paths that write records:
+/// the group's configuration, its metadata source, and the coordinator that
+/// owns the offsets log and the cache.
+#[derive(Clone, Copy)]
+struct StreamsTurn<'a> {
+    config: &'a StreamsGroupConfig,
+    metadata_source: Option<&'a Arc<dyn MetadataSource>>,
+    coordinator: &'a GroupCoordinator,
+}
+
+impl<'a> StreamsTurn<'a> {
+    /// The `__consumer_offsets` log that the turn writes to.
+    fn offsets_log(self) -> &'a dyn OffsetsLog { &*self.coordinator.offsets_log }
 }
 
 /// What the actor loop does after one message.
@@ -894,10 +883,7 @@ fn forget_abandoned_group(coordinator: &super::super::GroupCoordinator, group_id
 /// Handles one mailbox message.
 async fn handle_message(
     actor: &mut ActorState,
-    config: &StreamsGroupConfig,
-    offsets_log: &dyn OffsetsLog,
-    metadata_source: Option<&Arc<dyn MetadataSource>>,
-    coordinator: &Arc<super::super::GroupCoordinator>,
+    turn: StreamsTurn<'_>,
     msg: StreamsGroupActorMessage,
 ) -> Step {
     match msg {
@@ -908,18 +894,10 @@ async fn handle_message(
             client_host,
             reply,
         } => {
-            match handle_heartbeat(
-                actor,
-                config,
-                offsets_log,
-                metadata_source,
-                coordinator,
-                &request,
-                super::super::ClientIdentity {
-                    id: &client_id,
-                    host: &client_host,
-                },
-            )
+            match handle_heartbeat(actor, turn, &request, super::super::ClientIdentity {
+                id: &client_id,
+                host: &client_host,
+            })
             .await
             {
                 Ok(response) if response.error_code != codes::NONE && actor.holds_nothing() => {
@@ -929,13 +907,13 @@ async fn handle_message(
                     response::add_missing_client_tags(
                         &mut response,
                         &actor.state,
-                        config,
+                        turn.config,
                         &request,
                         version,
                     );
                     description::maybe_request_description(
                         actor,
-                        config,
+                        turn.config,
                         &request,
                         version,
                         &mut response,
@@ -977,7 +955,7 @@ async fn handle_message(
             let _ = reply.send(view);
         }
         StreamsGroupActorMessage::PushDescription { push, reply } => {
-            match description::handle_push(actor, offsets_log, coordinator, &push).await {
+            match description::handle_push(actor, turn, &push).await {
                 Ok(answer) => {
                     let _ = reply.send(answer);
                 }

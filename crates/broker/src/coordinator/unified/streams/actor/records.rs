@@ -9,7 +9,7 @@
 //! [`apply_seed`] is their inverse for bootstrap replay and respawn.
 
 use {
-    super::ActorState,
+    super::{ActorState, StreamsTurn},
     crate::{
         coordinator::unified::{
             GroupCoordinator, StreamsGroupSeed,
@@ -30,9 +30,8 @@ use {
             },
         },
         error::BrokerError,
-        metadata_source::MetadataSource,
     },
-    std::{collections::BTreeMap, sync::Arc, time::Instant},
+    std::{collections::BTreeMap, time::Instant},
 };
 
 /// The records of one streams-group transition, as Kafka's
@@ -255,7 +254,7 @@ fn target_member_value(
 }
 
 #[krabka_macros::flush_group_records(group [&actor.state.group_id]; encode [pending.into_batch(&actor.state.group_id, now_ms)];)]
-pub(super) async fn flush_pending(
+async fn flush_pending(
     actor: &ActorState,
     pending: PendingStreamsRecords,
     offsets_log: &dyn OffsetsLog,
@@ -265,25 +264,28 @@ pub(super) async fn flush_pending(
     coordinator.update_streams_cache(&actor.state.group_id, snapshot_seed(actor));
 }
 
+impl StreamsTurn<'_> {
+    /// Writes `pending` to the turn's offsets log as one batch and hands the
+    /// group's snapshot to the coordinator cache, as [`flush_pending`] does.
+    pub(super) async fn flush(
+        self,
+        actor: &ActorState,
+        pending: PendingStreamsRecords,
+        now_ms: i64,
+    ) -> Result<(), BrokerError> {
+        flush_pending(actor, pending, self.offsets_log(), self.coordinator, now_ms).await
+    }
+}
+
 /// Persist the reconciler's current delta after a timer or configuration change.
 pub(super) async fn reconcile_and_flush(
     actor: &mut ActorState,
-    config: &super::super::config::StreamsGroupConfig,
-    metadata_source: Option<&Arc<dyn MetadataSource>>,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
+    turn: StreamsTurn<'_>,
 ) -> Result<(), BrokerError> {
     let recorder = StreamsRecorder::start(actor, &[]);
-    super::reconciliation::reconcile(actor, config, metadata_source);
+    super::reconciliation::reconcile(actor, turn.config, turn.metadata_source);
     let pending = recorder.finish(actor);
-    flush_pending(
-        actor,
-        pending,
-        offsets_log,
-        coordinator,
-        super::chrono_now_ms(),
-    )
-    .await
+    turn.flush(actor, pending, super::chrono_now_ms()).await
 }
 
 /// Snapshots the full actor state into a `StreamsGroupSeed` for the cache and
