@@ -285,45 +285,12 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
     // `calculateEffectiveFeatureLevels`, which is where `kraft.version` is
     // reconciled with the quorum flags.
     let dynamic_format = is_dynamic_format(&args).map_err(|e| krabka(EXIT_INVALID_FEATURE, e))?;
-
-    // `meta.properties` holds the node id as Kafka's `int`. `--node-id`
-    // parses only that range, so this refuses nothing that clap accepted.
-    let node_id = i32::try_from(args.node_id.0).map_err(|_| {
-        krabka(
-            EXIT_BOOTSTRAP_FAIL,
-            "You must specify a valid non-negative node ID.",
-        )
-    })?;
-
-    // KIP-853: this node's stable directory id for the metadata log
-    // directory. The broker reads it back from `meta.properties` on every
-    // boot; it is the identity component of every `Voter` this node ever
-    // appears as.
-    let generated_directory_id = args.directory_id.unwrap_or_else(DirectoryId::random);
-    let initial_voters = build_initial_voters(&args, generated_directory_id)
-        .map_err(|e| krabka(EXIT_BOOTSTRAP_FAIL, e))?;
-    let metadata_directory_id = if args.initial_controllers.is_empty() {
-        generated_directory_id
-    } else {
-        DirectoryId(
-            initial_voters
-                .get(args.node_id)
-                .ok_or_else(|| {
-                    krabka(
-                        EXIT_BOOTSTRAP_FAIL,
-                        "--initial-controllers has no entry for this node",
-                    )
-                })?
-                .directory_id,
-        )
-    };
-    if args.directory_id.is_some() && metadata_directory_id != generated_directory_id {
-        return Err(krabka(
-            EXIT_BOOTSTRAP_FAIL,
-            "--directory-id must match the local --initial-controllers entry",
-        ));
-    }
-    let metadata_kind = metadata_directory_kind(dynamic_format, &args, &initial_voters);
+    let MetadataIdentity {
+        node_id,
+        directory_id: metadata_directory_id,
+        voters: initial_voters,
+        kind: metadata_kind,
+    } = resolve_metadata_identity(&args, dynamic_format)?;
 
     // KIP-853 control records live in the offset-zero metadata checkpoint,
     // separate from the non-Raft bootstrap record stream.
@@ -439,6 +406,70 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
         errors: ensemble.errors,
         raft_control_records,
         records,
+    })
+}
+
+/// Who this node is, and what its metadata log directory holds.
+struct MetadataIdentity {
+    /// `--node-id`, as the `int` that `meta.properties` records.
+    node_id: i32,
+    /// The directory id of the metadata log directory.
+    directory_id: DirectoryId,
+    /// The initial voters of a dynamic quorum, empty for any other format.
+    voters: VoterSet,
+    kind: DirectoryKind,
+}
+
+/// Resolves the node id, the metadata log directory's id, and the initial
+/// voters, and checks that `--directory-id` agrees with this node's
+/// `--initial-controllers` entry.
+fn resolve_metadata_identity(
+    args: &FormatArgs,
+    dynamic_format: bool,
+) -> Result<MetadataIdentity, Failure> {
+    // `meta.properties` holds the node id as Kafka's `int`. `--node-id`
+    // parses only that range, so this refuses nothing that clap accepted.
+    let node_id = i32::try_from(args.node_id.0).map_err(|_| {
+        krabka(
+            EXIT_BOOTSTRAP_FAIL,
+            "You must specify a valid non-negative node ID.",
+        )
+    })?;
+
+    // KIP-853: this node's stable directory id for the metadata log
+    // directory. The broker reads it back from `meta.properties` on every
+    // boot; it is the identity component of every `Voter` this node ever
+    // appears as.
+    let generated_directory_id = args.directory_id.unwrap_or_else(DirectoryId::random);
+    let voters = build_initial_voters(args, generated_directory_id)
+        .map_err(|e| krabka(EXIT_BOOTSTRAP_FAIL, e))?;
+    let directory_id = if args.initial_controllers.is_empty() {
+        generated_directory_id
+    } else {
+        DirectoryId(
+            voters
+                .get(args.node_id)
+                .ok_or_else(|| {
+                    krabka(
+                        EXIT_BOOTSTRAP_FAIL,
+                        "--initial-controllers has no entry for this node",
+                    )
+                })?
+                .directory_id,
+        )
+    };
+    if args.directory_id.is_some() && directory_id != generated_directory_id {
+        return Err(krabka(
+            EXIT_BOOTSTRAP_FAIL,
+            "--directory-id must match the local --initial-controllers entry",
+        ));
+    }
+    let kind = metadata_directory_kind(dynamic_format, args, &voters);
+    Ok(MetadataIdentity {
+        node_id,
+        directory_id,
+        voters,
+        kind,
     })
 }
 
