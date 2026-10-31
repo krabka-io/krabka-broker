@@ -328,11 +328,13 @@ mod tests {
         crate::coordinator::unified::{
             actor::MetadataProvider,
             config::NextGenConfig,
+            seeds::{ShareGroupSeed, StreamsGroupSeed},
             share::config::ShareGroupConfig,
             streams::config::StreamsGroupConfig,
             test_support::{ImageMetadatalessProvider, make_coord, stop_streams_actor},
         },
         assert2::{assert, check},
+        tokio::sync::{mpsc, oneshot},
     };
 
     #[tokio::test]
@@ -413,6 +415,95 @@ mod tests {
         streams_ids.sort();
         assert!(streams_ids == vec!["streams-a".to_owned()]);
 
+        coord.shutdown_all().await;
+    }
+
+    /// Sends `Shutdown` down `tx` and waits until the actor has exited and
+    /// closed its mailbox, as an actor does after a failed log write.
+    async fn stop_actor<M>(tx: &mpsc::Sender<M>, shutdown: impl FnOnce(oneshot::Sender<()>) -> M) {
+        let (reply, stopping) = oneshot::channel();
+        tx.send(shutdown(reply)).await.expect("send Shutdown");
+        stopping.await.expect("the actor stops");
+        tx.closed().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_closed_consumer_actor_respawns_hydrated_from_the_cached_seed() {
+        let coord = make_coord();
+        let closed = coord.get_or_create_consumer("g");
+        stop_actor(&closed.tx, GroupActorMessage::Shutdown).await;
+        coord.update_cached_seed("g", |seed| seed.group_epoch = 7);
+
+        let fresh = coord.get_or_create_consumer("g");
+
+        check!(!Arc::ptr_eq(&fresh, &closed));
+        check!(!fresh.tx.is_closed());
+        check!(coord.find("g").is_some_and(|r| Arc::ptr_eq(&r, &fresh)));
+        let (reply, view) = oneshot::channel();
+        fresh
+            .tx
+            .send(GroupActorMessage::Describe { reply })
+            .await
+            .expect("send Describe");
+        assert!(view.await.expect("a describe view").group_epoch == 7);
+        coord.shutdown_all().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_closed_share_actor_respawns_hydrated_from_the_cached_seed() {
+        let coord = make_coord();
+        let closed = coord.get_or_create_share("sg");
+        stop_actor(&closed.tx, ShareGroupActorMessage::Shutdown).await;
+        coord.update_share_cache("sg", ShareGroupSeed {
+            group_epoch: 17,
+            ..ShareGroupSeed::default()
+        });
+
+        let fresh = coord.get_or_create_share("sg");
+
+        check!(!Arc::ptr_eq(&fresh, &closed));
+        check!(!fresh.tx.is_closed());
+        check!(
+            coord
+                .find_share("sg")
+                .is_some_and(|r| Arc::ptr_eq(&r, &fresh))
+        );
+        let (reply, view) = oneshot::channel();
+        fresh
+            .tx
+            .send(ShareGroupActorMessage::Describe { reply })
+            .await
+            .expect("send Describe");
+        assert!(view.await.expect("a describe view").group_epoch == 17);
+        coord.shutdown_all().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_closed_streams_actor_respawns_hydrated_from_the_cached_seed() {
+        let coord = make_coord();
+        let closed = coord.get_or_create_streams("st");
+        stop_actor(&closed.tx, StreamsGroupActorMessage::Shutdown).await;
+        coord.update_streams_cache("st", StreamsGroupSeed {
+            group_epoch: 27,
+            ..StreamsGroupSeed::default()
+        });
+
+        let fresh = coord.get_or_create_streams("st");
+
+        check!(!Arc::ptr_eq(&fresh, &closed));
+        check!(!fresh.tx.is_closed());
+        check!(
+            coord
+                .find_streams("st")
+                .is_some_and(|r| Arc::ptr_eq(&r, &fresh))
+        );
+        let (reply, view) = oneshot::channel();
+        fresh
+            .tx
+            .send(StreamsGroupActorMessage::Describe { reply })
+            .await
+            .expect("send Describe");
+        assert!(view.await.expect("a describe view").group_epoch == 27);
         coord.shutdown_all().await;
     }
 
