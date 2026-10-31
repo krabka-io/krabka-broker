@@ -309,34 +309,7 @@ impl GroupState {
             to_revoke,
             wanted,
         } = subscription.split_against_target(target);
-
-        // `currentPartitionEpoch`: what every other member still holds,
-        // assigned or pending revocation. The member's own holdings need no
-        // entry: what it keeps is in `kept`, and what it gives up is not in its
-        // target. Only the partitions the member wants are looked up, so a
-        // member with nothing to claim reads no other member.
-        let held_by_others = self.held_by_others(&member.member_id, &wanted);
-        let mut has_unreleased = false;
-        let mut granted = Partitions::new();
-        for (topic_id, partitions) in wanted {
-            // A partition the member itself is pending to revoke is free
-            // for it: only one member holds a partition at a time.
-            let pending_here: HashSet<i32> = member
-                .partitions_pending_revocation
-                .get(&topic_id)
-                .map_or_default(|parts| parts.iter().copied().collect());
-            for partition in partitions {
-                if held_by_others.contains(&TopicIdPartition {
-                    topic_id,
-                    partition,
-                }) && !pending_here.contains(&partition)
-                {
-                    has_unreleased = true;
-                } else {
-                    granted.entry(topic_id).or_default().push(partition);
-                }
-            }
-        }
+        let (granted, has_unreleased) = self.grant_free(member, wanted);
 
         let mut rebuilt = if !to_revoke.is_empty() && owns_any(owned, &to_revoke) {
             // The member keeps its epoch and waits for the client to
@@ -375,6 +348,40 @@ impl GroupState {
             parts.sort_unstable();
         }
         rebuilt
+    }
+
+    /// Resolves the partitions `member` wants against what the other members
+    /// hold. It returns the partitions granted to `member`, and `true` when
+    /// another member still holds one it wants.
+    fn grant_free(&self, member: &MemberState, wanted: Partitions) -> (Partitions, bool) {
+        // `currentPartitionEpoch`: what every other member still holds,
+        // assigned or pending revocation. The member's own holdings need no
+        // entry: what it keeps is in `kept`, and what it gives up is not in its
+        // target. Only the partitions the member wants are looked up, so a
+        // member with nothing to claim reads no other member.
+        let held_by_others = self.held_by_others(&member.member_id, &wanted);
+        let mut has_unreleased = false;
+        let mut granted = Partitions::new();
+        for (topic_id, partitions) in wanted {
+            // A partition the member itself is pending to revoke is free
+            // for it: only one member holds a partition at a time.
+            let pending_here: HashSet<i32> = member
+                .partitions_pending_revocation
+                .get(&topic_id)
+                .map_or_default(|parts| parts.iter().copied().collect());
+            for partition in partitions {
+                if held_by_others.contains(&TopicIdPartition {
+                    topic_id,
+                    partition,
+                }) && !pending_here.contains(&partition)
+                {
+                    has_unreleased = true;
+                } else {
+                    granted.entry(topic_id).or_default().push(partition);
+                }
+            }
+        }
+        (granted, has_unreleased)
     }
 
     /// Kafka's `ConsumerGroup.waitingOnUnreleasedPartition`: `true` when the
