@@ -34,7 +34,9 @@ use {
     krabka_ids::PartitionIndex,
     krabka_log::{Offset, VerbatimBatch},
     krabka_protocol::{
-        owned::fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
+        owned::fetch_response::{
+            EpochEndOffset, FetchResponse, FetchableTopicResponse, PartitionData,
+        },
         primitives::uuid::Uuid as WireUuid,
         records::{Attributes, RecordBatch, RecordsError, RecordsPayload, validate_one_v2_batch},
     },
@@ -243,51 +245,7 @@ pub(super) async fn handle_partition_response(
 
     match mutation {
         ReplicaFetchMutation::Truncate => {
-            // KIP-320: an in-band divergence signal. The leader served no
-            // records and named the largest epoch it has that is at or below
-            // our last fetched epoch, and where that epoch ends. That is
-            // the leader's history, not our truncation point: Kafka's
-            // `getOffsetTruncationState` intersects it with our own epoch
-            // history first. `EpochEndOffset` defaults to (epoch:-1,
-            // end_offset:-1); a populated `epoch >= 0` marks a divergence.
-            // Recheck immediately before mutating: metadata may have
-            // changed since the response-level guard above.
-            if replication_target_changed(cfg) {
-                warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-                    "replicator: skipping diverging_epoch truncation from stale target");
-                return RowAction::Drop;
-            }
-            if let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) {
-                let _target_guard = krabka_macros::replication_target_guard!(
-                    part,
-                    cfg,
-                    "replicator: skipping diverging_epoch truncation from stale local target"
-                );
-                let leader_end_offset = part_resp.diverging_epoch.end_offset;
-                let end_offset =
-                    diverging_epoch_truncation_target(&part, &part_resp.diverging_epoch).0;
-                match part.truncate_to(Offset(end_offset)).await {
-                    Ok(()) => {
-                        super::truncate_producer_state(cfg, end_offset).await;
-                        info!(
-                            topic = %cfg.topic,
-                            partition = cfg.partition.get(),
-                            leader_epoch = part_resp.diverging_epoch.epoch,
-                            leader_end_offset,
-                            end_offset,
-                            "replicator: truncated to diverging_epoch (KIP-320 in-band)"
-                        );
-                    }
-                    Err(e) => warn!(
-                        topic = %cfg.topic,
-                        partition = cfg.partition.get(),
-                        end_offset,
-                        error = %e,
-                        "replicator: truncate_to(diverging_epoch) failed"
-                    ),
-                }
-            }
-            RowAction::Continue
+            apply_diverging_epoch(&part_resp.diverging_epoch, cfg).await
         }
 
         ReplicaFetchMutation::Append => {
@@ -433,6 +391,54 @@ pub(super) async fn handle_partition_response(
 
         ReplicaFetchMutation::Reject => unreachable!("rejected responses return above"),
     }
+}
+
+/// Truncates the follower log at the KIP-320 divergence point a row named.
+async fn apply_diverging_epoch(diverging_epoch: &EpochEndOffset, cfg: &Config) -> RowAction {
+    // KIP-320: an in-band divergence signal. The leader served no
+    // records and named the largest epoch it has that is at or below
+    // our last fetched epoch, and where that epoch ends. That is
+    // the leader's history, not our truncation point: Kafka's
+    // `getOffsetTruncationState` intersects it with our own epoch
+    // history first. `EpochEndOffset` defaults to (epoch:-1,
+    // end_offset:-1); a populated `epoch >= 0` marks a divergence.
+    // Recheck immediately before mutating: metadata may have
+    // changed since the response-level guard above.
+    if replication_target_changed(cfg) {
+        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
+            "replicator: skipping diverging_epoch truncation from stale target");
+        return RowAction::Drop;
+    }
+    if let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) {
+        let _target_guard = krabka_macros::replication_target_guard!(
+            part,
+            cfg,
+            "replicator: skipping diverging_epoch truncation from stale local target"
+        );
+        let leader_end_offset = diverging_epoch.end_offset;
+        let end_offset = diverging_epoch_truncation_target(&part, diverging_epoch).0;
+        match part.truncate_to(Offset(end_offset)).await {
+            Ok(()) => {
+                super::truncate_producer_state(cfg, end_offset).await;
+                info!(
+                    topic = %cfg.topic,
+                    partition = cfg.partition.get(),
+                    leader_epoch = diverging_epoch.epoch,
+                    leader_end_offset,
+                    end_offset,
+                    "replicator: truncated to diverging_epoch (KIP-320 in-band)"
+                );
+            }
+            Err(e) => warn!(
+                topic = %cfg.topic,
+                partition = cfg.partition.get(),
+                end_offset,
+                error = %e,
+                "replicator: truncate_to(diverging_epoch) failed"
+            ),
+        }
+    }
+    RowAction::Continue
 }
 
 async fn replicate_raw_batches(
