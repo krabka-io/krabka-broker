@@ -736,6 +736,45 @@ mod tests {
         assert2::assert!(matches!(err, RaftError::Protocol(_)));
     }
 
+    const LEADER: NodeId = NodeId(7);
+    const LEADER_ADDR: &str = "leader-host:9093";
+
+    /// A transport that expects exactly one round trip of `body` as `api_key`
+    /// at `version` to [`LEADER`] on [`LEADER_ADDR`], and answers `response`.
+    fn expect_one_round_trip(
+        api_key: i16,
+        version: i16,
+        body: impl Into<bytes::Bytes>,
+        response: bytes::Bytes,
+    ) -> MockLeaderRoundTrip {
+        let body = body.into();
+        let mut transport = MockLeaderRoundTrip::new();
+        transport
+            .expect_round_trip()
+            .withf(move |target, addr, sent_key, sent_version, sent| {
+                *target == LEADER
+                    && addr == LEADER_ADDR
+                    && *sent_key == api_key
+                    && *sent_version == version
+                    && sent == &body
+            })
+            .times(1)
+            .returning(move |_, _, _, _, _| Ok(response.clone()));
+        transport
+    }
+
+    /// A transport whose every dial is refused.
+    fn refused_transport() -> MockLeaderRoundTrip {
+        let mut transport = MockLeaderRoundTrip::new();
+        transport.expect_round_trip().returning(|_, _, _, _, _| {
+            Err(krabka_client_core::ClientError::Io(Error::new(
+                ErrorKind::ConnectionRefused,
+                "refused",
+            )))
+        });
+        transport
+    }
+
     #[tokio::test]
     async fn forward_submit_via_sends_encoded_body_and_returns_ok_on_applied() {
         // End-to-end of the testable core: the transport must receive the exact
@@ -744,20 +783,14 @@ mod tests {
         let records = vec![topic_record("gamma")];
         let expected_body = encode_submit_change_body(&records).expect("encode");
 
-        let mut transport = MockLeaderRoundTrip::new();
-        transport
-            .expect_round_trip()
-            .withf(move |leader, addr, api_key, version, body| {
-                *leader == 7
-                    && addr == "leader-host:9093"
-                    && *api_key == API_KEY_SUBMIT_CHANGE
-                    && *version == 0
-                    && body == &expected_body
-            })
-            .times(1)
-            .returning(|_, _, _, _, _| Ok(submit_change_response_bytes(0, -1)));
+        let transport = expect_one_round_trip(
+            API_KEY_SUBMIT_CHANGE,
+            0,
+            expected_body,
+            submit_change_response_bytes(0, -1),
+        );
 
-        forward_submit_via(&transport, NodeId(7), "leader-host:9093", 0, &records)
+        forward_submit_via(&transport, LEADER, LEADER_ADDR, 0, &records)
             .await
             .expect("applied");
     }
@@ -785,13 +818,7 @@ mod tests {
     async fn forward_submit_via_maps_transport_error_to_network() {
         // A dial/send failure surfaces as RaftError::Network (so CreateTopics
         // retries), not a panic or a swallowed success.
-        let mut transport = MockLeaderRoundTrip::new();
-        transport.expect_round_trip().returning(|_, _, _, _, _| {
-            Err(krabka_client_core::ClientError::Io(Error::new(
-                ErrorKind::ConnectionRefused,
-                "refused",
-            )))
-        });
+        let transport = refused_transport();
 
         let err = forward_submit_via(&transport, NodeId(7), "leader-host:9093", 0, &[
             topic_record("z"),
@@ -811,28 +838,17 @@ mod tests {
         }];
         let expected_body = encode_delegation_token_mutation_body(&mutations).expect("encode");
 
-        let mut transport = MockLeaderRoundTrip::new();
-        transport
-            .expect_round_trip()
-            .withf(move |leader, addr, api_key, version, body| {
-                *leader == 7
-                    && addr == "leader-host:9093"
-                    && *api_key == API_KEY_DELEGATION_TOKEN_MUTATION
-                    && *version == 1
-                    && body == &expected_body
-            })
-            .times(1)
-            .returning(|_, _, _, _, _| Ok(submit_change_response_bytes(0, -1)));
-
-        let result = forward_delegation_token_mutations_via(
-            &transport,
-            NodeId(7),
-            "leader-host:9093",
+        let transport = expect_one_round_trip(
+            API_KEY_DELEGATION_TOKEN_MUTATION,
             1,
-            &mutations,
-        )
-        .await
-        .expect("applied");
+            expected_body,
+            submit_change_response_bytes(0, -1),
+        );
+
+        let result =
+            forward_delegation_token_mutations_via(&transport, LEADER, LEADER_ADDR, 1, &mutations)
+                .await
+                .expect("applied");
         assert2::assert!(result == SubmitChangeResult::default());
     }
 
@@ -866,18 +882,10 @@ mod tests {
 
     #[tokio::test]
     async fn forward_delegation_token_mutations_via_maps_transport_error_to_network() {
-        let mut transport = MockLeaderRoundTrip::new();
-        transport.expect_round_trip().returning(|_, _, _, _, _| {
-            Err(krabka_client_core::ClientError::Io(Error::new(
-                ErrorKind::ConnectionRefused,
-                "refused",
-            )))
-        });
-
         let err = forward_delegation_token_mutations_via(
-            &transport,
-            NodeId(7),
-            "leader-host:9093",
+            &refused_transport(),
+            LEADER,
+            LEADER_ADDR,
             0,
             &[],
         )
@@ -892,21 +900,14 @@ mod tests {
         // api key, version and body reach the transport as given, and the
         // response bytes come back untouched.
         let body = bytes::Bytes::from_static(b"describe-quorum-request");
-        let expected_body = body.clone();
-        let mut transport = MockLeaderRoundTrip::new();
-        transport
-            .expect_round_trip()
-            .withf(move |leader, addr, api_key, version, sent| {
-                *leader == 3
-                    && addr == "leader-host:9093"
-                    && *api_key == 55
-                    && *version == 2
-                    && sent == &expected_body
-            })
-            .times(1)
-            .returning(|_, _, _, _, _| Ok(bytes::Bytes::from_static(b"raw-response")));
+        let transport = expect_one_round_trip(
+            55,
+            2,
+            body.clone(),
+            bytes::Bytes::from_static(b"raw-response"),
+        );
 
-        let response = forward_raw_via(&transport, NodeId(3), "leader-host:9093", 55, 2, body)
+        let response = forward_raw_via(&transport, LEADER, LEADER_ADDR, 55, 2, body)
             .await
             .expect("round trip");
         assert2::assert!(response == bytes::Bytes::from_static(b"raw-response"));
@@ -914,18 +915,10 @@ mod tests {
 
     #[tokio::test]
     async fn forward_raw_via_maps_transport_error_to_network() {
-        let mut transport = MockLeaderRoundTrip::new();
-        transport.expect_round_trip().returning(|_, _, _, _, _| {
-            Err(krabka_client_core::ClientError::Io(Error::new(
-                ErrorKind::ConnectionRefused,
-                "refused",
-            )))
-        });
-
         let err = forward_raw_via(
-            &transport,
-            NodeId(3),
-            "leader-host:9093",
+            &refused_transport(),
+            LEADER,
+            LEADER_ADDR,
             55,
             2,
             bytes::Bytes::new(),
