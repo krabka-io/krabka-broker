@@ -5,7 +5,7 @@
 //! without a live quorum.
 
 use {
-    super::{ControllerHandle, LeaderRoundTrip, connection_options},
+    super::{ControllerHandle, LeaderRoundTrip},
     crate::{
         DelegationTokenMutation, SubmitChangeResult,
         error::RaftError,
@@ -99,11 +99,9 @@ impl ControllerHandle {
         }
     }
 
-    // cargo-mutants: an I/O-only wrapper with no in-process signal. It encodes the
-    // already-validated mutations, dials the leader through
-    // `krabka_client_core::Connection` -- which no test in this process can build --
-    // and returns the leader's reply. The body it sends is produced by
-    // `encode_delegation_token_mutation_body`, which is mutation-tested.
+    // cargo-mutants: thin wrapper; builds the live DialerRoundTrip, needs a real
+    // dialer. Its encode → send → translate core is
+    // `forward_delegation_token_mutations_via`, which is mock-tested.
     #[cfg_attr(test, mutants::skip)]
     async fn forward_delegation_token_mutations_to(
         &self,
@@ -111,36 +109,18 @@ impl ControllerHandle {
         addr: &str,
         mutations: &[DelegationTokenMutation],
     ) -> Result<SubmitChangeResult, RaftError> {
-        let body = encode_delegation_token_mutation_body(mutations)?;
         let version = private_request_version(
             krabka_metadata::PrivateRpc::DelegationTokenMutation,
             Some(&self.current_image()),
         );
-        let options = connection_options(
-            &self.client_id,
-            self.client_dispatch_queue_capacity,
-            self.client_frame_max,
-        );
-        let connection = self
-            .dialer
-            .dial(leader, addr, options)
-            .await
-            .map_err(RaftError::Network)?;
-        let response = connection
-            .raw_request(
-                API_KEY_DELEGATION_TOKEN_MUTATION,
-                version,
-                bytes::Bytes::from(body),
-            )
-            .await
-            .map_err(RaftError::Network)?;
-        connection.close();
-        translate_submit_change_response(
-            &response,
+        forward_delegation_token_mutations_via(
+            &self.round_trip_transport(),
             leader,
-            API_KEY_DELEGATION_TOKEN_MUTATION,
+            addr,
             version,
+            mutations,
         )
+        .await
     }
 
     /// Forward a raw Kafka-wire request for `api_key`/`version` to the
@@ -157,11 +137,6 @@ impl ControllerHandle {
     /// `RaftError::NotLeader` when no leader is known or the leader's
     /// address cannot be resolved, `RaftError::Network` when the dial or
     /// round trip fails.
-    // cargo-mutants: an I/O-only wrapper with no in-process signal (dial + one
-    // raw request + close, over a `krabka_client_core::Connection` that no
-    // test in this process can build). Covered by a live two-node cluster
-    // test below.
-    #[cfg_attr(test, mutants::skip)]
     pub async fn forward_raw(
         &self,
         api_key: i16,
@@ -178,22 +153,15 @@ impl ControllerHandle {
                 current_leader: Some(leader),
             });
         };
-        let opts = connection_options(
-            &self.client_id,
-            self.client_dispatch_queue_capacity,
-            self.client_frame_max,
-        );
-        let conn = self
-            .dialer
-            .dial(leader, &addr, opts)
-            .await
-            .map_err(RaftError::Network)?;
-        let resp = conn
-            .raw_request(api_key, version, body)
-            .await
-            .map_err(RaftError::Network)?;
-        conn.close();
-        Ok(resp)
+        forward_raw_via(
+            &self.round_trip_transport(),
+            leader,
+            &addr,
+            api_key,
+            version,
+            body,
+        )
+        .await
     }
 
     /// Resolve a voter's controller listener `<host>:<port>` from the static
@@ -262,17 +230,66 @@ async fn forward_submit_via(
     records: &[krabka_metadata::MetadataRecord],
 ) -> Result<SubmitChangeResult, RaftError> {
     let body = encode_submit_change_body(records)?;
-    let resp_body = transport
-        .round_trip(
-            leader,
-            addr,
-            API_KEY_SUBMIT_CHANGE,
-            version,
-            bytes::Bytes::from(body),
-        )
+    forward_encoded_via(transport, leader, addr, API_KEY_SUBMIT_CHANGE, version, body).await
+}
+
+/// `forward_delegation_token_mutations_to`'s testable core: serialize → send
+/// (via the injected [`LeaderRoundTrip`]) → translate.
+async fn forward_delegation_token_mutations_via(
+    transport: &dyn LeaderRoundTrip,
+    leader: NodeId,
+    addr: &str,
+    version: i16,
+    mutations: &[DelegationTokenMutation],
+) -> Result<SubmitChangeResult, RaftError> {
+    let body = encode_delegation_token_mutation_body(mutations)?;
+    forward_encoded_via(
+        transport,
+        leader,
+        addr,
+        API_KEY_DELEGATION_TOKEN_MUTATION,
+        version,
+        body,
+    )
+    .await
+}
+
+/// Send an already-encoded `SubmitChange`-shaped `body` as `api_key` and
+/// translate the leader's reply with [`translate_submit_change_response`].
+async fn forward_encoded_via(
+    transport: &dyn LeaderRoundTrip,
+    leader: NodeId,
+    addr: &str,
+    api_key: i16,
+    version: i16,
+    body: Vec<u8>,
+) -> Result<SubmitChangeResult, RaftError> {
+    let resp_body = forward_raw_via(
+        transport,
+        leader,
+        addr,
+        api_key,
+        version,
+        bytes::Bytes::from(body),
+    )
+    .await?;
+    translate_submit_change_response(&resp_body, leader, api_key, version)
+}
+
+/// One round trip over `transport`, returning the response body unmodified
+/// and surfacing a dial or request failure as [`RaftError::Network`].
+async fn forward_raw_via(
+    transport: &dyn LeaderRoundTrip,
+    leader: NodeId,
+    addr: &str,
+    api_key: i16,
+    version: i16,
+    body: bytes::Bytes,
+) -> Result<bytes::Bytes, RaftError> {
+    transport
+        .round_trip(leader, addr, api_key, version, body)
         .await
-        .map_err(RaftError::Network)?;
-    translate_submit_change_response(&resp_body, leader, API_KEY_SUBMIT_CHANGE, version)
+        .map_err(RaftError::Network)
 }
 
 /// Build the exact `API_KEY_SUBMIT_CHANGE` v0 request body for `records`:
