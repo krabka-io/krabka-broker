@@ -16,7 +16,7 @@ use {
         handlers::{
             delegation_token_test_support::{
                 DAY_MS as RENEW_24H_MS, SecretProvision, TokenFixture, anonymous, authed,
-                test_controller, token_authed,
+                failed_write_cases, failing_writes_source, test_controller, token_authed,
             },
             test_support::metadata_version_gated,
         },
@@ -554,6 +554,35 @@ async fn non_positive_configured_periods_mint_nothing() {
     }
     assert!(controller.current_image().all_delegation_tokens().count() == 0);
     controller.cancel().await;
+}
+
+/// A mint whose controller write fails answers Kafka's
+/// `CreateDelegationTokenRequest.getErrorResponse` for the controller's
+/// exception, not `INVALID_REQUEST`: ANONYMOUS principals, `-1` timestamps,
+/// and `NOT_CONTROLLER` for a failover, which the admin client retries.
+#[tokio::test]
+async fn failed_controller_write_answers_kafka_error_response() {
+    let secret = SecretBytes::new(b"k".to_vec());
+    let req = self_mint_request();
+    for (case, failure, code) in failed_write_cases() {
+        let controller = failing_writes_source(failure);
+        let resp = handle(
+            &req,
+            &authed("alice"),
+            Some(&secret),
+            RENEW_24H_MS,
+            RENEW_24H_MS,
+            &controller,
+            token_acl(&empty_super_users()),
+        )
+        .await;
+        let expected = refusal()
+            .code(code)
+            .owner(user("ANONYMOUS"))
+            .requester(user("ANONYMOUS"))
+            .call();
+        assert!(resp == expected, "{case}");
+    }
 }
 
 #[test]

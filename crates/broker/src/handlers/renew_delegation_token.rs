@@ -392,4 +392,29 @@ mod tests {
     )]
     #[tokio::test]
     async fn renew_deadlines_case_9(renew_token: RenewTokenScenario) { let _ = (renew_token,); }
+
+    /// A renewal whose controller write fails answers Kafka's error response
+    /// for the controller's exception, not `INVALID_REQUEST`: a failover
+    /// answers the retriable `NOT_CONTROLLER`.
+    #[tokio::test]
+    async fn failed_controller_write_answers_kafka_error_code() {
+        let secret = SecretBytes::new(b"k".to_vec());
+        let req = RenewDelegationTokenRequest {
+            hmac: token_fixtures::hmac_for(token_fixtures::FAILING_WRITE_TOKEN_ID).into(),
+            renew_period_ms: 30_000,
+            ..Default::default()
+        };
+        for (case, failure, code) in token_fixtures::failed_write_cases() {
+            let controller = token_fixtures::failing_writes_source(failure);
+            let resp = handle(
+                &req,
+                &token_fixtures::authed("alice"),
+                Some(&secret),
+                token_fixtures::DAY_MS,
+                &controller,
+            )
+            .await;
+            assert!(resp == RenewDelegationTokenResponse::error(code), "{case}");
+        }
+    }
 }

@@ -385,4 +385,33 @@ mod tests {
     )]
     #[tokio::test]
     async fn expire_deadlines_case_8(expire_token: ExpireTokenScenario) { let _ = (expire_token,); }
+
+    /// An expiry whose controller write fails answers Kafka's error response
+    /// for the controller's exception, not `INVALID_REQUEST`: a failover
+    /// answers the retriable `NOT_CONTROLLER`.
+    #[tokio::test]
+    async fn failed_controller_write_answers_kafka_error_code() {
+        let secret = SecretBytes::new(b"k".to_vec());
+        for (period, shape) in [(30_000, "update"), (-1, "delete")] {
+            let req = ExpireDelegationTokenRequest {
+                hmac: token_fixtures::hmac_for(token_fixtures::FAILING_WRITE_TOKEN_ID).into(),
+                expiry_time_period_ms: period,
+                ..Default::default()
+            };
+            for (case, failure, code) in token_fixtures::failed_write_cases() {
+                let controller = token_fixtures::failing_writes_source(failure);
+                let resp = handle(
+                    &req,
+                    &token_fixtures::authed("alice"),
+                    Some(&secret),
+                    &controller,
+                )
+                .await;
+                assert!(
+                    resp == ExpireDelegationTokenResponse::error(code),
+                    "{shape}: {case}"
+                );
+            }
+        }
+    }
 }
