@@ -438,6 +438,81 @@ fn disabled_feature_records<'a>(
         })
 }
 
+/// One [`MetadataRecord::V1Topic`] per archived topic, in `topic_order`, each with a replication factor of 1.
+///
+/// # Errors
+///
+/// Returns [`RestoreError::Integrity`] when a topic in `topic_order` has no tally in `topics`.
+fn topic_records(
+    topic_order: &[&str],
+    topics: &HashMap<&str, TopicTally>,
+) -> Result<Vec<MetadataRecord>, RestoreError> {
+    topic_order
+        .iter()
+        .map(|topic| {
+            let TopicTally {
+                topic_id,
+                partitions,
+            } = topics.get(topic).copied().ok_or_else(|| {
+                RestoreError::Integrity(format!("topic {topic} has no partition tally"))
+            })?;
+            Ok(MetadataRecord::V1Topic(TopicRecord {
+                name: (*topic).to_owned(),
+                topic_id,
+                partitions,
+                replication_factor: 1,
+            }))
+        })
+        .collect()
+}
+
+/// One [`MetadataRecord::V1Partition`] per archived partition, in scan order, naming `node_id` as its leader and sole replica.
+fn partition_records(
+    inventory: &ArchiveInventory,
+    node_id: NodeId,
+) -> impl Iterator<Item = MetadataRecord> + '_ {
+    inventory.partitions.iter().map(move |entry| {
+        MetadataRecord::V1Partition(PartitionRecord {
+            topic: entry.partition.topic.clone(),
+            partition: entry.partition.partition,
+            leader: node_id,
+            replicas: vec![node_id],
+            isr: vec![node_id],
+            leader_epoch: LeaderEpoch(0),
+            adding_replicas: Vec::new(),
+            removing_replicas: Vec::new(),
+            directories: Vec::new(),
+            // KIP-631: 0 on creation. `PartitionRecord::default()`'s
+            // `partition_epoch` is -1, the on-disk deserialization default for
+            // a record written before this field existed; a freshly restored
+            // partition is neither, so this is set explicitly rather than
+            // pulled from `..Default::default()`.
+            partition_epoch: 0,
+        })
+    })
+}
+
+/// One [`MetadataRecord::V1PartitionOffsetAdvance`] per diskless partition that starts its committed next offset past 0.
+///
+/// The controller quorum is a diskless partition's offset authority: its
+/// first write is assigned the committed next offset, so it starts where the
+/// restored log ends. A partition restored empty from offset 0 needs no
+/// record.
+fn offset_advance_records(
+    diskless_next_offsets: &[DisklessNextOffset],
+) -> impl Iterator<Item = MetadataRecord> + '_ {
+    diskless_next_offsets
+        .iter()
+        .filter(|next| next.next_offset > 0)
+        .map(|next| {
+            MetadataRecord::V1PartitionOffsetAdvance(PartitionOffsetAdvanceRecord {
+                topic: next.topic.clone(),
+                partition: next.partition,
+                count: next.next_offset,
+            })
+        })
+}
+
 /// Build the topic and partition records a restore seeds into the target formatter, from what the archive scan recovered.
 ///
 /// Every topic's [`MetadataRecord::V1Topic`] precedes every [`MetadataRecord::V1Partition`], which is the ordering `krabka_format::run_with_records`'s own doc requires: a `MetadataImage` derives a topic's partition count from the partition records that apply after it, so a partition can only follow its own topic.
@@ -518,54 +593,9 @@ fn seed_metadata_records(
     );
     records.append(&mut features);
     records.append(&mut feature_epoch);
-    for topic in &topic_order {
-        let TopicTally {
-            topic_id,
-            partitions,
-        } = topics.get(topic).copied().ok_or_else(|| {
-            RestoreError::Integrity(format!("topic {topic} has no partition tally"))
-        })?;
-        records.push(MetadataRecord::V1Topic(TopicRecord {
-            name: (*topic).to_owned(),
-            topic_id,
-            partitions,
-            replication_factor: 1,
-        }));
-    }
-    for entry in &inventory.partitions {
-        records.push(MetadataRecord::V1Partition(PartitionRecord {
-            topic: entry.partition.topic.clone(),
-            partition: entry.partition.partition,
-            leader: node_id,
-            replicas: vec![node_id],
-            isr: vec![node_id],
-            leader_epoch: LeaderEpoch(0),
-            adding_replicas: Vec::new(),
-            removing_replicas: Vec::new(),
-            directories: Vec::new(),
-            // KIP-631: 0 on creation. `PartitionRecord::default()`'s
-            // `partition_epoch` is -1, the on-disk deserialization default for
-            // a record written before this field existed; a freshly restored
-            // partition is neither, so this is set explicitly rather than
-            // pulled from `..Default::default()`.
-            partition_epoch: 0,
-        }));
-    }
-    // KRaft is a diskless partition's offset authority: its first write is
-    // assigned the committed next offset, so it starts where the restored log
-    // ends. A partition restored empty from offset 0 needs no record.
-    records.extend(
-        diskless_next_offsets
-            .iter()
-            .filter(|next| next.next_offset > 0)
-            .map(|next| {
-                MetadataRecord::V1PartitionOffsetAdvance(PartitionOffsetAdvanceRecord {
-                    topic: next.topic.clone(),
-                    partition: next.partition,
-                    count: next.next_offset,
-                })
-            }),
-    );
+    records.extend(topic_records(&topic_order, &topics)?);
+    records.extend(partition_records(inventory, node_id));
+    records.extend(offset_advance_records(diskless_next_offsets));
     records.append(&mut topic_configs);
     records.append(&mut scram);
     records.append(&mut acls);
