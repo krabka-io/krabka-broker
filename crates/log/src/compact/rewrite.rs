@@ -231,21 +231,9 @@ pub fn rewrite_segments(
     // retained batches; the index sidecars get the sparse indexes the walk
     // derives as it writes them, by the rule a recovery scan applies, so the
     // install can open the output without decoding it again.
-    let log_file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&log_swap)?;
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&index_swap)?;
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&timeindex_swap)?;
+    let log_file = create_truncated(&log_swap)?;
+    create_truncated(&index_swap)?;
+    create_truncated(&timeindex_swap)?;
 
     // The walk decodes, filters and writes one batch at a time, so the group
     // never sits in memory decoded: a compressed group can expand to many
@@ -408,11 +396,7 @@ pub fn rewrite_segments(
     } else {
         let path = swap_path(dir, new_base.0, "txnindex");
         // Truncate any stale .cleaned file, then append the retained entries.
-        OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
+        create_truncated(&path)?;
         let mut idx = TxnIndex::open(path.clone())?;
         for entry in retained {
             idx.append(entry)?;
@@ -454,6 +438,15 @@ fn bare_header(batch: &RecordBatch) -> RecordBatch {
         partition_leader_epoch: batch.partition_leader_epoch,
         records: vec![],
     }
+}
+
+/// Open `path` for writing, creating it or truncating a stale one.
+fn create_truncated(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
 }
 
 fn swap_path(dir: &Path, base_offset: i64, ext: &str) -> PathBuf {
