@@ -9,7 +9,7 @@
 use {
     super::{
         group_coordinator::GroupCoordinator,
-        seeds::{GroupSeed, ReplaySeed},
+        seeds::{GroupSeed, ReplaySeed, ShareGroupSeed},
     },
     crate::error::BrokerError,
     dashmap::DashMap,
@@ -87,6 +87,14 @@ impl GroupCoordinator {
         SeedMaps {
             live: &self.seeds,
             cache: &self.seeds_cache,
+        }
+    }
+
+    /// The share groups' replayed seeds and cached copies.
+    pub(super) fn share_replay(&self) -> SeedMaps<'_, ShareGroupSeed> {
+        SeedMaps {
+            live: &self.share_seeds,
+            cache: &self.share_seeds_cache,
         }
     }
 }
@@ -813,12 +821,18 @@ mod tests {
     }
 
     #[test]
-    fn a_consumer_update_of_a_group_the_replay_does_not_hold_creates_only_its_cached_copy() {
+    fn an_update_of_a_group_the_replay_does_not_hold_creates_only_its_cached_copy() {
         let c = make_coord();
         c.consumer_replay().update("g", |seed| seed.group_epoch = 7);
+        c.share_replay()
+            .update_with("g", 8, |seed, epoch| seed.group_epoch = epoch);
         check!(
             (c.seeds.get("g").is_none(), c.cached_seed("g"))
                 == (true, Some(consumer(|seed| seed.group_epoch = 7)))
+        );
+        check!(
+            (c.share_seeds.get("g").is_none(), c.cached_share_seed("g"))
+                == (true, Some(share(|seed| seed.group_epoch = 8)))
         );
         let read = c.consumer_replay().read("g", |seed| seed.group_epoch);
         assert!(let Err(BrokerError::Startup(message)) = read);

@@ -14,7 +14,6 @@ use {
             LEAVE_GROUP_MEMBER_EPOCH, ModernGroupType, group_tombstone,
             persisted_group_with_create, target_metadata, target_metadata_tombstone,
         },
-        seeds::{ReplaySeed, ShareGroupSeed},
         share,
     },
     crate::error::BrokerError,
@@ -50,64 +49,8 @@ impl GroupCoordinator {
             ModernGroupType::Share,
             self.replayed_modern_group(group_id),
             create_if_not_exists,
-            || {
-                self.share_seeds
-                    .insert(group_id.into(), ShareGroupSeed::new_group());
-                self.share_seeds_cache
-                    .insert(group_id.into(), ShareGroupSeed::new_group());
-            },
+            || self.share_replay().create(group_id),
         )
-    }
-
-    /// Applies `update` to the replayed group and to its cached copy.
-    fn update_share_seed(&self, group_id: &str, update: impl Fn(&mut ShareGroupSeed)) {
-        if let Some(mut seed) = self.share_seeds.get_mut(group_id) {
-            update(seed.value_mut());
-        }
-        update(
-            self.share_seeds_cache
-                .entry(group_id.into())
-                .or_insert_with(ShareGroupSeed::new_group)
-                .value_mut(),
-        );
-    }
-
-    /// Applies `update` with `value` to the replayed group, and with a copy
-    /// of it to the cached copy.
-    fn update_share_seed_with<T: Clone>(
-        &self,
-        group_id: &str,
-        value: T,
-        update: impl Fn(&mut ShareGroupSeed, T),
-    ) {
-        let cached = value.clone();
-        if let Some(mut seed) = self.share_seeds.get_mut(group_id) {
-            update(seed.value_mut(), value);
-        }
-        update(
-            self.share_seeds_cache
-                .entry(group_id.into())
-                .or_insert_with(ShareGroupSeed::new_group)
-                .value_mut(),
-            cached,
-        );
-    }
-
-    /// Reads the replayed group, which must exist.
-    ///
-    /// # Errors
-    ///
-    /// Returns Kafka's `IllegalStateException` for a group with no replayed
-    /// state.
-    fn share_seed<T>(
-        &self,
-        group_id: &str,
-        read: impl FnOnce(&ShareGroupSeed) -> T,
-    ) -> Result<T, BrokerError> {
-        self.share_seeds
-            .get(group_id)
-            .map(|seed| read(seed.value()))
-            .ok_or_else(|| BrokerError::Startup(format!("Group {group_id} has no replayed state.")))
     }
 
     /// `ShareGroupMetadataValue`: the group epoch and the metadata hash.
@@ -121,7 +64,7 @@ impl GroupCoordinator {
         v: share::persistence::ShareGroupMetadataValue,
     ) -> Result<(), BrokerError> {
         self.persisted_share_group(group_id, true)?;
-        self.update_share_seed(group_id, |seed| {
+        self.share_replay().update(group_id, |seed| {
             seed.group_epoch = v.epoch;
             seed.metadata_hash = v.metadata_hash;
         });
@@ -141,7 +84,7 @@ impl GroupCoordinator {
         v: share::persistence::ShareGroupMemberMetadataValue,
     ) -> Result<(), BrokerError> {
         self.persisted_share_group(group_id, true)?;
-        self.update_share_seed_with(group_id, v, |seed, v| {
+        self.share_replay().update_with(group_id, v, |seed, v| {
             seed.members.insert(member_id.into(), v);
         });
         Ok(())
@@ -161,7 +104,7 @@ impl GroupCoordinator {
     ) -> Result<(), BrokerError> {
         self.persisted_share_group(group_id, true)?;
         target_metadata(v.assignment_epoch, v.assignment_timestamp_ms)?;
-        self.update_share_seed(group_id, |seed| {
+        self.share_replay().update(group_id, |seed| {
             seed.target_epoch = v.assignment_epoch;
             seed.assignment_timestamp_ms = v.assignment_timestamp_ms;
         });
@@ -181,7 +124,7 @@ impl GroupCoordinator {
         v: share::persistence::ShareGroupTargetAssignmentMemberValue,
     ) -> Result<(), BrokerError> {
         self.persisted_share_group(group_id, true)?;
-        self.update_share_seed_with(group_id, v, |seed, v| {
+        self.share_replay().update_with(group_id, v, |seed, v| {
             seed.target_per_member.insert(member_id.into(), v);
         });
         Ok(())
@@ -201,7 +144,7 @@ impl GroupCoordinator {
         v: share::persistence::ShareGroupCurrentMemberAssignmentValue,
     ) -> Result<(), BrokerError> {
         self.persisted_share_group(group_id, true)?;
-        self.update_share_seed_with(group_id, v, |seed, v| {
+        self.share_replay().update_with(group_id, v, |seed, v| {
             seed.install_current_member(member_id, v, uninitialized_member);
         });
         Ok(())
@@ -220,7 +163,7 @@ impl GroupCoordinator {
         v: share::persistence::ShareGroupStatePartitionMetadataValue,
     ) -> Result<(), BrokerError> {
         self.persisted_share_group(group_id, true)?;
-        self.update_share_seed_with(group_id, v, |seed, v| {
+        self.share_replay().update_with(group_id, v, |seed, v| {
             seed.state_partition_metadata = v;
         });
         Ok(())
@@ -273,7 +216,7 @@ impl GroupCoordinator {
         }
         match key {
             K::GroupMetadata { .. } => {
-                self.share_seed(group_id, |seed| {
+                self.share_replay().read(group_id, |seed| {
                     group_tombstone(
                         ModernGroupType::Share,
                         group_id,
@@ -287,31 +230,35 @@ impl GroupCoordinator {
                 self.group_types.remove(group_id);
             }
             K::MemberMetadata { member_id, .. } => {
-                let remove =
-                    self.share_seed(group_id, |seed| seed.member_tombstone(member_id))??;
+                let remove = self
+                    .share_replay()
+                    .read(group_id, |seed| seed.member_tombstone(member_id))??;
                 if remove {
-                    self.update_share_seed(group_id, |seed| {
+                    self.share_replay().update(group_id, |seed| {
                         seed.remove_replayed_member(member_id);
                     });
                 }
             }
             K::TargetAssignmentMetadata { .. } => {
-                self.share_seed(group_id, |seed| {
+                self.share_replay().read(group_id, |seed| {
                     target_metadata_tombstone(group_id, seed.target_per_member.len())
                 })??;
-                self.update_share_seed(group_id, |seed| {
+                self.share_replay().update(group_id, |seed| {
                     seed.target_epoch = -1;
                     seed.assignment_timestamp_ms = 0;
                 });
             }
             K::TargetAssignmentMember { member_id, .. } => {
-                self.update_share_seed(group_id, |seed| {
+                self.share_replay().update(group_id, |seed| {
                     seed.target_per_member.remove(member_id);
                 });
             }
             K::CurrentMemberAssignment { member_id, .. } => {
-                if self.share_seed(group_id, |seed| seed.members.contains_key(member_id))? {
-                    self.update_share_seed(group_id, |seed| {
+                if self
+                    .share_replay()
+                    .read(group_id, |seed| seed.members.contains_key(member_id))?
+                {
+                    self.share_replay().update(group_id, |seed| {
                         seed.current_per_member.insert(
                             member_id.clone(),
                             share::persistence::ShareGroupCurrentMemberAssignmentValue {
@@ -323,7 +270,7 @@ impl GroupCoordinator {
                     });
                 }
             }
-            K::StatePartitionMetadata { .. } => self.update_share_seed(group_id, |seed| {
+            K::StatePartitionMetadata { .. } => self.share_replay().update(group_id, |seed| {
                 seed.state_partition_metadata =
                     share::persistence::ShareGroupStatePartitionMetadataValue::default();
             }),
