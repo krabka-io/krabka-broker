@@ -749,24 +749,12 @@ async fn actor_loop(
                     Step::RefusedJoin(refused) => refused,
                 };
                 // Kafka writes no record for a heartbeat that its coordinator
-                // refuses, so such a heartbeat never creates the group. With
-                // nothing queued behind it, the actor of a group that holds
-                // nothing closes its mailbox, answers what raced in, and
-                // leaves no group behind.
+                // refuses, so such a heartbeat never creates the group.
                 if !rx.is_empty() {
                     refused.send();
                     continue;
                 }
-                rx.close();
-                while let Some(msg) = rx.recv().await {
-                    if let Step::RefusedJoin(other) = handle_message(&mut actor, turn, msg).await {
-                        other.send();
-                    }
-                }
-                if actor.holds_nothing() {
-                    forget_abandoned_group(&coordinator, &actor.state.group_id);
-                }
-                refused.send();
+                close_refused_group(&mut actor, turn, &mut rx, *refused).await;
                 break;
             }
             Wake::SessionCheck => {
@@ -802,6 +790,27 @@ async fn actor_loop(
             }
         }
     }
+}
+
+/// Ends the actor of a group that refused a heartbeat with nothing queued
+/// behind it: closes the mailbox, answers what raced in, leaves no group
+/// behind when it still holds nothing, and then sends the `refused` answer.
+async fn close_refused_group(
+    actor: &mut ActorState,
+    turn: StreamsTurn<'_>,
+    rx: &mut mpsc::Receiver<StreamsGroupActorMessage>,
+    refused: DeferredReply,
+) {
+    rx.close();
+    while let Some(msg) = rx.recv().await {
+        if let Step::RefusedJoin(other) = handle_message(actor, turn, msg).await {
+            other.send();
+        }
+    }
+    if actor.holds_nothing() {
+        forget_abandoned_group(turn.coordinator, &actor.state.group_id);
+    }
+    refused.send();
 }
 
 /// What one wake-up of the actor loop hands to the paths that write records:
