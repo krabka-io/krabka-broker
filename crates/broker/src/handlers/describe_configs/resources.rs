@@ -224,8 +224,8 @@ fn broker_resource_node(
         })
 }
 
-/// A topic's whole effective configuration, for a caller outside
-/// `DescribeConfigs`.
+/// A topic's whole effective configuration for a caller outside
+/// `DescribeConfigs`, resolved against an override map the caller supplies.
 ///
 /// KIP-525 puts the same values on a `CreateTopics` v5+ response, so a client
 /// that has just created a topic needs no follow-up `DescribeConfigs` to learn
@@ -234,12 +234,11 @@ fn broker_resource_node(
 /// this is the one computation krabka answers both with. The synonym chain and
 /// the documentation are left out because `CreatableTopicConfigs` has no
 /// fields for them.
-/// A topic's whole effective configuration, resolved against a caller-supplied
-/// override map rather than the stored one.
 ///
-/// `CreateTopics` (KIP-525) is the caller, and the map it passes is the one the
-/// create writes. That is also the answer for a `validateOnly` request, where
-/// the topic never reaches the image: Kafka builds the same row from
+/// `CreateTopics` is the caller, and the map it passes, rather than the stored
+/// one, is the one the create writes. That is also the answer for a
+/// `validateOnly` request, where the topic never reaches the image: Kafka
+/// builds the same row from
 /// `computeEffectiveTopicConfigs(creationConfigs)` and discards only the
 /// *records*, so a dry run reports what the topic would be created as instead
 /// of the bare cluster defaults a lookup of an absent topic would give.
