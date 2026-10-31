@@ -40,11 +40,9 @@
 
 use {
     crate::{
-        config_keys::RecoveryStrategy,
-        controller_admin::BrokerControllerAdminRouter,
-        leader_election::compute_reregistration_changes,
-        metrics::BrokerMetrics,
-        unclean_recovery::{RecoveryJob, UncleanRecoveryHandle},
+        config_keys::RecoveryStrategy, controller_admin::BrokerControllerAdminRouter,
+        leader_election::compute_reregistration_changes, metrics::BrokerMetrics,
+        unclean_recovery::UncleanRecoveryHandle,
     },
     krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, NodeId},
     krabka_raft::{RaftError, RegistrationAdmission, RegistrationAdmissionFuture},
@@ -271,19 +269,9 @@ fn hand_off_recoveries(
         let Some(recovery) = recovery.await else {
             return;
         };
-        for (topic, partition, strategy) in recoveries {
-            recovery
-                .enqueue(RecoveryJob {
-                    topic,
-                    partition,
-                    strategy,
-                    reply: None,
-                    // Nobody asked for this recovery, as for the one an
-                    // unclean `BrokerRegistration` starts.
-                    proposal: None,
-                })
-                .await;
-        }
+        // Nobody asked for these recoveries: the controller started them on
+        // its own when it admitted the re-registration.
+        recovery.enqueue_background(recoveries).await;
     }))
 }
 
