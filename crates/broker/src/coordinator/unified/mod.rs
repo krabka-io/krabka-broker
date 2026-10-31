@@ -72,6 +72,8 @@ pub(crate) fn commit_validation_reply<E>(reply: &Result<Result<(), i16>, E>) -> 
     }
 }
 
+#[cfg(test)]
+pub(crate) use self::seeds::ReplaySeed;
 pub use self::{
     group_coordinator::{GroupCoordinator, GroupType},
     image_metadata::ImageMetadataProvider,
@@ -84,5 +86,3 @@ pub(crate) use self::{
     },
     offset_batch::OffsetRecordBatchBuilder,
 };
-#[cfg(test)]
-pub(crate) use self::seeds::ReplaySeed;
