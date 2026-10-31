@@ -527,6 +527,83 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
     }
 }
 
+/// Kafka's `TransactionCoordinator.handleInitProducerId` refuses a
+/// `keepPreparedTxn` request that names a producer identity with
+/// `INVALID_REQUEST`, after the 2PC and `keepPreparedTxn` gates and before the
+/// timeout check and the coordinator check.
+#[tokio::test]
+async fn keep_prepared_txn_with_an_identity_is_invalid_before_the_timeout_check() {
+    let HandlerStartedBroker {
+        broker: broker_handle,
+        dir: _dir,
+    } = start_broker_no_audit_with(|config| {
+        config.features.transaction_two_phase_commit_enable = true;
+        config.features.unstable_api_versions = UnstableApiVersions::Enabled;
+        config.transaction_max_timeout = secs(8);
+    })
+    .await;
+    wait_for_transaction_version_2(&broker_handle).await;
+    let broker = broker_handle.broker_arc_for_test();
+    krabka_macros::request_test_identity! {
+        bind(principal, peer, context);
+        user ["admin"];
+        client ["txn-client"];
+    };
+    let version = init_producer_id_response::MAX_VERSION;
+    // (name, request identity, transaction timeout, expected code). No
+    // FindCoordinator ran, so this broker coordinates nothing.
+    let cases = [
+        (
+            "an identity is invalid",
+            (5, 1),
+            5_000,
+            codes::INVALID_REQUEST,
+        ),
+        (
+            "an identity is invalid before an invalid timeout",
+            (5, 1),
+            9_000,
+            codes::INVALID_REQUEST,
+        ),
+        (
+            "no identity reaches the timeout check",
+            (-1, -1),
+            9_000,
+            codes::INVALID_TRANSACTION_TIMEOUT,
+        ),
+        (
+            "no identity reaches the coordinator check",
+            (-1, -1),
+            5_000,
+            codes::NOT_COORDINATOR,
+        ),
+    ];
+    let mut expected = Vec::new();
+    let mut actual = Vec::new();
+    for (name, (producer_id, producer_epoch), transaction_timeout_ms, code) in cases {
+        let request = InitProducerIdRequest {
+            transactional_id: Some("txn-keep-prepared-identity".to_owned()),
+            transaction_timeout_ms,
+            producer_id,
+            producer_epoch,
+            keep_prepared_txn: true,
+            ..Default::default()
+        };
+        let response = init_producer_id_handle(&broker, request, version, &context)
+            .await
+            .expect("answer the keepPreparedTxn request");
+        expected.push((name, InitProducerIdResponse {
+            error_code: code,
+            producer_id: -1,
+            producer_epoch: -1,
+            ..Default::default()
+        }));
+        actual.push((name, response));
+    }
+    assert!(actual == expected);
+    broker_handle.shutdown().await;
+}
+
 #[tokio::test]
 async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
     krabka_macros::broker_test_setup!(

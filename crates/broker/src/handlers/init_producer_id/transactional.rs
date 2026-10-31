@@ -1718,4 +1718,126 @@ mod tests {
         check!(via_old_handle.producer_epoch == 4);
         check!(via_old_handle.state == TxnState::Empty);
     }
+
+    /// The `CompleteAbort` entry that the fence of an `Ongoing` transaction
+    /// writes, compared field for field.
+    ///
+    /// The prior producer id is recorded against the identity the client held
+    /// on the `Ongoing` entry -- the staged recovery identity when there is
+    /// one -- not against the entry's own `producer_id`, which is where this
+    /// path differs from the completion task.
+    #[tokio::test]
+    async fn a_fenced_abort_writes_the_complete_abort_entry() {
+        const TID: &str = "tid-fenced-complete-abort";
+
+        struct Case {
+            name: &'static str,
+            txnv: TxnVersion,
+            ongoing: TxnEntry,
+            expected: TxnEntry,
+        }
+        let ongoing = |epoch| TxnEntry {
+            state: TxnState::Ongoing,
+            ..TxnEntry::new_empty(TID.to_owned(), ProducerId(1000), epoch, 60_000, 0)
+        };
+        let complete_abort = |producer_id, producer_epoch| TxnEntry {
+            state: TxnState::CompleteAbort,
+            client_transaction_version: TxnVersion::Verified.level(),
+            ..TxnEntry::new_empty(TID.to_owned(), producer_id, producer_epoch, 60_000, 0)
+        };
+        let cases = [
+            Case {
+                name: "no staged identity",
+                txnv: TxnVersion::Verified,
+                ongoing: ongoing(3),
+                expected: TxnEntry {
+                    last_producer_epoch: 3,
+                    ..complete_abort(ProducerId(1000), 4)
+                },
+            },
+            Case {
+                name: "a staged recovery identity",
+                txnv: TxnVersion::Verified,
+                ongoing: TxnEntry {
+                    next_producer_id: ProducerId(2000),
+                    next_producer_epoch: 0,
+                    ..ongoing(3)
+                },
+                expected: TxnEntry {
+                    last_producer_epoch: 3,
+                    ..complete_abort(ProducerId(2000), 1)
+                },
+            },
+            Case {
+                name: "below transaction version 2",
+                txnv: TxnVersion::Classic,
+                ongoing: ongoing(3),
+                expected: TxnEntry {
+                    client_transaction_version: TxnVersion::Classic.level(),
+                    ..complete_abort(ProducerId(1000), 4)
+                },
+            },
+        ];
+        for case in cases {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let SeededCoordinator { coordinator, .. } =
+                coordinator_with_completed_transaction(tmp.path(), TID).await;
+            seed(&coordinator, case.ongoing).await;
+
+            let fenced = handle_transactional(
+                &coordinator,
+                TID,
+                case.txnv,
+                60_000,
+                false,
+                false,
+                (-1, -1),
+            )
+            .await
+            .expect("init responds");
+            check!(fenced == concurrent_transactions_response(), "{}", case.name);
+
+            let entry = coordinator.get(TID).expect("entry").lock().await.clone();
+            let expected = TxnEntry {
+                last_update_ms: entry.last_update_ms,
+                ..case.expected
+            };
+            check!(entry == expected, "{}", case.name);
+        }
+    }
+
+    /// The fence of an `Ongoing` transaction at the exhausted epoch rotates to
+    /// a fresh producer id and records the old one as the prior producer id.
+    #[tokio::test]
+    async fn a_fenced_abort_at_the_exhausted_epoch_writes_the_rotated_entry() {
+        const TID: &str = "tid-fenced-rotation";
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let SeededCoordinator { coordinator, .. } =
+            coordinator_with_completed_transaction(tmp.path(), TID).await;
+        seed(
+            &coordinator,
+            TxnEntry {
+                state: TxnState::Ongoing,
+                ..TxnEntry::new_empty(TID.to_owned(), ProducerId(1000), i16::MAX - 1, 60_000, 0)
+            },
+        )
+        .await;
+
+        let fenced = init_verified(&coordinator, TID, InitIdentity::Anonymous)
+            .await
+            .expect("init responds");
+        check!(fenced == concurrent_transactions_response());
+
+        let entry = coordinator.get(TID).expect("entry").lock().await.clone();
+        let expected = TxnEntry {
+            state: TxnState::CompleteAbort,
+            prev_producer_id: ProducerId(1000),
+            last_producer_epoch: i16::MAX - 1,
+            client_transaction_version: TxnVersion::Verified.level(),
+            last_update_ms: entry.last_update_ms,
+            ..TxnEntry::new_empty(TID.to_owned(), ProducerId(0), 0, 60_000, 0)
+        };
+        check!(entry == expected);
+    }
 }
