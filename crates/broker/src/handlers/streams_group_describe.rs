@@ -79,16 +79,28 @@ pub async fn handle(
         return Ok(resp);
     }
 
-    // Kafka puts `GROUP_AUTHORIZATION_FAILED` rows first, ahead of
-    // successfully-described (or otherwise-errored) rows, rather than
-    // preserving request order.
+    // Kafka puts `GROUP_AUTHORIZATION_FAILED` rows first, then the
+    // `INVALID_GROUP_ID` rows, ahead of successfully-described (or
+    // otherwise-errored) rows, rather than preserving request order.
     let mut denied_rows: Vec<DescribedGroup> = Vec::new();
+    let mut invalid_rows: Vec<DescribedGroup> = Vec::new();
     let mut other_rows: Vec<DescribedGroup> = Vec::new();
     for gid in &req.group_ids {
         if group_describe_denied(broker.config.authorizer.as_ref(), &image, ctx, gid) {
             denied_rows.push(DescribedGroup {
                 group_id: gid.clone(),
                 error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                ..Default::default()
+            });
+            continue;
+        }
+        // GroupCoordinatorService.streamsGroupDescribe rejects an empty id
+        // before it routes the group to a shard, and its completed future
+        // comes ahead of the shard results.
+        if gid.is_empty() {
+            invalid_rows.push(DescribedGroup {
+                group_id: String::new(),
+                error_code: codes::INVALID_GROUP_ID,
                 ..Default::default()
             });
             continue;
@@ -108,6 +120,7 @@ pub async fn handle(
             .await,
         );
     }
+    denied_rows.extend(invalid_rows);
     denied_rows.extend(other_rows);
 
     Ok(StreamsGroupDescribeResponse {
