@@ -12,7 +12,6 @@ use {
             registration_listeners::{self, ListenerFields},
         },
         leader_election::{compute_failover_changes, compute_unclean_restart_changes},
-        unclean_recovery::RecoveryJob,
     },
     krabka_metadata::{
         BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId, metadata_version,
@@ -182,21 +181,10 @@ pub async fn handle(
     // KIP-966: a partition whose topic opted into an offset-aware recovery
     // strategy is handed to the Unclean Recovery Manager, the same way the
     // dead-broker failover hands one over. Fire and forget.
-    for (topic, partition, strategy) in restart.recoveries {
-        broker
-            .unclean_recovery
-            .enqueue(RecoveryJob {
-                topic,
-                partition,
-                strategy,
-                reply: None,
-                // Nobody asked for this recovery, so there is no proposal to
-                // name and nobody to refuse; `break_glass` decides whether the
-                // URM runs it.
-                proposal: None,
-            })
-            .await;
-    }
+    broker
+        .unclean_recovery
+        .enqueue_background(restart.recoveries)
+        .await;
 
     Ok(answer)
 }

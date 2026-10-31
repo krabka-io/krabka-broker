@@ -13,7 +13,7 @@ use {
         },
         metadata_source::MetadataSource,
         metrics::BrokerMetrics,
-        unclean_recovery::{RecoveryJob, UncleanRecoveryHandle},
+        unclean_recovery::UncleanRecoveryHandle,
     },
     krabka_metadata::MetadataImage,
     krabka_raft::NodeId,
@@ -255,23 +255,7 @@ async fn fail_over_dead_broker(
     // strategy are handed to the Unclean Recovery Manager, which polls
     // surviving replicas for their log state before electing. Fire and
     // forget — the failover path does not await the outcome.
-    for (topic, partition, strategy) in plan.recoveries {
-        recovery
-            .enqueue(RecoveryJob {
-                topic,
-                partition,
-                strategy,
-                reply: None,
-                // KFC-9: nobody asked for this recovery, so there is no
-                // proposal to name and nobody to refuse. A dead leader at
-                // 03:00 has no caller waiting on an answer, and
-                // `break_glass.background_unclean_recovery` is what decides
-                // whether the URM runs it, audits it, or leaves the partition
-                // offline.
-                proposal: None,
-            })
-            .await;
-    }
+    recovery.enqueue_background(plan.recoveries).await;
     Ok(())
 }
 
