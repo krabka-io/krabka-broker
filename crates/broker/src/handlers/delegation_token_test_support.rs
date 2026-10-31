@@ -605,12 +605,16 @@ pub(super) fn failing_writes_source(failure: fn() -> RaftError) -> FakeMetadataS
         .build()
 }
 
+/// One failed-write case: its name, the error the write fails with, and the
+/// error code the handler answers.
+pub(super) type FailedWriteCase = (&'static str, fn() -> RaftError, i16);
+
 /// The error code a token handler answers when its controller write fails,
 /// for each kind of failure: Kafka's `ApiError.fromThrowable` of the
 /// controller's exception. A write that lost or never found the active
 /// controller is `NOT_CONTROLLER`, which the admin client retries. Anything
 /// else is `UNKNOWN_SERVER_ERROR`.
-pub(super) fn failed_write_cases() -> [(&'static str, fn() -> RaftError, i16); 5] {
+pub(super) fn failed_write_cases() -> [FailedWriteCase; 5] {
     [
         (
             "not leader",
