@@ -57,6 +57,14 @@ pub fn is_plain_async(signature: &Signature) -> bool {
     signature.asyncness.is_some() && has_plain_qualifiers(signature)
 }
 
+/// A plain async signature that also has no where clause and no variadic
+/// parameter, so its parameters are concrete.
+pub fn is_concrete_async(signature: &Signature) -> bool {
+    is_plain_async(signature)
+        && signature.generics.where_clause.is_none()
+        && signature.params.inner.variadic.is_none()
+}
+
 fn has_plain_qualifiers(signature: &Signature) -> bool {
     signature.constness.is_none()
         && signature.safety.is_none()
@@ -122,11 +130,7 @@ pub fn named_async_parameter_types(
     message: &str,
 ) -> Result<Vec<String>, ParseError> {
     let parameters = &signature.params.inner.inputs;
-    if !is_plain_async(signature)
-        || signature.generics.where_clause.is_some()
-        || signature.params.inner.variadic.is_some()
-        || parameters.len() != names.len()
-    {
+    if !is_concrete_async(signature) || parameters.len() != names.len() {
         return Err(ParseError::new(signature.span(), message));
     }
     parameters
@@ -611,7 +615,28 @@ mod tests {
         let error = mode(tokens.parse().unwrap(), [("strict", ()), ("open", ())])
             .err()
             .expect("mode rejected");
-        assert2::assert!(error.to_string() == "expected one of `strict`, `open`", "{tokens}");
+        assert2::assert!(
+            error.to_string() == "expected one of `strict`, `open`",
+            "{tokens}"
+        );
+    }
+
+    #[yare::parameterized(
+        plain = { "async fn perform(value: u8) {}", true },
+        sync = { "fn perform(value: u8) {}", false },
+        const_fn = { "const async fn perform() {}", false },
+        unsafe_fn = { "async unsafe fn perform() {}", false },
+        extern_fn = { "async extern \"C\" fn perform() {}", false },
+        generic = { "async fn perform<T>(value: T) {}", false },
+        where_clause = { "async fn perform() where Concrete: Trait {}", false },
+        variadic = { "async fn perform(value: u8, ...) {}", false },
+    )]
+    fn concrete_async_rejects_qualifiers_generics_where_clauses_and_variadics(
+        source: &str,
+        expected: bool,
+    ) {
+        let signature = function_signature(&source.parse().unwrap()).unwrap();
+        assert2::assert!(is_concrete_async(&signature) == expected, "{source}");
     }
 
     #[test]

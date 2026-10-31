@@ -2,7 +2,7 @@
 
 use {
     crate::{
-        meta::{compact, edit_native_body, function_signature, is_plain_async, parameter_ident},
+        meta::{compact, edit_native_body, function_signature, is_concrete_async, parameter_ident},
         sweep_loop::{SpliceValue, splice},
     },
     moxy::{
@@ -34,11 +34,7 @@ fn shutdown_message(meta: &TokenStream, item: &TokenStream) -> Result<LitStr, Pa
         ));
     }
     let signature = function_signature(item)?;
-    if !is_plain_async(&signature)
-        || signature.generics.where_clause.is_some()
-        || signature.params.inner.variadic.is_some()
-        || !signature.output.is_default()
-    {
+    if !is_concrete_async(&signature) || !signature.output.is_default() {
         return Err(ParseError::new(
             signature.span(),
             "expected an ordinary async reaper with no return type",
