@@ -28,18 +28,15 @@
 
 use {
     crate::{
-        config_keys::{
-            MIN_INSYNC_REPLICAS, broker_dynamic::BrokerConfigContext, clear_elr_records,
-            group::GroupBounds,
-        },
+        config_keys::{MIN_INSYNC_REPLICAS, clear_elr_records},
         handlers::{
             ApiVersion, DispatchResult, RequestContext,
             alter_configs::{
-                BrokerPreprocess, broker_preprocess_refusal, forwarded_log_dirs,
-                forwarded_serving_node,
+                BrokerPreprocess, RecordBuilders, broker_preprocess_refusal,
+                guarded_resource_response, resource_preamble_refusal, resource_records,
             },
-            audit_resource, config_resource_refusal, encode_response,
-            forward_to_controller::{guarded_operation_on_source, to_active_controller_or_handle},
+            audit_resource, encode_response,
+            forward_to_controller::to_active_controller_or_handle,
             response_encoding::ErrorRow as _,
         },
     },
@@ -53,7 +50,7 @@ use {
         },
     },
     krabka_raft::RaftError,
-    std::{sync::Arc, time::Duration},
+    std::sync::Arc,
 };
 
 mod broker_logger_scope;
@@ -72,14 +69,11 @@ use {
     },
     crate::{
         broker::Broker,
-        codes,
         handlers::describe_configs::{
-            RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
-            RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
+            RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_TOPIC,
         },
     },
     std::{iter, mem},
-    tokio::time::Instant,
 };
 const OP_SET: i8 = 0;
 const OP_DELETE: i8 = 1;
@@ -219,6 +213,15 @@ fn validate_resource_shape(
     )
 }
 
+/// `IncrementalAlterConfigs`' builder for each resource type. Each merges the
+/// operations onto the map the image holds.
+const RECORD_BUILDERS: RecordBuilders<AlterConfigsResource> = RecordBuilders {
+    topic: topic_config_record,
+    broker: broker_records,
+    group: group_record,
+    client_metrics: client_metrics_records,
+};
+
 async fn process_resource(
     broker: &Broker,
     _image: &MetadataImage,
@@ -229,31 +232,18 @@ async fn process_resource(
 ) -> AlterConfigsResourceResponse {
     // Read and admission are optimistic; the engine atomically checks that
     // image when it appends. Rebuild every operation after a conflicting commit.
-    let result = guarded_operation_on_source(
-        broker.controller.as_ref(),
-        Instant::now() + Duration::from_secs(5),
-        |image| {
-            process_resource_once(
-                broker,
-                image,
-                ctx,
-                resource.clone(),
-                validate_only,
-                is_duplicate,
-            )
-        },
-    )
-    .await;
-    let code = match result {
-        Ok(Ok(response)) => return response,
-        Err(_) => codes::REQUEST_TIMED_OUT,
-        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => codes::NOT_CONTROLLER,
-        Ok(Err(error)) => {
-            tracing::error!(%error, "IncrementalAlterConfigs submit_change failed");
-            codes::UNKNOWN_SERVER_ERROR
-        }
-    };
-    resource_refusal(&resource, code)
+    guarded_resource_response(broker, "IncrementalAlterConfigs", |image| {
+        process_resource_once(
+            broker,
+            image,
+            ctx,
+            resource.clone(),
+            validate_only,
+            is_duplicate,
+        )
+    })
+    .await
+    .unwrap_or_else(|code| resource_refusal(&resource, code))
 }
 
 fn resource_refusal(resource: &AlterConfigsResource, code: i16) -> AlterConfigsResourceResponse {
@@ -263,41 +253,6 @@ fn resource_refusal(resource: &AlterConfigsResource, code: i16) -> AlterConfigsR
         error_code: code,
         error_message: None,
         ..Default::default()
-    }
-}
-
-/// The records a `TOPIC`, `BROKER`, `CLIENT_METRICS` or `GROUP` resource stages, or
-/// the error it answers with.
-fn resource_records(
-    broker: &Broker,
-    image: &MetadataImage,
-    ctx: &RequestContext<'_>,
-    resource: &AlterConfigsResource,
-) -> Result<Vec<MetadataRecord>, (i16, String)> {
-    match resource.resource_type {
-        RESOURCE_TYPE_TOPIC => topic_config_record(
-            resource,
-            image,
-            &broker.config.topic_policy,
-            broker.config.remote_storage_backend.is_some(),
-            broker.config.features.unstable_api_versions,
-        )
-        .map(|record| vec![record]),
-        RESOURCE_TYPE_BROKER => broker_records(resource, BrokerConfigContext {
-            image,
-            serving: forwarded_serving_node(broker, ctx, &resource.resource_name),
-            log_dirs: &forwarded_log_dirs(broker, ctx),
-            unstable: broker.config.features.unstable_api_versions,
-        }),
-        RESOURCE_TYPE_CLIENT_METRICS => client_metrics_records(resource, image),
-        RESOURCE_TYPE_GROUP => group_record(
-            resource,
-            image,
-            &GroupBounds::of(&broker.config),
-            broker.config.features.unstable_api_versions,
-        )
-        .map(|record| vec![record]),
-        other => unreachable!("resource type {other} passed the ACL dispatch"),
     }
 }
 
@@ -311,16 +266,10 @@ async fn process_resource_once(
 ) -> Result<AlterConfigsResourceResponse, RaftError> {
     let mut out: AlterConfigsResourceResponse =
         super::alter_configs::empty_resource_response(&resource);
-    if let Err((code, message)) = validate_resource_shape(&resource, is_duplicate) {
-        return Ok(out.with_error(code, message));
-    }
-    if let Some((code, message)) = config_resource_refusal(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        (resource.resource_type, &resource.resource_name),
-        true,
-    ) {
+    let shape = validate_resource_shape(&resource, is_duplicate);
+    if let Some((code, message)) =
+        resource_preamble_refusal(broker, &image, ctx, &resource, shape, true)
+    {
         return Ok(out.with_error(code, message));
     }
 
@@ -336,7 +285,7 @@ async fn process_resource_once(
         );
         return Ok(out);
     }
-    let mut to_submit = match resource_records(broker, &image, ctx, &resource) {
+    let mut to_submit = match resource_records(broker, &image, ctx, &resource, &RECORD_BUILDERS) {
         Ok(records) => records,
         Err((code, message)) => return Ok(out.with_error(code, message)),
     };
@@ -379,8 +328,10 @@ mod tests {
         super::*,
         crate::{
             api_catalog::UnstableApiVersions,
+            codes,
             config_keys::{RETENTION_MS, SEGMENT_BYTES},
             handlers::{
+                describe_configs::RESOURCE_TYPE_GROUP,
                 forward_to_controller::guarded_operation_on_source,
                 incremental_alter_configs::test_support::{
                     AlterableConfig, StoredOverride, check, image_with_topic_config,
@@ -397,10 +348,30 @@ mod tests {
             topic_policy::TopicPolicy,
         },
         krabka_metadata::TopicConfigRecord,
+        std::time::Duration,
+        tokio::time::Instant,
     };
 
     krabka_macros::wire_codec_helpers! {
         test_context ["admin-client"];
+    }
+
+    /// Dispatch `request` at version 1 and compare the whole wire response
+    /// with `responses`.
+    async fn assert_incremental_dispatch(
+        broker: &Broker,
+        ctx: &RequestContext<'_>,
+        request: &IncrementalAlterConfigsRequest,
+        responses: Vec<AlterConfigsResourceResponse>,
+    ) {
+        let expected = IncrementalAlterConfigsResponse {
+            responses,
+            ..Default::default()
+        };
+        assert_dispatch_response(request, &expected, 1, |body| async move {
+            dispatch(broker, 1, &body, ctx).await
+        })
+        .await;
     }
 
     /// The wire response interleaves logger results, local broker refusals and
@@ -476,16 +447,7 @@ mod tests {
                 validate_only: true,
                 ..Default::default()
             };
-            let expected = IncrementalAlterConfigsResponse {
-                responses: ordered.responses,
-                ..Default::default()
-            };
-            let broker_ref = broker.as_ref();
-            let context_ref = &ctx;
-            assert_dispatch_response(&request, &expected, 1, |body| async move {
-                dispatch(broker_ref, 1, &body, context_ref).await
-            })
-            .await;
+            assert_incremental_dispatch(broker.as_ref(), &ctx, &request, ordered.responses).await;
         }
         handle.shutdown().await;
     }
@@ -524,21 +486,13 @@ mod tests {
             resources: vec![make_scoped_resource(RESOURCE_TYPE_BROKER, name, configs)],
             ..Default::default()
         };
-        let expected = IncrementalAlterConfigsResponse {
-            responses: vec![config_resource_error_response(
-                RESOURCE_TYPE_BROKER,
-                name,
-                error_code,
-                Some(error_message.into()),
-            )],
-            ..Default::default()
-        };
-        let broker_ref = broker.as_ref();
-        let context_ref = &ctx;
-        assert_dispatch_response(&request, &expected, 1, |body| async move {
-            dispatch(broker_ref, 1, &body, context_ref).await
-        })
-        .await;
+        let refusal = config_resource_error_response(
+            RESOURCE_TYPE_BROKER,
+            name,
+            error_code,
+            Some(error_message.into()),
+        );
+        assert_incremental_dispatch(broker.as_ref(), &ctx, &request, vec![refusal]).await;
         started.broker.shutdown().await;
     }
 

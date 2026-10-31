@@ -96,7 +96,7 @@ mod tests {
                 alter_configs::test_support::{
                     image_with_topic, image_with_topic_config, topic_resource,
                 },
-                test_support::check_config_result,
+                test_support::{check_config_result, diskless_turned_on_refusal},
             },
         },
         assert2::{assert, check},
@@ -114,20 +114,6 @@ mod tests {
         use crate::handlers::test_support::build_topic_config_record_with_default_policy;
 
         build_topic_config_record_with_default_policy(resource, image, super::topic_config_record)
-    }
-
-    /// A diskless change answers before the existence check, so a topic that
-    /// does not exist reports the diskless refusal.
-    #[test]
-    fn a_diskless_change_on_an_unknown_topic_answers_before_existence() {
-        let resource = topic_resource("missing", &[(config_keys::DISKLESS, "true")]);
-        let diskless = maplit::btreemap! {
-            config_keys::DISKLESS.to_owned() => "true".to_owned(),
-        };
-        let expected = config_keys::validate_diskless_unchanged(None, &diskless)
-            .expect_err("turning diskless on is a change");
-        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        check!(topic_config_record(&resource, &image) == Err((codes::INVALID_CONFIG, expected)));
     }
 
     #[test]
@@ -332,6 +318,15 @@ mod tests {
 
             check_config_result(result, want_ok, label, config_keys::DISKLESS);
         }
+    }
+
+    /// A diskless change answers before the existence check, so a topic that
+    /// does not exist reports the diskless refusal.
+    #[test]
+    fn a_diskless_change_on_an_unknown_topic_answers_before_existence() {
+        let resource = topic_resource("missing", &[(config_keys::DISKLESS, "true")]);
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        check!(topic_config_record(&resource, &image) == Err(diskless_turned_on_refusal()));
     }
 
     #[test]

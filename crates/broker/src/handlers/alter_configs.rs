@@ -44,7 +44,10 @@ use {
     crate::{
         api_catalog::UnstableApiVersions,
         broker::Broker,
-        codes::{INVALID_CONFIG, INVALID_REQUEST, POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION},
+        codes::{
+            INVALID_CONFIG, INVALID_REQUEST, NOT_CONTROLLER, POLICY_VIOLATION, REQUEST_TIMED_OUT,
+            UNKNOWN_SERVER_ERROR, UNKNOWN_TOPIC_OR_PARTITION,
+        },
         config_keys::{
             self, MIN_INSYNC_REPLICAS,
             broker_dynamic::BrokerConfigContext,
@@ -59,18 +62,23 @@ use {
                 RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
             },
             encode_response,
-            forward_to_controller::to_active_controller_or_handle,
+            forward_to_controller::{guarded_operation_on_source, to_active_controller_or_handle},
             response_encoding::{ErrorRow as _, ResourceErrorRow},
         },
         topic_policy::{TopicPolicy, check as check_topic_policy},
     },
     krabka_metadata::{GroupConfigRecord, MetadataImage, MetadataRecord, NodeId},
     krabka_protocol::owned::incremental_alter_configs_request,
+    krabka_raft::RaftError,
     std::{
         collections::{BTreeMap, BTreeSet, HashMap},
+        future::Future,
         mem,
         path::PathBuf,
+        sync::Arc,
+        time::Duration,
     },
+    tokio::time::Instant,
 };
 
 pub(super) trait ResourceErrorRequestResource {
@@ -272,10 +280,126 @@ pub(super) fn group_config_record_from(
     }))
 }
 
+/// Run one resource's alter through the guarded optimistic retry: each attempt
+/// plans against a fresh controller image and submits only if that image is
+/// still current, so a conflicting commit replans every operation.
+///
+/// # Errors
+/// Returns the code the resource answers with when the retry gives up:
+/// `REQUEST_TIMED_OUT` at the deadline, `NOT_CONTROLLER` when this node is no
+/// longer the leader, and `UNKNOWN_SERVER_ERROR`, logged under `operation`, for
+/// any other submit failure.
+pub(super) async fn guarded_resource_response<Row, Attempt, Fut>(
+    broker: &Broker,
+    operation: &str,
+    attempt: Attempt,
+) -> Result<Row, i16>
+where
+    Attempt: FnMut(Arc<MetadataImage>) -> Fut,
+    Fut: Future<Output = Result<Row, RaftError>> + Send,
+{
+    let result = guarded_operation_on_source(
+        broker.controller.as_ref(),
+        Instant::now() + Duration::from_secs(5),
+        attempt,
+    )
+    .await;
+    match result {
+        Ok(Ok(row)) => Ok(row),
+        Err(_) => Err(REQUEST_TIMED_OUT),
+        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => Err(NOT_CONTROLLER),
+        Ok(Err(error)) => {
+            tracing::error!(%error, "{operation} submit_change failed");
+            Err(UNKNOWN_SERVER_ERROR)
+        }
+    }
+}
+
+/// The refusal a resource answers with before any record is built: its
+/// request-shape error, else its authorization error. Kafka's
+/// `ConfigAdminManager.preprocess` checks the shape before
+/// `ControllerApis.authorizeAlterResource` runs.
+pub(super) fn resource_preamble_refusal<Resource>(
+    broker: &Broker,
+    image: &MetadataImage,
+    ctx: &RequestContext<'_>,
+    resource: &Resource,
+    shape: Result<(), (i16, String)>,
+    broker_logger_supported: bool,
+) -> Option<(i16, String)>
+where
+    Resource: ResourceErrorRequestResource,
+{
+    if let Err(error) = shape {
+        return Some(error);
+    }
+    config_resource_refusal(
+        broker.config.authorizer.as_ref(),
+        image,
+        ctx,
+        (resource.resource_type(), resource.resource_name()),
+        broker_logger_supported,
+    )
+}
+
+/// The result of a builder that stages one record.
+type RecordResult = Result<MetadataRecord, (i16, String)>;
+/// The result of a builder that stages any number of records.
+type RecordsResult = Result<Vec<MetadataRecord>, (i16, String)>;
+
+/// Each API's record builder for one resource type, which
+/// [`resource_records`] dispatches to.
+pub(super) struct RecordBuilders<Resource> {
+    pub(super) topic:
+        fn(&Resource, &MetadataImage, &TopicPolicy, bool, UnstableApiVersions) -> RecordResult,
+    pub(super) broker: fn(&Resource, BrokerConfigContext<'_>) -> RecordsResult,
+    pub(super) group:
+        fn(&Resource, &MetadataImage, &GroupBounds, UnstableApiVersions) -> RecordResult,
+    pub(super) client_metrics: fn(&Resource, &MetadataImage) -> RecordsResult,
+}
+
+/// The records a TOPIC, BROKER, `CLIENT_METRICS` or GROUP resource stages, or
+/// the error it answers with, from this broker's settings and the resource's
+/// API-specific `builders`.
+pub(super) fn resource_records<Resource>(
+    broker: &Broker,
+    image: &MetadataImage,
+    ctx: &RequestContext<'_>,
+    resource: &Resource,
+    builders: &RecordBuilders<Resource>,
+) -> RecordsResult
+where
+    Resource: ResourceErrorRequestResource,
+{
+    let unstable = broker.config.features.unstable_api_versions;
+    match resource.resource_type() {
+        RESOURCE_TYPE_TOPIC => (builders.topic)(
+            resource,
+            image,
+            &broker.config.topic_policy,
+            broker.config.remote_storage_backend.is_some(),
+            unstable,
+        )
+        .map(|record| vec![record]),
+        RESOURCE_TYPE_BROKER => (builders.broker)(resource, BrokerConfigContext {
+            image,
+            serving: forwarded_serving_node(broker, ctx, resource.resource_name()),
+            log_dirs: &forwarded_log_dirs(broker, ctx),
+            unstable,
+        }),
+        RESOURCE_TYPE_GROUP => {
+            (builders.group)(resource, image, &GroupBounds::of(&broker.config), unstable)
+                .map(|record| vec![record])
+        }
+        RESOURCE_TYPE_CLIENT_METRICS => (builders.client_metrics)(resource, image),
+        other => unreachable!("resource type {other} passed the ACL dispatch"),
+    }
+}
+
 /// The node a BROKER resource's checks run for: the node the client
 /// addressed when the request was forwarded to this controller, else this
 /// node.
-pub(super) fn forwarded_serving_node(
+fn forwarded_serving_node(
     broker: &Broker,
     ctx: &RequestContext<'_>,
     resource_name: &str,
@@ -291,7 +415,7 @@ pub(super) fn forwarded_serving_node(
 
 /// This node's log directories for a BROKER resource's checks, or none when
 /// the request was forwarded and so addresses another node's directories.
-pub(super) fn forwarded_log_dirs(broker: &Broker, ctx: &RequestContext<'_>) -> Vec<PathBuf> {
+fn forwarded_log_dirs(broker: &Broker, ctx: &RequestContext<'_>) -> Vec<PathBuf> {
     if ctx.forwarded {
         Vec::new()
     } else {

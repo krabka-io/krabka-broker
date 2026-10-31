@@ -155,7 +155,7 @@ mod tests {
                     AlterableConfig, StoredOverride, assert, check, image_with_topic_config,
                     make_del_cfg, make_set_cfg, make_topic_resource, overrides_map,
                 },
-                test_support::check_config_result,
+                test_support::{check_config_result, diskless_turned_on_refusal},
             },
             throttle::ThrottledReplicas,
         },
@@ -173,19 +173,6 @@ mod tests {
         use crate::handlers::test_support::build_topic_config_record_with_default_policy;
 
         build_topic_config_record_with_default_policy(resource, image, super::topic_config_record)
-    }
-
-    /// A diskless change answers before the existence check, so a topic that
-    /// does not exist reports the diskless refusal.
-    #[test]
-    fn a_diskless_change_on_an_unknown_topic_answers_before_existence() {
-        let resource =
-            make_topic_resource("missing", vec![make_set_cfg(config_keys::DISKLESS, "true")]);
-        let diskless = overrides_map(&[StoredOverride::new(config_keys::DISKLESS, "true")]);
-        let expected = config_keys::validate_diskless_unchanged(None, &diskless)
-            .expect_err("turning diskless on is a change");
-        let image = MetadataImage::new(uuid::Uuid::nil());
-        check!(topic_config_record(&resource, &image) == Err((codes::INVALID_CONFIG, expected)));
     }
 
     #[test]
@@ -415,6 +402,16 @@ mod tests {
 
             check_config_result(result, want_ok, label, config_keys::DISKLESS);
         }
+    }
+
+    /// A diskless change answers before the existence check, so a topic that
+    /// does not exist reports the diskless refusal.
+    #[test]
+    fn a_diskless_change_on_an_unknown_topic_answers_before_existence() {
+        let resource =
+            make_topic_resource("missing", vec![make_set_cfg(config_keys::DISKLESS, "true")]);
+        let image = MetadataImage::new(uuid::Uuid::nil());
+        check!(topic_config_record(&resource, &image) == Err(diskless_turned_on_refusal()));
     }
 
     #[test]

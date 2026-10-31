@@ -66,9 +66,9 @@ mod tests {
             coordinator::unified::streams::config::{
                 KEY_NUM_STANDBY_REPLICAS, KEY_SESSION_TIMEOUT_MS, KEY_SHARE_AUTO_OFFSET_RESET,
             },
-            handlers::incremental_alter_configs::{
-                RESOURCE_TYPE_GROUP,
-                test_support::{make_scoped_resource, make_set_cfg},
+            handlers::{
+                describe_configs::RESOURCE_TYPE_GROUP,
+                incremental_alter_configs::test_support::{make_scoped_resource, make_set_cfg},
             },
         },
         assert2::assert,

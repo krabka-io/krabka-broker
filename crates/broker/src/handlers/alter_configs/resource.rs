@@ -15,29 +15,34 @@
 
 use {
     super::{
-        RESOURCE_TYPE_BROKER, RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP,
-        RESOURCE_TYPE_TOPIC, broker_configs::broker_config_records,
+        RESOURCE_TYPE_TOPIC, RecordBuilders, broker_configs::broker_config_records,
         client_metrics_configs::client_metrics_config_record, empty_resource_response,
-        forwarded_log_dirs, forwarded_serving_node, group_configs::group_config_record,
-        topic_configs::topic_config_record, validate_resource_shape,
+        group_configs::group_config_record, guarded_resource_response, resource_preamble_refusal,
+        resource_records, topic_configs::topic_config_record, validate_resource_shape,
     },
     crate::{
         broker::Broker,
-        codes,
-        config_keys::{broker_dynamic::BrokerConfigContext, clear_elr_records, group::GroupBounds},
-        handlers::{
-            RequestContext, audit_admin_success, config_resource_refusal,
-            forward_to_controller::guarded_operation_on_source, response_encoding::ErrorRow as _,
-        },
+        config_keys::clear_elr_records,
+        handlers::{RequestContext, audit_admin_success, response_encoding::ErrorRow as _},
     },
-    krabka_metadata::{MetadataImage, MetadataRecord},
+    krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
         alter_configs_request::AlterConfigsResource,
         alter_configs_response::AlterConfigsResourceResponse,
     },
     krabka_raft::RaftError,
-    std::{sync::Arc, time::Duration},
-    tokio::time::Instant,
+    std::sync::Arc,
+};
+
+/// `AlterConfigs`' builder for each resource type. GROUP and `CLIENT_METRICS`
+/// replace the whole map, so their builders do not read the image.
+const RECORD_BUILDERS: RecordBuilders<AlterConfigsResource> = RecordBuilders {
+    topic: topic_config_record,
+    broker: broker_config_records,
+    group: |resource, _image, bounds, unstable| group_config_record(resource, bounds, unstable),
+    client_metrics: |resource, _image| {
+        client_metrics_config_record(resource).map(|record| vec![record])
+    },
 };
 
 pub(super) async fn process_resource(
@@ -48,37 +53,24 @@ pub(super) async fn process_resource(
     validate_only: bool,
     is_duplicate: bool,
 ) -> AlterConfigsResourceResponse {
-    let result = guarded_operation_on_source(
-        broker.controller.as_ref(),
-        Instant::now() + Duration::from_secs(5),
-        |image| {
-            process_resource_once(
-                broker,
-                image,
-                ctx,
-                resource.clone(),
-                validate_only,
-                is_duplicate,
-            )
-        },
-    )
-    .await;
-    let code = match result {
-        Ok(Ok(response)) => return response,
-        Err(_) => codes::REQUEST_TIMED_OUT,
-        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => codes::NOT_CONTROLLER,
-        Ok(Err(error)) => {
-            tracing::error!(%error, "AlterConfigs submit_change failed");
-            codes::UNKNOWN_SERVER_ERROR
-        }
-    };
-    AlterConfigsResourceResponse {
+    guarded_resource_response(broker, "AlterConfigs", |image| {
+        process_resource_once(
+            broker,
+            image,
+            ctx,
+            resource.clone(),
+            validate_only,
+            is_duplicate,
+        )
+    })
+    .await
+    .unwrap_or_else(|code| AlterConfigsResourceResponse {
         resource_type: resource.resource_type,
         resource_name: resource.resource_name,
         error_code: code,
         error_message: None,
         ..Default::default()
-    }
+    })
 }
 
 async fn process_resource_once(
@@ -90,26 +82,20 @@ async fn process_resource_once(
     is_duplicate: bool,
 ) -> Result<AlterConfigsResourceResponse, RaftError> {
     let out: AlterConfigsResourceResponse = empty_resource_response(&resource);
-    if let Err((code, message)) = validate_resource_shape(
+    let shape = validate_resource_shape(
         is_duplicate,
         resource
             .configs
             .iter()
             .map(|cfg| (cfg.name.as_str(), cfg.value.is_none())),
-    ) {
-        return Ok(out.with_error(code, message));
-    }
-    if let Some((code, message)) = config_resource_refusal(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        (resource.resource_type, &resource.resource_name),
-        false,
-    ) {
+    );
+    if let Some((code, message)) =
+        resource_preamble_refusal(broker, &image, ctx, &resource, shape, false)
+    {
         return Ok(out.with_error(code, message));
     }
 
-    let records = resource_records(broker, &image, ctx, &resource);
+    let records = resource_records(broker, &image, ctx, &resource, &RECORD_BUILDERS);
     let mut records = match records {
         Ok(records) => records,
         Err((code, message)) => {
@@ -146,47 +132,14 @@ async fn process_resource_once(
     Ok(out)
 }
 
-fn resource_records(
-    broker: &Broker,
-    image: &MetadataImage,
-    ctx: &RequestContext<'_>,
-    resource: &AlterConfigsResource,
-) -> Result<Vec<MetadataRecord>, (i16, String)> {
-    match resource.resource_type {
-        RESOURCE_TYPE_TOPIC => topic_config_record(
-            resource,
-            image,
-            &broker.config.topic_policy,
-            broker.config.remote_storage_backend.is_some(),
-            broker.config.features.unstable_api_versions,
-        )
-        .map(|record| vec![record]),
-        RESOURCE_TYPE_BROKER => broker_config_records(resource, BrokerConfigContext {
-            image,
-            serving: forwarded_serving_node(broker, ctx, &resource.resource_name),
-            log_dirs: &forwarded_log_dirs(broker, ctx),
-            unstable: broker.config.features.unstable_api_versions,
-        }),
-        RESOURCE_TYPE_GROUP => group_config_record(
-            resource,
-            &GroupBounds::of(&broker.config),
-            broker.config.features.unstable_api_versions,
-        )
-        .map(|record| vec![record]),
-        RESOURCE_TYPE_CLIENT_METRICS => {
-            client_metrics_config_record(resource).map(|record| vec![record])
-        }
-        _ => unreachable!("resource type passed ACL dispatch"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use {
         super::*,
         crate::{
             api_catalog::UnstableApiVersions,
-            config_keys::REMOTE_STORAGE_ENABLE,
+            codes,
+            config_keys::{REMOTE_STORAGE_ENABLE, broker_dynamic::BrokerConfigContext},
             handlers::{
                 alter_configs::test_support::{
                     broker_resource, image_with_broker, image_with_topic_config, topic_resource,
@@ -201,6 +154,7 @@ mod tests {
         assert2::assert,
         krabka_metadata::{BrokerConfigRecord, MetadataRecord},
         krabka_raft::NodeId,
+        std::time::Duration,
         tokio::time::Instant,
     };
 
