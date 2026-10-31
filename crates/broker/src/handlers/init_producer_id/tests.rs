@@ -15,12 +15,12 @@ use {
         authorizer::SimpleAclAuthorizer,
         broker::{Broker, BrokerHandle},
         error::BrokerError,
-        partition_registry::PartitionRegistry,
-        producer_id_manager::ProducerIdManager,
         handlers::{
             acl_test_support as acl_fixtures, acl_wire, context::RequestContext,
             find_coordinator::handle as find_coordinator_handle,
         },
+        partition_registry::PartitionRegistry,
+        producer_id_manager::ProducerIdManager,
         test_support::{
             ControllerPeerAllowed, start_broker_no_audit, start_broker_no_audit_with,
             start_broker_with_authorizer_no_audit, wait_for_controller_leader,

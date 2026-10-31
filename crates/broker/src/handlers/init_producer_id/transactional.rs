@@ -291,9 +291,7 @@ pub(super) async fn handle_transactional(
                     completed.has_failed_epoch_fence = false;
                     completed.partitions.clear();
                     // The entry stays locked until the completion is written.
-                    let written = coord
-                        .put_under_state_partition_lock(completed, txnv)
-                        .await;
+                    let written = coord.put_under_state_partition_lock(completed, txnv).await;
                     drop(live);
                     drop(state_partition_write);
                     if let Err(error) = written {
@@ -1790,9 +1788,9 @@ mod tests {
             .set_mode(MarkerFanoutMode::Hold);
         let fence = {
             let coordinator = Arc::clone(&coordinator);
-            tokio::spawn(async move {
-                init_verified(&coordinator, TID, InitIdentity::default()).await
-            })
+            tokio::spawn(
+                async move { init_verified(&coordinator, TID, InitIdentity::default()).await },
+            )
         };
         coordinator.marker_fanout_gate.wait_for_arrivals(1).await;
         let prepared = coordinator.get(TID).expect("entry").lock().await.clone();
@@ -1802,7 +1800,12 @@ mod tests {
         // `complete_prepared_transaction` appends.
         let mut completed = prepared;
         let identity = completion_producer_identity(&completed);
-        apply_completion(&mut completed, TxnState::CompleteAbort, identity, now_millis());
+        apply_completion(
+            &mut completed,
+            TxnState::CompleteAbort,
+            identity,
+            now_millis(),
+        );
         seed(&coordinator, completed).await;
 
         // A producer that names no identity bumps the completed transaction.
@@ -1811,18 +1814,21 @@ mod tests {
             .expect("init responds");
         check!(bumped.error_code == codes::NONE);
         let live = coordinator.get(TID).expect("entry").lock().await.clone();
-        check!((live.producer_id.get(), live.producer_epoch) == (bumped.producer_id, bumped.producer_epoch));
+        check!(
+            (live.producer_id.get(), live.producer_epoch)
+                == (bumped.producer_id, bumped.producer_epoch)
+        );
 
         coordinator
             .marker_fanout_gate
             .set_mode(MarkerFanoutMode::Open);
-        let fenced = fence
-            .await
-            .expect("fence task")
-            .expect("init responds");
+        let fenced = fence.await.expect("fence task").expect("init responds");
 
         check!(fenced == concurrent_transactions_response());
         let after = coordinator.get(TID).expect("entry").lock().await.clone();
-        assert!(after == live, "the fence's CompleteAbort overwrote the bumped identity");
+        assert!(
+            after == live,
+            "the fence's CompleteAbort overwrote the bumped identity"
+        );
     }
 }
