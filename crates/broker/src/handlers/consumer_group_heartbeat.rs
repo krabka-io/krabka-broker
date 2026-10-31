@@ -12,6 +12,7 @@ use {
             actor::{GroupActorMessage, GroupKindTag},
             config::NextGenConfig,
             regex_resolver::ImageTopicRegexResolver,
+            replay_policy::{LEAVE_GROUP_MEMBER_EPOCH, LEAVE_GROUP_STATIC_MEMBER_EPOCH},
         },
         error::BrokerError,
         handlers::{
@@ -138,8 +139,6 @@ fn reply(code: i16, message: Option<String>) -> ConsumerGroupHeartbeatResponse {
 /// The version from which a consumer must generate its own member id,
 /// Kafka's `CONSUMER_GENERATED_MEMBER_ID_REQUIRED_VERSION`.
 const CONSUMER_GENERATED_MEMBER_ID_REQUIRED_VERSION: i16 = 1;
-const LEAVE_GROUP_MEMBER_EPOCH: i32 = -1;
-const LEAVE_GROUP_STATIC_MEMBER_EPOCH: i32 = -2;
 
 /// Kafka's `GroupCoordinatorService.throwIfConsumerGroupHeartbeatRequestIsInvalid`.
 ///

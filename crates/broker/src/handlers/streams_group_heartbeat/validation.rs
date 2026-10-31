@@ -5,12 +5,13 @@
 //! and message and never schedules the write operation.
 
 use {
-    crate::{api_catalog::UnstableApiVersions, codes, handlers::coordinator_routing::java_blank},
+    crate::{
+        api_catalog::UnstableApiVersions, codes,
+        coordinator::unified::replay_policy::LEAVE_GROUP_STATIC_MEMBER_EPOCH,
+        handlers::coordinator_routing::java_blank,
+    },
     krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
 };
-
-/// `LEAVE_GROUP_STATIC_MEMBER_EPOCH`: the epoch of a static member's leave.
-const LEAVE_GROUP_STATIC_MEMBER_EPOCH: i32 = -2;
 
 /// Kafka's `throwIfStreamsGroupHeartbeatRequestIsUsingUnsupportedFeatures`
 /// and then `throwIfStreamsGroupHeartbeatRequestIsInvalid`, in Kafka's order.

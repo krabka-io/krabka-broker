@@ -10,7 +10,10 @@ use {
     crate::{
         broker::Broker,
         codes,
-        coordinator::unified::{GroupCoordinator, GroupType, share::actor::ShareGroupActorMessage},
+        coordinator::unified::{
+            GroupCoordinator, GroupType, replay_policy::LEAVE_GROUP_MEMBER_EPOCH,
+            share::actor::ShareGroupActorMessage,
+        },
         error::BrokerError,
         features::share_groups_enabled,
         handlers::{
@@ -28,9 +31,6 @@ use {
     },
     std::sync::Arc,
 };
-
-/// Kafka's `ShareGroupHeartbeatRequest.LEAVE_GROUP_MEMBER_EPOCH`.
-const LEAVE_GROUP_MEMBER_EPOCH: i32 = -1;
 
 pub async fn handle(
     broker: &Broker,
