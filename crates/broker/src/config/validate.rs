@@ -46,36 +46,71 @@ impl BrokerConfig {
     ///   scope that contains it: instance, then `client_id` or principal, then
     ///   the global ceiling.
     pub fn validate(&self) -> Result<(), BrokerError> {
+        self.validate_broker_id()?;
+        self.validate_log_io_policy()?;
+        self.validate_profiling()?;
+        validate_audit_topic_name(&self.audit_topic)?;
+        self.validate_node_roles()?;
+        let listeners = self.effective_listeners();
+        let inter_broker_listener = self.validate_listener_topology(&listeners)?;
+        self.validate_listener_auth(&listeners)?;
+        self.validate_controller_listener()?;
+        self.validate_outbound_sasl(inter_broker_listener)?;
+        self.validate_platform(cfg!(target_family = "wasm"))?;
+        self.validate_positive_runtime_scalars()?;
+        self.validate_additional_runtime_scalars()?;
+        // After the scalar checks: the stretch durability check reads the
+        // replication factor and `min.insync.replicas`, and the kernel it
+        // calls takes a positive replication factor.
+        self.validate_stretch()?;
+        self.record_decompression_policy()?;
+        self.validate_runtime_relations()?;
+        self.validate_additional_runtime_relations()?;
+        self.validate_groups()?;
+        if let RlmmKind::TopicBacked(config) = &self.remote_log_metadata {
+            config.validate()?;
+        }
+        self.validate_remote_storage_worm()?;
+        self.validate_leader_rebalance()
+    }
+
+    /// Kafka's `KafkaConfig` requires `broker.id == node.id` in `KRaft` mode.
+    fn validate_broker_id(&self) -> Result<(), BrokerError> {
         if u64::try_from(self.broker_id).ok() != Some(self.node_id.0) {
             return Err(BrokerError::BrokerIdNodeIdMismatch {
                 broker_id: self.broker_id,
                 node_id: self.node_id,
             });
         }
-        self.validate_log_io_policy()?;
+        Ok(())
+    }
+
+    /// The profiling endpoint is off, or listens on loopback behind a token
+    /// file with a valid profiling policy.
+    fn validate_profiling(&self) -> Result<(), BrokerError> {
         match (self.profiling_listen_addr, &self.profiling_auth_token_file) {
-            (None, None) => {}
-            (None, Some(_)) => {
-                return Err(BrokerError::InvalidRuntimeConfig(
-                    "profiling_auth_token_file requires profiling_listen_addr".into(),
-                ));
-            }
-            (Some(_), None) => {
-                return Err(BrokerError::InvalidRuntimeConfig(
-                    "profiling_listen_addr requires profiling_auth_token_file".into(),
-                ));
-            }
+            (None, None) => Ok(()),
+            (None, Some(_)) => Err(BrokerError::InvalidRuntimeConfig(
+                "profiling_auth_token_file requires profiling_listen_addr".into(),
+            )),
+            (Some(_), None) => Err(BrokerError::InvalidRuntimeConfig(
+                "profiling_listen_addr requires profiling_auth_token_file".into(),
+            )),
             (Some(address), Some(_)) if !address.ip().is_loopback() => {
-                return Err(BrokerError::InvalidRuntimeConfig(
+                Err(BrokerError::InvalidRuntimeConfig(
                     "profiling_listen_addr must use a loopback address".into(),
-                ));
+                ))
             }
             (Some(_), Some(_)) => self
                 .profiling
                 .validate()
-                .map_err(BrokerError::InvalidRuntimeConfig)?,
+                .map_err(BrokerError::InvalidRuntimeConfig),
         }
-        validate_audit_topic_name(&self.audit_topic)?;
+    }
+
+    /// The role set is non-empty and coherent: a witness is configured as one,
+    /// only a controller is a voter, and only a broker names `[[listeners]]`.
+    fn validate_node_roles(&self) -> Result<(), BrokerError> {
         if self.roles.is_empty() {
             return Err(BrokerError::EmptyRoles);
         }
@@ -100,9 +135,15 @@ impl BrokerConfig {
                     .join(", "),
             });
         }
+        Ok(())
+    }
 
-        let listeners = self.effective_listeners();
-
+    /// No two `listeners` share a bind address, and one of them is the
+    /// inter-broker listener, which this returns.
+    fn validate_listener_topology<'a>(
+        &self,
+        listeners: &'a [ListenerSpec],
+    ) -> Result<&'a ListenerSpec, BrokerError> {
         // Bind-address collisions.
         for (i, listener) in listeners.iter().enumerate() {
             for other in listeners.iter().skip(i + 1) {
@@ -116,16 +157,19 @@ impl BrokerConfig {
         }
 
         // Inter-broker listener must exist.
-        let inter_broker_listener = listeners
+        listeners
             .iter()
             .find(|listener| listener.name == self.inter_broker_listener_name)
             .ok_or_else(|| BrokerError::InvalidInterBrokerListener {
                 name: self.inter_broker_listener_name.clone(),
-            })?;
+            })
+    }
 
+    /// Every SASL listener in `listeners` can authenticate a client.
+    fn validate_listener_auth(&self, listeners: &[ListenerSpec]) -> Result<(), BrokerError> {
         // Every SASL listener requires at least one mechanism. Per-listener
         // sasl_mechanisms wins over the broker-wide default.
-        for l in &listeners {
+        for l in listeners {
             self.validate_sasl_listener(l)?;
         }
 
@@ -142,7 +186,12 @@ impl BrokerConfig {
         if gssapi_enabled && self.gssapi.is_none() {
             return Err(BrokerError::GssapiConfigMissing);
         }
+        Ok(())
+    }
 
+    /// The controller listener has the TLS material and SASL credentials its
+    /// protocol needs.
+    fn validate_controller_listener(&self) -> Result<(), BrokerError> {
         let cp = self.controller_listener_protocol;
         if cp.requires_tls() && self.tls_config.is_none() {
             return Err(BrokerError::Tls(
@@ -155,10 +204,10 @@ impl BrokerConfig {
                     name: "controller".into(),
                 });
             }
-            // As above, but the controller listener is configured on its own
-            // and is not in `effective_listeners`: an empty table here starts
-            // the node and then rejects every controller peer, so no quorum
-            // ever forms.
+            // As `validate_sasl_listener` checks for a SASL listener, but the
+            // controller listener is configured on its own and is not in
+            // `effective_listeners`: an empty table here starts the node and
+            // then rejects every controller peer, so no quorum ever forms.
             if self.enabled_sasl_mechanisms.contains(&SaslMechanism::Plain)
                 && self.plain_credentials.is_empty()
             {
@@ -167,19 +216,12 @@ impl BrokerConfig {
                 });
             }
         }
-        self.validate_outbound_sasl(inter_broker_listener)?;
-        self.validate_platform(cfg!(target_family = "wasm"))?;
-        self.validate_positive_runtime_scalars()?;
-        self.validate_additional_runtime_scalars()?;
-        // After the scalar checks: the stretch durability check reads the
-        // replication factor and `min.insync.replicas`, and the kernel it
-        // calls takes a positive replication factor.
-        self.validate_stretch()?;
-        self.record_decompression_policy()?;
+        Ok(())
+    }
 
-        self.validate_runtime_relations()?;
-        self.validate_additional_runtime_relations()?;
-
+    /// Each group kind's assignors and timeout bounds. The consumer group's
+    /// assignors are checked before its bounds.
+    fn validate_groups(&self) -> Result<(), BrokerError> {
         let consumer = &self.next_gen_consumer_group;
         consumer.validate_assignors()?;
         validate_group_bounds("consumer group", &GroupTimeoutBounds::consumer(consumer))?;
@@ -187,13 +229,7 @@ impl BrokerConfig {
         validate_group_bounds(
             "streams group",
             &GroupTimeoutBounds::streams(&self.streams_group),
-        )?;
-
-        if let RlmmKind::TopicBacked(config) = &self.remote_log_metadata {
-            config.validate()?;
-        }
-        self.validate_remote_storage_worm()?;
-        self.validate_leader_rebalance()
+        )
     }
 
     /// The SASL mechanisms `listener` enables: its own, else the broker-wide
