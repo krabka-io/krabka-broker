@@ -227,7 +227,15 @@ async fn forward_submit_via(
     records: &[krabka_metadata::MetadataRecord],
 ) -> Result<SubmitChangeResult, RaftError> {
     let body = encode_submit_change_body(records)?;
-    forward_encoded_via(transport, leader, addr, API_KEY_SUBMIT_CHANGE, version, body).await
+    forward_encoded_via(
+        transport,
+        leader,
+        addr,
+        API_KEY_SUBMIT_CHANGE,
+        version,
+        body,
+    )
+    .await
 }
 
 /// `forward_delegation_token_mutations_to`'s testable core: serialize → send
@@ -778,18 +786,150 @@ mod tests {
         // A dial/send failure surfaces as RaftError::Network (so CreateTopics
         // retries), not a panic or a swallowed success.
         let mut transport = MockLeaderRoundTrip::new();
-        transport
-            .expect_round_trip()
-            .returning(|_, _, _, _, _| {
-                Err(krabka_client_core::ClientError::Io(Error::new(
-                    ErrorKind::ConnectionRefused,
-                    "refused",
-                )))
-            });
+        transport.expect_round_trip().returning(|_, _, _, _, _| {
+            Err(krabka_client_core::ClientError::Io(Error::new(
+                ErrorKind::ConnectionRefused,
+                "refused",
+            )))
+        });
 
         let err = forward_submit_via(&transport, NodeId(7), "leader-host:9093", 0, &[
             topic_record("z"),
         ])
+        .await
+        .expect_err("network error");
+        assert2::assert!(matches!(err, RaftError::Network(_)));
+    }
+
+    #[tokio::test]
+    async fn forward_delegation_token_mutations_via_sends_encoded_body_and_returns_ok_on_applied() {
+        // The transport must receive the exact framed mutations body as
+        // `API_KEY_DELEGATION_TOKEN_MUTATION` at the dialed leader/addr and
+        // version, and an `error_code = 0` response yields the decoded result.
+        let mutations = vec![DelegationTokenMutation::Delete {
+            expected: golden_token(),
+        }];
+        let expected_body = encode_delegation_token_mutation_body(&mutations).expect("encode");
+
+        let mut transport = MockLeaderRoundTrip::new();
+        transport
+            .expect_round_trip()
+            .withf(move |leader, addr, api_key, version, body| {
+                *leader == 7
+                    && addr == "leader-host:9093"
+                    && *api_key == API_KEY_DELEGATION_TOKEN_MUTATION
+                    && *version == 1
+                    && body == &expected_body
+            })
+            .times(1)
+            .returning(|_, _, _, _, _| Ok(submit_change_response_bytes(0, -1)));
+
+        let result = forward_delegation_token_mutations_via(
+            &transport,
+            NodeId(7),
+            "leader-host:9093",
+            1,
+            &mutations,
+        )
+        .await
+        .expect("applied");
+        assert2::assert!(result == SubmitChangeResult::default());
+    }
+
+    #[tokio::test]
+    async fn forward_delegation_token_mutations_via_reports_its_own_api_key_on_unsupported_version()
+    {
+        // The leader's reply is translated against the delegation-token api
+        // key, not the submit-change one.
+        let mut transport = MockLeaderRoundTrip::new();
+        transport.expect_round_trip().returning(|_, _, _, _, _| {
+            Ok(submit_change_response_bytes(
+                PRIVATE_UNSUPPORTED_VERSION,
+                -1,
+            ))
+        });
+
+        let err = forward_delegation_token_mutations_via(
+            &transport,
+            NodeId(7),
+            "leader-host:9093",
+            2,
+            &[],
+        )
+        .await
+        .expect_err("unsupported version");
+        assert2::assert!(matches!(err, RaftError::UnsupportedPrivateVersion {
+            api_key: API_KEY_DELEGATION_TOKEN_MUTATION,
+            version: 2,
+        }));
+    }
+
+    #[tokio::test]
+    async fn forward_delegation_token_mutations_via_maps_transport_error_to_network() {
+        let mut transport = MockLeaderRoundTrip::new();
+        transport.expect_round_trip().returning(|_, _, _, _, _| {
+            Err(krabka_client_core::ClientError::Io(Error::new(
+                ErrorKind::ConnectionRefused,
+                "refused",
+            )))
+        });
+
+        let err = forward_delegation_token_mutations_via(
+            &transport,
+            NodeId(7),
+            "leader-host:9093",
+            0,
+            &[],
+        )
+        .await
+        .expect_err("network error");
+        assert2::assert!(matches!(err, RaftError::Network(_)));
+    }
+
+    #[tokio::test]
+    async fn forward_raw_via_sends_request_verbatim_and_returns_response_unmodified() {
+        // `forward_raw` relays a Kafka-wire request it does not interpret: the
+        // api key, version and body reach the transport as given, and the
+        // response bytes come back untouched.
+        let body = bytes::Bytes::from_static(b"describe-quorum-request");
+        let expected_body = body.clone();
+        let mut transport = MockLeaderRoundTrip::new();
+        transport
+            .expect_round_trip()
+            .withf(move |leader, addr, api_key, version, sent| {
+                *leader == 3
+                    && addr == "leader-host:9093"
+                    && *api_key == 55
+                    && *version == 2
+                    && sent == &expected_body
+            })
+            .times(1)
+            .returning(|_, _, _, _, _| Ok(bytes::Bytes::from_static(b"raw-response")));
+
+        let response = forward_raw_via(&transport, NodeId(3), "leader-host:9093", 55, 2, body)
+            .await
+            .expect("round trip");
+        assert2::assert!(response == bytes::Bytes::from_static(b"raw-response"));
+    }
+
+    #[tokio::test]
+    async fn forward_raw_via_maps_transport_error_to_network() {
+        let mut transport = MockLeaderRoundTrip::new();
+        transport.expect_round_trip().returning(|_, _, _, _, _| {
+            Err(krabka_client_core::ClientError::Io(Error::new(
+                ErrorKind::ConnectionRefused,
+                "refused",
+            )))
+        });
+
+        let err = forward_raw_via(
+            &transport,
+            NodeId(3),
+            "leader-host:9093",
+            55,
+            2,
+            bytes::Bytes::new(),
+        )
         .await
         .expect_err("network error");
         assert2::assert!(matches!(err, RaftError::Network(_)));
