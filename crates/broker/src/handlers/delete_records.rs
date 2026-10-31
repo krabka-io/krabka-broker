@@ -437,30 +437,7 @@ async fn trim_one(
     let archive = deletes.then(|| archive_floor(env, topic, &part)).flatten();
     match trim_behind_archive(archive.as_ref(), &part, target).await {
         Ok(_) => {
-            // On a diskless partition the local trim frontier is already past
-            // `target` in the steady state, so `new_start` says nothing about
-            // what a client can still read. The floor does, and it is also the
-            // low watermark the response carries. Its followers learn the
-            // floor from the WAL index, so the row does not wait for them.
-            //
-            // Any other partition answers Kafka's `lowWatermarkIfLeader`: the
-            // lowest log start of the leader and of every live follower. When
-            // that is still below the offset the request asked for, the row
-            // waits for the followers (see `low_watermark::await_followers`).
-            // Kafka's required offset is the requested one, with `-1` read as
-            // the high watermark; a trim capped below it by the delivery
-            // watermark requires only the offset it trimmed to.
-            let (low_watermark, waiting_for) = if part.diskless {
-                (target.0, None)
-            } else {
-                let requested = if fp.offset == -1 { hw.0 } else { fp.offset };
-                let required = target.0.min(requested);
-                let low_watermark = low_watermark::current(env.broker, &part).await.0;
-                (
-                    low_watermark,
-                    (low_watermark < required).then_some(required),
-                )
-            };
+            let (low_watermark, waiting_for) = settle_row(env, &part, fp, target, hw).await;
             audit_transition(
                 &env.broker.audit_log,
                 &env.broker.config.break_glass,
@@ -625,4 +602,39 @@ async fn measure_trim(
         deletes,
         hw,
     })
+}
+
+/// The low watermark a trimmed partition's row answers, and the offset the row
+/// still waits for the followers to reach.
+///
+/// On a diskless partition the local trim frontier is already past `target` in
+/// the steady state, so `new_start` says nothing about what a client can still
+/// read. The floor does, and it is also the low watermark the response carries.
+/// Its followers learn the floor from the WAL index, so the row does not wait
+/// for them.
+///
+/// Any other partition answers Kafka's `lowWatermarkIfLeader`: the lowest log
+/// start of the leader and of every live follower. When that is still below
+/// the offset the request asked for, the row waits for the followers (see
+/// `low_watermark::await_followers`). Kafka's required offset is the requested
+/// one, with `-1` read as the high watermark; a trim capped below it by the
+/// delivery watermark requires only the offset it trimmed to.
+async fn settle_row(
+    env: &TrimEnv<'_>,
+    part: &Partition,
+    fp: &DeleteRecordsPartition,
+    target: Offset,
+    hw: Offset,
+) -> (i64, Option<i64>) {
+    if part.diskless {
+        (target.0, None)
+    } else {
+        let requested = if fp.offset == -1 { hw.0 } else { fp.offset };
+        let required = target.0.min(requested);
+        let low_watermark = low_watermark::current(env.broker, part).await.0;
+        (
+            low_watermark,
+            (low_watermark < required).then_some(required),
+        )
+    }
 }
