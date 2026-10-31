@@ -118,60 +118,7 @@ pub async fn flush_once(
         tracing::warn!(object_key = %record.object_key, %error, "diskless object reservation release failed");
     }
 
-    let cache = index_log.cache();
-    for partition in partitions {
-        if !is_current_leader(partition) {
-            continue;
-        }
-        let frontier = {
-            cache
-                .lock()
-                .await
-                .flushed_frontier(partition.topic_id, partition.handle.index.get())
-        };
-        if let Some(frontier) = frontier {
-            metrics.record_diskless_wal_projection_lag(
-                partition.topic_id,
-                partition.handle.index,
-                partition.high_watermark.0.saturating_sub(frontier),
-            );
-            if let Some(lag) = config.trim_safety_lag {
-                let current_start = partition
-                    .handle
-                    .log
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .log_start_offset()
-                    .0;
-                let decision = krabka_verified::diskless_trim_decision(
-                    frontier,
-                    partition.high_watermark.0,
-                    lag,
-                    current_start,
-                );
-                let trim_frontier = if decision.should_trim {
-                    match partition
-                        .handle
-                        .trim_to_offset(Offset(decision.target))
-                        .await
-                    {
-                        Ok(offset) => offset.0,
-                        Err(error) => {
-                            metrics.diskless_wal_flush_failures_total.inc();
-                            return Err(error);
-                        }
-                    }
-                } else {
-                    current_start
-                };
-                metrics.record_diskless_wal_trim_frontier(
-                    partition.topic_id,
-                    partition.handle.index,
-                    trim_frontier,
-                );
-            }
-        }
-    }
+    trim_flushed(metrics, index_log, partitions, config, &is_current_leader).await?;
 
     Ok(Some(record))
 }
@@ -235,6 +182,72 @@ async fn build_object(
             .map_err(|error| BrokerError::Txn(format!("diskless wal object: {error}")))?;
     }
     Ok(builder)
+}
+
+/// Record each led partition's projection lag behind the durable frontier
+/// and trim its local log behind that frontier, partition by partition.
+async fn trim_flushed(
+    metrics: &BrokerMetrics,
+    index_log: &DisklessIndexLog,
+    partitions: &[FlushPartition],
+    config: &FlushConfig,
+    is_current_leader: &impl Fn(&FlushPartition) -> bool,
+) -> Result<(), BrokerError> {
+    let cache = index_log.cache();
+    for partition in partitions {
+        if !is_current_leader(partition) {
+            continue;
+        }
+        let frontier = {
+            cache
+                .lock()
+                .await
+                .flushed_frontier(partition.topic_id, partition.handle.index.get())
+        };
+        if let Some(frontier) = frontier {
+            metrics.record_diskless_wal_projection_lag(
+                partition.topic_id,
+                partition.handle.index,
+                partition.high_watermark.0.saturating_sub(frontier),
+            );
+            if let Some(lag) = config.trim_safety_lag {
+                let current_start = partition
+                    .handle
+                    .log
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .log_start_offset()
+                    .0;
+                let decision = krabka_verified::diskless_trim_decision(
+                    frontier,
+                    partition.high_watermark.0,
+                    lag,
+                    current_start,
+                );
+                let trim_frontier = if decision.should_trim {
+                    match partition
+                        .handle
+                        .trim_to_offset(Offset(decision.target))
+                        .await
+                    {
+                        Ok(offset) => offset.0,
+                        Err(error) => {
+                            metrics.diskless_wal_flush_failures_total.inc();
+                            return Err(error);
+                        }
+                    }
+                } else {
+                    current_start
+                };
+                metrics.record_diskless_wal_trim_frontier(
+                    partition.topic_id,
+                    partition.handle.index,
+                    trim_frontier,
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One index entry per v2 batch in the object.
