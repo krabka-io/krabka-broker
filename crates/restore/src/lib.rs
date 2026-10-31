@@ -200,20 +200,12 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         .map(|authentication| &authentication.claims);
     if let Some(snapshot) = rlmm_snapshot.as_ref().filter(|_| has_classic) {
         discover::reconcile_authenticated_snapshot(&mut archive.partitions, args, snapshot)?;
-        if archive.partitions.is_empty() {
-            return Err(RestoreError::EmptyArchive {
-                prefix: store.prefix().unwrap_or("").to_owned(),
-            });
-        }
+        ensure_partitions(&archive, &store)?;
     }
     if let Some(capture) = &diskless_capture {
         diskless::add_partitions(&mut archive, capture, args)?;
     }
-    if archive.partitions.is_empty() {
-        return Err(RestoreError::EmptyArchive {
-            prefix: store.prefix().unwrap_or("").to_owned(),
-        });
-    }
+    ensure_partitions(&archive, &store)?;
     let predicates = Predicates::from_args(args)?;
     let (format, diskless_next_offsets) = format_with_next_offsets(
         &store,
@@ -372,6 +364,16 @@ async fn format_with_next_offsets(
         materialize::format_target_with_snapshot(args, archive, metadata_snapshot, &next_offsets)
             .await?;
     Ok((format, next_offsets))
+}
+
+/// Refuse an archive that, after filtering, holds no partition to restore.
+fn ensure_partitions(archive: &ArchiveInventory, store: &ArchiveStore) -> Result<(), RestoreError> {
+    if archive.partitions.is_empty() {
+        return Err(RestoreError::EmptyArchive {
+            prefix: store.prefix().unwrap_or("").to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Refuse a target that already holds entries.
