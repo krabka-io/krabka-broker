@@ -152,7 +152,6 @@ async fn actor_loop(
     coordinator: Arc<super::super::GroupCoordinator>,
     mut rx: mpsc::Receiver<ShareGroupActorMessage>,
 ) {
-    let offsets_log = Arc::clone(&coordinator.offsets_log);
     let mut state = ShareGroupState::new(group_id);
     let mut tick_period = config.heartbeat_interval;
     let mut tick = interval(tick_period);
@@ -181,7 +180,6 @@ async fn actor_loop(
                             &mut state,
                             &effective,
                             &*metadata,
-                            &*offsets_log,
                             &coordinator,
                             &request,
                             super::super::ClientIdentity {
@@ -220,7 +218,7 @@ async fn actor_loop(
                         let _ = reply.send(result);
                     }
                     ShareGroupActorMessage::Delete { reply } => {
-                        let result = delete::delete_group(&mut state, &*offsets_log, &coordinator).await;
+                        let result = delete::delete_group(&mut state, &coordinator).await;
                         let deleted = result.is_ok();
                         let _ = reply.send(result);
                         if deleted {
@@ -247,7 +245,7 @@ async fn actor_loop(
             }
             _ = tick.tick() => {
                 let effective = effective_config(&config, &coordinator, &state.group_id);
-                if handle_session_tick(&mut state, &effective, &*metadata, &*offsets_log, &coordinator).await.is_err() {
+                if handle_session_tick(&mut state, &effective, &*metadata, &coordinator).await.is_err() {
                     break;
                 }
             }

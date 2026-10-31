@@ -22,7 +22,6 @@ use {
             DeleteGroupError,
             unified::{
                 GroupCoordinator, OffsetRecordBatchBuilder,
-                offsets_log::OffsetsLog,
                 share::{
                     persistence::{ShareGroupKey, encode_share_key},
                     state::{ShareGroupState, TopicPartitionList},
@@ -44,17 +43,16 @@ use {
 /// [`DeleteGroupError::Internal`] when the tombstone append fails.
 pub(super) async fn delete_group(
     state: &mut ShareGroupState,
-    offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
 ) -> Result<(), DeleteGroupError> {
     if !state.members.is_empty() {
         return Err(DeleteGroupError::NonEmpty);
     }
 
-    delete_share_state(state, offsets_log, coordinator).await?;
+    delete_share_state(state, coordinator).await?;
 
     let appended = match tombstone_batch(&state.group_id, chrono_now_ms()) {
-        Ok(batch) => offsets_log.append(&state.group_id, batch).await,
+        Ok(batch) => coordinator.offsets_log.append(&state.group_id, batch).await,
         Err(error) => Err(error),
     };
     appended.map_err(|error| {
@@ -83,7 +81,6 @@ pub(super) async fn delete_group(
 /// A group with no share-state partition metadata writes nothing here.
 async fn delete_share_state(
     state: &mut ShareGroupState,
-    offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
 ) -> Result<(), DeleteGroupError> {
     if !state.has_state_partition_metadata() {
@@ -108,7 +105,7 @@ async fn delete_share_state(
         ..Default::default()
     };
     if let Err(error) =
-        flush_pending(state, pending, offsets_log, coordinator, chrono_now_ms()).await
+        flush_pending(state, pending, &*coordinator.offsets_log, coordinator, chrono_now_ms()).await
     {
         tracing::warn!(
             group_id = %state.group_id,
