@@ -90,8 +90,8 @@ pub(super) struct TopicProducePolicy<'a> {
 /// back and the handler drives every partition's wait together, so charging it
 /// per partition would charge one interval N times over.
 ///
-/// The work returns the per-partition response on every path. Only
-/// `txn_coordinator.put` errors propagate with `?`.
+/// Admission answers on every path, with a refused row or an admitted batch.
+/// Only the append in [`complete_partition`] can fail with a `BrokerError`.
 pub(super) struct PartitionInput<'a> {
     pub(super) part_data: FramedPartition,
     /// The settings of this partition's topic.
@@ -365,7 +365,7 @@ pub(super) async fn process_partition(
     services: PartitionServices<'_>,
 ) -> Result<PartitionOutcome, BrokerError> {
     let transaction = input.transaction;
-    let admission = admit_partition(input, services).await?;
+    let admission = admit_partition(input, services).await;
     let batch = match admission {
         Admission::Done(row) => return Ok(PartitionOutcome::Done(row)),
         Admission::Admitted(batch) => batch,
@@ -387,7 +387,7 @@ pub(super) async fn process_partition(
 pub(super) async fn admit_partition(
     input: PartitionInput<'_>,
     services: PartitionServices<'_>,
-) -> Result<Admission, BrokerError> {
+) -> Admission {
     let PartitionInput {
         part_data,
         topic:
@@ -451,13 +451,13 @@ pub(super) async fn admit_partition(
     match freeze {
         FreezeMutationResolution::AuthorizationDenied => {
             out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
-            return Ok(Admission::Done(out));
+            return Admission::Done(out);
         }
         FreezeMutationResolution::Frozen(entry) => {
             metrics.record_topic_freeze_rejection(topic_name);
             out.error_code = codes::POLICY_VIOLATION;
             out.error_message = Some(FreezeVerdict::from(entry).error_message());
-            return Ok(Admission::Done(out));
+            return Admission::Done(out);
         }
         FreezeMutationResolution::Admit => {}
     }
@@ -483,7 +483,7 @@ pub(super) async fn admit_partition(
     // refuse the broker's own replay of its coordinator logs.
     if internal_topic_denied {
         out.error_code = codes::INVALID_TOPIC_EXCEPTION;
-        return Ok(Admission::Done(out));
+        return Admission::Done(out);
     }
 
     // ── max.message.bytes ────────────────────────────────────────────
@@ -508,7 +508,7 @@ pub(super) async fn admit_partition(
     if part_data.payload.largest_batch_len() > max_message_bytes.bytes_usize() {
         out.error_code = codes::MESSAGE_TOO_LARGE;
         out.base_offset = INVALID_OFFSET;
-        return Ok(Admission::Done(out));
+        return Admission::Done(out);
     }
 
     // Decide verbatim-passthrough vs owned-decode and extract the HEADER
@@ -551,7 +551,7 @@ pub(super) async fn admit_partition(
         Ok(p) => p,
         Err(code) => {
             out.error_code = code;
-            return Ok(Admission::Done(out));
+            return Admission::Done(out);
         }
     };
 
@@ -585,7 +585,7 @@ pub(super) async fn admit_partition(
     {
         // `out` already carries the -1 `base_offset` sentinel.
         out.error_code = codes::MESSAGE_TOO_LARGE;
-        return Ok(Admission::Done(out));
+        return Admission::Done(out);
     }
 
     // ── leadership gate (Kafka: only the LEADER accepts Produce) ──────
@@ -633,7 +633,7 @@ pub(super) async fn admit_partition(
             if let Some(leader) = error.current_leader {
                 out.current_leader = leader;
             }
-            return Ok(Admission::Done(out));
+            return Admission::Done(out);
         }
     };
 
@@ -642,12 +642,12 @@ pub(super) async fn admit_partition(
         if let Some(record) = image.partition(topic_name, idx) {
             out.current_leader = current_leader_hint(record);
         }
-        return Ok(Admission::Done(out));
+        return Admission::Done(out);
     }
 
     // ── compacted topic: Kafka's `LogValidator.validateKey` ──────────
     if let Some(refusal) = record_validation_refusal(&out, &prepared, &part, topic_name) {
-        return Ok(Admission::Done(refusal));
+        return Admission::Done(refusal);
     }
 
     // ── KFC-7 schema validation ──────────────────────────────────────
@@ -670,7 +670,7 @@ pub(super) async fn admit_partition(
         out.error_code = codes::INVALID_RECORD;
         out.error_message = Some(SCHEMA_REJECTION_MESSAGE.to_owned());
         out.record_errors = rejection;
-        return Ok(Admission::Done(out));
+        return Admission::Done(out);
     }
 
     // KIP-890: verify before the duplicate lookup, outside the barrier (a
@@ -678,9 +678,9 @@ pub(super) async fn admit_partition(
     let verification = match verify_before_append(&prepared, &part, transaction, out.clone()).await
     {
         Ok(verification) => verification,
-        Err(refused) => return Ok(Admission::Done(*refused)),
+        Err(refused) => return Admission::Done(*refused),
     };
-    Ok(Admission::Admitted(Box::new(AdmittedBatch {
+    Admission::Admitted(Box::new(AdmittedBatch {
         prepared,
         part,
         shared_topic,
@@ -689,7 +689,7 @@ pub(super) async fn admit_partition(
         version: transaction.version,
         out,
         verification,
-    })))
+    }))
 }
 
 /// Whether the batch, as the writer will store it, is larger than the

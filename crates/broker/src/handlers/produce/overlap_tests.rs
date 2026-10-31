@@ -98,9 +98,8 @@ async fn admit(
             .payload(PartitionPayload::Slice(batch(entry.base_sequence)))
             .acks(acks)
             .call();
-        let Admission::Admitted(admitted_batch) = admit_partition(input, fixture.services(image))
-            .await
-            .expect("admit")
+        let Admission::Admitted(admitted_batch) =
+            admit_partition(input, fixture.services(image)).await
         else {
             panic!("{} must pass every gate before the append", entry.topic);
         };

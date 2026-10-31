@@ -439,7 +439,7 @@ pub async fn handle(
                 },
                 services,
             )
-            .await?;
+            .await;
             let micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
             match admission {
                 Admission::Done(out) => {
