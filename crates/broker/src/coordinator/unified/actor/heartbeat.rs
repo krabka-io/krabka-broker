@@ -93,28 +93,8 @@ pub(super) async fn handle_actor_heartbeat(
         let _ = reply.send(group_id_not_found(Some(message)));
         return true;
     }
-    // Kafka's `consumerGroupFenceMembers` downgrades the group, in place of
-    // the fence, when the leaving member is its last native one.
-    if request.member_epoch == LEAVE_GROUP_MEMBER_EPOCH
-        && let Ok(member) = resolve_leaving_member(state, &request)
-    {
-        let fenced = [member.member_id.clone()];
-        if downgrades_without(state, services.config, &fenced) {
-            if let Err(error) = downgrade_fencing(group, &fenced, services).await {
-                tracing::warn!(group_id = %group.group_id, %error,
-                    "next-gen actor exiting after downgrade log-write failure");
-                let _ = reply.send(ConsumerGroupHeartbeatResponse {
-                    error_code: write_failure_code(&error),
-                    ..Default::default()
-                });
-                return false;
-            }
-            let _ = reply.send(ConsumerGroupHeartbeatResponse {
-                member_id: Some(request.member_id.clone()),
-                ..base_resp(codes::NONE, request.member_epoch)
-            });
-            return true;
-        }
+    if let Some(fenced) = downgrading_leave(state, services.config, &request) {
+        return downgrade_on_leave(group, &fenced, services, &request, reply).await;
     }
     match handle_heartbeat(state, services, &request, client, regex_resolver, prefix).await {
         Ok(response) => {
@@ -160,6 +140,48 @@ fn refuse_over_classic(
         config.max_size,
     )
     .err()
+}
+
+/// Kafka's `consumerGroupFenceMembers` downgrades the group, in place of the
+/// fence, when the leaving member is its last native one. The member to fence
+/// when this leave downgrades the group, or `None`.
+fn downgrading_leave(
+    state: &GroupState,
+    config: &NextGenConfig,
+    request: &ConsumerGroupHeartbeatRequest,
+) -> Option<[String; 1]> {
+    if request.member_epoch != LEAVE_GROUP_MEMBER_EPOCH {
+        return None;
+    }
+    let member = resolve_leaving_member(state, request).ok()?;
+    let fenced = [member.member_id.clone()];
+    downgrades_without(state, config, &fenced).then_some(fenced)
+}
+
+/// Downgrades the group in place of fencing the leaving member and answers
+/// the leave. It returns `false` when the downgrade's log write fails, and
+/// the actor then exits.
+async fn downgrade_on_leave(
+    group: &mut CoordinatorGroup,
+    fenced: &[String],
+    services: ActorServices<'_>,
+    request: &ConsumerGroupHeartbeatRequest,
+    reply: oneshot::Sender<ConsumerGroupHeartbeatResponse>,
+) -> bool {
+    if let Err(error) = downgrade_fencing(group, fenced, services).await {
+        tracing::warn!(group_id = %group.group_id, %error,
+            "next-gen actor exiting after downgrade log-write failure");
+        let _ = reply.send(ConsumerGroupHeartbeatResponse {
+            error_code: write_failure_code(&error),
+            ..Default::default()
+        });
+        return false;
+    }
+    let _ = reply.send(ConsumerGroupHeartbeatResponse {
+        member_id: Some(request.member_id.clone()),
+        ..base_resp(codes::NONE, request.member_epoch)
+    });
+    true
 }
 
 /// A classic group that a heartbeat replaced with a consumer group.
