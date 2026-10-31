@@ -93,13 +93,15 @@ pub async fn handle(
             topic_decisions.get(rt.topic_name.as_str()) == Some(&AuthorizationResult::Deny)
         });
 
-    if let Some(error_code) = group_coordinator_error(broker, &gid) {
-        return Ok(top_level(error_code, None));
-    }
     // GroupCoordinatorService.deleteShareGroupOffsets rejects an empty id
-    // before it routes the group to a shard.
+    // before it routes the group to a shard. An empty id hashes to some
+    // partition, and a broker that does not lead it would otherwise answer
+    // NOT_COORDINATOR instead.
     if gid.is_empty() {
         return Ok(top_level(codes::INVALID_GROUP_ID, None));
+    }
+    if let Some(error_code) = group_coordinator_error(broker, &gid) {
+        return Ok(top_level(error_code, None));
     }
     // GroupCoordinatorShard.initiateDeleteShareGroupOffsets looks the group
     // up through `shareGroup`, which refuses a missing group and a group of

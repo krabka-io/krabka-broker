@@ -91,9 +91,11 @@ pub async fn handle(
         .assignors
         .first()
         .map_or_default(|a| a.name());
-    // Kafka places every GROUP_AUTHORIZATION_FAILED row first, ahead of the
-    // coordinator results, which keep request order among themselves.
+    // Kafka places every GROUP_AUTHORIZATION_FAILED row first, then the
+    // INVALID_GROUP_ID rows, then the coordinator results, which keep
+    // request order among themselves.
     let mut denied: Vec<DescribedGroup> = Vec::new();
+    let mut invalid: Vec<DescribedGroup> = Vec::new();
     let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
     for group_id in &req.group_ids {
         if group_describe_denied(broker.config.authorizer.as_ref(), &image, ctx, group_id) {
@@ -105,9 +107,10 @@ pub async fn handle(
             continue;
         }
         // GroupCoordinatorService.consumerGroupDescribe rejects an empty id
-        // before it routes the group to a shard.
+        // before it routes the group to a shard, and its completed future
+        // comes ahead of the shard results.
         if group_id.is_empty() {
-            described.push(DescribedGroup::error_row("", codes::INVALID_GROUP_ID, None));
+            invalid.push(DescribedGroup::error_row("", codes::INVALID_GROUP_ID, None));
             continue;
         }
         if let Some(error_code) = group_coordinator_error(broker, group_id) {
@@ -151,6 +154,7 @@ pub async fn handle(
         &mut described,
     );
 
+    denied.extend(invalid);
     denied.extend(described);
     hide_undescribable_topics(broker.config.authorizer.as_ref(), &image, ctx, &mut denied);
     Ok(response(denied))
