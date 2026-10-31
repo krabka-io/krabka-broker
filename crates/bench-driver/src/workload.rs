@@ -431,53 +431,14 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
     let fault_at_ms = finish_fault(fault, &mut notes).await;
 
     // ── Join all tasks ──────────────────────────────────────────────────────
-    let mut prod_hist = Histogram::new_from(&histogram);
-    let mut prod_msgs = 0u64;
-    let mut prod_bytes = 0u64;
-    let mut prod_dropped = 0u64;
-    let mut earliest_recovery_ms = 0u64;
-    let mut max_spike = Time::ZERO;
-    let mut prod_iv_msgs = vec![0u64; n_intervals];
-    let mut prod_iv_hist: Vec<Histogram<u64>> =
-        iter::repeat_with(|| Histogram::new_from(&histogram))
-            .take(n_intervals)
-            .collect();
-    while let Some(j) = prod_set.join_next().await {
-        match j {
-            Ok(t) => {
-                let _ = prod_hist.add(&t.measurements.latency);
-                prod_msgs += t.measurements.msgs;
-                prod_bytes += t.measurements.bytes;
-                prod_dropped += t.dropped;
-                for (total, m) in prod_iv_msgs.iter_mut().zip(&t.measurements.interval_msgs) {
-                    *total += *m;
-                }
-                for (total, h) in prod_iv_hist.iter_mut().zip(&t.measurements.interval_hist) {
-                    let _ = total.add(h);
-                }
-                if t.latency_spike_max > max_spike {
-                    max_spike = t.latency_spike_max;
-                }
-                if t.recovery_unix_ms > 0
-                    && (earliest_recovery_ms == 0 || t.recovery_unix_ms < earliest_recovery_ms)
-                {
-                    earliest_recovery_ms = t.recovery_unix_ms;
-                }
-                if !t.error.is_empty() {
-                    errors.push(t.error);
-                }
-            }
-            Err(e) => errors.push(format!("producer-task-panic: {e}")),
-        }
-    }
-
+    let producers = join_producers(prod_set, n_intervals, &histogram, &mut errors).await;
     let consumed = join_consumers(cons_set, n_intervals, &histogram, &mut errors).await;
 
     let samples = build_samples(
         grid.interval(),
         &IntervalTallies {
-            messages: &prod_iv_msgs,
-            histograms: &prod_iv_hist,
+            messages: &producers.measurements.interval_msgs,
+            histograms: &producers.measurements.interval_hist,
         },
         &IntervalTallies {
             messages: &consumed.interval_msgs,
@@ -497,7 +458,7 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
             end_ms: wallclock_end,
         },
         grid.meas_end_ns,
-        prod_msgs,
+        producers.measurements.msgs,
         &mut notes,
     )
     .await;
@@ -509,9 +470,9 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
         failover_active,
         FailoverStamps {
             kill_at_ms: fault_at_ms,
-            recovery_at_ms: earliest_recovery_ms,
-            dropped: prod_dropped,
-            latency_spike_max: max_spike,
+            recovery_at_ms: producers.earliest_recovery_ms,
+            dropped: producers.dropped,
+            latency_spike_max: producers.max_spike,
         },
         first_ack_unix_ms.load(Ordering::SeqCst),
         wallclock_start,
@@ -530,14 +491,14 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
         wallclock_start_unix_ms: WallclockMs(wallclock_start),
         wallclock_end_unix_ms: WallclockMs(wallclock_end),
         throughput: Throughput {
-            msgs_produced: MessageCount(prod_msgs),
+            msgs_produced: MessageCount(producers.measurements.msgs),
             msgs_consumed: MessageCount(consumed.msgs),
-            bytes_in: ByteSize::from_bytes(prod_bytes),
+            bytes_in: ByteSize::from_bytes(producers.measurements.bytes),
             bytes_out: ByteSize::from_bytes(consumed.bytes),
-            producer_rate: event_rate(prod_msgs, scenario.duration),
+            producer_rate: event_rate(producers.measurements.msgs, scenario.duration),
             consumer_rate: event_rate(consumed.msgs, scenario.duration),
         },
-        producer_latency: hist::percentiles(&prod_hist),
+        producer_latency: hist::percentiles(&producers.measurements.latency),
         consumer_e2e_latency: hist::percentiles(&consumed.latency),
         resource,
         disturbance,
@@ -688,6 +649,54 @@ fn spawn_producers(
             histogram: Histogram::new_from(histogram),
         }));
     }
+}
+
+/// What every producer task measured, merged.
+struct ProducerTotals {
+    measurements: TaskMeasurements,
+    dropped: u64,
+    /// The earliest recovery any producer saw, or zero when none saw one.
+    earliest_recovery_ms: u64,
+    /// The largest latency spike any producer saw.
+    max_spike: Time,
+}
+
+/// Wait for every producer task, merging what each measured. A task that
+/// failed or panicked leaves its error in `errors`.
+async fn join_producers(
+    mut tasks: JoinSet<ProducerOut>,
+    intervals: usize,
+    histogram: &Histogram<u64>,
+    errors: &mut Vec<String>,
+) -> ProducerTotals {
+    let mut totals = ProducerTotals {
+        measurements: TaskMeasurements::new(intervals, histogram),
+        dropped: 0,
+        earliest_recovery_ms: 0,
+        max_spike: Time::ZERO,
+    };
+    while let Some(joined) = tasks.join_next().await {
+        match joined {
+            Ok(task) => {
+                totals.measurements.merge(&task.measurements);
+                totals.dropped += task.dropped;
+                if task.latency_spike_max > totals.max_spike {
+                    totals.max_spike = task.latency_spike_max;
+                }
+                if task.recovery_unix_ms > 0
+                    && (totals.earliest_recovery_ms == 0
+                        || task.recovery_unix_ms < totals.earliest_recovery_ms)
+                {
+                    totals.earliest_recovery_ms = task.recovery_unix_ms;
+                }
+                if !task.error.is_empty() {
+                    errors.push(task.error);
+                }
+            }
+            Err(e) => errors.push(format!("producer-task-panic: {e}")),
+        }
+    }
+    totals
 }
 
 /// Wait for every consumer task, merging what each measured. A task that
