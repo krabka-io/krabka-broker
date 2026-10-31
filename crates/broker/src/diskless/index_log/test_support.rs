@@ -138,6 +138,34 @@ impl MetadataEventLog for StallableLog {
     }
 }
 
+/// Wraps a [`MetadataEventLog`] whose subscription never delivers one
+/// partition's records, as a broker whose fetch loop for that partition
+/// wedges. Publishing to it still succeeds. Every other method delegates.
+pub struct HeldPartitionLog {
+    inner: Arc<dyn MetadataEventLog>,
+    held: i32,
+}
+
+impl HeldPartitionLog {
+    pub(crate) fn new(inner: Arc<dyn MetadataEventLog>, held: i32) -> Arc<Self> {
+        Arc::new(Self { inner, held })
+    }
+}
+
+#[krabka_macros::metadata_log_delegate(krabka_remote_storage_topic, keyed)]
+#[async_trait]
+impl MetadataEventLog for HeldPartitionLog {
+    fn subscribe(
+        &self,
+        assignment: Vec<PartitionStart>,
+    ) -> (MetadataEventStream, Arc<dyn AssignmentHandle>) {
+        let (stream, handle) = self.inner.subscribe(assignment);
+        let held = self.held;
+        let filtered = stream.filter(move |event| future::ready(event.partition != held));
+        (Box::pin(filtered), handle)
+    }
+}
+
 /// Publishes one record from inside `subscribe`, modelling another broker's
 /// in-flight flush landing exactly while a restarting projection establishes
 /// its subscription. A watermark read *before* subscribing steps over that
