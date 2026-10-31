@@ -361,75 +361,10 @@ async fn trim_one(
         waiting_for: None,
     };
 
-    // Kafka's `ReplicaManager.deleteRecordsOnLocalLog` refuses every partition
-    // of an internal topic with `INVALID_TOPIC_EXCEPTION` before it looks for
-    // the partition. `KafkaApis` answers a partition the metadata does not
-    // hold before that, with `UNKNOWN_TOPIC_OR_PARTITION`. A trim of an
-    // internal topic deletes committed offsets, transaction state or share
-    // state, and a trim of krabka's own internal topics deletes broker state,
-    // so both sets are refused.
-    // The partition registry is updated apart from this image, so an internal
-    // partition the image lacks never falls through to it.
-    if is_internal_topic(&env.broker.config, topic) {
-        return refused(if env.image.partition(topic, index).is_some() {
-            codes::INVALID_TOPIC_EXCEPTION
-        } else {
-            codes::UNKNOWN_TOPIC_OR_PARTITION
-        });
-    }
-    // `KafkaApis.handleDeleteRecordsRequest` answers a partition the metadata
-    // does not hold with `UNKNOWN_TOPIC_OR_PARTITION`. One the metadata holds
-    // and this broker does not host is `NOT_LEADER_OR_FOLLOWER`
-    // (`ReplicaManager.getPartitionOrError`), which sends the client to
-    // refresh its metadata and find the leader rather than give up.
-    if env.image.partition(topic, index).is_none() {
-        return refused(codes::UNKNOWN_TOPIC_OR_PARTITION);
-    }
-    let Some(part) = env.partitions.get(topic, krabka_ids::PartitionIndex(index)) else {
-        return refused(codes::NOT_LEADER_OR_FOLLOWER);
+    let part = match admit_partition(env, topic, index) {
+        Ok(part) => part,
+        Err(code) => return refused(code),
     };
-
-    let cur_leader = part.current_leader.load(atomic::Ordering::Acquire);
-    if cur_leader != env.broker.config.node_id {
-        return refused(codes::NOT_LEADER_OR_FOLLOWER);
-    }
-
-    // Kafka's `Partition.deleteRecordsOnLeader` refuses a trim on a log whose
-    // `cleanup.policy` compacts and does not delete. A compacted topic holds
-    // the latest value of each key, and a trim would lose keys. The leader's
-    // own log config is the one Kafka reads.
-    if trim_forbidden_by_policy(&part) {
-        tracing::warn!(
-            %topic,
-            partition = index,
-            "DeleteRecords refused: cleanup.policy=compact does not allow deletion"
-        );
-        return refused(codes::POLICY_VIOLATION);
-    }
-
-    // KFC-9: a write freeze refuses every operation that removes data from the
-    // topic it covers, and it answers ahead of the two-person rule. That order
-    // is the rule: a break-glass approval to trim does not defeat a freeze, and
-    // a trim the freeze refuses must not spend an approval on its way to being
-    // refused.
-    //
-    // No version of the `DeleteRecords` response carries an `error_message`, so
-    // the reason reaches the operator through the broker's log alone. Like the
-    // produce gate, this refusal emits no privileged-action audit event: a
-    // freeze is not a break-glass act, and the registry entry that caused it is
-    // already in the metadata log.
-    if let FreezeMutationResolution::Frozen(record) =
-        resolve_freeze_mutation(env.image, topic, true, FreezeMutationKind::DeleteRecords)
-    {
-        let verdict = FreezeVerdict::from(record);
-        tracing::warn!(
-            %topic,
-            partition = index,
-            refusal = %verdict.removal_message(),
-            "DeleteRecords refused by a freeze"
-        );
-        return refused(codes::POLICY_VIOLATION);
-    }
 
     // KFC-9: the two-person rule answers here, before the broker reads a single
     // offset. The approval is not spent yet: a request that then fails its
@@ -446,37 +381,14 @@ async fn trim_one(
         }
     };
 
-    let leo = part.log_end_offset();
-    let hw = part.high_watermark().await;
-    // Recompute delivery under the log mutex against the partition's own
-    // clock. This agrees with the cap a fetch at this instant would apply,
-    // rather than with whatever the last scheduler sweep published. It
-    // answers `None` on a topic that delivers immediately. The verified
-    // decision rejects malformed state, preserves stale retries, and caps
-    // every admitted target at both HWM and delivery.
-    let delivery_watermark = part
-        .delivery
-        .publish_now(&part.log)
-        .map(|delivery| delivery.watermark);
-    // A diskless partition's local log start is the flusher's trim frontier:
-    // the records below it are in the object store, not gone. The trim has to
-    // measure against the offset the partition actually starts at, which is
-    // the same one `ListOffsets(EARLIEST)` answers, or every request below the
-    // trim frontier would be a no-op that deletes nothing.
-    let current_start = diskless_logical_start(env, topic, &part)
-        .await
-        .map_or_else(|| part.log_start_offset(), Offset);
-    // `deletes` is what the audit trail keys on: a `Noop` answers the current
-    // start, trims to where the partition already begins, and removes nothing.
-    let (target, deletes) =
-        match trim_decision(fp.offset, hw, leo, current_start, delivery_watermark) {
-            DeleteRecordsTrimDecision::Noop { frontier } => (Offset(frontier), false),
-            DeleteRecordsTrimDecision::Apply { frontier } => (Offset(frontier), true),
-            DeleteRecordsTrimDecision::RejectMalformed
-            | DeleteRecordsTrimDecision::RejectOutOfRange => {
-                return refused(codes::OFFSET_OUT_OF_RANGE);
-            }
-        };
+    let TrimMeasurement {
+        target,
+        deletes,
+        hw,
+    } = match measure_trim(env, topic, &part, fp).await {
+        Ok(measurement) => measurement,
+        Err(code) => return refused(code),
+    };
 
     let audit_target = trim_target(topic, index);
     if let Err(error) = require_transition(
@@ -525,30 +437,7 @@ async fn trim_one(
     let archive = deletes.then(|| archive_floor(env, topic, &part)).flatten();
     match trim_behind_archive(archive.as_ref(), &part, target).await {
         Ok(_) => {
-            // On a diskless partition the local trim frontier is already past
-            // `target` in the steady state, so `new_start` says nothing about
-            // what a client can still read. The floor does, and it is also the
-            // low watermark the response carries. Its followers learn the
-            // floor from the WAL index, so the row does not wait for them.
-            //
-            // Any other partition answers Kafka's `lowWatermarkIfLeader`: the
-            // lowest log start of the leader and of every live follower. When
-            // that is still below the offset the request asked for, the row
-            // waits for the followers (see `low_watermark::await_followers`).
-            // Kafka's required offset is the requested one, with `-1` read as
-            // the high watermark; a trim capped below it by the delivery
-            // watermark requires only the offset it trimmed to.
-            let (low_watermark, waiting_for) = if part.diskless {
-                (target.0, None)
-            } else {
-                let requested = if fp.offset == -1 { hw.0 } else { fp.offset };
-                let required = target.0.min(requested);
-                let low_watermark = low_watermark::current(env.broker, &part).await.0;
-                (
-                    low_watermark,
-                    (low_watermark < required).then_some(required),
-                )
-            };
+            let (low_watermark, waiting_for) = settle_row(env, &part, fp, target, hw).await;
             audit_transition(
                 &env.broker.audit_log,
                 &env.broker.config.break_glass,
@@ -576,5 +465,176 @@ async fn trim_one(
             tracing::warn!(%topic, partition = index, %error, "DeleteRecords trim failed");
             refused(codes::UNKNOWN_SERVER_ERROR)
         }
+    }
+}
+
+/// Admit one partition to a trim, or answer the error code that refuses it.
+///
+/// The checks run in Kafka's order: an internal topic, a partition the
+/// metadata does not hold, one this broker does not host or lead, a
+/// `cleanup.policy` that forbids deletion, and last a write freeze. The freeze
+/// stays last so that it answers ahead of the two-person rule that follows.
+fn admit_partition(env: &TrimEnv<'_>, topic: &str, index: i32) -> Result<Arc<Partition>, i16> {
+    // Kafka's `ReplicaManager.deleteRecordsOnLocalLog` refuses every partition
+    // of an internal topic with `INVALID_TOPIC_EXCEPTION` before it looks for
+    // the partition. `KafkaApis` answers a partition the metadata does not
+    // hold before that, with `UNKNOWN_TOPIC_OR_PARTITION`. A trim of an
+    // internal topic deletes committed offsets, transaction state or share
+    // state, and a trim of krabka's own internal topics deletes broker state,
+    // so both sets are refused.
+    // The partition registry is updated apart from this image, so an internal
+    // partition the image lacks never falls through to it.
+    if is_internal_topic(&env.broker.config, topic) {
+        return Err(if env.image.partition(topic, index).is_some() {
+            codes::INVALID_TOPIC_EXCEPTION
+        } else {
+            codes::UNKNOWN_TOPIC_OR_PARTITION
+        });
+    }
+    // `KafkaApis.handleDeleteRecordsRequest` answers a partition the metadata
+    // does not hold with `UNKNOWN_TOPIC_OR_PARTITION`. One the metadata holds
+    // and this broker does not host is `NOT_LEADER_OR_FOLLOWER`
+    // (`ReplicaManager.getPartitionOrError`), which sends the client to
+    // refresh its metadata and find the leader rather than give up.
+    if env.image.partition(topic, index).is_none() {
+        return Err(codes::UNKNOWN_TOPIC_OR_PARTITION);
+    }
+    let Some(part) = env.partitions.get(topic, krabka_ids::PartitionIndex(index)) else {
+        return Err(codes::NOT_LEADER_OR_FOLLOWER);
+    };
+
+    let cur_leader = part.current_leader.load(atomic::Ordering::Acquire);
+    if cur_leader != env.broker.config.node_id {
+        return Err(codes::NOT_LEADER_OR_FOLLOWER);
+    }
+
+    // Kafka's `Partition.deleteRecordsOnLeader` refuses a trim on a log whose
+    // `cleanup.policy` compacts and does not delete. A compacted topic holds
+    // the latest value of each key, and a trim would lose keys. The leader's
+    // own log config is the one Kafka reads.
+    if trim_forbidden_by_policy(&part) {
+        tracing::warn!(
+            %topic,
+            partition = index,
+            "DeleteRecords refused: cleanup.policy=compact does not allow deletion"
+        );
+        return Err(codes::POLICY_VIOLATION);
+    }
+
+    // KFC-9: a write freeze refuses every operation that removes data from the
+    // topic it covers, and it answers ahead of the two-person rule. That order
+    // is the rule: a break-glass approval to trim does not defeat a freeze, and
+    // a trim the freeze refuses must not spend an approval on its way to being
+    // refused.
+    //
+    // No version of the `DeleteRecords` response carries an `error_message`, so
+    // the reason reaches the operator through the broker's log alone. Like the
+    // produce gate, this refusal emits no privileged-action audit event: a
+    // freeze is not a break-glass act, and the registry entry that caused it is
+    // already in the metadata log.
+    if let FreezeMutationResolution::Frozen(record) =
+        resolve_freeze_mutation(env.image, topic, true, FreezeMutationKind::DeleteRecords)
+    {
+        let verdict = FreezeVerdict::from(record);
+        tracing::warn!(
+            %topic,
+            partition = index,
+            refusal = %verdict.removal_message(),
+            "DeleteRecords refused by a freeze"
+        );
+        return Err(codes::POLICY_VIOLATION);
+    }
+
+    Ok(part)
+}
+
+/// Where one admitted partition's trim lands.
+struct TrimMeasurement {
+    /// The offset the trim moves the partition's start to.
+    target: Offset,
+    /// Whether the trim removes anything. A `Noop` does not.
+    deletes: bool,
+    /// The high watermark the trim was measured against.
+    hw: Offset,
+}
+
+/// Measure where a trim of `part` to the requested offset lands, or answer the
+/// error code that refuses it.
+async fn measure_trim(
+    env: &TrimEnv<'_>,
+    topic: &str,
+    part: &Partition,
+    fp: &DeleteRecordsPartition,
+) -> Result<TrimMeasurement, i16> {
+    let leo = part.log_end_offset();
+    let hw = part.high_watermark().await;
+    // Recompute delivery under the log mutex against the partition's own
+    // clock. This agrees with the cap a fetch at this instant would apply,
+    // rather than with whatever the last scheduler sweep published. It
+    // answers `None` on a topic that delivers immediately. The verified
+    // decision rejects malformed state, preserves stale retries, and caps
+    // every admitted target at both HWM and delivery.
+    let delivery_watermark = part
+        .delivery
+        .publish_now(&part.log)
+        .map(|delivery| delivery.watermark);
+    // A diskless partition's local log start is the flusher's trim frontier:
+    // the records below it are in the object store, not gone. The trim has to
+    // measure against the offset the partition actually starts at, which is
+    // the same one `ListOffsets(EARLIEST)` answers, or every request below the
+    // trim frontier would be a no-op that deletes nothing.
+    let current_start = diskless_logical_start(env, topic, part)
+        .await
+        .map_or_else(|| part.log_start_offset(), Offset);
+    // `deletes` is what the audit trail keys on: a `Noop` answers the current
+    // start, trims to where the partition already begins, and removes nothing.
+    let (target, deletes) =
+        match trim_decision(fp.offset, hw, leo, current_start, delivery_watermark) {
+            DeleteRecordsTrimDecision::Noop { frontier } => (Offset(frontier), false),
+            DeleteRecordsTrimDecision::Apply { frontier } => (Offset(frontier), true),
+            DeleteRecordsTrimDecision::RejectMalformed
+            | DeleteRecordsTrimDecision::RejectOutOfRange => {
+                return Err(codes::OFFSET_OUT_OF_RANGE);
+            }
+        };
+    Ok(TrimMeasurement {
+        target,
+        deletes,
+        hw,
+    })
+}
+
+/// The low watermark a trimmed partition's row answers, and the offset the row
+/// still waits for the followers to reach.
+///
+/// On a diskless partition the local trim frontier is already past `target` in
+/// the steady state, so `new_start` says nothing about what a client can still
+/// read. The floor does, and it is also the low watermark the response carries.
+/// Its followers learn the floor from the WAL index, so the row does not wait
+/// for them.
+///
+/// Any other partition answers Kafka's `lowWatermarkIfLeader`: the lowest log
+/// start of the leader and of every live follower. When that is still below
+/// the offset the request asked for, the row waits for the followers (see
+/// `low_watermark::await_followers`). Kafka's required offset is the requested
+/// one, with `-1` read as the high watermark; a trim capped below it by the
+/// delivery watermark requires only the offset it trimmed to.
+async fn settle_row(
+    env: &TrimEnv<'_>,
+    part: &Partition,
+    fp: &DeleteRecordsPartition,
+    target: Offset,
+    hw: Offset,
+) -> (i64, Option<i64>) {
+    if part.diskless {
+        (target.0, None)
+    } else {
+        let requested = if fp.offset == -1 { hw.0 } else { fp.offset };
+        let required = target.0.min(requested);
+        let low_watermark = low_watermark::current(env.broker, part).await.0;
+        (
+            low_watermark,
+            (low_watermark < required).then_some(required),
+        )
     }
 }

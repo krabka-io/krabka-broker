@@ -7,10 +7,7 @@ use {
     super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT},
     crate::{client_metrics::config::validate, codes},
     krabka_metadata::{ClientMetricsConfigRecord, MetadataImage, MetadataRecord},
-    krabka_protocol::owned::{
-        incremental_alter_configs_request::AlterConfigsResource,
-        incremental_alter_configs_response::AlterConfigsResourceResponse,
-    },
+    krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource,
 };
 
 /// Merge per-key ops into a client-metrics subscription's override map and
@@ -22,12 +19,10 @@ use {
 /// `CLIENT_METRICS` definitions, so no key is splittable. The merged map is
 /// then checked by `ClientMetricsConfigs.validate`. A request that changes
 /// nothing, such as a DELETE of a key with no value, stages no record.
-pub(super) fn handle_client_metrics_scoped(
+pub(super) fn client_metrics_records(
     resource: &AlterConfigsResource,
     image: &MetadataImage,
-    out: &mut AlterConfigsResourceResponse,
-    to_submit: &mut Vec<MetadataRecord>,
-) {
+) -> Result<Vec<MetadataRecord>, (i16, String)> {
     let current = image
         .client_metrics_config(&resource.resource_name)
         .cloned()
@@ -42,8 +37,7 @@ pub(super) fn handle_client_metrics_scoped(
                 merged.remove(&cfg.name);
             }
             op => {
-                out.error_code = codes::INVALID_CONFIG;
-                out.error_message = Some(match op {
+                return Err((codes::INVALID_CONFIG, match op {
                     OP_APPEND => format!(
                         "Can't APPEND to key {} because its type is not LIST.",
                         cfg.name
@@ -56,34 +50,27 @@ pub(super) fn handle_client_metrics_scoped(
                         "config_operation={op} not supported for client-metrics key `{}`",
                         cfg.name
                     ),
-                });
-                return;
+                }));
             }
         }
     }
-    if let Err(error) = validate(&resource.resource_name, &merged) {
-        out.error_code = error.code();
-        out.error_message = Some(error.message().to_owned());
-        return;
+    validate(&resource.resource_name, &merged)
+        .map_err(|error| (error.code(), error.message().to_owned()))?;
+    if merged == current {
+        return Ok(vec![]);
     }
-    if merged != current {
-        to_submit.push(MetadataRecord::V1ClientMetricsConfig(
-            ClientMetricsConfigRecord {
-                name: resource.resource_name.clone(),
-                configs: merged,
-            },
-        ));
-    }
+    Ok(vec![MetadataRecord::V1ClientMetricsConfig(
+        ClientMetricsConfigRecord {
+            name: resource.resource_name.clone(),
+            configs: merged,
+        },
+    )])
 }
 
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
-        crate::handlers::incremental_alter_configs::{
-            RESOURCE_TYPE_CLIENT_METRICS, test_support::Handled,
-        },
-        assert2::check,
+        super::*, crate::handlers::describe_configs::RESOURCE_TYPE_CLIENT_METRICS, assert2::check,
         krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
         std::collections::BTreeMap,
     };
@@ -119,7 +106,7 @@ mod tests {
         img
     }
 
-    fn run(name: &str, ops: &[Op<'_>]) -> Handled {
+    fn run(name: &str, ops: &[Op<'_>]) -> Result<Vec<MetadataRecord>, (i16, String)> {
         let resource = AlterConfigsResource {
             resource_type: RESOURCE_TYPE_CLIENT_METRICS,
             resource_name: name.into(),
@@ -140,21 +127,7 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
-        let mut out = AlterConfigsResourceResponse::default();
-        let mut to_submit = Vec::new();
-        handle_client_metrics_scoped(&resource, &image_with_sub_a(), &mut out, &mut to_submit);
-        Handled {
-            response: out,
-            records: to_submit,
-        }
-    }
-
-    fn refused(code: i16, message: &str) -> AlterConfigsResourceResponse {
-        AlterConfigsResourceResponse {
-            error_code: code,
-            error_message: Some(message.into()),
-            ..Default::default()
-        }
+        client_metrics_records(&resource, &image_with_sub_a())
     }
 
     #[derive(Default)]
@@ -162,7 +135,7 @@ mod tests {
         key: String,
         operation: i8,
         value: String,
-        handled: Option<Handled>,
+        handled: Option<Result<Vec<MetadataRecord>, (i16, String)>>,
     }
     #[rstest::fixture]
     fn client_metrics_alteration() -> ClientMetricsAlterationScenario {
@@ -203,9 +176,7 @@ mod tests {
         code: i16,
         message: String,
     ) {
-        let handled = client_metrics_alteration.handled.as_ref().unwrap();
-        check!(handled.response == refused(code, &message));
-        check!(handled.records.is_empty());
+        check!(client_metrics_alteration.handled == Some(Err((code, message))));
     }
     rstest_bdd_macros::scenarios!("tests/features/handler_client_metrics_alteration",fixtures=[client_metrics_alteration:ClientMetricsAlterationScenario]);
 
@@ -281,29 +252,23 @@ mod tests {
             },
         ];
         for AcceptedCase { name, op, expected } in cases {
-            let Handled {
-                response,
-                records: to_submit,
-            } = run("sub-a", &[op]);
-            check!(
-                response == AlterConfigsResourceResponse::default(),
-                "case {name}"
-            );
-            check!(to_submit == expected, "case {name}");
+            check!(run("sub-a", &[op]) == Ok(expected), "case {name}");
         }
     }
 
     #[test]
     fn empty_subscription_name_is_an_invalid_request() {
-        let Handled {
-            response,
-            records: to_submit,
-        } = run("", &[Op {
+        let result = run("", &[Op {
             key: "interval.ms",
             operation: OP_SET,
             value: Some("60000"),
         }]);
-        check!(response == refused(codes::INVALID_REQUEST, "Subscription name can't be empty"));
-        check!(to_submit.is_empty());
+        check!(
+            result
+                == Err((
+                    codes::INVALID_REQUEST,
+                    "Subscription name can't be empty".to_owned()
+                ))
+        );
     }
 }

@@ -31,8 +31,8 @@ use {
         error::BrokerError,
         handlers::RequestContext,
         txn::{
-            decision::{CompletionDecision, decide_end_txn_completion},
-            util::now_millis,
+            decision::{CompletionDecision, CompletionExpectation, decide_end_txn_completion},
+            util::{ProducerIdentity, now_millis},
             version::{TxnVersion, resolve_txn_version},
         },
     },
@@ -201,15 +201,20 @@ pub async fn handle(
     // the incremented epoch of the producer that wrote the transaction, while
     // the staged completion identity is returned to the client. This
     // revalidation prevents Phase 3 from adopting a stale staged identity.
-    let (complete_snap, response_pid, response_epoch) = match decide_end_txn_completion(
-        &entry,
-        prepare_snap.producer_id,
-        prepare_snap.producer_epoch,
-        prepared_completion_pid,
-        prepared_completion_epoch,
+    let expectation = CompletionExpectation {
+        prepared: ProducerIdentity {
+            producer_id: prepare_snap.producer_id,
+            producer_epoch: prepare_snap.producer_epoch,
+        },
+        completion: ProducerIdentity {
+            producer_id: prepared_completion_pid,
+            producer_epoch: prepared_completion_epoch,
+        },
         prepare,
         complete,
-    ) {
+    };
+    let decision = decide_end_txn_completion(&entry, &expectation);
+    let (complete_snap, response_pid, response_epoch) = match decision {
         CompletionDecision::Proceed {
             next_state,
             response_pid: new_pid,

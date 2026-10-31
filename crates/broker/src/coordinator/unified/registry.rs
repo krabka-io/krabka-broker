@@ -11,12 +11,82 @@ use {
         actor::{self, GroupActorHandle, GroupActorMessage, GroupKindTag},
         group::CoordinatorGroup,
         group_coordinator::{GroupCoordinator, GroupType},
+        seeds::{GroupSeed, ShareGroupSeed, StreamsGroupSeed},
         share::actor::{ShareGroupActorHandle, ShareGroupActorMessage},
         streams::actor::{StreamsGroupActorHandle, StreamsGroupActorMessage},
     },
-    dashmap::Entry,
+    dashmap::{DashMap, Entry},
     std::sync::Arc,
 };
+
+/// What a registry needs from an actor handle: whether the actor has exited,
+/// and how to hydrate a freshly-spawned one.
+trait RegisteredActor {
+    type Seed;
+
+    /// `true` once the actor has exited and its mailbox is closed.
+    fn is_closed(&self) -> bool;
+
+    /// Hands `seed` to the actor, dropping it when the mailbox is full or
+    /// closed.
+    fn try_seed(&self, seed: Self::Seed);
+}
+
+impl RegisteredActor for GroupActorHandle {
+    type Seed = GroupSeed;
+
+    fn is_closed(&self) -> bool { self.tx.is_closed() }
+
+    fn try_seed(&self, seed: GroupSeed) { let _ = self.tx.try_send(GroupActorMessage::Seed(seed)); }
+}
+
+impl RegisteredActor for ShareGroupActorHandle {
+    type Seed = ShareGroupSeed;
+
+    fn is_closed(&self) -> bool { self.tx.is_closed() }
+
+    fn try_seed(&self, seed: ShareGroupSeed) {
+        let _ = self.tx.try_send(ShareGroupActorMessage::Seed(seed));
+    }
+}
+
+impl RegisteredActor for StreamsGroupActorHandle {
+    type Seed = StreamsGroupSeed;
+
+    fn is_closed(&self) -> bool { self.tx.is_closed() }
+
+    fn try_seed(&self, seed: StreamsGroupSeed) {
+        let _ = self.tx.try_send(StreamsGroupActorMessage::Seed(seed));
+    }
+}
+
+/// The live actor that `map` holds for `group_id`, or a fresh one from
+/// `spawn` when the entry is absent or its actor has exited.
+///
+/// After the insert, the registered actor is hydrated with what `seed`
+/// returns.
+fn get_or_spawn<H: RegisteredActor>(
+    map: &DashMap<String, Arc<H>>,
+    group_id: &str,
+    spawn: impl FnOnce() -> H,
+    seed: impl FnOnce() -> Option<H::Seed>,
+) -> Arc<H> {
+    if let Some(h) = map.get(group_id) {
+        // Dead-actor detection: a closed mpsc sender means the actor exited
+        // (typically after a log-write failure). Drop the entry and respawn.
+        if !h.value().is_closed() {
+            return Arc::clone(h.value());
+        }
+        drop(h);
+        map.remove(group_id);
+    }
+    let h = Arc::new(spawn());
+    let inserted = Arc::clone(map.entry(group_id.into()).or_insert(h).value());
+    if let Some(seed) = seed() {
+        inserted.try_seed(seed);
+    }
+    inserted
+}
 
 /// The `GROUP_ID_NOT_FOUND` message of a `ConsumerGroupHeartbeat` that names a
 /// group that does not exist: Kafka's `getOrMaybeCreateConsumerGroup` says
@@ -45,32 +115,29 @@ impl GroupCoordinator {
         group_id: &str,
         initial_kind: GroupKindTag,
     ) -> Arc<GroupActorHandle> {
-        if let Some(h) = self.groups.get(group_id) {
-            // Dead-actor detection: if the mpsc sender is closed, the actor
-            // has exited (typically after a log-write failure). Drop the
-            // entry and fall through to spawn a fresh actor.
-            if !h.value().tx.is_closed() {
-                return Arc::clone(h.value());
-            }
-            drop(h);
-            self.groups.remove(group_id);
-        }
-        let h = Arc::new(GroupActorHandle::spawn(
-            group_id.into(),
-            initial_kind,
-            Arc::clone(&self.config),
-            Arc::clone(&self.metadata),
-            Arc::clone(&self.offsets_log),
-            Arc::clone(self),
-        ));
-        let inserted = Arc::clone(self.groups.entry(group_id.into()).or_insert(h).value());
-        // Re-hydrate a respawned consumer actor from its last-known-good state.
-        if initial_kind == GroupKindTag::Consumer
-            && let Some(seed) = self.cached_seed(group_id)
-        {
-            let _ = inserted.tx.try_send(GroupActorMessage::Seed(seed));
-        }
-        inserted
+        get_or_spawn(
+            &self.groups,
+            group_id,
+            || {
+                GroupActorHandle::spawn(
+                    group_id.into(),
+                    initial_kind,
+                    Arc::clone(&self.config),
+                    Arc::clone(&self.metadata),
+                    Arc::clone(&self.offsets_log),
+                    Arc::clone(self),
+                )
+            },
+            // Re-hydrate a respawned consumer actor from its last-known-good
+            // state.
+            || {
+                if initial_kind == GroupKindTag::Consumer {
+                    self.cached_seed(group_id)
+                } else {
+                    None
+                }
+            },
+        )
     }
 
     /// Get or create a classic-protocol actor.
@@ -100,31 +167,19 @@ impl GroupCoordinator {
 
     #[must_use]
     pub fn get_or_create_share(self: &Arc<Self>, group_id: &str) -> Arc<ShareGroupActorHandle> {
-        if let Some(h) = self.share_groups.get(group_id) {
-            // Dead-actor detection: a closed mpsc sender means the actor exited
-            // (typically after a log-write failure). Drop the entry and respawn.
-            if !h.value().tx.is_closed() {
-                return Arc::clone(h.value());
-            }
-            drop(h);
-            self.share_groups.remove(group_id);
-        }
-        let h = Arc::new(ShareGroupActorHandle::spawn(
-            group_id.into(),
-            Arc::clone(&self.share_config),
-            Arc::clone(&self.metadata),
-            Arc::clone(self),
-        ));
-        let inserted = Arc::clone(
-            self.share_groups
-                .entry(group_id.into())
-                .or_insert(h)
-                .value(),
-        );
-        if let Some(seed) = self.cached_share_seed(group_id) {
-            let _ = inserted.tx.try_send(ShareGroupActorMessage::Seed(seed));
-        }
-        inserted
+        get_or_spawn(
+            &self.share_groups,
+            group_id,
+            || {
+                ShareGroupActorHandle::spawn(
+                    group_id.into(),
+                    Arc::clone(&self.share_config),
+                    Arc::clone(&self.metadata),
+                    Arc::clone(self),
+                )
+            },
+            || self.cached_share_seed(group_id),
+        )
     }
 
     #[must_use]
@@ -149,30 +204,18 @@ impl GroupCoordinator {
 
     #[must_use]
     pub fn get_or_create_streams(self: &Arc<Self>, group_id: &str) -> Arc<StreamsGroupActorHandle> {
-        if let Some(h) = self.streams_groups.get(group_id) {
-            // Dead-actor detection: a closed mpsc sender means the actor exited
-            // (typically after a log-write failure). Drop the entry and respawn.
-            if !h.value().tx.is_closed() {
-                return Arc::clone(h.value());
-            }
-            drop(h);
-            self.streams_groups.remove(group_id);
-        }
-        let h = Arc::new(StreamsGroupActorHandle::spawn(
-            group_id.into(),
-            Arc::clone(&self.streams_config),
-            Arc::clone(self),
-        ));
-        let inserted = Arc::clone(
-            self.streams_groups
-                .entry(group_id.into())
-                .or_insert(h)
-                .value(),
-        );
-        if let Some(seed) = self.cached_streams_seed(group_id) {
-            let _ = inserted.tx.try_send(StreamsGroupActorMessage::Seed(seed));
-        }
-        inserted
+        get_or_spawn(
+            &self.streams_groups,
+            group_id,
+            || {
+                StreamsGroupActorHandle::spawn(
+                    group_id.into(),
+                    Arc::clone(&self.streams_config),
+                    Arc::clone(self),
+                )
+            },
+            || self.cached_streams_seed(group_id),
+        )
     }
 
     #[must_use]
@@ -328,11 +371,13 @@ mod tests {
         crate::coordinator::unified::{
             actor::MetadataProvider,
             config::NextGenConfig,
+            seeds::{ShareGroupSeed, StreamsGroupSeed},
             share::config::ShareGroupConfig,
             streams::config::StreamsGroupConfig,
             test_support::{ImageMetadatalessProvider, make_coord, stop_streams_actor},
         },
         assert2::{assert, check},
+        tokio::sync::{mpsc, oneshot},
     };
 
     #[tokio::test]
@@ -413,6 +458,95 @@ mod tests {
         streams_ids.sort();
         assert!(streams_ids == vec!["streams-a".to_owned()]);
 
+        coord.shutdown_all().await;
+    }
+
+    /// Sends `Shutdown` down `tx` and waits until the actor has exited and
+    /// closed its mailbox, as an actor does after a failed log write.
+    async fn stop_actor<M>(tx: &mpsc::Sender<M>, shutdown: impl FnOnce(oneshot::Sender<()>) -> M) {
+        let (reply, stopping) = oneshot::channel();
+        tx.send(shutdown(reply)).await.expect("send Shutdown");
+        stopping.await.expect("the actor stops");
+        tx.closed().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_closed_consumer_actor_respawns_hydrated_from_the_cached_seed() {
+        let coord = make_coord();
+        let closed = coord.get_or_create_consumer("g");
+        stop_actor(&closed.tx, GroupActorMessage::Shutdown).await;
+        coord.update_cached_seed("g", |seed| seed.group_epoch = 7);
+
+        let fresh = coord.get_or_create_consumer("g");
+
+        check!(!Arc::ptr_eq(&fresh, &closed));
+        check!(!fresh.tx.is_closed());
+        check!(coord.find("g").is_some_and(|r| Arc::ptr_eq(&r, &fresh)));
+        let (reply, view) = oneshot::channel();
+        fresh
+            .tx
+            .send(GroupActorMessage::Describe { reply })
+            .await
+            .expect("send Describe");
+        assert!(view.await.expect("a describe view").group_epoch == 7);
+        coord.shutdown_all().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_closed_share_actor_respawns_hydrated_from_the_cached_seed() {
+        let coord = make_coord();
+        let closed = coord.get_or_create_share("sg");
+        stop_actor(&closed.tx, ShareGroupActorMessage::Shutdown).await;
+        coord.update_share_cache("sg", ShareGroupSeed {
+            group_epoch: 17,
+            ..ShareGroupSeed::default()
+        });
+
+        let fresh = coord.get_or_create_share("sg");
+
+        check!(!Arc::ptr_eq(&fresh, &closed));
+        check!(!fresh.tx.is_closed());
+        check!(
+            coord
+                .find_share("sg")
+                .is_some_and(|r| Arc::ptr_eq(&r, &fresh))
+        );
+        let (reply, view) = oneshot::channel();
+        fresh
+            .tx
+            .send(ShareGroupActorMessage::Describe { reply })
+            .await
+            .expect("send Describe");
+        assert!(view.await.expect("a describe view").group_epoch == 17);
+        coord.shutdown_all().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_closed_streams_actor_respawns_hydrated_from_the_cached_seed() {
+        let coord = make_coord();
+        let closed = coord.get_or_create_streams("st");
+        stop_actor(&closed.tx, StreamsGroupActorMessage::Shutdown).await;
+        coord.update_streams_cache("st", StreamsGroupSeed {
+            group_epoch: 27,
+            ..StreamsGroupSeed::default()
+        });
+
+        let fresh = coord.get_or_create_streams("st");
+
+        check!(!Arc::ptr_eq(&fresh, &closed));
+        check!(!fresh.tx.is_closed());
+        check!(
+            coord
+                .find_streams("st")
+                .is_some_and(|r| Arc::ptr_eq(&r, &fresh))
+        );
+        let (reply, view) = oneshot::channel();
+        fresh
+            .tx
+            .send(StreamsGroupActorMessage::Describe { reply })
+            .await
+            .expect("send Describe");
+        assert!(view.await.expect("a describe view").group_epoch == 27);
         coord.shutdown_all().await;
     }
 

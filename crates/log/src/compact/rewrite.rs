@@ -14,7 +14,7 @@ use {
         record_limit::check_records_read,
         recovery::swap::cleaned_path,
         segment::{FrontierScan, SealedInput, TailScan},
-        txn_index::TxnIndex,
+        txn_index::{AbortedTxn, TxnIndex},
     },
     bytes::{Bytes, BytesMut},
     krabka_compression::CompressionType,
@@ -31,6 +31,8 @@ use {
     tracing::{field, instrument},
 };
 
+#[cfg(test)]
+mod golden_tests;
 #[cfg(test)]
 mod record_limit_tests;
 #[cfg(test)]
@@ -154,6 +156,14 @@ impl CleaningRound<'_> {
     fn is_last_batch_of_round(&self, batch: &RecordBatch) -> bool {
         last_offset_of(batch) + 1 == self.upper_bound.0
     }
+
+    /// `RETAIN_EMPTY`: whether `batch` stays as a bare header when it loses
+    /// every record. It does when it keeps a producer's state alive, or when
+    /// it is the last batch of the round.
+    fn retains_if_emptied(&self, batch: &RecordBatch) -> bool {
+        (batch.producer_id >= 0 && self.is_last_record_of_producer(batch))
+            || self.is_last_batch_of_round(batch)
+    }
 }
 
 /// Stream `segments`, oldest to newest, into new `.cleaned` files and apply the
@@ -213,7 +223,10 @@ pub fn rewrite_segments(
     // and the horizon it computes is stamped into an on-disk `base_timestamp`,
     // so the extent crosses to a raw count once, here, truncating rather than
     // rounding so a stamped horizon can never land a millisecond late.
-    let delete_retention_ms = retention.delete_retention.millis_i64_trunc();
+    let clock = RetainClock {
+        now_ms: retention.now_ms,
+        delete_retention_ms: retention.delete_retention.millis_i64_trunc(),
+    };
 
     let first = segments
         .first()
@@ -229,21 +242,9 @@ pub fn rewrite_segments(
     // retained batches; the index sidecars get the sparse indexes the walk
     // derives as it writes them, by the rule a recovery scan applies, so the
     // install can open the output without decoding it again.
-    let log_file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&log_swap)?;
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&index_swap)?;
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&timeindex_swap)?;
+    let log_file = create_truncated(&log_swap)?;
+    create_truncated(&index_swap)?;
+    create_truncated(&timeindex_swap)?;
 
     // The walk decodes, filters and writes one batch at a time, so the group
     // never sits in memory decoded: a compressed group can expand to many
@@ -252,82 +253,21 @@ pub fn rewrite_segments(
     let mut frontier = FrontierScan::new(new_base, u64::MAX, round.index_interval)?;
     for batch in group_batches(segments) {
         let batch = &batch?;
-        let is_control = batch.attributes.is_control_batch();
-        let producer_id = ProducerId(batch.producer_id);
         // The pass reads the batch before it filters its records, as Kafka's
         // `Cleaner.shouldDiscardBatch` does: a transaction whose records all
         // die in this pass still holds its marker until the next one.
-        let (txn, aborted) = if is_control {
-            let discardable = txn_meta.on_control_batch_read(batch)?;
-            let state = if producer_id.get() < 0 {
-                TxnDataState::NotTransactional
-            } else if discardable {
-                TxnDataState::DataFullyGone
-            } else {
-                TxnDataState::DataSurvives
-            };
-            (state, false)
-        } else {
-            (
-                TxnDataState::NotTransactional,
-                txn_meta.on_batch_read(batch),
-            )
-        };
+        let txn = classify_batch(batch, txn_meta)?;
         // `MemoryRecords.filterTo` decompresses every batch but one it deletes
         // outright, which is an aborted batch that is neither the last record
         // of an active producer nor the last batch of the round, and holds the
         // batch it decompresses to `max.decompressed.message.bytes`.
-        if !aborted
-            || (producer_id.get() >= 0 && round.is_last_record_of_producer(batch))
-            || round.is_last_batch_of_round(batch)
-        {
+        if !txn.aborted || round.retains_if_emptied(batch) {
             check_records_read(batch, batch.records.len(), round.max_decompressed_record)?;
         }
-        let batch_meta = BatchMeta {
-            is_control,
-            producer_id,
-            existing_horizon: batch.delete_horizon_ms(),
-        };
+        let retained = retained_records(batch, offset_map, txn, clock);
 
-        let mut kept: Vec<Record> = Vec::with_capacity(batch.records.len());
-        // Stamp the output batch with a delete horizon if any record's
-        // decision asks for it (stamp once per batch).
-        let mut stamp_horizon: Option<i64> = None;
-        for record in &batch.records {
-            let absolute = Offset(batch.base_offset + i64::from(record.offset_delta));
-            let is_newest_for_key = record
-                .key
-                .as_ref()
-                .is_some_and(|k| offset_map.get(k.as_ref()).copied() == Some(absolute));
-            let rec_meta = RecordMeta {
-                has_key: record.key.is_some(),
-                has_value: record.value.is_some(),
-            };
-            // Every record of an aborted transaction goes, whether or not it
-            // is the newest for its key: Kafka's `discardBatchRecords`.
-            let decision = if aborted {
-                RetainDecision::Delete
-            } else {
-                retain_decision(
-                    rec_meta,
-                    batch_meta,
-                    is_newest_for_key,
-                    txn,
-                    retention.now_ms,
-                    delete_retention_ms,
-                )
-            };
-            match decision {
-                RetainDecision::Keep => kept.push(record.clone()),
-                RetainDecision::SetHorizon(h) => {
-                    kept.push(record.clone());
-                    stamp_horizon = Some(h);
-                }
-                RetainDecision::Delete => {}
-            }
-        }
-
-        let Some(kept_max_timestamp) = kept
+        let Some(kept_max_timestamp) = retained
+            .kept
             .iter()
             .map(|r| batch.base_timestamp.saturating_add(r.timestamp_delta))
             .max()
@@ -336,9 +276,7 @@ pub fn rewrite_segments(
             // keeps a producer's state alive, or that is the last batch of
             // the round, so the producer sequence and epoch and the log-end
             // offset survive.
-            let keeps_producer_state =
-                batch.producer_id >= 0 && round.is_last_record_of_producer(batch);
-            if !(keeps_producer_state || round.is_last_batch_of_round(batch)) {
+            if !round.retains_if_emptied(batch) {
                 continue;
             }
             let out_batch = bare_header(batch);
@@ -352,31 +290,7 @@ pub fn rewrite_segments(
             continue;
         };
 
-        // Kafka's `MemoryRecords.buildRetainedRecordsInto` keeps the original
-        // batch's base offset and last offset (`overrideLastOffset`), so the
-        // producer's last sequence (`base_sequence + last_offset_delta`) and
-        // the `RETAIN_EMPTY` comparisons of the next pass survive a batch that
-        // loses its tail records. The max timestamp is the retained records'
-        // under CreateTime (`MemoryRecordsBuilder.recordWritten`), and the
-        // batch's own under LogAppendTime (`writeDefaultBatchHeader`). The
-        // timestamps are absolute here, whether or not a delete horizon
-        // already re-based the batch.
-        let max_timestamp = match batch.attributes.timestamp_type() {
-            TimestampType::LogAppendTime => batch.max_timestamp,
-            TimestampType::CreateTime => kept_max_timestamp,
-        };
-        let mut out_batch = RecordBatch {
-            max_timestamp,
-            records: kept,
-            ..batch.clone()
-        };
-        // Stamp the delete horizon once, after the kept batch is built. This
-        // rewrites each kept record's timestamp_delta so absolute timestamps
-        // are preserved (see `RecordBatch::with_delete_horizon`).
-        if let Some(h) = stamp_horizon {
-            out_batch = out_batch.with_delete_horizon(h);
-        }
-
+        let out_batch = retained_batch(batch, retained, kept_max_timestamp);
         last_kept_offset =
             write_rewritten_batch(&*io, &log_file, &out_batch, last_kept_offset, &mut frontier)?;
     }
@@ -400,23 +314,7 @@ pub fn rewrite_segments(
     // across outputs. A read-committed fetch that scans several of a
     // multi-segment pass's outputs would otherwise see the same aborted
     // transaction once per output and inflate its response.
-    let retained = txn_meta.take_cleaned_index();
-    let txnindex_swap = if retained.is_empty() {
-        None
-    } else {
-        let path = swap_path(dir, new_base.0, "txnindex");
-        // Truncate any stale .cleaned file, then append the retained entries.
-        OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
-        let mut idx = TxnIndex::open(path.clone())?;
-        for entry in retained {
-            idx.append(entry)?;
-        }
-        Some(path)
-    };
+    let txnindex_swap = write_cleaned_txnindex(dir, new_base, txn_meta.take_cleaned_index())?;
 
     tracing::Span::current().record("new_last_offset", last_kept_offset.0);
     Ok(RewriteOutput {
@@ -429,6 +327,170 @@ pub fn rewrite_segments(
         txnindex_swap,
         frontier,
     })
+}
+
+/// What the transaction tracker says about one batch of the walk.
+#[derive(Debug, Clone, Copy)]
+struct BatchTxn {
+    /// For a marker, whether the data of its transaction survives this pass.
+    /// `NotTransactional` for a data batch and for a marker without a producer.
+    state: TxnDataState,
+    /// Whether the batch is data of an aborted transaction. Never for a marker.
+    aborted: bool,
+}
+
+/// Read `batch` into `txn_meta` and classify it. The read updates the
+/// tracker, so the walk calls this once per batch, in offset order.
+fn classify_batch(
+    batch: &RecordBatch,
+    txn_meta: &mut CleanedTransactionMetadata,
+) -> Result<BatchTxn, LogError> {
+    if !batch.attributes.is_control_batch() {
+        return Ok(BatchTxn {
+            state: TxnDataState::NotTransactional,
+            aborted: txn_meta.on_batch_read(batch),
+        });
+    }
+    let discardable = txn_meta.on_control_batch_read(batch)?;
+    let state = if batch.producer_id < 0 {
+        TxnDataState::NotTransactional
+    } else if discardable {
+        TxnDataState::DataFullyGone
+    } else {
+        TxnDataState::DataSurvives
+    };
+    Ok(BatchTxn {
+        state,
+        aborted: false,
+    })
+}
+
+/// The clock the retain decision reads, in the raw milliseconds the verified
+/// kernel is stated over.
+#[derive(Debug, Clone, Copy)]
+struct RetainClock {
+    now_ms: i64,
+    delete_retention_ms: i64,
+}
+
+/// The records of one batch the retain decision keeps.
+#[derive(Debug)]
+struct RetainedRecords {
+    kept: Vec<Record>,
+    /// The delete horizon to stamp on the output batch, if any kept record's
+    /// decision asks for one.
+    stamp_horizon: Option<i64>,
+}
+
+/// Apply the KIP-534 [`retain_decision`] to every record of `batch`.
+fn retained_records(
+    batch: &RecordBatch,
+    offset_map: &HashMap<Bytes, Offset>,
+    txn: BatchTxn,
+    clock: RetainClock,
+) -> RetainedRecords {
+    let batch_meta = BatchMeta {
+        is_control: batch.attributes.is_control_batch(),
+        producer_id: ProducerId(batch.producer_id),
+        existing_horizon: batch.delete_horizon_ms(),
+    };
+
+    let mut kept: Vec<Record> = Vec::with_capacity(batch.records.len());
+    // Stamp the output batch with a delete horizon if any record's
+    // decision asks for it (stamp once per batch).
+    let mut stamp_horizon: Option<i64> = None;
+    for record in &batch.records {
+        let absolute = Offset(batch.base_offset + i64::from(record.offset_delta));
+        let is_newest_for_key = record
+            .key
+            .as_ref()
+            .is_some_and(|k| offset_map.get(k.as_ref()).copied() == Some(absolute));
+        let rec_meta = RecordMeta {
+            has_key: record.key.is_some(),
+            has_value: record.value.is_some(),
+        };
+        // Every record of an aborted transaction goes, whether or not it
+        // is the newest for its key: Kafka's `discardBatchRecords`.
+        let decision = if txn.aborted {
+            RetainDecision::Delete
+        } else {
+            retain_decision(
+                rec_meta,
+                batch_meta,
+                is_newest_for_key,
+                txn.state,
+                clock.now_ms,
+                clock.delete_retention_ms,
+            )
+        };
+        match decision {
+            RetainDecision::Keep => kept.push(record.clone()),
+            RetainDecision::SetHorizon(h) => {
+                kept.push(record.clone());
+                stamp_horizon = Some(h);
+            }
+            RetainDecision::Delete => {}
+        }
+    }
+    RetainedRecords {
+        kept,
+        stamp_horizon,
+    }
+}
+
+/// The output batch for `batch` when it keeps `retained`, whose newest record
+/// is at `kept_max_timestamp`.
+fn retained_batch(
+    batch: &RecordBatch,
+    retained: RetainedRecords,
+    kept_max_timestamp: i64,
+) -> RecordBatch {
+    // Kafka's `MemoryRecords.buildRetainedRecordsInto` keeps the original
+    // batch's base offset and last offset (`overrideLastOffset`), so the
+    // producer's last sequence (`base_sequence + last_offset_delta`) and
+    // the `RETAIN_EMPTY` comparisons of the next pass survive a batch that
+    // loses its tail records. The max timestamp is the retained records'
+    // under CreateTime (`MemoryRecordsBuilder.recordWritten`), and the
+    // batch's own under LogAppendTime (`writeDefaultBatchHeader`). The
+    // timestamps are absolute here, whether or not a delete horizon
+    // already re-based the batch.
+    let max_timestamp = match batch.attributes.timestamp_type() {
+        TimestampType::LogAppendTime => batch.max_timestamp,
+        TimestampType::CreateTime => kept_max_timestamp,
+    };
+    let mut out_batch = RecordBatch {
+        max_timestamp,
+        records: retained.kept,
+        ..batch.clone()
+    };
+    // Stamp the delete horizon once, after the kept batch is built. This
+    // rewrites each kept record's timestamp_delta so absolute timestamps
+    // are preserved (see `RecordBatch::with_delete_horizon`).
+    if let Some(h) = retained.stamp_horizon {
+        out_batch = out_batch.with_delete_horizon(h);
+    }
+    out_batch
+}
+
+/// Write the `.txnindex.cleaned` of the output at `new_base` with the
+/// `retained` aborted transactions, and return its path. Writes nothing and
+/// returns `None` when no aborted transaction survives.
+fn write_cleaned_txnindex(
+    dir: &Path,
+    new_base: Offset,
+    retained: Vec<AbortedTxn>,
+) -> Result<Option<PathBuf>, LogError> {
+    if retained.is_empty() {
+        return Ok(None);
+    }
+    let path = swap_path(dir, new_base.0, "txnindex");
+    // Truncate any stale .cleaned file, then append the retained entries.
+    create_truncated(&path)?;
+    let mut idx = TxnIndex::open(path.clone())?;
+    for entry in retained {
+        idx.append(entry)?;
+    }
+    Ok(Some(path))
 }
 
 /// The bare header a `RETAIN_EMPTY` batch leaves in the output, Kafka's
@@ -452,6 +514,15 @@ fn bare_header(batch: &RecordBatch) -> RecordBatch {
         partition_leader_epoch: batch.partition_leader_epoch,
         records: vec![],
     }
+}
+
+/// Open `path` for writing, creating it or truncating a stale one.
+fn create_truncated(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
 }
 
 fn swap_path(dir: &Path, base_offset: i64, ext: &str) -> PathBuf {

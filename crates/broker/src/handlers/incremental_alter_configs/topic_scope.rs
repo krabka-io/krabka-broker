@@ -23,7 +23,8 @@ use {
             self,
             registry::{self, ConfigScope, ConfigType},
         },
-        topic_policy::{TopicPolicy, check as check_topic_policy},
+        handlers::alter_configs::finish_topic_overrides,
+        topic_policy::TopicPolicy,
     },
     krabka_log::topic_name,
     krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord},
@@ -136,24 +137,7 @@ pub(super) fn topic_config_record(
         unstable,
     )
     .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
-    config_keys::validate_diskless_unchanged(current, &merged)
-        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
-    config_keys::validate_remote_storage_disable(current, &merged)
-        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
-    if image.topic(topic).is_none() {
-        return Err((
-            codes::UNKNOWN_TOPIC_OR_PARTITION,
-            format!("The topic '{topic}' does not exist."),
-        ));
-    }
-    // KIP-133: the operator-declared policy, on the map the topic ends up
-    // with. Kafka calls `AlterConfigPolicy.validate` on the same resolved map,
-    // and its `RequestMetadata` carries no partition count and no replication
-    // factor, so neither is passed here. It runs after the built-in
-    // validators, as `ConfigAdminManager` does: a config the broker itself
-    // refuses never reaches the policy.
-    check_topic_policy(policy, topic, None, None, &merged)
-        .map_err(|reason| (codes::POLICY_VIOLATION, reason))?;
+    finish_topic_overrides(image, topic, current, &merged, policy)?;
     merged.extend(audit_epochs);
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
@@ -171,7 +155,7 @@ mod tests {
                     AlterableConfig, StoredOverride, assert, check, image_with_topic_config,
                     make_del_cfg, make_set_cfg, make_topic_resource, overrides_map,
                 },
-                test_support::check_config_result,
+                test_support::{check_config_result, diskless_turned_on_refusal},
             },
             throttle::ThrottledReplicas,
         },
@@ -418,6 +402,16 @@ mod tests {
 
             check_config_result(result, want_ok, label, config_keys::DISKLESS);
         }
+    }
+
+    /// A diskless change answers before the existence check, so a topic that
+    /// does not exist reports the diskless refusal.
+    #[test]
+    fn a_diskless_change_on_an_unknown_topic_answers_before_existence() {
+        let resource =
+            make_topic_resource("missing", vec![make_set_cfg(config_keys::DISKLESS, "true")]);
+        let image = MetadataImage::new(uuid::Uuid::nil());
+        check!(topic_config_record(&resource, &image) == Err(diskless_turned_on_refusal()));
     }
 
     #[test]

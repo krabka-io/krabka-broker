@@ -15,13 +15,17 @@ use {
     crate::{
         broker::Broker,
         config::ListenerSpec,
+        listener_tls::ListenerTlsCache,
         metrics::{BrokerMetrics, ConnectionCloseReason},
         network::auth::subject_dn_rfc2253,
         platform::Sockets,
     },
+    krabka_metadata::{MetadataImage, NodeId},
+    krabka_security::{DynamicServerConfig, TlsConfig},
+    rustls::ServerConfig,
     std::{io, net::SocketAddr, sync::Arc, time::Duration},
     tokio::{net::TcpStream, time},
-    tokio_rustls::server::TlsStream,
+    tokio_rustls::{TlsAcceptor, server::TlsStream},
 };
 
 /// Per-listener entrypoint.
@@ -42,46 +46,8 @@ pub async fn serve_connection_on_listener(
     // non-matching host.
     let peer = Sockets::TARGET.peer_address(&stream);
     if spec.protocol.requires_tls() {
-        // A listener's dynamic `listener.name.<listener>.ssl.*` keys, set
-        // for this node, win over its static `tls_config` while set: Kafka's
-        // `SslFactory.reconfigure` serves new handshakes from the new stores.
-        let dynamic = spec
-            .tls_config
-            .as_ref()
-            .or(broker.config.tls_config.as_ref())
-            .and_then(|static_tls| {
-                broker.listener_tls.server_config(
-                    &broker.controller.current_image(),
-                    broker.config.node_id,
-                    &spec.name,
-                    static_tls,
-                )
-            });
-        let acceptor = if let Some(config) = dynamic {
-            tokio_rustls::TlsAcceptor::from(config)
-        } else if let Some(per_tls) = spec.tls_config.as_ref() {
-            match per_tls.build_server_config() {
-                Ok(sc) => tokio_rustls::TlsAcceptor::from(sc),
-                Err(e) => {
-                    tracing::error!(
-                        listener = %spec.name,
-                        error = %e,
-                        "failed to build TlsAcceptor from per-listener tls_config"
-                    );
-                    return;
-                }
-            }
-        } else {
-            // Use DynamicServerConfig so hot-reload keeps working.
-            let Some(dynamic) = broker.tls_dynamic.as_ref() else {
-                tracing::error!(
-                    listener = %spec.name,
-                    "TLS listener without per-listener tls_config and no broker-wide tls_dynamic"
-                );
-                return;
-            };
-            // Snapshot per accept; an in-flight handshake keeps its captured config.
-            tokio_rustls::TlsAcceptor::from(dynamic.current())
+        let Some(acceptor) = listener_tls_acceptor(&broker, &spec) else {
+            return;
         };
         // The handshake is held to the same `connections.max.idle.ms` the
         // serve loop holds a connected peer to: a peer that opens the socket
@@ -160,6 +126,85 @@ pub async fn serve_connection_on_listener(
         .await;
     } else {
         serve_connection_plaintext(broker, stream, spec, peer).await;
+    }
+}
+
+/// The TLS acceptor for a new connection on `spec`'s listener, or `None`
+/// when the listener has no server config to serve; that case is logged.
+fn listener_tls_acceptor(broker: &Broker, spec: &ListenerSpec) -> Option<TlsAcceptor> {
+    TlsSources::of(broker)
+        .server_config(spec, || broker.controller.current_image())
+        .map(TlsAcceptor::from)
+}
+
+/// The places a TLS listener's server config comes from.
+struct TlsSources<'a> {
+    node_id: NodeId,
+    /// The configs built from each listener's dynamic SSL keys.
+    listener_keys: &'a ListenerTlsCache,
+    /// The broker-wide static `tls_config`.
+    broker_static: Option<&'a TlsConfig>,
+    /// The hot-reloaded config built from `broker_static`.
+    broker_dynamic: Option<&'a DynamicServerConfig>,
+}
+
+impl<'a> TlsSources<'a> {
+    fn of(broker: &'a Broker) -> Self {
+        Self {
+            node_id: broker.config.node_id,
+            listener_keys: &broker.listener_tls,
+            broker_static: broker.config.tls_config.as_ref(),
+            broker_dynamic: broker.tls_dynamic.as_deref(),
+        }
+    }
+
+    /// The server config a new handshake on `spec`'s listener uses, reading
+    /// the dynamic keys from `image` only when there is a static config to
+    /// start them from.
+    ///
+    /// A listener's dynamic `listener.name.<listener>.ssl.*` keys, set for
+    /// this node, win over its static `tls_config` while set: Kafka's
+    /// `SslFactory.reconfigure` serves new handshakes from the new stores. A
+    /// listener without either serves the broker-wide config.
+    fn server_config(
+        &self,
+        spec: &ListenerSpec,
+        image: impl FnOnce() -> Arc<MetadataImage>,
+    ) -> Option<Arc<ServerConfig>> {
+        let dynamic = spec
+            .tls_config
+            .as_ref()
+            .or(self.broker_static)
+            .and_then(|static_tls| {
+                self.listener_keys
+                    .server_config(&image(), self.node_id, &spec.name, static_tls)
+            });
+        if dynamic.is_some() {
+            return dynamic;
+        }
+        if let Some(per_tls) = spec.tls_config.as_ref() {
+            return match per_tls.build_server_config() {
+                Ok(sc) => Some(sc),
+                Err(e) => {
+                    tracing::error!(
+                        listener = %spec.name,
+                        error = %e,
+                        "failed to build TlsAcceptor from per-listener tls_config"
+                    );
+                    None
+                }
+            };
+        }
+        // Use DynamicServerConfig so hot-reload keeps working.
+        let Some(dynamic) = self.broker_dynamic else {
+            tracing::error!(
+                listener = %spec.name,
+                "TLS listener without per-listener tls_config and no broker-wide tls_dynamic"
+            );
+            return None;
+        };
+        // Snapshot per accept; an in-flight handshake keeps its captured config.
+        Some(dynamic.current())
     }
 }
 
@@ -305,9 +350,15 @@ async fn serve_connection_plaintext(
 mod tests {
     use {
         super::*,
-        crate::{config::ListenerSpec, network::auth::SslPrincipalMapper},
-        assert2::check,
-        krabka_security::ListenerProtocol,
+        crate::{
+            config::ListenerSpec, network::auth::SslPrincipalMapper,
+            test_support::localhost_ecdsa_pair,
+        },
+        assert2::{assert, check},
+        krabka_metadata::{BrokerConfigRecord, MetadataRecord},
+        krabka_security::{ClientAuthMode, ListenerProtocol},
+        rustls::crypto::aws_lc_rs,
+        std::{fs, path::Path},
     };
 
     fn spec(protocol: ListenerProtocol, rules: &[&str]) -> ListenerSpec {
@@ -346,6 +397,174 @@ mod tests {
             check!(
                 outcome == expected.map(|name| name.map(str::to_owned)),
                 "{protocol:?} {rules:?} {distinguished_name:?}"
+            );
+        }
+    }
+
+    /// A broker-wide and a per-listener static config, a per-listener one
+    /// whose files are missing, and a keystore file for the dynamic keys.
+    struct TlsFixture {
+        _dir: tempfile::TempDir,
+        broker_static: TlsConfig,
+        listener_static: TlsConfig,
+        broken_static: TlsConfig,
+        keystore: String,
+    }
+
+    fn static_tls(dir: &Path, name: &str) -> TlsConfig {
+        TlsConfig {
+            cert_chain_path: dir.join(format!("{name}-cert.pem")),
+            private_key_path: dir.join(format!("{name}-key.pem")),
+            trust_roots_path: None,
+            client_ca_path: None,
+            client_auth: ClientAuthMode::Disabled,
+        }
+    }
+
+    fn tls_fixture() -> TlsFixture {
+        drop(aws_lc_rs::default_provider().install_default());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (cert, key) = localhost_ecdsa_pair();
+        let (cert, key) = (cert.pem(), key.serialize_pem());
+        let [broker_static, listener_static] =
+            ["broker", "listener"].map(|name| static_tls(dir.path(), name));
+        for tls in [&broker_static, &listener_static] {
+            fs::write(&tls.cert_chain_path, &cert).expect("write cert");
+            fs::write(&tls.private_key_path, &key).expect("write key");
+        }
+        let keystore = dir.path().join("dynamic.pem");
+        fs::write(&keystore, format!("{key}{cert}")).expect("write keystore");
+        TlsFixture {
+            broken_static: static_tls(dir.path(), "missing"),
+            keystore: keystore.to_str().expect("utf-8 path").to_owned(),
+            _dir: dir,
+            broker_static,
+            listener_static,
+        }
+    }
+
+    /// An image that sets this node's keystore location for listener `L`, or
+    /// sets nothing.
+    fn image(keystore: Option<&str>) -> Arc<MetadataImage> {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        if let Some(location) = keystore {
+            image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                node_id: NodeId(1),
+                config_name: "listener.name.l.ssl.keystore.location".to_owned(),
+                config_value: Some(location.to_owned()),
+            }));
+        }
+        Arc::new(image)
+    }
+
+    /// Which source a listener's server config came from.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Served {
+        ListenerKeys,
+        ListenerStatic,
+        BrokerWide,
+        Nothing,
+    }
+
+    fn served(sources: &TlsSources<'_>, spec: &ListenerSpec, image: &Arc<MetadataImage>) -> Served {
+        let Some(config) = sources.server_config(spec, || Arc::clone(image)) else {
+            return Served::Nothing;
+        };
+        if sources
+            .broker_dynamic
+            .is_some_and(|dynamic| Arc::ptr_eq(&config, &dynamic.current()))
+        {
+            return Served::BrokerWide;
+        }
+        // The cache hands back the config it built while the keys are unchanged.
+        let from_keys = spec
+            .tls_config
+            .as_ref()
+            .or(sources.broker_static)
+            .and_then(|tls| {
+                sources
+                    .listener_keys
+                    .server_config(image, NodeId(1), "L", tls)
+            });
+        if from_keys.is_some_and(|keys| Arc::ptr_eq(&config, &keys)) {
+            Served::ListenerKeys
+        } else {
+            Served::ListenerStatic
+        }
+    }
+
+    /// The dynamic listener keys win over the listener's static config, which
+    /// wins over the broker-wide one. The keys are read only when a static
+    /// config, the listener's or the broker's, exists to start them from, and
+    /// a per-listener config that fails to build serves nothing rather than
+    /// the broker-wide config.
+    #[test]
+    fn a_listener_serves_its_keys_then_its_static_config_then_the_broker_wide_one() {
+        let fixture = tls_fixture();
+        let broker_dynamic =
+            DynamicServerConfig::from_tls_config(&fixture.broker_static).expect("broker-wide");
+        let keys = Some(fixture.keystore.as_str());
+        // (per-listener static, broker-wide static, broker-wide dynamic,
+        // listener keys, served)
+        let cases = [
+            (
+                Some(&fixture.listener_static),
+                None,
+                None,
+                keys,
+                Served::ListenerKeys,
+            ),
+            (
+                Some(&fixture.listener_static),
+                Some(&fixture.broker_static),
+                Some(&*broker_dynamic),
+                None,
+                Served::ListenerStatic,
+            ),
+            (
+                None,
+                Some(&fixture.broker_static),
+                Some(&*broker_dynamic),
+                None,
+                Served::BrokerWide,
+            ),
+            (
+                None,
+                Some(&fixture.broker_static),
+                Some(&*broker_dynamic),
+                keys,
+                Served::ListenerKeys,
+            ),
+            (
+                None,
+                Some(&fixture.broker_static),
+                None,
+                keys,
+                Served::ListenerKeys,
+            ),
+            (None, None, Some(&*broker_dynamic), keys, Served::BrokerWide),
+            (
+                Some(&fixture.broken_static),
+                None,
+                Some(&*broker_dynamic),
+                None,
+                Served::Nothing,
+            ),
+            (None, None, None, None, Served::Nothing),
+        ];
+        for (listener_static, broker_static, broker_dynamic, keystore, expected) in cases {
+            let mut listener = spec(ListenerProtocol::Ssl, &[]);
+            listener.tls_config = listener_static.cloned();
+            let listener_keys = ListenerTlsCache::default();
+            let sources = TlsSources {
+                node_id: NodeId(1),
+                listener_keys: &listener_keys,
+                broker_static,
+                broker_dynamic,
+            };
+            assert!(
+                served(&sources, &listener, &image(keystore)) == expected,
+                "{listener_static:?} {broker_static:?} {keystore:?}"
             );
         }
     }

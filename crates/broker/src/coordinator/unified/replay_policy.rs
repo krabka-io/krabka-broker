@@ -17,8 +17,14 @@
 use crate::error::BrokerError;
 
 /// Kafka's `ConsumerGroupHeartbeatRequest.LEAVE_GROUP_MEMBER_EPOCH`, which the
-/// tombstone of a member's current assignment leaves on the member.
+/// tombstone of a member's current assignment leaves on the member. The share
+/// heartbeat uses the same value, Kafka's
+/// `ShareGroupHeartbeatRequest.LEAVE_GROUP_MEMBER_EPOCH`.
 pub const LEAVE_GROUP_MEMBER_EPOCH: i32 = -1;
+
+/// Kafka's `ConsumerGroupHeartbeatRequest.LEAVE_GROUP_STATIC_MEMBER_EPOCH`, the
+/// epoch of a static member's leave. The streams heartbeat uses the same value.
+pub const LEAVE_GROUP_STATIC_MEMBER_EPOCH: i32 = -2;
 
 /// The assignment epoch that the tombstone of the target assignment metadata
 /// leaves on a group, and that the group tombstone requires.

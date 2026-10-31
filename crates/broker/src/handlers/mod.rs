@@ -34,6 +34,7 @@ mod admin_audit;
 #[cfg(test)]
 mod controller_mutation_tests;
 mod coordinator_routing;
+mod delegation_token_admission;
 mod partition_transition;
 #[cfg(test)]
 #[macro_use]

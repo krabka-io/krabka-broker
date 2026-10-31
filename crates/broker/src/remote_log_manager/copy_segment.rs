@@ -9,16 +9,15 @@ use {
         RemoteTier,
         archive::{ArchiveMode, ChainPosition},
         copy::CopyIdentity,
-        delete::delete_one_segment,
+        delete::delete_segment_metered,
         leader_epoch::leader_epoch_index_bytes,
         rlmm::rlmm_mutate,
     },
     crate::{blocking::spawn_blocking, metrics::RemoteTierPath, time_util::now_ms},
     krabka_log::{Offset, SegmentExport},
     krabka_remote_storage::{
-        RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadata,
-        RemoteLogSegmentState, RemoteStorageError, RemoteStorageManager, TopicIdPartition,
-        WormChainRecord,
+        RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
+        TopicIdPartition, WormChainRecord,
     },
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
     std::{collections::BTreeMap, sync::Arc},
@@ -193,7 +192,7 @@ async fn copy_one_inner(
     // that wait withdraws the record and leaves the tier untouched.
     if !fence.holds() {
         fenced(tp, ex, "before the upload");
-        rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
+        rollback(tier, &metadata, broker_id).await;
         return CopyOutcome::Fenced;
     }
 
@@ -241,14 +240,14 @@ async fn copy_one_inner(
             warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                   error = %e, "remote-log-manager: segment copy failed");
             seal_failed();
-            rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
+            rollback(tier, &metadata, broker_id).await;
             return CopyOutcome::Failed;
         }
         Ok(Err(e)) => {
             warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                   error = %e, "remote-log-manager: segment copy task panicked");
             seal_failed();
-            rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
+            rollback(tier, &metadata, broker_id).await;
             return CopyOutcome::Failed;
         }
     };
@@ -261,7 +260,7 @@ async fn copy_one_inner(
     // extends already runs through it, so it is published as usual.
     if chain == ChainPosition::Unchained && !fence.holds() {
         fenced(tp, ex, "after the upload");
-        rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
+        rollback(tier, &metadata, broker_id).await;
         return CopyOutcome::Fenced;
     }
 
@@ -327,7 +326,7 @@ async fn copy_one_inner(
                    end = ex.last_offset.0, error = %e,
                    "remote-log-manager: the segment was deleted while it was copied; \
                     withdrawing the copy");
-            rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
+            rollback(tier, &metadata, broker_id).await;
             return CopyOutcome::Withdrawn { next };
         }
         Err(e) => {
@@ -401,23 +400,7 @@ async fn delete_below_floor(
     debug!(topic = %tp.topic, partition = tp.partition, base = copied.start_offset(),
            end = copied.end_offset(), floor = floor.0,
            "remote-log-manager: copy finished below the established log start; deleting it");
-    tier.metrics
-        .record_remote_request(RemoteTierPath::Delete, &tp.topic);
-    let deleted = delete_one_segment(
-        tp,
-        broker_id,
-        &current,
-        tier.archive,
-        tier.rsm,
-        tier.rlmm,
-        tier.index_cache,
-    )
-    .await;
-    if !deleted {
-        tier.metrics
-            .record_remote_error(RemoteTierPath::Delete, &tp.topic);
-    }
-    deleted
+    delete_segment_metered(tier, tp, broker_id, &current).await
 }
 
 /// Log a copy withdrawn because the broker lost the partition `when`.
@@ -440,17 +423,11 @@ fn fenced(tp: &TopicIdPartition, ex: &SegmentExport, when: &str) {
 /// segment UUID, so its keys cannot collide with theirs. This residue is
 /// exactly what the WORM verifier reports as `orphan_objects`: unreferenced
 /// bytes are the standing cost of a tier that can take nothing back.
-async fn rollback(
-    metadata: &RemoteLogSegmentMetadata,
-    broker_id: i32,
-    archive: ArchiveMode,
-    rsm: &Arc<dyn RemoteStorageManager>,
-    rlmm: &Arc<dyn RemoteLogMetadataManager>,
-) {
+async fn rollback(tier: &RemoteTier<'_>, metadata: &RemoteLogSegmentMetadata, broker_id: i32) {
     let id = metadata.remote_log_segment_id().clone();
-    match archive {
+    match tier.archive {
         ArchiveMode::Mutable => {
-            let rsm_del = Arc::clone(rsm);
+            let rsm_del = Arc::clone(tier.rsm);
             let md_del = metadata.clone();
             let _ = spawn_blocking(move || rsm_del.delete_log_segment_data(&md_del)).await;
         }
@@ -466,7 +443,7 @@ async fn rollback(
         RemoteLogSegmentState::DeleteSegmentStarted,
         RemoteLogSegmentState::DeleteSegmentFinished,
     ] {
-        let _ = super::rlmm::update_segment(rlmm, id.clone(), None, state, broker_id).await;
+        let _ = super::rlmm::update_segment(tier.rlmm, id.clone(), None, state, broker_id).await;
     }
 }
 
@@ -486,7 +463,8 @@ mod tests {
         krabka_ids::LeaderEpoch,
         krabka_log::Offset,
         krabka_remote_storage::{
-            ChainHead, ChainStamp, CustomMetadata, EpochId, ManifestSeq, RemoteStorageError,
+            ChainHead, ChainStamp, CustomMetadata, EpochId, ManifestSeq, RemoteLogMetadataManager,
+            RemoteStorageError, RemoteStorageManager,
         },
         krabka_units::bytes,
         std::{
@@ -680,6 +658,40 @@ mod tests {
         check!(residue == expected);
     }
 
+    /// Deleting a copy that finished below the floor counts as one delete
+    /// request, and as one delete error when the backend refuses it.
+    #[yare::parameterized(
+        the_delete_goes = { false, 0 },
+        the_backend_refuses_it = { true, 1 },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_delete_below_the_floor_records_its_delete_request_and_error(
+        refuse: bool,
+        errors: u64,
+    ) {
+        let rsm: Arc<dyn RemoteStorageManager> = if refuse {
+            Arc::new(fixtures::RefusesDeleteRsm::default())
+        } else {
+            Arc::new(DeletingRsm::default())
+        };
+        let owned = fixtures::owned_tier_resources();
+
+        copy_one(
+            &owned.tier(&rsm),
+            &tp(),
+            CopyIdentity {
+                broker_id: 1,
+                leader_epoch: LeaderEpoch(0),
+                fence: &FloorFence(Some(Offset(10))),
+            },
+            &synth_export().call(),
+            ChainPosition::Unchained,
+        )
+        .await;
+
+        check!(owned.delete_counts() == (1, errors));
+    }
+
     /// A `DeleteRecords` that marks a segment `DeleteSegmentStarted` while
     /// its copy uploads makes `CopySegmentFinished` an invalid transition.
     /// The copy then rolls back: its bytes are deleted, and its metadata ends
@@ -777,11 +789,13 @@ mod tests {
         let cases = [
             (
                 "mutable tier stamps nothing",
+                ArchiveMode::Mutable,
                 ChainPosition::Unchained,
                 None,
             ),
             (
                 "write-once stamps the request form",
+                ArchiveMode::WriteOnce,
                 ChainPosition::At(stamp),
                 Some(
                     WormChainRecord::request(stamp)
@@ -790,14 +804,14 @@ mod tests {
                 ),
             ),
         ];
-        for (name, chain, expected) in cases {
+        for (name, archive, chain, expected) in cases {
             let rsm_impl = Arc::new(CapturingRsm::default());
             let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
             let rlmm = fixtures::in_memory_metadata();
             let export = synth_export().call();
 
             let outcome = copy_one(
-                &tier(chain.archive(), &rsm, &rlmm),
+                &tier(archive, &rsm, &rlmm),
                 &tp(),
                 CopyIdentity::unfenced(1, LeaderEpoch(0)),
                 &export,
@@ -856,11 +870,13 @@ mod tests {
             );
         }
     }
-    /// One seal case: what it is called, the backend it runs against, where
-    /// the copy sits in the chain, and the counter values it must leave.
+    /// One seal case: what it is called, the backend it runs against, the
+    /// tier's archive mode, where the copy sits in the chain, and the counter
+    /// values it must leave.
     struct SealCase {
         name: &'static str,
         rsm: Arc<dyn RemoteStorageManager>,
+        archive: ArchiveMode,
         chain: ChainPosition,
         sealed: u64,
         failed: u64,
@@ -883,6 +899,7 @@ mod tests {
             SealCase {
                 name: "a sealed manifest with a matching receipt",
                 rsm: Arc::new(FakeWormArchive::new()),
+                archive: ArchiveMode::WriteOnce,
                 chain: ChainPosition::At(stamp),
                 sealed: 1,
                 failed: 0,
@@ -890,6 +907,7 @@ mod tests {
             SealCase {
                 name: "a copy the backend refused",
                 rsm: Arc::new(AlwaysFailRsm),
+                archive: ArchiveMode::WriteOnce,
                 chain: ChainPosition::At(stamp),
                 sealed: 0,
                 failed: 1,
@@ -897,6 +915,7 @@ mod tests {
             SealCase {
                 name: "a copy that came back with no receipt",
                 rsm: Arc::new(ReturningRsm(None)),
+                archive: ArchiveMode::WriteOnce,
                 chain: ChainPosition::At(stamp),
                 sealed: 0,
                 failed: 1,
@@ -904,6 +923,7 @@ mod tests {
             SealCase {
                 name: "an unchained copy that failed",
                 rsm: Arc::new(AlwaysFailRsm),
+                archive: ArchiveMode::Mutable,
                 chain: ChainPosition::Unchained,
                 sealed: 0,
                 failed: 0,
@@ -912,6 +932,7 @@ mod tests {
         for SealCase {
             name,
             rsm,
+            archive,
             chain,
             sealed,
             failed,
@@ -925,7 +946,7 @@ mod tests {
             let tier = fixtures::configured_tier()
                 .rsm(&rsm)
                 .rlmm(&rlmm)
-                .archive(chain.archive())
+                .archive(archive)
                 .metrics(&metrics)
                 .index_cache(&index_cache)
                 .call();

@@ -18,8 +18,8 @@ use {
         error::RestoreError,
     },
     bytes::{Bytes, BytesMut},
-    krabka_ids::ProducerId,
-    krabka_log::{FilteredBatch, VerbatimBatch, filter_batch},
+    krabka_ids::{Offset, ProducerId},
+    krabka_log::{FilteredBatch, Log, VerbatimBatch, filter_batch},
     krabka_protocol::records::{
         Attributes, RecordBatch, RecordBatchBorrowed, RecordBatchHeader, RecordsError,
         validate_one_v2_batch,
@@ -49,6 +49,27 @@ impl PreparedBatch {
             Self::Owned { encoded_len, .. } => *encoded_len,
         }
     }
+
+    /// Append this batch to `log` at `base_offset`, through the log path that fits its shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RestoreError::Log`] when the log refuses the append.
+    pub(crate) fn append_to(
+        &mut self,
+        log: &mut Log,
+        base_offset: Offset,
+    ) -> Result<(), RestoreError> {
+        match self {
+            Self::Verbatim(verbatim) => {
+                log.append_verbatim_at(verbatim, base_offset)?;
+            }
+            Self::Owned { batch, .. } => {
+                log.append_at(batch, base_offset)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// How [`prepare_batch`]'s outcome folds into
@@ -57,6 +78,17 @@ pub enum BatchTally {
     Kept,
     Rewritten { kept: u64, dropped: u64 },
     Emptied,
+}
+
+impl BatchTally {
+    /// Split a batch of `records_in_batch` records into the `(kept, dropped)` counts this outcome stands for.
+    pub(crate) fn records(&self, records_in_batch: u64) -> (u64, u64) {
+        match *self {
+            Self::Kept => (records_in_batch, 0),
+            Self::Rewritten { kept, dropped } => (kept, dropped),
+            Self::Emptied => (0, records_in_batch),
+        }
+    }
 }
 
 #[derive(bon::Builder)]
@@ -308,6 +340,17 @@ mod tests {
             timestamp_delta,
             ..Record::default()
         }
+    }
+
+    #[rstest::rstest]
+    #[case::kept(BatchTally::Kept, (5, 0))]
+    #[case::rewritten(BatchTally::Rewritten { kept: 3, dropped: 2 }, (3, 2))]
+    #[case::emptied(BatchTally::Emptied, (0, 5))]
+    fn batch_tally_splits_a_batch_into_kept_and_dropped_records(
+        #[case] tally: BatchTally,
+        #[case] expected: (u64, u64),
+    ) {
+        check!(tally.records(5) == expected);
     }
 
     #[test]

@@ -14,7 +14,6 @@ use {
         broker::Broker,
         error::BrokerError,
         handlers::{ApiVersion, RequestContext},
-        unclean_recovery::RecoveryJob,
     },
     krabka_protocol::owned::{
         broker_heartbeat_request::BrokerHeartbeatRequest,
@@ -141,24 +140,7 @@ pub async fn handle(
         )
         .await;
         // Fire-and-forget: enqueue logs internally if the recovery manager is gone.
-        for (topic, partition, strategy) in recoveries {
-            recovery
-                .enqueue(RecoveryJob {
-                    topic,
-                    partition,
-                    strategy,
-                    reply: None,
-                    // KFC-9: a heartbeat that reports an offline log dir
-                    // is not a request for an unclean recovery, and the
-                    // broker that sent it is not a person who can be asked
-                    // for a second signature. The recovery carries no
-                    // proposal, and
-                    // `break_glass.background_unclean_recovery` decides
-                    // what the URM does with it.
-                    proposal: None,
-                })
-                .await;
-        }
+        recovery.enqueue_background(recoveries).await;
     }
 
     // KIP-1066: store the directories the broker reports cordoned on its

@@ -302,7 +302,7 @@ pub async fn handle(
     // throttles for the larger delay. A throttled fetch takes its byte charge
     // back and answers no fetch rows, so its records stay acquired until
     // their lock runs out. Its acknowledge results still answer.
-    let (throttle_time_ms, charge) = apply_consumer_fetch_quota(
+    let throttle_time_ms = apply_consumer_fetch_quota(
         broker,
         &image,
         ctx,
@@ -311,7 +311,6 @@ pub async fn handle(
         fetch_rows_size(&pending, version),
     );
     if throttle_time_ms > 0 {
-        charge.refund();
         return Ok(ShareFetchResponse {
             throttle_time_ms,
             ..success_response(

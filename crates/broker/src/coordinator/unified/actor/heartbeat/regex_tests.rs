@@ -5,7 +5,9 @@
 use {
     super::*,
     crate::coordinator::unified::{
-        actor::{seed::apply_seed, test_support::StaticMetadata},
+        actor::{
+            regex_resolution::apply_regex_result, seed::apply_seed, test_support::StaticMetadata,
+        },
         persistence_next_gen::{GroupMetadataValue, RegularExpressionValue},
         reconciler::ReconcileInput,
         regex_resolver::FixedRegexResolver,

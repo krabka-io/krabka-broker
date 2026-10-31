@@ -312,6 +312,207 @@ struct TopicTally {
     partitions: i32,
 }
 
+/// Every topic the archive holds, in the order its first partition appears, with each one's [`TopicTally`].
+struct TopicTallies<'a> {
+    order: Vec<&'a str>,
+    by_name: HashMap<&'a str, TopicTally>,
+}
+
+/// Count each archived topic's partitions, keeping the order in which the scan first met each topic.
+fn tally_topics(inventory: &ArchiveInventory) -> TopicTallies<'_> {
+    let mut order: Vec<&str> = Vec::new();
+    let mut by_name: HashMap<&str, TopicTally> = HashMap::new();
+    for entry in &inventory.partitions {
+        let topic = entry.partition.topic.as_str();
+        let counted = by_name.entry(topic).or_insert_with(|| {
+            order.push(topic);
+            TopicTally {
+                topic_id: entry.partition.topic_id,
+                partitions: 0,
+            }
+        });
+        counted.partitions += 1;
+    }
+    TopicTallies { order, by_name }
+}
+
+/// The snapshot records a restore carries over, sorted by family.
+#[derive(Default)]
+struct SnapshotFamilies<'a> {
+    features: Vec<MetadataRecord>,
+    feature_epoch: Vec<MetadataRecord>,
+    topic_configs: Vec<MetadataRecord>,
+    scram: Vec<MetadataRecord>,
+    acls: Vec<MetadataRecord>,
+    quotas: Vec<MetadataRecord>,
+    /// The name of every feature the snapshot finalizes a level for.
+    finalized_features: HashSet<&'a str>,
+}
+
+/// Sort the snapshot's `records` into the families a restore carries over, counting each one in `report`.
+///
+/// A topic configuration comes back only for a topic the archive holds, and only when the snapshot names that topic under the archive's topic id.
+///
+/// # Errors
+///
+/// Returns [`RestoreError::MetadataSnapshotTopicMismatch`] when the snapshot configures an archived topic that it holds under another topic id, or does not hold at all.
+fn classify_snapshot<'a>(
+    records: &'a [MetadataRecord],
+    topics: &HashMap<&str, TopicTally>,
+    snapshot_topics: &HashMap<&str, Uuid>,
+    report: &mut MetadataRestoreReport,
+) -> Result<SnapshotFamilies<'a>, RestoreError> {
+    let mut families = SnapshotFamilies::default();
+    for record in records {
+        match record {
+            MetadataRecord::V1FeatureLevel(feature) => {
+                report.feature_levels += 1;
+                families.finalized_features.insert(feature.name.as_str());
+                families.features.push(record.clone());
+            }
+            MetadataRecord::V1FeaturesEpoch(_) => families.feature_epoch.push(record.clone()),
+            MetadataRecord::V1TopicConfig(config) => {
+                if let Some(TopicTally {
+                    topic_id: archive_topic_id,
+                    ..
+                }) = topics.get(config.topic.as_str())
+                {
+                    match snapshot_topics.get(config.topic.as_str()) {
+                        Some(snapshot_topic_id) if snapshot_topic_id == archive_topic_id => {
+                            report.topic_configs += 1;
+                            families.topic_configs.push(record.clone());
+                        }
+                        snapshot_topic_id => {
+                            return Err(RestoreError::MetadataSnapshotTopicMismatch {
+                                topic: config.topic.clone(),
+                                archive_topic_id: *archive_topic_id,
+                                snapshot_topic_id: snapshot_topic_id
+                                    .map_or_else(|| "absent".to_owned(), ToString::to_string),
+                            });
+                        }
+                    }
+                }
+            }
+            MetadataRecord::V1ScramCredential(_) => {
+                report.scram_credentials += 1;
+                families.scram.push(record.clone());
+            }
+            MetadataRecord::V1AccessControlEntry(_) => {
+                report.access_control_entries += 1;
+                families.acls.push(record.clone());
+            }
+            MetadataRecord::V1ClientQuota(_) => {
+                report.client_quotas += 1;
+                families.quotas.push(record.clone());
+            }
+            _ => {}
+        }
+    }
+    Ok(families)
+}
+
+/// One level-0 [`MetadataRecord::V1FeatureLevel`] for every registered feature the snapshot does not finalize.
+///
+/// A feature that the snapshot does not finalize is disabled in the restored
+/// cluster. `metadata.version` is never disabled: Kafka has no
+/// `MetadataVersion` at level 0, and the active controller refuses bootstrap
+/// records that remove it. So a snapshot without one keeps the level of the
+/// format.
+fn disabled_feature_records<'a>(
+    finalized_features: &'a HashSet<&str>,
+) -> impl Iterator<Item = MetadataRecord> + 'a {
+    krabka_metadata::feature_registry()
+        .iter()
+        .filter(|feature| {
+            !matches!(
+                feature.name(),
+                metadata_version::KRAFT_VERSION_FEATURE
+                    | metadata_version::METADATA_VERSION_FEATURE
+            ) && !finalized_features.contains(feature.name())
+        })
+        .map(|feature| {
+            MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
+                name: feature.name().to_owned(),
+                level: 0,
+            })
+        })
+}
+
+/// One [`MetadataRecord::V1Topic`] per archived topic, in `topic_order`, each with a replication factor of 1.
+///
+/// # Errors
+///
+/// Returns [`RestoreError::Integrity`] when a topic in `topic_order` has no tally in `topics`.
+fn topic_records(
+    topic_order: &[&str],
+    topics: &HashMap<&str, TopicTally>,
+) -> Result<Vec<MetadataRecord>, RestoreError> {
+    topic_order
+        .iter()
+        .map(|topic| {
+            let TopicTally {
+                topic_id,
+                partitions,
+            } = topics.get(topic).copied().ok_or_else(|| {
+                RestoreError::Integrity(format!("topic {topic} has no partition tally"))
+            })?;
+            Ok(MetadataRecord::V1Topic(TopicRecord {
+                name: (*topic).to_owned(),
+                topic_id,
+                partitions,
+                replication_factor: 1,
+            }))
+        })
+        .collect()
+}
+
+/// One [`MetadataRecord::V1Partition`] per archived partition, in scan order, naming `node_id` as its leader and sole replica.
+fn partition_records(
+    inventory: &ArchiveInventory,
+    node_id: NodeId,
+) -> impl Iterator<Item = MetadataRecord> + '_ {
+    inventory.partitions.iter().map(move |entry| {
+        MetadataRecord::V1Partition(PartitionRecord {
+            topic: entry.partition.topic.clone(),
+            partition: entry.partition.partition,
+            leader: node_id,
+            replicas: vec![node_id],
+            isr: vec![node_id],
+            leader_epoch: LeaderEpoch(0),
+            adding_replicas: Vec::new(),
+            removing_replicas: Vec::new(),
+            directories: Vec::new(),
+            // KIP-631: 0 on creation. `PartitionRecord::default()`'s
+            // `partition_epoch` is -1, the on-disk deserialization default for
+            // a record written before this field existed; a freshly restored
+            // partition is neither, so this is set explicitly rather than
+            // pulled from `..Default::default()`.
+            partition_epoch: 0,
+        })
+    })
+}
+
+/// One [`MetadataRecord::V1PartitionOffsetAdvance`] per diskless partition that starts its committed next offset past 0.
+///
+/// The controller quorum is a diskless partition's offset authority: its
+/// first write is assigned the committed next offset, so it starts where the
+/// restored log ends. A partition restored empty from offset 0 needs no
+/// record.
+fn offset_advance_records(
+    diskless_next_offsets: &[DisklessNextOffset],
+) -> impl Iterator<Item = MetadataRecord> + '_ {
+    diskless_next_offsets
+        .iter()
+        .filter(|next| next.next_offset > 0)
+        .map(|next| {
+            MetadataRecord::V1PartitionOffsetAdvance(PartitionOffsetAdvanceRecord {
+                topic: next.topic.clone(),
+                partition: next.partition,
+                count: next.next_offset,
+            })
+        })
+}
+
 /// Build the topic and partition records a restore seeds into the target formatter, from what the archive scan recovered.
 ///
 /// Every topic's [`MetadataRecord::V1Topic`] precedes every [`MetadataRecord::V1Partition`], which is the ordering `krabka_format::run_with_records`'s own doc requires: a `MetadataImage` derives a topic's partition count from the partition records that apply after it, so a partition can only follow its own topic.
@@ -327,19 +528,10 @@ fn seed_metadata_records(
     snapshot_records: Option<&[MetadataRecord]>,
     diskless_next_offsets: &[DisklessNextOffset],
 ) -> Result<SeededMetadata, RestoreError> {
-    let mut topic_order: Vec<&str> = Vec::new();
-    let mut topics: HashMap<&str, TopicTally> = HashMap::new();
-    for entry in &inventory.partitions {
-        let topic = entry.partition.topic.as_str();
-        let counted = topics.entry(topic).or_insert_with(|| {
-            topic_order.push(topic);
-            TopicTally {
-                topic_id: entry.partition.topic_id,
-                partitions: 0,
-            }
-        });
-        counted.partitions += 1;
-    }
+    let TopicTallies {
+        order: topic_order,
+        by_name: topics,
+    } = tally_topics(inventory);
 
     let mut metadata = MetadataRestoreReport {
         snapshot,
@@ -350,12 +542,6 @@ fn seed_metadata_records(
         feature_levels: 0,
         topics_without_configuration: Vec::new(),
     };
-    let mut features = Vec::new();
-    let mut feature_epoch = Vec::new();
-    let mut topic_configs = Vec::new();
-    let mut scram = Vec::new();
-    let mut acls = Vec::new();
-    let mut quotas = Vec::new();
     let snapshot_topics: HashMap<&str, Uuid> = snapshot_records
         .into_iter()
         .flatten()
@@ -377,75 +563,22 @@ fn seed_metadata_records(
         })
         .map(|topic| (*topic).to_owned())
         .collect();
-    let mut snapshot_features = HashSet::new();
-    for record in snapshot_records.into_iter().flatten() {
-        match record {
-            MetadataRecord::V1FeatureLevel(feature) => {
-                metadata.feature_levels += 1;
-                snapshot_features.insert(feature.name.as_str());
-                features.push(record.clone());
-            }
-            MetadataRecord::V1FeaturesEpoch(_) => feature_epoch.push(record.clone()),
-            MetadataRecord::V1TopicConfig(config) => {
-                if let Some(TopicTally {
-                    topic_id: archive_topic_id,
-                    ..
-                }) = topics.get(config.topic.as_str())
-                {
-                    match snapshot_topics.get(config.topic.as_str()) {
-                        Some(snapshot_topic_id) if snapshot_topic_id == archive_topic_id => {
-                            metadata.topic_configs += 1;
-                            topic_configs.push(record.clone());
-                        }
-                        snapshot_topic_id => {
-                            return Err(RestoreError::MetadataSnapshotTopicMismatch {
-                                topic: config.topic.clone(),
-                                archive_topic_id: *archive_topic_id,
-                                snapshot_topic_id: snapshot_topic_id
-                                    .map_or_else(|| "absent".to_owned(), ToString::to_string),
-                            });
-                        }
-                    }
-                }
-            }
-            MetadataRecord::V1ScramCredential(_) => {
-                metadata.scram_credentials += 1;
-                scram.push(record.clone());
-            }
-            MetadataRecord::V1AccessControlEntry(_) => {
-                metadata.access_control_entries += 1;
-                acls.push(record.clone());
-            }
-            MetadataRecord::V1ClientQuota(_) => {
-                metadata.client_quotas += 1;
-                quotas.push(record.clone());
-            }
-            _ => {}
-        }
-    }
+    let SnapshotFamilies {
+        mut features,
+        mut feature_epoch,
+        mut topic_configs,
+        mut scram,
+        mut acls,
+        mut quotas,
+        finalized_features: snapshot_features,
+    } = classify_snapshot(
+        snapshot_records.unwrap_or_default(),
+        &topics,
+        &snapshot_topics,
+        &mut metadata,
+    )?;
     if snapshot_records.is_some() {
-        // A feature that the snapshot does not finalize is disabled in the
-        // restored cluster. `metadata.version` is never disabled: Kafka has no
-        // `MetadataVersion` at level 0, and the active controller refuses
-        // bootstrap records that remove it. So a snapshot without one keeps
-        // the level of the format.
-        features.extend(
-            krabka_metadata::feature_registry()
-                .iter()
-                .filter(|feature| {
-                    !matches!(
-                        feature.name(),
-                        metadata_version::KRAFT_VERSION_FEATURE
-                            | metadata_version::METADATA_VERSION_FEATURE
-                    ) && !snapshot_features.contains(feature.name())
-                })
-                .map(|feature| {
-                    MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
-                        name: feature.name().to_owned(),
-                        level: 0,
-                    })
-                }),
-        );
+        features.extend(disabled_feature_records(&snapshot_features));
     }
 
     let mut records = Vec::with_capacity(
@@ -460,54 +593,9 @@ fn seed_metadata_records(
     );
     records.append(&mut features);
     records.append(&mut feature_epoch);
-    for topic in &topic_order {
-        let TopicTally {
-            topic_id,
-            partitions,
-        } = topics.get(topic).copied().ok_or_else(|| {
-            RestoreError::Integrity(format!("topic {topic} has no partition tally"))
-        })?;
-        records.push(MetadataRecord::V1Topic(TopicRecord {
-            name: (*topic).to_owned(),
-            topic_id,
-            partitions,
-            replication_factor: 1,
-        }));
-    }
-    for entry in &inventory.partitions {
-        records.push(MetadataRecord::V1Partition(PartitionRecord {
-            topic: entry.partition.topic.clone(),
-            partition: entry.partition.partition,
-            leader: node_id,
-            replicas: vec![node_id],
-            isr: vec![node_id],
-            leader_epoch: LeaderEpoch(0),
-            adding_replicas: Vec::new(),
-            removing_replicas: Vec::new(),
-            directories: Vec::new(),
-            // KIP-631: 0 on creation. `PartitionRecord::default()`'s
-            // `partition_epoch` is -1, the on-disk deserialization default for
-            // a record written before this field existed; a freshly restored
-            // partition is neither, so this is set explicitly rather than
-            // pulled from `..Default::default()`.
-            partition_epoch: 0,
-        }));
-    }
-    // KRaft is a diskless partition's offset authority: its first write is
-    // assigned the committed next offset, so it starts where the restored log
-    // ends. A partition restored empty from offset 0 needs no record.
-    records.extend(
-        diskless_next_offsets
-            .iter()
-            .filter(|next| next.next_offset > 0)
-            .map(|next| {
-                MetadataRecord::V1PartitionOffsetAdvance(PartitionOffsetAdvanceRecord {
-                    topic: next.topic.clone(),
-                    partition: next.partition,
-                    count: next.next_offset,
-                })
-            }),
-    );
+    records.extend(topic_records(&topic_order, &topics)?);
+    records.extend(partition_records(inventory, node_id));
+    records.extend(offset_advance_records(diskless_next_offsets));
     records.append(&mut topic_configs);
     records.append(&mut scram);
     records.append(&mut acls);

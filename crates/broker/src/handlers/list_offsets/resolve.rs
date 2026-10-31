@@ -28,7 +28,7 @@ use {
         sentinels::{UNKNOWN_EPOCH, UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP, timestamp_kind},
         timestamp::resolve_timestamp_offset,
     },
-    crate::{broker::Broker, codes, partition::Partition},
+    crate::{broker::Broker, codes, partition::Partition, remote_reader::TieredOffset},
     krabka_protocol::owned::{
         list_offsets_request::ListOffsetsPartition,
         list_offsets_response::ListOffsetsPartitionResponse,
@@ -63,6 +63,7 @@ struct EarliestContext<'a> {
 }
 
 /// An offset with the leader epoch that goes with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ResolvedOffset {
     offset: i64,
     leader_epoch: i32,
@@ -217,6 +218,96 @@ async fn resolve_earliest_pending_upload(
             Ok(None)
         }
     }
+}
+
+/// The KIP-1005 `LATEST_TIERED` answer from what the tier answered: `None`
+/// when it holds no finished segment or failed, and `REQUEST_TIMED_OUT` when
+/// it did not answer within the remote timeout.
+fn latest_tiered_candidate(
+    answer: Option<&Result<Option<TieredOffset>, krabka_remote_storage::RemoteStorageError>>,
+) -> Result<Option<ResolvedOffset>, i16> {
+    match answer {
+        None => Err(codes::REQUEST_TIMED_OUT),
+        Some(Ok(Some(tiered))) => Ok(Some(ResolvedOffset {
+            offset: tiered.offset,
+            leader_epoch: tiered.leader_epoch.0,
+        })),
+        Some(Ok(None) | Err(_)) => Ok(None),
+    }
+}
+
+/// Resolve the KIP-1005 `LATEST_TIERED` sentinel: the highest offset a
+/// finished remote segment holds and the leader epoch that owns it, or `None`
+/// when there is no remote reader configured for this topic.
+///
+/// Split out of [`resolve_partition`] purely to keep that function's line
+/// count down.
+async fn resolve_latest_tiered(
+    broker: &Broker,
+    topic: TopicPartitionName<'_>,
+    remote_topic_id: Option<uuid::Uuid>,
+    remote_timeout: Duration,
+) -> Result<Option<ResolvedOffset>, i16> {
+    let Some((reader, id)) = broker.remote_reader.as_ref().zip(remote_topic_id) else {
+        return Ok(None);
+    };
+    let TopicPartitionName {
+        name: topic_name,
+        partition: index,
+    } = topic;
+    let topic_partition =
+        krabka_remote_storage::TopicIdPartition::new(id, topic_name.to_owned(), index);
+    let answer = await_remote(
+        remote_timeout,
+        reader.latest_tiered_offset(&topic_partition),
+    )
+    .await;
+    if let Some(Err(error)) = &answer {
+        tracing::warn!(topic = topic_name, partition = index,
+            error = %error, "list_offsets: remote latest_tiered_offset failed");
+    }
+    latest_tiered_candidate(answer.as_ref())
+}
+
+/// Resolve the KIP-734 `MAX_TIMESTAMP` sentinel from the local log: the
+/// offset and timestamp of the record with the largest timestamp, or the
+/// unknown pair when the log holds no record.
+///
+/// An empty log has no record to name, and Kafka's
+/// `UnifiedLog.fetchOffsetByTimestamp` answers it with an empty result rather
+/// than the log start: KIP-207 fences that empty result, and an unfenced one
+/// is the unknown row.
+///
+/// A compressed record above the topic's trunk
+/// `max.decompressed.message.bytes` in the batch Kafka reads to resolve the
+/// maximum fails the row, as an exception out of
+/// `UnifiedLog.fetchOffsetByTimestamp` does.
+fn resolve_max_timestamp(
+    partition: &Partition,
+    topic: TopicPartitionName<'_>,
+) -> Result<(i64, i64), i16> {
+    let found = partition
+        .log
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .max_timestamp_offset_and_ts();
+    match found {
+        Ok(found) => Ok(found.map_or(
+            (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
+            |(offset, timestamp)| (offset.0, timestamp),
+        )),
+        Err(error) => {
+            tracing::warn!(topic = topic.name, partition = topic.partition, error = %error,
+                "list_offsets: max timestamp lookup refused a record");
+            Err(codes::from_broker_error(&error.into()))
+        }
+    }
+}
+
+/// The leader epoch of the batch that holds a by-record lookup's `offset`,
+/// or `None` when the lookup found nothing and the row keeps its epoch.
+fn epoch_of_found(partition: &Partition, offset: i64) -> Option<i32> {
+    (offset != UNKNOWN_OFFSET).then(|| leader_epoch_for_offset(partition, offset))
 }
 
 /// The local snapshot and archive lookup needed to resolve scheduled LATEST.
@@ -445,6 +536,47 @@ fn apply_selection(
     }
 }
 
+/// What one kind of lookup resolved, before the KIP-207 fence and the
+/// selection measure it. `leader_epoch` is `None` when the row keeps the
+/// epoch it was built with.
+struct Resolved {
+    offset: i64,
+    timestamp: i64,
+    leader_epoch: Option<i32>,
+}
+
+impl Resolved {
+    /// An offset sentinel's answer: an offset and its epoch, no timestamp.
+    const fn at(resolved: ResolvedOffset) -> Self {
+        Self {
+            offset: resolved.offset,
+            timestamp: UNKNOWN_TIMESTAMP,
+            leader_epoch: Some(resolved.leader_epoch),
+        }
+    }
+
+    /// A tiered sentinel's answer, or the unknown offset when it named none.
+    fn at_or_unknown(resolved: Option<ResolvedOffset>) -> Self {
+        resolved.map_or(
+            Self {
+                offset: UNKNOWN_OFFSET,
+                timestamp: UNKNOWN_TIMESTAMP,
+                leader_epoch: None,
+            },
+            Self::at,
+        )
+    }
+
+    /// A by-record lookup's answer, with the epoch of the batch it found.
+    fn found(partition: &Partition, offset: i64, timestamp: i64) -> Self {
+        Self {
+            offset,
+            timestamp,
+            leader_epoch: epoch_of_found(partition, offset),
+        }
+    }
+}
+
 /// Log coordinates and policy read together before any remote lookup awaits.
 struct PartitionLogSnapshot {
     local_start: i64,
@@ -547,31 +679,23 @@ pub(super) async fn resolve_partition(
         deleted_below,
         local_log_start,
     };
-    let (offset, timestamp) = match kind {
-        ListOffsetsKind::Earliest => match resolve_earliest(earliest_context()).await {
-            Ok(ResolvedOffset {
-                offset: earliest,
-                leader_epoch,
-            }) => {
-                response.leader_epoch = leader_epoch;
-                (earliest, UNKNOWN_TIMESTAMP)
-            }
-            Err(error_code) => return error_response(index, error_code),
-        },
+    let topic = TopicPartitionName {
+        name: topic_name,
+        partition: index,
+    };
+    let resolved = match kind {
+        ListOffsetsKind::Earliest => resolve_earliest(earliest_context()).await.map(Resolved::at),
         ListOffsetsKind::Latest => {
             // Kafka answers LATEST with the partition's live leader epoch,
             // not the epoch recorded for whatever offset the log end
             // happens to sit at -- the two agree once a record lands in the
             // new epoch, but LATEST must not wait for that.
             // `Partition.scala:1473-1475`.
-            response.leader_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
-            match resolve_latest(LatestContext {
+            let live_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
+            resolve_latest(LatestContext {
                 broker,
                 partition: &partition,
-                topic: TopicPartitionName {
-                    name: topic_name,
-                    partition: index,
-                },
+                topic,
                 remote_timeout,
                 remote_topic_id,
                 snapshot: LatestSnapshot {
@@ -582,10 +706,12 @@ pub(super) async fn resolve_partition(
                 },
             })
             .await
-            {
-                Ok(latest) => (latest, UNKNOWN_TIMESTAMP),
-                Err(error_code) => return error_response(index, error_code),
-            }
+            .map(|latest| {
+                Resolved::at(ResolvedOffset {
+                    offset: latest,
+                    leader_epoch: live_epoch,
+                })
+            })
         }
         ListOffsetsKind::EarliestLocal => {
             let offset = if remote_enabled {
@@ -593,104 +719,51 @@ pub(super) async fn resolve_partition(
             } else {
                 local_start
             };
-            response.leader_epoch = leader_epoch_for_offset(&partition, offset);
-            (offset, UNKNOWN_TIMESTAMP)
+            Ok(Resolved::at(ResolvedOffset {
+                offset,
+                leader_epoch: leader_epoch_for_offset(&partition, offset),
+            }))
         }
         ListOffsetsKind::LatestTiered => {
-            if let Some((reader, id)) = broker.remote_reader.as_ref().zip(remote_topic_id) {
-                let topic_partition =
-                    krabka_remote_storage::TopicIdPartition::new(id, topic_name.to_owned(), index);
-                match await_remote(
-                    remote_timeout,
-                    reader.latest_tiered_offset(&topic_partition),
-                )
+            resolve_latest_tiered(broker, topic, remote_topic_id, remote_timeout)
                 .await
-                {
-                    None => return error_response(index, codes::REQUEST_TIMED_OUT),
-                    Some(Ok(Some(tiered))) => {
-                        response.leader_epoch = tiered.leader_epoch.0;
-                        (tiered.offset, UNKNOWN_TIMESTAMP)
-                    }
-                    Some(Ok(None)) => (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
-                    Some(Err(error)) => {
-                        tracing::warn!(topic = topic_name, partition = index,
-                            error = %error, "list_offsets: remote latest_tiered_offset failed");
-                        (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP)
-                    }
-                }
-            } else {
-                (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP)
-            }
+                .map(Resolved::at_or_unknown)
         }
         ListOffsetsKind::EarliestPendingUpload => {
-            match resolve_earliest_pending_upload(earliest_context()).await {
-                Ok(None) => (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
-                Ok(Some(ResolvedOffset {
-                    offset,
-                    leader_epoch,
-                })) => {
-                    response.leader_epoch = leader_epoch;
-                    (offset, UNKNOWN_TIMESTAMP)
-                }
-                Err(error_code) => return error_response(index, error_code),
-            }
+            resolve_earliest_pending_upload(earliest_context())
+                .await
+                .map(Resolved::at_or_unknown)
         }
-        ListOffsetsKind::MaxTimestamp => {
-            // An empty log has no record to name, and Kafka's
-            // `UnifiedLog.fetchOffsetByTimestamp` answers it with an empty
-            // result rather than the log start: KIP-207 fences that empty
-            // result, and an unfenced one is the unknown row.
-            let found = partition
-                .log
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .max_timestamp_offset_and_ts();
-            // A compressed record above the topic's trunk
-            // `max.decompressed.message.bytes` in the batch Kafka reads to
-            // resolve the maximum fails the row, as an exception out of
-            // `UnifiedLog.fetchOffsetByTimestamp` does.
-            let (offset, timestamp) = match found {
-                Ok(found) => found.map_or(
-                    (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
-                    |(offset, timestamp)| (offset.0, timestamp),
-                ),
-                Err(error) => {
-                    tracing::warn!(topic = topic_name, partition = index, error = %error,
-                        "list_offsets: max timestamp lookup refused a record");
-                    return error_response(index, codes::from_broker_error(&error.into()));
-                }
-            };
-            // Kafka fills the epoch with the resolved batch's own
-            // `partitionLeaderEpoch`. `UnifiedLog.java:1742-1749`.
-            if offset != UNKNOWN_OFFSET {
-                response.leader_epoch = leader_epoch_for_offset(&partition, offset);
-            }
-            (offset, timestamp)
-        }
-        ListOffsetsKind::Timestamp => {
-            let (offset, timestamp) = match resolve_timestamp_offset(
-                broker,
-                &partition,
-                topic_name,
-                index,
-                topic_id,
-                request.timestamp,
-                remote_timeout,
-            )
-            .await
-            {
-                Ok(found) => found,
-                Err(error_code) => return error_response(index, error_code),
-            };
-            // Kafka fills the epoch with the matched batch's own epoch.
-            // `FileRecords.java:364-381`.
-            if offset != UNKNOWN_OFFSET {
-                response.leader_epoch = leader_epoch_for_offset(&partition, offset);
-            }
-            (offset, timestamp)
-        }
+        // Kafka fills the epoch with the resolved batch's own
+        // `partitionLeaderEpoch`. `UnifiedLog.java:1742-1749`.
+        ListOffsetsKind::MaxTimestamp => resolve_max_timestamp(&partition, topic)
+            .map(|(offset, timestamp)| Resolved::found(&partition, offset, timestamp)),
+        // Kafka fills the epoch with the matched batch's own epoch.
+        // `FileRecords.java:364-381`.
+        ListOffsetsKind::Timestamp => resolve_timestamp_offset(
+            broker,
+            &partition,
+            topic_name,
+            index,
+            topic_id,
+            request.timestamp,
+            remote_timeout,
+        )
+        .await
+        .map(|(offset, timestamp)| Resolved::found(&partition, offset, timestamp)),
         ListOffsetsKind::Unsupported => unreachable!("unsupported timestamp returned above"),
     };
+    let Resolved {
+        offset,
+        timestamp,
+        leader_epoch,
+    } = match resolved {
+        Ok(resolved) => resolved,
+        Err(error_code) => return error_response(index, error_code),
+    };
+    if let Some(leader_epoch) = leader_epoch {
+        response.leader_epoch = leader_epoch;
+    }
     // KIP-207 for a data-resolved lookup: fenced only when it found nothing
     // or found an offset the request's bound does not yet cover.
     if let (Some(error_code), Some(last_fetchable)) = (offsets_error, last_fetchable)
@@ -781,6 +854,41 @@ mod tests {
         ] {
             assert!(
                 remote_earliest_candidate(answer.as_ref(), deleted_below, 0) == expected,
+                "{name}"
+            );
+        }
+    }
+
+    /// What the remote tier's answer makes of `LATEST_TIERED`. A tier that does
+    /// not answer within the remote timeout fails the row; one that holds no
+    /// finished segment, or fails, leaves the offset unknown.
+    #[test]
+    fn the_remote_tier_answer_decides_the_latest_tiered_candidate() {
+        use {krabka_ids::LeaderEpoch, krabka_remote_storage::RemoteStorageError};
+
+        let tiered = TieredOffset {
+            offset: 4,
+            leader_epoch: LeaderEpoch(2),
+        };
+        for (name, answer, expected) in [
+            (
+                "the tier answers",
+                Some(Ok(Some(tiered))),
+                Ok(Some(ResolvedOffset {
+                    offset: 4,
+                    leader_epoch: 2,
+                })),
+            ),
+            ("the tier holds nothing", Some(Ok(None)), Ok(None)),
+            (
+                "the tier fails",
+                Some(Err(RemoteStorageError::Io(io::Error::other("boom")))),
+                Ok(None),
+            ),
+            ("the tier times out", None, Err(codes::REQUEST_TIMED_OUT)),
+        ] {
+            assert!(
+                latest_tiered_candidate(answer.as_ref()) == expected,
                 "{name}"
             );
         }

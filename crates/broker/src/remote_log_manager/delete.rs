@@ -3,8 +3,8 @@
 //! partition-wide cascade that a `DeleteTopics` request starts.
 
 use {
-    super::{archive::ArchiveMode, now_ms, rlmm::rlmm_mutate},
-    crate::blocking::spawn_blocking,
+    super::{RemoteTier, archive::ArchiveMode, now_ms, rlmm::rlmm_mutate},
+    crate::{blocking::spawn_blocking, metrics::RemoteTierPath},
     krabka_log::Offset,
     krabka_remote_storage::{
         RemoteIndexCache, RemoteLogMetadataManager, RemoteLogSegmentMetadata,
@@ -66,6 +66,12 @@ pub async fn cascade_remote_partition_delete(
         return;
     }
 
+    let targets = DeleteTargets {
+        archive,
+        rsm: &rsm,
+        rlmm: &rlmm,
+        index_cache: &index_cache,
+    };
     let segments = match rlmm.list_remote_log_segments(&tp) {
         Ok(list) => list,
         Err(e) => {
@@ -79,7 +85,7 @@ pub async fn cascade_remote_partition_delete(
         if md.state() == RemoteLogSegmentState::DeleteSegmentFinished {
             continue;
         }
-        let _ = delete_one_segment(&tp, broker_id, &md, archive, &rsm, &rlmm, &index_cache).await;
+        let _ = delete_one_segment(targets, &tp, broker_id, &md).await;
     }
 
     if let Err(e) = put_partition_state(
@@ -110,6 +116,17 @@ async fn put_partition_state(
     rlmm_mutate(rlmm, move |m| m.put_remote_partition_delete_metadata(md)).await
 }
 
+/// The parts of a remote tier that deleting one segment reaches: the archive
+/// mode that decides whether bytes go at all, the two managers that remove
+/// them, and the index cache that has to release them.
+#[derive(Clone, Copy)]
+pub(super) struct DeleteTargets<'a> {
+    pub(super) archive: ArchiveMode,
+    pub(super) rsm: &'a Arc<dyn RemoteStorageManager>,
+    pub(super) rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
+    pub(super) index_cache: &'a Arc<RemoteIndexCache>,
+}
+
 /// Drive one `CopySegmentFinished` (or in-flight) segment through the
 /// `DeleteSegmentStarted` → RSM delete → `DeleteSegmentFinished` chain.
 /// Returns `true` when the lifecycle completes cleanly. Shared by
@@ -122,13 +139,15 @@ async fn put_partition_state(
 /// that — so the skip is what keeps a routine pass from logging an error every
 /// tick.
 pub(super) async fn delete_one_segment(
+    DeleteTargets {
+        archive,
+        rsm,
+        rlmm,
+        index_cache,
+    }: DeleteTargets<'_>,
     tp: &TopicIdPartition,
     broker_id: i32,
     md: &RemoteLogSegmentMetadata,
-    archive: ArchiveMode,
-    rsm: &Arc<dyn RemoteStorageManager>,
-    rlmm: &Arc<dyn RemoteLogMetadataManager>,
-    index_cache: &Arc<krabka_remote_storage::RemoteIndexCache>,
 ) -> bool {
     let id = md.remote_log_segment_id().clone();
     // Kafka drops a segment's `RemoteIndexCache` entries as it enters
@@ -203,6 +222,25 @@ pub(super) async fn delete_one_segment(
            worm_retained = archive == ArchiveMode::WriteOnce,
            "remote-log-manager: remote segment reached DeleteSegmentFinished");
     true
+}
+
+/// [`delete_one_segment`] through `tier`, counted as KIP-405's
+/// `RemoteDeleteRequestsPerSec`, and as `RemoteDeleteErrorsPerSec` when the
+/// lifecycle does not complete. Returns whether it did.
+pub(super) async fn delete_segment_metered(
+    tier: &RemoteTier<'_>,
+    tp: &TopicIdPartition,
+    broker_id: i32,
+    md: &RemoteLogSegmentMetadata,
+) -> bool {
+    tier.metrics
+        .record_remote_request(RemoteTierPath::Delete, &tp.topic);
+    let deleted = delete_one_segment(tier.delete_targets(), tp, broker_id, md).await;
+    if !deleted {
+        tier.metrics
+            .record_remote_error(RemoteTierPath::Delete, &tp.topic);
+    }
+    deleted
 }
 
 /// Mark every segment of `tp` that lies wholly below `floor` as

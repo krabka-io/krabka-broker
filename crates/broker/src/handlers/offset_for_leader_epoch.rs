@@ -54,14 +54,18 @@ use {
         handlers::{RequestContext, acl_denied, cluster_action_denied},
         partition::Partition,
     },
-    krabka_metadata::{AclOperation, ResourceType},
+    krabka_ids::PartitionIndex,
+    krabka_log::LeaderEpoch,
+    krabka_metadata::{AclOperation, MetadataImage, ResourceType},
     krabka_protocol::owned::{
-        offset_for_leader_epoch_request::OffsetForLeaderEpochRequest,
+        offset_for_leader_epoch_request::{
+            OffsetForLeaderEpochRequest, OffsetForLeaderPartition, OffsetForLeaderTopic,
+        },
         offset_for_leader_epoch_response::{
             EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
         },
     },
-    std::sync::{Arc, PoisonError, atomic::Ordering},
+    std::sync::{PoisonError, atomic::Ordering},
 };
 
 /// The two-state leader check Kafka's `ReplicaManager.lastOffsetForLeaderEpoch`
@@ -72,7 +76,7 @@ use {
 /// before the supervisor installs the new role, and the installed role can
 /// lag the other way while a promotion prepares the log.
 fn not_leader(
-    image: &krabka_metadata::MetadataImage,
+    image: &MetadataImage,
     topic: &str,
     partition_index: i32,
     partition: &Partition,
@@ -85,171 +89,160 @@ fn not_leader(
     !installed || committed_elsewhere
 }
 
+/// An error row for `partition`. `ReplicaManager.lastOffsetForLeaderEpoch`
+/// builds every error row from `new EpochEndOffset()`, whose schema defaults
+/// put `-1` in both `leader_epoch` and `end_offset`.
+fn error_row(partition: i32, error_code: i16) -> EpochEndOffset {
+    EpochEndOffset {
+        partition,
+        error_code,
+        leader_epoch: -1,
+        end_offset: -1,
+        ..Default::default()
+    }
+}
+
+/// The row for one authorized partition: the first hosting, fence or
+/// leader refusal that applies, else the epoch checkpoint's answer.
+fn epoch_end_offset(
+    broker: &Broker,
+    image: &MetadataImage,
+    topic: &str,
+    part: &OffsetForLeaderPartition,
+) -> EpochEndOffset {
+    // The three hosting outcomes of `ReplicaManager
+    // .lastOffsetForLeaderEpoch`, decided before the fence: a
+    // replica this broker does not host is `NOT_LEADER_OR_FOLLOWER`
+    // when the metadata still holds the partition (a reassignment
+    // moved it away, so the client refreshes its metadata) and
+    // `UNKNOWN_TOPIC_OR_PARTITION` when it does not, and a
+    // partition in an offline log dir is `KAFKA_STORAGE_ERROR`.
+    let Some(p) = broker.partitions.get(topic, PartitionIndex(part.partition)) else {
+        let error_code = if image.partition(topic, part.partition).is_some() {
+            codes::NOT_LEADER_OR_FOLLOWER
+        } else {
+            codes::UNKNOWN_TOPIC_OR_PARTITION
+        };
+        return error_row(part.partition, error_code);
+    };
+    if broker.log_dir_status.is_offline(&p.log_dir.load()) {
+        return error_row(part.partition, codes::KAFKA_STORAGE_ERROR);
+    }
+
+    // KIP-320 leader-epoch fence, ahead of the leader-only gate and
+    // the KIP-101 domain logic below, exactly as
+    // `Partition.getLocalLog` runs `checkCurrentLeaderEpoch` before
+    // its leader check. `list_offsets_leader_epoch_fence` reads
+    // only `-1` as "no epoch asserted", the rule
+    // `ReplicaManager.lastOffsetForLeaderEpoch` applies here too.
+    if let Some((error_code, _)) = p.list_offsets_leader_epoch_fence(part.current_leader_epoch) {
+        return error_row(part.partition, error_code);
+    }
+
+    if not_leader(image, topic, part.partition, &p, broker.config.node_id) {
+        return error_row(part.partition, codes::NOT_LEADER_OR_FOLLOWER);
+    }
+
+    // `Partition.lastOffsetForLeaderEpoch`: Kafka's
+    // `LeaderEpochFileCache.endOffsetFor` pair, verbatim. An epoch
+    // the checkpoint cannot place answers `(-1, -1)`, which is
+    // also what `UnifiedLog.endOffsetForEpoch`'s `None` leaves in
+    // the row. No error either way: the hosting checks above are
+    // what set an error code, not this KIP-101 lookup.
+    let log = p.log.lock().unwrap_or_else(PoisonError::into_inner);
+    let leo = log.log_end_offset();
+    let (found_epoch, end_offset) = log
+        .epoch_checkpoint()
+        .epoch_and_offset_for(LeaderEpoch(part.leader_epoch), leo);
+    drop(log);
+    EpochEndOffset {
+        partition: part.partition,
+        error_code: codes::NONE,
+        leader_epoch: found_epoch.0,
+        end_offset: end_offset.0,
+        ..Default::default()
+    }
+}
+
+/// The result for a topic the caller may not `Describe`:
+/// `TOPIC_AUTHORIZATION_FAILED` on every partition it requested.
+fn unauthorized_topic(topic: &OffsetForLeaderTopic) -> OffsetForLeaderTopicResult {
+    OffsetForLeaderTopicResult {
+        topic: topic.topic.clone(),
+        partitions: topic
+            .partitions
+            .iter()
+            .map(|part| error_row(part.partition, codes::TOPIC_AUTHORIZATION_FAILED))
+            .collect(),
+        ..Default::default()
+    }
+}
+
 pub fn handle(
     broker: &Broker,
     req: &OffsetForLeaderEpochRequest,
     _version: i16,
     ctx: &RequestContext<'_>,
 ) -> OffsetForLeaderEpochResponse {
-    let partitions = Arc::clone(&broker.partitions);
     // Test-only: count served OFLE requests so the KIP-320 proactive-validation
     // integration test can prove the consumer's validate pass issued an OFLE
     // RPC (vs. the reactive in-band fetch paths, which issue none).
     #[cfg(any(test, feature = "test-helpers"))]
-    let ofle_counter = Arc::clone(&broker.offset_for_leader_epoch_requests);
-    {
-        #[cfg(any(test, feature = "test-helpers"))]
-        ofle_counter.fetch_add(1, Ordering::AcqRel);
+    broker
+        .offset_for_leader_epoch_requests
+        .fetch_add(1, Ordering::AcqRel);
 
-        // ── ACL preamble ────────────────────────────────────────────
-        // Kafka checks `ClusterAction` on `Cluster("kafka-cluster")` once as
-        // a shortcut: an Allow there authorizes every topic in the request,
-        // with no further lookup. This is what lets a follower broker (whose
-        // principal typically holds `ClusterAction` but no topic ACLs) fetch
-        // leader-epoch info from other brokers. A Deny falls back to
-        // per-topic `Describe` on `Topic(name)`; a denied topic gets
-        // `TOPIC_AUTHORIZATION_FAILED (29)` on every partition row it
-        // requested, with `leader_epoch` and `end_offset` both `-1` (Kafka's
-        // schema default for an unauthorized row), and authorized topics
-        // proceed unchanged.
-        let acl_image = broker.controller.current_image();
-        let cluster_action_allowed =
-            !cluster_action_denied(broker.config.authorizer.as_ref(), &acl_image, ctx);
+    // ── ACL preamble ────────────────────────────────────────────
+    // Kafka checks `ClusterAction` on `Cluster("kafka-cluster")` once as
+    // a shortcut: an Allow there authorizes every topic in the request,
+    // with no further lookup. This is what lets a follower broker (whose
+    // principal typically holds `ClusterAction` but no topic ACLs) fetch
+    // leader-epoch info from other brokers. A Deny falls back to
+    // per-topic `Describe` on `Topic(name)`; a denied topic gets
+    // `TOPIC_AUTHORIZATION_FAILED (29)` on every partition row it
+    // requested, with `leader_epoch` and `end_offset` both `-1` (Kafka's
+    // schema default for an unauthorized row), and authorized topics
+    // proceed unchanged.
+    let acl_image = broker.controller.current_image();
+    let cluster_action_allowed =
+        !cluster_action_denied(broker.config.authorizer.as_ref(), &acl_image, ctx);
 
-        let mut authorized_out: Vec<OffsetForLeaderTopicResult> =
-            Vec::with_capacity(req.topics.len());
-        let mut unauthorized_out: Vec<OffsetForLeaderTopicResult> = Vec::new();
+    let mut authorized_out: Vec<OffsetForLeaderTopicResult> = Vec::with_capacity(req.topics.len());
+    let mut unauthorized_out: Vec<OffsetForLeaderTopicResult> = Vec::new();
 
-        for topic in &req.topics {
-            if !cluster_action_allowed
-                && acl_denied(
-                    broker.config.authorizer.as_ref(),
-                    &acl_image,
-                    ctx,
-                    ResourceType::Topic,
-                    &topic.topic,
-                    AclOperation::Describe,
-                )
-            {
-                let parts_out = topic
-                    .partitions
-                    .iter()
-                    .map(|part| EpochEndOffset {
-                        partition: part.partition,
-                        leader_epoch: -1,
-                        end_offset: -1,
-                        error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                        ..Default::default()
-                    })
-                    .collect();
-                unauthorized_out.push(OffsetForLeaderTopicResult {
-                    topic: topic.topic.clone(),
-                    partitions: parts_out,
-                    ..Default::default()
-                });
-                continue;
-            }
-            let mut parts_out: Vec<EpochEndOffset> = Vec::with_capacity(topic.partitions.len());
-
-            for part in &topic.partitions {
-                // `ReplicaManager.lastOffsetForLeaderEpoch` builds every error
-                // row from `new EpochEndOffset()`, whose schema defaults put
-                // -1 in both `leader_epoch` and `end_offset`.
-                let mut out = EpochEndOffset {
-                    partition: part.partition,
-                    leader_epoch: -1,
-                    end_offset: -1,
-                    ..Default::default()
-                };
-
-                // The three hosting outcomes of `ReplicaManager
-                // .lastOffsetForLeaderEpoch`, decided before the fence: a
-                // replica this broker does not host is `NOT_LEADER_OR_FOLLOWER`
-                // when the metadata still holds the partition (a reassignment
-                // moved it away, so the client refreshes its metadata) and
-                // `UNKNOWN_TOPIC_OR_PARTITION` when it does not, and a
-                // partition in an offline log dir is `KAFKA_STORAGE_ERROR`.
-                let Some(p) =
-                    partitions.get(&topic.topic, krabka_ids::PartitionIndex(part.partition))
-                else {
-                    out.error_code = if acl_image.partition(&topic.topic, part.partition).is_some()
-                    {
-                        codes::NOT_LEADER_OR_FOLLOWER
-                    } else {
-                        codes::UNKNOWN_TOPIC_OR_PARTITION
-                    };
-                    parts_out.push(out);
-                    continue;
-                };
-                if broker.log_dir_status.is_offline(&p.log_dir.load()) {
-                    out.error_code = codes::KAFKA_STORAGE_ERROR;
-                    parts_out.push(out);
-                    continue;
-                }
-
-                // KIP-320 leader-epoch fence, ahead of the leader-only gate and
-                // the KIP-101 domain logic below, exactly as
-                // `Partition.getLocalLog` runs `checkCurrentLeaderEpoch` before
-                // its leader check. `list_offsets_leader_epoch_fence` reads
-                // only `-1` as "no epoch asserted", the rule
-                // `ReplicaManager.lastOffsetForLeaderEpoch` applies here too.
-                if let Some((error_code, _)) =
-                    p.list_offsets_leader_epoch_fence(part.current_leader_epoch)
-                {
-                    out.error_code = error_code;
-                    out.leader_epoch = -1;
-                    parts_out.push(out);
-                    continue;
-                }
-
-                if not_leader(
-                    &acl_image,
-                    &topic.topic,
-                    part.partition,
-                    &p,
-                    broker.config.node_id,
-                ) {
-                    out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
-                    out.leader_epoch = -1;
-                    parts_out.push(out);
-                    continue;
-                }
-
-                // `Partition.lastOffsetForLeaderEpoch`: Kafka's
-                // `LeaderEpochFileCache.endOffsetFor` pair, verbatim. An epoch
-                // the checkpoint cannot place answers `(-1, -1)`, which is
-                // also what `UnifiedLog.endOffsetForEpoch`'s `None` leaves in
-                // the row. No error either way: the hosting checks above are
-                // what set an error code, not this KIP-101 lookup.
-                let log = p.log.lock().unwrap_or_else(PoisonError::into_inner);
-                let leo = log.log_end_offset();
-                let (found_epoch, end_offset) = log
-                    .epoch_checkpoint()
-                    .epoch_and_offset_for(krabka_log::LeaderEpoch(part.leader_epoch), leo);
-                drop(log);
-                out.error_code = codes::NONE;
-                out.leader_epoch = found_epoch.0;
-                out.end_offset = end_offset.0;
-
-                parts_out.push(out);
-            }
-
-            authorized_out.push(OffsetForLeaderTopicResult {
-                topic: topic.topic.clone(),
-                partitions: parts_out,
-                ..Default::default()
-            });
+    for topic in &req.topics {
+        if !cluster_action_allowed
+            && acl_denied(
+                broker.config.authorizer.as_ref(),
+                &acl_image,
+                ctx,
+                ResourceType::Topic,
+                &topic.topic,
+                AclOperation::Describe,
+            )
+        {
+            unauthorized_out.push(unauthorized_topic(topic));
+            continue;
         }
-
-        // Authorized rows first, then unauthorized rows -- matches Kafka's
-        // `endOffsetsForAuthorizedPartitions ++ endOffsetsForUnauthorizedPartitions`.
-        authorized_out.extend(unauthorized_out);
-
-        OffsetForLeaderEpochResponse {
-            throttle_time_ms: 0,
-            topics: authorized_out,
+        authorized_out.push(OffsetForLeaderTopicResult {
+            topic: topic.topic.clone(),
+            partitions: topic
+                .partitions
+                .iter()
+                .map(|part| epoch_end_offset(broker, &acl_image, &topic.topic, part))
+                .collect(),
             ..Default::default()
-        }
+        });
+    }
+
+    // Authorized rows first, then unauthorized rows -- matches Kafka's
+    // `endOffsetsForAuthorizedPartitions ++ endOffsetsForUnauthorizedPartitions`.
+    authorized_out.extend(unauthorized_out);
+
+    OffsetForLeaderEpochResponse {
+        throttle_time_ms: 0,
+        topics: authorized_out,
+        ..Default::default()
     }
 }
 

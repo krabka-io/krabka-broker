@@ -7,8 +7,8 @@ use {
         remote_log_manager::{
             test_support as fixtures,
             test_support::{
-                Backends, FakeWormArchive, archived_backends, copy_exports, local_backends,
-                seed_finished_segments, synth_export, tier, tp,
+                Backends, FakeWormArchive, RefusesDeleteRsm, archived_backends, copy_exports,
+                local_backends, seed_finished_segments, synth_export, tier, tp,
             },
         },
         time_util::now_ms,
@@ -20,10 +20,7 @@ use {
         RemoteLogSegmentMetadataUpdate, RemoteStorageError, RemoteStorageManager,
     },
     krabka_units::{bytes, hours, millis},
-    std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    std::sync::{Arc, atomic::Ordering},
     uuid::Uuid,
 };
 
@@ -59,37 +56,6 @@ fn empty_local_bounds(
         now_ms,
         local: LocalLogFootprint::EMPTY,
         earliest_epoch: None,
-    }
-}
-
-/// An RSM that refuses every delete the way a WORM backend does, and
-/// counts how many times it was asked. Modelled on [`AlwaysFailRsm`],
-/// with the failure moved from the copy to the delete.
-#[derive(Default)]
-struct RefusesDeleteRsm {
-    deletes_attempted: AtomicUsize,
-}
-
-#[krabka_macros::missing_remote_reads]
-impl RemoteStorageManager for RefusesDeleteRsm {
-    fn copy_log_segment_data(
-        &self,
-        _metadata: &RemoteLogSegmentMetadata,
-        _data: &LogSegmentData,
-    ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
-        Ok(None)
-    }
-
-    fn delete_log_segment_data(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-    ) -> Result<(), RemoteStorageError> {
-        self.deletes_attempted.fetch_add(1, Ordering::Relaxed);
-        Err(RemoteStorageError::Worm(
-            krabka_remote_storage::WormError::DeleteRefused {
-                key: format!("{}.log", metadata.remote_log_segment_id().id),
-            },
-        ))
     }
 }
 
@@ -1195,6 +1161,47 @@ async fn a_retention_pass_finishes_the_deletes_started_below_the_floor(
             }
     );
     check!(segment_states(&rlmm) == remaining);
+}
+
+/// The delete counters an abandoned-delete pass leaves: one request per
+/// attempt, and one error for the delete that stops the pass.
+///
+/// Segments 0 and 10 were marked `DeleteSegmentStarted` under a floor of 20,
+/// so they are the only work: nothing finished lies below the floor and no
+/// retention setting is on.
+#[yare::parameterized(
+    every_delete_goes = { false, 2, 0 },
+    the_first_refusal_stops_the_pass = { true, 1, 1 },
+)]
+#[test_macro(tokio::test)]
+async fn finishing_abandoned_deletes_records_its_delete_requests_and_errors(
+    refuse: bool,
+    requests: u64,
+    errors: u64,
+) {
+    let owned = fixtures::owned_tier_resources();
+    seed_finished_segments(&owned.rlmm, 4);
+    mark_delete_started(&owned.rlmm, &[0, 1]);
+    let rsm: Arc<dyn RemoteStorageManager> = if refuse {
+        Arc::new(RefusesDeleteRsm::default())
+    } else {
+        Arc::new(AcceptingRsm)
+    };
+    let cfg = LogConfig {
+        retention: None,
+        retention_size: None,
+        ..LogConfig::default()
+    };
+
+    remote_retention_pass(
+        &tp(),
+        1,
+        empty_local_bounds(&cfg, Offset(20), Some(Offset(20)), now_ms()),
+        &owned.tier(&rsm),
+    )
+    .await;
+
+    check!(owned.delete_counts() == (requests, errors));
 }
 
 #[derive(Default)]

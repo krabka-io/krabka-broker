@@ -10,12 +10,11 @@ use {
         },
         handlers::produce::{
             framing::PartitionPayload,
-            pipeline::{PartitionInput, process_partition},
+            pipeline::process_partition,
             test_support::{
                 ConfigOverride, PipelineFixture, PipelinePartitionSetup, encode_batch,
                 image_with_overrides as image_with_delivery, pipeline_input,
             },
-            topic_settings::TimestampPolicy,
         },
     },
     assert2::check,
@@ -294,14 +293,13 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
 
     for (delivery_ms, want, label) in cases {
         let resp = process_partition(
-            PartitionInput {
-                timestamps: TimestampPolicy::default(),
-                delivery,
-                ..pipeline_input(
-                    "sched",
-                    PartitionPayload::Slice(encode_batch(&batch_delivered_at(delivery_ms))),
-                )
-            },
+            pipeline_input()
+                .topic("sched")
+                .payload(PartitionPayload::Slice(encode_batch(&batch_delivered_at(
+                    delivery_ms,
+                ))))
+                .maybe_delivery(delivery)
+                .call(),
             fixture.services(&image),
         )
         .await

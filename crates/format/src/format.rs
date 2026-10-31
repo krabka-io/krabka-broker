@@ -49,8 +49,8 @@
 
 use {
     krabka_metadata::{
-        KRaftVersionRecord, MetadataRecord, ScramCredentialRecord, VoterSet, VotersRecord,
-        metadata_version,
+        AclEntry, KRaftVersionRecord, MetadataRecord, ScramCredentialRecord, VoterSet,
+        VotersRecord, metadata_version,
     },
     krabka_security::scram::{MIN_SCRAM_ITERATIONS, hash_scram_password_with_salt},
     ring::rand::{SecureRandom, SystemRandom},
@@ -79,7 +79,7 @@ pub use self::{
 };
 use {
     self::{
-        ensemble::{Ensemble, SurveyError, remove_partial_output},
+        ensemble::{Ensemble, FormattedDirectory, SurveyError, remove_partial_output},
         features::{ResolvedFeatures, resolve_format_features},
         output::{Fault, write_bootstrap_files, write_dynamic_checkpoint, write_meta_properties},
         quorum::{build_initial_voters, is_dynamic_format},
@@ -268,157 +268,47 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
     // metadata.version, group.version, etc. at their 4.0 defaults so a fresh
     // cluster engages each feature with no manual step; a level-0 feature is
     // omitted (absent = disabled), matching `kafka-storage format`.
-    let ResolvedFeatures {
-        metadata_version: bootstrap_mv,
-        overrides: feature_overrides,
-    } = resolve_format_features(
+    let features = resolve_format_features(
         args.release_version.as_deref(),
         &args.feature,
         args.unstable_feature_versions_enable,
     )
     .map_err(|e| krabka(EXIT_INVALID_FEATURE, e))?;
-    let metadata_version = metadata_version::from_feature_level(bootstrap_mv)
-        .map_or_else(|| bootstrap_mv.to_string(), |mv| mv.ivn().to_owned());
+    let metadata_version = metadata_version::from_feature_level(features.metadata_version)
+        .map_or_else(
+            || features.metadata_version.to_string(),
+            |mv| mv.ivn().to_owned(),
+        );
 
     // The `kraft.version` rules come after the release and the feature names,
     // as in `Formatter.run`: it resolves the release, then checks the names in
     // `calculateEffectiveFeatureLevels`, which is where `kraft.version` is
     // reconciled with the quorum flags.
     let dynamic_format = is_dynamic_format(&args).map_err(|e| krabka(EXIT_INVALID_FEATURE, e))?;
+    let MetadataIdentity {
+        node_id,
+        directory_id: metadata_directory_id,
+        voters: initial_voters,
+        kind: metadata_kind,
+    } = resolve_metadata_identity(&args, dynamic_format)?;
 
-    // `meta.properties` holds the node id as Kafka's `int`. `--node-id`
-    // parses only that range, so this refuses nothing that clap accepted.
-    let node_id = i32::try_from(args.node_id.0).map_err(|_| {
-        krabka(
-            EXIT_BOOTSTRAP_FAIL,
-            "You must specify a valid non-negative node ID.",
-        )
-    })?;
+    let raft_control_records = raft_control_records(dynamic_format, initial_voters);
 
-    // KIP-853: this node's stable directory id for the metadata log
-    // directory. The broker reads it back from `meta.properties` on every
-    // boot; it is the identity component of every `Voter` this node ever
-    // appears as.
-    let generated_directory_id = args.directory_id.unwrap_or_else(DirectoryId::random);
-    let initial_voters = build_initial_voters(&args, generated_directory_id)
-        .map_err(|e| krabka(EXIT_BOOTSTRAP_FAIL, e))?;
-    let metadata_directory_id = if args.initial_controllers.is_empty() {
-        generated_directory_id
-    } else {
-        DirectoryId(
-            initial_voters
-                .get(args.node_id)
-                .ok_or_else(|| {
-                    krabka(
-                        EXIT_BOOTSTRAP_FAIL,
-                        "--initial-controllers has no entry for this node",
-                    )
-                })?
-                .directory_id,
-        )
-    };
-    if args.directory_id.is_some() && metadata_directory_id != generated_directory_id {
-        return Err(krabka(
-            EXIT_BOOTSTRAP_FAIL,
-            "--directory-id must match the local --initial-controllers entry",
-        ));
-    }
-    let metadata_kind = metadata_directory_kind(dynamic_format, &args, &initial_voters);
-
-    // KIP-853 control records live in the offset-zero metadata checkpoint,
-    // separate from the non-Raft bootstrap record stream.
-    let mut raft_control_records = Vec::new();
-    if dynamic_format {
-        raft_control_records.push(MetadataRecord::V1KRaftVersion(KRaftVersionRecord {
-            kraft_version: 1,
-        }));
-        if !initial_voters.is_empty() {
-            raft_control_records.push(MetadataRecord::V1Voters(VotersRecord {
-                voters: initial_voters,
-            }));
-        }
-    }
-
-    let mut records: Vec<MetadataRecord> =
-        krabka_metadata::bootstrap_feature_records_with_overrides(bootstrap_mv, &feature_overrides);
-    // Caller-seeded records (a restore's recovered topics) follow the feature
-    // levels that decide how they are read, and precede the credential and ACL
-    // records so a seeded ACL names a topic the image already holds.
-    records.extend(extra);
-    records.extend(scram_records(&args)?);
-    records.extend(
-        args.add_acl
-            .into_iter()
-            .map(MetadataRecord::V1AccessControlEntry),
-    );
+    let records = bootstrap_records(&features, extra, &args.add_scram, args.add_acl)?;
 
     let metadata_log_dir = args
         .metadata_log_dir
         .or_else(|| args.log_dirs.first().cloned())
         .ok_or_else(|| krabka(EXIT_BOOTSTRAP_FAIL, "no log directory to format"))?;
-    let log_dirs = directory_set(&metadata_log_dir, args.log_dirs);
-    let ensemble = Ensemble::load(&log_dirs).map_err(|error| match error {
-        SurveyError::Foreign(dir) => krabka(
-            EXIT_DIRTY_LOG_DIR,
-            format_args!(
-                "refusing to overwrite non-empty log directory {}: it holds files krabka format \
-                 did not write",
-                dir.display()
-            ),
-        ),
-        SurveyError::Io(dir, e) => krabka(
-            EXIT_BOOTSTRAP_FAIL,
-            format_args!("cannot read log directory {}: {e}", dir.display()),
-        ),
-    })?;
-    if ensemble.errors.contains(&metadata_log_dir) {
-        return Err(Failure {
-            code: EXIT_DIRTY_LOG_DIR,
-            message: format!(
-                "Encountered I/O error in metadata log directory {}. Cannot continue.",
-                metadata_log_dir.display()
-            ),
-        });
-    }
-    let cluster_id = ensemble
-        .verify(args.cluster_id, node_id)
-        .map_err(|message| Failure {
-            code: EXIT_DIRTY_LOG_DIR,
-            message,
-        })?
-        .unwrap_or_else(ClusterId::random);
-    if !args.ignore_formatted
-        && let Some(first) = ensemble.formatted.first()
-    {
-        return Err(Failure {
-            code: EXIT_DIRTY_LOG_DIR,
-            message: format!(
-                "Log directory {} is already formatted. Use --ignore-formatted to ignore this \
-                 directory and format the others.",
-                first.dir.display()
-            ),
-        });
-    }
+    let ensemble = survey(&metadata_log_dir, args.log_dirs)?;
+    let cluster_id = verify_formatted(&ensemble, args.cluster_id, node_id, args.ignore_formatted)?;
 
-    let mut used: Vec<DirectoryId> = ensemble
-        .formatted
-        .iter()
-        .filter_map(|formatted| formatted.meta.directory_id)
-        .collect();
-    let mut targets = Vec::with_capacity(ensemble.empty.len());
-    for dir in ensemble.empty {
-        let (kind, directory_id) = if dir == metadata_log_dir {
-            (metadata_kind, metadata_directory_id)
-        } else {
-            (DirectoryKind::Data, DirectoryId::random_unused(&used))
-        };
-        used.push(directory_id);
-        targets.push(Target {
-            dir,
-            kind,
-            directory_id,
-        });
-    }
+    let metadata_target = Target {
+        dir: metadata_log_dir,
+        kind: metadata_kind,
+        directory_id: metadata_directory_id,
+    };
+    let targets = assign_targets(ensemble.empty, &ensemble.formatted, &metadata_target);
     if targets.is_empty() && ensemble.formatted.is_empty() {
         return Err(Failure {
             code: EXIT_BOOTSTRAP_FAIL,
@@ -440,6 +330,202 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
         raft_control_records,
         records,
     })
+}
+
+/// Who this node is, and what its metadata log directory holds.
+struct MetadataIdentity {
+    /// `--node-id`, as the `int` that `meta.properties` records.
+    node_id: i32,
+    /// The directory id of the metadata log directory.
+    directory_id: DirectoryId,
+    /// The initial voters of a dynamic quorum, empty for any other format.
+    voters: VoterSet,
+    kind: DirectoryKind,
+}
+
+/// Resolves the node id, the metadata log directory's id, and the initial
+/// voters, and checks that `--directory-id` agrees with this node's
+/// `--initial-controllers` entry.
+fn resolve_metadata_identity(
+    args: &FormatArgs,
+    dynamic_format: bool,
+) -> Result<MetadataIdentity, Failure> {
+    // `meta.properties` holds the node id as Kafka's `int`. `--node-id`
+    // parses only that range, so this refuses nothing that clap accepted.
+    let node_id = i32::try_from(args.node_id.0).map_err(|_| {
+        krabka(
+            EXIT_BOOTSTRAP_FAIL,
+            "You must specify a valid non-negative node ID.",
+        )
+    })?;
+
+    // KIP-853: this node's stable directory id for the metadata log
+    // directory. The broker reads it back from `meta.properties` on every
+    // boot; it is the identity component of every `Voter` this node ever
+    // appears as.
+    let generated_directory_id = args.directory_id.unwrap_or_else(DirectoryId::random);
+    let voters = build_initial_voters(args, generated_directory_id)
+        .map_err(|e| krabka(EXIT_BOOTSTRAP_FAIL, e))?;
+    let directory_id = if args.initial_controllers.is_empty() {
+        generated_directory_id
+    } else {
+        DirectoryId(
+            voters
+                .get(args.node_id)
+                .ok_or_else(|| {
+                    krabka(
+                        EXIT_BOOTSTRAP_FAIL,
+                        "--initial-controllers has no entry for this node",
+                    )
+                })?
+                .directory_id,
+        )
+    };
+    if args.directory_id.is_some() && directory_id != generated_directory_id {
+        return Err(krabka(
+            EXIT_BOOTSTRAP_FAIL,
+            "--directory-id must match the local --initial-controllers entry",
+        ));
+    }
+    let kind = metadata_directory_kind(dynamic_format, args, &voters);
+    Ok(MetadataIdentity {
+        node_id,
+        directory_id,
+        voters,
+        kind,
+    })
+}
+
+/// The KIP-853 control records. They live in the offset-zero metadata
+/// checkpoint, separate from the non-Raft bootstrap record stream: the
+/// `KRaft` version of a dynamic format, then its initial voters when it has
+/// any.
+fn raft_control_records(dynamic_format: bool, initial_voters: VoterSet) -> Vec<MetadataRecord> {
+    let mut records = Vec::new();
+    if dynamic_format {
+        records.push(MetadataRecord::V1KRaftVersion(KRaftVersionRecord {
+            kraft_version: 1,
+        }));
+        if !initial_voters.is_empty() {
+            records.push(MetadataRecord::V1Voters(VotersRecord {
+                voters: initial_voters,
+            }));
+        }
+    }
+    records
+}
+
+/// The non-Raft bootstrap record stream: the finalized feature levels, then
+/// `extra`, then a credential per `--add-scram`, then an entry per
+/// `--add-acl`.
+///
+/// Caller-seeded records (a restore's recovered topics) follow the feature
+/// levels that decide how they are read, and precede the credential and ACL
+/// records so a seeded ACL names a topic the image already holds.
+fn bootstrap_records(
+    features: &ResolvedFeatures,
+    extra: Vec<MetadataRecord>,
+    scram: &[ScramSpec],
+    acls: Vec<AclEntry>,
+) -> Result<Vec<MetadataRecord>, Failure> {
+    let mut records: Vec<MetadataRecord> =
+        krabka_metadata::bootstrap_feature_records_with_overrides(
+            features.metadata_version,
+            &features.overrides,
+        );
+    records.extend(extra);
+    records.extend(scram_records(scram)?);
+    records.extend(acls.into_iter().map(MetadataRecord::V1AccessControlEntry));
+    Ok(records)
+}
+
+/// Reads every directory of the run, refusing one that holds files `format`
+/// did not write, one that cannot be listed, and a metadata log directory
+/// whose `meta.properties` does not read.
+fn survey(metadata_log_dir: &Path, log_dirs: Vec<PathBuf>) -> Result<Ensemble, Failure> {
+    let log_dirs = directory_set(metadata_log_dir, log_dirs);
+    let ensemble = Ensemble::load(&log_dirs).map_err(|error| match error {
+        SurveyError::Foreign(dir) => krabka(
+            EXIT_DIRTY_LOG_DIR,
+            format_args!(
+                "refusing to overwrite non-empty log directory {}: it holds files krabka format \
+                 did not write",
+                dir.display()
+            ),
+        ),
+        SurveyError::Io(dir, e) => krabka(
+            EXIT_BOOTSTRAP_FAIL,
+            format_args!("cannot read log directory {}: {e}", dir.display()),
+        ),
+    })?;
+    if ensemble.errors.iter().any(|dir| dir == metadata_log_dir) {
+        return Err(Failure {
+            code: EXIT_DIRTY_LOG_DIR,
+            message: format!(
+                "Encountered I/O error in metadata log directory {}. Cannot continue.",
+                metadata_log_dir.display()
+            ),
+        });
+    }
+    Ok(ensemble)
+}
+
+/// Checks the formatted directories against each other, `expected` and
+/// `node_id`, and returns the run's cluster id: the set's, else a new one.
+/// Without `ignore_formatted`, any formatted directory then refuses the run.
+fn verify_formatted(
+    ensemble: &Ensemble,
+    expected: Option<ClusterId>,
+    node_id: i32,
+    ignore_formatted: bool,
+) -> Result<ClusterId, Failure> {
+    let cluster_id = ensemble
+        .verify(expected, node_id)
+        .map_err(|message| Failure {
+            code: EXIT_DIRTY_LOG_DIR,
+            message,
+        })?
+        .unwrap_or_else(ClusterId::random);
+    if !ignore_formatted && let Some(first) = ensemble.formatted.first() {
+        return Err(Failure {
+            code: EXIT_DIRTY_LOG_DIR,
+            message: format!(
+                "Log directory {} is already formatted. Use --ignore-formatted to ignore this \
+                 directory and format the others.",
+                first.dir.display()
+            ),
+        });
+    }
+    Ok(cluster_id)
+}
+
+/// The directory each of `empty` gets formatted as. The metadata log
+/// directory takes `metadata`'s kind and id; every other directory is a data
+/// directory with a fresh id that no directory of the run already holds.
+fn assign_targets(
+    empty: Vec<PathBuf>,
+    formatted: &[FormattedDirectory],
+    metadata: &Target,
+) -> Vec<Target> {
+    let mut used: Vec<DirectoryId> = formatted
+        .iter()
+        .filter_map(|formatted| formatted.meta.directory_id)
+        .collect();
+    let mut targets = Vec::with_capacity(empty.len());
+    for dir in empty {
+        let (kind, directory_id) = if dir == metadata.dir {
+            (metadata.kind, metadata.directory_id)
+        } else {
+            (DirectoryKind::Data, DirectoryId::random_unused(&used))
+        };
+        used.push(directory_id);
+        targets.push(Target {
+            dir,
+            kind,
+            directory_id,
+        });
+    }
+    targets
 }
 
 /// The directories one run formats: `metadata_log_dir` first, then every
@@ -480,11 +566,11 @@ fn metadata_directory_kind(
 /// formatter's side, with `hash_scram_password_with_salt` from
 /// `krabka-security`, so the record on disk carries the stretched keys and
 /// never the plain password.
-fn scram_records(args: &FormatArgs) -> Result<Vec<MetadataRecord>, Failure> {
+fn scram_records(specs: &[ScramSpec]) -> Result<Vec<MetadataRecord>, Failure> {
     // The minimum is positive, so its magnitude is the minimum itself.
     let min = MIN_SCRAM_ITERATIONS.unsigned_abs();
-    let mut records = Vec::with_capacity(args.add_scram.len());
-    for spec in &args.add_scram {
+    let mut records = Vec::with_capacity(specs.len());
+    for spec in specs {
         if spec.iterations < min {
             return Err(krabka(
                 EXIT_LOW_ITERATIONS,

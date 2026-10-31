@@ -6,7 +6,7 @@ use {
     super::*,
     crate::{
         coordinator::unified::{
-            GroupCoordinator, StreamsGroupSeed,
+            GroupCoordinator, ReplaySeed, StreamsGroupSeed,
             offsets_log::fake::InMemoryOffsetsLog,
             persistence::{Key, parse_key},
             streams::{

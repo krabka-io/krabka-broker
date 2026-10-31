@@ -431,53 +431,14 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
     let fault_at_ms = finish_fault(fault, &mut notes).await;
 
     // ── Join all tasks ──────────────────────────────────────────────────────
-    let mut prod_hist = Histogram::new_from(&histogram);
-    let mut prod_msgs = 0u64;
-    let mut prod_bytes = 0u64;
-    let mut prod_dropped = 0u64;
-    let mut earliest_recovery_ms = 0u64;
-    let mut max_spike = Time::ZERO;
-    let mut prod_iv_msgs = vec![0u64; n_intervals];
-    let mut prod_iv_hist: Vec<Histogram<u64>> =
-        iter::repeat_with(|| Histogram::new_from(&histogram))
-            .take(n_intervals)
-            .collect();
-    while let Some(j) = prod_set.join_next().await {
-        match j {
-            Ok(t) => {
-                let _ = prod_hist.add(&t.latency);
-                prod_msgs += t.msgs;
-                prod_bytes += t.bytes;
-                prod_dropped += t.dropped;
-                for (total, m) in prod_iv_msgs.iter_mut().zip(&t.interval_msgs) {
-                    *total += *m;
-                }
-                for (total, h) in prod_iv_hist.iter_mut().zip(&t.interval_hist) {
-                    let _ = total.add(h);
-                }
-                if t.latency_spike_max > max_spike {
-                    max_spike = t.latency_spike_max;
-                }
-                if t.recovery_unix_ms > 0
-                    && (earliest_recovery_ms == 0 || t.recovery_unix_ms < earliest_recovery_ms)
-                {
-                    earliest_recovery_ms = t.recovery_unix_ms;
-                }
-                if !t.error.is_empty() {
-                    errors.push(t.error);
-                }
-            }
-            Err(e) => errors.push(format!("producer-task-panic: {e}")),
-        }
-    }
-
+    let producers = join_producers(prod_set, n_intervals, &histogram, &mut errors).await;
     let consumed = join_consumers(cons_set, n_intervals, &histogram, &mut errors).await;
 
     let samples = build_samples(
         grid.interval(),
         &IntervalTallies {
-            messages: &prod_iv_msgs,
-            histograms: &prod_iv_hist,
+            messages: &producers.measurements.interval_msgs,
+            histograms: &producers.measurements.interval_hist,
         },
         &IntervalTallies {
             messages: &consumed.interval_msgs,
@@ -497,7 +458,7 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
             end_ms: wallclock_end,
         },
         grid.meas_end_ns,
-        prod_msgs,
+        producers.measurements.msgs,
         &mut notes,
     )
     .await;
@@ -509,9 +470,9 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
         failover_active,
         FailoverStamps {
             kill_at_ms: fault_at_ms,
-            recovery_at_ms: earliest_recovery_ms,
-            dropped: prod_dropped,
-            latency_spike_max: max_spike,
+            recovery_at_ms: producers.earliest_recovery_ms,
+            dropped: producers.dropped,
+            latency_spike_max: producers.max_spike,
         },
         first_ack_unix_ms.load(Ordering::SeqCst),
         wallclock_start,
@@ -530,14 +491,14 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
         wallclock_start_unix_ms: WallclockMs(wallclock_start),
         wallclock_end_unix_ms: WallclockMs(wallclock_end),
         throughput: Throughput {
-            msgs_produced: MessageCount(prod_msgs),
+            msgs_produced: MessageCount(producers.measurements.msgs),
             msgs_consumed: MessageCount(consumed.msgs),
-            bytes_in: ByteSize::from_bytes(prod_bytes),
+            bytes_in: ByteSize::from_bytes(producers.measurements.bytes),
             bytes_out: ByteSize::from_bytes(consumed.bytes),
-            producer_rate: event_rate(prod_msgs, scenario.duration),
+            producer_rate: event_rate(producers.measurements.msgs, scenario.duration),
             consumer_rate: event_rate(consumed.msgs, scenario.duration),
         },
-        producer_latency: hist::percentiles(&prod_hist),
+        producer_latency: hist::percentiles(&producers.measurements.latency),
         consumer_e2e_latency: hist::percentiles(&consumed.latency),
         resource,
         disturbance,
@@ -690,6 +651,54 @@ fn spawn_producers(
     }
 }
 
+/// What every producer task measured, merged.
+struct ProducerTotals {
+    measurements: TaskMeasurements,
+    dropped: u64,
+    /// The earliest recovery any producer saw, or zero when none saw one.
+    earliest_recovery_ms: u64,
+    /// The largest latency spike any producer saw.
+    max_spike: Time,
+}
+
+/// Wait for every producer task, merging what each measured. A task that
+/// failed or panicked leaves its error in `errors`.
+async fn join_producers(
+    mut tasks: JoinSet<ProducerOut>,
+    intervals: usize,
+    histogram: &Histogram<u64>,
+    errors: &mut Vec<String>,
+) -> ProducerTotals {
+    let mut totals = ProducerTotals {
+        measurements: TaskMeasurements::new(intervals, histogram),
+        dropped: 0,
+        earliest_recovery_ms: 0,
+        max_spike: Time::ZERO,
+    };
+    while let Some(joined) = tasks.join_next().await {
+        match joined {
+            Ok(task) => {
+                totals.measurements.merge(&task.measurements);
+                totals.dropped += task.dropped;
+                if task.latency_spike_max > totals.max_spike {
+                    totals.max_spike = task.latency_spike_max;
+                }
+                if task.recovery_unix_ms > 0
+                    && (totals.earliest_recovery_ms == 0
+                        || task.recovery_unix_ms < totals.earliest_recovery_ms)
+                {
+                    totals.earliest_recovery_ms = task.recovery_unix_ms;
+                }
+                if !task.error.is_empty() {
+                    errors.push(task.error);
+                }
+            }
+            Err(e) => errors.push(format!("producer-task-panic: {e}")),
+        }
+    }
+    totals
+}
+
 /// Wait for every consumer task, merging what each measured. A task that
 /// failed or panicked leaves its error in `errors`.
 async fn join_consumers(
@@ -702,15 +711,7 @@ async fn join_consumers(
     while let Some(joined) = tasks.join_next().await {
         match joined {
             Ok(task) => {
-                let _ = merged.latency.add(&task.latency);
-                merged.msgs += task.msgs;
-                merged.bytes += task.bytes;
-                for (total, m) in merged.interval_msgs.iter_mut().zip(&task.interval_msgs) {
-                    *total += *m;
-                }
-                for (total, h) in merged.interval_hist.iter_mut().zip(&task.interval_hist) {
-                    let _ = total.add(h);
-                }
+                merged.merge(&task.measurements);
                 if !task.error.is_empty() {
                     errors.push(task.error);
                 }
@@ -953,26 +954,20 @@ const STATE_MEASURING: u8 = 1;
 const STATE_STOP: u8 = 2;
 
 struct ProducerOut {
-    latency: Histogram<u64>,
-    msgs: u64,
-    bytes: u64,
+    /// Measurement-window tallies. The interval vectors hold one entry per
+    /// slice of the [`Grid`], and are empty on a build failure.
+    measurements: TaskMeasurements,
     dropped: u64,
     recovery_unix_ms: u64,
     latency_spike_max: Time,
     error: String,
-    /// Measurement-window tallies, one per slice of the [`Grid`]. This is empty
-    /// on a build failure. `run()` merges by index with bounds checks.
-    interval_msgs: Vec<u64>,
-    interval_hist: Vec<Histogram<u64>>,
 }
 
 struct ConsumerOut {
-    latency: Histogram<u64>,
-    msgs: u64,
-    bytes: u64,
+    /// Measurement-window tallies. The interval vectors are empty on a build
+    /// failure.
+    measurements: TaskMeasurements,
     error: String,
-    interval_msgs: Vec<u64>,
-    interval_hist: Vec<Histogram<u64>>,
 }
 
 fn empty_output(
@@ -1064,6 +1059,7 @@ struct ProducerTask {
     histogram: Histogram<u64>,
 }
 
+#[derive(Debug, PartialEq)]
 struct TaskMeasurements {
     latency: Histogram<u64>,
     interval_msgs: Vec<u64>,
@@ -1086,6 +1082,21 @@ impl TaskMeasurements {
             bytes: 0,
         }
     }
+
+    /// Add `other`'s tallies to these. The interval tallies merge slice by
+    /// slice, up to the shorter of the two lists. A histogram that cannot take
+    /// `other`'s counts is left as it was.
+    fn merge(&mut self, other: &Self) {
+        let _ = self.latency.add(&other.latency);
+        self.msgs += other.msgs;
+        self.bytes += other.bytes;
+        for (total, m) in self.interval_msgs.iter_mut().zip(&other.interval_msgs) {
+            *total += *m;
+        }
+        for (total, h) in self.interval_hist.iter_mut().zip(&other.interval_hist) {
+            let _ = total.add(h);
+        }
+    }
 }
 
 /// One producer's acknowledgement tallies and the run controls they observe.
@@ -1105,22 +1116,17 @@ impl<'a> ProducerObservations<'a> {
         shared: SharedHandles<'a>,
         histogram: &Histogram<u64>,
     ) -> Self {
-        let measurements = TaskMeasurements::new(grid.n, histogram);
         Self {
             idx,
             msg_size,
             grid,
             shared,
             output: ProducerOut {
-                latency: measurements.latency,
-                msgs: measurements.msgs,
-                bytes: measurements.bytes,
+                measurements: TaskMeasurements::new(grid.n, histogram),
                 dropped: 0,
                 recovery_unix_ms: 0,
                 latency_spike_max: Time::ZERO,
                 error: String::new(),
-                interval_msgs: measurements.interval_msgs,
-                interval_hist: measurements.interval_hist,
             },
         }
     }
@@ -1156,14 +1162,14 @@ impl<'a> ProducerObservations<'a> {
             Ok(_meta) => {
                 let latency = sent_at.elapsed().as_time();
                 if self.shared.stop.load(Ordering::Relaxed) == STATE_MEASURING {
-                    hist::record(&mut self.output.latency, latency);
-                    self.output.msgs += 1;
-                    self.output.bytes += self.msg_size;
+                    hist::record(&mut self.output.measurements.latency, latency);
+                    self.output.measurements.msgs += 1;
+                    self.output.measurements.bytes += self.msg_size;
                     let iv = self.grid.idx(Instant::now());
-                    if let Some(count) = self.output.interval_msgs.get_mut(iv) {
+                    if let Some(count) = self.output.measurements.interval_msgs.get_mut(iv) {
                         *count += 1;
                     }
-                    if let Some(histogram) = self.output.interval_hist.get_mut(iv) {
+                    if let Some(histogram) = self.output.measurements.interval_hist.get_mut(iv) {
                         hist::record(histogram, latency);
                     }
                     // Recovery and the spike are measured against the
@@ -1253,15 +1259,17 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
         .context("build producer")
     {
         Err(e) => ProducerOut {
-            latency: histogram,
-            msgs: 0,
-            bytes: 0,
+            measurements: TaskMeasurements {
+                latency: histogram,
+                interval_msgs: Vec::new(),
+                interval_hist: Vec::new(),
+                msgs: 0,
+                bytes: 0,
+            },
             dropped: 0,
             recovery_unix_ms: 0,
             latency_spike_max: Time::ZERO,
             error: format!("producer-{idx}-build: {e:#}"),
-            interval_msgs: Vec::new(),
-            interval_hist: Vec::new(),
         },
         Ok(producer) => {
             let mut tmpl = payload::template(scenario.msg_size);
@@ -1450,12 +1458,14 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
         Ok(c) => c,
         Err(e) => {
             return ConsumerOut {
-                latency: histogram,
-                msgs: 0,
-                bytes: 0,
+                measurements: TaskMeasurements {
+                    latency: histogram,
+                    interval_msgs: Vec::new(),
+                    interval_hist: Vec::new(),
+                    msgs: 0,
+                    bytes: 0,
+                },
                 error: format!("consumer-{idx}-build: {e:#}"),
-                interval_msgs: Vec::new(),
-                interval_hist: Vec::new(),
             };
         }
     };
@@ -1521,12 +1531,8 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
         error = format!("consumer-{idx}-close-timeout");
     }
     ConsumerOut {
-        latency: measurements.latency,
-        msgs: measurements.msgs,
-        bytes: measurements.bytes,
+        measurements,
         error,
-        interval_msgs: measurements.interval_msgs,
-        interval_hist: measurements.interval_hist,
     }
 }
 
@@ -1701,6 +1707,71 @@ mod tests {
 
     fn scenario(rf: i16) -> Scenario { short_scenario(rf) }
 
+    /// A histogram holding one count per latency, in milliseconds.
+    fn latencies(ms: &[u32]) -> Histogram<u64> {
+        let mut histogram = hist::new().unwrap();
+        for &latency in ms {
+            hist::record(&mut histogram, millis(latency));
+        }
+        histogram
+    }
+
+    /// One task's tallies: a message per latency, each in its interval and in
+    /// the overall histogram.
+    fn tallies(intervals: &[&[u32]], bytes: u64) -> TaskMeasurements {
+        let all: Vec<u32> = intervals.concat();
+        TaskMeasurements {
+            latency: latencies(&all),
+            interval_msgs: intervals.iter().map(|slice| slice.len() as u64).collect(),
+            interval_hist: intervals.iter().map(|slice| latencies(slice)).collect(),
+            msgs: all.len() as u64,
+            bytes,
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::other_has_more_intervals(
+        tallies(&[&[1], &[2, 3]], 10),
+        tallies(&[&[4], &[5], &[6]], 20),
+        TaskMeasurements {
+            latency: latencies(&[1, 2, 3, 4, 5, 6]),
+            interval_msgs: vec![2, 3],
+            interval_hist: vec![latencies(&[1, 4]), latencies(&[2, 3, 5])],
+            msgs: 6,
+            bytes: 30,
+        },
+    )]
+    #[case::other_has_fewer_intervals(
+        tallies(&[&[1], &[2], &[3]], 0),
+        tallies(&[&[4]], 5),
+        TaskMeasurements {
+            latency: latencies(&[1, 2, 3, 4]),
+            interval_msgs: vec![2, 1, 1],
+            interval_hist: vec![latencies(&[1, 4]), latencies(&[2]), latencies(&[3])],
+            msgs: 4,
+            bytes: 5,
+        },
+    )]
+    #[case::other_failed_to_build(
+        tallies(&[&[1], &[2]], 7),
+        TaskMeasurements {
+            latency: hist::new().unwrap(),
+            interval_msgs: Vec::new(),
+            interval_hist: Vec::new(),
+            msgs: 0,
+            bytes: 0,
+        },
+        tallies(&[&[1], &[2]], 7),
+    )]
+    fn merge_sums_totals_and_merges_intervals_up_to_the_shorter_list(
+        #[case] mut merged: TaskMeasurements,
+        #[case] other: TaskMeasurements,
+        #[case] expected: TaskMeasurements,
+    ) {
+        merged.merge(&other);
+        assert!(merged == expected);
+    }
+
     #[derive(Debug, PartialEq, Eq)]
     struct ProducerCounters {
         messages: u64,
@@ -1710,8 +1781,8 @@ mod tests {
 
     fn producer_counters(output: &ProducerOut) -> ProducerCounters {
         ProducerCounters {
-            messages: output.msgs,
-            bytes: output.bytes,
+            messages: output.measurements.msgs,
+            bytes: output.measurements.bytes,
             dropped: output.dropped,
         }
     }
@@ -1830,11 +1901,20 @@ mod tests {
                         dropped: measured,
                     }
             );
-            assert!(observations.output.latency.len() == measured);
-            assert!(observations.output.interval_msgs.iter().sum::<u64>() == measured);
+            assert!(observations.output.measurements.latency.len() == measured);
             assert!(
                 observations
                     .output
+                    .measurements
+                    .interval_msgs
+                    .iter()
+                    .sum::<u64>()
+                    == measured
+            );
+            assert!(
+                observations
+                    .output
+                    .measurements
                     .interval_hist
                     .iter()
                     .map(Histogram::len)
@@ -1860,7 +1940,8 @@ mod tests {
             observations.record_ack(Ok(metadata.clone()), sent_at);
             observations.record_ack(Err(ProducerError::Server(32)), sent_at);
             assert!(
-                observations.output.msgs == measured && observations.output.dropped == 2 * measured
+                observations.output.measurements.msgs == measured
+                    && observations.output.dropped == 2 * measured
             );
             assert!(first_ack.load(Ordering::SeqCst) == first_receipt);
             let first_error = observations.output.error.clone();
@@ -2128,16 +2209,22 @@ mod tests {
         assert2::assert!(producers.is_empty());
         broker.stop();
 
-        assert2::assert!(output.interval_msgs.iter().sum::<u64>() == output.msgs);
-        assert2::assert!(output.latency.len() == output.msgs);
-        assert2::assert!(output.bytes == output.msgs * 100);
+        assert2::assert!(
+            output.measurements.interval_msgs.iter().sum::<u64>() == output.measurements.msgs
+        );
+        assert2::assert!(output.measurements.latency.len() == output.measurements.msgs);
+        assert2::assert!(output.measurements.bytes == output.measurements.msgs * 100);
         if metadata_error == 0 && delivery_error == 0 {
-            assert2::assert!(output.msgs > 0);
+            assert2::assert!(output.measurements.msgs > 0);
             assert2::assert!((output.dropped, output.error.as_str()) == (0, ""));
             assert2::assert!(first_ack.load(Ordering::SeqCst) > 0);
         } else {
             assert2::assert!(
-                (output.msgs, output.bytes, first_ack.load(Ordering::SeqCst)) == (0, 0, 0)
+                (
+                    output.measurements.msgs,
+                    output.measurements.bytes,
+                    first_ack.load(Ordering::SeqCst)
+                ) == (0, 0, 0)
             );
             assert2::assert!(output.dropped > 0);
             assert2::assert!(output.error == "producer-0-err: broker error_code 29");
@@ -2189,10 +2276,13 @@ mod tests {
             .await
             .expect("consumer startup retries end")
         {
-            let output = joined.expect("consumer reports its build error");
+            let ConsumerOut {
+                measurements: output,
+                error,
+            } = joined.expect("consumer reports its build error");
             assert!((output.msgs, output.bytes, output.latency.len()) == (0, 0, 0));
             assert!(output.interval_msgs.is_empty() && output.interval_hist.is_empty());
-            errors.push(output.error);
+            errors.push(error);
         }
         errors.sort();
         for (idx, error) in errors.iter().enumerate() {

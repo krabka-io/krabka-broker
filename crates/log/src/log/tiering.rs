@@ -7,7 +7,7 @@
 //! deletes what that manager tells it to delete.
 
 use {
-    super::Log,
+    super::{Log, truncate::RemovedSegments},
     crate::{
         error::LogError, leader_epoch_checkpoint::EpochEntry, name, producer_snapshot, retention,
         segment::Segment,
@@ -17,6 +17,7 @@ use {
     std::{
         fs, iter,
         path::{Path, PathBuf},
+        time::SystemTime,
     },
     tracing::{field, instrument},
 };
@@ -218,11 +219,12 @@ impl Log {
             .map(|sealed| sealed.segment.base_offset())
             .collect();
 
-        let removed = to_drop.len();
-        tracing::Span::current().record("removed", removed);
-        self.remove_sealed_segments(&to_drop)?;
-
-        Ok(removed)
+        // The floor stays behind on a partial failure as well: the remote
+        // tier still answers for every evicted offset.
+        let RemovedSegments { deleted, failure } =
+            self.remove_sealed_segments(&to_drop, SystemTime::now());
+        tracing::Span::current().record("removed", deleted);
+        failure.map_or(Ok(deleted), Err)
     }
 
     /// Describe the active segment for tiered local retention (KIP-405), or

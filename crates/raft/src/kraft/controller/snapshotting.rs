@@ -19,7 +19,7 @@ use {
     crate::{
         error::RaftError,
         kraft::snapshot_fetch::SnapshotId,
-        snapshot::{SnapshotReader, SnapshotWriter},
+        snapshot::{SnapshotReader, SnapshotWriter, mirror_controls},
     },
     krabka_ids::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord},
@@ -218,18 +218,7 @@ impl Engine {
         // prefix. This also proves locally that the checkpoint is readable
         // before any durable state is pruned.
         let contents = SnapshotReader::read(&bytes)?;
-        let mut reloaded =
-            MetadataImage::from_records(pending.image.cluster_id(), &contents.metadata_records);
-        if let Some(control) = &contents.control_state {
-            reloaded.apply(&MetadataRecord::V1KRaftVersion(
-                krabka_metadata::KRaftVersionRecord {
-                    kraft_version: control.kraft_version,
-                },
-            ));
-            reloaded.apply(&MetadataRecord::V1Voters(VotersRecord {
-                voters: control.voters.clone(),
-            }));
-        }
+        let mut reloaded = contents.to_image(pending.image.cluster_id());
         write_checkpoint(&self.data_dir, pending.end_offset.0, pending.epoch, &bytes)?;
         self.last_snapshot_timestamp_ms = last_contained_ts;
 
@@ -242,14 +231,11 @@ impl Engine {
             pending.end_offset,
             self.metadata_raft_fetch_max,
         )?;
-        reloaded.apply(&MetadataRecord::V1KRaftVersion(
-            krabka_metadata::KRaftVersionRecord {
-                kraft_version: self.controls.committed_version,
-            },
-        ));
-        reloaded.apply(&MetadataRecord::V1Voters(VotersRecord {
-            voters: self.controls.committed_voters.clone(),
-        }));
+        mirror_controls(
+            &mut reloaded,
+            self.controls.committed_version,
+            self.controls.committed_voters.clone(),
+        );
 
         self.prune_to_snapshot(pending.end_offset)?;
         self.image.replace(reloaded);

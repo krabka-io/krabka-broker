@@ -30,7 +30,7 @@ use {
     crate::support::{
         KEY_TYPE_GROUP,
         classic::classic_join_sync,
-        client::connect_owned,
+        client::{connect_owned, raw_connection},
         consumer_groups::{consumer_heartbeat, joining_consumer},
         find_coordinator,
         offsets::{
@@ -42,7 +42,7 @@ use {
     },
     assert2::assert,
     krabka_broker::NodeId,
-    krabka_client_core::{Client, Connection, ConnectionOptions},
+    krabka_client_core::{Client, Connection},
     krabka_protocol::{
         owned::{
             consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
@@ -119,12 +119,7 @@ const RECOMMITTED: Offsets = Offsets {
 /// One connection to the broker that binds `address`, past any relay, so a
 /// request reaches that broker whatever the cluster's metadata advertises.
 async fn connect(address: SocketAddr) -> Connection {
-    Connection::connect(address, ConnectionOptions {
-        client_id: "group-coordinator-failover".to_owned(),
-        ..ConnectionOptions::default()
-    })
-    .await
-    .expect("connect")
+    raw_connection(address, "group-coordinator-failover").await
 }
 
 async fn client(address: SocketAddr) -> Client {

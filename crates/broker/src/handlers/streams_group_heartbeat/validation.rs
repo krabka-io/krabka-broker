@@ -5,12 +5,13 @@
 //! and message and never schedules the write operation.
 
 use {
-    crate::{api_catalog::UnstableApiVersions, codes},
+    crate::{
+        api_catalog::UnstableApiVersions, codes,
+        coordinator::unified::replay_policy::LEAVE_GROUP_STATIC_MEMBER_EPOCH,
+        handlers::coordinator_routing::java_blank,
+    },
     krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
 };
-
-/// `LEAVE_GROUP_STATIC_MEMBER_EPOCH`: the epoch of a static member's leave.
-const LEAVE_GROUP_STATIC_MEMBER_EPOCH: i32 = -2;
 
 /// Kafka's `throwIfStreamsGroupHeartbeatRequestIsUsingUnsupportedFeatures`
 /// and then `throwIfStreamsGroupHeartbeatRequestIsInvalid`, in Kafka's order.
@@ -65,16 +66,16 @@ pub(super) fn request_error(
         return invalid("Regular expressions for source topics are not supported yet.");
     }
 
-    if is_blank(&req.member_id) {
+    if java_blank(&req.member_id) {
         return invalid("MemberId can't be empty.");
     }
-    if is_blank(&req.group_id) {
+    if java_blank(&req.group_id) {
         return invalid("GroupId can't be empty.");
     }
-    if req.instance_id.as_deref().is_some_and(is_blank) {
+    if req.instance_id.as_deref().is_some_and(java_blank) {
         return invalid("InstanceId can't be empty.");
     }
-    if req.rack_id.as_deref().is_some_and(is_blank) {
+    if req.rack_id.as_deref().is_some_and(java_blank) {
         return invalid("RackId can't be empty.");
     }
 
@@ -136,10 +137,6 @@ pub(super) fn request_error(
     }
     None
 }
-
-/// Kafka's `throwIfEmptyString`: Java's `String.trim` removes every leading
-/// and trailing character at or below U+0020.
-fn is_blank(value: &str) -> bool { value.trim_matches(|c: char| c <= ' ').is_empty() }
 
 #[cfg(test)]
 mod tests {

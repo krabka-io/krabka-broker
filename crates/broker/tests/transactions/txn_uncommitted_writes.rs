@@ -17,7 +17,7 @@ use {
     crate::{
         support::{
             self,
-            client::connect_owned,
+            client::{connect_owned, raw_connection},
             offsets::{
                 offset_commit_partition, offset_commit_topic, offset_delete_partition,
                 offset_delete_request, offset_delete_topic,
@@ -38,7 +38,7 @@ use {
     },
     assert2::assert,
     krabka_broker::{BrokerConfig, BrokerHandle, NodeId},
-    krabka_client_core::{Client, Connection, ConnectionOptions},
+    krabka_client_core::{Client, Connection},
     krabka_protocol::{
         owned::{
             add_offsets_to_txn_request::AddOffsetsToTxnRequest,
@@ -76,12 +76,7 @@ fn retriable(code: i16) -> bool { coordinator_loading(code) || code == CONCURREN
 /// One connection to the broker that binds `address`, past any relay, so a
 /// request reaches that broker whatever the cluster's metadata advertises.
 async fn connect(address: SocketAddr) -> Connection {
-    Connection::connect(address, ConnectionOptions {
-        client_id: "txn-uncommitted-writes".to_owned(),
-        ..ConnectionOptions::default()
-    })
-    .await
-    .expect("connect")
+    raw_connection(address, "txn-uncommitted-writes").await
 }
 
 async fn client(address: SocketAddr) -> Client {

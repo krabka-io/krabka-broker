@@ -47,6 +47,129 @@ impl Subscription<'_> {
             .topic_name(topic_id)
             .is_some_and(|name| self.group.member_subscribes_to(self.member, &name))
     }
+
+    /// Splits what the member holds against its `target`. A topic the member
+    /// no longer subscribes to has an empty target, so all of it is revoked.
+    fn split_against_target(&self, target: &Partitions) -> HeldVsTarget {
+        let member = self.member;
+        let mut split = HeldVsTarget {
+            kept: Partitions::new(),
+            to_revoke: Partitions::new(),
+            wanted: Partitions::new(),
+        };
+        let topic_ids: HashSet<Uuid> = target
+            .keys()
+            .chain(member.assigned_partitions.keys())
+            .copied()
+            .collect();
+        for topic_id in topic_ids {
+            let target_here: HashSet<i32> = if self.contains(&topic_id) {
+                target
+                    .get(&topic_id)
+                    .map_or_default(|parts| parts.iter().copied().collect())
+            } else {
+                HashSet::new()
+            };
+            let held: &[i32] = member
+                .assigned_partitions
+                .get(&topic_id)
+                .map_or(&[], Vec::as_slice);
+            for &partition in held {
+                let side = if target_here.contains(&partition) {
+                    &mut split.kept
+                } else {
+                    &mut split.to_revoke
+                };
+                side.entry(topic_id).or_default().push(partition);
+            }
+            let held: HashSet<i32> = held.iter().copied().collect();
+            let new: Vec<i32> = target_here.difference(&held).copied().collect();
+            if !new.is_empty() {
+                split.wanted.insert(topic_id, new);
+            }
+        }
+        split
+    }
+}
+
+/// A member's holdings split against its target, the first phase of
+/// `computeNextAssignment`.
+struct HeldVsTarget {
+    /// The held partitions that stay in the target.
+    kept: Partitions,
+    /// The held partitions that left the target.
+    to_revoke: Partitions,
+    /// The target partitions the member does not hold yet.
+    wanted: Partitions,
+}
+
+/// What `computeNextAssignment` decided for a member before it builds the
+/// next assignment: its holdings split against the target, and the wanted
+/// partitions resolved against the other members.
+struct Split {
+    /// The held partitions that stay in the target.
+    kept: Partitions,
+    /// The held partitions that left the target.
+    to_revoke: Partitions,
+    /// The wanted partitions no other member holds.
+    granted: Partitions,
+    /// `true` when another member still holds a wanted partition.
+    has_unreleased: bool,
+}
+
+impl Split {
+    /// Builds the member's next assignment, with `assigned` and `pending`
+    /// sorted. `owned` is what the heartbeat reports.
+    fn into_rebuilt(
+        self,
+        member: &MemberState,
+        target_epoch: i32,
+        owned: Option<&Partitions>,
+    ) -> Rebuilt {
+        let Self {
+            mut kept,
+            to_revoke,
+            granted,
+            has_unreleased,
+        } = self;
+        let mut rebuilt = if !to_revoke.is_empty() && owns_any(owned, &to_revoke) {
+            // The member keeps its epoch and waits for the client to
+            // acknowledge the revocation.
+            Rebuilt {
+                state: MemberAssignmentState::UnrevokedPartitions,
+                epoch: member.member_epoch,
+                assigned: kept,
+                pending: to_revoke,
+                granted: Partitions::new(),
+            }
+        } else {
+            // Whatever the member had to revoke it has revoked. It moves to
+            // the target epoch with what it keeps and what is free.
+            let state = if has_unreleased {
+                MemberAssignmentState::UnreleasedPartitions
+            } else {
+                MemberAssignmentState::Stable
+            };
+            for (topic_id, parts) in &granted {
+                kept.entry(*topic_id).or_default().extend(parts);
+            }
+            Rebuilt {
+                state,
+                epoch: target_epoch,
+                assigned: kept,
+                pending: Partitions::new(),
+                granted,
+            }
+        };
+        for parts in rebuilt
+            .assigned
+            .values_mut()
+            .chain(rebuilt.pending.values_mut())
+        {
+            parts.sort_unstable();
+        }
+        rebuilt
+    }
 }
 
 impl GroupState {
@@ -250,43 +373,25 @@ impl GroupState {
             .get(&member.member_id)
             .unwrap_or(&no_target);
 
-        let mut kept = Partitions::new();
-        let mut to_revoke = Partitions::new();
-        // The target partitions the member does not hold yet.
-        let mut wanted = Partitions::new();
-        let topic_ids: HashSet<Uuid> = target
-            .keys()
-            .chain(member.assigned_partitions.keys())
-            .copied()
-            .collect();
-        for topic_id in topic_ids {
-            // A topic the member no longer subscribes to has an empty target.
-            let target_here: HashSet<i32> = if subscription.contains(&topic_id) {
-                target
-                    .get(&topic_id)
-                    .map_or_default(|parts| parts.iter().copied().collect())
-            } else {
-                HashSet::new()
-            };
-            let held: &[i32] = member
-                .assigned_partitions
-                .get(&topic_id)
-                .map_or(&[], Vec::as_slice);
-            for &partition in held {
-                let side = if target_here.contains(&partition) {
-                    &mut kept
-                } else {
-                    &mut to_revoke
-                };
-                side.entry(topic_id).or_default().push(partition);
-            }
-            let held: HashSet<i32> = held.iter().copied().collect();
-            let new: Vec<i32> = target_here.difference(&held).copied().collect();
-            if !new.is_empty() {
-                wanted.insert(topic_id, new);
-            }
+        let HeldVsTarget {
+            kept,
+            to_revoke,
+            wanted,
+        } = subscription.split_against_target(target);
+        let (granted, has_unreleased) = self.grant_free(member, wanted);
+        Split {
+            kept,
+            to_revoke,
+            granted,
+            has_unreleased,
         }
+        .into_rebuilt(member, target_epoch, owned)
+    }
 
+    /// Resolves the partitions `member` wants against what the other members
+    /// hold. It returns the partitions granted to `member`, and `true` when
+    /// another member still holds one it wants.
+    fn grant_free(&self, member: &MemberState, wanted: Partitions) -> (Partitions, bool) {
         // `currentPartitionEpoch`: what every other member still holds,
         // assigned or pending revocation. The member's own holdings need no
         // entry: what it keeps is in `kept`, and what it gives up is not in its
@@ -314,44 +419,7 @@ impl GroupState {
                 }
             }
         }
-
-        let mut rebuilt = if !to_revoke.is_empty() && owns_any(owned, &to_revoke) {
-            // The member keeps its epoch and waits for the client to
-            // acknowledge the revocation.
-            Rebuilt {
-                state: MemberAssignmentState::UnrevokedPartitions,
-                epoch: member.member_epoch,
-                assigned: kept,
-                pending: to_revoke,
-                granted: Partitions::new(),
-            }
-        } else {
-            // Whatever the member had to revoke it has revoked. It moves to
-            // the target epoch with what it keeps and what is free.
-            let state = if has_unreleased {
-                MemberAssignmentState::UnreleasedPartitions
-            } else {
-                MemberAssignmentState::Stable
-            };
-            for (topic_id, parts) in &granted {
-                kept.entry(*topic_id).or_default().extend(parts);
-            }
-            Rebuilt {
-                state,
-                epoch: target_epoch,
-                assigned: kept,
-                pending: Partitions::new(),
-                granted,
-            }
-        };
-        for parts in rebuilt
-            .assigned
-            .values_mut()
-            .chain(rebuilt.pending.values_mut())
-        {
-            parts.sort_unstable();
-        }
-        rebuilt
+        (granted, has_unreleased)
     }
 
     /// Kafka's `ConsumerGroup.waitingOnUnreleasedPartition`: `true` when the
@@ -428,8 +496,6 @@ impl GroupState {
     }
 }
 
-/// Kafka's `ownsRevokedPartitions`: `true` when the heartbeat reports any of
-/// the `pending` partitions, or reports nothing at all.
 /// Kafka's `Assignment.equals`: the same partitions of the same topics,
 /// whatever their order.
 pub fn same_assignment(a: &Partitions, b: &Partitions) -> bool {
@@ -447,6 +513,8 @@ pub fn same_assignment(a: &Partitions, b: &Partitions) -> bool {
     set(a) == set(b)
 }
 
+/// Kafka's `ownsRevokedPartitions`: `true` when the heartbeat reports any of
+/// the `pending` partitions, or reports nothing at all.
 fn owns_any(owned: Option<&Partitions>, pending: &Partitions) -> bool {
     owned.is_none_or(|owned| {
         owned.iter().any(|(topic_id, parts)| {

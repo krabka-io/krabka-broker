@@ -10,9 +10,14 @@ use {
         network::{client::tune_socket, dispatch},
         quota::{lookup_ip_quota_with_key, positive_f64_to_u64},
     },
-    krabka_raft::AcceptingListener,
+    krabka_raft::{AcceptingListener, ConnectionGuard, ConnectionLimit, ConnectionQuotas},
     krabka_units::{ByteSize, Time, convert::TimeExt as _},
-    std::{net::IpAddr, sync::Arc, time::Instant},
+    std::{
+        net::{IpAddr, SocketAddr},
+        ops::ControlFlow,
+        sync::Arc,
+        time::Instant,
+    },
     tokio::{
         net::{TcpListener, TcpStream},
         task::JoinSet,
@@ -57,6 +62,73 @@ fn connection_creation_throttle(broker: &Broker, peer_ip: IpAddr) -> Option<Time
         .then(|| connection_creation_delay(rate, broker.config.connection_creation_throttle_max))
 }
 
+/// What the accept loop does with a connection it accepted.
+enum Admission {
+    /// Serve the connection. The guard holds its connection slots and must
+    /// live as long as the connection does.
+    Serve(ConnectionGuard),
+    /// Over the peer's KIP-612 `connection_creation_rate`: hold the socket
+    /// for the throttle time, then close it without serving it.
+    Throttled(Time),
+    /// Over a connection cap: close the socket at once.
+    Rejected,
+}
+
+/// Decide whether the connection `peer` opened on `accepting` is served.
+///
+/// KIP-612 `connection_creation_rate` is checked before the connection takes
+/// a slot, as Kafka's `ConnectionQuotas.inc` records the ip rate before it
+/// counts the connection. A connection over the rate is never served: the
+/// broker holds the socket for the throttle time and then closes it, so the
+/// client backs off and reconnects later. The caller runs the hold as a task
+/// of its own, so the accept loop keeps accepting other connections
+/// meanwhile, as Kafka's acceptor does with `throttledSockets`.
+///
+/// Then come the connection caps: this listener's, the broker's and the peer
+/// address's. A slot is reserved before doing any work; on rejection the
+/// caller closes the socket at once. Kafka closes a connection over the
+/// per-IP cap and waits for a slot under the other two.
+fn admit(
+    broker: &Broker,
+    spec: &ListenerSpec,
+    accepting: AcceptingListener<'_>,
+    quotas: &ConnectionQuotas,
+    peer: SocketAddr,
+) -> Admission {
+    let peer_ip = peer.ip();
+    if let Some(delay) = connection_creation_throttle(broker, peer_ip) {
+        // Kafka un-records a throttled connection from the broker-wide and
+        // listener rates.
+        broker.connections.refund_creation(accepting, quotas);
+        broker
+            .metrics
+            .observe_quota_throttle(QuotaType::ConnectionCreation, delay.secs_f64());
+        tracing::debug!(
+            %peer,
+            name = %spec.name,
+            delay_ms = delay.millis_i64(),
+            "connection_creation_rate exceeded; closing connection after the throttle"
+        );
+        return Admission::Throttled(delay);
+    }
+    match broker
+        .connections
+        .try_acquire_within(peer_ip, accepting, quotas)
+    {
+        Ok(guard) => Admission::Serve(guard),
+        Err(limit) => {
+            broker.metrics.record_connection_close(close_reason(limit));
+            tracing::debug!(
+                %peer,
+                name = %spec.name,
+                ?limit,
+                "connection limit reached; closing connection"
+            );
+            Admission::Rejected
+        }
+    }
+}
+
 /// Hold a throttled socket for `delay`, then close it without reading a
 /// request. Kafka's acceptor keeps the socket in `throttledSockets` until
 /// the throttle ends, so the client does not reconnect at once.
@@ -65,7 +137,93 @@ async fn close_after(stream: TcpStream, delay: Time) {
     drop(stream);
 }
 
+/// The close reason a connection rejected at `limit` is counted under: the
+/// per-IP cap has its own, the broker-wide and listener caps share one.
+fn close_reason(limit: ConnectionLimit) -> ConnectionCloseReason {
+    match limit {
+        ConnectionLimit::Global | ConnectionLimit::Listener => {
+            ConnectionCloseReason::MaxConnections
+        }
+        ConnectionLimit::PerIp => ConnectionCloseReason::MaxConnectionsPerIp,
+    }
+}
+
 async fn shutdown_connection_tasks(connections: &mut JoinSet<()>) { connections.shutdown().await; }
+
+/// Admit and serve one accepted connection, or throttle or reject it.
+///
+/// `Break` means `shutdown` fired while the accept waited out a
+/// `max.connection.creation.rate` throttle, so the accept loop must stop.
+async fn on_accept(
+    broker: &Arc<Broker>,
+    spec: &ListenerSpec,
+    shutdown: &CancellationToken,
+    connections: &mut JoinSet<()>,
+    (stream, peer): (TcpStream, SocketAddr),
+) -> ControlFlow<()> {
+    tracing::debug!(%peer, name = %spec.name, "accepted connection");
+    // Kafka's `ConnectionQuotas.protectedListener` is evaluated at each
+    // accept, so a listener added or removed while the broker runs protects or
+    // unprotects the inter-broker listener from the next connection on.
+    let accepting = AcceptingListener {
+        name: &spec.name,
+        protected: broker
+            .data_plane
+            .is_protected(&spec.name, &broker.config.inter_broker_listener_name),
+    };
+    tune_accepted_socket(
+        &stream,
+        broker.config.socket_send_buffer,
+        broker.config.socket_receive_buffer,
+    );
+
+    // The connection quotas are resolved per accept, so a dynamic change
+    // applies to the next connection without a restart. Over
+    // `max.connection.creation.rate`, broker-wide or for this listener, the
+    // acceptor waits the throttle out and then takes the connection, as
+    // Kafka's `ConnectionQuotas.waitForConnectionSlot` does.
+    let quotas = broker.connections.quotas(
+        &broker.controller.current_image(),
+        broker.config.node_id,
+        &spec.name,
+    );
+    let delay = broker.connections.creation_delay(
+        accepting,
+        &quotas,
+        Instant::now(),
+        broker.config.connection_creation_throttle_max.to_std(),
+    );
+    if !delay.is_zero() {
+        tokio::select! {
+            () = time::sleep(delay) => {}
+            () = shutdown.cancelled() => return ControlFlow::Break(()),
+        }
+    }
+
+    match admit(broker, spec, accepting, &quotas, peer) {
+        Admission::Serve(conn_guard) => {
+            let b = Arc::clone(broker);
+            let s = spec.clone();
+            connections.spawn(async move {
+                // Hold the connection guard for the lifetime of the
+                // connection; dropping it releases the global + per-IP slots.
+                let _conn_guard = conn_guard;
+                // `Box::pin` the per-connection handler: the request dispatch
+                // state machine (68 API handlers, each now carrying a tracing
+                // span) is a legitimately large future that trips
+                // `clippy::large_futures` once held inline in this spawned
+                // task. Boxing moves it to the heap (one alloc per long-lived
+                // connection — free).
+                Box::pin(dispatch::serve_connection_on_listener(b, stream, s)).await;
+            });
+        }
+        Admission::Throttled(delay) => {
+            connections.spawn(close_after(stream, delay));
+        }
+        Admission::Rejected => drop(stream),
+    }
+    ControlFlow::Continue(())
+}
 
 /// Accept connections on `listener` until `shutdown`, then close the
 /// listener and every connection it accepted.
@@ -76,7 +234,7 @@ pub(super) async fn accept_loop(
     shutdown: CancellationToken,
 ) {
     let mut connections = JoinSet::new();
-    'accept: loop {
+    loop {
         tokio::select! {
             () = shutdown.cancelled() => {
                 tracing::info!(name = %spec.name, "listener shutting down");
@@ -91,126 +249,13 @@ pub(super) async fn accept_loop(
             }
             accept = listener.accept() => {
                 match accept {
-                    Ok((stream, peer)) => {
-                        tracing::debug!(%peer, name = %spec.name, "accepted connection");
-                        let peer_ip = peer.ip();
-                        // Kafka's `ConnectionQuotas.protectedListener` is
-                        // evaluated at each accept, so a listener added or
-                        // removed while the broker runs protects or
-                        // unprotects the inter-broker listener from the
-                        // next connection on.
-                        let accepting = AcceptingListener {
-                            name: &spec.name,
-                            protected: broker
-                                .data_plane
-                                .is_protected(&spec.name, &broker.config.inter_broker_listener_name),
-                        };
-                        tune_accepted_socket(
-                            &stream,
-                            broker.config.socket_send_buffer,
-                            broker.config.socket_receive_buffer,
-                        );
-
-                        // The connection quotas are resolved per accept, so a
-                        // dynamic change applies to the next connection
-                        // without a restart. Over `max.connection.creation.rate`,
-                        // broker-wide or for this listener, the acceptor waits
-                        // the throttle out and then takes the connection, as
-                        // Kafka's `ConnectionQuotas.waitForConnectionSlot`
-                        // does.
-                        let quotas = broker
-                            .connections
-                            .quotas(&broker.controller.current_image(), broker.config.node_id, &spec.name);
-                        let delay = broker.connections.creation_delay(
-                            accepting,
-                            &quotas,
-                            Instant::now(),
-                            broker.config.connection_creation_throttle_max.to_std(),
-                        );
-                        if !delay.is_zero() {
-                            tokio::select! {
-                                () = time::sleep(delay) => {}
-                                () = shutdown.cancelled() => break 'accept,
-                            }
+                    Ok(accepted) => {
+                        if on_accept(&broker, &spec, &shutdown, &mut connections, accepted)
+                            .await
+                            .is_break()
+                        {
+                            break;
                         }
-
-                        // KIP-612 `connection_creation_rate`, checked before
-                        // the connection takes a slot, as Kafka's
-                        // `ConnectionQuotas.inc` records the ip rate before
-                        // it counts the connection. A connection over the
-                        // rate is never served: the broker holds the socket
-                        // for the throttle time and then closes it, so the
-                        // client backs off and reconnects later. The hold
-                        // runs as a task of its own, so the accept loop keeps
-                        // accepting other connections meanwhile, as Kafka's
-                        // acceptor does with `throttledSockets`.
-                        if let Some(delay) = connection_creation_throttle(&broker, peer_ip) {
-                            // Kafka un-records a throttled connection from
-                            // the broker-wide and listener rates.
-                            broker.connections.refund_creation(accepting, &quotas);
-                            broker.metrics.observe_quota_throttle(
-                                QuotaType::ConnectionCreation,
-                                delay.secs_f64(),
-                            );
-                            tracing::debug!(
-                                %peer,
-                                name = %spec.name,
-                                delay_ms = delay.millis_i64(),
-                                "connection_creation_rate exceeded; closing connection after the throttle"
-                            );
-                            connections.spawn(close_after(stream, delay));
-                            continue;
-                        }
-
-                        // The connection caps: this listener's, the broker's
-                        // and the peer address's. Reserve a slot before doing
-                        // any work; on rejection close the socket at once.
-                        // Kafka closes a connection over the per-IP cap and
-                        // waits for a slot under the other two. The guard is
-                        // moved into the spawned task so the counts are
-                        // released however the connection ends.
-                        let conn_guard = match broker.connections.try_acquire_within(peer_ip, accepting, &quotas) {
-                            Ok(guard) => guard,
-                            Err(limit) => {
-                                let reason = match limit {
-                                    krabka_raft::ConnectionLimit::Global
-                                    | krabka_raft::ConnectionLimit::Listener => {
-                                        ConnectionCloseReason::MaxConnections
-                                    }
-                                    krabka_raft::ConnectionLimit::PerIp => {
-                                        ConnectionCloseReason::MaxConnectionsPerIp
-                                    }
-                                };
-                                broker.metrics.record_connection_close(reason);
-                                tracing::debug!(
-                                    %peer,
-                                    name = %spec.name,
-                                    ?limit,
-                                    "connection limit reached; closing connection"
-                                );
-                                drop(stream);
-                                continue;
-                            }
-                        };
-
-                        let b = Arc::clone(&broker);
-                        let s = spec.clone();
-                        connections.spawn(async move {
-                            // Hold the connection guard for the lifetime of the
-                            // connection; dropping it releases the global +
-                            // per-IP slots.
-                            let _conn_guard = conn_guard;
-                            // `Box::pin` the per-connection handler: the request
-                            // dispatch state machine (68 API handlers, each now
-                            // carrying a tracing span) is a legitimately large
-                            // future that trips `clippy::large_futures` once held
-                            // inline in this spawned task. Boxing moves it to the
-                            // heap (one alloc per long-lived connection — free).
-                            Box::pin(dispatch::serve_connection_on_listener(
-                                b, stream, s,
-                            ))
-                            .await;
-                        });
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, name = %spec.name, "accept failed");
@@ -269,6 +314,27 @@ mod tests {
     #[test]
     fn connection_creation_delay_honors_nondefault_cap() {
         assert!(connection_creation_delay(0.1, millis(17)) == millis(17));
+    }
+
+    #[test]
+    fn close_reason_separates_the_per_ip_cap_from_the_others() {
+        let cases = [
+            (
+                ConnectionLimit::Global,
+                ConnectionCloseReason::MaxConnections,
+            ),
+            (
+                ConnectionLimit::Listener,
+                ConnectionCloseReason::MaxConnections,
+            ),
+            (
+                ConnectionLimit::PerIp,
+                ConnectionCloseReason::MaxConnectionsPerIp,
+            ),
+        ];
+        for (limit, expected) in cases {
+            assert!(close_reason(limit) == expected, "{limit:?}");
+        }
     }
 
     #[tokio::test]

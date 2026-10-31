@@ -7,7 +7,7 @@ use {
     super::{
         AdmittedPartition, PendingPartition, complete_admitted,
         framing::PartitionPayload,
-        pipeline::{Admission, PartitionInput, admit_partition},
+        pipeline::{Admission, admit_partition},
         producer_checks::TransactionRequest,
         test_support::{PipelineFixture, PipelinePartitionSetup, encode_batch, pipeline_input},
     },
@@ -93,16 +93,13 @@ async fn admit(
     let mut admitted = Vec::new();
     let mut topic_results = Vec::new();
     for entry in entries {
-        let input = PartitionInput {
-            acks,
-            ..pipeline_input(
-                entry.topic,
-                PartitionPayload::Slice(batch(entry.base_sequence)),
-            )
-        };
-        let Admission::Admitted(admitted_batch) = admit_partition(input, fixture.services(image))
-            .await
-            .expect("admit")
+        let input = pipeline_input()
+            .topic(entry.topic)
+            .payload(PartitionPayload::Slice(batch(entry.base_sequence)))
+            .acks(acks)
+            .call();
+        let Admission::Admitted(admitted_batch) =
+            admit_partition(input, fixture.services(image)).await
         else {
             panic!("{} must pass every gate before the append", entry.topic);
         };
@@ -131,7 +128,11 @@ async fn admit(
 }
 
 fn no_transaction() -> TransactionRequest<'static> {
-    pipeline_input("unused", PartitionPayload::Slice(Bytes::new())).transaction
+    pipeline_input()
+        .topic("unused")
+        .payload(PartitionPayload::Slice(Bytes::new()))
+        .call()
+        .transaction
 }
 
 /// The row of an `acks=1` append that took offset `base_offset`.

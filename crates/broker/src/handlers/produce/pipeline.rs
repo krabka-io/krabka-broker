@@ -7,9 +7,9 @@ use {
         INVALID_OFFSET,
         append::{AppendContext, AppendOutcome, PendingAck, dispatch_prepared},
         delivery::DeliveryGate,
-        framing::FramedPartition,
+        framing::{FramedPartition, PartitionPayload},
         leadership::{
-            BrokerProducePolicy, current_leader_hint, diskless_role_ready,
+            BrokerProducePolicy, PartitionGateError, current_leader_hint, diskless_role_ready,
             replica_state_matches_image, replication_target_matches_image, validate_partition_gate,
         },
         prepare::{DecodeEnv, PreparedBatch, prepare_batch_within},
@@ -35,7 +35,8 @@ use {
         schema_validation::{SchemaGate, SchemaValidator},
         txn::{coordinator::TxnCoordinator, state::TopicPartition},
     },
-    krabka_compression::RecordDecompressionPolicy,
+    krabka_compression::{CompressionType, RecordDecompressionPolicy},
+    krabka_log::LogConfig,
     krabka_protocol::owned::produce_response::{
         BatchIndexAndErrorMessage, PartitionProduceResponse,
     },
@@ -44,20 +45,13 @@ use {
     tokio::sync::OwnedRwLockReadGuard,
 };
 
-/// Per-partition produce input, held apart so that the call site can time the
-/// work and charge it to `partition_cpu_micros_total`.
-///
-/// The interval the call site measures is this pipeline's own: the gates, the
-/// enqueue, and the writer's answer. The `acks=-1` high-watermark wait is not
-/// in it, because that wait no longer happens here — the pipeline hands it
-/// back and the handler drives every partition's wait together, so charging it
-/// per partition would charge one interval N times over.
-///
-/// The work returns the per-partition response on every path. Only
-/// `txn_coordinator.put` errors propagate with `?`.
-pub(super) struct PartitionInput<'a> {
-    pub(super) part_data: FramedPartition,
-    pub(super) topic_compression: Option<krabka_compression::CompressionType>,
+/// The produce settings of one topic, resolved once per topic by the handler
+/// and shared by every partition of that topic in the request.
+#[derive(Clone, Copy)]
+pub(super) struct TopicProducePolicy<'a> {
+    /// The topic's broker-side `compression.type`. `None` is Kafka's
+    /// `producer` pass-through, with no recompression.
+    pub(super) compression: Option<CompressionType>,
     /// The topic's KIP-32 timestamp policy, resolved once per topic:
     /// `message.timestamp.type` plus the two
     /// `message.timestamp.{before,after}.max.ms` windows. The default admits
@@ -65,7 +59,7 @@ pub(super) struct PartitionInput<'a> {
     pub(super) timestamps: TimestampPolicy,
     /// Whether the topic's `cleanup.policy` holds `compact`, resolved once per
     /// topic. Kafka's `LogValidator` then refuses a record with no key.
-    pub(super) compacted_topic: bool,
+    pub(super) compacted: bool,
     /// The topic's `max.message.bytes`, resolved once per topic, with the
     /// broker's `message.max.bytes` behind it. Every topic has one, so unlike
     /// the gates below it is a value and not an `Option`.
@@ -77,20 +71,37 @@ pub(super) struct PartitionInput<'a> {
     /// `None` is "neither `schema.validation.key` nor
     /// `schema.validation.value` is set", and skips the check entirely.
     pub(super) schema: Option<SchemaGate>,
-    /// The topic name, as the `Arc<str>` the metric label sets clone. The
-    /// registry owns the one copy — see `PartitionRegistry::shared_topic_name`
-    /// — so passing it down here is what keeps the per-partition accounting
-    /// free of allocations.
-    pub(super) topic_name: Arc<str>,
     /// The topic's authorization-and-freeze result, resolved once per topic.
     /// Only `Frozen` carries registry detail, after authorization succeeded.
     pub(super) freeze: FreezeMutationResolution<'a>,
-    /// Whether this partition's topic is one of [`crate::internal_topics::
+    /// Whether this topic is one of [`crate::internal_topics::
     /// INTERNAL_TOPICS`] (or the configured audit topic) and the request's
     /// `client_id` is not Kafka's admin-tooling exception. Resolved once per
     /// topic, beside `freeze`, since it is a property of the topic and the
     /// request, not of a partition or a batch.
     pub(super) internal_topic_denied: bool,
+}
+
+/// Per-partition produce input, held apart so that the call site can time the
+/// work and charge it to `partition_cpu_micros_total`.
+///
+/// The interval the call site measures is this pipeline's own: the gates, the
+/// enqueue, and the writer's answer. The `acks=-1` high-watermark wait is not
+/// in it, because that wait no longer happens here — the pipeline hands it
+/// back and the handler drives every partition's wait together, so charging it
+/// per partition would charge one interval N times over.
+///
+/// Admission answers on every path, with a refused row or an admitted batch.
+/// Only the append in [`complete_partition`] can fail with a `BrokerError`.
+pub(super) struct PartitionInput<'a> {
+    pub(super) part_data: FramedPartition,
+    /// The settings of this partition's topic.
+    pub(super) topic: TopicProducePolicy<'a>,
+    /// The topic name, as the `Arc<str>` the metric label sets clone. The
+    /// registry owns the one copy — see `PartitionRegistry::shared_topic_name`
+    /// — so passing it down here is what keeps the per-partition accounting
+    /// free of allocations.
+    pub(super) topic_name: Arc<str>,
     /// The request fields of the KIP-890 transaction check.
     pub(super) transaction: TransactionRequest<'a>,
     pub(super) acks: i16,
@@ -355,7 +366,7 @@ pub(super) async fn process_partition(
     services: PartitionServices<'_>,
 ) -> Result<PartitionOutcome, BrokerError> {
     let transaction = input.transaction;
-    let admission = admit_partition(input, services).await?;
+    let admission = admit_partition(input, services).await;
     let batch = match admission {
         Admission::Done(row) => return Ok(PartitionOutcome::Done(row)),
         Admission::Admitted(batch) => batch,
@@ -377,18 +388,21 @@ pub(super) async fn process_partition(
 pub(super) async fn admit_partition(
     input: PartitionInput<'_>,
     services: PartitionServices<'_>,
-) -> Result<Admission, BrokerError> {
+) -> Admission {
     let PartitionInput {
         part_data,
-        topic_compression,
-        timestamps,
-        compacted_topic,
-        max_message_bytes,
-        delivery,
-        schema,
+        topic:
+            TopicProducePolicy {
+                compression: topic_compression,
+                timestamps,
+                compacted: compacted_topic,
+                max_message_bytes,
+                delivery,
+                schema,
+                freeze,
+                internal_topic_denied,
+            },
         topic_name,
-        freeze,
-        internal_topic_denied,
         transaction,
         acks,
     } = input;
@@ -399,7 +413,6 @@ pub(super) async fn admit_partition(
     let topic_name: &str = &shared_topic;
     let PartitionServices {
         partitions,
-        log_dir_status,
         image,
         broker_policy,
         record_decompression_policy,
@@ -423,30 +436,8 @@ pub(super) async fn admit_partition(
         ..Default::default()
     };
 
-    // ── KFC-9 write freeze ───────────────────────────────────────────
-    // Beside the topic ACL denial, and ahead of `prepare_batch`, because a
-    // freeze is an authority gate and not a content gate. It ranks with the
-    // denial above rather than with the KFC-1 and KFC-7 gates below, so a
-    // frozen topic never pays CRC verification or decompression for a batch
-    // the broker will never accept.
-    //
-    // The position has a second consequence, which the tests assert: the gate
-    // returns ahead of the idempotent-sequence gate, so a refused batch leaves
-    // the producer state untouched and the log end offset unmoved. A refusal
-    // that still appended would be the worst failure this feature can have,
-    // and the error code alone does not rule it out.
-    match freeze {
-        FreezeMutationResolution::AuthorizationDenied => {
-            out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
-            return Ok(Admission::Done(out));
-        }
-        FreezeMutationResolution::Frozen(entry) => {
-            metrics.record_topic_freeze_rejection(topic_name);
-            out.error_code = codes::POLICY_VIOLATION;
-            out.error_message = Some(FreezeVerdict::from(entry).error_message());
-            return Ok(Admission::Done(out));
-        }
-        FreezeMutationResolution::Admit => {}
+    if let Some(RowError { code, message }) = freeze_refusal(freeze, metrics, topic_name) {
+        return refuse(out, code, message);
     }
 
     // ── internal-topic gate ──────────────────────────────────────────
@@ -469,33 +460,11 @@ pub(super) async fn admit_partition(
     // `crate::internal_topics::PRODUCE_ADMIN_CLIENT_ID`), so this gate cannot
     // refuse the broker's own replay of its coordinator logs.
     if internal_topic_denied {
-        out.error_code = codes::INVALID_TOPIC_EXCEPTION;
-        return Ok(Admission::Done(out));
+        return refuse(out, codes::INVALID_TOPIC_EXCEPTION, None);
     }
 
-    // ── max.message.bytes ────────────────────────────────────────────
-    // Ahead of `prepare_batch`, which is the whole operational point: a batch
-    // the broker will never accept must not first cost it a CRC pass and a
-    // decompression over however many mebibytes the producer sent. The check
-    // reads v2 batch headers and nothing else.
-    //
-    // Kafka measures each batch on its own, over the batch's entire wire
-    // encoding including its 61-byte header, and refuses one that is strictly
-    // larger than the cap. `error_message` stays empty because Kafka's
-    // `RecordTooLargeException` is not one of the exceptions it attaches a
-    // custom message to; the client renders `Errors.MESSAGE_TOO_LARGE`'s own
-    // text instead.
-    //
-    // `base_offset` is the -1 sentinel, not 0. The refusal happens before any
-    // append, so Kafka's `LogAppendInfo.UNKNOWN_LOG_APPEND_INFO` supplies the
-    // row's offsets and every one of them is -1. A raw `Produce v9` against
-    // `apache/kafka:4.3.1` with `max.message.bytes=2048` answers a 2049-byte
-    // batch with `base_offset=-1`, and a producer that read 0 would report a
-    // record it never wrote as living at the partition's first offset.
-    if part_data.payload.largest_batch_len() > max_message_bytes.bytes_usize() {
-        out.error_code = codes::MESSAGE_TOO_LARGE;
-        out.base_offset = INVALID_OFFSET;
-        return Ok(Admission::Done(out));
+    if exceeds_wire_size(&part_data.payload, max_message_bytes) {
+        return refuse(out, codes::MESSAGE_TOO_LARGE, None);
     }
 
     // Decide verbatim-passthrough vs owned-decode and extract the HEADER
@@ -536,105 +505,37 @@ pub(super) async fn admit_partition(
         },
     ) {
         Ok(p) => p,
-        Err(code) => {
-            out.error_code = code;
-            return Ok(Admission::Done(out));
-        }
+        Err(code) => return refuse(out, code, None),
     };
 
-    // ── max.message.bytes, again, on the re-encoded batch ────────────
-    // The check above measured the bytes the producer sent. Those are the
-    // bytes that land only on the verbatim path. The owned path re-encodes,
-    // and a topic whose `compression.type` forces a codec the producer did not
-    // use decides the stored size itself: `compression.type=uncompressed`
-    // expands a batch that arrived well under the cap into one the cap exists
-    // to keep out, and a legacy `MessageSet` changes size in the v2
-    // up-conversion. `stored_len` is `None` on the verbatim path, so this
-    // second measurement costs the hot path nothing. The owned path keeps the
-    // bytes it encodes here, so the `segment.bytes` gate and the writer reuse
-    // them while the codec and level stay what they were.
-    //
-    // Kafka runs the same second check for the same reason:
-    // `UnifiedLog.append` re-walks the validated batches and throws
-    // `RecordTooLargeException` whenever `LogValidator` reports
-    // `messageSizeMaybeChanged`. It sits here, before the producer-state
-    // gates, because Kafka's sits before `analyzeAndValidateProducerState`
-    // too, and because a refused batch must leave the idempotent sequence and
-    // the log end offset exactly where it found them.
-    let stored_config = matches!(prepared.source, super::prepare::PreparedSource::Owned(_))
-        .then(|| {
-            let part = partitions.get(topic_name, krabka_ids::PartitionIndex(idx))?;
-            part.log.lock().ok().map(|log| log.config_snapshot())
-        })
-        .flatten();
-    if let Some(stored) = prepared.stored_len(topic_compression, stored_config.as_ref())
-        && stored > max_message_bytes.bytes_usize()
-    {
+    let stored_config = owned_log_config(&prepared, partitions, topic_name, idx);
+    if exceeds_stored_size(
+        &mut prepared,
+        topic_compression,
+        stored_config.as_ref(),
+        max_message_bytes,
+    ) {
         // `out` already carries the -1 `base_offset` sentinel.
-        out.error_code = codes::MESSAGE_TOO_LARGE;
-        return Ok(Admission::Done(out));
+        return refuse(out, codes::MESSAGE_TOO_LARGE, None);
     }
 
-    // ── leadership gate (Kafka: only the LEADER accepts Produce) ──────
-    // Only the partition leader may accept a Produce. A Produce misrouted
-    // to a non-leader must be rejected so the client refreshes its
-    // metadata and re-targets — it must NOT be appended to a local
-    // follower replica (the real leader would never see those records and
-    // the follower's append would be discarded on its next truncating
-    // Fetch from the leader → silent data loss).
-    //
-    // The authoritative leader is the metadata IMAGE's `partition.leader`,
-    // the same source the Fetch handler uses for its KIP-320 / KIP-951
-    // `current_leader` hint. We deliberately do NOT gate on the broker's
-    // local `leader_partitions` / `is_coordinator_for` set: that set is
-    // recomputed on every metadata change and is transiently empty while
-    // raft leadership settles on a freshly-booted broker, so it would
-    // spuriously reject a legitimate leader's Produces (see the same
-    // hazard documented for the transactional path below). The image
-    // reflects committed leadership, so a just-elected leader's own image
-    // already names it the leader; the only residual window is a follower
-    // whose image hasn't yet caught up to a leadership change, which
-    // correctly returns NOT_LEADER (the client retries against the new
-    // leader) rather than appending to the wrong replica.
-    //
-    // Partition-level absence in the image (topic exists but this index
-    // doesn't, or the topic is unknown) maps to UNKNOWN_TOPIC_OR_PARTITION
-    // (3); presence-but-not-leader maps to NOT_LEADER_OR_FOLLOWER (6) with
-    // a `current_leader` hint (encodes at Produce v10+, KIP-951) so the
-    // client re-routes without a full Metadata round-trip. The hint names a
-    // node id, and the response's `NodeEndpoints` carries that node's
-    // advertised address: `node_endpoints::produce_node_endpoints` fills it
-    // from these rows once every partition has been decided.
-    let part = match validate_partition_gate(
-        topic_name,
-        idx,
-        acks,
-        partitions,
-        log_dir_status,
-        image,
-        broker_policy,
-    ) {
-        Ok(ready) => ready,
-        Err(error) => {
-            out.error_code = error.code;
-            if let Some(leader) = error.current_leader {
+    let part = match leader_partition(topic_name, idx, acks, services).await {
+        Ok(part) => part,
+        Err(PartitionGateError {
+            code,
+            current_leader,
+        }) => {
+            out.error_code = code;
+            if let Some(leader) = current_leader {
                 out.current_leader = leader;
             }
-            return Ok(Admission::Done(out));
+            return Admission::Done(out);
         }
     };
-
-    if !local_replica_is_ready(&part, image, topic_name, idx).await {
-        out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
-        if let Some(record) = image.partition(topic_name, idx) {
-            out.current_leader = current_leader_hint(record);
-        }
-        return Ok(Admission::Done(out));
-    }
 
     // ── compacted topic: Kafka's `LogValidator.validateKey` ──────────
     if let Some(refusal) = record_validation_refusal(&out, &prepared, &part, topic_name) {
-        return Ok(Admission::Done(refusal));
+        return Admission::Done(refusal);
     }
 
     // ── KFC-7 schema validation ──────────────────────────────────────
@@ -657,7 +558,7 @@ pub(super) async fn admit_partition(
         out.error_code = codes::INVALID_RECORD;
         out.error_message = Some(SCHEMA_REJECTION_MESSAGE.to_owned());
         out.record_errors = rejection;
-        return Ok(Admission::Done(out));
+        return Admission::Done(out);
     }
 
     // KIP-890: verify before the duplicate lookup, outside the barrier (a
@@ -665,9 +566,9 @@ pub(super) async fn admit_partition(
     let verification = match verify_before_append(&prepared, &part, transaction, out.clone()).await
     {
         Ok(verification) => verification,
-        Err(refused) => return Ok(Admission::Done(*refused)),
+        Err(refused) => return Admission::Done(*refused),
     };
-    Ok(Admission::Admitted(Box::new(AdmittedBatch {
+    Admission::Admitted(Box::new(AdmittedBatch {
         prepared,
         part,
         shared_topic,
@@ -676,7 +577,186 @@ pub(super) async fn admit_partition(
         version: transaction.version,
         out,
         verification,
-    })))
+    }))
+}
+
+/// A gate's refusal ahead of the append: `out`, which already carries the -1
+/// `base_offset` sentinel, with the gate's code and message.
+fn refuse(mut out: PartitionProduceResponse, code: i16, message: Option<String>) -> Admission {
+    out.error_code = code;
+    out.error_message = message;
+    Admission::Done(out)
+}
+
+/// The refusal of a topic whose ACL denied the write or whose writes are
+/// frozen (KFC-9), or `None` when the topic admits it.
+///
+/// The freeze sits beside the topic ACL denial, and ahead of `prepare_batch`,
+/// because a freeze is an authority gate and not a content gate. It ranks with
+/// the denial rather than with the later KFC-1 and KFC-7 gates, so a
+/// frozen topic never pays CRC verification or decompression for a batch
+/// the broker will never accept.
+///
+/// The position has a second consequence, which the tests assert: the gate
+/// returns ahead of the idempotent-sequence gate, so a refused batch leaves
+/// the producer state untouched and the log end offset unmoved. A refusal
+/// that still appended would be the worst failure this feature can have,
+/// and the error code alone does not rule it out.
+fn freeze_refusal(
+    freeze: FreezeMutationResolution<'_>,
+    metrics: &BrokerMetrics,
+    topic_name: &str,
+) -> Option<RowError> {
+    match freeze {
+        FreezeMutationResolution::AuthorizationDenied => Some(RowError {
+            code: codes::TOPIC_AUTHORIZATION_FAILED,
+            message: None,
+        }),
+        FreezeMutationResolution::Frozen(entry) => {
+            metrics.record_topic_freeze_rejection(topic_name);
+            Some(RowError {
+                code: codes::POLICY_VIOLATION,
+                message: Some(FreezeVerdict::from(entry).error_message()),
+            })
+        }
+        FreezeMutationResolution::Admit => None,
+    }
+}
+
+/// Whether a batch the producer sent is larger than the topic's
+/// `max.message.bytes`.
+///
+/// It runs ahead of `prepare_batch`, which is the whole operational point: a batch
+/// the broker will never accept must not first cost it a CRC pass and a
+/// decompression over however many mebibytes the producer sent. The check
+/// reads v2 batch headers and nothing else.
+///
+/// Kafka measures each batch on its own, over the batch's entire wire
+/// encoding including its 61-byte header, and refuses one that is strictly
+/// larger than the cap. `error_message` stays empty because Kafka's
+/// `RecordTooLargeException` is not one of the exceptions it attaches a
+/// custom message to; the client renders `Errors.MESSAGE_TOO_LARGE`'s own
+/// text instead.
+///
+/// `base_offset` is the -1 sentinel, not 0. The refusal happens before any
+/// append, so Kafka's `LogAppendInfo.UNKNOWN_LOG_APPEND_INFO` supplies the
+/// row's offsets and every one of them is -1. A raw `Produce v9` against
+/// `apache/kafka:4.3.1` with `max.message.bytes=2048` answers a 2049-byte
+/// batch with `base_offset=-1`, and a producer that read 0 would report a
+/// record it never wrote as living at the partition's first offset.
+fn exceeds_wire_size(payload: &PartitionPayload, max_message_bytes: ByteSize) -> bool {
+    payload.largest_batch_len() > max_message_bytes.bytes_usize()
+}
+
+/// The partition's log config when the batch took the owned path, which
+/// re-encodes it, or `None` on the verbatim path.
+fn owned_log_config(
+    prepared: &PreparedBatch,
+    partitions: &PartitionRegistry,
+    topic_name: &str,
+    idx: i32,
+) -> Option<LogConfig> {
+    matches!(prepared.source, super::prepare::PreparedSource::Owned(_))
+        .then(|| {
+            let part = partitions.get(topic_name, krabka_ids::PartitionIndex(idx))?;
+            part.log.lock().ok().map(|log| log.config_snapshot())
+        })
+        .flatten()
+}
+
+/// Whether the batch, as the owned path re-encodes it, is larger than the
+/// topic's `max.message.bytes`.
+///
+/// [`exceeds_wire_size`] measured the bytes the producer sent. Those are the
+/// bytes that land only on the verbatim path. The owned path re-encodes,
+/// and a topic whose `compression.type` forces a codec the producer did not
+/// use decides the stored size itself: `compression.type=uncompressed`
+/// expands a batch that arrived well under the cap into one the cap exists
+/// to keep out, and a legacy `MessageSet` changes size in the v2
+/// up-conversion. `stored_len` is `None` on the verbatim path, so this
+/// second measurement costs the hot path nothing. The owned path keeps the
+/// bytes it encodes here, so the `segment.bytes` gate and the writer reuse
+/// them while the codec and level stay what they were.
+///
+/// Kafka runs the same second check for the same reason:
+/// `UnifiedLog.append` re-walks the validated batches and throws
+/// `RecordTooLargeException` whenever `LogValidator` reports
+/// `messageSizeMaybeChanged`. It runs before the producer-state
+/// gates, because Kafka's sits before `analyzeAndValidateProducerState`
+/// too, and because a refused batch must leave the idempotent sequence and
+/// the log end offset exactly where it found them.
+fn exceeds_stored_size(
+    prepared: &mut PreparedBatch,
+    topic_compression: Option<CompressionType>,
+    stored_config: Option<&LogConfig>,
+    max_message_bytes: ByteSize,
+) -> bool {
+    prepared
+        .stored_len(topic_compression, stored_config)
+        .is_some_and(|stored| stored > max_message_bytes.bytes_usize())
+}
+
+/// The partition, when this broker leads it and its local replica is ready
+/// to take the append, or the leadership refusal.
+///
+/// Only the partition leader may accept a Produce. A Produce misrouted
+/// to a non-leader must be rejected so the client refreshes its
+/// metadata and re-targets — it must NOT be appended to a local
+/// follower replica (the real leader would never see those records and
+/// the follower's append would be discarded on its next truncating
+/// Fetch from the leader → silent data loss).
+///
+/// The authoritative leader is the metadata IMAGE's `partition.leader`,
+/// the same source the Fetch handler uses for its KIP-320 / KIP-951
+/// `current_leader` hint. We deliberately do NOT gate on the broker's
+/// local `leader_partitions` / `is_coordinator_for` set: that set is
+/// recomputed on every metadata change and is transiently empty while
+/// raft leadership settles on a freshly-booted broker, so it would
+/// spuriously reject a legitimate leader's Produces (see the same
+/// hazard documented for the transactional path below). The image
+/// reflects committed leadership, so a just-elected leader's own image
+/// already names it the leader; the only residual window is a follower
+/// whose image hasn't yet caught up to a leadership change, which
+/// correctly returns `NOT_LEADER` (the client retries against the new
+/// leader) rather than appending to the wrong replica.
+///
+/// Partition-level absence in the image (topic exists but this index
+/// doesn't, or the topic is unknown) maps to `UNKNOWN_TOPIC_OR_PARTITION`
+/// (3); presence-but-not-leader maps to `NOT_LEADER_OR_FOLLOWER` (6) with
+/// a `current_leader` hint (encodes at Produce v10+, KIP-951) so the
+/// client re-routes without a full Metadata round-trip. The hint names a
+/// node id, and the response's `NodeEndpoints` carries that node's
+/// advertised address: `node_endpoints::produce_node_endpoints` fills it
+/// from these rows once every partition has been decided.
+async fn leader_partition(
+    topic_name: &str,
+    idx: i32,
+    acks: i16,
+    services: PartitionServices<'_>,
+) -> Result<Arc<Partition>, PartitionGateError> {
+    let PartitionServices {
+        partitions,
+        log_dir_status,
+        image,
+        broker_policy,
+        ..
+    } = services;
+    let part = validate_partition_gate(
+        topic_name,
+        idx,
+        acks,
+        partitions,
+        log_dir_status,
+        image,
+        broker_policy,
+    )?;
+    if !local_replica_is_ready(&part, image, topic_name, idx).await {
+        return Err(PartitionGateError {
+            code: codes::NOT_LEADER_OR_FOLLOWER,
+            current_leader: image.partition(topic_name, idx).map(current_leader_hint),
+        });
+    }
+    Ok(part)
 }
 
 /// Whether the batch, as the writer will store it, is larger than the

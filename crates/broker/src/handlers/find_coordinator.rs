@@ -33,11 +33,11 @@ use {
         },
         txn::bootstrap::TOPIC as TRANSACTION_STATE_TOPIC,
     },
+    krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::owned::{
         find_coordinator_request::FindCoordinatorRequest,
         find_coordinator_response::{Coordinator, FindCoordinatorResponse},
     },
-    std::sync::Arc,
 };
 
 mod authz;
@@ -65,6 +65,46 @@ const KEY_TYPE_GROUP: i8 = 0;
 const KEY_TYPE_TRANSACTION: i8 = 1;
 const KEY_TYPE_SHARE: i8 = 2;
 
+/// The coordinator a key names: Kafka's `CoordinatorType`.
+#[derive(Clone, Copy, Debug)]
+enum KeyType {
+    Group,
+    Transaction,
+    Share,
+}
+
+impl KeyType {
+    /// `CoordinatorType.forId`, with `None` where Kafka throws for an id it
+    /// does not define.
+    const fn from_wire(key_type: i8) -> Option<Self> {
+        match key_type {
+            KEY_TYPE_GROUP => Some(Self::Group),
+            KEY_TYPE_TRANSACTION => Some(Self::Transaction),
+            KEY_TYPE_SHARE => Some(Self::Share),
+            _ => None,
+        }
+    }
+
+    /// The internal topic whose partitions hold this coordinator's state.
+    const fn state_topic(self) -> &'static str {
+        match self {
+            Self::Group => OFFSETS_TOPIC,
+            Self::Transaction => TRANSACTION_STATE_TOPIC,
+            Self::Share => SHARE_GROUP_STATE_TOPIC,
+        }
+    }
+
+    /// The ACL a key of this type needs on the resource the key names.
+    /// SHARE has none: its `ClusterAction` is checked once per request.
+    const fn acl(self) -> Option<(ResourceType, AclOperation)> {
+        match self {
+            Self::Group => Some((ResourceType::Group, AclOperation::Describe)),
+            Self::Transaction => Some((ResourceType::TransactionalId, AclOperation::Describe)),
+            Self::Share => None,
+        }
+    }
+}
+
 fn unavailable_for_keys(keys: Vec<String>) -> Vec<Coordinator> {
     keys.into_iter().map(unavailable_coordinator).collect()
 }
@@ -84,6 +124,54 @@ fn merge_key_slots(key_slots: Vec<KeySlot>, coordinators: Vec<Coordinator>) -> V
         .collect()
 }
 
+/// The coordinator row of each admitted key of type `kind`, in key order.
+fn resolve_admitted(
+    broker: &Broker,
+    target: &ResolveTarget<'_>,
+    kind: KeyType,
+    keys: Vec<String>,
+) -> Vec<Coordinator> {
+    let state_topic = kind.state_topic();
+    match kind {
+        KeyType::Group => keys
+            .into_iter()
+            .map(|key| match partition_for_group(target.image, &key) {
+                Some(partition) => {
+                    resolve_partition_coordinator(target, state_topic, partition, key)
+                }
+                None => unavailable_coordinator(key),
+            })
+            .collect(),
+        KeyType::Transaction => resolve_transaction_keys(broker, target, keys),
+        KeyType::Share => keys
+            .into_iter()
+            .map(|key| resolve_share_key(broker, target, state_topic, key))
+            .collect(),
+    }
+}
+
+/// The leader of the `state_topic` partition that holds share key `key`.
+fn resolve_share_key(
+    broker: &Broker,
+    target: &ResolveTarget<'_>,
+    state_topic: &str,
+    key: String,
+) -> Coordinator {
+    // Admission validated the key already, so the parse cannot fail here.
+    let Some((group, topic_uuid, partition)) = parse_share_key(&key) else {
+        return unavailable_coordinator(key);
+    };
+    let Some(p) = partition_for_share_key(
+        group,
+        &topic_uuid,
+        partition,
+        broker.config.share_coordinator.state_topic_num_partitions,
+    ) else {
+        return unavailable_coordinator(key);
+    };
+    resolve_partition_coordinator(target, state_topic, p, key)
+}
+
 pub async fn handle(
     broker: &Broker,
     req: FindCoordinatorRequest,
@@ -95,7 +183,9 @@ pub async fn handle(
     // to the legacy top-level `advertised_listener` when the connection
     // listener isn't among this broker's configured listeners.
     let advertised = local_advertised_for_listener(&broker.config, ctx.connection_listener_name);
-    let controller = Arc::clone(&broker.controller);
+    // One metadata snapshot answers the whole request: the ClusterAction
+    // check, every key's admission, and the coordinator lookups.
+    let image = broker.controller.current_image();
 
     // For v4+, requests carry `coordinator_keys`. For v0-v3 the single `key`
     // field is what the client cares about; it becomes a one-row list so the
@@ -106,49 +196,44 @@ pub async fn handle(
         req.coordinator_keys.clone()
     };
 
+    // With no keys Kafka's per-key loop never runs, so an empty v4+ batch
+    // stays empty whatever its key type. Below v4 there is always one key.
+    if keys.is_empty() {
+        return Ok(coordinators_response(version, Vec::new()));
+    }
+
     // ── Request-level failures ──────────────────────────────────────
     // Kafka's per-key loop throws out of the handler for these two, and
     // `FindCoordinatorRequest.getErrorResponse` stamps the one error on every
-    // key. With no keys the loop never runs, so an empty v4+ batch stays empty.
-    if !keys.is_empty() {
-        // `authorizeClusterOperation(request, CLUSTER_ACTION)` runs before
-        // `SharePartitionKey.validate`, so a malformed key of a refused
-        // principal is answered 31 like the others.
-        if req.key_type == KEY_TYPE_SHARE
-            && version >= 6
-            && !cluster_action_allowed(broker, &controller.current_image(), ctx)
-        {
-            return Ok(request_error_response(
-                version,
-                codes::CLUSTER_AUTHORIZATION_FAILED,
-                keys,
-            ));
-        }
-        // `CoordinatorType.forId` throws `InvalidRequestException`.
-        if !matches!(
-            req.key_type,
-            KEY_TYPE_GROUP | KEY_TYPE_TRANSACTION | KEY_TYPE_SHARE
-        ) {
-            return Ok(request_error_response(
-                version,
-                codes::INVALID_REQUEST,
-                keys,
-            ));
-        }
+    // key.
+    //
+    // `authorizeClusterOperation(request, CLUSTER_ACTION)` runs before
+    // `SharePartitionKey.validate`, so a malformed key of a refused
+    // principal is answered 31 like the others.
+    if req.key_type == KEY_TYPE_SHARE
+        && version >= 6
+        && !cluster_action_allowed(broker, &image, ctx)
+    {
+        return Ok(request_error_response(
+            version,
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+            keys,
+        ));
     }
+    // `CoordinatorType.forId` throws `InvalidRequestException`.
+    let Some(kind) = KeyType::from_wire(req.key_type) else {
+        return Ok(request_error_response(
+            version,
+            codes::INVALID_REQUEST,
+            keys,
+        ));
+    };
 
     // ── Per-key admission ───────────────────────────────────────────
     // GROUP and TRANSACTION require `Describe` on their keyed resources; a
     // SHARE key must be well formed and the request v6+. Refused keys retain
     // their original response slots while admitted keys resolve normally.
-    let key_slots = authorize_keys(
-        broker,
-        &controller.current_image(),
-        ctx,
-        version,
-        req.key_type,
-        keys,
-    );
+    let key_slots = authorize_keys(broker, &image, ctx, version, req.key_type, keys);
     let keys: Vec<String> = key_slots
         .iter()
         .filter_map(|slot| match slot {
@@ -157,15 +242,11 @@ pub async fn handle(
         })
         .collect();
 
+    // Every key may have been refused, and then nothing is resolved.
     let coordinators: Vec<Coordinator> = if keys.is_empty() {
         Vec::new()
     } else {
-        let state_topic = match req.key_type {
-            KEY_TYPE_GROUP => OFFSETS_TOPIC,
-            KEY_TYPE_TRANSACTION => TRANSACTION_STATE_TOPIC,
-            _ => SHARE_GROUP_STATE_TOPIC,
-        };
-        let image = controller.current_image();
+        let state_topic = kind.state_topic();
         if image.topic(state_topic).is_none() {
             // Kafka asks `AutoTopicCreationManager.createTopics` for the
             // state topic without a request context, and answers
@@ -182,37 +263,7 @@ pub async fn handle(
                 advertised: &advertised,
                 listener: ctx.connection_listener_name,
             };
-            match req.key_type {
-                KEY_TYPE_GROUP => keys
-                    .into_iter()
-                    .map(|key| match partition_for_group(&image, &key) {
-                        Some(partition) => {
-                            resolve_partition_coordinator(&target, state_topic, partition, key)
-                        }
-                        None => unavailable_coordinator(key),
-                    })
-                    .collect(),
-                KEY_TYPE_TRANSACTION => resolve_transaction_keys(broker, &target, keys),
-                _ => keys
-                    .into_iter()
-                    .map(|key| {
-                        // Admission validated the key already, so the parse
-                        // cannot fail here.
-                        let Some((group, topic_uuid, partition)) = parse_share_key(&key) else {
-                            return unavailable_coordinator(key);
-                        };
-                        let Some(p) = partition_for_share_key(
-                            group,
-                            &topic_uuid,
-                            partition,
-                            broker.config.share_coordinator.state_topic_num_partitions,
-                        ) else {
-                            return unavailable_coordinator(key);
-                        };
-                        resolve_partition_coordinator(&target, state_topic, p, key)
-                    })
-                    .collect(),
-            }
+            resolve_admitted(broker, &target, kind, keys)
         }
     };
 

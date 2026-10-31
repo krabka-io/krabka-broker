@@ -14,6 +14,7 @@ use {
             next_batch_offset,
         },
     },
+    crate::snapshot::mirror_controls,
     krabka_ids::Offset,
     krabka_metadata::{
         MetadataImage, MetadataRecord, VotersRecord, metadata_version::METADATA_VERSION_FEATURE,
@@ -154,14 +155,11 @@ impl Engine {
                                                 .saturating_add(1),
                                         );
                                         let mut image = self.image.clone();
-                                        image.apply(&MetadataRecord::V1KRaftVersion(
-                                            krabka_metadata::KRaftVersionRecord {
-                                                kraft_version: self.controls.version_at(end_offset),
-                                            },
-                                        ));
-                                        image.apply(&MetadataRecord::V1Voters(VotersRecord {
-                                            voters: self.controls.voters_at(end_offset),
-                                        }));
+                                        mirror_controls(
+                                            &mut image,
+                                            self.controls.version_at(end_offset),
+                                            self.controls.voters_at(end_offset),
+                                        );
                                         self.downgrade_snapshot_pending =
                                             Some(PendingDowngradeSnapshot {
                                                 image,

@@ -8,7 +8,11 @@
 //! delivery-complete accounting grows outside an internal archive.
 
 use {
-    super::{AckType, AcquisitionState, RecordState, clamp_i32, dlq::DlqCause, window::give_back},
+    super::{
+        AckType, AcquisitionState, InFlightBatch, RecordState, clamp_i32,
+        dlq::{ArchiveSink, DlqCause},
+        window::give_back,
+    },
     crate::codes::{INVALID_RECORD_STATE, INVALID_REQUEST},
     krabka_log::Offset,
     std::{iter::Peekable, mem, ops::Range, time::Instant},
@@ -32,6 +36,44 @@ fn next_action_run(
         count += 1;
     }
     Some((action, count))
+}
+
+/// Applies a consumer's terminal disposition to one acquired run.
+///
+/// `Accept` completes the run and `Gap` archives it; both count it as
+/// delivery-complete. `Release` gives it back for redelivery, or archives it
+/// at `max_attempts`. `Reject` archives it, through the dead-letter queue
+/// when one is enabled.
+fn apply_ack(
+    run: &mut InFlightBatch,
+    ack: AckType,
+    max_attempts: i16,
+    archive: &mut ArchiveSink<'_>,
+) {
+    match ack {
+        AckType::Accept => settle(
+            run,
+            RecordState::Acknowledged,
+            archive.delivery_complete_count,
+        ),
+        AckType::Release => {
+            // delivery_count retained: next acquire redelivers at +1.
+            give_back(run, max_attempts, archive);
+        }
+        // Kafka's `recordStateWithDlq`: only a `Reject` goes through
+        // the dead-letter queue. A gap has no record to send.
+        AckType::Reject => archive.archive(run, DlqCause::ClientReject),
+        AckType::Gap => settle(run, RecordState::Archived, archive.delivery_complete_count),
+    }
+}
+
+/// Moves `run` to the terminal `state` without the dead-letter queue: clears
+/// its owner and lock, and counts its offsets as delivery-complete.
+fn settle(run: &mut InFlightBatch, state: RecordState, delivery_complete_count: &mut i32) {
+    run.state = state;
+    run.acquired_by = None;
+    run.lock_deadline = None;
+    *delivery_complete_count += clamp_i32(run.len());
 }
 
 impl AcquisitionState {
@@ -101,7 +143,7 @@ impl AcquisitionState {
 
         let old_batches = mem::take(&mut self.batches);
         let mut batches = Vec::with_capacity(old_batches.len());
-        let mut archive = super::dlq::ArchiveSink {
+        let mut archive = ArchiveSink {
             dlq_enabled: self.dlq_enabled,
             delivery_complete_count: &mut self.delivery_complete_count,
             pending_dlq: &mut self.pending_dlq,
@@ -142,25 +184,9 @@ impl AcquisitionState {
                 let mut run = batch.clone();
                 run.first_offset = offset;
                 run.last_offset = run_last;
-                let n = clamp_i32(run.len());
                 match action {
-                    AckAction::Disposition(AckType::Accept) => {
-                        run.state = RecordState::Acknowledged;
-                        run.acquired_by = None;
-                        run.lock_deadline = None;
-                        *archive.delivery_complete_count += n;
-                    }
-                    AckAction::Disposition(AckType::Release) => {
-                        give_back(&mut run, max_attempts, &mut archive);
-                    }
-                    AckAction::Disposition(AckType::Reject) => {
-                        archive.archive(&mut run, DlqCause::ClientReject);
-                    }
-                    AckAction::Disposition(AckType::Gap) => {
-                        run.state = RecordState::Archived;
-                        run.acquired_by = None;
-                        run.lock_deadline = None;
-                        *archive.delivery_complete_count += n;
+                    AckAction::Disposition(ack) => {
+                        apply_ack(&mut run, ack, max_attempts, &mut archive);
                     }
                     AckAction::Renew { deadline } => run.lock_deadline = Some(deadline),
                 }
@@ -224,28 +250,7 @@ impl AcquisitionState {
             if !b.acquired_within(first, last) {
                 continue;
             }
-            let n = clamp_i32(b.len());
-            match ack {
-                AckType::Accept => {
-                    b.state = RecordState::Acknowledged;
-                    b.acquired_by = None;
-                    b.lock_deadline = None;
-                    *archive.delivery_complete_count += n;
-                }
-                AckType::Release => {
-                    // delivery_count retained: next acquire redelivers at +1.
-                    give_back(b, max_attempts, &mut archive);
-                }
-                // Kafka's `recordStateWithDlq`: only a `Reject` goes through
-                // the dead-letter queue. A gap has no record to send.
-                AckType::Reject => archive.archive(b, DlqCause::ClientReject),
-                AckType::Gap => {
-                    b.state = RecordState::Archived;
-                    b.acquired_by = None;
-                    b.lock_deadline = None;
-                    *archive.delivery_complete_count += n;
-                }
-            }
+            apply_ack(b, ack, max_attempts, &mut archive);
         }
         self.dirty = true;
         self.advance_spso();
