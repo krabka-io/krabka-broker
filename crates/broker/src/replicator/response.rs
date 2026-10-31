@@ -250,73 +250,83 @@ pub(super) async fn handle_partition_response(
 
         ReplicaFetchMutation::Append => append_records(part_resp, cfg).await,
 
-        ReplicaFetchMutation::Retry => match part_resp.error_code {
-            codes::OFFSET_OUT_OF_RANGE => handle_offset_out_of_range(cfg).await,
-            // KIP-405: the leader still holds this offset, but only in the
-            // remote tier, and it will not stream the archive down the
-            // replication path. The follower starts again at the leader's
-            // local log start instead.
-            codes::OFFSET_MOVED_TO_TIERED_STORAGE => {
-                handle_offset_moved_to_tiered_storage(cfg).await
-            }
-            codes::UNKNOWN_TOPIC_OR_PARTITION => {
-                // Leader hasn't materialized its side yet
-                // (CreateTopics-vs-replicator race).
-                RowAction::Backoff(cfg.connection.replication.unknown_topic_retry_delay)
-            }
-            codes::NOT_LEADER_OR_FOLLOWER => RowAction::Drop,
-            codes::FENCED_LEADER_EPOCH | codes::UNKNOWN_LEADER_EPOCH => {
-                // Stale-response guard: if the target changed, this
-                // follower-replicator is stale — STOP it. Without this it neither
-                // truncates (the `replication_target_changed` guard in
-                // `handle_epoch_fence` skips that) nor stops, so it hot-loops the
-                // Fetch at ~full CPU, starving metadata propagation and the
-                // cooperative cancellation that would otherwise retire it — the
-                // broker then never becomes ready and crashloops.
-                if replication_target_changed(cfg) {
-                    warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-                    "replicator: stopping on fenced epoch from stale target");
-                    return RowAction::Drop;
-                }
-                if part_resp.error_code == codes::FENCED_LEADER_EPOCH {
-                    warn!(
-                        topic = %cfg.topic,
-                        partition = cfg.partition.get(),
-                        "replicator: fenced leader epoch; calling OffsetForLeaderEpoch"
-                    );
-                    if let Err(error) = handle_epoch_fence(cfg).await {
-                        warn!(
-                            topic = %cfg.topic,
-                            partition = cfg.partition.get(),
-                            %error,
-                            "replicator: OffsetForLeaderEpoch recovery failed"
-                        );
-                    }
-                } else {
-                    // The leader is behind our metadata image. It cannot answer an
-                    // epoch lookup yet, so leave the log untouched and retry Fetch.
-                    warn!(
-                        topic = %cfg.topic,
-                        partition = cfg.partition.get(),
-                        "replicator: leader does not know current epoch; retrying Fetch"
-                    );
-                }
-                // Back off before re-fetching so a persistent fence (e.g. our
-                // leader_epoch hasn't caught up to the new leader's yet) doesn't
-                // hot-spin the CPU between fetch and fence.
-                RowAction::Backoff(cfg.connection.replication.epoch_fence_backoff)
-            }
-            other => {
-                warn!(
-                    error_code = other,
-                    "replicator: unexpected fetch error_code"
-                );
-                RowAction::Backoff(cfg.connection.replication.unexpected_error_backoff)
-            }
-        },
+        ReplicaFetchMutation::Retry => retry_after_error(part_resp.error_code, cfg).await,
 
         ReplicaFetchMutation::Reject => unreachable!("rejected responses return above"),
     }
+}
+
+/// Maps the error code of a row the leader answered with an error to what
+/// the fetcher does next.
+async fn retry_after_error(error_code: i16, cfg: &Config) -> RowAction {
+    match error_code {
+        codes::OFFSET_OUT_OF_RANGE => handle_offset_out_of_range(cfg).await,
+        // KIP-405: the leader still holds this offset, but only in the
+        // remote tier, and it will not stream the archive down the
+        // replication path. The follower starts again at the leader's
+        // local log start instead.
+        codes::OFFSET_MOVED_TO_TIERED_STORAGE => handle_offset_moved_to_tiered_storage(cfg).await,
+        codes::UNKNOWN_TOPIC_OR_PARTITION => {
+            // Leader hasn't materialized its side yet
+            // (CreateTopics-vs-replicator race).
+            RowAction::Backoff(cfg.connection.replication.unknown_topic_retry_delay)
+        }
+        codes::NOT_LEADER_OR_FOLLOWER => RowAction::Drop,
+        codes::FENCED_LEADER_EPOCH | codes::UNKNOWN_LEADER_EPOCH => {
+            handle_epoch_error(error_code, cfg).await
+        }
+        other => {
+            warn!(
+                error_code = other,
+                "replicator: unexpected fetch error_code"
+            );
+            RowAction::Backoff(cfg.connection.replication.unexpected_error_backoff)
+        }
+    }
+}
+
+/// Handles a `FENCED_LEADER_EPOCH` or `UNKNOWN_LEADER_EPOCH` row: stops on a
+/// stale target, looks the epoch up on a fence, and backs off either way.
+async fn handle_epoch_error(error_code: i16, cfg: &Config) -> RowAction {
+    // Stale-response guard: if the target changed, this
+    // follower-replicator is stale — STOP it. Without this it neither
+    // truncates (the `replication_target_changed` guard in
+    // `handle_epoch_fence` skips that) nor stops, so it hot-loops the
+    // Fetch at ~full CPU, starving metadata propagation and the
+    // cooperative cancellation that would otherwise retire it — the
+    // broker then never becomes ready and crashloops.
+    if replication_target_changed(cfg) {
+        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
+        "replicator: stopping on fenced epoch from stale target");
+        return RowAction::Drop;
+    }
+    if error_code == codes::FENCED_LEADER_EPOCH {
+        warn!(
+            topic = %cfg.topic,
+            partition = cfg.partition.get(),
+            "replicator: fenced leader epoch; calling OffsetForLeaderEpoch"
+        );
+        if let Err(error) = handle_epoch_fence(cfg).await {
+            warn!(
+                topic = %cfg.topic,
+                partition = cfg.partition.get(),
+                %error,
+                "replicator: OffsetForLeaderEpoch recovery failed"
+            );
+        }
+    } else {
+        // The leader is behind our metadata image. It cannot answer an
+        // epoch lookup yet, so leave the log untouched and retry Fetch.
+        warn!(
+            topic = %cfg.topic,
+            partition = cfg.partition.get(),
+            "replicator: leader does not know current epoch; retrying Fetch"
+        );
+    }
+    // Back off before re-fetching so a persistent fence (e.g. our
+    // leader_epoch hasn't caught up to the new leader's yet) doesn't
+    // hot-spin the CPU between fetch and fence.
+    RowAction::Backoff(cfg.connection.replication.epoch_fence_backoff)
 }
 
 /// Truncates the follower log at the KIP-320 divergence point a row named.
