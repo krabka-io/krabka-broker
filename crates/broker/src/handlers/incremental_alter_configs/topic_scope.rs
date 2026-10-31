@@ -43,8 +43,12 @@ pub(in crate::handlers::incremental_alter_configs) fn merge_list_op(
 ) -> String {
     let base = current.or(default).unwrap_or_default();
     let mut parts: Vec<&str> = base.split(',').filter(|part| !part.is_empty()).collect();
-    // Java's `String.split` drops trailing empty strings.
-    let items: Vec<&str> = value.trim_end_matches(',').split(',').collect();
+    // Java's `String.split` drops trailing empty strings: `"a,"` is `[a]` and
+    // `","` is no item at all, while `""` is one empty item.
+    let items: Vec<&str> = match value.trim_end_matches(',') {
+        "" if !value.is_empty() => Vec::new(),
+        trimmed => trimmed.split(',').collect(),
+    };
     for item in items {
         if operation == OP_APPEND {
             if !parts.contains(&item) {

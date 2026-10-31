@@ -8,7 +8,7 @@
 //! live in [`crate::config_keys::broker_dynamic`].
 
 use {
-    super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT},
+    super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT, topic_scope::merge_list_op},
     crate::{
         api_catalog::UnstableApiVersions,
         codes,
@@ -76,21 +76,13 @@ fn apply_operations(
                     }
                     BrokerKeyKind::List => {}
                 }
-                let old = props
-                    .get(name)
-                    .map_or_else(|| list_default(name).to_owned(), Clone::clone);
-                let mut parts: Vec<&str> = old.split(',').filter(|part| !part.is_empty()).collect();
-                let items: Vec<&str> = value.split(',').collect();
-                if operation == OP_APPEND {
-                    for item in items {
-                        if !parts.contains(&item) {
-                            parts.push(item);
-                        }
-                    }
-                } else {
-                    parts.retain(|part| !items.contains(part));
-                }
-                props.insert(name.to_owned(), parts.join(","));
+                let next = merge_list_op(
+                    operation,
+                    props.get(name).map(String::as_str),
+                    Some(list_default(name)),
+                    value,
+                );
+                props.insert(name.to_owned(), next);
             }
         }
     }
