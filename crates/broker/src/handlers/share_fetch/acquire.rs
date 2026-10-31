@@ -318,6 +318,57 @@ fn log_start_moved_past_spso(err: &BrokerError) -> bool {
     matches!(err, BrokerError::Log(LogError::OffsetTooLow { .. }))
 }
 
+/// Applies the acknowledgements piggybacked on `p` (first pass only), all or
+/// nothing, and sets its `acknowledge_error_code`.
+///
+/// The type Renew renews the lock of its offsets, and the other types take
+/// their normal transition. The change is durable before the acquisition
+/// runs, or it is rolled back and the write error becomes the acknowledge
+/// error.
+///
+/// # Errors
+///
+/// Returns the acknowledge error code when it fences the partition.
+async fn apply_piggybacked_acks(
+    context: &AcquireContext<'_>,
+    now: Instant,
+    p: &mut PendingPartition,
+    cell: &Arc<Mutex<AcquisitionState>>,
+    st: &mut AcquisitionState,
+) -> Result<(), i16> {
+    let &AcquireContext {
+        manager: mgr,
+        group,
+        member,
+        renewal,
+        settings,
+        ..
+    } = context;
+    let application = AckApplication {
+        member,
+        now,
+        renewal,
+        max_attempts: settings.delivery_count_limit,
+    };
+    let batches = p.ack_batches.iter().map(|batch| {
+        (
+            batch.first_offset,
+            batch.last_offset,
+            batch.acknowledge_types.as_slice(),
+        )
+    });
+    let code = mgr
+        .apply_durably(group, p.topic_id, p.partition_index, cell, st, |st| {
+            apply_acknowledgements(st, &application, batches)
+        })
+        .await;
+    p.out.acknowledge_error_code = code;
+    if fences_the_partition(code) {
+        return Err(code);
+    }
+    Ok(())
+}
+
 /// The highest offset an acquire pass may materialize or read on `part`.
 ///
 /// Under read_committed, never surface records past the last stable offset:
@@ -449,7 +500,6 @@ async fn acquire_pass(
         max_records,
         max_bytes,
         mode,
-        renewal,
         settings,
         ..
     } = context;
@@ -485,35 +535,10 @@ async fn acquire_pass(
         let mut st = cell.lock().await;
         st.set_dlq_enabled(settings.dlq_enabled);
 
-        // Apply piggybacked acknowledgements (first pass only), all or
-        // nothing. The type Renew renews the lock of its offsets, and the
-        // other types take their normal transition. The change is durable
-        // before the acquisition runs, or it is rolled back and the write
-        // error becomes the acknowledge error.
-        if has_acks {
-            let application = AckApplication {
-                member,
-                now,
-                renewal,
-                max_attempts: settings.delivery_count_limit,
-            };
-            let batches = p.ack_batches.iter().map(|batch| {
-                (
-                    batch.first_offset,
-                    batch.last_offset,
-                    batch.acknowledge_types.as_slice(),
-                )
-            });
-            let code = mgr
-                .apply_durably(group, p.topic_id, p.partition_index, &cell, &mut st, |st| {
-                    apply_acknowledgements(st, &application, batches)
-                })
-                .await;
-            p.out.acknowledge_error_code = code;
-            if fences_the_partition(code) {
-                fail_partition(p, true, code);
-                continue;
-            }
+        if has_acks && let Err(code) = apply_piggybacked_acks(context, now, p, &cell, &mut st).await
+        {
+            fail_partition(p, true, code);
+            continue;
         }
 
         if !p.fetchable {
