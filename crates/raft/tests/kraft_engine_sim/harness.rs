@@ -21,8 +21,7 @@ pub use {
         ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax,
         kraft::{
             KraftConfig, KraftController, KraftLog, KraftOpenConfig, NodeId, QuorumState,
-            QuorumTimeouts,
-            snapshot_fetch::MetadataSnapshotFetchMax,
+            QuorumTimeouts, snapshot_fetch::MetadataSnapshotFetchMax,
         },
     },
     std::{collections::HashMap, sync::Arc, time::Duration},
