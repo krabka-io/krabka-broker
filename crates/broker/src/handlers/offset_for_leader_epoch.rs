@@ -85,6 +85,19 @@ fn not_leader(
     !installed || committed_elsewhere
 }
 
+/// An error row for `partition`. `ReplicaManager.lastOffsetForLeaderEpoch`
+/// builds every error row from `new EpochEndOffset()`, whose schema defaults
+/// put `-1` in both `leader_epoch` and `end_offset`.
+fn error_row(partition: i32, error_code: i16) -> EpochEndOffset {
+    EpochEndOffset {
+        partition,
+        error_code,
+        leader_epoch: -1,
+        end_offset: -1,
+        ..Default::default()
+    }
+}
+
 pub fn handle(
     broker: &Broker,
     req: &OffsetForLeaderEpochRequest,
@@ -131,13 +144,7 @@ pub fn handle(
             let parts_out = topic
                 .partitions
                 .iter()
-                .map(|part| EpochEndOffset {
-                    partition: part.partition,
-                    leader_epoch: -1,
-                    end_offset: -1,
-                    error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    ..Default::default()
-                })
+                .map(|part| error_row(part.partition, codes::TOPIC_AUTHORIZATION_FAILED))
                 .collect();
             unauthorized_out.push(OffsetForLeaderTopicResult {
                 topic: topic.topic.clone(),
@@ -149,16 +156,6 @@ pub fn handle(
         let mut parts_out: Vec<EpochEndOffset> = Vec::with_capacity(topic.partitions.len());
 
         for part in &topic.partitions {
-            // `ReplicaManager.lastOffsetForLeaderEpoch` builds every error
-            // row from `new EpochEndOffset()`, whose schema defaults put
-            // -1 in both `leader_epoch` and `end_offset`.
-            let mut out = EpochEndOffset {
-                partition: part.partition,
-                leader_epoch: -1,
-                end_offset: -1,
-                ..Default::default()
-            };
-
             // The three hosting outcomes of `ReplicaManager
             // .lastOffsetForLeaderEpoch`, decided before the fence: a
             // replica this broker does not host is `NOT_LEADER_OR_FOLLOWER`
@@ -170,17 +167,16 @@ pub fn handle(
                 .partitions
                 .get(&topic.topic, krabka_ids::PartitionIndex(part.partition))
             else {
-                out.error_code = if acl_image.partition(&topic.topic, part.partition).is_some() {
+                let error_code = if acl_image.partition(&topic.topic, part.partition).is_some() {
                     codes::NOT_LEADER_OR_FOLLOWER
                 } else {
                     codes::UNKNOWN_TOPIC_OR_PARTITION
                 };
-                parts_out.push(out);
+                parts_out.push(error_row(part.partition, error_code));
                 continue;
             };
             if broker.log_dir_status.is_offline(&p.log_dir.load()) {
-                out.error_code = codes::KAFKA_STORAGE_ERROR;
-                parts_out.push(out);
+                parts_out.push(error_row(part.partition, codes::KAFKA_STORAGE_ERROR));
                 continue;
             }
 
@@ -193,9 +189,7 @@ pub fn handle(
             if let Some((error_code, _)) =
                 p.list_offsets_leader_epoch_fence(part.current_leader_epoch)
             {
-                out.error_code = error_code;
-                out.leader_epoch = -1;
-                parts_out.push(out);
+                parts_out.push(error_row(part.partition, error_code));
                 continue;
             }
 
@@ -206,9 +200,7 @@ pub fn handle(
                 &p,
                 broker.config.node_id,
             ) {
-                out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
-                out.leader_epoch = -1;
-                parts_out.push(out);
+                parts_out.push(error_row(part.partition, codes::NOT_LEADER_OR_FOLLOWER));
                 continue;
             }
 
@@ -224,11 +216,13 @@ pub fn handle(
                 .epoch_checkpoint()
                 .epoch_and_offset_for(krabka_log::LeaderEpoch(part.leader_epoch), leo);
             drop(log);
-            out.error_code = codes::NONE;
-            out.leader_epoch = found_epoch.0;
-            out.end_offset = end_offset.0;
-
-            parts_out.push(out);
+            parts_out.push(EpochEndOffset {
+                partition: part.partition,
+                error_code: codes::NONE,
+                leader_epoch: found_epoch.0,
+                end_offset: end_offset.0,
+                ..Default::default()
+            });
         }
 
         authorized_out.push(OffsetForLeaderTopicResult {
