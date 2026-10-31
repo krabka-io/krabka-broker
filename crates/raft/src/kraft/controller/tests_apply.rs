@@ -38,19 +38,26 @@ fn append_topic_batch(
         .expect("append metadata");
 }
 
-#[test]
-fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
+/// A one-voter engine that reads one batch at a time, with topics `first`
+/// (offsets 0 and 1) and `second` (offsets 2 and 3) appended but not yet
+/// committed.
+fn two_topic_engine_with_tiny_fetch_budget() -> (Engine, tempfile::TempDir, MetadataRaftFetchMax) {
     let tiny = MetadataRaftFetchMax::try_from(krabka_units::bytes(1))
         .expect("one byte still makes progress");
-    let (mut engine, _dir) = build_engine_only()
+    let (mut engine, dir) = build_engine_only()
         .ids(&[NodeId(1)])
         .metadata_raft_fetch_max(tiny)
         .call();
-
     let mut scratch = engine.image.clone();
     for (name, id) in [("first", 1), ("second", 2)] {
         append_topic_batch(&mut engine, &mut scratch, name, id, 1_700_000_000_123);
     }
+    (engine, dir, tiny)
+}
+
+#[test]
+fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
+    let (mut engine, _dir, tiny) = two_topic_engine_with_tiny_fetch_budget();
     check!(
         engine
             .log
@@ -90,16 +97,7 @@ fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
 /// thread throws.
 #[test]
 fn a_failed_read_during_apply_stops_the_controller_and_publishes_nothing() {
-    let tiny = MetadataRaftFetchMax::try_from(krabka_units::bytes(1))
-        .expect("one byte still makes progress");
-    let (mut engine, _dir) = build_engine_only()
-        .ids(&[NodeId(1)])
-        .metadata_raft_fetch_max(tiny)
-        .call();
-    let mut scratch = engine.image.clone();
-    for (name, id) in [("first", 1), ("second", 2)] {
-        append_topic_batch(&mut engine, &mut scratch, name, id, 1_700_000_000_123);
-    }
+    let (mut engine, _dir, _) = two_topic_engine_with_tiny_fetch_budget();
     let published_before = Arc::clone(&engine.image.published());
     engine.apply_read_failure_at = Some(Offset(2));
 
