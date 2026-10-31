@@ -146,9 +146,7 @@ fn apply_reset_codes(
     if result_codes.len() != slots.len() {
         return AlterShareGroupOffsetsResponse::error(codes::COORDINATOR_NOT_AVAILABLE, None);
     }
-    for ((topic_slot, partition_slot), error_code) in
-        slots.into_iter().zip(result_codes)
-    {
+    for ((topic_slot, partition_slot), error_code) in slots.into_iter().zip(result_codes) {
         let Some(topic) = responses.get_mut(topic_slot) else {
             continue;
         };
@@ -188,8 +186,7 @@ fn plan_resets(
     denied_topics: &HashSet<String>,
     topics: Vec<AlterShareGroupOffsetsRequestTopic>,
 ) -> ResetPlan {
-    let mut responses: Vec<AlterShareGroupOffsetsResponseTopic> =
-        Vec::with_capacity(topics.len());
+    let mut responses: Vec<AlterShareGroupOffsetsResponseTopic> = Vec::with_capacity(topics.len());
     let mut requests = Vec::new();
     let mut slots = Vec::new();
 
