@@ -139,7 +139,16 @@ mod freeze;
 // admin-tooling exception.
 mod internal_topic;
 
-fn non_leader_image() -> Arc<krabka_metadata::MetadataImage> {
+// ── gate order ────────────────────────────────────────────────────
+//
+// Which gate answers when one batch trips two of them.
+mod gate_order;
+
+fn non_leader_image() -> Arc<krabka_metadata::MetadataImage> { Arc::new(non_leader_metadata()) }
+
+// `orders` led by node 2 at leader epoch 17, so a pipeline running as node 1
+// is not its leader.
+fn non_leader_metadata() -> krabka_metadata::MetadataImage {
     let mut img = image_with_topic("orders", &[2, 3]);
     img.apply(&MetadataRecord::V1Partition(PartitionRecord {
         leader_epoch: krabka_metadata::LeaderEpoch(17),
@@ -149,7 +158,7 @@ fn non_leader_image() -> Arc<krabka_metadata::MetadataImage> {
             .replicas(&[krabka_audit::NodeId(2), krabka_audit::NodeId(3)])
             .call()
     }));
-    Arc::new(img)
+    img
 }
 
 fn non_leader_row() -> PartitionProduceResponse {
