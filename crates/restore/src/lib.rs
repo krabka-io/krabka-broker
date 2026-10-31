@@ -200,20 +200,12 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         .map(|authentication| &authentication.claims);
     if let Some(snapshot) = rlmm_snapshot.as_ref().filter(|_| has_classic) {
         discover::reconcile_authenticated_snapshot(&mut archive.partitions, args, snapshot)?;
-        if archive.partitions.is_empty() {
-            return Err(RestoreError::EmptyArchive {
-                prefix: store.prefix().unwrap_or("").to_owned(),
-            });
-        }
+        ensure_partitions(&archive, &store)?;
     }
     if let Some(capture) = &diskless_capture {
         diskless::add_partitions(&mut archive, capture, args)?;
     }
-    if archive.partitions.is_empty() {
-        return Err(RestoreError::EmptyArchive {
-            prefix: store.prefix().unwrap_or("").to_owned(),
-        });
-    }
+    ensure_partitions(&archive, &store)?;
     let predicates = Predicates::from_args(args)?;
     let (format, diskless_next_offsets) = format_with_next_offsets(
         &store,
@@ -225,12 +217,10 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         metadata_bytes.as_deref(),
     )
     .await?;
+    let authenticated_archive = authenticated_archive(authenticated.as_ref());
     materialize::seed_rlmm_snapshot_from(
         args,
-        authenticated
-            .as_ref()
-            .and_then(|source| source.archive.as_ref())
-            .map(AuthenticatedArchive::report),
+        authenticated_archive.map(AuthenticatedArchive::report),
         rlmm_snapshot.as_ref(),
     )?;
 
@@ -243,96 +233,33 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     }
     let mut partitions = Vec::with_capacity(archive.partitions.len());
     let mut skipped = unclaimed;
+    let inputs = PhaseInputs {
+        store: &store,
+        args,
+        predicates: &predicates,
+    };
     for entry in &archive.partitions {
-        if entry.segments.is_empty() {
-            continue;
+        if let Some(report) = restore_partition(
+            &inputs,
+            authenticated_archive,
+            entry,
+            &mut skipped,
+            &mut consumed_authenticated_objects,
+        )
+        .await?
+        {
+            partitions.push(report);
         }
-        let mut segments = Vec::with_capacity(entry.segments.len());
-        let mut skipped_predecessor = false;
-        for segment in &entry.segments {
-            let verification = match &authenticated {
-                Some(SourceAuthentication {
-                    archive: Some(authenticated),
-                    ..
-                }) => {
-                    verify_segment_authenticated(
-                        &store,
-                        &entry.partition,
-                        segment,
-                        authenticated.objects(),
-                    )
-                    .await
-                }
-                Some(SourceAuthentication { archive: None, .. }) | None => {
-                    verify_segment(&store, &entry.partition, segment).await
-                }
-            };
-            let verified = match verification {
-                Ok(verified) => verified,
-                Err(error)
-                    if args.continue_on_corrupt
-                        && !matches!(error, RestoreError::Authenticity { .. }) =>
-                {
-                    skipped.push(SkippedSegment {
-                        topic: entry.partition.topic.clone(),
-                        partition: entry.partition.partition,
-                        segment_id: segment.segment_id,
-                        reason: error.to_string(),
-                    });
-                    skipped_predecessor = true;
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
-            if matches!(
-                &authenticated,
-                Some(SourceAuthentication {
-                    archive: Some(_),
-                    ..
-                })
-            ) {
-                consumed_authenticated_objects
-                    .extend(segment.artifacts().map(|object| object.key.to_string()));
-            }
-            segments.push(
-                materialize::write_segment_after_skip(
-                    args,
-                    &entry.partition,
-                    &verified,
-                    &predicates,
-                    skipped_predecessor,
-                )
-                .await?,
-            );
-            skipped_predecessor = false;
-        }
-        partitions.push(PartitionReport {
-            topic: entry.partition.topic.clone(),
-            partition: entry.partition.partition,
-            topic_id: entry.partition.topic_id,
-            segments,
-        });
     }
 
-    let diskless = match diskless_capture {
-        Some(capture) => {
-            let report =
-                diskless::materialize(&store, args, &predicates, &capture, diskless_claims).await?;
-            diskless::check_next_offsets(&report, &diskless_next_offsets)?;
-            if diskless_claims.is_some() {
-                consumed_authenticated_objects.extend(
-                    capture
-                        .partitions
-                        .iter()
-                        .filter(|partition| args.selects_topic(&partition.topic))
-                        .flat_map(|partition| &partition.ranges)
-                        .map(|range| range.object_key.clone()),
-                );
-            }
-            Some(report)
-        }
-        None => None,
-    };
+    let diskless = restore_diskless(
+        &inputs,
+        diskless_capture.as_ref(),
+        diskless_claims,
+        &diskless_next_offsets,
+        &mut consumed_authenticated_objects,
+    )
+    .await?;
     if let Some(SourceAuthentication { report, .. }) = &mut authenticated {
         report.objects = u64::try_from(consumed_authenticated_objects.len()).unwrap_or(u64::MAX);
     }
@@ -346,6 +273,125 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         partitions,
         skipped,
     })
+}
+
+/// The inputs every restore phase after formatting reads.
+struct PhaseInputs<'a> {
+    store: &'a ArchiveStore,
+    args: &'a RestoreArgs,
+    predicates: &'a Predicates,
+}
+
+/// Verify and write one partition's archived segments.
+///
+/// Returns `None` for a partition with no segments. Under
+/// `--continue-on-corrupt` a segment that fails verification, other than for
+/// authenticity, is pushed onto `skipped` and the next segment is written as
+/// following a skipped predecessor. The keys of every verified segment of an
+/// authenticated archive are added to `consumed`.
+async fn restore_partition(
+    inputs: &PhaseInputs<'_>,
+    authenticated: Option<&AuthenticatedArchive>,
+    entry: &PartitionInventory,
+    skipped: &mut Vec<SkippedSegment>,
+    consumed: &mut BTreeSet<String>,
+) -> Result<Option<PartitionReport>, RestoreError> {
+    let PhaseInputs {
+        store,
+        args,
+        predicates,
+    } = *inputs;
+    if entry.segments.is_empty() {
+        return Ok(None);
+    }
+    let mut segments = Vec::with_capacity(entry.segments.len());
+    let mut skipped_predecessor = false;
+    for segment in &entry.segments {
+        let verification = match authenticated {
+            Some(authenticated) => {
+                verify_segment_authenticated(
+                    store,
+                    &entry.partition,
+                    segment,
+                    authenticated.objects(),
+                )
+                .await
+            }
+            None => verify_segment(store, &entry.partition, segment).await,
+        };
+        let verified = match verification {
+            Ok(verified) => verified,
+            Err(error)
+                if args.continue_on_corrupt
+                    && !matches!(error, RestoreError::Authenticity { .. }) =>
+            {
+                skipped.push(SkippedSegment {
+                    topic: entry.partition.topic.clone(),
+                    partition: entry.partition.partition,
+                    segment_id: segment.segment_id,
+                    reason: error.to_string(),
+                });
+                skipped_predecessor = true;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if authenticated.is_some() {
+            consumed.extend(segment.artifacts().map(|object| object.key.to_string()));
+        }
+        segments.push(
+            materialize::write_segment_after_skip(
+                args,
+                &entry.partition,
+                &verified,
+                predicates,
+                skipped_predecessor,
+            )
+            .await?,
+        );
+        skipped_predecessor = false;
+    }
+    Ok(Some(PartitionReport {
+        topic: entry.partition.topic.clone(),
+        partition: entry.partition.partition,
+        topic_id: entry.partition.topic_id,
+        segments,
+    }))
+}
+
+/// Materialize the diskless capture, if there is one, and hold it to the next
+/// offsets the target was formatted with.
+///
+/// When the capture is authenticated, the object keys of every selected
+/// topic's ranges are added to `consumed`.
+async fn restore_diskless(
+    inputs: &PhaseInputs<'_>,
+    capture: Option<&DisklessWalCapture>,
+    claims: Option<&BTreeMap<String, krabka_remote_storage::ObjectEntry>>,
+    next_offsets: &[diskless::DisklessNextOffset],
+    consumed: &mut BTreeSet<String>,
+) -> Result<Option<DisklessRestoreReport>, RestoreError> {
+    let Some(capture) = capture else {
+        return Ok(None);
+    };
+    let PhaseInputs {
+        store,
+        args,
+        predicates,
+    } = *inputs;
+    let report = diskless::materialize(store, args, predicates, capture, claims).await?;
+    diskless::check_next_offsets(&report, next_offsets)?;
+    if claims.is_some() {
+        consumed.extend(
+            capture
+                .partitions
+                .iter()
+                .filter(|partition| args.selects_topic(&partition.topic))
+                .flat_map(|partition| &partition.ranges)
+                .map(|range| range.object_key.clone()),
+        );
+    }
+    Ok(Some(report))
 }
 
 /// Format the target, seeding the restored metadata with each diskless
@@ -372,6 +418,24 @@ async fn format_with_next_offsets(
         materialize::format_target_with_snapshot(args, archive, metadata_snapshot, &next_offsets)
             .await?;
     Ok((format, next_offsets))
+}
+
+/// The signed archive a source authentication vouches for, if any.
+///
+/// A source has no archive when it holds no classic segments and only the
+/// signed diskless capture is authenticated.
+fn authenticated_archive(source: Option<&SourceAuthentication>) -> Option<&AuthenticatedArchive> {
+    source?.archive.as_ref()
+}
+
+/// Refuse an archive that, after filtering, holds no partition to restore.
+fn ensure_partitions(archive: &ArchiveInventory, store: &ArchiveStore) -> Result<(), RestoreError> {
+    if archive.partitions.is_empty() {
+        return Err(RestoreError::EmptyArchive {
+            prefix: store.prefix().unwrap_or("").to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Refuse a target that already holds entries.
