@@ -337,6 +337,28 @@ fn moved_to_tiered_storage(p: &mut PendingRead, live: LiveOffsets, local_log_sta
     0
 }
 
+/// Answers a consumer partition whose first remote batch is not due yet, as
+/// the local path answers a batch that is not due: an empty partition and no
+/// error. `OFFSET_OUT_OF_RANGE` would send the consumer to its reset policy and
+/// lose the record it is waiting for, and the batch is due later, not never.
+///
+/// Returns zero served bytes.
+fn answer_not_due(p: &mut PendingRead, live: LiveOffsets) -> usize {
+    tracing::debug!(
+        topic = %p.topic_name,
+        partition = p.partition_index,
+        offset = p.fetch_offset,
+        "remote-reader: batch is not due yet; holding it back"
+    );
+    p.out.error_code = codes::NONE;
+    live.report(&mut p.out);
+    p.out.records = None;
+    if p.read_committed {
+        p.out.aborted_transactions = Some(Vec::new());
+    }
+    0
+}
+
 /// What a cold read needs from the partition's log, read under one lock.
 struct TierConfig {
     /// The topic's KFC-1 delivery policy.
@@ -580,23 +602,7 @@ pub(super) async fn try_remote_read(
         last_offset: batch_last_offset,
     }) = run
     else {
-        // Answer as the local path answers a batch that is not due: an empty
-        // partition and no error. `OFFSET_OUT_OF_RANGE` would send the
-        // consumer to its reset policy and lose the record it is waiting for,
-        // and the batch is due later, not never.
-        tracing::debug!(
-            topic = %p.topic_name,
-            partition = p.partition_index,
-            offset = p.fetch_offset,
-            "remote-reader: batch is not due yet; holding it back"
-        );
-        p.out.error_code = codes::NONE;
-        live.report(&mut p.out);
-        p.out.records = None;
-        if p.read_committed {
-            p.out.aborted_transactions = Some(Vec::new());
-        }
-        return Some(0);
+        return Some(answer_not_due(p, live));
     };
 
     // KIP-405 read-committed: surface the aborted-transaction list from remote
