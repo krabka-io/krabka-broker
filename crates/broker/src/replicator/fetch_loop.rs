@@ -105,6 +105,16 @@ impl FetcherState {
             next_partition_audit: Instant::now() + PARTITION_STATE_AUDIT_INTERVAL,
         }
     }
+
+    /// Marks every followed partition for the next round to replan.
+    fn mark_all_dirty(&mut self) { self.dirty = self.followed.keys().cloned().collect(); }
+
+    /// Forgets the leader's session, so the next round is full and replans
+    /// every followed partition.
+    fn reset_session(&mut self) {
+        self.session.reset();
+        self.mark_all_dirty();
+    }
 }
 
 pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), String> {
@@ -133,7 +143,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             state.followed_generation = generation;
             state.followed = entries;
             state.followed_index = FollowedIndex::new(&state.followed);
-            state.dirty = state.followed.keys().cloned().collect();
+            state.mark_all_dirty();
             state
                 .request_epochs
                 .retain(|key, _| state.followed.contains_key(key));
@@ -217,16 +227,14 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             // Drop the session with the connection; the next round is full.
             Err(ClientError::Disconnected | ClientError::Io(_)) => {
                 client = None;
-                state.session.reset();
-                state.dirty = state.followed.keys().cloned().collect();
+                state.reset_session();
                 continue;
             }
             Err(e) => {
                 warn!(error = %e,
                     "replicator: client.send unexpected error; retrying after backoff");
                 client = None;
-                state.session.reset();
-                state.dirty = state.followed.keys().cloned().collect();
+                state.reset_session();
                 if sleep_or_cancel(&fetcher.shutdown, replication.send_error_backoff)
                     .await
                     .is_err()
@@ -242,7 +250,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             .handle_response(resp.error_code, resp.session_id)
             == SessionOutcome::SessionLost
         {
-            state.dirty = state.followed.keys().cloned().collect();
+            state.mark_all_dirty();
             info!(
                 leader_node_id = fetcher.leader_node_id.0,
                 error_code = resp.error_code,
@@ -297,7 +305,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             }
         }
         if state.session.is_full() {
-            state.dirty = state.followed.keys().cloned().collect();
+            state.mark_all_dirty();
         }
         if let Some(delay) = backoff
             && sleep_or_cancel(&fetcher.shutdown, delay).await.is_err()
@@ -836,6 +844,28 @@ mod tests {
 
         shutdown.cancel();
         let _ = task.await;
+    }
+
+    /// A state following `followed` over an incremental session, so a test
+    /// sees what one step does without a full session re-marking everything.
+    fn incremental_state(followed: BTreeMap<FollowedKey, Arc<Config>>) -> FetcherState {
+        let mut state = FetcherState::new();
+        state.followed = followed;
+        state.session.handle_response(NONE, 77);
+        assert!(!state.session.is_full());
+        state
+    }
+
+    #[test]
+    fn resetting_the_session_reopens_it_and_replans_every_partition() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let key = followed_key(&cfg);
+        let mut state = incremental_state(followed_partition(cfg));
+
+        state.reset_session();
+
+        check!(state.session.is_full());
+        check!(state.dirty == BTreeSet::from([key]));
     }
 
     /// `WireUuid` is only here to keep the import used when the assertions
