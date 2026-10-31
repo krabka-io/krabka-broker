@@ -23,7 +23,7 @@ use {
         network::client::InterBrokerClient,
     },
     krabka_client_core::ConnectionOptions,
-    krabka_metadata::metadata_version,
+    krabka_metadata::{MetadataImage, metadata_version},
     krabka_protocol::{
         owned::broker_heartbeat_request::BrokerHeartbeatRequest, primitives::uuid::Uuid,
     },
@@ -257,6 +257,31 @@ struct ControllerAddress {
     port: u16,
 }
 
+/// The current controller leader and the address of its controller listener,
+/// with the metadata image that named it, or `None` while either is unknown.
+fn resolve_controller(cfg: &Config) -> Option<(ControllerAddress, Arc<MetadataImage>)> {
+    let leader_id = *cfg.controller.watch_leader().borrow();
+    let Some(leader_id) = leader_id else {
+        debug!("heartbeat: no controller leader yet");
+        return None;
+    };
+    let image = cfg.controller.current_image();
+    let Some((host, port)) = leader_endpoint(&image, &cfg.controller_quorum_voters, leader_id)
+    else {
+        debug!(
+            leader = leader_id.0,
+            "heartbeat: controller leader has no known controller endpoint yet"
+        );
+        return None;
+    };
+    let controller = ControllerAddress {
+        leader: leader_id,
+        host,
+        port,
+    };
+    Some((controller, image))
+}
+
 /// The connection the heartbeats travel on, and the controller it reaches.
 struct ControllerChannel {
     controller: ControllerAddress,
@@ -333,24 +358,8 @@ pub async fn run(mut cfg: Config) {
         }
         // Resolve the current controller leader's CONTROLLER-listener address
         // from the metadata image, or skip this tick if it is not known yet.
-        let leader_id = *cfg.controller.watch_leader().borrow();
-        let Some(leader_id) = leader_id else {
-            debug!("heartbeat: no controller leader yet");
+        let Some((controller, image)) = resolve_controller(&cfg) else {
             continue;
-        };
-        let image = cfg.controller.current_image();
-        let Some((host, port)) = leader_endpoint(&image, &cfg.controller_quorum_voters, leader_id)
-        else {
-            debug!(
-                leader = leader_id.0,
-                "heartbeat: controller leader has no known controller endpoint yet"
-            );
-            continue;
-        };
-        let controller = ControllerAddress {
-            leader: leader_id,
-            host,
-            port,
         };
         let rpc_timeout = heartbeat_rpc_timeout(cfg.interval);
         let open = match channel.take() {
