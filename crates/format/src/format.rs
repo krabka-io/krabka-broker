@@ -300,49 +300,8 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
         .metadata_log_dir
         .or_else(|| args.log_dirs.first().cloned())
         .ok_or_else(|| krabka(EXIT_BOOTSTRAP_FAIL, "no log directory to format"))?;
-    let log_dirs = directory_set(&metadata_log_dir, args.log_dirs);
-    let ensemble = Ensemble::load(&log_dirs).map_err(|error| match error {
-        SurveyError::Foreign(dir) => krabka(
-            EXIT_DIRTY_LOG_DIR,
-            format_args!(
-                "refusing to overwrite non-empty log directory {}: it holds files krabka format \
-                 did not write",
-                dir.display()
-            ),
-        ),
-        SurveyError::Io(dir, e) => krabka(
-            EXIT_BOOTSTRAP_FAIL,
-            format_args!("cannot read log directory {}: {e}", dir.display()),
-        ),
-    })?;
-    if ensemble.errors.contains(&metadata_log_dir) {
-        return Err(Failure {
-            code: EXIT_DIRTY_LOG_DIR,
-            message: format!(
-                "Encountered I/O error in metadata log directory {}. Cannot continue.",
-                metadata_log_dir.display()
-            ),
-        });
-    }
-    let cluster_id = ensemble
-        .verify(args.cluster_id, node_id)
-        .map_err(|message| Failure {
-            code: EXIT_DIRTY_LOG_DIR,
-            message,
-        })?
-        .unwrap_or_else(ClusterId::random);
-    if !args.ignore_formatted
-        && let Some(first) = ensemble.formatted.first()
-    {
-        return Err(Failure {
-            code: EXIT_DIRTY_LOG_DIR,
-            message: format!(
-                "Log directory {} is already formatted. Use --ignore-formatted to ignore this \
-                 directory and format the others.",
-                first.dir.display()
-            ),
-        });
-    }
+    let ensemble = survey(&metadata_log_dir, args.log_dirs)?;
+    let cluster_id = verify_formatted(&ensemble, args.cluster_id, node_id, args.ignore_formatted)?;
 
     let mut used: Vec<DirectoryId> = ensemble
         .formatted
@@ -491,6 +450,66 @@ fn bootstrap_records(
     records.extend(scram_records(scram)?);
     records.extend(acls.into_iter().map(MetadataRecord::V1AccessControlEntry));
     Ok(records)
+}
+
+/// Reads every directory of the run, refusing one that holds files `format`
+/// did not write, one that cannot be listed, and a metadata log directory
+/// whose `meta.properties` does not read.
+fn survey(metadata_log_dir: &Path, log_dirs: Vec<PathBuf>) -> Result<Ensemble, Failure> {
+    let log_dirs = directory_set(metadata_log_dir, log_dirs);
+    let ensemble = Ensemble::load(&log_dirs).map_err(|error| match error {
+        SurveyError::Foreign(dir) => krabka(
+            EXIT_DIRTY_LOG_DIR,
+            format_args!(
+                "refusing to overwrite non-empty log directory {}: it holds files krabka format \
+                 did not write",
+                dir.display()
+            ),
+        ),
+        SurveyError::Io(dir, e) => krabka(
+            EXIT_BOOTSTRAP_FAIL,
+            format_args!("cannot read log directory {}: {e}", dir.display()),
+        ),
+    })?;
+    if ensemble.errors.iter().any(|dir| dir == metadata_log_dir) {
+        return Err(Failure {
+            code: EXIT_DIRTY_LOG_DIR,
+            message: format!(
+                "Encountered I/O error in metadata log directory {}. Cannot continue.",
+                metadata_log_dir.display()
+            ),
+        });
+    }
+    Ok(ensemble)
+}
+
+/// Checks the formatted directories against each other, `expected` and
+/// `node_id`, and returns the run's cluster id: the set's, else a new one.
+/// Without `ignore_formatted`, any formatted directory then refuses the run.
+fn verify_formatted(
+    ensemble: &Ensemble,
+    expected: Option<ClusterId>,
+    node_id: i32,
+    ignore_formatted: bool,
+) -> Result<ClusterId, Failure> {
+    let cluster_id = ensemble
+        .verify(expected, node_id)
+        .map_err(|message| Failure {
+            code: EXIT_DIRTY_LOG_DIR,
+            message,
+        })?
+        .unwrap_or_else(ClusterId::random);
+    if !ignore_formatted && let Some(first) = ensemble.formatted.first() {
+        return Err(Failure {
+            code: EXIT_DIRTY_LOG_DIR,
+            message: format!(
+                "Log directory {} is already formatted. Use --ignore-formatted to ignore this \
+                 directory and format the others.",
+                first.dir.display()
+            ),
+        });
+    }
+    Ok(cluster_id)
 }
 
 /// The directories one run formats: `metadata_log_dir` first, then every
