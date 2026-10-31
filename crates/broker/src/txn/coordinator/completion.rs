@@ -77,11 +77,27 @@ pub fn completion_for(prepare: TxnState) -> Option<PreparedCompletion> {
 pub fn apply_completion(
     entry: &mut TxnEntry,
     complete: TxnState,
-    (new_pid, new_epoch): (ProducerId, i16),
+    identity: (ProducerId, i16),
     now_ms: i64,
 ) {
-    if new_pid != entry.producer_id {
-        entry.prev_producer_id = entry.producer_id;
+    let previous_pid = entry.producer_id;
+    apply_completion_from(entry, complete, identity, previous_pid, now_ms);
+}
+
+/// [`apply_completion`], with the rotation judged against `previous_pid`
+/// rather than the entry's own producer ID: `previous_pid` is recorded as the
+/// prior producer ID when the new identity rotated away from it. The fence
+/// `InitProducerId` runs passes the identity the client held on the `Ongoing`
+/// entry, which is the staged recovery identity when there is one.
+pub fn apply_completion_from(
+    entry: &mut TxnEntry,
+    complete: TxnState,
+    (new_pid, new_epoch): (ProducerId, i16),
+    previous_pid: ProducerId,
+    now_ms: i64,
+) {
+    if new_pid != previous_pid {
+        entry.prev_producer_id = previous_pid;
     }
     entry.state = complete;
     entry.producer_id = new_pid;
