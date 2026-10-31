@@ -373,44 +373,32 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// A dir already offline in the registry answers `KAFKA_STORAGE_ERROR`
-    /// and nothing else, as Kafka's `KafkaStorageException` arm does.
-    #[tokio::test]
-    async fn handle_reports_an_offline_dir_as_a_storage_error() {
-        let version = describe_log_dirs_response::MAX_VERSION;
-        let extra = tempfile::tempdir().expect("extra log dir");
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_with_extra(extra.path())];
-            user ["admin"];
-        };
-        broker
-            .log_dir_status
-            .mark_offline(extra.path(), "test: EIO");
-
-        let resp = handle(&broker, DescribeLogDirsRequest::default(), version, &ctx)
-            .await
-            .expect("handle");
-
-        let expected = DescribeLogDirsResult {
-            error_code: codes::KAFKA_STORAGE_ERROR,
-            log_dir: extra.path().display().to_string(),
-            topics: Vec::new(),
-            total_bytes: -1,
-            usable_bytes: -1,
-            is_cordoned: false,
-            ..Default::default()
-        };
-        assert!(row_for(&resp, extra.path()) == Some(&expected));
-        broker_handle.shutdown().await;
+    /// What a test does to the extra log dir after boot.
+    #[derive(Debug, Clone, Copy)]
+    enum Fault {
+        /// A failed log operation already took it offline.
+        Offline,
+        /// It vanished, so the capacity query fails with `ENOENT`, whoever
+        /// the test runs as.
+        Removed,
     }
 
-    /// A dir that cannot be described is an error for that dir alone, not a
-    /// healthy empty dir, and the describe leaves it online: Kafka's
-    /// catch-all answers `Errors.forException`, `UNKNOWN_SERVER_ERROR` for an
-    /// `IOException`, and `describeLogDirs` never takes a dir offline.
+    /// A dir that cannot be described answers its error alone, never a
+    /// healthy empty row:
+    ///   * a dir already offline is `KAFKA_STORAGE_ERROR`, Kafka's
+    ///     `KafkaStorageException` arm;
+    ///   * any other failure is `UNKNOWN_SERVER_ERROR`, Kafka's catch-all
+    ///     `Errors.forException` for an `IOException`, and the describe leaves
+    ///     the dir online: `describeLogDirs` never takes a dir offline.
+    #[rstest::rstest]
+    #[case::offline(Fault::Offline, codes::KAFKA_STORAGE_ERROR, true)]
+    #[case::removed(Fault::Removed, codes::UNKNOWN_SERVER_ERROR, false)]
     #[tokio::test]
-    async fn handle_reports_a_dir_it_cannot_describe_as_an_unknown_error() {
+    async fn handle_answers_a_dir_it_cannot_describe_with_its_error_alone(
+        #[case] fault: Fault,
+        #[case] error_code: i16,
+        #[case] offline_after: bool,
+    ) {
         let version = describe_log_dirs_response::MAX_VERSION;
         let extra = tempfile::tempdir().expect("extra log dir");
         let extra_dir = extra.path().join("data");
@@ -420,15 +408,19 @@ mod tests {
             boot [start_with_extra(&extra_dir)];
             user ["admin"];
         };
-        // The capacity query fails with `ENOENT`, whoever the test runs as.
-        fs::remove_dir_all(&extra_dir).expect("remove extra log dir");
+        match fault {
+            Fault::Offline => {
+                broker.log_dir_status.mark_offline(&extra_dir, "test: EIO");
+            }
+            Fault::Removed => fs::remove_dir_all(&extra_dir).expect("remove extra log dir"),
+        }
 
         let resp = handle(&broker, DescribeLogDirsRequest::default(), version, &ctx)
             .await
             .expect("handle");
 
         let expected = DescribeLogDirsResult {
-            error_code: codes::UNKNOWN_SERVER_ERROR,
+            error_code,
             log_dir: extra_dir.display().to_string(),
             topics: Vec::new(),
             total_bytes: -1,
@@ -437,7 +429,7 @@ mod tests {
             ..Default::default()
         };
         assert!(row_for(&resp, &extra_dir) == Some(&expected));
-        assert!(!broker.log_dir_status.is_offline(&extra_dir));
+        assert!(broker.log_dir_status.is_offline(&extra_dir) == offline_after);
         broker_handle.shutdown().await;
     }
 }
