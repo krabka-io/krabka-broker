@@ -125,11 +125,11 @@ pub fn build(
     #[builder(into, default = ControllerSetup::default().snapshot_interval_records)]
     snapshot_interval_records: SnapshotRecordCount,
     heartbeat_interval: Option<Time>,
-    #[builder(into, default = ControllerSetup::default().controller_fetch_miss_limit)]
+    #[builder(default = ControllerSetup::default().controller_fetch_miss_limit)]
     controller_fetch_miss_limit: ControllerFetchMissLimit,
-    #[builder(into, default = ControllerSetup::default().metadata_raft_command_queue_capacity)]
+    #[builder(default = ControllerSetup::default().metadata_raft_command_queue_capacity)]
     metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity,
-    #[builder(into, default = ControllerSetup::default().metadata_raft_fetch_max)]
+    #[builder(default = ControllerSetup::default().metadata_raft_fetch_max)]
     metadata_raft_fetch_max: MetadataRaftFetchMax,
     #[builder(default = ControllerSetup::default().max_bytes_between_snapshots)]
     max_bytes_between_snapshots: krabka_units::ByteSize,
@@ -295,9 +295,9 @@ impl Default for EngineSetup<'_> {
 pub fn build_engine_only(
     #[builder(into, default = EngineSetup::default().me)] me: NodeId,
     #[builder(default = EngineSetup::default().ids)] ids: &'_ [NodeId],
-    #[builder(into, default = EngineSetup::default().controller_fetch_miss_limit)]
+    #[builder(default = EngineSetup::default().controller_fetch_miss_limit)]
     controller_fetch_miss_limit: ControllerFetchMissLimit,
-    #[builder(into, default = EngineSetup::default().metadata_raft_fetch_max)]
+    #[builder(default = EngineSetup::default().metadata_raft_fetch_max)]
     metadata_raft_fetch_max: MetadataRaftFetchMax,
     #[builder(default = EngineSetup::default().metadata_log)] metadata_log: MetadataLogConfig,
 ) -> (Engine, tempfile::TempDir) {

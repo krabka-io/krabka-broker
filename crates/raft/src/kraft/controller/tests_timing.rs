@@ -269,7 +269,7 @@ async fn a_fetch_timeout_elects_a_voter_at_once_and_re_polls_an_observer(
     let (mut replica, _dir) = build_engine_only()
         .me(me)
         .ids(&[NodeId(1), NodeId(2)])
-        .controller_fetch_miss_limit(3)
+        .controller_fetch_miss_limit(ControllerFetchMissLimit::new(3).expect("positive miss limit"))
         .call();
     replica.on_event(Event::ReceiveBeginQuorumEpoch {
         leader_id: NodeId(1),
