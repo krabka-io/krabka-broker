@@ -366,25 +366,32 @@ impl<'a> TopicCreation<'a> {
                 .await;
                 return Ok(());
             }
-            // Another request created the name after this one read the
-            // image. The quorum decides that race, and the row is the one
-            // Kafka's existence check answers.
-            Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {
-                topic_exists_result(name.clone())
-            }
-            Err(RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord(_))) => {
-                // E.g., `partitions <= 0` rejected by image::validate.
-                topic_error_result(name.clone(), codes::INVALID_PARTITIONS, None)
-            }
-            Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-                topic_error_result(name.clone(), codes::NOT_CONTROLLER, None)
-            }
-            Err(e) => {
-                tracing::error!(topic = %name, error = %e, "CreateTopics submit_change failed");
-                topic_error_result(name.clone(), codes::UNKNOWN_SERVER_ERROR, None)
-            }
+            Err(error) => submit_failure_result(name.clone(), &error),
         };
         Err(Box::new(failure))
+    }
+}
+
+/// The row a topic answers when its metadata commit fails with `error`.
+fn submit_failure_result(name: String, error: &RaftError) -> CreatableTopicResult {
+    match error {
+        // Another request created the name after this one read the image. The
+        // quorum decides that race, and the row is the one Kafka's existence
+        // check answers.
+        RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_)) => {
+            topic_exists_result(name)
+        }
+        RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord(_)) => {
+            // E.g., `partitions <= 0` rejected by image::validate.
+            topic_error_result(name, codes::INVALID_PARTITIONS, None)
+        }
+        RaftError::NotLeader { .. } | RaftError::LeaderUnknown => {
+            topic_error_result(name, codes::NOT_CONTROLLER, None)
+        }
+        error => {
+            tracing::error!(topic = %name, %error, "CreateTopics submit_change failed");
+            topic_error_result(name, codes::UNKNOWN_SERVER_ERROR, None)
+        }
     }
 }
 
