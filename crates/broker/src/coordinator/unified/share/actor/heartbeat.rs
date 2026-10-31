@@ -112,7 +112,7 @@ pub(super) async fn handle_heartbeat(
     if let Some(initialize) = initialize {
         start_initialize(state, coordinator, initialize);
     }
-    cleanup_deleted_topics(state, offsets_log, coordinator, now_ms).await;
+    cleanup_deleted_topics(state, coordinator, now_ms).await;
     // Kafka sends the assignment only on a full request (a rejoin at epoch 0
     // or a request that carries the subscription) or when it changed.
     let assigned_changed = state

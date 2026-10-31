@@ -234,7 +234,6 @@ async fn actor_loop(
                         apply_initialized(
                             &mut state,
                             &outcomes,
-                            &*offsets_log,
                             &coordinator,
                             chrono_now_ms(),
                         )

@@ -51,7 +51,7 @@ pub(super) async fn handle_session_tick(
             return Err(e);
         }
     }
-    cleanup_deleted_topics(state, offsets_log, coordinator, chrono_now_ms()).await;
+    cleanup_deleted_topics(state, coordinator, chrono_now_ms()).await;
     Ok(())
 }
 
