@@ -7,7 +7,7 @@ use {
         bound::Predicates,
         materialize::{
             open_partition_log,
-            prepare::{BatchTally, PrepareBatchSetup, PreparedBatch, prepare_batch},
+            prepare::{BatchTally, PrepareBatchSetup, prepare_batch},
         },
         report::{DisklessPartitionReport, DisklessRestoreReport},
         verify::{MAX_LOG_BYTES, fetch_capped},
@@ -412,14 +412,7 @@ async fn walk_partition(
                         log.reset_to(base)?;
                     }
                     log.reconcile_next_offset(base);
-                    match &mut prepared {
-                        PreparedBatch::Verbatim(batch) => {
-                            log.append_verbatim_at(batch, base)?;
-                        }
-                        PreparedBatch::Owned { batch, .. } => {
-                            log.append_at(batch, base)?;
-                        }
-                    }
+                    prepared.append_to(log, base)?;
                 }
                 batches += 1;
                 match tally {

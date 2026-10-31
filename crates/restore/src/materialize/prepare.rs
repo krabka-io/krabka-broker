@@ -18,8 +18,8 @@ use {
         error::RestoreError,
     },
     bytes::{Bytes, BytesMut},
-    krabka_ids::ProducerId,
-    krabka_log::{FilteredBatch, VerbatimBatch, filter_batch},
+    krabka_ids::{Offset, ProducerId},
+    krabka_log::{FilteredBatch, Log, VerbatimBatch, filter_batch},
     krabka_protocol::records::{
         Attributes, RecordBatch, RecordBatchBorrowed, RecordBatchHeader, RecordsError,
         validate_one_v2_batch,
@@ -48,6 +48,27 @@ impl PreparedBatch {
             Self::Verbatim(batch) => batch.bytes.len(),
             Self::Owned { encoded_len, .. } => *encoded_len,
         }
+    }
+
+    /// Append this batch to `log` at `base_offset`, through the log path that fits its shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RestoreError::Log`] when the log refuses the append.
+    pub(crate) fn append_to(
+        &mut self,
+        log: &mut Log,
+        base_offset: Offset,
+    ) -> Result<(), RestoreError> {
+        match self {
+            Self::Verbatim(verbatim) => {
+                log.append_verbatim_at(verbatim, base_offset)?;
+            }
+            Self::Owned { batch, .. } => {
+                log.append_at(batch, base_offset)?;
+            }
+        }
+        Ok(())
     }
 }
 
