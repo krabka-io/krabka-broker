@@ -124,6 +124,52 @@ fn merge_key_slots(key_slots: Vec<KeySlot>, coordinators: Vec<Coordinator>) -> V
         .collect()
 }
 
+/// The coordinator row of each admitted key of type `kind`, in key order.
+fn resolve_admitted(
+    broker: &Broker,
+    target: &ResolveTarget<'_>,
+    kind: KeyType,
+    keys: Vec<String>,
+) -> Vec<Coordinator> {
+    let state_topic = kind.state_topic();
+    match kind {
+        KeyType::Group => keys
+            .into_iter()
+            .map(|key| match partition_for_group(target.image, &key) {
+                Some(partition) => resolve_partition_coordinator(target, state_topic, partition, key),
+                None => unavailable_coordinator(key),
+            })
+            .collect(),
+        KeyType::Transaction => resolve_transaction_keys(broker, target, keys),
+        KeyType::Share => keys
+            .into_iter()
+            .map(|key| resolve_share_key(broker, target, state_topic, key))
+            .collect(),
+    }
+}
+
+/// The leader of the `state_topic` partition that holds share key `key`.
+fn resolve_share_key(
+    broker: &Broker,
+    target: &ResolveTarget<'_>,
+    state_topic: &str,
+    key: String,
+) -> Coordinator {
+    // Admission validated the key already, so the parse cannot fail here.
+    let Some((group, topic_uuid, partition)) = parse_share_key(&key) else {
+        return unavailable_coordinator(key);
+    };
+    let Some(p) = partition_for_share_key(
+        group,
+        &topic_uuid,
+        partition,
+        broker.config.share_coordinator.state_topic_num_partitions,
+    ) else {
+        return unavailable_coordinator(key);
+    };
+    resolve_partition_coordinator(target, state_topic, p, key)
+}
+
 pub async fn handle(
     broker: &Broker,
     req: FindCoordinatorRequest,
@@ -215,37 +261,7 @@ pub async fn handle(
                 advertised: &advertised,
                 listener: ctx.connection_listener_name,
             };
-            match kind {
-                KeyType::Group => keys
-                    .into_iter()
-                    .map(|key| match partition_for_group(&image, &key) {
-                        Some(partition) => {
-                            resolve_partition_coordinator(&target, state_topic, partition, key)
-                        }
-                        None => unavailable_coordinator(key),
-                    })
-                    .collect(),
-                KeyType::Transaction => resolve_transaction_keys(broker, &target, keys),
-                KeyType::Share => keys
-                    .into_iter()
-                    .map(|key| {
-                        // Admission validated the key already, so the parse
-                        // cannot fail here.
-                        let Some((group, topic_uuid, partition)) = parse_share_key(&key) else {
-                            return unavailable_coordinator(key);
-                        };
-                        let Some(p) = partition_for_share_key(
-                            group,
-                            &topic_uuid,
-                            partition,
-                            broker.config.share_coordinator.state_topic_num_partitions,
-                        ) else {
-                            return unavailable_coordinator(key);
-                        };
-                        resolve_partition_coordinator(&target, state_topic, p, key)
-                    })
-                    .collect(),
-            }
+            resolve_admitted(broker, &target, kind, keys)
         }
     };
 
