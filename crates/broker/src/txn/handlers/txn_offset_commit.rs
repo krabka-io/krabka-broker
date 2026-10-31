@@ -72,7 +72,7 @@ use {
         },
         primitives::uuid::Uuid,
     },
-    std::{collections::HashSet, sync::Arc},
+    std::collections::HashSet,
     tokio::sync::oneshot,
 };
 
@@ -124,42 +124,13 @@ pub async fn handle(
     version: i16,
     ctx: &RequestContext<'_>,
 ) -> Result<TxnOffsetCommitResponse, BrokerError> {
-    let partitions = Arc::clone(&broker.partitions);
-
     // ── ACL preamble: Write on TransactionalId, Read on the group ──
     if let Some(code) = preamble_refusal(broker, ctx, &req) {
         return Ok(error_response(&req, code));
     }
 
-    // ── KIP-1319: name every topic and give it its id ──────────
-    // ── ACL preamble: per-topic Read ──────────────────────────
-    // ── Existence check: authorized topic/partition must be in the image ──
+    let sweep = sweep_topics(broker, ctx, &mut req, version);
     let topic_ids = version >= FIRST_TOPIC_ID_VERSION;
-    let (denied_topics, unknown_rows) = {
-        let image = broker.controller.current_image();
-        resolve_topics(&mut req, version, &image);
-        let topic_names: Vec<&str> = req
-            .topics
-            .iter()
-            .map(|t| t.name.as_str())
-            .filter(|name| !(topic_ids && name.is_empty()))
-            .collect();
-        let topic_decisions = authorize_topics(
-            broker.config.authorizer.as_ref(),
-            &*image,
-            ctx.principal,
-            ctx.peer,
-            AclOperation::Read,
-            topic_names,
-        );
-        let denied_topics: HashSet<String> = topic_decisions
-            .into_iter()
-            .filter(|&(_, r)| r == AuthorizationResult::Deny)
-            .map(|(name, _)| name.to_owned())
-            .collect();
-        let unknown_rows = unknown_partitions(&req.topics, &denied_topics, &image);
-        (denied_topics, unknown_rows)
-    };
 
     // Every response from here on carries the per-row codes the sweep above
     // settled, and the given code only on the rows that survived it, the way
@@ -178,8 +149,8 @@ pub async fn handle(
             &req,
             code,
             topic_ids,
-            &denied_topics,
-            &unknown_rows,
+            &sweep.denied_topics,
+            &sweep.unknown_rows,
         ))
     };
 
@@ -187,7 +158,7 @@ pub async fn handle(
     // the topic sweep (`KafkaApis.scala:2163-2165`). A request whose every row
     // is denied or unknown answers those rows and nothing else: no routing
     // check, no fencing, no transaction registration.
-    let reserved = reserved_keys(&req, &denied_topics, &unknown_rows);
+    let reserved = reserved_keys(&req, &sweep.denied_topics, &sweep.unknown_rows);
     if reserved.is_empty() {
         return respond(codes::NONE);
     }
@@ -334,16 +305,13 @@ pub async fn handle(
     let appended = match append_txn_batch(
         &req,
         LocalOffsets {
-            registry: &partitions,
+            registry: &broker.partitions,
             metadata: &*broker.controller,
             node_id: broker.config.node_id,
         },
         offsets_partition,
         now_ms,
-        RowSweep {
-            denied_topics: &denied_topics,
-            unknown_rows: &unknown_rows,
-        },
+        sweep.rows(),
         AppendChecks {
             producer_check,
             record_topic_ids,
@@ -402,6 +370,65 @@ pub async fn handle(
             );
             respond(batch::append_error_code(&error))
         }
+    }
+}
+
+/// The rows the topic sweep answered with their own codes: the topics the
+/// principal may not `Read`, and the rows of authorized topics that the
+/// existence check flagged. Every later exit keeps these codes.
+struct TopicSweep {
+    denied_topics: HashSet<String>,
+    unknown_rows: HashSet<TopicPartition>,
+}
+
+impl TopicSweep {
+    /// The sweep as the transactional append reads it.
+    fn rows(&self) -> RowSweep<'_> {
+        RowSweep {
+            denied_topics: &self.denied_topics,
+            unknown_rows: &self.unknown_rows,
+        }
+    }
+}
+
+/// The topic sweep that runs after the ACL preamble.
+///
+/// KIP-1319 names every topic and gives it its id (see [`resolve_topics`]).
+/// The per-topic `Read` gate then denies whole topics, and the existence check
+/// flags every partition of an authorized topic that the metadata image does
+/// not hold.
+fn sweep_topics(
+    broker: &Broker,
+    ctx: &RequestContext<'_>,
+    req: &mut TxnOffsetCommitRequest,
+    version: i16,
+) -> TopicSweep {
+    let topic_ids = version >= FIRST_TOPIC_ID_VERSION;
+    let image = broker.controller.current_image();
+    resolve_topics(req, version, &image);
+    let topic_names: Vec<&str> = req
+        .topics
+        .iter()
+        .map(|t| t.name.as_str())
+        .filter(|name| !(topic_ids && name.is_empty()))
+        .collect();
+    let topic_decisions = authorize_topics(
+        broker.config.authorizer.as_ref(),
+        &*image,
+        ctx.principal,
+        ctx.peer,
+        AclOperation::Read,
+        topic_names,
+    );
+    let denied_topics: HashSet<String> = topic_decisions
+        .into_iter()
+        .filter(|&(_, r)| r == AuthorizationResult::Deny)
+        .map(|(name, _)| name.to_owned())
+        .collect();
+    let unknown_rows = unknown_partitions(&req.topics, &denied_topics, &image);
+    TopicSweep {
+        denied_topics,
+        unknown_rows,
     }
 }
 
