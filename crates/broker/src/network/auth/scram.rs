@@ -16,8 +16,10 @@ use {
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_authenticate_response::SaslAuthenticateResponse,
     },
+    krabka_metadata::MetadataImage,
     krabka_security::{
-        Principal, SaslMechanism, ScramServerExchange, SecretBytes, compute_token_hmac,
+        AuthMethod, Principal, SaslMechanism, ScramCredential, ScramServerExchange, SecretBytes,
+        compute_token_hmac,
         scram::{self, MIN_SCRAM_ITERATIONS},
     },
     krabka_units::Time,
@@ -87,68 +89,19 @@ pub fn handle_authenticate_scram(
                 return fail_authenticate("SCRAM username has an invalid `=` escape");
             };
 
-            // Kafka's `ScramSaslServer` picks the credential store from the
-            // `tokenauth` extension alone: with it the name is a delegation-token
-            // id and only the token cache is read, without it only the SCRAM user
-            // store is. A token carries a credential for every SCRAM mechanism
-            // (`DelegationTokenManager.prepareScramCredentials`).
-            let image = controller.current_image();
-            let token_requested = client_first.token_authenticated();
-            let regular = if token_requested {
-                None
-            } else {
-                image.scram_credential(&username, mech)
-            };
-            // Kafka keeps its token cache only when `delegation.token.secret.key`
-            // is set, so a token is found only next to the key that recomputes
-            // its password.
-            let token = secret_key.filter(|_| token_requested).and_then(|secret| {
-                image
-                    .delegation_token_by_id(&username)
-                    .map(|token| (token, secret))
-            });
-            // A stored token is a credential whether or not it has expired, as
-            // in Kafka's `ScramServerCallbackHandler`, which reads the token
-            // cache without an expiry check. Its expiry bounds the session
-            // below, so an expired token gets a lifetime of 0 and its next
-            // request closes the connection; the expiry sweep removes it.
-            // The verified selector's `token_mechanism` input is whether the
-            // token store may be read, which is the `tokenauth` extension.
-            let (cred, principal, token_expiry_ms) = match (
-                scram_credential_source(regular.is_some(), token_requested, token.is_some()),
-                regular,
-                token,
+            let ResolvedCredential {
+                credential,
+                principal,
+                token_expiry_ms,
+            } = match resolve_scram_credential(
+                &controller.current_image(),
+                &username,
+                mech,
+                client_first.token_authenticated(),
+                secret_key,
             ) {
-                (ScramCredentialSource::Regular, Some(regular), _) => (
-                    regular.clone(),
-                    Principal {
-                        name: username.clone(),
-                        auth_method: krabka_security::AuthMethod::from_sasl(mech),
-                        groups: vec![],
-                    },
-                    None,
-                ),
-                (ScramCredentialSource::DelegationToken, _, Some((token, secret))) => {
-                    let owner = Principal {
-                        name: token.owner.name.clone(),
-                        auth_method: krabka_security::AuthMethod::from_sasl(mech),
-                        groups: vec![],
-                    };
-                    (
-                        synthesize_token_scram_credential(token, secret, mech),
-                        owner,
-                        Some(token.expiry_timestamp_ms),
-                    )
-                }
-                // The selector names a source only when that source exists.
-                (
-                    ScramCredentialSource::Unknown
-                    | ScramCredentialSource::Regular
-                    | ScramCredentialSource::DelegationToken,
-                    ..,
-                ) => {
-                    return fail_authenticate("unknown user");
-                }
+                Ok(resolved) => resolved,
+                Err(refusal) => return refusal,
             };
 
             // Kafka checks the GS2 authorization id only once a credential is
@@ -166,14 +119,14 @@ pub fn handle_authenticate_scram(
             // (4096) iterations. It throws a `SaslException`, so the client
             // gets the generic text. `AlterUserScramCredentials` never writes
             // such a credential, but a bootstrap record can carry one.
-            if i64::from(cred.iterations) < i64::from(MIN_SCRAM_ITERATIONS) {
+            if i64::from(credential.iterations) < i64::from(MIN_SCRAM_ITERATIONS) {
                 return fail_authenticate("SCRAM credential iterations below the minimum");
             }
 
             // The exchange decodes the `n=` value and checks it against its
             // username, as `ScramSaslServer` does with `ScramFormatter.username`,
             // so it gets the decoded name.
-            let server = ScramServerExchange::new_with_principal(username, cred, principal);
+            let server = ScramServerExchange::new_with_principal(username, credential, principal);
             // Feed the same client-first bytes; on success the exchange emits
             // the server-first message and yields the next phase.
             match server.step(&req.auth_bytes) {
@@ -267,6 +220,90 @@ pub fn handle_authenticate_scram(
 /// `SaslAuthenticate` response and no `connection.failed.authentication.delay.ms`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScramDisconnect;
+
+/// The credential round 1 found, and the principal it authenticates.
+struct ResolvedCredential {
+    credential: ScramCredential,
+    principal: Principal,
+    /// The delegation token's expiry, or `None` for a SCRAM user credential.
+    token_expiry_ms: Option<i64>,
+}
+
+/// Looks up the credential for `username` in the store the client-first
+/// message picked.
+///
+/// Kafka's `ScramSaslServer` picks the credential store from the `tokenauth`
+/// extension alone: with it the name is a delegation-token id and only the
+/// token cache is read, without it only the SCRAM user store is. A token
+/// carries a credential for every SCRAM mechanism
+/// (`DelegationTokenManager.prepareScramCredentials`).
+///
+/// # Errors
+///
+/// The `unknown user` refusal when the chosen store holds no credential.
+fn resolve_scram_credential(
+    image: &MetadataImage,
+    username: &str,
+    mech: SaslMechanism,
+    token_requested: bool,
+    secret_key: Option<&SecretBytes>,
+) -> Result<ResolvedCredential, SaslAuthenticateResponse> {
+    let regular = if token_requested {
+        None
+    } else {
+        image.scram_credential(username, mech)
+    };
+    // Kafka keeps its token cache only when `delegation.token.secret.key`
+    // is set, so a token is found only next to the key that recomputes
+    // its password.
+    let token = secret_key.filter(|_| token_requested).and_then(|secret| {
+        image
+            .delegation_token_by_id(username)
+            .map(|token| (token, secret))
+    });
+    // A stored token is a credential whether or not it has expired, as
+    // in Kafka's `ScramServerCallbackHandler`, which reads the token
+    // cache without an expiry check. Its expiry bounds the session, so an
+    // expired token gets a lifetime of 0 and its next request closes the
+    // connection; the expiry sweep removes it. The verified selector's
+    // `token_mechanism` input is whether the token store may be read,
+    // which is the `tokenauth` extension.
+    match (
+        scram_credential_source(regular.is_some(), token_requested, token.is_some()),
+        regular,
+        token,
+    ) {
+        (ScramCredentialSource::Regular, Some(regular), _) => Ok(ResolvedCredential {
+            credential: regular.clone(),
+            principal: scram_principal(username.to_owned(), mech),
+            token_expiry_ms: None,
+        }),
+        (ScramCredentialSource::DelegationToken, _, Some((token, secret))) => {
+            Ok(ResolvedCredential {
+                credential: synthesize_token_scram_credential(token, secret, mech),
+                principal: scram_principal(token.owner.name.clone(), mech),
+                token_expiry_ms: Some(token.expiry_timestamp_ms),
+            })
+        }
+        // The selector names a source only when that source exists.
+        (
+            ScramCredentialSource::Unknown
+            | ScramCredentialSource::Regular
+            | ScramCredentialSource::DelegationToken,
+            ..,
+        ) => Err(fail_authenticate("unknown user")),
+    }
+}
+
+/// The principal a SCRAM credential authenticates: `name`, with the auth
+/// method of `mech` and no groups.
+fn scram_principal(name: String, mech: SaslMechanism) -> Principal {
+    Principal {
+        name,
+        auth_method: AuthMethod::from_sasl(mech),
+        groups: vec![],
+    }
+}
 
 /// The iteration count of a delegation token's SCRAM credential: Kafka's
 /// `DelegationTokenManager.prepareScramCredentials` uses each mechanism's
