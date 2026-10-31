@@ -16,6 +16,7 @@ use {
         handlers::{
             ApiVersion, ErrorResponse as _, RequestContext,
             acl_gates::{group_protocol_refusal, subscribed_names_response},
+            coordinator_routing::java_blank,
             group_coordinator_error, group_coordinator_error_response,
             share_fetch::member_id_is_valid,
         },
@@ -151,22 +152,17 @@ fn share_group_lookup_error(
     })
 }
 
-/// Kafka's `Utils.throwIfEmptyString` test: a set value that Java's
-/// `String.trim` reduces to nothing, which strips every character at or below
-/// U+0020 from both ends.
-fn blank(value: &str) -> bool { value.chars().all(|c| c <= ' ') }
-
 /// The `INVALID_REQUEST` message of Kafka's
 /// `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`, or
 /// `None` for a well-formed request.
 fn invalid_request_message(req: &ShareGroupHeartbeatRequest) -> Option<&'static str> {
-    if blank(&req.member_id) {
+    if java_blank(&req.member_id) {
         return Some("MemberId can't be empty.");
     }
-    if blank(&req.group_id) {
+    if java_blank(&req.group_id) {
         return Some("GroupId can't be empty.");
     }
-    if req.rack_id.as_deref().is_some_and(blank) {
+    if req.rack_id.as_deref().is_some_and(java_blank) {
         return Some("RackId can't be empty.");
     }
     if req.member_epoch == 0 {
