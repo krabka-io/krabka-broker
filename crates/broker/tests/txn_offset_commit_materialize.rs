@@ -27,7 +27,7 @@ use {
         offsets::{
             offset_commit_topic, offset_fetch_group, offset_fetch_request, offset_fetch_topic,
         },
-        topics::{creatable_topic, create_topic_request},
+        client::create_topic,
         transactions::{
             EndTransactionSetup, ProducerEpoch, ProducerIdentity, TransactionOutcome,
             end_transaction_request, init_producer_request, txn_offset_partition, txn_offset_topic,
@@ -74,18 +74,6 @@ async fn start() -> support::InProcess {
 }
 
 const TOPIC: &str = "src";
-
-/// Create a single-partition topic and return nothing. This test keys offsets
-/// by name.
-async fn create_topic(client: &krabka_client_core::Client) {
-    let resp = client
-        .send(create_topic_request(
-            creatable_topic().name((TOPIC).into()).call(),
-        ))
-        .await
-        .expect("create topic");
-    assert!(resp.topics[0].error_code == 0, "create topic: {resp:?}");
-}
 
 /// `OffsetFetch` for `(TOPIC, 0)` under `group_id`. This function fills BOTH
 /// the legacy v0–7 single-group fields and the v8+ `groups[]` shape, which
@@ -376,7 +364,7 @@ impl TransactionalOffsets {
 #[rstest_bdd_macros::given("a source topic and group coordinator are ready on one broker")]
 async fn transactional_offset_topic(transactional_offsets: &mut TransactionalOffsets) {
     transactional_offsets.process = Some(start().await);
-    create_topic(&transactional_offsets.process().client).await;
+    create_topic(&transactional_offsets.process().client, TOPIC, 1).await;
     transactional_offsets.topic_id =
         Some(topic_id_for(&transactional_offsets.process().client, TOPIC).await);
 }

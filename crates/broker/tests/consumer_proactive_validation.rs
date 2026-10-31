@@ -74,12 +74,11 @@ mod support;
 
 use {
     crate::support::{
-        client::connect_client,
+        client::{connect_client, create_topic},
         consumer_groups::routing_consumer,
         produce::{SinglePartitionProduceSetup, batch_request},
         records::value_record,
         standalone_broker,
-        topics::{creatable_topic, create_topic_request},
     },
     assert2::{assert, check},
     bytes::Bytes,
@@ -138,16 +137,6 @@ async fn produce(client: &Client, topic: &str, values: &[&str]) {
     }
 }
 
-async fn create_topic(client: &Client, name: &str) {
-    let cr = client
-        .send(create_topic_request(
-            creatable_topic().name((name).into()).call(),
-        ))
-        .await
-        .expect("CreateTopics");
-    assert!(cr.topics[0].error_code == 0, "create_topic failed: {cr:?}");
-}
-
 use krabka_client_consumer::{Consumer, ConsumerRecord};
 struct ProactiveValidation {
     directory: Option<tempfile::TempDir>,
@@ -183,7 +172,7 @@ async fn consumed_epoch_zero(validation: &mut ProactiveValidation) {
     let topic = "proactive-trunc";
 
     let producer = connect_client(&bootstrap, Some("p")).await;
-    create_topic(&producer, topic).await;
+    create_topic(&producer, topic, 1).await;
     // 4 records at the natural leader epoch 0 → offsets 0..=3, LEO 4,
     // epoch checkpoint `0 -> 0`.
     produce(&producer, topic, &["v0", "v1", "v2", "v3"]).await;
