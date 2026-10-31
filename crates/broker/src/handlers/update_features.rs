@@ -39,10 +39,23 @@ use {
     crate::{
         broker::Broker,
         codes,
-        handlers::{RequestContext, audit_admin_success, audit_resource, cluster_alter_denied},
+        handlers::{
+            RequestContext, audit_admin_success, audit_resource, cluster_alter_denied,
+            forward_to_controller::{guarded_operation_on_source, to_active_controller_or_handle},
+        },
         metadata_source::MetadataSource,
     },
+    krabka_protocol::owned::update_features_request,
+    std::{
+        sync::{Mutex, PoisonError},
+        time::Duration,
+    },
+    tokio::time::Instant,
 };
+
+/// `Errors.REQUEST_TIMED_OUT.message()`, the answer of a write the controller
+/// did not admit before the deadline.
+const REQUEST_TIMED_OUT_MESSAGE: &str = "The request timed out.";
 
 /// `NOT_CONTROLLER`'s answer when the write reaches a node that has lost the
 /// quorum leadership.
@@ -97,7 +110,31 @@ pub async fn handle(
     version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<UpdateFeaturesResponse, BrokerError> {
-    Ok(answer(broker, req, version, ctx).await)
+    // Kafka's `KafkaApis.handleUpdateFeatures` forwards the request to the
+    // active controller, which validates and writes it against its own image.
+    to_active_controller_or_handle(
+        broker,
+        req,
+        update_features_request::API_KEY,
+        version,
+        ctx,
+        request_refusal,
+        |req| async move { Ok(answer(broker, req, version, ctx).await) },
+    )
+    .await
+}
+
+/// The answer `ForwardingManagerImpl` makes up when the controller gives none.
+fn request_refusal(
+    _req: &UpdateFeaturesRequest,
+    code: i16,
+    message: Option<&str>,
+) -> UpdateFeaturesResponse {
+    UpdateFeaturesResponse {
+        error_code: code,
+        error_message: message.map(str::to_owned),
+        ..Default::default()
+    }
 }
 
 /// Runs the `UpdateFeatures` request at `version` and returns the typed
@@ -148,7 +185,24 @@ pub async fn answer(
     success(&req, version)
 }
 
+/// How long one request may wait for the controller to admit its write,
+/// replanning after every intervening commit.
+const SUBMIT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Validates `req` against the metadata image of `source` and writes it.
+///
+/// Kafka's `QuorumController.updateFeatures` validates the request and
+/// generates its records on the controller event thread, so nothing commits
+/// between the two. Here the plan and the append run in
+/// [`guarded_operation_on_source`]: an append whose image is no longer
+/// current is refused, and the request is validated and planned again on the
+/// newer image.
+///
+/// A `kraft.version` upgrade is finalized before the feature records are
+/// appended, as `FeatureControlManager.updateFeature` asks the KRaft layer to
+/// upgrade before it returns the records. A request whose append then fails
+/// leaves `kraft.version` upgraded, as it does in Kafka. A retry never
+/// finalizes the same level twice.
 ///
 /// Returns the features to audit, `None` for a `validate_only` request that
 /// passed, or the response that refuses the request.
@@ -158,52 +212,90 @@ async fn apply_updates(
     local_controller: preconditions::LocalController,
     default_min_insync_replicas: i32,
 ) -> Result<Option<Vec<String>>, UpdateFeaturesResponse> {
-    let image = source.current_image();
-    let mut plan = plan_updates(req, &image, local_controller).map_err(|e| feature_error(&e))?;
-    if req.validate_only {
-        // Kafka's `FeatureControlManager.updateFeature` asks the KRaft layer to
-        // upgrade `kraft.version` with `validateOnly` set, and
-        // `LeaderState.maybeAppendUpgradedKRaftVersion` runs every one of its
-        // checks and skips only the append.
-        if let Some(level) = plan.kraft_upgrade
-            && let Some(refusal) = kraft_upgrade_refusal(source.validate_kraft_version(level).await)
-        {
-            return Err(refusal);
-        }
-        return Ok(None);
-    }
-    // KIP-966: turning ELR on writes its safety config records in the same
-    // batch, ahead of the feature record, as Kafka's
-    // `ConfigurationControlManager.updateFeatures` does.
-    if plan.enables_elr {
-        let mut batch = validate::elr_safety_records(&image, default_min_insync_replicas);
-        batch.append(&mut plan.records);
-        plan.records = batch;
-    }
-
-    if let Some(level) = plan.kraft_upgrade
-        && let Some(refusal) = kraft_upgrade_refusal(source.finalize_kraft_version(level).await)
-    {
-        return Err(refusal);
-    }
-
-    if !plan.records.is_empty() {
-        match source.submit_change(plan.records).await {
-            Ok(_) => {}
-            Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-                return Err(top_level_error(
-                    codes::NOT_CONTROLLER,
-                    NOT_CONTROLLER_MESSAGE,
-                ));
+    let finalized_kraft = Mutex::new(None);
+    let finalized_kraft = &finalized_kraft;
+    let result = guarded_operation_on_source(source, Instant::now() + SUBMIT_TIMEOUT, |image| {
+        async move {
+            let mut plan = match plan_updates(req, &image, local_controller) {
+                Ok(plan) => plan,
+                Err(error) => return Ok(Err(feature_error(&error))),
+            };
+            if req.validate_only {
+                // Kafka's `FeatureControlManager.updateFeature` asks the KRaft
+                // layer to upgrade `kraft.version` with `validateOnly` set, and
+                // `LeaderState.maybeAppendUpgradedKRaftVersion` runs every one
+                // of its checks and skips only the append.
+                if let Some(level) = plan.kraft_upgrade
+                    && let Some(refusal) =
+                        kraft_upgrade_refusal(source.validate_kraft_version(level).await)
+                {
+                    return Ok(Err(refusal));
+                }
+                return Ok(Ok(None));
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "UpdateFeatures: submit_change failed");
-                return Err(top_level_error(
-                    codes::FEATURE_UPDATE_FAILED,
-                    "Failed to persist the feature update.",
-                ));
+            // KIP-966: turning ELR on writes its safety config records in the
+            // same batch, ahead of the feature record, as Kafka's
+            // `ConfigurationControlManager.updateFeatures` does.
+            if plan.enables_elr {
+                let mut batch = validate::elr_safety_records(&image, default_min_insync_replicas);
+                batch.append(&mut plan.records);
+                plan.records = batch;
             }
+
+            let already_finalized = *finalized_kraft
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(level) = plan.kraft_upgrade
+                && already_finalized != Some(level)
+            {
+                if let Some(refusal) =
+                    kraft_upgrade_refusal(source.finalize_kraft_version(level).await)
+                {
+                    return Ok(Err(refusal));
+                }
+                *finalized_kraft
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = Some(level);
+            }
+
+            if !plan.records.is_empty() {
+                match source.submit_change_if_image(plan.records, image).await {
+                    Ok(_) => {}
+                    Err(
+                        error @ (RaftError::StaleMetadataImage
+                        | RaftError::UncommittedTail
+                        | RaftError::NotLeader { .. }
+                        | RaftError::LeaderUnknown),
+                    ) => return Err(error),
+                    Err(error) => {
+                        tracing::warn!(%error, "UpdateFeatures: submit_change failed");
+                        return Ok(Err(top_level_error(
+                            codes::FEATURE_UPDATE_FAILED,
+                            "Failed to persist the feature update.",
+                        )));
+                    }
+                }
+            }
+            Ok(Ok(Some(plan.features)))
+        }
+    })
+    .await;
+    match result {
+        Ok(Ok(outcome)) => outcome,
+        Err(_) => Err(top_level_error(
+            codes::REQUEST_TIMED_OUT,
+            REQUEST_TIMED_OUT_MESSAGE,
+        )),
+        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => Err(top_level_error(
+            codes::NOT_CONTROLLER,
+            NOT_CONTROLLER_MESSAGE,
+        )),
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "UpdateFeatures: submit_change failed");
+            Err(top_level_error(
+                codes::FEATURE_UPDATE_FAILED,
+                "Failed to persist the feature update.",
+            ))
         }
     }
-    Ok(Some(plan.features))
 }
