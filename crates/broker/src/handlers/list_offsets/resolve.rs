@@ -536,6 +536,47 @@ fn apply_selection(
     }
 }
 
+/// What one kind of lookup resolved, before the KIP-207 fence and the
+/// selection measure it. `leader_epoch` is `None` when the row keeps the
+/// epoch it was built with.
+struct Resolved {
+    offset: i64,
+    timestamp: i64,
+    leader_epoch: Option<i32>,
+}
+
+impl Resolved {
+    /// An offset sentinel's answer: an offset and its epoch, no timestamp.
+    const fn at(resolved: ResolvedOffset) -> Self {
+        Self {
+            offset: resolved.offset,
+            timestamp: UNKNOWN_TIMESTAMP,
+            leader_epoch: Some(resolved.leader_epoch),
+        }
+    }
+
+    /// A tiered sentinel's answer, or the unknown offset when it named none.
+    fn at_or_unknown(resolved: Option<ResolvedOffset>) -> Self {
+        resolved.map_or(
+            Self {
+                offset: UNKNOWN_OFFSET,
+                timestamp: UNKNOWN_TIMESTAMP,
+                leader_epoch: None,
+            },
+            Self::at,
+        )
+    }
+
+    /// A by-record lookup's answer, with the epoch of the batch it found.
+    fn found(partition: &Partition, offset: i64, timestamp: i64) -> Self {
+        Self {
+            offset,
+            timestamp,
+            leader_epoch: epoch_of_found(partition, offset),
+        }
+    }
+}
+
 /// Log coordinates and policy read together before any remote lookup awaits.
 struct PartitionLogSnapshot {
     local_start: i64,
@@ -638,31 +679,23 @@ pub(super) async fn resolve_partition(
         deleted_below,
         local_log_start,
     };
-    let (offset, timestamp) = match kind {
-        ListOffsetsKind::Earliest => match resolve_earliest(earliest_context()).await {
-            Ok(ResolvedOffset {
-                offset: earliest,
-                leader_epoch,
-            }) => {
-                response.leader_epoch = leader_epoch;
-                (earliest, UNKNOWN_TIMESTAMP)
-            }
-            Err(error_code) => return error_response(index, error_code),
-        },
+    let topic = TopicPartitionName {
+        name: topic_name,
+        partition: index,
+    };
+    let resolved = match kind {
+        ListOffsetsKind::Earliest => resolve_earliest(earliest_context()).await.map(Resolved::at),
         ListOffsetsKind::Latest => {
             // Kafka answers LATEST with the partition's live leader epoch,
             // not the epoch recorded for whatever offset the log end
             // happens to sit at -- the two agree once a record lands in the
             // new epoch, but LATEST must not wait for that.
             // `Partition.scala:1473-1475`.
-            response.leader_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
-            match resolve_latest(LatestContext {
+            let live_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
+            resolve_latest(LatestContext {
                 broker,
                 partition: &partition,
-                topic: TopicPartitionName {
-                    name: topic_name,
-                    partition: index,
-                },
+                topic,
                 remote_timeout,
                 remote_topic_id,
                 snapshot: LatestSnapshot {
@@ -673,10 +706,12 @@ pub(super) async fn resolve_partition(
                 },
             })
             .await
-            {
-                Ok(latest) => (latest, UNKNOWN_TIMESTAMP),
-                Err(error_code) => return error_response(index, error_code),
-            }
+            .map(|latest| {
+                Resolved::at(ResolvedOffset {
+                    offset: latest,
+                    leader_epoch: live_epoch,
+                })
+            })
         }
         ListOffsetsKind::EarliestLocal => {
             let offset = if remote_enabled {
@@ -684,79 +719,51 @@ pub(super) async fn resolve_partition(
             } else {
                 local_start
             };
-            response.leader_epoch = leader_epoch_for_offset(&partition, offset);
-            (offset, UNKNOWN_TIMESTAMP)
+            Ok(Resolved::at(ResolvedOffset {
+                offset,
+                leader_epoch: leader_epoch_for_offset(&partition, offset),
+            }))
         }
         ListOffsetsKind::LatestTiered => {
-            let topic = TopicPartitionName {
-                name: topic_name,
-                partition: index,
-            };
-            match resolve_latest_tiered(broker, topic, remote_topic_id, remote_timeout).await {
-                Ok(None) => (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
-                Ok(Some(ResolvedOffset {
-                    offset,
-                    leader_epoch,
-                })) => {
-                    response.leader_epoch = leader_epoch;
-                    (offset, UNKNOWN_TIMESTAMP)
-                }
-                Err(error_code) => return error_response(index, error_code),
-            }
+            resolve_latest_tiered(broker, topic, remote_topic_id, remote_timeout)
+                .await
+                .map(Resolved::at_or_unknown)
         }
         ListOffsetsKind::EarliestPendingUpload => {
-            match resolve_earliest_pending_upload(earliest_context()).await {
-                Ok(None) => (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
-                Ok(Some(ResolvedOffset {
-                    offset,
-                    leader_epoch,
-                })) => {
-                    response.leader_epoch = leader_epoch;
-                    (offset, UNKNOWN_TIMESTAMP)
-                }
-                Err(error_code) => return error_response(index, error_code),
-            }
+            resolve_earliest_pending_upload(earliest_context())
+                .await
+                .map(Resolved::at_or_unknown)
         }
-        ListOffsetsKind::MaxTimestamp => {
-            let topic = TopicPartitionName {
-                name: topic_name,
-                partition: index,
-            };
-            let (offset, timestamp) = match resolve_max_timestamp(&partition, topic) {
-                Ok(found) => found,
-                Err(error_code) => return error_response(index, error_code),
-            };
-            // Kafka fills the epoch with the resolved batch's own
-            // `partitionLeaderEpoch`. `UnifiedLog.java:1742-1749`.
-            if let Some(leader_epoch) = epoch_of_found(&partition, offset) {
-                response.leader_epoch = leader_epoch;
-            }
-            (offset, timestamp)
-        }
-        ListOffsetsKind::Timestamp => {
-            let (offset, timestamp) = match resolve_timestamp_offset(
-                broker,
-                &partition,
-                topic_name,
-                index,
-                topic_id,
-                request.timestamp,
-                remote_timeout,
-            )
-            .await
-            {
-                Ok(found) => found,
-                Err(error_code) => return error_response(index, error_code),
-            };
-            // Kafka fills the epoch with the matched batch's own epoch.
-            // `FileRecords.java:364-381`.
-            if let Some(leader_epoch) = epoch_of_found(&partition, offset) {
-                response.leader_epoch = leader_epoch;
-            }
-            (offset, timestamp)
-        }
+        // Kafka fills the epoch with the resolved batch's own
+        // `partitionLeaderEpoch`. `UnifiedLog.java:1742-1749`.
+        ListOffsetsKind::MaxTimestamp => resolve_max_timestamp(&partition, topic)
+            .map(|(offset, timestamp)| Resolved::found(&partition, offset, timestamp)),
+        // Kafka fills the epoch with the matched batch's own epoch.
+        // `FileRecords.java:364-381`.
+        ListOffsetsKind::Timestamp => resolve_timestamp_offset(
+            broker,
+            &partition,
+            topic_name,
+            index,
+            topic_id,
+            request.timestamp,
+            remote_timeout,
+        )
+        .await
+        .map(|(offset, timestamp)| Resolved::found(&partition, offset, timestamp)),
         ListOffsetsKind::Unsupported => unreachable!("unsupported timestamp returned above"),
     };
+    let Resolved {
+        offset,
+        timestamp,
+        leader_epoch,
+    } = match resolved {
+        Ok(resolved) => resolved,
+        Err(error_code) => return error_response(index, error_code),
+    };
+    if let Some(leader_epoch) = leader_epoch {
+        response.leader_epoch = leader_epoch;
+    }
     // KIP-207 for a data-resolved lookup: fenced only when it found nothing
     // or found an offset the request's bound does not yet cover.
     if let (Some(error_code), Some(last_fetchable)) = (offsets_error, last_fetchable)
