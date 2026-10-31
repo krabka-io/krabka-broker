@@ -10,9 +10,13 @@ use {
         network::{client::tune_socket, dispatch},
         quota::{lookup_ip_quota_with_key, positive_f64_to_u64},
     },
-    krabka_raft::{AcceptingListener, ConnectionLimit},
+    krabka_raft::{AcceptingListener, ConnectionGuard, ConnectionLimit, ConnectionQuotas},
     krabka_units::{ByteSize, Time, convert::TimeExt as _},
-    std::{net::IpAddr, sync::Arc, time::Instant},
+    std::{
+        net::{IpAddr, SocketAddr},
+        sync::Arc,
+        time::Instant,
+    },
     tokio::{
         net::{TcpListener, TcpStream},
         task::JoinSet,
@@ -55,6 +59,70 @@ fn connection_creation_throttle(broker: &Broker, peer_ip: IpAddr) -> Option<Time
             .get_or_create(CONNECTION_CREATION_RATE_QUOTA_KEY, &entity_key, rate);
     (bucket.try_consume(1) == 0)
         .then(|| connection_creation_delay(rate, broker.config.connection_creation_throttle_max))
+}
+
+/// What the accept loop does with a connection it accepted.
+enum Admission {
+    /// Serve the connection. The guard holds its connection slots and must
+    /// live as long as the connection does.
+    Serve(ConnectionGuard),
+    /// Over the peer's KIP-612 `connection_creation_rate`: hold the socket
+    /// for the throttle time, then close it without serving it.
+    Throttled(Time),
+    /// Over a connection cap: close the socket at once.
+    Rejected,
+}
+
+/// Decide whether the connection `peer` opened on `accepting` is served.
+///
+/// KIP-612 `connection_creation_rate` is checked before the connection takes
+/// a slot, as Kafka's `ConnectionQuotas.inc` records the ip rate before it
+/// counts the connection. A connection over the rate is never served: the
+/// broker holds the socket for the throttle time and then closes it, so the
+/// client backs off and reconnects later. The caller runs the hold as a task
+/// of its own, so the accept loop keeps accepting other connections
+/// meanwhile, as Kafka's acceptor does with `throttledSockets`.
+///
+/// Then come the connection caps: this listener's, the broker's and the peer
+/// address's. A slot is reserved before doing any work; on rejection the
+/// caller closes the socket at once. Kafka closes a connection over the
+/// per-IP cap and waits for a slot under the other two.
+fn admit(
+    broker: &Broker,
+    spec: &ListenerSpec,
+    accepting: AcceptingListener<'_>,
+    quotas: &ConnectionQuotas,
+    peer: SocketAddr,
+) -> Admission {
+    let peer_ip = peer.ip();
+    if let Some(delay) = connection_creation_throttle(broker, peer_ip) {
+        // Kafka un-records a throttled connection from the broker-wide and
+        // listener rates.
+        broker.connections.refund_creation(accepting, quotas);
+        broker
+            .metrics
+            .observe_quota_throttle(QuotaType::ConnectionCreation, delay.secs_f64());
+        tracing::debug!(
+            %peer,
+            name = %spec.name,
+            delay_ms = delay.millis_i64(),
+            "connection_creation_rate exceeded; closing connection after the throttle"
+        );
+        return Admission::Throttled(delay);
+    }
+    match broker.connections.try_acquire_within(peer_ip, accepting, quotas) {
+        Ok(guard) => Admission::Serve(guard),
+        Err(limit) => {
+            broker.metrics.record_connection_close(close_reason(limit));
+            tracing::debug!(
+                %peer,
+                name = %spec.name,
+                ?limit,
+                "connection limit reached; closing connection"
+            );
+            Admission::Rejected
+        }
+    }
 }
 
 /// Hold a throttled socket for `delay`, then close it without reading a
@@ -102,7 +170,6 @@ pub(super) async fn accept_loop(
                 match accept {
                     Ok((stream, peer)) => {
                         tracing::debug!(%peer, name = %spec.name, "accepted connection");
-                        let peer_ip = peer.ip();
                         // Kafka's `ConnectionQuotas.protectedListener` is
                         // evaluated at each accept, so a listener added or
                         // removed while the broker runs protects or
@@ -143,51 +210,13 @@ pub(super) async fn accept_loop(
                             }
                         }
 
-                        // KIP-612 `connection_creation_rate`, checked before
-                        // the connection takes a slot, as Kafka's
-                        // `ConnectionQuotas.inc` records the ip rate before
-                        // it counts the connection. A connection over the
-                        // rate is never served: the broker holds the socket
-                        // for the throttle time and then closes it, so the
-                        // client backs off and reconnects later. The hold
-                        // runs as a task of its own, so the accept loop keeps
-                        // accepting other connections meanwhile, as Kafka's
-                        // acceptor does with `throttledSockets`.
-                        if let Some(delay) = connection_creation_throttle(&broker, peer_ip) {
-                            // Kafka un-records a throttled connection from
-                            // the broker-wide and listener rates.
-                            broker.connections.refund_creation(accepting, &quotas);
-                            broker.metrics.observe_quota_throttle(
-                                QuotaType::ConnectionCreation,
-                                delay.secs_f64(),
-                            );
-                            tracing::debug!(
-                                %peer,
-                                name = %spec.name,
-                                delay_ms = delay.millis_i64(),
-                                "connection_creation_rate exceeded; closing connection after the throttle"
-                            );
-                            connections.spawn(close_after(stream, delay));
-                            continue;
-                        }
-
-                        // The connection caps: this listener's, the broker's
-                        // and the peer address's. Reserve a slot before doing
-                        // any work; on rejection close the socket at once.
-                        // Kafka closes a connection over the per-IP cap and
-                        // waits for a slot under the other two. The guard is
-                        // moved into the spawned task so the counts are
-                        // released however the connection ends.
-                        let conn_guard = match broker.connections.try_acquire_within(peer_ip, accepting, &quotas) {
-                            Ok(guard) => guard,
-                            Err(limit) => {
-                                broker.metrics.record_connection_close(close_reason(limit));
-                                tracing::debug!(
-                                    %peer,
-                                    name = %spec.name,
-                                    ?limit,
-                                    "connection limit reached; closing connection"
-                                );
+                        let conn_guard = match admit(&broker, &spec, accepting, &quotas, peer) {
+                            Admission::Serve(guard) => guard,
+                            Admission::Throttled(delay) => {
+                                connections.spawn(close_after(stream, delay));
+                                continue;
+                            }
+                            Admission::Rejected => {
                                 drop(stream);
                                 continue;
                             }
