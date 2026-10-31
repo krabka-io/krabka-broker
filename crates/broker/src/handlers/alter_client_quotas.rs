@@ -37,6 +37,7 @@ use {
     },
     crate::{
         codes::{CLUSTER_AUTHORIZATION_FAILED, NONE},
+        metadata_source::MetadataSource,
         quota::parse_ip_literal,
     },
     krabka_client_core::transport,
@@ -64,29 +65,7 @@ pub async fn handle(
 
     let resolvable = resolve_ip_names(&req).await;
     let ip_is_valid = |name: &str| parse_ip_literal(name).is_some() || resolvable.contains(name);
-    let Alteration { results, records } =
-        alter_client_quotas(&req.entries, image.client_quotas(), &ip_is_valid);
-    let mut entry_results: Vec<_> = results
-        .iter()
-        .map(|(entity, outcome)| match outcome {
-            Ok(()) => ok_entry(entity),
-            Err((code, msg)) => err_entry(entity, *code, msg.clone()),
-        })
-        .collect();
-    // Kafka's `QuorumController.alterClientQuotas` drops the records of a
-    // `validate_only` request and keeps its results.
-    let to_submit: Vec<MetadataRecord> = if req.validate_only {
-        Vec::new()
-    } else {
-        records
-    };
-
-    if !to_submit.is_empty()
-        && let Err(e) = broker.controller.submit_change(to_submit).await
-    {
-        tracing::warn!(error = %e, "alter-client-quotas submit failed");
-        apply_submit_error(&mut entry_results, e);
-    }
+    let entry_results = alter_and_submit(broker.controller.as_ref(), &req, &ip_is_valid).await;
 
     if !req.validate_only {
         audit_admin_success(
@@ -106,6 +85,40 @@ pub async fn handle(
             entries: entry_results,
         }
     ))
+}
+
+/// Plans `req`'s entries against the quota state of `source` and submits the
+/// records they produce, returning one response row per distinct entity.
+async fn alter_and_submit(
+    source: &dyn MetadataSource,
+    req: &AlterClientQuotasRequest,
+    ip_is_valid: &(dyn Fn(&str) -> bool + Sync),
+) -> Vec<EntryData> {
+    let image = source.current_image();
+    let Alteration { results, records } =
+        alter_client_quotas(&req.entries, image.client_quotas(), ip_is_valid);
+    let mut entry_results: Vec<_> = results
+        .iter()
+        .map(|(entity, outcome)| match outcome {
+            Ok(()) => ok_entry(entity),
+            Err((code, msg)) => err_entry(entity, *code, msg.clone()),
+        })
+        .collect();
+    // Kafka's `QuorumController.alterClientQuotas` drops the records of a
+    // `validate_only` request and keeps its results.
+    let to_submit: Vec<MetadataRecord> = if req.validate_only {
+        Vec::new()
+    } else {
+        records
+    };
+
+    if !to_submit.is_empty()
+        && let Err(e) = source.submit_change(to_submit).await
+    {
+        tracing::warn!(error = %e, "alter-client-quotas submit failed");
+        apply_submit_error(&mut entry_results, e);
+    }
+    entry_results
 }
 
 /// Resolves every named `ip` entity that is not an IP literal.
