@@ -423,13 +423,37 @@ fn fenced(tp: &TopicIdPartition, ex: &SegmentExport, when: &str) {
 /// segment UUID, so its keys cannot collide with theirs. This residue is
 /// exactly what the WORM verifier reports as `orphan_objects`: unreferenced
 /// bytes are the standing cost of a tier that can take nothing back.
+///
+/// # A failed delete on a mutable tier
+///
+/// The RSM delete counts as one KIP-405 `RemoteDeleteRequestsPerSec`. When it
+/// fails, the rollback warns and counts a `RemoteDeleteErrorsPerSec`, but still
+/// drops the metadata: nothing retries the delete, and the failed copy's
+/// objects stay in the tier unreferenced, as Kafka's copy task leaves them when
+/// its own cleanup delete fails. A delete of objects the copy never wrote
+/// succeeds, since the RSM contract makes it idempotent.
 async fn rollback(tier: &RemoteTier<'_>, metadata: &RemoteLogSegmentMetadata, broker_id: i32) {
     let id = metadata.remote_log_segment_id().clone();
+    let tp = &id.topic_id_partition;
     match tier.archive {
         ArchiveMode::Mutable => {
+            tier.metrics
+                .record_remote_request(RemoteTierPath::Delete, &tp.topic);
             let rsm_del = Arc::clone(tier.rsm);
             let md_del = metadata.clone();
-            let _ = spawn_blocking(move || rsm_del.delete_log_segment_data(&md_del)).await;
+            let failure =
+                match spawn_blocking(move || rsm_del.delete_log_segment_data(&md_del)).await {
+                    Ok(Ok(())) => None,
+                    Ok(Err(e)) => Some(e.to_string()),
+                    Err(e) => Some(format!("RSM delete task panicked: {e}")),
+                };
+            if let Some(error) = failure {
+                warn!(topic = %tp.topic, partition = tp.partition, base = metadata.start_offset(),
+                      error, "remote-log-manager: failed to delete a failed copy's objects; \
+                              they stay in the tier unreferenced");
+                tier.metrics
+                    .record_remote_error(RemoteTierPath::Delete, &tp.topic);
+            }
         }
         ArchiveMode::WriteOnce => {
             debug!(topic = %id.topic_id_partition.topic,
@@ -443,7 +467,15 @@ async fn rollback(tier: &RemoteTier<'_>, metadata: &RemoteLogSegmentMetadata, br
         RemoteLogSegmentState::DeleteSegmentStarted,
         RemoteLogSegmentState::DeleteSegmentFinished,
     ] {
-        let _ = super::rlmm::update_segment(tier.rlmm, id.clone(), None, state, broker_id).await;
+        // A segment deleted under the copy is already `DeleteSegmentStarted`,
+        // so that update fails as expected; hence DEBUG.
+        if let Err(e) =
+            super::rlmm::update_segment(tier.rlmm, id.clone(), None, state, broker_id).await
+        {
+            debug!(topic = %tp.topic, partition = tp.partition, base = metadata.start_offset(),
+                   ?state, error = %e,
+                   "remote-log-manager: rollback could not record a delete state");
+        }
     }
 }
 
@@ -486,6 +518,33 @@ mod tests {
             _data: &LogSegmentData,
         ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
             Err(RemoteStorageError::InvalidArgument("boom".into()))
+        }
+    }
+
+    /// An RSM whose copy always fails, and whose rollback delete fails too
+    /// when `refuse_delete` is set, as when the object store itself is down.
+    struct FailingCopyRsm {
+        refuse_delete: bool,
+    }
+
+    #[krabka_macros::missing_remote_reads]
+    impl RemoteStorageManager for FailingCopyRsm {
+        fn copy_log_segment_data(
+            &self,
+            _metadata: &RemoteLogSegmentMetadata,
+            _data: &LogSegmentData,
+        ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
+            Err(RemoteStorageError::InvalidArgument("boom".into()))
+        }
+
+        fn delete_log_segment_data(
+            &self,
+            _metadata: &RemoteLogSegmentMetadata,
+        ) -> Result<(), RemoteStorageError> {
+            if self.refuse_delete {
+                return Err(RemoteStorageError::Backend("store unavailable".into()));
+            }
+            Ok(())
         }
     }
 
@@ -716,6 +775,46 @@ mod tests {
                     deletes: 1,
                 }
         );
+    }
+
+    /// A failed copy's rollback deletes its partial objects, and that delete
+    /// counts as one delete request, and as one delete error when the backend
+    /// refuses it. The metadata is dropped either way, so a refused delete
+    /// leaves objects behind that only the error counter reports.
+    #[yare::parameterized(
+        the_delete_goes = { false, 0 },
+        the_backend_refuses_it = { true, 1 },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_failed_copy_rollback_records_its_delete_request_and_error(
+        refuse_delete: bool,
+        errors: u64,
+    ) {
+        let rsm: Arc<dyn RemoteStorageManager> = Arc::new(FailingCopyRsm { refuse_delete });
+        let owned = fixtures::owned_tier_resources();
+
+        let outcome = copy_one(
+            &owned.tier(&rsm),
+            &tp(),
+            CopyIdentity {
+                broker_id: 1,
+                leader_epoch: LeaderEpoch(0),
+                fence: &FloorFence(None),
+            },
+            &synth_export().call(),
+            ChainPosition::Unchained,
+        )
+        .await;
+
+        check!(outcome == CopyOutcome::Failed);
+        check!(
+            owned
+                .rlmm
+                .list_remote_log_segments(&tp())
+                .unwrap()
+                .is_empty()
+        );
+        check!(owned.delete_counts() == (1, errors));
     }
 
     #[tokio::test]
