@@ -146,35 +146,9 @@ pub(super) fn describe_one(
     }
 
     if r.resource_type == RESOURCE_TYPE_BROKER {
-        let node_id = if r.resource_name.is_empty() {
-            None
-        } else {
-            // Kafka's `resourceNameToBrokerId` is `String.toInt`, so `-1` is
-            // an integer that names some other node.
-            let Ok(node_id) = r.resource_name.parse::<i32>() else {
-                return failed(
-                    codes::INVALID_REQUEST,
-                    Some(format!(
-                        "Broker id must be an integer, but it is: {}",
-                        r.resource_name
-                    )),
-                );
-            };
-            let node_id = u64::try_from(node_id)
-                .map_or(None, |id| Some(krabka_metadata::NodeId(id)))
-                .filter(|id| *id == serving.node);
-            let Some(node_id) = node_id else {
-                return failed(
-                    codes::INVALID_REQUEST,
-                    Some(format!(
-                        "Unexpected broker id, expected {} or empty string, but received {}",
-                        serving.node.0, r.resource_name
-                    )),
-                );
-            };
-            // A broker resource is answered from the serving process's own
-            // configuration, so Kafka refuses to answer for any other node.
-            Some(node_id)
+        let node_id = match broker_resource_node(&r.resource_name, serving.node) {
+            Ok(node_id) => node_id,
+            Err(message) => return failed(codes::INVALID_REQUEST, Some(message)),
         };
         return ok(broker_configs(image, node_id, serving, &wanted, options));
     }
@@ -232,6 +206,37 @@ pub(super) fn describe_one(
         codes::INVALID_REQUEST,
         Some(format!("Unsupported resource type: {}", r.resource_type)),
     )
+}
+
+/// The node a `BROKER` resource name asks about: `None` for the empty name,
+/// which is Kafka's cluster-default resource, and `serving` for a name that
+/// is this node's id.
+///
+/// A broker resource is answered from the serving process's own
+/// configuration, so Kafka refuses to answer for any other node. Kafka's
+/// `resourceNameToBrokerId` is `String.toInt`, so `-1` is an integer that
+/// names some other node. The error is the message the resource is refused
+/// with at `INVALID_REQUEST`.
+fn broker_resource_node(
+    name: &str,
+    serving: krabka_metadata::NodeId,
+) -> Result<Option<krabka_metadata::NodeId>, String> {
+    if name.is_empty() {
+        return Ok(None);
+    }
+    let Ok(node_id) = name.parse::<i32>() else {
+        return Err(format!("Broker id must be an integer, but it is: {name}"));
+    };
+    u64::try_from(node_id)
+        .map_or(None, |id| Some(krabka_metadata::NodeId(id)))
+        .filter(|id| *id == serving)
+        .map(Some)
+        .ok_or_else(|| {
+            format!(
+                "Unexpected broker id, expected {} or empty string, but received {name}",
+                serving.0
+            )
+        })
 }
 
 /// A topic's whole effective configuration, for a caller outside
