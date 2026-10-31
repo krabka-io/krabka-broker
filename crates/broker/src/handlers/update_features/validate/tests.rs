@@ -4,10 +4,9 @@
 use {
     super::*,
     crate::{
-        config_keys::MIN_INSYNC_REPLICAS,
         features::ELR_VERSION,
         handlers::update_features::test_support::{
-            elr_update, metadata_update, named_update, validate_only,
+            elr_update, metadata_update, min_isr_config_record, named_update, validate_only,
         },
         test_support::broker_registration,
     },
@@ -213,13 +212,6 @@ fn check_feature_plan_refusal(
     reason: String,
 ) {
     assert!(feature_planning.result.as_ref().unwrap() == &Err(invalid(&feature, level, &reason)));
-}
-fn min_isr_config_record(node_id: NodeId, value: Option<&str>) -> MetadataRecord {
-    MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
-        node_id,
-        config_name: MIN_INSYNC_REPLICAS.into(),
-        config_value: value.map(str::to_owned),
-    })
 }
 #[rstest_bdd_macros::given(
     "ELR is disabled with cluster minimum ISR {cluster} broker {broker} minimum ISR {value} and static minimum ISR {static_value}"

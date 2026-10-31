@@ -14,12 +14,13 @@ use {
             cluster_alter_configs_denied,
         },
     },
-    krabka_metadata::MetadataRecord,
     krabka_protocol::owned::{
-        alter_client_quotas_request::AlterClientQuotasRequest,
+        alter_client_quotas_request::{self, AlterClientQuotasRequest},
         alter_client_quotas_response::AlterClientQuotasResponse,
     },
-    std::collections::HashSet,
+    krabka_raft::RaftError,
+    std::{collections::HashSet, time::Duration},
+    tokio::time::Instant,
 };
 
 mod entries;
@@ -36,7 +37,14 @@ use {
         response::{apply_submit_error, err_entry, ok_entry, whole_request_error},
     },
     crate::{
-        codes::{CLUSTER_AUTHORIZATION_FAILED, NONE},
+        codes::{
+            CLUSTER_AUTHORIZATION_FAILED, NONE, NOT_CONTROLLER, REQUEST_TIMED_OUT,
+            UNKNOWN_SERVER_ERROR,
+        },
+        handlers::forward_to_controller::{
+            ends_guarded_attempt, guarded_operation_on_source, to_active_controller_or_handle,
+        },
+        metadata_source::MetadataSource,
         quota::parse_ip_literal,
     },
     krabka_client_core::transport,
@@ -46,7 +54,28 @@ use {
 pub async fn handle(
     broker: &Broker,
     req: AlterClientQuotasRequest,
-    _version: ApiVersion,
+    version: ApiVersion,
+    ctx: &RequestContext<'_>,
+) -> Result<AlterClientQuotasResponse, BrokerError> {
+    // Kafka's `KafkaApis.handleAlterClientQuotasRequest` forwards the request
+    // to the active controller, which plans and writes it against its own
+    // image.
+    to_active_controller_or_handle(
+        broker,
+        req,
+        alter_client_quotas_request::API_KEY,
+        version,
+        ctx,
+        request_refusal,
+        |req| answer(broker, req, ctx),
+    )
+    .await
+}
+
+/// Runs the request on the active controller.
+async fn answer(
+    broker: &Broker,
+    req: AlterClientQuotasRequest,
     ctx: &RequestContext<'_>,
 ) -> Result<AlterClientQuotasResponse, BrokerError> {
     let image = broker.controller.current_image();
@@ -64,29 +93,7 @@ pub async fn handle(
 
     let resolvable = resolve_ip_names(&req).await;
     let ip_is_valid = |name: &str| parse_ip_literal(name).is_some() || resolvable.contains(name);
-    let Alteration { results, records } =
-        alter_client_quotas(&req.entries, image.client_quotas(), &ip_is_valid);
-    let mut entry_results: Vec<_> = results
-        .iter()
-        .map(|(entity, outcome)| match outcome {
-            Ok(()) => ok_entry(entity),
-            Err((code, msg)) => err_entry(entity, *code, msg.clone()),
-        })
-        .collect();
-    // Kafka's `QuorumController.alterClientQuotas` drops the records of a
-    // `validate_only` request and keeps its results.
-    let to_submit: Vec<MetadataRecord> = if req.validate_only {
-        Vec::new()
-    } else {
-        records
-    };
-
-    if !to_submit.is_empty()
-        && let Err(e) = broker.controller.submit_change(to_submit).await
-    {
-        tracing::warn!(error = %e, "alter-client-quotas submit failed");
-        apply_submit_error(&mut entry_results, e);
-    }
+    let entry_results = alter_and_submit(broker.controller.as_ref(), &req, &ip_is_valid).await;
 
     if !req.validate_only {
         audit_admin_success(
@@ -106,6 +113,82 @@ pub async fn handle(
             entries: entry_results,
         }
     ))
+}
+
+/// How long one request may wait for the controller to admit its write,
+/// replanning after every intervening commit.
+const SUBMIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Plans `req`'s entries against the quota state of `source` and submits the
+/// records they produce, returning one response row per distinct entity.
+///
+/// Kafka's `QuorumController.alterClientQuotas` plans and appends on the
+/// controller event thread, so nothing commits between the two. Planning
+/// drops a removal of a key that is not set and a set to the value already
+/// set, so a plan built from an image that has since moved on can lose part
+/// of the request. The plan and the append run in
+/// [`guarded_operation_on_source`]: an append whose image is no longer
+/// current is refused, and the request is planned again on the newer image.
+async fn alter_and_submit(
+    source: &dyn MetadataSource,
+    req: &AlterClientQuotasRequest,
+    ip_is_valid: &(dyn Fn(&str) -> bool + Sync),
+) -> Vec<EntryData> {
+    let result = guarded_operation_on_source(source, Instant::now() + SUBMIT_TIMEOUT, |image| {
+        async move {
+            let Alteration { results, records } =
+                alter_client_quotas(&req.entries, image.client_quotas(), ip_is_valid);
+            let mut entry_results: Vec<_> = results
+                .iter()
+                .map(|(entity, outcome)| match outcome {
+                    Ok(()) => ok_entry(entity),
+                    Err((code, msg)) => err_entry(entity, *code, msg.clone()),
+                })
+                .collect();
+            // Kafka's `QuorumController.alterClientQuotas` drops the records
+            // of a `validate_only` request and keeps its results.
+            if req.validate_only || records.is_empty() {
+                return Ok(entry_results);
+            }
+            match source.submit_change_if_image(records, image).await {
+                Ok(_) => {}
+                Err(error) if ends_guarded_attempt(&error) => return Err(error),
+                Err(error) => {
+                    tracing::warn!(%error, "alter-client-quotas submit failed");
+                    apply_submit_error(&mut entry_results, error);
+                }
+            }
+            Ok(entry_results)
+        }
+    })
+    .await;
+    // A controller failure fails the whole request, as
+    // `AlterClientQuotasRequest.getErrorResponse` answers it.
+    let code = match result {
+        Ok(Ok(entry_results)) => return entry_results,
+        Err(_) => REQUEST_TIMED_OUT,
+        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => NOT_CONTROLLER,
+        Ok(Err(error)) => {
+            tracing::error!(%error, "alter-client-quotas submit failed");
+            UNKNOWN_SERVER_ERROR
+        }
+    };
+    request_refusal(req, code, None).entries
+}
+
+/// Every entry of `req` answered with `code` and `message`: the answer
+/// `ForwardingManagerImpl` makes up when the controller gives none, and the
+/// answer to a write the controller did not take.
+fn request_refusal(
+    req: &AlterClientQuotasRequest,
+    code: i16,
+    message: Option<&str>,
+) -> AlterClientQuotasResponse {
+    let mut response = whole_request_error(req, code, message.unwrap_or_default());
+    for entry in &mut response.entries {
+        entry.error_message = message.map(str::to_owned);
+    }
+    response
 }
 
 /// Resolves every named `ip` entity that is not an IP literal.
