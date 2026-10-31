@@ -745,7 +745,8 @@ impl Log {
     ///
     /// Kafka's `UnifiedLog.collectAbortedTransactions`: the search starts at
     /// the first segment that reaches `start` and stops at the first index
-    /// that reports it complete (see [`TxnIndex::collect_aborted`]).
+    /// that reports it complete (see
+    /// [`TxnIndex::collect_aborted`](crate::txn_index::TxnIndex::collect_aborted)).
     #[must_use]
     pub fn aborted_in_range(&self, start: Offset, end: Offset) -> Vec<AbortedTxn> {
         let mut aborted = Vec::new();
