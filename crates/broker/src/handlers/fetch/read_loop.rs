@@ -414,35 +414,40 @@ pub(super) async fn execute_pending_reads(
         // consumer fetch from this replica. Each row reads the image as it is
         // now: a fetch that the first pass answers is not checked again, and
         // the image can name a new leader before the role is installed.
-        let image = broker.controller.current_image();
-        match &pass_image {
-            Some(seen) if !Arc::ptr_eq(seen, &image) => pass_image_mixed = true,
-            Some(_) => {}
-            None => pass_image = Some(Arc::clone(&image)),
-        }
-        if let Some(refused) = leader_refusal(
-            &image,
-            TopicPartitionRef {
-                topic: &read.topic_name,
-                partition_index: read.partition_index,
-            },
-            &partition,
-            required_leader(read.fetch_only_leader, broker.config.node_id, &partition),
-        ) {
+        // The image is dropped before the read below, so the read loop's
+        // future does not carry it across the await.
+        let refused = {
+            let image = broker.controller.current_image();
+            match &pass_image {
+                Some(seen) if !Arc::ptr_eq(seen, &image) => pass_image_mixed = true,
+                Some(_) => {}
+                None => pass_image = Some(Arc::clone(&image)),
+            }
+            leader_refusal(
+                &image,
+                TopicPartitionRef {
+                    topic: &read.topic_name,
+                    partition_index: read.partition_index,
+                },
+                &partition,
+                required_leader(read.fetch_only_leader, broker.config.node_id, &partition),
+            )
+        };
+        if let Some(refused) = refused {
             read.out = refused;
             continue;
         }
         // Kafka's `Partition.readRecords` takes the log end offset with the
         // high watermark before it reads. The follower update after the read
-        // compares the fetch offset with that log end offset.
-        let follower_update = read
-            .follower_position
-            .map(|position| (position, partition.log_end_offset()));
+        // compares the fetch offset with that log end offset. Only the log end
+        // is kept across the read: the follower's position stays on `read`.
+        let leader_log_end = read.follower_position.map(|_| partition.log_end_offset());
         read_and_account(broker, read, &partition, index, &mut state, phases).await;
         // Kafka's `Partition.fetchRecords` records the follower's position
         // only after its read succeeded, so the row this read just filled
         // reports the high watermark from before that position counted.
-        if let Some((position, leader_log_end)) = follower_update
+        if let Some(position) = read.follower_position
+            && let Some(leader_log_end) = leader_log_end
             && read.out.error_code == codes::NONE
             && partition
                 .record_follower_position(position.position, read.fetch_offset, leader_log_end)

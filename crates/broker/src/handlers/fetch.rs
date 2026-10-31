@@ -306,15 +306,13 @@ pub async fn handle(
         is_follower_fetch,
     );
     // A read that fails answers its own partition's row and never fails the
-    // fetch (see `do_read`), so this call has no error to return. Boxed once
-    // per request: the read loop's state is large, and inline it would make
-    // every connection's future carry it.
+    // fetch (see `do_read`), so this call has no error to return.
     let GroupedResponses {
         mut responses,
         cpu_micros: cpu_micros_by_idx,
         long_poll_active,
     } = handler_clock
-        .run(Box::pin(execute_pending_reads(
+        .run(execute_pending_reads(
             broker,
             pending,
             &forgotten_wakes,
@@ -325,7 +323,7 @@ pub async fn handle(
                 sendfile_capable: ctx.sendfile_capable,
             },
             &phases,
-        )))
+        ))
         .await;
     broker
         .metrics
