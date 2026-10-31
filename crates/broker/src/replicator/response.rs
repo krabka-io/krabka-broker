@@ -34,7 +34,9 @@ use {
     krabka_ids::PartitionIndex,
     krabka_log::{Offset, VerbatimBatch},
     krabka_protocol::{
-        owned::fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
+        owned::fetch_response::{
+            EpochEndOffset, FetchResponse, FetchableTopicResponse, PartitionData,
+        },
         primitives::uuid::Uuid as WireUuid,
         records::{Attributes, RecordBatch, RecordsError, RecordsPayload, validate_one_v2_batch},
     },
@@ -227,212 +229,242 @@ pub(super) async fn handle_partition_response(
         diverging_epoch: part_resp.diverging_epoch.epoch,
     });
 
-    if mutation == ReplicaFetchMutation::Reject {
+    match mutation {
+        ReplicaFetchMutation::Reject => {
+            warn!(
+                topic = %cfg.topic,
+                partition = cfg.partition.get(),
+                leader_node_id = cfg.leader_node_id.0,
+                leader_epoch = cfg.leader_epoch.0,
+                request_leader_epoch,
+                reported_leader_id = reported_leader.leader_id,
+                reported_leader_epoch = reported_leader.leader_epoch,
+                "replicator: discarding fenced Fetch response"
+            );
+            RowAction::Drop
+        }
+        ReplicaFetchMutation::Truncate => {
+            apply_diverging_epoch(&part_resp.diverging_epoch, cfg).await
+        }
+        ReplicaFetchMutation::Append => append_records(part_resp, cfg).await,
+        ReplicaFetchMutation::Retry => retry_after_error(part_resp.error_code, cfg).await,
+    }
+}
+
+/// Maps the error code of a row the leader answered with an error to what
+/// the fetcher does next.
+async fn retry_after_error(error_code: i16, cfg: &Config) -> RowAction {
+    match error_code {
+        codes::OFFSET_OUT_OF_RANGE => handle_offset_out_of_range(cfg).await,
+        // KIP-405: the leader still holds this offset, but only in the
+        // remote tier, and it will not stream the archive down the
+        // replication path. The follower starts again at the leader's
+        // local log start instead.
+        codes::OFFSET_MOVED_TO_TIERED_STORAGE => handle_offset_moved_to_tiered_storage(cfg).await,
+        codes::UNKNOWN_TOPIC_OR_PARTITION => {
+            // Leader hasn't materialized its side yet
+            // (CreateTopics-vs-replicator race).
+            RowAction::Backoff(cfg.connection.replication.unknown_topic_retry_delay)
+        }
+        codes::NOT_LEADER_OR_FOLLOWER => RowAction::Drop,
+        codes::FENCED_LEADER_EPOCH | codes::UNKNOWN_LEADER_EPOCH => {
+            handle_epoch_error(error_code, cfg).await
+        }
+        other => {
+            warn!(
+                error_code = other,
+                "replicator: unexpected fetch error_code"
+            );
+            RowAction::Backoff(cfg.connection.replication.unexpected_error_backoff)
+        }
+    }
+}
+
+/// Handles a `FENCED_LEADER_EPOCH` or `UNKNOWN_LEADER_EPOCH` row: stops on a
+/// stale target, looks the epoch up on a fence, and backs off either way.
+async fn handle_epoch_error(error_code: i16, cfg: &Config) -> RowAction {
+    // Stale-response guard: if the target changed, this
+    // follower-replicator is stale — STOP it. Without this it neither
+    // truncates (the `replication_target_changed` guard in
+    // `handle_epoch_fence` skips that) nor stops, so it hot-loops the
+    // Fetch at ~full CPU, starving metadata propagation and the
+    // cooperative cancellation that would otherwise retire it — the
+    // broker then never becomes ready and crashloops.
+    if replication_target_changed(cfg) {
+        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
+        "replicator: stopping on fenced epoch from stale target");
+        return RowAction::Drop;
+    }
+    if error_code == codes::FENCED_LEADER_EPOCH {
         warn!(
             topic = %cfg.topic,
             partition = cfg.partition.get(),
-            leader_node_id = cfg.leader_node_id.0,
-            leader_epoch = cfg.leader_epoch.0,
-            request_leader_epoch,
-            reported_leader_id = reported_leader.leader_id,
-            reported_leader_epoch = reported_leader.leader_epoch,
-            "replicator: discarding fenced Fetch response"
+            "replicator: fenced leader epoch; calling OffsetForLeaderEpoch"
         );
+        if let Err(error) = handle_epoch_fence(cfg).await {
+            warn!(
+                topic = %cfg.topic,
+                partition = cfg.partition.get(),
+                %error,
+                "replicator: OffsetForLeaderEpoch recovery failed"
+            );
+        }
+    } else {
+        // The leader is behind our metadata image. It cannot answer an
+        // epoch lookup yet, so leave the log untouched and retry Fetch.
+        warn!(
+            topic = %cfg.topic,
+            partition = cfg.partition.get(),
+            "replicator: leader does not know current epoch; retrying Fetch"
+        );
+    }
+    // Back off before re-fetching so a persistent fence (e.g. our
+    // leader_epoch hasn't caught up to the new leader's yet) doesn't
+    // hot-spin the CPU between fetch and fence.
+    RowAction::Backoff(cfg.connection.replication.epoch_fence_backoff)
+}
+
+/// Truncates the follower log at the KIP-320 divergence point a row named.
+async fn apply_diverging_epoch(diverging_epoch: &EpochEndOffset, cfg: &Config) -> RowAction {
+    // KIP-320: an in-band divergence signal. The leader served no
+    // records and named the largest epoch it has that is at or below
+    // our last fetched epoch, and where that epoch ends. That is
+    // the leader's history, not our truncation point: Kafka's
+    // `getOffsetTruncationState` intersects it with our own epoch
+    // history first. `EpochEndOffset` defaults to (epoch:-1,
+    // end_offset:-1); a populated `epoch >= 0` marks a divergence.
+    // Recheck immediately before mutating: metadata may have
+    // changed since the response-level guard above.
+    if replication_target_changed(cfg) {
+        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
+            "replicator: skipping diverging_epoch truncation from stale target");
         return RowAction::Drop;
     }
-
-    match mutation {
-        ReplicaFetchMutation::Truncate => {
-            // KIP-320: an in-band divergence signal. The leader served no
-            // records and named the largest epoch it has that is at or below
-            // our last fetched epoch, and where that epoch ends. That is
-            // the leader's history, not our truncation point: Kafka's
-            // `getOffsetTruncationState` intersects it with our own epoch
-            // history first. `EpochEndOffset` defaults to (epoch:-1,
-            // end_offset:-1); a populated `epoch >= 0` marks a divergence.
-            // Recheck immediately before mutating: metadata may have
-            // changed since the response-level guard above.
-            if replication_target_changed(cfg) {
-                warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-                    "replicator: skipping diverging_epoch truncation from stale target");
-                return RowAction::Drop;
-            }
-            if let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) {
-                let _target_guard = krabka_macros::replication_target_guard!(
-                    part,
-                    cfg,
-                    "replicator: skipping diverging_epoch truncation from stale local target"
+    if let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) {
+        let _target_guard = krabka_macros::replication_target_guard!(
+            part,
+            cfg,
+            "replicator: skipping diverging_epoch truncation from stale local target"
+        );
+        let leader_end_offset = diverging_epoch.end_offset;
+        let end_offset = diverging_epoch_truncation_target(&part, diverging_epoch).0;
+        match part.truncate_to(Offset(end_offset)).await {
+            Ok(()) => {
+                super::truncate_producer_state(cfg, end_offset).await;
+                info!(
+                    topic = %cfg.topic,
+                    partition = cfg.partition.get(),
+                    leader_epoch = diverging_epoch.epoch,
+                    leader_end_offset,
+                    end_offset,
+                    "replicator: truncated to diverging_epoch (KIP-320 in-band)"
                 );
-                let leader_end_offset = part_resp.diverging_epoch.end_offset;
-                let end_offset =
-                    diverging_epoch_truncation_target(&part, &part_resp.diverging_epoch).0;
-                match part.truncate_to(Offset(end_offset)).await {
-                    Ok(()) => {
-                        super::truncate_producer_state(cfg, end_offset).await;
-                        info!(
-                            topic = %cfg.topic,
-                            partition = cfg.partition.get(),
-                            leader_epoch = part_resp.diverging_epoch.epoch,
-                            leader_end_offset,
-                            end_offset,
-                            "replicator: truncated to diverging_epoch (KIP-320 in-band)"
-                        );
-                    }
-                    Err(e) => warn!(
-                        topic = %cfg.topic,
-                        partition = cfg.partition.get(),
-                        end_offset,
-                        error = %e,
-                        "replicator: truncate_to(diverging_epoch) failed"
-                    ),
-                }
             }
-            RowAction::Continue
+            Err(e) => warn!(
+                topic = %cfg.topic,
+                partition = cfg.partition.get(),
+                end_offset,
+                error = %e,
+                "replicator: truncate_to(diverging_epoch) failed"
+            ),
         }
-
-        ReplicaFetchMutation::Append => {
-            let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
-                warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-                    "replicator: local partition vanished between fetches");
-                return RowAction::Continue;
-            };
-            let _target_guard = krabka_macros::replication_target_guard!(
-                part,
-                cfg,
-                "replicator: discarding response for stale local target"
-            );
-            if let Some(records) = &part_resp.records {
-                restart_at_first_batch_base(&part, cfg, records).await;
-            }
-            match part_resp.records.take() {
-                Some(RecordsPayload::Raw(bytes)) => {
-                    let action = replicate_raw_batches(&part, cfg, bytes).await;
-                    if action != RowAction::Continue {
-                        return action;
-                    }
-                }
-                Some(RecordsPayload::V2(batches)) => {
-                    for batch in batches {
-                        if replication_target_changed(cfg) {
-                            return RowAction::Drop;
-                        }
-                        // Capture byte count before the move into replicate_batch
-                        // so the metrics update only fires on a successful append.
-                        // PERF — measured; decision: KEEP. `encoded_len()` is
-                        // computed here for the metric and again inside the append
-                        // path; threading a single computation through would save
-                        // the re-walk, but that changes the writer API
-                        // (cross-file). `benches/perf_deferrals.rs` times the walk
-                        // against the `replicate_batch` it precedes, over the
-                        // batch shapes a producer actually writes: 0.01% of the
-                        // append for one 100 KiB record, ~1% for 100 x 1 KiB, ~4%
-                        // for 1000 x 100 B. Even that worst shape's ~4% sits
-                        // inside the append's own run-to-run spread, so the
-                        // re-walk is not separable from noise in production.
-                        // Those three figures are what the `bench` job of the `ci`
-                        // workflow measures on the nightly schedule and prints in
-                        // its job summary; the latest scheduled `ci` run in the
-                        // Actions tab is the reproducible reading, and its
-                        // `criterion-baseline` artifact holds the samples.
-                        // Revisit only if the replicator's shape mix moves to very
-                        // wide batches of tiny records, where the walk is a
-                        // per-record cost and the append is not.
-                        let batch_bytes = batch.encoded_len();
-                        if let Err(e) = part.replicate_batch(batch).await {
-                            warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
-                            "replicator: replicate_batch failed");
-                            if let Some(offline) = offline_after_failed_append(&part, cfg) {
-                                return offline;
-                            }
-                            break;
-                        }
-                        record_replicated(cfg, u64::try_from(batch_bytes).unwrap_or(0));
-                    }
-                }
-                _ => {}
-            }
-            // KIP-392: record the leader's high watermark so consumer reads
-            // served from this follower are bounded correctly. Done on every
-            // successful response, including empty ones. Wrap the wire `i64`.
-            if replication_target_changed(cfg) {
-                return RowAction::Drop;
-            }
-            part.set_follower_hw(Offset(part_resp.high_watermark)).await;
-            // KIP-73: the lag behind the leader's high watermark decides
-            // whether the follower throttle applies to this partition.
-            cfg.lag
-                .update(part_resp.high_watermark, part.log_end_offset().0);
-            follow_leader_log_start(&part, cfg, part_resp.log_start_offset).await;
-            RowAction::Continue
-        }
-
-        ReplicaFetchMutation::Retry => match part_resp.error_code {
-            codes::OFFSET_OUT_OF_RANGE => handle_offset_out_of_range(cfg).await,
-            // KIP-405: the leader still holds this offset, but only in the
-            // remote tier, and it will not stream the archive down the
-            // replication path. The follower starts again at the leader's
-            // local log start instead.
-            codes::OFFSET_MOVED_TO_TIERED_STORAGE => {
-                handle_offset_moved_to_tiered_storage(cfg).await
-            }
-            codes::UNKNOWN_TOPIC_OR_PARTITION => {
-                // Leader hasn't materialized its side yet
-                // (CreateTopics-vs-replicator race).
-                RowAction::Backoff(cfg.connection.replication.unknown_topic_retry_delay)
-            }
-            codes::NOT_LEADER_OR_FOLLOWER => RowAction::Drop,
-            codes::FENCED_LEADER_EPOCH | codes::UNKNOWN_LEADER_EPOCH => {
-                // Stale-response guard: if the target changed, this
-                // follower-replicator is stale — STOP it. Without this it neither
-                // truncates (the `replication_target_changed` guard in
-                // `handle_epoch_fence` skips that) nor stops, so it hot-loops the
-                // Fetch at ~full CPU, starving metadata propagation and the
-                // cooperative cancellation that would otherwise retire it — the
-                // broker then never becomes ready and crashloops.
-                if replication_target_changed(cfg) {
-                    warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-                    "replicator: stopping on fenced epoch from stale target");
-                    return RowAction::Drop;
-                }
-                if part_resp.error_code == codes::FENCED_LEADER_EPOCH {
-                    warn!(
-                        topic = %cfg.topic,
-                        partition = cfg.partition.get(),
-                        "replicator: fenced leader epoch; calling OffsetForLeaderEpoch"
-                    );
-                    if let Err(error) = handle_epoch_fence(cfg).await {
-                        warn!(
-                            topic = %cfg.topic,
-                            partition = cfg.partition.get(),
-                            %error,
-                            "replicator: OffsetForLeaderEpoch recovery failed"
-                        );
-                    }
-                } else {
-                    // The leader is behind our metadata image. It cannot answer an
-                    // epoch lookup yet, so leave the log untouched and retry Fetch.
-                    warn!(
-                        topic = %cfg.topic,
-                        partition = cfg.partition.get(),
-                        "replicator: leader does not know current epoch; retrying Fetch"
-                    );
-                }
-                // Back off before re-fetching so a persistent fence (e.g. our
-                // leader_epoch hasn't caught up to the new leader's yet) doesn't
-                // hot-spin the CPU between fetch and fence.
-                RowAction::Backoff(cfg.connection.replication.epoch_fence_backoff)
-            }
-            other => {
-                warn!(
-                    error_code = other,
-                    "replicator: unexpected fetch error_code"
-                );
-                RowAction::Backoff(cfg.connection.replication.unexpected_error_backoff)
-            }
-        },
-
-        ReplicaFetchMutation::Reject => unreachable!("rejected responses return above"),
     }
+    RowAction::Continue
+}
+
+/// Appends the records a row carries, then records the leader's progress.
+async fn append_records(part_resp: &mut PartitionData, cfg: &Config) -> RowAction {
+    let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
+        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
+            "replicator: local partition vanished between fetches");
+        return RowAction::Continue;
+    };
+    let _target_guard = krabka_macros::replication_target_guard!(
+        part,
+        cfg,
+        "replicator: discarding response for stale local target"
+    );
+    if let Some(records) = &part_resp.records {
+        restart_at_first_batch_base(&part, cfg, records).await;
+    }
+    let action = match part_resp.records.take() {
+        Some(RecordsPayload::Raw(bytes)) => replicate_raw_batches(&part, cfg, bytes).await,
+        Some(RecordsPayload::V2(batches)) => replicate_v2_batches(&part, cfg, batches).await,
+        _ => RowAction::Continue,
+    };
+    if action != RowAction::Continue {
+        return action;
+    }
+    record_leader_progress(&part, cfg, part_resp).await
+}
+
+/// Records the leader's high watermark, this follower's lag behind it and the
+/// leader's log start, from a row whose records were appended.
+async fn record_leader_progress(
+    part: &Partition,
+    cfg: &Config,
+    part_resp: &PartitionData,
+) -> RowAction {
+    // KIP-392: record the leader's high watermark so consumer reads
+    // served from this follower are bounded correctly. Done on every
+    // successful response, including empty ones. Wrap the wire `i64`.
+    if replication_target_changed(cfg) {
+        return RowAction::Drop;
+    }
+    part.set_follower_hw(Offset(part_resp.high_watermark)).await;
+    // KIP-73: the lag behind the leader's high watermark decides
+    // whether the follower throttle applies to this partition.
+    cfg.lag
+        .update(part_resp.high_watermark, part.log_end_offset().0);
+    follow_leader_log_start(part, cfg, part_resp.log_start_offset).await;
+    RowAction::Continue
+}
+
+/// Replicates decoded V2 batches one at a time. A failed append stops the
+/// row; it stops following the partition only when its log directory went
+/// offline.
+async fn replicate_v2_batches(
+    part: &Partition,
+    cfg: &Config,
+    batches: Vec<RecordBatch>,
+) -> RowAction {
+    for batch in batches {
+        if replication_target_changed(cfg) {
+            return RowAction::Drop;
+        }
+        // Capture byte count before the move into replicate_batch
+        // so the metrics update only fires on a successful append.
+        // PERF — measured; decision: KEEP. `encoded_len()` is
+        // computed here for the metric and again inside the append
+        // path; threading a single computation through would save
+        // the re-walk, but that changes the writer API
+        // (cross-file). `benches/perf_deferrals.rs` times the walk
+        // against the `replicate_batch` it precedes, over the
+        // batch shapes a producer actually writes: 0.01% of the
+        // append for one 100 KiB record, ~1% for 100 x 1 KiB, ~4%
+        // for 1000 x 100 B. Even that worst shape's ~4% sits
+        // inside the append's own run-to-run spread, so the
+        // re-walk is not separable from noise in production.
+        // Those three figures are what the `bench` job of the `ci`
+        // workflow measures on the nightly schedule and prints in
+        // its job summary; the latest scheduled `ci` run in the
+        // Actions tab is the reproducible reading, and its
+        // `criterion-baseline` artifact holds the samples.
+        // Revisit only if the replicator's shape mix moves to very
+        // wide batches of tiny records, where the walk is a
+        // per-record cost and the append is not.
+        let batch_bytes = batch.encoded_len();
+        if let Err(e) = part.replicate_batch(batch).await {
+            warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
+            "replicator: replicate_batch failed");
+            if let Some(offline) = offline_after_failed_append(part, cfg) {
+                return offline;
+            }
+            break;
+        }
+        record_replicated(cfg, u64::try_from(batch_bytes).unwrap_or(0));
+    }
+    RowAction::Continue
 }
 
 async fn replicate_raw_batches(
@@ -946,6 +978,39 @@ mod tests {
 
         assert_backoff(response, &cfg).await;
         assert!(listener.accept().is_err(), "unexpected epoch lookup");
+    }
+
+    /// Every error code a `Retry` row can carry maps to one action. With no
+    /// local partition, the out-of-range and tiered-storage recoveries and the
+    /// epoch-fence lookup all stop before asking the leader anything, so each
+    /// row's action depends on its error code alone. Each delay is distinct so
+    /// the table shows which one a row picked.
+    #[yare::parameterized(
+        offset_out_of_range = { codes::OFFSET_OUT_OF_RANGE, RowAction::Continue },
+        offset_moved_to_tiered_storage = {
+            codes::OFFSET_MOVED_TO_TIERED_STORAGE, RowAction::Continue
+        },
+        unknown_topic_or_partition = {
+            codes::UNKNOWN_TOPIC_OR_PARTITION, RowAction::Backoff(secs(11))
+        },
+        not_leader_or_follower = { codes::NOT_LEADER_OR_FOLLOWER, RowAction::Drop },
+        fenced_leader_epoch = { codes::FENCED_LEADER_EPOCH, RowAction::Backoff(secs(13)) },
+        unknown_leader_epoch = { codes::UNKNOWN_LEADER_EPOCH, RowAction::Backoff(secs(13)) },
+        other = { codes::INVALID_REQUEST, RowAction::Backoff(secs(17)) },
+    )]
+    #[test_macro(tokio::test(start_paused = true))]
+    async fn each_retry_error_code_maps_to_its_row_action(error_code: i16, expected: RowAction) {
+        let (mut cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        cfg.connection.replication.unknown_topic_retry_delay = secs(11);
+        cfg.connection.replication.epoch_fence_backoff = secs(13);
+        cfg.connection.replication.unexpected_error_backoff = secs(17);
+        let response = fetch_response(
+            TOPIC,
+            WIRE_TOPIC_ID,
+            partition_response(PARTITION, error_code),
+        );
+
+        assert2::assert!(handle_response(response, &cfg, cfg.leader_epoch.0).await == expected);
     }
 
     #[yare::parameterized(
