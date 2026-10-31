@@ -265,7 +265,7 @@ mod tests {
         unsupported_private_version_keeps_default = {
             RaftError::UnsupportedPrivateVersion { api_key: 1003, version: 1 },
             codes::UNKNOWN_SERVER_ERROR,
-            codes::UNKNOWN_SERVER_ERROR,
+            (codes::UNKNOWN_SERVER_ERROR, codes::UNKNOWN_SERVER_ERROR),
         },
         shutdown_keeps_default = {
             RaftError::Shutdown,
