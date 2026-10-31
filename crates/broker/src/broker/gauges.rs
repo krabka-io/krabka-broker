@@ -36,6 +36,9 @@ fn epoch_now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Converts a count to the `i64` a gauge holds, saturating at `i64::MAX`.
+fn gauge_count(count: usize) -> i64 { i64::try_from(count).unwrap_or(i64::MAX) }
+
 /// The KIP-835 applied-record gauges one sample publishes. The fields carry
 /// Kafka's units and its values before the first applied record, as
 /// `BrokerServerMetrics` reads them from `MetadataProvenance.EMPTY`.
@@ -162,10 +165,10 @@ fn update_metadata_health_metrics(
         metrics.raft_log_end_offset.set(snap.log_end_offset);
         metrics
             .raft_voters
-            .set(i64::try_from(snap.voters.len()).unwrap_or(i64::MAX));
+            .set(gauge_count(snap.voters.len()));
         metrics
             .raft_observers
-            .set(i64::try_from(snap.observers.len()).unwrap_or(i64::MAX));
+            .set(gauge_count(snap.observers.len()));
     }
     AppliedRecordGauges::derive(ReportedProgress::read(controller), now_ms).publish(metrics);
     let (processing_avg_us, processing_max_us) = controller.pending_record_processing_time_us();
@@ -229,10 +232,10 @@ pub(super) fn spawn_broker_gauge_updater(
                 .count();
             metrics
                 .partitions_led
-                .set(i64::try_from(led).unwrap_or(i64::MAX));
+                .set(gauge_count(led));
             metrics
                 .partitions_total
-                .set(i64::try_from(partitions.len()).unwrap_or(i64::MAX));
+                .set(gauge_count(partitions.len()));
             // The registry is the one place that knows a dir went offline: a
             // runtime write or fsync failure flips it there and nothing else
             // publishes the flip. `DescribeLogDirs` reports the same dirs,
@@ -290,18 +293,18 @@ pub(super) fn spawn_broker_gauge_updater(
             }
             metrics
                 .under_replicated_partitions
-                .set(i64::try_from(partition_health.0).unwrap_or(i64::MAX));
+                .set(gauge_count(partition_health.0));
             metrics
                 .under_min_isr_partition_count
-                .set(i64::try_from(partition_health.1).unwrap_or(i64::MAX));
+                .set(gauge_count(partition_health.1));
             metrics
                 .offline_partitions_count
-                .set(i64::try_from(partition_health.2).unwrap_or(i64::MAX));
+                .set(gauge_count(partition_health.2));
             metrics
                 .offline_audit_partitions
-                .set(i64::try_from(offline_audit).unwrap_or(i64::MAX));
+                .set(gauge_count(offline_audit));
             metrics.leader_site_drift_partitions.set(
-                i64::try_from(leader_site_drift_partitions(&image, node_id)).unwrap_or(i64::MAX),
+                gauge_count(leader_site_drift_partitions(&image, node_id)),
             );
             metrics
                 .witness_role
@@ -322,13 +325,13 @@ pub(super) fn spawn_broker_gauge_updater(
                     .count();
                 metrics
                     .active_brokers
-                    .set(i64::try_from(active).unwrap_or(i64::MAX));
+                    .set(gauge_count(active));
                 metrics
                     .fenced_brokers
-                    .set(i64::try_from(fenced).unwrap_or(i64::MAX));
+                    .set(gauge_count(fenced));
                 metrics
                     .global_topics
-                    .set(i64::try_from(image.topics().count()).unwrap_or(i64::MAX));
+                    .set(gauge_count(image.topics().count()));
                 let mut total_partitions = 0_usize;
                 let mut at_min_isr = 0_usize;
                 let mut reassigning = 0_usize;
@@ -357,16 +360,16 @@ pub(super) fn spawn_broker_gauge_updater(
                 }
                 metrics
                     .global_partitions
-                    .set(i64::try_from(total_partitions).unwrap_or(i64::MAX));
+                    .set(gauge_count(total_partitions));
                 metrics
                     .at_min_isr_partition_count
-                    .set(i64::try_from(at_min_isr).unwrap_or(i64::MAX));
+                    .set(gauge_count(at_min_isr));
                 metrics
                     .reassigning_partitions
-                    .set(i64::try_from(reassigning).unwrap_or(i64::MAX));
+                    .set(gauge_count(reassigning));
                 metrics
                     .preferred_replica_imbalance
-                    .set(i64::try_from(preferred_imbalance).unwrap_or(i64::MAX));
+                    .set(gauge_count(preferred_imbalance));
             } else {
                 metrics.active_brokers.set(0);
                 metrics.fenced_brokers.set(0);
@@ -388,7 +391,7 @@ pub(super) fn spawn_broker_gauge_updater(
                 usize::from(image.kraft_version() >= 1).saturating_mul(static_voter_count);
             metrics
                 .ignored_static_voters
-                .set(i64::try_from(ignored_static_voters).unwrap_or(i64::MAX));
+                .set(gauge_count(ignored_static_voters));
             let voted_directory = controller.voted_directory_id();
             if voted_directory != previous_voted_directory {
                 if let Some(directory_id) = previous_voted_directory {
