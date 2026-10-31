@@ -111,7 +111,10 @@ fn admit(
         );
         return Admission::Throttled(delay);
     }
-    match broker.connections.try_acquire_within(peer_ip, accepting, quotas) {
+    match broker
+        .connections
+        .try_acquire_within(peer_ip, accepting, quotas)
+    {
         Ok(guard) => Admission::Serve(guard),
         Err(limit) => {
             broker.metrics.record_connection_close(close_reason(limit));
@@ -138,7 +141,9 @@ async fn close_after(stream: TcpStream, delay: Time) {
 /// per-IP cap has its own, the broker-wide and listener caps share one.
 fn close_reason(limit: ConnectionLimit) -> ConnectionCloseReason {
     match limit {
-        ConnectionLimit::Global | ConnectionLimit::Listener => ConnectionCloseReason::MaxConnections,
+        ConnectionLimit::Global | ConnectionLimit::Listener => {
+            ConnectionCloseReason::MaxConnections
+        }
         ConnectionLimit::PerIp => ConnectionCloseReason::MaxConnectionsPerIp,
     }
 }
@@ -177,9 +182,11 @@ async fn on_accept(
     // `max.connection.creation.rate`, broker-wide or for this listener, the
     // acceptor waits the throttle out and then takes the connection, as
     // Kafka's `ConnectionQuotas.waitForConnectionSlot` does.
-    let quotas = broker
-        .connections
-        .quotas(&broker.controller.current_image(), broker.config.node_id, &spec.name);
+    let quotas = broker.connections.quotas(
+        &broker.controller.current_image(),
+        broker.config.node_id,
+        &spec.name,
+    );
     let delay = broker.connections.creation_delay(
         accepting,
         &quotas,
@@ -312,9 +319,18 @@ mod tests {
     #[test]
     fn close_reason_separates_the_per_ip_cap_from_the_others() {
         let cases = [
-            (ConnectionLimit::Global, ConnectionCloseReason::MaxConnections),
-            (ConnectionLimit::Listener, ConnectionCloseReason::MaxConnections),
-            (ConnectionLimit::PerIp, ConnectionCloseReason::MaxConnectionsPerIp),
+            (
+                ConnectionLimit::Global,
+                ConnectionCloseReason::MaxConnections,
+            ),
+            (
+                ConnectionLimit::Listener,
+                ConnectionCloseReason::MaxConnections,
+            ),
+            (
+                ConnectionLimit::PerIp,
+                ConnectionCloseReason::MaxConnectionsPerIp,
+            ),
         ];
         for (limit, expected) in cases {
             assert!(close_reason(limit) == expected, "{limit:?}");
