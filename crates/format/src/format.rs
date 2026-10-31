@@ -79,7 +79,7 @@ pub use self::{
 };
 use {
     self::{
-        ensemble::{Ensemble, SurveyError, remove_partial_output},
+        ensemble::{Ensemble, FormattedDirectory, SurveyError, remove_partial_output},
         features::{ResolvedFeatures, resolve_format_features},
         output::{Fault, write_bootstrap_files, write_dynamic_checkpoint, write_meta_properties},
         quorum::{build_initial_voters, is_dynamic_format},
@@ -303,25 +303,12 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
     let ensemble = survey(&metadata_log_dir, args.log_dirs)?;
     let cluster_id = verify_formatted(&ensemble, args.cluster_id, node_id, args.ignore_formatted)?;
 
-    let mut used: Vec<DirectoryId> = ensemble
-        .formatted
-        .iter()
-        .filter_map(|formatted| formatted.meta.directory_id)
-        .collect();
-    let mut targets = Vec::with_capacity(ensemble.empty.len());
-    for dir in ensemble.empty {
-        let (kind, directory_id) = if dir == metadata_log_dir {
-            (metadata_kind, metadata_directory_id)
-        } else {
-            (DirectoryKind::Data, DirectoryId::random_unused(&used))
-        };
-        used.push(directory_id);
-        targets.push(Target {
-            dir,
-            kind,
-            directory_id,
-        });
-    }
+    let metadata_target = Target {
+        dir: metadata_log_dir,
+        kind: metadata_kind,
+        directory_id: metadata_directory_id,
+    };
+    let targets = assign_targets(ensemble.empty, &ensemble.formatted, &metadata_target);
     if targets.is_empty() && ensemble.formatted.is_empty() {
         return Err(Failure {
             code: EXIT_BOOTSTRAP_FAIL,
@@ -510,6 +497,35 @@ fn verify_formatted(
         });
     }
     Ok(cluster_id)
+}
+
+/// The directory each of `empty` gets formatted as. The metadata log
+/// directory takes `metadata`'s kind and id; every other directory is a data
+/// directory with a fresh id that no directory of the run already holds.
+fn assign_targets(
+    empty: Vec<PathBuf>,
+    formatted: &[FormattedDirectory],
+    metadata: &Target,
+) -> Vec<Target> {
+    let mut used: Vec<DirectoryId> = formatted
+        .iter()
+        .filter_map(|formatted| formatted.meta.directory_id)
+        .collect();
+    let mut targets = Vec::with_capacity(empty.len());
+    for dir in empty {
+        let (kind, directory_id) = if dir == metadata.dir {
+            (metadata.kind, metadata.directory_id)
+        } else {
+            (DirectoryKind::Data, DirectoryId::random_unused(&used))
+        };
+        used.push(directory_id);
+        targets.push(Target {
+            dir,
+            kind,
+            directory_id,
+        });
+    }
+    targets
 }
 
 /// The directories one run formats: `metadata_log_dir` first, then every
