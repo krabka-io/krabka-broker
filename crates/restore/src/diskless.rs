@@ -7,7 +7,7 @@ use {
         bound::Predicates,
         materialize::{
             open_partition_log,
-            prepare::{BatchTally, PrepareBatchSetup, prepare_batch},
+            prepare::{PrepareBatchSetup, prepare_batch},
         },
         report::{DisklessPartitionReport, DisklessRestoreReport},
         verify::{MAX_LOG_BYTES, fetch_capped},
@@ -415,16 +415,9 @@ async fn walk_partition(
                     prepared.append_to(log, base)?;
                 }
                 batches += 1;
-                match tally {
-                    BatchTally::Kept => records = records.saturating_add(records_in_batch),
-                    BatchTally::Rewritten { kept, dropped } => {
-                        records = records.saturating_add(kept);
-                        records_dropped = records_dropped.saturating_add(dropped);
-                    }
-                    BatchTally::Emptied => {
-                        records_dropped = records_dropped.saturating_add(records_in_batch);
-                    }
-                }
+                let (kept, dropped) = tally.records(records_in_batch);
+                records = records.saturating_add(kept);
+                records_dropped = records_dropped.saturating_add(dropped);
             }
             cursor = batch_end;
         }

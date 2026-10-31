@@ -141,20 +141,13 @@ pub async fn write_segment_after_skip(
         }
 
         match tally {
-            BatchTally::Kept => {
-                outcome.batches_kept += 1;
-                outcome.records_kept += records_in_batch;
-            }
-            BatchTally::Rewritten { kept, dropped } => {
-                outcome.batches_rewritten += 1;
-                outcome.records_kept += kept;
-                outcome.records_dropped += dropped;
-            }
-            BatchTally::Emptied => {
-                outcome.batches_emptied += 1;
-                outcome.records_dropped += records_in_batch;
-            }
+            BatchTally::Kept => outcome.batches_kept += 1,
+            BatchTally::Rewritten { .. } => outcome.batches_rewritten += 1,
+            BatchTally::Emptied => outcome.batches_emptied += 1,
         }
+        let (kept, dropped) = tally.records(records_in_batch);
+        outcome.records_kept += kept;
+        outcome.records_dropped += dropped;
 
         pos += consumed;
     }
