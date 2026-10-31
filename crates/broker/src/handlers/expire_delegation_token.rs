@@ -411,20 +411,16 @@ mod tests {
                 expiry_time_period_ms: period,
                 ..Default::default()
             };
-            for (case, failure, code) in token_fixtures::failed_write_cases() {
-                let controller = token_fixtures::failing_writes_source(failure);
-                let resp = handle(
-                    &req,
-                    &token_fixtures::authed("alice"),
-                    Some(&secret),
-                    &controller,
-                )
-                .await;
-                assert!(
-                    resp == ExpireDelegationTokenResponse::error(code),
-                    "{shape}: {case}"
-                );
-            }
+            let (req, secret) = (&req, &secret);
+            token_fixtures::check_failed_writes(
+                shape,
+                |controller| async move {
+                    let auth = token_fixtures::authed("alice");
+                    handle(req, &auth, Some(secret), &controller).await
+                },
+                ExpireDelegationTokenResponse::error,
+            )
+            .await;
         }
     }
 }

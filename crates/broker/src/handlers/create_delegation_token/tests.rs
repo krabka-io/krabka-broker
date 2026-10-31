@@ -16,7 +16,7 @@ use {
         handlers::{
             delegation_token_test_support::{
                 DAY_MS as RENEW_24H_MS, SecretProvision, TokenFixture, anonymous, authed,
-                failed_write_cases, failing_writes_source, test_controller, token_authed,
+                check_failed_writes, test_controller, token_authed,
             },
             test_support::metadata_version_gated,
         },
@@ -564,25 +564,31 @@ async fn non_positive_configured_periods_mint_nothing() {
 async fn failed_controller_write_answers_kafka_error_response() {
     let secret = SecretBytes::new(b"k".to_vec());
     let req = self_mint_request();
-    for (case, failure, code) in failed_write_cases() {
-        let controller = failing_writes_source(failure);
-        let resp = handle(
-            &req,
-            &authed("alice"),
-            Some(&secret),
-            RENEW_24H_MS,
-            RENEW_24H_MS,
-            &controller,
-            token_acl(&empty_super_users()),
-        )
-        .await;
-        let expected = refusal()
-            .code(code)
-            .owner(user("ANONYMOUS"))
-            .requester(user("ANONYMOUS"))
-            .call();
-        assert!(resp == expected, "{case}");
-    }
+    let (req, secret) = (&req, &secret);
+    check_failed_writes(
+        "create",
+        |controller| async move {
+            let authorizer = empty_super_users();
+            handle(
+                req,
+                &authed("alice"),
+                Some(secret),
+                RENEW_24H_MS,
+                RENEW_24H_MS,
+                &controller,
+                token_acl(&authorizer),
+            )
+            .await
+        },
+        |code| {
+            refusal()
+                .code(code)
+                .owner(user("ANONYMOUS"))
+                .requester(user("ANONYMOUS"))
+                .call()
+        },
+    )
+    .await;
 }
 
 #[test]

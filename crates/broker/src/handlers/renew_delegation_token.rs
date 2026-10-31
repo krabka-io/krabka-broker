@@ -416,17 +416,22 @@ mod tests {
             renew_period_ms: 30_000,
             ..Default::default()
         };
-        for (case, failure, code) in token_fixtures::failed_write_cases() {
-            let controller = token_fixtures::failing_writes_source(failure);
-            let resp = handle(
-                &req,
-                &token_fixtures::authed("alice"),
-                Some(&secret),
-                token_fixtures::DAY_MS,
-                &controller,
-            )
-            .await;
-            assert!(resp == RenewDelegationTokenResponse::error(code), "{case}");
-        }
+        let (req, secret) = (&req, &secret);
+        token_fixtures::check_failed_writes(
+            "renew",
+            |controller| async move {
+                let auth = token_fixtures::authed("alice");
+                handle(
+                    req,
+                    &auth,
+                    Some(secret),
+                    token_fixtures::DAY_MS,
+                    &controller,
+                )
+                .await
+            },
+            RenewDelegationTokenResponse::error,
+        )
+        .await;
     }
 }
