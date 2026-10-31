@@ -304,6 +304,74 @@ impl LocalPartitionHealth {
     }
 }
 
+/// The cluster-wide gauges the active controller publishes (#390).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ClusterCounts {
+    /// Registered brokers the liveness view holds alive.
+    active_brokers: usize,
+    /// Registered brokers the liveness view does not hold alive.
+    fenced_brokers: usize,
+    topics: usize,
+    /// Every partition in the image.
+    partitions: usize,
+    /// Partitions whose ISR size equals the topic's minimum.
+    at_min_isr: usize,
+    /// Partitions with replicas being added or removed.
+    reassigning: usize,
+    /// Partitions not led by their first, preferred, replica.
+    preferred_imbalance: usize,
+}
+
+impl ClusterCounts {
+    fn count(inputs: &GaugeInputs<'_>) -> Self {
+        let image = inputs.image;
+        let mut counts = Self {
+            active_brokers: image
+                .brokers()
+                .filter(|broker| inputs.alive.contains(&broker.node_id.0))
+                .count(),
+            fenced_brokers: image
+                .brokers()
+                .filter(|broker| !inputs.alive.contains(&broker.node_id.0))
+                .count(),
+            topics: image.topics().count(),
+            ..Self::default()
+        };
+        for partition in image.all_partitions() {
+            counts.partitions += 1;
+            counts.at_min_isr += usize::from(
+                isr_size(partition) == inputs.minimum_isr.for_topic(&partition.topic),
+            );
+            counts.reassigning += usize::from(
+                !partition.adding_replicas.is_empty() || !partition.removing_replicas.is_empty(),
+            );
+            counts.preferred_imbalance += usize::from(
+                partition
+                    .replicas
+                    .first()
+                    .is_some_and(|preferred| *preferred != partition.leader),
+            );
+        }
+        counts
+    }
+
+    fn publish(self, metrics: &BrokerMetrics) {
+        metrics.active_brokers.set(gauge_count(self.active_brokers));
+        metrics.fenced_brokers.set(gauge_count(self.fenced_brokers));
+        metrics.global_topics.set(gauge_count(self.topics));
+        metrics.global_partitions.set(gauge_count(self.partitions));
+        metrics
+            .at_min_isr_partition_count
+            .set(gauge_count(self.at_min_isr));
+        metrics
+            .reassigning_partitions
+            .set(gauge_count(self.reassigning));
+        metrics
+            .preferred_replica_imbalance
+            .set(gauge_count(self.preferred_imbalance));
+    }
+}
+
 /// What this broker holds locally: the partitions it hosts and the health of
 /// the directories they sit in. They travel together because one gauge pass
 /// samples both, and neither is reachable from the metadata image.
@@ -389,69 +457,14 @@ pub(super) fn spawn_broker_gauge_updater(
                 .active_controller
                 .set(i64::from(u8::from(is_controller)));
 
-            // Cluster state metrics published by the active controller (#390)
-            if is_controller {
-                let active = image
-                    .brokers()
-                    .filter(|b| alive.contains(&b.node_id.0))
-                    .count();
-                let fenced = image
-                    .brokers()
-                    .filter(|b| !alive.contains(&b.node_id.0))
-                    .count();
-                metrics
-                    .active_brokers
-                    .set(gauge_count(active));
-                metrics
-                    .fenced_brokers
-                    .set(gauge_count(fenced));
-                metrics
-                    .global_topics
-                    .set(gauge_count(image.topics().count()));
-                let mut total_partitions = 0_usize;
-                let mut at_min_isr = 0_usize;
-                let mut reassigning = 0_usize;
-                let mut preferred_imbalance = 0_usize;
-                for partition in image.all_partitions() {
-                    total_partitions += 1;
-                    let minimum = inputs.minimum_isr.for_topic(&partition.topic);
-                    if i32::try_from(partition.isr.len()).unwrap_or(i32::MAX) == minimum {
-                        at_min_isr += 1;
-                    }
-                    if !partition.adding_replicas.is_empty()
-                        || !partition.removing_replicas.is_empty()
-                    {
-                        reassigning += 1;
-                    }
-                    if partition
-                        .replicas
-                        .first()
-                        .is_some_and(|pref| *pref != partition.leader)
-                    {
-                        preferred_imbalance += 1;
-                    }
-                }
-                metrics
-                    .global_partitions
-                    .set(gauge_count(total_partitions));
-                metrics
-                    .at_min_isr_partition_count
-                    .set(gauge_count(at_min_isr));
-                metrics
-                    .reassigning_partitions
-                    .set(gauge_count(reassigning));
-                metrics
-                    .preferred_replica_imbalance
-                    .set(gauge_count(preferred_imbalance));
+            // Cluster state metrics published by the active controller (#390);
+            // every other node publishes zeros.
+            let cluster = if is_controller {
+                ClusterCounts::count(&inputs)
             } else {
-                metrics.active_brokers.set(0);
-                metrics.fenced_brokers.set(0);
-                metrics.global_topics.set(0);
-                metrics.global_partitions.set(0);
-                metrics.at_min_isr_partition_count.set(0);
-                metrics.reassigning_partitions.set(0);
-                metrics.preferred_replica_imbalance.set(0);
-            }
+                ClusterCounts::default()
+            };
+            cluster.publish(&metrics);
 
             update_metadata_health_metrics(&metrics, controller.as_ref(), epoch_now_ms());
 
