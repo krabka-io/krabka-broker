@@ -59,11 +59,12 @@ use {
             response_encoding::{ErrorRow as _, ResourceErrorRow},
         },
     },
-    krabka_metadata::MetadataImage,
+    krabka_metadata::{MetadataImage, NodeId},
     krabka_protocol::owned::incremental_alter_configs_request,
     std::{
         collections::{BTreeMap, BTreeSet, HashMap},
         mem,
+        path::PathBuf,
     },
 };
 
@@ -210,6 +211,33 @@ fn preprocess_resource(
         }
         .with_error(code, message),
     )
+}
+
+/// The node a BROKER resource's checks run for: the node the client
+/// addressed when the request was forwarded to this controller, else this
+/// node.
+pub(super) fn forwarded_serving_node(
+    broker: &Broker,
+    ctx: &RequestContext<'_>,
+    resource_name: &str,
+) -> NodeId {
+    if ctx.forwarded && !resource_name.is_empty() {
+        resource_name
+            .parse::<u64>()
+            .map_or(broker.config.node_id, NodeId)
+    } else {
+        broker.config.node_id
+    }
+}
+
+/// This node's log directories for a BROKER resource's checks, or none when
+/// the request was forwarded and so addresses another node's directories.
+pub(super) fn forwarded_log_dirs(broker: &Broker, ctx: &RequestContext<'_>) -> Vec<PathBuf> {
+    if ctx.forwarded {
+        Vec::new()
+    } else {
+        broker.config.broker_log_dirs()
+    }
 }
 
 /// One resource's broker-side preprocessing, as

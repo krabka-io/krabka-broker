@@ -34,7 +34,10 @@ use {
         },
         handlers::{
             ApiVersion, DispatchResult, RequestContext,
-            alter_configs::{BrokerPreprocess, broker_preprocess_refusal},
+            alter_configs::{
+                BrokerPreprocess, broker_preprocess_refusal, forwarded_log_dirs,
+                forwarded_serving_node,
+            },
             audit_resource, config_resource_refusal, encode_response,
             forward_to_controller::{guarded_operation_on_source, to_active_controller_or_handle},
             response_encoding::ErrorRow as _,
@@ -280,27 +283,12 @@ fn resource_records(
             broker.config.features.unstable_api_versions,
         )
         .map(|record| vec![record]),
-        RESOURCE_TYPE_BROKER => {
-            let serving = if ctx.forwarded && !resource.resource_name.is_empty() {
-                resource
-                    .resource_name
-                    .parse::<u64>()
-                    .map_or(broker.config.node_id, krabka_metadata::NodeId)
-            } else {
-                broker.config.node_id
-            };
-            let log_dirs = if ctx.forwarded {
-                Vec::new()
-            } else {
-                broker.config.broker_log_dirs()
-            };
-            broker_records(resource, BrokerConfigContext {
-                image,
-                serving,
-                log_dirs: &log_dirs,
-                unstable: broker.config.features.unstable_api_versions,
-            })
-        }
+        RESOURCE_TYPE_BROKER => broker_records(resource, BrokerConfigContext {
+            image,
+            serving: forwarded_serving_node(broker, ctx, &resource.resource_name),
+            log_dirs: &forwarded_log_dirs(broker, ctx),
+            unstable: broker.config.features.unstable_api_versions,
+        }),
         RESOURCE_TYPE_CLIENT_METRICS => client_metrics_records(resource, image),
         RESOURCE_TYPE_GROUP => group_record(
             resource,

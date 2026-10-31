@@ -18,8 +18,8 @@ use {
         RESOURCE_TYPE_BROKER, RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP,
         RESOURCE_TYPE_TOPIC, broker_configs::broker_config_records,
         client_metrics_configs::client_metrics_config_record, empty_resource_response,
-        group_configs::group_config_record, topic_configs::topic_config_record,
-        validate_resource_shape,
+        forwarded_log_dirs, forwarded_serving_node, group_configs::group_config_record,
+        topic_configs::topic_config_record, validate_resource_shape,
     },
     crate::{
         broker::Broker,
@@ -30,7 +30,7 @@ use {
             forward_to_controller::guarded_operation_on_source, response_encoding::ErrorRow as _,
         },
     },
-    krabka_metadata::{MetadataImage, MetadataRecord, NodeId},
+    krabka_metadata::{MetadataImage, MetadataRecord},
     krabka_protocol::owned::{
         alter_configs_request::AlterConfigsResource,
         alter_configs_response::AlterConfigsResourceResponse,
@@ -163,19 +163,8 @@ fn resource_records(
         .map(|record| vec![record]),
         RESOURCE_TYPE_BROKER => broker_config_records(resource, BrokerConfigContext {
             image,
-            serving: if ctx.forwarded && !resource.resource_name.is_empty() {
-                resource
-                    .resource_name
-                    .parse::<u64>()
-                    .map_or(broker.config.node_id, NodeId)
-            } else {
-                broker.config.node_id
-            },
-            log_dirs: &if ctx.forwarded {
-                Vec::new()
-            } else {
-                broker.config.broker_log_dirs()
-            },
+            serving: forwarded_serving_node(broker, ctx, &resource.resource_name),
+            log_dirs: &forwarded_log_dirs(broker, ctx),
             unstable: broker.config.features.unstable_api_versions,
         }),
         RESOURCE_TYPE_GROUP => group_config_record(
