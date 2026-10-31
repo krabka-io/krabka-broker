@@ -451,7 +451,6 @@ async fn capture_diskless_index(
     events: &mut Vec<BackupEvent>,
 ) -> Result<Option<Vec<u8>>, BackupError> {
     const TOPIC: &str = "__diskless_wal_index";
-    const MAX_WAL_OBJECT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
     let mut admin = connect_admin(bootstrap, security.clone()).await?;
     let index_metadata = admin
         .metadata(&[TOPIC])
@@ -464,37 +463,7 @@ async fn capture_diskless_index(
         .metadata(&[])
         .await
         .map_err(|error| BackupError::Cluster(format!("Metadata: {error}")))?;
-    let topic_names = metadata
-        .topics
-        .iter()
-        .filter(|topic| topic.name != TOPIC)
-        .map(|topic| topic.name.as_str())
-        .collect::<Vec<_>>();
-    let resources = topic_names
-        .iter()
-        .map(|name| ConfigResource::topic(*name))
-        .collect::<Vec<_>>();
-    let configs = admin
-        .describe_configs(&resources, DescribeConfigsOptions::default())
-        .await
-        .map_err(|error| BackupError::Cluster(format!("DescribeConfigs: {error}")))?
-        .into_iter()
-        .map(|(resource, config)| {
-            // The client used to fail the whole call on a resource error, as
-            // this `Broker` error; keep that text.
-            let config = config.map_err(|error| {
-                let error = AdminError::Broker {
-                    api: "DescribeConfigs",
-                    code: error.code,
-                    name: error.name,
-                    message: error.message,
-                };
-                BackupError::Cluster(format!("DescribeConfigs: {error}"))
-            })?;
-            let overrides = config.dynamic_overrides(&resource);
-            Ok((resource.name, overrides))
-        })
-        .collect::<Result<BTreeMap<_, _>, BackupError>>()?;
+    let configs = topic_overrides(&mut admin, &metadata, TOPIC).await?;
     let topics = diskless_topic_topology(&metadata, &configs, TOPIC)?;
     let mut config = KafkaMetadataLogConfig::new(bootstrap);
     TOPIC.clone_into(&mut config.topic);
@@ -515,48 +484,97 @@ async fn capture_diskless_index(
     capture.group_offsets_sha256 = digests.group_offsets;
     log.shutdown().await;
     drop(log);
-    if let (Some(key_id), Some(key_path)) = (
-        signing.worm_signing_key_id.as_ref(),
-        signing.worm_signing_key.as_ref(),
-    ) {
-        let signer = FileEd25519Signer::from_pkcs8_file(key_path, key_id.clone())
-            .map_err(|error| BackupError::InvalidArgument(error.to_string()))?;
-        let keys = capture
-            .partitions
-            .iter()
-            .flat_map(|partition| &partition.ranges)
-            .map(|range| range.object_key.clone())
-            .collect::<BTreeSet<_>>();
-        let mut claims = Vec::with_capacity(keys.len());
-        for key in keys {
-            let bytes = store
-                .get_absolute_capped(&key, MAX_WAL_OBJECT_BYTES)
-                .await?;
-            claims.push(ObjectEntry {
-                suffix: Path::new(&key)
-                    .extension()
-                    .map_or_else(String::new, |extension| {
-                        format!(".{}", extension.to_string_lossy())
-                    }),
-                key,
-                size_bytes: bytes.len() as u64,
-                sha256: Sha256Digest::of(&bytes),
-                e_tag: None,
-                version_id: None,
-                create_precondition: false,
-            });
-        }
-        let head = capture
-            .seal(claims, &signer)
-            .map_err(BackupError::Integrity)?;
-        events.push(BackupEvent::DisklessSealed { head });
-    }
+    seal_capture(store, signing, &mut capture, events).await?;
     serde_json::to_vec_pretty(&capture)
         .map(Some)
         .map_err(|source| BackupError::Json {
             context: DISKLESS_WAL_INDEX.to_owned(),
             source,
         })
+}
+
+/// Each non-index topic's dynamic config overrides, by topic name.
+async fn topic_overrides(
+    admin: &mut AdminClient,
+    metadata: &TopicMetadata,
+    index_topic: &str,
+) -> Result<BTreeMap<String, BTreeMap<String, String>>, BackupError> {
+    let resources = metadata
+        .topics
+        .iter()
+        .filter(|topic| topic.name != index_topic)
+        .map(|topic| ConfigResource::topic(topic.name.as_str()))
+        .collect::<Vec<_>>();
+    admin
+        .describe_configs(&resources, DescribeConfigsOptions::default())
+        .await
+        .map_err(|error| BackupError::Cluster(format!("DescribeConfigs: {error}")))?
+        .into_iter()
+        .map(|(resource, config)| {
+            // The client used to fail the whole call on a resource error, as
+            // this `Broker` error; keep that text.
+            let config = config.map_err(|error| {
+                let error = AdminError::Broker {
+                    api: "DescribeConfigs",
+                    code: error.code,
+                    name: error.name,
+                    message: error.message,
+                };
+                BackupError::Cluster(format!("DescribeConfigs: {error}"))
+            })?;
+            let overrides = config.dynamic_overrides(&resource);
+            Ok((resource.name, overrides))
+        })
+        .collect()
+}
+
+/// Seals `capture` with an Ed25519 signature over every WAL object it names,
+/// when `signing` holds both a key id and a key. Without both it does nothing.
+async fn seal_capture(
+    store: &Archive,
+    signing: &CaptureSigningArgs,
+    capture: &mut DisklessWalCapture,
+    events: &mut Vec<BackupEvent>,
+) -> Result<(), BackupError> {
+    const MAX_WAL_OBJECT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+    let (Some(key_id), Some(key_path)) = (
+        signing.worm_signing_key_id.as_ref(),
+        signing.worm_signing_key.as_ref(),
+    ) else {
+        return Ok(());
+    };
+    let signer = FileEd25519Signer::from_pkcs8_file(key_path, key_id.clone())
+        .map_err(|error| BackupError::InvalidArgument(error.to_string()))?;
+    let keys = capture
+        .partitions
+        .iter()
+        .flat_map(|partition| &partition.ranges)
+        .map(|range| range.object_key.clone())
+        .collect::<BTreeSet<_>>();
+    let mut claims = Vec::with_capacity(keys.len());
+    for key in keys {
+        let bytes = store
+            .get_absolute_capped(&key, MAX_WAL_OBJECT_BYTES)
+            .await?;
+        claims.push(ObjectEntry {
+            suffix: Path::new(&key)
+                .extension()
+                .map_or_else(String::new, |extension| {
+                    format!(".{}", extension.to_string_lossy())
+                }),
+            key,
+            size_bytes: bytes.len() as u64,
+            sha256: Sha256Digest::of(&bytes),
+            e_tag: None,
+            version_id: None,
+            create_precondition: false,
+        });
+    }
+    let head = capture
+        .seal(claims, &signer)
+        .map_err(BackupError::Integrity)?;
+    events.push(BackupEvent::DisklessSealed { head });
+    Ok(())
 }
 
 fn diskless_topic_topology(
