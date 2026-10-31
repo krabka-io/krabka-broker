@@ -462,16 +462,15 @@ pub(super) async fn execute_pending_reads(
         // feeds the rebalancer, while the phase is per request and is the
         // Fetch half of `request_local_duration_seconds`.
         phases.add_local(elapsed);
-        // `serve_from_cold_tier` reads its budget off `read.max_bytes`
-        // itself, so this pass's capped budget is loaned to it here and
-        // given back immediately after: the field's steady-state value stays
-        // the original per-partition request, which is what a later
-        // long-poll re-read of this partition (or an epoch recheck) must
-        // still see.
-        read.max_bytes = budget;
-        let cold =
-            serve_from_cold_tier(broker, read, &partition, phases, &mut state.remote_wait).await;
-        read.max_bytes = requested_max_bytes;
+        let cold = serve_from_cold_tier(
+            broker,
+            read,
+            &partition,
+            budget,
+            phases,
+            &mut state.remote_wait,
+        )
+        .await;
         let withheld = withheld_by_leader_throttle(broker, read);
         state.record_read(index, read, ReadAccounting {
             local_bytes,
@@ -750,12 +749,16 @@ async fn reread_woken(
     phases.add_local(read_start.elapsed());
 
     // The partition may have aged past this offset while the fetch was parked,
-    // in which case the cold tier is where the records now are. Loan the
-    // capped budget to it the same way the first pass does, and give the
-    // original per-partition request back afterward.
-    read.max_bytes = read_budget;
-    let cold = serve_from_cold_tier(broker, read, &part, phases, &mut state.remote_wait).await;
-    read.max_bytes = requested_max_bytes;
+    // in which case the cold tier is where the records now are.
+    let cold = serve_from_cold_tier(
+        broker,
+        read,
+        &part,
+        read_budget,
+        phases,
+        &mut state.remote_wait,
+    )
+    .await;
     let withheld = withheld_by_leader_throttle(broker, read);
     state.record_read(index, read, ReadAccounting {
         local_bytes: bytes,
@@ -813,25 +816,6 @@ fn withheld_by_leader_throttle(broker: &Broker, read: &PendingRead) -> bool {
     withheld
 }
 
-/// Serve `read`'s offset out of the cold tier when the local log no longer
-/// holds it, charging the object-store round trip to the request's remote
-/// phase.
-///
-/// A KIP-405 tiered read and a diskless WAL cold read are both a network round
-/// trip to an object store rather than work on this broker's own log, so they
-/// belong beside the long poll and the Produce `acks=all` gate and not beside
-/// `do_read`. Kafka accounts them the same way: a fetch that misses the local
-/// log becomes a `DelayedRemoteFetch` in the purgatory, and the purgatory wait
-/// is what `RequestMetrics.RemoteTimeMs` measures.
-///
-/// Returns the bytes the cold tier served, and zero when the local log already
-/// answered, when no tier holds the offset, or when the tier failed the read
-/// -- a failure the remote path has already answered with
-/// `UNKNOWN_SERVER_ERROR`, so the `OFFSET_OUT_OF_RANGE` gate above is what
-/// keeps the failed partition from being handed to a second tier. A read the
-/// local log answered charges nothing at all: the clock is only read once the
-/// fallback is entered, so a cluster with no tiered or diskless topic sees an
-/// unchanged remote phase.
 /// Turns a read the response budget had no room for into the row an empty
 /// read produces: the watermarks and log start the read just filled in, no
 /// records, and the aborted-transaction list an empty read carries.
@@ -848,10 +832,33 @@ fn discard_to_metadata_only(read: &mut PendingRead) {
     read.out.aborted_transactions = (read.read_committed && !read.is_follower_fetch).then(Vec::new);
 }
 
+/// Serve `read`'s offset out of the cold tier when the local log no longer
+/// holds it, charging the object-store round trip to the request's remote
+/// phase.
+///
+/// A KIP-405 tiered read and a diskless WAL cold read are both a network round
+/// trip to an object store rather than work on this broker's own log, so they
+/// belong beside the long poll and the Produce `acks=all` gate and not beside
+/// `do_read`. Kafka accounts them the same way: a fetch that misses the local
+/// log becomes a `DelayedRemoteFetch` in the purgatory, and the purgatory wait
+/// is what `RequestMetrics.RemoteTimeMs` measures.
+///
+/// `max_bytes` is the partition's budget for this read: its
+/// `partition_max_bytes`, capped at what the response has left.
+///
+/// Returns the bytes the cold tier served, and zero when the local log already
+/// answered, when no tier holds the offset, or when the tier failed the read
+/// -- a failure the remote path has already answered with
+/// `UNKNOWN_SERVER_ERROR`, so the `OFFSET_OUT_OF_RANGE` gate above is what
+/// keeps the failed partition from being handed to a second tier. A read the
+/// local log answered charges nothing at all: the clock is only read once the
+/// fallback is entered, so a cluster with no tiered or diskless topic sees an
+/// unchanged remote phase.
 async fn serve_from_cold_tier(
     broker: &Broker,
     read: &mut PendingRead,
     part: &Partition,
+    max_bytes: i32,
     phases: &RequestPhases,
     remote_wait: &mut RemoteFetchWait,
 ) -> usize {
@@ -862,7 +869,6 @@ async fn serve_from_cold_tier(
     // Boxed: the cold read holds the remote-wait deadline and the reader
     // permit across several awaits, and inline it would make every fetch
     // future, local or cold, carry its whole state.
-    let max_bytes = read.max_bytes;
     let served = match Box::pin(try_remote_read(broker, read, part, max_bytes, remote_wait)).await {
         Some(remote_bytes) => remote_bytes,
         None => try_diskless_read(broker, read, part, max_bytes)
@@ -1838,10 +1844,12 @@ mod tests {
         };
 
         let phases = RequestPhases::default();
+        let max_bytes = pending.max_bytes;
         let served = super::serve_from_cold_tier(
             &broker,
             &mut pending,
             &part,
+            max_bytes,
             &phases,
             &mut super::RemoteFetchWait::default(),
         )
@@ -1862,6 +1870,7 @@ mod tests {
             &broker,
             &mut pending,
             &part,
+            max_bytes,
             &local_only,
             &mut super::RemoteFetchWait::default(),
         )
