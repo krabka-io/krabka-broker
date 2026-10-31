@@ -622,8 +622,7 @@ mod tests {
     )]
     fn modes_name_every_accepted_choice_when_rejecting(tokens: &str) {
         let error = mode(tokens.parse().unwrap(), [("strict", ()), ("open", ())])
-            .err()
-            .expect("mode rejected");
+            .expect_err("mode rejected");
         assert2::assert!(
             error.to_string() == "expected one of `strict`, `open`",
             "{tokens}"

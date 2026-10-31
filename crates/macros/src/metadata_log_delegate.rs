@@ -111,7 +111,7 @@ mod tests {
         tokens
             .windows(2)
             .filter(|pair| pair[0].is_keyword_fn())
-            .filter_map(|pair| pair[1].as_ident().map(|name| compact(name)))
+            .filter_map(|pair| pair[1].as_ident().map(compact))
             .collect()
     }
 
