@@ -642,7 +642,7 @@ where
 
     async fn run(&mut self) {
         while let Some(frame) = self.next_frame().await {
-            if let Step::Close = self.serve_frame(frame).await {
+            if matches!(self.serve_frame(frame).await, Step::Close) {
                 break;
             }
         }
@@ -833,7 +833,7 @@ where
     /// Serves a `SaslHandshake` or `SaslAuthenticate` frame, or returns `None`
     /// for any other request.
     ///
-    /// SASL frames (api_key 17 / 36) mutate the per-connection auth state,
+    /// SASL frames (`api_key` 17 / 36) mutate the per-connection auth state,
     /// which lives in this loop. They run *before* the regular handler table
     /// because handlers receive only `&Broker` and have no way to touch
     /// `auth`. A SASL outcome that keeps the connection open sets no mute.
