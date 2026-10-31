@@ -227,7 +227,7 @@ pub fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
         let [name_tokens, mode_tokens] = argument_array(tokens)?;
         (
             name(name_tokens)?,
-            mode(mode_tokens, ["plain", "full"])? == "full",
+            mode(mode_tokens, [("plain", false), ("full", true)])?,
         )
     } else {
         (name(tokens)?, true)
@@ -274,7 +274,7 @@ pub fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
 pub fn record_header_text(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let [name_tokens, mode_tokens] = argument_array(tokens)?;
     let name = name(name_tokens)?;
-    let strict = mode(mode_tokens, ["strict", "lossy"])? == "strict";
+    let strict = mode(mode_tokens, [("strict", true), ("lossy", false)])?;
     Ok(moxy::template! {
         fn {{ name }}(record: &::krabka_protocol::records::Record, key: &str) -> Option<String> {
             record.headers.iter()

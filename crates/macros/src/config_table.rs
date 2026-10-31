@@ -6,13 +6,13 @@ use crate::{
 };
 
 pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
-    let mode = mode(meta, ["strict", "open"])?;
+    let strict = mode(meta, [("strict", true), ("open", false)])?;
     let ItemBody { tokens: item, .. } =
         item_body(item, "config_table", TokenTree::is_keyword_struct)?;
     let mut output = moxy::template! {
         #[derive(Debug, Clone, Default, ::serde::Deserialize, ::schemars::JsonSchema, PartialEq)]
     };
-    if mode == "strict" {
+    if strict {
         output.extend(moxy::template! { #[serde(deny_unknown_fields)] });
     }
     output.extend(item);

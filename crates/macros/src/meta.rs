@@ -465,22 +465,24 @@ pub fn required_tokens(tokens: TokenStream, message: &str) -> Result<TokenStream
     }
 }
 
-/// Read one of the explicit modes accepted by a field-group attribute.
-pub fn mode<const N: usize>(
+/// Read one of the explicit modes accepted by a field-group attribute, as the
+/// value paired with its name.
+pub fn mode<T, const N: usize>(
     tokens: TokenStream,
-    modes: [&'static str; N],
-) -> Result<&'static str, ParseError> {
+    modes: [(&'static str, T); N],
+) -> Result<T, ParseError> {
+    let names = modes.each_ref().map(|(name, _)| *name);
     let tokens: Vec<_> = tokens.into_iter().collect();
     if let [TokenTree::Ident(name)] = tokens.as_slice()
-        && let Some(mode) = modes.into_iter().find(|mode| name == *mode)
+        && let Some((_, value)) = modes.into_iter().find(|(mode, _)| name == *mode)
     {
-        return Ok(mode);
+        return Ok(value);
     }
     Err(ParseError::new(
         Span::call_site(),
         format!(
             "expected one of {}",
-            modes.map(|mode| format!("`{mode}`")).join(", ")
+            names.map(|mode| format!("`{mode}`")).join(", ")
         ),
     ))
 }
@@ -491,11 +493,7 @@ pub fn mode_docs<const N: usize>(
     file: [&'static str; N],
     runtime: [&'static str; N],
 ) -> Result<[LitStr; N], ParseError> {
-    let docs = match mode(meta, ["file", "runtime"])? {
-        "file" => file,
-        "runtime" => runtime,
-        _ => unreachable!(),
-    };
+    let docs = mode(meta, [("file", file), ("runtime", runtime)])?;
     Ok(docs.map(|doc| LitStr::new(doc, Span::call_site())))
 }
 
@@ -599,7 +597,8 @@ mod tests {
         second = { "open", "open" },
     )]
     fn modes_select_each_accepted_name(tokens: &str, expected: &str) {
-        assert2::assert!(mode(tokens.parse().unwrap(), ["strict", "open"]).unwrap() == expected);
+        let modes = [("strict", "strict"), ("open", "open")];
+        assert2::assert!(mode(tokens.parse().unwrap(), modes).unwrap() == expected);
     }
 
     #[yare::parameterized(
@@ -609,7 +608,7 @@ mod tests {
         literal = { "\"strict\"" },
     )]
     fn modes_name_every_accepted_choice_when_rejecting(tokens: &str) {
-        let error = mode(tokens.parse().unwrap(), ["strict", "open"])
+        let error = mode(tokens.parse().unwrap(), [("strict", ()), ("open", ())])
             .err()
             .expect("mode rejected");
         assert2::assert!(error.to_string() == "expected one of `strict`, `open`", "{tokens}");
