@@ -237,6 +237,17 @@ fn registered_epoch(cfg: &Config, image: &krabka_metadata::MetadataImage) -> i64
     })
 }
 
+/// What the heartbeat loop carries from one answer to the next heartbeat.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct HeartbeatState {
+    /// Kafka's `initialCatchUpFuture`: set by the first answer that says the
+    /// broker has caught up, and never cleared.
+    caught_up: bool,
+    /// Kafka's `gotControlledShutdownResponse`: whether the controller has
+    /// answered a heartbeat that asked to shut down.
+    controlled_shutdown_answered: bool,
+}
+
 /// The controller leader, and the controller-listener endpoint the metadata
 /// names for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,12 +316,7 @@ pub async fn run(mut cfg: Config) {
     }
     let mut tick = time::interval(cfg.interval.to_std());
     let mut channel: Option<ControllerChannel> = None;
-    // Kafka's `initialCatchUpFuture`: set by the first answer that says the
-    // broker has caught up, and never cleared.
-    let mut caught_up = false;
-    // Kafka's `gotControlledShutdownResponse`: whether the controller has
-    // answered a heartbeat that asked to shut down.
-    let mut controlled_shutdown_answered = false;
+    let mut state = HeartbeatState::default();
     loop {
         tokio::select! {
             _ = tick.tick() => {},
@@ -366,7 +372,7 @@ pub async fn run(mut cfg: Config) {
         let log_dirs = HeartbeatLogDirs {
             offline: offline_dir_uuids(&cfg.log_dir_status, &cfg.log_dir_ids),
             cordoned: cordoned_dir_uuids(
-                caught_up,
+                state.caught_up,
                 &image,
                 &cfg.cordoned_log_dirs,
                 &cfg.log_dir_ids,
@@ -406,7 +412,7 @@ pub async fn run(mut cfg: Config) {
                     );
                     continue;
                 }
-                caught_up |= r.is_caught_up;
+                state.caught_up |= r.is_caught_up;
                 if !r.is_fenced {
                     cfg.unfenced.send_replace(InitialUnfence::Unfenced);
                 }
@@ -415,8 +421,8 @@ pub async fn run(mut cfg: Config) {
                     // `BrokerHandle::controlled_shutdown` waiter is
                     // single-shot.
                     let _ = cfg.should_shutdown.send(true);
-                } else if want_shut_down && !controlled_shutdown_answered {
-                    controlled_shutdown_answered = true;
+                } else if want_shut_down && !state.controlled_shutdown_answered {
+                    state.controlled_shutdown_answered = true;
                     tick.reset_after(CONTROLLED_SHUTDOWN_RECHECK);
                 }
             }
