@@ -7,8 +7,8 @@ use {
         remote_log_manager::{
             test_support as fixtures,
             test_support::{
-                Backends, FakeWormArchive, archived_backends, copy_exports, local_backends,
-                seed_finished_segments, synth_export, tier, tp,
+                Backends, FakeWormArchive, RefusesDeleteRsm, archived_backends, copy_exports,
+                local_backends, seed_finished_segments, synth_export, tier, tp,
             },
         },
         time_util::now_ms,
@@ -20,10 +20,7 @@ use {
         RemoteLogSegmentMetadataUpdate, RemoteStorageError, RemoteStorageManager,
     },
     krabka_units::{bytes, hours, millis},
-    std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    std::sync::{Arc, atomic::Ordering},
     uuid::Uuid,
 };
 
@@ -59,37 +56,6 @@ fn empty_local_bounds(
         now_ms,
         local: LocalLogFootprint::EMPTY,
         earliest_epoch: None,
-    }
-}
-
-/// An RSM that refuses every delete the way a WORM backend does, and
-/// counts how many times it was asked. Modelled on [`AlwaysFailRsm`],
-/// with the failure moved from the copy to the delete.
-#[derive(Default)]
-struct RefusesDeleteRsm {
-    deletes_attempted: AtomicUsize,
-}
-
-#[krabka_macros::missing_remote_reads]
-impl RemoteStorageManager for RefusesDeleteRsm {
-    fn copy_log_segment_data(
-        &self,
-        _metadata: &RemoteLogSegmentMetadata,
-        _data: &LogSegmentData,
-    ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
-        Ok(None)
-    }
-
-    fn delete_log_segment_data(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-    ) -> Result<(), RemoteStorageError> {
-        self.deletes_attempted.fetch_add(1, Ordering::Relaxed);
-        Err(RemoteStorageError::Worm(
-            krabka_remote_storage::WormError::DeleteRefused {
-                key: format!("{}.log", metadata.remote_log_segment_id().id),
-            },
-        ))
     }
 }
 
@@ -1213,24 +1179,14 @@ async fn finishing_abandoned_deletes_records_its_delete_requests_and_errors(
     requests: u64,
     errors: u64,
 ) {
-    let fixtures::OwnedTierResources {
-        rlmm,
-        metrics,
-        index_cache,
-    } = fixtures::owned_tier_resources();
-    seed_finished_segments(&rlmm, 4);
-    mark_delete_started(&rlmm, &[0, 1]);
+    let owned = fixtures::owned_tier_resources();
+    seed_finished_segments(&owned.rlmm, 4);
+    mark_delete_started(&owned.rlmm, &[0, 1]);
     let rsm: Arc<dyn RemoteStorageManager> = if refuse {
         Arc::new(RefusesDeleteRsm::default())
     } else {
         Arc::new(AcceptingRsm)
     };
-    let tier = fixtures::configured_tier()
-        .rsm(&rsm)
-        .rlmm(&rlmm)
-        .metrics(&metrics)
-        .index_cache(&index_cache)
-        .call();
     let cfg = LogConfig {
         retention: None,
         retention_size: None,
@@ -1241,23 +1197,11 @@ async fn finishing_abandoned_deletes_records_its_delete_requests_and_errors(
         &tp(),
         1,
         empty_local_bounds(&cfg, Offset(20), Some(Offset(20)), now_ms()),
-        &tier,
+        &owned.tier(&rsm),
     )
     .await;
 
-    let topic = fixtures::orders_label();
-    check!(
-        (
-            metrics
-                .remote_delete_requests_total
-                .get_or_create(&topic)
-                .get(),
-            metrics
-                .remote_delete_errors_total
-                .get_or_create(&topic)
-                .get()
-        ) == (requests, errors)
-    );
+    check!(owned.delete_counts() == (requests, errors));
 }
 
 #[derive(Default)]

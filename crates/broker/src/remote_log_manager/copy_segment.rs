@@ -658,27 +658,6 @@ mod tests {
         check!(residue == expected);
     }
 
-    /// Accepts every copy and refuses every delete.
-    struct RefusesDeleteRsm;
-
-    #[krabka_macros::missing_remote_reads]
-    impl RemoteStorageManager for RefusesDeleteRsm {
-        fn copy_log_segment_data(
-            &self,
-            _metadata: &RemoteLogSegmentMetadata,
-            _data: &LogSegmentData,
-        ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
-            Ok(None)
-        }
-
-        fn delete_log_segment_data(
-            &self,
-            _metadata: &RemoteLogSegmentMetadata,
-        ) -> Result<(), RemoteStorageError> {
-            Err(RemoteStorageError::InvalidArgument("refused".into()))
-        }
-    }
-
     /// Deleting a copy that finished below the floor counts as one delete
     /// request, and as one delete error when the backend refuses it.
     #[yare::parameterized(
@@ -691,24 +670,14 @@ mod tests {
         errors: u64,
     ) {
         let rsm: Arc<dyn RemoteStorageManager> = if refuse {
-            Arc::new(RefusesDeleteRsm)
+            Arc::new(fixtures::RefusesDeleteRsm::default())
         } else {
             Arc::new(DeletingRsm::default())
         };
-        let fixtures::OwnedTierResources {
-            rlmm,
-            metrics,
-            index_cache,
-        } = fixtures::owned_tier_resources();
-        let tier = fixtures::configured_tier()
-            .rsm(&rsm)
-            .rlmm(&rlmm)
-            .metrics(&metrics)
-            .index_cache(&index_cache)
-            .call();
+        let owned = fixtures::owned_tier_resources();
 
         copy_one(
-            &tier,
+            &owned.tier(&rsm),
             &tp(),
             CopyIdentity {
                 broker_id: 1,
@@ -720,19 +689,7 @@ mod tests {
         )
         .await;
 
-        let topic = fixtures::orders_label();
-        check!(
-            (
-                metrics
-                    .remote_delete_requests_total
-                    .get_or_create(&topic)
-                    .get(),
-                metrics
-                    .remote_delete_errors_total
-                    .get_or_create(&topic)
-                    .get()
-            ) == (1, errors)
-        );
+        check!(owned.delete_counts() == (1, errors));
     }
 
     /// A `DeleteRecords` that marks a segment `DeleteSegmentStarted` while
