@@ -920,27 +920,29 @@ impl TailWindow {
     pub(crate) fn end(&self) -> u64 { self.start + to_u64(self.len) }
 
     /// The window from the chunk that holds `pos` on: what a read that starts
-    /// at or after `pos` can use. Chunks wholly before `pos` are left out, so
-    /// a reader near the end clones a few handles whatever the window's size.
+    /// at or after `pos` can use. Chunks wholly before `pos` are left out, and
+    /// the walk goes back from the end, so a reader near the end touches a few
+    /// handles whatever the window's size: the plan that takes this view holds
+    /// the log lock.
     pub(crate) fn suffix(&self, pos: u64) -> Self {
-        let mut start = self.start;
-        let mut len = self.len;
-        let skipped = self
-            .chunks
-            .iter()
-            .take_while(|chunk| {
-                let past = start + to_u64(chunk.len()) <= pos;
-                if past {
-                    start += to_u64(chunk.len());
-                    len -= chunk.len();
-                }
-                past
-            })
-            .count();
+        let end = self.end();
+        let mut start = end;
+        let mut kept = 0;
+        for chunk in self.chunks.iter().rev() {
+            if start <= pos {
+                break;
+            }
+            start -= to_u64(chunk.len());
+            kept += 1;
+        }
         Self {
             start,
-            len,
-            chunks: self.chunks.iter().skip(skipped).cloned().collect(),
+            len: usize::try_from(end - start).unwrap_or(self.len),
+            chunks: self
+                .chunks
+                .range(self.chunks.len() - kept..)
+                .cloned()
+                .collect(),
         }
     }
 
@@ -1052,6 +1054,9 @@ struct Slab {
     free: BytesMut,
     /// What the arena counted for the slab.
     capacity: usize,
+    /// The segment positions of its first byte and of the end of its last
+    /// batch.
+    start: u64,
     end: u64,
 }
 
@@ -1157,7 +1162,8 @@ impl TailCache {
     /// Copy `len` bytes, the concatenation of `parts`, into the newest slab,
     /// or a new one when it has no room, and return them as a shared slice.
     fn copy_in(&mut self, parts: &[&[u8]], len: usize) -> Bytes {
-        let end = self.window.end() + to_u64(len);
+        let start = self.window.end();
+        let end = start + to_u64(len);
         let room = self
             .slabs
             .back()
@@ -1176,6 +1182,7 @@ impl TailCache {
             self.slabs.push_back(Slab {
                 free,
                 capacity,
+                start,
                 end,
             });
         }
@@ -1239,6 +1246,11 @@ impl TailCache {
     pub(crate) fn truncate(&mut self, end: u64) {
         self.written = self.written.min(end);
         self.window.truncate(end);
+        // A slab that starts at or past the cut holds only bytes the cut
+        // dropped; the next push starts a slab of its own there.
+        while let Some(slab) = self.slabs.pop_back_if(|slab| slab.start >= end) {
+            self.arena.give_back(slab.free, slab.capacity);
+        }
         for slab in &mut self.slabs {
             slab.end = slab.end.min(end);
         }
@@ -2311,5 +2323,29 @@ mod tests {
             arena.fresh(),
             arena.pooled()
         );
+    }
+
+    /// A truncation gives back the slabs it leaves wholly past the cut, so a
+    /// window cut back to its first batches does not keep its old size
+    /// counted against the budget.
+    #[test]
+    fn tail_cache_truncate_gives_back_the_slabs_past_the_cut() {
+        let arena = Arc::new(TailArena::new(Some(1 << 30)));
+        let mut cache = TailCache::in_arena(1 << 20, 64 << 20, 0, Arc::clone(&arena));
+        fill(&mut cache, 48, 1 << 20);
+        check!(cache.end() - cache.start() == 48 << 20);
+        let grown = arena.held();
+        check!(grown >= 48 << 20);
+        cache.truncate(2 << 20);
+        check!((cache.start(), cache.end()) == (0, 2 << 20));
+        check!(to_u64(cache.slab_bytes()) == arena.held());
+        check!(
+            arena.held() <= to_u64(2 * SLAB),
+            "{} bytes held after cutting {grown} back to 2 MiB",
+            arena.held()
+        );
+        cache.push(&[b"after the cut"]);
+        check!(cache.end() == (2 << 20) + 13);
+        check!(read(&cache, 2 << 20, 13) == Some(b"after the cut".to_vec()));
     }
 }
