@@ -299,6 +299,11 @@ pub(super) fn forwarded_log_dirs(broker: &Broker, ctx: &RequestContext<'_>) -> V
     }
 }
 
+/// The broker-side checks one API runs on a BROKER resource against this
+/// node's own settings.
+pub(super) type PreprocessBroker<Resource> =
+    fn(&Resource, BrokerConfigContext<'_>, OwnBrokerChecks<'_>) -> Result<(), (i16, String)>;
+
 /// One resource's broker-side preprocessing, as
 /// [`broker_preprocess_refusal`] runs it.
 pub(super) struct BrokerPreprocess<'a, Resource> {
@@ -309,9 +314,9 @@ pub(super) struct BrokerPreprocess<'a, Resource> {
     /// Whether this resource has broker-side checks to run at all.
     pub(super) runs_preprocess: bool,
     /// The broker-side checks against this node's own settings.
-    pub(super) preprocess:
-        fn(&Resource, BrokerConfigContext<'_>, OwnBrokerChecks<'_>) -> Result<(), (i16, String)>,
-    /// Whether the authorizer accepts a `BROKER_LOGGER` resource type.
+    pub(super) preprocess: PreprocessBroker<Resource>,
+    /// Whether this API accepts a `BROKER_LOGGER` resource, which it then
+    /// authorizes against the cluster.
     pub(super) broker_logger_supported: bool,
 }
 

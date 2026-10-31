@@ -266,7 +266,7 @@ fn resource_refusal(resource: &AlterConfigsResource, code: i16) -> AlterConfigsR
     }
 }
 
-/// The records a TOPIC, BROKER, CLIENT_METRICS or GROUP resource stages, or
+/// The records a `TOPIC`, `BROKER`, `CLIENT_METRICS` or `GROUP` resource stages, or
 /// the error it answers with.
 fn resource_records(
     broker: &Broker,
