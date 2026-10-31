@@ -35,7 +35,10 @@ use {
         fs,
         ops::RangeInclusive,
         path::{Path, PathBuf},
-        sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, atomic::Ordering},
+        sync::{
+            Arc, Mutex, MutexGuard, OnceLock, PoisonError,
+            atomic::{AtomicUsize, Ordering},
+        },
     },
     tokio_util::sync::CancellationToken,
     uuid::Uuid,
@@ -828,6 +831,36 @@ pub async fn registered_sweep_fixture(
     fixture
 }
 
+/// An RSM that refuses every delete the way a WORM backend does, and
+/// counts how many times it was asked. Every copy succeeds.
+#[derive(Default)]
+pub struct RefusesDeleteRsm {
+    pub deletes_attempted: AtomicUsize,
+}
+
+#[krabka_macros::missing_remote_reads]
+impl RemoteStorageManager for RefusesDeleteRsm {
+    fn copy_log_segment_data(
+        &self,
+        _metadata: &RemoteLogSegmentMetadata,
+        _data: &LogSegmentData,
+    ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
+        Ok(None)
+    }
+
+    fn delete_log_segment_data(
+        &self,
+        metadata: &RemoteLogSegmentMetadata,
+    ) -> Result<(), RemoteStorageError> {
+        self.deletes_attempted.fetch_add(1, Ordering::Relaxed);
+        Err(RemoteStorageError::Worm(
+            krabka_remote_storage::WormError::DeleteRefused {
+                key: format!("{}.log", metadata.remote_log_segment_id().id),
+            },
+        ))
+    }
+}
+
 /// A metadata backend and per-test metric/cache resources, in their original declaration order.
 pub struct OwnedTierResources {
     pub rlmm: Arc<dyn RemoteLogMetadataManager>,
@@ -842,6 +875,34 @@ pub fn owned_tier_resources() -> OwnedTierResources {
         rlmm,
         metrics,
         index_cache,
+    }
+}
+
+impl OwnedTierResources {
+    /// A mutable tier over `rsm` and these resources, so a test can read the
+    /// counters it moves.
+    pub fn tier<'a>(&'a self, rsm: &'a Arc<dyn RemoteStorageManager>) -> RemoteTier<'a> {
+        configured_tier()
+            .rsm(rsm)
+            .rlmm(&self.rlmm)
+            .metrics(&self.metrics)
+            .index_cache(&self.index_cache)
+            .call()
+    }
+
+    /// The `orders` topic's Delete request and error counts.
+    pub fn delete_counts(&self) -> (u64, u64) {
+        let topic = orders_label();
+        (
+            self.metrics
+                .remote_delete_requests_total
+                .get_or_create(&topic)
+                .get(),
+            self.metrics
+                .remote_delete_errors_total
+                .get_or_create(&topic)
+                .get(),
+        )
     }
 }
 

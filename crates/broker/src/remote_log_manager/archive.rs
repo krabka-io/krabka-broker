@@ -76,13 +76,4 @@ impl ChainPosition {
             }
         }
     }
-
-    /// The archive mode this position belongs to: a stamp exists exactly when
-    /// the tier is write-once.
-    pub(super) const fn archive(self) -> ArchiveMode {
-        match self {
-            Self::Unchained => ArchiveMode::Mutable,
-            Self::At(_) | Self::Exhausted => ArchiveMode::WriteOnce,
-        }
-    }
 }
