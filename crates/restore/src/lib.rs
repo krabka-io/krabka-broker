@@ -249,25 +249,16 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         }
     }
 
-    let diskless = match diskless_capture {
-        Some(capture) => {
-            let report =
-                diskless::materialize(&store, args, &predicates, &capture, diskless_claims).await?;
-            diskless::check_next_offsets(&report, &diskless_next_offsets)?;
-            if diskless_claims.is_some() {
-                consumed_authenticated_objects.extend(
-                    capture
-                        .partitions
-                        .iter()
-                        .filter(|partition| args.selects_topic(&partition.topic))
-                        .flat_map(|partition| &partition.ranges)
-                        .map(|range| range.object_key.clone()),
-                );
-            }
-            Some(report)
-        }
-        None => None,
-    };
+    let diskless = restore_diskless(
+        &store,
+        args,
+        &predicates,
+        diskless_capture.as_ref(),
+        diskless_claims,
+        &diskless_next_offsets,
+        &mut consumed_authenticated_objects,
+    )
+    .await?;
     if let Some(SourceAuthentication { report, .. }) = &mut authenticated {
         report.objects = u64::try_from(consumed_authenticated_objects.len()).unwrap_or(u64::MAX);
     }
@@ -355,6 +346,38 @@ async fn restore_partition(
         topic_id: entry.partition.topic_id,
         segments,
     }))
+}
+
+/// Materialize the diskless capture, if there is one, and hold it to the next
+/// offsets the target was formatted with.
+///
+/// When the capture is authenticated, the object keys of every selected
+/// topic's ranges are added to `consumed`.
+async fn restore_diskless(
+    store: &ArchiveStore,
+    args: &RestoreArgs,
+    predicates: &Predicates,
+    capture: Option<&DisklessWalCapture>,
+    claims: Option<&BTreeMap<String, krabka_remote_storage::ObjectEntry>>,
+    next_offsets: &[diskless::DisklessNextOffset],
+    consumed: &mut BTreeSet<String>,
+) -> Result<Option<DisklessRestoreReport>, RestoreError> {
+    let Some(capture) = capture else {
+        return Ok(None);
+    };
+    let report = diskless::materialize(store, args, predicates, capture, claims).await?;
+    diskless::check_next_offsets(&report, next_offsets)?;
+    if claims.is_some() {
+        consumed.extend(
+            capture
+                .partitions
+                .iter()
+                .filter(|partition| args.selects_topic(&partition.topic))
+                .flat_map(|partition| &partition.ranges)
+                .map(|range| range.object_key.clone()),
+        );
+    }
+    Ok(Some(report))
 }
 
 /// Format the target, seeding the restored metadata with each diskless
