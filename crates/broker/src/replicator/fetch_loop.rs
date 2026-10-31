@@ -150,6 +150,27 @@ impl FetcherState {
             self.materialized.insert(key.clone());
         }
     }
+
+    /// Marks this round's due partitions dirty and plans the round.
+    ///
+    /// Every partition is due when the periodic audit is, and a held-back
+    /// partition is due once its hold has expired. The hold is cleared against
+    /// a fresh reading of the clock, not against `now`.
+    fn collect_due(&mut self, now: Instant) -> Round {
+        if now >= self.next_partition_audit {
+            self.dirty.extend(self.followed.keys().cloned());
+            self.next_partition_audit = now + PARTITION_STATE_AUDIT_INTERVAL;
+        }
+        self.dirty.extend(
+            self.delayed
+                .iter()
+                .filter(|(_, until)| **until <= now)
+                .map(|(key, _)| key.clone()),
+        );
+        self.delayed
+            .retain(|key, until| self.followed.contains_key(key) && *until > Instant::now());
+        plan_changed(&self.followed, &self.delayed, &self.dirty)
+    }
 }
 
 pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), String> {
@@ -175,22 +196,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             state.adopt_snapshot(fetcher, snapshot);
         }
 
-        let now = Instant::now();
-        if now >= state.next_partition_audit {
-            state.dirty.extend(state.followed.keys().cloned());
-            state.next_partition_audit = now + PARTITION_STATE_AUDIT_INTERVAL;
-        }
-        state.dirty.extend(
-            state
-                .delayed
-                .iter()
-                .filter(|(_, until)| **until <= now)
-                .map(|(key, _)| key.clone()),
-        );
-        state
-            .delayed
-            .retain(|key, until| state.followed.contains_key(key) && *until > Instant::now());
-        let round = plan_changed(&state.followed, &state.delayed, &state.dirty);
+        let round = state.collect_due(Instant::now());
         if round.entries.is_empty()
             && (state.session.is_full() || state.followed.is_empty() || round.all_throttled)
         {
@@ -875,6 +881,38 @@ mod tests {
 
         check!(state.session.is_full());
         check!(state.dirty == BTreeSet::from([key]));
+    }
+
+    /// A partition whose hold-back has expired is replanned, and the hold is
+    /// cleared. The paused clock keeps the periodic audit from firing, so the
+    /// expiry is what marks it.
+    #[tokio::test(start_paused = true)]
+    async fn an_expired_hold_back_is_replanned_and_cleared() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let key = followed_key(&cfg);
+        let mut state = incremental_state(followed_partition(cfg));
+        let now = Instant::now();
+        state.delayed.insert(key.clone(), now);
+
+        state.collect_due(now);
+
+        check!(state.dirty == BTreeSet::from([key]));
+        check!(state.delayed.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_hold_back_that_has_not_expired_stays() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let key = followed_key(&cfg);
+        let mut state = incremental_state(followed_partition(cfg));
+        let now = Instant::now();
+        let until = now + Duration::from_secs(1);
+        state.delayed.insert(key.clone(), until);
+
+        state.collect_due(now);
+
+        check!(state.dirty.is_empty());
+        check!(state.delayed == DelayedUntil::from([(key, until)]));
     }
 
     /// `WireUuid` is only here to keep the import used when the assertions
