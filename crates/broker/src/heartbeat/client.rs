@@ -323,6 +323,30 @@ async fn dial(
     }
 }
 
+/// The open connection in `channel` when it still reaches `controller`, or a
+/// new one dialled to `controller` after closing the stale one. `None` when
+/// the dial fails.
+async fn reuse_or_dial(
+    cfg: &Config,
+    channel: Option<ControllerChannel>,
+    controller: ControllerAddress,
+    rpc_timeout: Time,
+) -> Option<ControllerChannel> {
+    match channel {
+        Some(open) if open.controller == controller && !open.connection.is_closed() => Some(open),
+        stale => {
+            if let Some(stale) = stale {
+                stale.connection.close();
+            }
+            let connection = dial(cfg, &controller, rpc_timeout).await?;
+            Some(ControllerChannel {
+                controller,
+                connection,
+            })
+        }
+    }
+}
+
 /// Sends a `BrokerHeartbeat` to the controller leader at every tick.
 ///
 /// Every heartbeat travels on one connection, as Kafka's
@@ -362,20 +386,8 @@ pub async fn run(mut cfg: Config) {
             continue;
         };
         let rpc_timeout = heartbeat_rpc_timeout(cfg.interval);
-        let open = match channel.take() {
-            Some(open) if open.controller == controller && !open.connection.is_closed() => open,
-            stale => {
-                if let Some(stale) = stale {
-                    stale.connection.close();
-                }
-                let Some(connection) = dial(&cfg, &controller, rpc_timeout).await else {
-                    continue;
-                };
-                ControllerChannel {
-                    controller,
-                    connection,
-                }
-            }
+        let Some(open) = reuse_or_dial(&cfg, channel.take(), controller, rpc_timeout).await else {
+            continue;
         };
         let want_shut_down = *cfg.want_shutdown.borrow_and_update();
         let log_dirs = HeartbeatLogDirs {
