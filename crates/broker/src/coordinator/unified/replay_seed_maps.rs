@@ -423,6 +423,13 @@ mod tests {
         }
     }
 
+    /// Replays member `m` of share group `g` with a current assignment at
+    /// `epoch`.
+    fn replay_share_member_at(c: &GroupCoordinator, epoch: i32) -> Result<(), BrokerError> {
+        c.replay_share_member_metadata("g", "m", share_member("client"))?;
+        c.replay_share_current_member_assignment("g", "m", share_current(epoch))
+    }
+
     #[test]
     fn share_value_then_tombstone_sequences_leave_identical_live_and_cached_seeds() {
         let cases = vec![
@@ -543,8 +550,7 @@ mod tests {
             Case {
                 name: "member tombstone after its current tombstone removes the member",
                 replay: |c| {
-                    c.replay_share_member_metadata("g", "m", share_member("client"))?;
-                    c.replay_share_current_member_assignment("g", "m", share_current(3))?;
+                    replay_share_member_at(c, 3)?;
                     c.replay_share_tombstone(&share_member_key(|group_id, member_id| {
                         ShareGroupKey::CurrentMemberAssignment {
                             group_id,
@@ -563,8 +569,7 @@ mod tests {
             Case {
                 name: "member tombstone before its current tombstone fails",
                 replay: |c| {
-                    c.replay_share_member_metadata("g", "m", share_member("client"))?;
-                    c.replay_share_current_member_assignment("g", "m", share_current(3))?;
+                    replay_share_member_at(c, 3)?;
                     c.replay_share_tombstone(&share_member_key(|group_id, member_id| {
                         ShareGroupKey::MemberMetadata {
                             group_id,
@@ -584,8 +589,7 @@ mod tests {
             Case {
                 name: "member tombstone of a member with a target fails",
                 replay: |c| {
-                    c.replay_share_member_metadata("g", "m", share_member("client"))?;
-                    c.replay_share_current_member_assignment("g", "m", share_current(-1))?;
+                    replay_share_member_at(c, -1)?;
                     c.replay_share_target_assignment_member(
                         "g",
                         "m",
