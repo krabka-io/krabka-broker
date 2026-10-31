@@ -394,16 +394,22 @@ mod tests {
         );
     }
 
+    /// Charges `bytes` of a fetch by user `alice` and client `app` to a
+    /// `consumer_byte_rate` quota.
+    fn alice_consumer() -> impl Fn(&QuotaBuckets, u64) -> ConsumerQuotaOutcome {
+        let img = image_with_quota().key("consumer_byte_rate").call();
+        move |buckets, bytes| {
+            super::consume_consumer_quota(&img, buckets, "alice", Some("app"), bytes)
+        }
+    }
+
     /// A fetch is charged in full and, when that throttles it, the whole
     /// charge comes back (`ClientQuotaManager.unrecordQuotaSensor`), the debt
     /// it left included: the fetch that follows the throttle finds the bucket
     /// as it was. A throttled fetch that is not refunded stays charged.
     #[test]
     fn a_throttled_fetch_gives_the_whole_charge_back() {
-        let img = image_with_quota().key("consumer_byte_rate").call();
-        let consume = |buckets: &QuotaBuckets, bytes| {
-            super::consume_consumer_quota(&img, buckets, "alice", Some("app"), bytes)
-        };
+        let consume = alice_consumer();
 
         let refunded = QuotaBuckets::with_window(secs(1));
         let ConsumerQuotaOutcome { throttle, charge } = consume(&refunded, 1_500);
@@ -434,10 +440,7 @@ mod tests {
     /// keeps its charge.
     #[test]
     fn only_a_reported_throttle_gives_the_charge_back() {
-        let img = image_with_quota().key("consumer_byte_rate").call();
-        let consume = |buckets: &QuotaBuckets, bytes| {
-            super::consume_consumer_quota(&img, buckets, "alice", Some("app"), bytes)
-        };
+        let consume = alice_consumer();
         let cases = [
             ("no delay", <Time as TimeExt>::ZERO, Settled {
                 throttle_time_ms: 0,
