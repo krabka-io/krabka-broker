@@ -27,10 +27,7 @@ use {
     krabka_remote_storage::{RemoteStorageError, TopicIdPartition, corrupt_log},
     krabka_units::convert::TimeExt as _,
     krabka_verified::transaction,
-    std::{
-        sync::{PoisonError, atomic},
-        time::Instant,
-    },
+    std::{sync::PoisonError, time::Instant},
     zerocopy::FromBytes as _,
 };
 
@@ -579,44 +576,14 @@ pub(super) async fn try_remote_read(
     }
     let topic_id = uuid::Uuid::from_bytes(p.topic_id.0);
     let tp = TopicIdPartition::new(topic_id, p.topic_name.to_string(), p.partition_index);
-    // Atomic stores the raw epoch; wrap into `LeaderEpoch` for the
-    // remote-reader / RLMM seam that follows.
-    let current_leader_epoch =
-        LeaderEpoch(part.current_leader_epoch.load(atomic::Ordering::Acquire));
-    // Resolve the leader epoch that *owned* the requested fetch offset from
-    // the local leader-epoch checkpoint (Kafka's `epochForOffset`).  The
-    // checkpoint is only appended-to / truncated-from-end (never pruned from
-    // the start on local eviction), so tiered offsets that are no longer
-    // stored locally still resolve to their copy-time epoch.  Fall back to
-    // the current leader epoch when the checkpoint has no entries (empty /
-    // fresh log) so behavior is at least as good as before.
-    //
-    // An offset below the checkpoint's first entry is one a floor established
-    // too high cut out of it, and that a follower later took back from its
-    // leader (`Log::follow_leader_log_start`). The archive is the record of
-    // which epoch owned it.
-    let (cached_epoch, earliest_cached_epoch) = {
-        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
-        let checkpoint = log.epoch_checkpoint();
-        let epochs = (
-            checkpoint.epoch_for_offset(Offset(p.fetch_offset)),
-            checkpoint.entries().first().map(|entry| entry.epoch),
-        );
-        drop(log);
-        epochs
-    };
-    let leader_epoch = match (cached_epoch, earliest_cached_epoch) {
-        (Some(epoch), _) => epoch,
-        (None, Some(ceiling)) => {
-            match reader
-                .archived_epoch_for_offset(&tp, p.fetch_offset, ceiling)
-                .await
-            {
-                Ok(found) => found.unwrap_or(current_leader_epoch),
-                Err(e) => return Some(fail_remote_read(&broker.metrics, p, &e)),
-            }
-        }
-        (None, None) => current_leader_epoch,
+    // The leader epoch that owned the fetch offset (Kafka's `epochForOffset`),
+    // with the archive's answer below a cut checkpoint.
+    let leader_epoch = match reader
+        .owning_epoch_for(part, &tp, Offset(p.fetch_offset))
+        .await
+    {
+        Ok(epoch) => epoch,
+        Err(e) => return Some(fail_remote_read(&broker.metrics, p, &e)),
     };
     // A remote read with no cap reads the whole segment, so the smallest
     // budget is one byte, which still returns the first batch whole.
