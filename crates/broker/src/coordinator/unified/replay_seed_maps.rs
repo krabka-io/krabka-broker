@@ -131,6 +131,7 @@ mod tests {
         crate::error::BrokerError,
         assert2::{assert, check},
         dashmap::DashMap,
+        std::fmt::Debug,
     };
 
     /// What a replay left behind: its result, with a startup error as its
@@ -172,7 +173,7 @@ mod tests {
         expected: Outcome<S>,
     }
 
-    fn check_cases<S: Clone + PartialEq + std::fmt::Debug>(
+    fn check_cases<S: Clone + PartialEq + Debug>(
         cases: Vec<Case<S>>,
         maps: impl Fn(&GroupCoordinator) -> (&DashMap<String, S>, &DashMap<String, S>),
     ) {

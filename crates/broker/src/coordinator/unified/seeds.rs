@@ -117,7 +117,7 @@ pub struct StreamsGroupSeed {
 
 /// What the bootstrap replay needs from every protocol's seed beyond its
 /// records: the group that replay creates for a new group id.
-pub(crate) trait ReplaySeed {
+pub trait ReplaySeed {
     /// The group that Kafka's replay creates for the first record of a group
     /// id.
     #[must_use]
