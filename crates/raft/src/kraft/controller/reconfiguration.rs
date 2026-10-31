@@ -17,6 +17,7 @@ use {
             types::{Epoch, ReplicaKey},
         },
         reconfig::{ReconfigOutcome, VoterChange},
+        snapshot::SnapshotControlState,
     },
     krabka_ids::Offset,
     krabka_metadata::{MetadataRecord, VoterSet, VotersRecord},
@@ -265,6 +266,51 @@ impl Engine {
         change: VoterChange,
         reply: oneshot::Sender<Result<ReconfigOutcome, RaftError>>,
     ) {
+        match self.plan_and_append_reconfiguration(change) {
+            Err(error) => {
+                let _ = reply.send(Err(error));
+            }
+            Ok(ReconfigStep::Answer(outcome)) => {
+                let _ = reply.send(Ok(outcome));
+            }
+            Ok(ReconfigStep::Appended {
+                need_offset,
+                ack_when_committed,
+                removed_local_leader,
+            }) => {
+                let waiter_reply = if ack_when_committed {
+                    Some(reply)
+                } else {
+                    let _ = reply.send(Ok(ReconfigOutcome::Committed));
+                    None
+                };
+                self.pending_reconfig = Some(PendingReconfig {
+                    need_offset,
+                    reply: waiter_reply,
+                    removed_local_leader,
+                });
+
+                self.advance_if_single_voter();
+                self.publish_leader();
+            }
+        }
+    }
+
+    /// Decide one KIP-853 control operation and append its control batch.
+    ///
+    /// A check-only add, a kraft.version validation and a level-0 voter
+    /// update preflight answer at once, as does a refusal that is an outcome
+    /// rather than an error. Otherwise the batch is appended and its controls
+    /// are applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal of the change, or a failure to build, append or
+    /// apply its control batch.
+    fn plan_and_append_reconfiguration(
+        &mut self,
+        change: VoterChange,
+    ) -> Result<ReconfigStep, RaftError> {
         use crate::reconfig::VoterChange;
 
         // A check-only add takes the facts about the candidate as given, so it
@@ -317,26 +363,24 @@ impl Engine {
         );
         let plan = match decision {
             VoterReconfigurationDecision::Admit(_) if check_only => {
-                let _ = reply.send(Ok(ReconfigOutcome::Committed));
-                return;
+                return Ok(ReconfigStep::Answer(ReconfigOutcome::Committed));
             }
             VoterReconfigurationDecision::Admit(plan) => plan,
             rejected => {
-                let _ = reply.send(rejected_reconfiguration(
+                return rejected_reconfiguration(
                     rejected,
                     self.core.quorum_state().leader_id,
                     target_id,
                     current_version,
                     requested_version,
                     lag,
-                ));
-                return;
+                )
+                .map(ReconfigStep::Answer);
             }
         };
 
         if matches!(change, VoterChange::ValidateKraftVersion(_)) {
-            let _ = reply.send(Ok(ReconfigOutcome::Committed));
-            return;
+            return Ok(ReconfigStep::Answer(ReconfigOutcome::Committed));
         }
 
         let (next, ack_when_committed, removed_local_leader) = match change {
@@ -356,10 +400,9 @@ impl Engine {
             }
         };
         if next.len() != plan.next_voter_count {
-            let _ = reply.send(Err(RaftError::ReconfigRejected(
+            return Err(RaftError::ReconfigRejected(
                 "constructed voter set does not match the proved result".into(),
-            )));
-            return;
+            ));
         }
 
         if plan.preflight_only {
@@ -371,8 +414,7 @@ impl Engine {
             self.peers.update_voters(&next);
             self.execute(actions);
             self.publish_leader();
-            let _ = reply.send(Ok(ReconfigOutcome::Committed));
-            return;
+            return Ok(ReconfigStep::Answer(ReconfigOutcome::Committed));
         }
 
         let mut records = Vec::with_capacity(2);
@@ -389,45 +431,19 @@ impl Engine {
         }
 
         let leader_epoch = self.core.quorum_state().leader_epoch;
-        let mut batch = match typed_control_batch(leader_epoch, &records) {
-            Ok(batch) => batch,
-            Err(error) => {
-                let _ = reply.send(Err(error));
-                return;
-            }
-        };
-        let base = match self
+        let mut batch = typed_control_batch(leader_epoch, &records)?;
+        let base = self
             .log
-            .append(&mut batch, KraftController::wall_clock_ms())
-        {
-            Ok(base) => base,
-            Err(error) => {
-                let _ = reply.send(Err(error));
-                return;
-            }
-        };
-        if let Err(error) = self.apply_control_batch(&batch) {
-            let _ = reply.send(Err(error));
-            return;
-        }
-        let need_offset = Offset(
-            base.0
-                .saturating_add(i64::try_from(records.len()).unwrap_or(i64::MAX)),
-        );
-        let waiter_reply = if ack_when_committed {
-            Some(reply)
-        } else {
-            let _ = reply.send(Ok(ReconfigOutcome::Committed));
-            None
-        };
-        self.pending_reconfig = Some(PendingReconfig {
-            need_offset,
-            reply: waiter_reply,
+            .append(&mut batch, KraftController::wall_clock_ms())?;
+        self.apply_control_batch(&batch)?;
+        Ok(ReconfigStep::Appended {
+            need_offset: Offset(
+                base.0
+                    .saturating_add(i64::try_from(records.len()).unwrap_or(i64::MAX)),
+            ),
+            ack_when_committed,
             removed_local_leader,
-        });
-
-        self.advance_if_single_voter();
-        self.publish_leader();
+        })
     }
 
     /// Apply KIP-853 controls as soon as their batch is appended or fetched.
@@ -487,14 +503,13 @@ impl Engine {
         }
         self.core.commit_voter_set();
         self.core.set_kraft_version(self.controls.committed_version);
-        self.image.apply(&MetadataRecord::V1KRaftVersion(
-            krabka_metadata::KRaftVersionRecord {
-                kraft_version: self.controls.committed_version,
-            },
-        ));
-        self.image.apply(&MetadataRecord::V1Voters(VotersRecord {
+        let controls = SnapshotControlState {
+            kraft_version: self.controls.committed_version,
             voters: self.controls.committed_voters.clone(),
-        }));
+        };
+        for record in controls.into_records() {
+            self.image.apply(&record);
+        }
         if self.downgrade_snapshot_pending.is_none() {
             self.publish_image();
         }
@@ -519,6 +534,19 @@ impl Engine {
             self.reconcile_timers("leader");
         }
     }
+}
+
+/// What [`Engine::on_reconfigure`] does after the change is decided.
+enum ReconfigStep {
+    /// Answer the request now.
+    Answer(ReconfigOutcome),
+    /// The control batch is in the log. Track it until it commits, and
+    /// answer on the commit or now.
+    Appended {
+        need_offset: Offset,
+        ack_when_committed: bool,
+        removed_local_leader: bool,
+    },
 }
 
 #[cfg(test)]

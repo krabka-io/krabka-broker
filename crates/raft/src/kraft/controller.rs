@@ -39,7 +39,7 @@ use {
             MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax,
         },
         error::{MetadataReplayError, RaftError},
-        event_queue::{EventQueueMeter, EventQueueRecorder, EventTimer},
+        event_queue::{EventQueueMeter, EventQueueRecorder, EventTimer, NoEventQueueRecorder},
         kraft::{
             action::{Action, TimerKind},
             core::{QuorumStateMachine, QuorumTimeouts},
@@ -77,7 +77,7 @@ use {
     },
     krabka_units::{
         fmt::Human as _,
-        prelude::{ByteSize, Time, TimeExt as _},
+        prelude::{self, ByteSize, Time, TimeExt as _},
     },
     std::{
         collections::BTreeMap,
@@ -466,4 +466,95 @@ pub struct KraftConfig {
     pub activation: Activation,
     /// Where the engine reports Kafka's controller event-queue measurements.
     pub event_queue_recorder: Arc<dyn EventQueueRecorder>,
+}
+
+/// Configuration to open a [`KraftController`] over a data directory with
+/// [`KraftController::open`].
+///
+/// It holds every [`KraftConfig`] input except the initial quorum state,
+/// which `open` recovers from the data directory, and adds the voter set
+/// that seeds that state when the directory has none yet.
+#[derive(bon::Builder)]
+pub struct KraftOpenConfig {
+    pub me: NodeId,
+    pub cluster_id: Uuid,
+    /// This replica's directory id, from its `meta.properties`.
+    pub directory_id: Uuid,
+    /// The voters of a fresh quorum state, used only when the data directory
+    /// holds no quorum-state file.
+    pub bootstrap_voters: VoterSet,
+    /// Kafka's `controller.quorum.election.timeout.ms` and
+    /// `controller.quorum.fetch.timeout.ms`.
+    pub timeouts: QuorumTimeouts,
+    pub heartbeat_interval: Option<Time>,
+    #[builder(into, default)]
+    pub controller_fetch_miss_limit: ControllerFetchMissLimit,
+    #[builder(into, default)]
+    pub metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity,
+    #[builder(into, default)]
+    pub metadata_raft_fetch_max: MetadataRaftFetchMax,
+    pub peers: Arc<dyn PeerSender>,
+    /// See [`KraftConfig::snapshot_interval_records`]. `0` disables it.
+    #[builder(default = 0)]
+    pub snapshot_interval_records: u64,
+    /// See [`KraftConfig::max_bytes_between_snapshots`]. `0` disables it.
+    #[builder(default = prelude::bytes(0))]
+    pub max_bytes_between_snapshots: ByteSize,
+    /// See [`KraftConfig::max_snapshot_interval`]. `0` disables it.
+    #[builder(default = prelude::millis(0))]
+    pub max_snapshot_interval: Time,
+    #[builder(default)]
+    pub metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
+    /// See [`KraftConfig::metadata_log`].
+    pub metadata_log: MetadataLogConfig,
+    /// See [`KraftConfig::activation`]. A bootstrap checkpoint in the data
+    /// directory replaces its bootstrap records.
+    #[builder(default)]
+    pub activation: Activation,
+    #[builder(default = Arc::new(NoEventQueueRecorder))]
+    pub event_queue_recorder: Arc<dyn EventQueueRecorder>,
+}
+
+impl KraftOpenConfig {
+    /// The [`KraftConfig`] that starts the engine from `initial_state`.
+    fn into_kraft_config(self, initial_state: QuorumState) -> KraftConfig {
+        let Self {
+            me,
+            cluster_id,
+            directory_id,
+            timeouts,
+            heartbeat_interval,
+            controller_fetch_miss_limit,
+            metadata_raft_command_queue_capacity,
+            metadata_raft_fetch_max,
+            peers,
+            snapshot_interval_records,
+            max_bytes_between_snapshots,
+            max_snapshot_interval,
+            metadata_snapshot_fetch_max,
+            metadata_log,
+            activation,
+            event_queue_recorder,
+            ..
+        } = self;
+        KraftConfig {
+            me,
+            cluster_id,
+            directory_id,
+            initial_state,
+            timeouts,
+            heartbeat_interval,
+            controller_fetch_miss_limit,
+            metadata_raft_command_queue_capacity,
+            metadata_raft_fetch_max,
+            peers,
+            snapshot_interval_records,
+            max_bytes_between_snapshots,
+            max_snapshot_interval,
+            metadata_snapshot_fetch_max,
+            metadata_log,
+            activation,
+            event_queue_recorder,
+        }
+    }
 }

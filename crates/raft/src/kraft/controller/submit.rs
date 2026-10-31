@@ -12,7 +12,11 @@ use {
             decode_committed_value, is_kip835_noop, metadata_record_batch, next_batch_offset,
         },
     },
-    crate::{DelegationTokenMutation, SubmitChangeResult, error::RaftError, kraft::role::Role},
+    crate::{
+        DelegationTokenMutation, SubmitChangeResult,
+        error::RaftError,
+        kraft::{role::Role, types::Epoch},
+    },
     krabka_ids::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord, to_kraft_values},
     std::sync::Arc,
@@ -80,7 +84,7 @@ impl Engine {
             let _ = reply.send(Ok(SubmitChangeResult::default()));
             return;
         }
-        self.on_submit_change_guarded(&records, reply, true, Submitter::Request);
+        self.on_submit_change_guarded(&records, reply, Submitter::DelegationTokenRequest);
     }
 
     /// Replay the uncommitted records of earlier leader epochs into a copy of
@@ -252,7 +256,7 @@ impl Engine {
         records: &[krabka_metadata::MetadataRecord],
         reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
     ) {
-        self.on_submit_change_guarded(records, reply, false, Submitter::Request);
+        self.on_submit_change_guarded(records, reply, Submitter::Request);
     }
 
     /// Append the activation batch of a log that holds no `metadata.version`.
@@ -264,21 +268,49 @@ impl Engine {
         records: &[krabka_metadata::MetadataRecord],
         reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
     ) {
-        self.on_submit_change_guarded(records, reply, false, Submitter::Activation);
+        self.on_submit_change_guarded(records, reply, Submitter::Activation);
     }
 
+    /// Admit and append `records`, then answer `reply` once: at once for a
+    /// refusal or a no-op, or through a commit waiter for an append.
     fn on_submit_change_guarded(
         &mut self,
         records: &[krabka_metadata::MetadataRecord],
         reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
-        delegation_token_guarded: bool,
         submitter: Submitter,
     ) {
+        match self.admit_and_append(records, submitter) {
+            Err(error) => {
+                let _ = reply.send(Err(error));
+            }
+            Ok(Admitted::NoOp(result)) => {
+                let _ = reply.send(Ok(result));
+            }
+            Ok(Admitted::Appended(appended)) => self.park_commit_waiter(appended, reply),
+        }
+    }
+
+    /// Run every admission check on `records` and append their batch.
+    ///
+    /// The checks run in this order: leadership, a reservation before this
+    /// epoch commits, compare-and-set, a topic name that a parked waiter or an
+    /// earlier epoch creates, and the record preparation. A batch of no values
+    /// is a no-op and appends nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first check that refuses the records, or a failure to
+    /// build or append their batch. A batch whose append does not land at the
+    /// log end it was stamped for is an error after the append.
+    fn admit_and_append(
+        &mut self,
+        records: &[krabka_metadata::MetadataRecord],
+        submitter: Submitter,
+    ) -> Result<Admitted, RaftError> {
         if !self.core.role().is_leader() {
-            let _ = reply.send(Err(RaftError::NotLeader {
+            return Err(RaftError::NotLeader {
                 current_leader: self.core.quorum_state().leader_id,
-            }));
-            return;
+            });
         }
         let leader_epoch = self.core.quorum_state().leader_epoch;
         let epoch_ready = self.leader_epoch_ready();
@@ -291,20 +323,16 @@ impl Engine {
             .iter()
             .any(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
             && !epoch_ready
-            && submitter == Submitter::Request
+            && submitter.is_request()
         {
-            let _ = reply.send(Err(RaftError::UncommittedTail));
-            return;
+            return Err(RaftError::UncommittedTail);
         }
 
-        if let Err(error) = self.mutation_admission().check_compare_and_set_records(
+        self.mutation_admission().check_compare_and_set_records(
             records,
-            delegation_token_guarded,
+            submitter == Submitter::DelegationTokenRequest,
             |node_id| self.registration_change_must_wait(node_id),
-        ) {
-            let _ = reply.send(Err(error));
-            return;
-        }
+        )?;
 
         // Kafka's `QuorumController` replays each record into its in-memory
         // state before the record commits. Thus `ReplicationControlManager`
@@ -330,10 +358,9 @@ impl Engine {
                     .iter()
                     .any(|waiter| waiter.creates.contains(name))
         }) {
-            let _ = reply.send(Err(RaftError::Metadata(
+            return Err(RaftError::Metadata(
                 krabka_metadata::MetadataError::TopicExists(name.clone()),
-            )));
-            return;
+            ));
         }
 
         // Pre-validate and translate to KIP-631 value blobs in ONE pass against
@@ -352,7 +379,7 @@ impl Engine {
             value_blobs,
             result,
             registration_nodes,
-        } = match prepare_records(
+        } = prepare_records(
             records,
             self.image.overlay(),
             self.image.overlay(),
@@ -362,56 +389,55 @@ impl Engine {
                 .commit_waiters
                 .iter()
                 .flat_map(|waiter| &waiter.result.offset_reservations),
-        ) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                let _ = reply.send(Err(error));
-                return;
-            }
-        };
+        )?;
 
         // Every record fanned out to nothing (e.g. an empty config clear): the
         // submit is a committed no-op. Reply success without appending a batch.
         if value_blobs.is_empty() {
-            let _ = reply.send(Ok(result));
-            return;
+            return Ok(Admitted::NoOp(result));
         }
 
-        let mut batch = match metadata_record_batch(leader_epoch, &value_blobs) {
-            Ok(batch) => batch,
-            Err(e) => {
-                let _ = reply.send(Err(e));
-                return;
-            }
-        };
-        let base = match self
+        let mut batch = metadata_record_batch(leader_epoch, &value_blobs)?;
+        let base = self
             .log
-            .append(&mut batch, KraftController::wall_clock_ms())
-        {
-            Ok(off) => off,
-            Err(e) => {
-                let _ = reply.send(Err(e));
-                return;
-            }
-        };
-        if let Err(e) = validate_append_result(
+            .append(&mut batch, KraftController::wall_clock_ms())?;
+        validate_append_result(
             "submit-change",
             assign_base,
             base,
             self.log.log_end_offset(),
-        ) {
-            let _ = reply.send(Err(e));
-            return;
-        }
-        let need_offset = submit_waiter_need_offset(base, value_blobs.len());
+        )?;
+        Ok(Admitted::Appended(AppendedSubmit {
+            leader_epoch,
+            base_offset: base,
+            need_offset: submit_waiter_need_offset(base, value_blobs.len()),
+            creates,
+            result,
+            registration_nodes,
+        }))
+    }
+
+    /// Park the waiter of an appended submit, then try to advance the HWM
+    /// immediately: a single voter commits its own append with no peer fetch.
+    fn park_commit_waiter(
+        &mut self,
+        appended: AppendedSubmit,
+        reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
+    ) {
+        let AppendedSubmit {
+            leader_epoch,
+            base_offset,
+            need_offset,
+            creates,
+            result,
+            registration_nodes,
+        } = appended;
         for node_id in registration_nodes {
             self.registration_writes
                 .insert(node_id, (leader_epoch, need_offset));
         }
-        // Park the waiter, then try to advance the HWM immediately: a single
-        // voter commits its own append with no peer fetch.
         self.commit_waiters.push(CommitWaiter {
-            base_offset: base,
+            base_offset,
             need_offset,
             rejection: None,
             creates,
@@ -524,6 +550,9 @@ enum Submitter {
     /// leader's epoch commits, so every reservation an earlier leader left
     /// uncommitted is committed and folded in, or truncated, first.
     Request,
+    /// A delegation-token request: a [`Self::Request`] whose compare-and-set
+    /// records the delegation-token guard admits.
+    DelegationTokenRequest,
     /// The activation batch: the bootstrap records of a log that holds no
     /// `metadata.version`. It is this epoch's first write after its
     /// `LeaderChange`, on a log that holds no earlier record, so no earlier
@@ -532,6 +561,29 @@ enum Submitter {
     /// materialized end with a `V1PartitionOffsetAdvance` (#1524), and the
     /// activation batch has to carry it.
     Activation,
+}
+
+impl Submitter {
+    /// Whether a broker or client request appends the batch.
+    fn is_request(self) -> bool { matches!(self, Self::Request | Self::DelegationTokenRequest) }
+}
+
+/// What an admitted submit leaves to answer.
+enum Admitted {
+    /// Every record fanned out to no value, so nothing was appended.
+    NoOp(SubmitChangeResult),
+    /// The batch is in the log and waits for its commit.
+    Appended(AppendedSubmit),
+}
+
+/// A submit batch in the log, with what its commit waiter needs.
+struct AppendedSubmit {
+    leader_epoch: Epoch,
+    base_offset: Offset,
+    need_offset: Offset,
+    creates: Vec<String>,
+    result: SubmitChangeResult,
+    registration_nodes: Vec<krabka_metadata::NodeId>,
 }
 
 #[cfg(test)]
