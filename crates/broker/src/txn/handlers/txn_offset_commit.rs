@@ -168,15 +168,33 @@ pub async fn handle(
         return respond(codes::NONE);
     }
 
-    let (offsets_partition, txnv) = match route_to_offsets_partition(broker, &req.group_id) {
-        Ok(routed) => routed,
-        Err(code) => return respond(code),
-    };
+    respond(
+        commit_rows(broker, &req, version, &sweep, reserved)
+            .await
+            .err()
+            .unwrap_or(codes::NONE),
+    )
+}
 
-    if let Err(code) = refuse_staged_identity(broker, &req.transactional_id).await {
-        return respond(code);
-    }
-
+/// The group coordinator's part of the commit, for the rows that survived the
+/// topic sweep: the routing check, the staged producer identity gate, the
+/// KIP-890 producer verification, the group existence check, the KIP-447
+/// fencing, then the reserve, append and pending mark. `Err` is the code every
+/// surviving row answers.
+///
+/// Step 5: Kafka's `CoordinatorRuntime` completes the write, and so the
+/// request, once the high watermark covers the batch. An answer at the local
+/// append would acknowledge offsets that the next leader of the partition may
+/// never get, and the transaction would then commit without them.
+async fn commit_rows(
+    broker: &Broker,
+    req: &TxnOffsetCommitRequest,
+    version: i16,
+    sweep: &TopicSweep,
+    reserved: Vec<TopicPartition>,
+) -> Result<(), i16> {
+    let (offsets_partition, txnv) = route_to_offsets_partition(broker, &req.group_id)?;
+    refuse_staged_identity(broker, &req.transactional_id).await?;
     // KIP-890: Kafka verifies the producer with the transaction coordinator
     // before the group coordinator's write operation validates the group, at
     // every version. A wrong producer id, a stale epoch, an unknown
@@ -185,20 +203,9 @@ pub async fn handle(
     // check then runs under the append lock with the guard the verification
     // started.
     let producer_check =
-        match verification::verify_producer(broker, &req, version, offsets_partition, txnv).await {
-            Ok(check) => check,
-            Err(code) => return respond(code),
-        };
-
-    let group = match resolve_group_actors(broker, &req, version) {
-        Ok(group) => group,
-        Err(code) => return respond(code),
-    };
-
-    if let Err(code) = fence_commit(&req, version, &group, &reserved).await {
-        return respond(code);
-    }
-
+        verification::verify_producer(broker, req, version, offsets_partition, txnv).await?;
+    let group = resolve_group_actors(broker, req, version)?;
+    fence_commit(req, version, &group, &reserved).await?;
     // Kafka trunk's `OffsetAndMetadata.fromRequest(topic.topicId(), ...)` keeps
     // the topic id of every commit. 4.3.1 keeps the zero id, and its versions
     // stop at 5, so only a v6 request and trunk mode record an id.
@@ -212,32 +219,19 @@ pub async fn handle(
             record_topic_ids,
         },
     };
-    let write = match append_and_mark(broker, &req, append, &group.classic, reserved).await {
-        Ok(Some(write)) => write,
+    let Some(write) = append_and_mark(broker, req, append, &group.classic, reserved).await? else {
         // Every row was denied or unknown: those rows keep their codes.
-        Ok(None) => return respond(codes::NONE),
-        Err(code) => return respond(code),
+        return Ok(());
     };
-
-    // 5. Kafka's `CoordinatorRuntime` completes the write, and so the request,
-    //    once the high watermark covers the batch. An answer at the local
-    //    append would acknowledge offsets that the next leader of the
-    //    partition may never get, and the transaction would then commit
-    //    without them. Per-(topic, partition) error_code = NONE for allowed,
-    //    TOPIC_AUTHORIZATION_FAILED for denied, UNKNOWN_TOPIC_OR_PARTITION for
-    //    a row the existence check flagged.
-    match write.committed().await {
-        Ok(()) => respond(codes::NONE),
-        Err(error) => {
-            tracing::warn!(
-                group = %req.group_id,
-                tid = %req.transactional_id,
-                %error,
-                "TxnOffsetCommit: the offsets append did not commit"
-            );
-            respond(batch::append_error_code(&error))
-        }
-    }
+    write.committed().await.map_err(|error| {
+        tracing::warn!(
+            group = %req.group_id,
+            tid = %req.transactional_id,
+            %error,
+            "TxnOffsetCommit: the offsets append did not commit"
+        );
+        batch::append_error_code(&error)
+    })
 }
 
 /// Step 1 of the commit: this broker must lead the group's offsets partition
