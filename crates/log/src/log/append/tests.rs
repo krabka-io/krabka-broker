@@ -440,6 +440,49 @@ fn invalid_interval_is_write_free_and_a_corrected_retry_succeeds() {
     assert!(log.log_end_offset() == Offset(1));
 }
 
+/// Append a batch at a caller-supplied offset through the owned path.
+fn append_owned_at(log: &mut Log, mut batch: RecordBatch, base: Offset) -> Result<(), LogError> {
+    log.append_at(&mut batch, base)
+}
+
+/// Append a batch at a caller-supplied offset through the verbatim path.
+fn append_verbatim_at(log: &mut Log, batch: RecordBatch, base: Offset) -> Result<(), LogError> {
+    let EncodedVerbatim { batch, .. } = verbatim_from(&batch, LeaderEpoch(0));
+    log.append_verbatim_at(&batch, base).map(drop)
+}
+
+/// The owned and verbatim appends that keep the caller's offset refuse a batch
+/// whose interval does not fit at the append frontier with the same error, and
+/// write nothing.
+#[test]
+fn offset_preserving_appends_refuse_an_interval_off_the_append_frontier() {
+    type Append = fn(&mut Log, RecordBatch, Offset) -> Result<(), LogError>;
+    let paths: [(&str, Append); 2] = [("owned", append_owned_at), ("verbatim", append_verbatim_at)];
+    let intervals = [
+        ("negative last offset delta", Offset(0), -1),
+        ("last offset overflows", Offset(i64::MAX), 1),
+    ];
+    for (path, append) in paths {
+        for (interval, base, last_offset_delta) in intervals {
+            let TempLog { dir: _dir, mut log } = test_log();
+            let mut batch = sample_batch(1);
+            batch.last_offset_delta = last_offset_delta;
+
+            let error = append(&mut log, batch, base).unwrap_err();
+
+            assert!(
+                let LogError::InvalidArgument(message) = error,
+                "{path}: {interval}"
+            );
+            check!(
+                message == "batch does not form a valid interval at the append frontier",
+                "{path}: {interval}"
+            );
+            assert_empty_append_state(&log);
+        }
+    }
+}
+
 #[test]
 fn successor_overflow_is_rejected_before_log_mutation() {
     let TempLog { dir: _dir, mut log } = test_log();
