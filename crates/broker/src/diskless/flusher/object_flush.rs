@@ -49,21 +49,30 @@ pub async fn flush_once(
         return Ok(None);
     }
     metrics.diskless_wal_flush_attempts_total.inc();
-    let record = upload_and_publish(&target, metrics, index_log, config, builder).await?;
-    // The ranges are committed and applied, so they protect the object from
-    // here on. A release that fails leaves the reservation behind, which only
-    // keeps the object longer; it must not hold back the trim below.
-    if target.reserve_objects
-        && let Err(error) = index_log
-            .release_object_reservation(&record.object_key)
-            .await
-    {
-        tracing::warn!(object_key = %record.object_key, %error, "diskless object reservation release failed");
+    let attempt: Result<WalFlushRecord, BrokerError> = async {
+        let record = upload_and_publish(&target, metrics, index_log, config, builder).await?;
+        // The ranges are committed and applied, so they protect the object from
+        // here on. A release that fails leaves the reservation behind, which only
+        // keeps the object longer; it must not hold back the trim below.
+        if target.reserve_objects
+            && let Err(error) = index_log
+                .release_object_reservation(&record.object_key)
+                .await
+        {
+            tracing::warn!(object_key = %record.object_key, %error, "diskless object reservation release failed");
+        }
+
+        trim_flushed(metrics, index_log, partitions, config, &is_current_leader).await?;
+
+        Ok(record)
     }
-
-    trim_flushed(metrics, index_log, partitions, config, &is_current_leader).await?;
-
-    Ok(Some(record))
+    .await;
+    // Every failure after the attempt began counts once, whichever stage
+    // failed. A failure while building the object is no attempt.
+    if attempt.is_err() {
+        metrics.diskless_wal_flush_failures_total.inc();
+    }
+    attempt.map(Some)
 }
 
 /// Append each led partition's unflushed committed records to one WAL object,
@@ -141,60 +150,36 @@ async fn upload_and_publish(
     let object_key =
         krabka_object_store::prefixed_key(config.object_prefix.as_deref(), &relative_key)
             .to_string();
-    let object = match builder.finish() {
-        Ok(object) => object,
-        Err(error) => {
-            metrics.diskless_wal_flush_failures_total.inc();
-            return Err(BrokerError::Txn(format!("diskless wal object: {error}")));
-        }
-    };
+    let object = builder
+        .finish()
+        .map_err(|error| BrokerError::Txn(format!("diskless wal object: {error}")))?;
     // A different broker may list and reclaim this prefix while upload or
     // index publication is delayed. Commit the reservation first; any failure
     // from this point leaves it behind, which can leak an object but cannot
     // make a live object appear reclaimable.
-    if target.reserve_objects
-        && let Err(error) = index_log.reserve_object(&object_key).await
-    {
-        metrics.diskless_wal_flush_failures_total.inc();
-        return Err(error);
+    if target.reserve_objects {
+        index_log.reserve_object(&object_key).await?;
     }
-    if let Err(error) = target
+    target
         .object_store
         .put(
             &Path::from(object_key.clone()),
             PutPayload::from(object.clone()),
         )
         .await
-    {
-        metrics.diskless_wal_flush_failures_total.inc();
-        return Err(BrokerError::Txn(format!("diskless wal put: {error}")));
-    }
+        .map_err(|error| BrokerError::Txn(format!("diskless wal put: {error}")))?;
     metrics
         .diskless_wal_flush_bytes_total
         .inc_by(u64::try_from(object.len()).unwrap_or(u64::MAX));
 
-    let entries = match batch_index_entries(&object, now_ms()) {
-        Ok(entries) => entries,
-        Err(error) => {
-            metrics.diskless_wal_flush_failures_total.inc();
-            return Err(error);
-        }
-    };
+    let entries = batch_index_entries(&object, now_ms())?;
     let record = WalFlushRecord {
         object_key,
         format_version: WalFlushRecord::FORMAT_VERSION,
         entries,
     };
-    if let Err(error) = index_log.publish_flush(&record).await {
-        metrics.diskless_wal_flush_failures_total.inc();
-        return Err(error);
-    }
-    if let Err(error) =
-        wait_for_committed_projection(index_log, &record, config.index_projection_timeout).await
-    {
-        metrics.diskless_wal_flush_failures_total.inc();
-        return Err(error);
-    }
+    index_log.publish_flush(&record).await?;
+    wait_for_committed_projection(index_log, &record, config.index_projection_timeout).await?;
     Ok(record)
 }
 
@@ -239,17 +224,11 @@ async fn trim_flushed(
                     current_start,
                 );
                 let trim_frontier = if decision.should_trim {
-                    match partition
+                    partition
                         .handle
                         .trim_to_offset(Offset(decision.target))
-                        .await
-                    {
-                        Ok(offset) => offset.0,
-                        Err(error) => {
-                            metrics.diskless_wal_flush_failures_total.inc();
-                            return Err(error);
-                        }
-                    }
+                        .await?
+                        .0
                 } else {
                     current_start
                 };
