@@ -522,7 +522,6 @@ impl KraftOpenConfig {
             me,
             cluster_id,
             directory_id,
-            bootstrap_voters: _,
             timeouts,
             heartbeat_interval,
             controller_fetch_miss_limit,
@@ -536,6 +535,7 @@ impl KraftOpenConfig {
             metadata_log,
             activation,
             event_queue_recorder,
+            ..
         } = self;
         KraftConfig {
             me,

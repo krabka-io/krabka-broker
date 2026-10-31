@@ -43,7 +43,7 @@ impl SnapshotControlState {
 
     /// The controls as image records: the `V1KRaftVersion` and then the
     /// `V1Voters`, the order that every mirror into an image applies them in.
-    pub(crate) fn into_records(self) -> [MetadataRecord; 2] {
+    pub fn into_records(self) -> [MetadataRecord; 2] {
         [
             MetadataRecord::V1KRaftVersion(KRaftVersionRecord {
                 kraft_version: self.kraft_version,
@@ -58,7 +58,7 @@ impl SnapshotControlState {
 /// Mirror the KIP-853 controls into `image`, so its readers observe the live
 /// quorum membership. The controls are raft control records with no KIP-631
 /// counterpart, so the metadata records alone never set them.
-pub(crate) fn mirror_controls(image: &mut MetadataImage, kraft_version: u16, voters: VoterSet) {
+pub fn mirror_controls(image: &mut MetadataImage, kraft_version: u16, voters: VoterSet) {
     let controls = SnapshotControlState {
         kraft_version,
         voters,
@@ -86,7 +86,7 @@ pub struct SnapshotContents {
 impl SnapshotContents {
     /// The image this snapshot holds: its metadata records, and then its
     /// controls when it has them.
-    pub(crate) fn to_image(&self, cluster_id: Uuid) -> MetadataImage {
+    pub fn to_image(&self, cluster_id: Uuid) -> MetadataImage {
         let mut image = MetadataImage::from_records(cluster_id, &self.metadata_records);
         if let Some(control) = &self.control_state {
             mirror_controls(&mut image, control.kraft_version, control.voters.clone());

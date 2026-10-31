@@ -536,6 +536,19 @@ impl Engine {
     }
 }
 
+/// What [`Engine::on_reconfigure`] does after the change is decided.
+enum ReconfigStep {
+    /// Answer the request now.
+    Answer(ReconfigOutcome),
+    /// The control batch is in the log. Track it until it commits, and
+    /// answer on the commit or now.
+    Appended {
+        need_offset: Offset,
+        ack_when_committed: bool,
+        removed_local_leader: bool,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use {
@@ -604,17 +617,4 @@ mod tests {
             );
         }
     }
-}
-
-/// What [`Engine::on_reconfigure`] does after the change is decided.
-enum ReconfigStep {
-    /// Answer the request now.
-    Answer(ReconfigOutcome),
-    /// The control batch is in the log. Track it until it commits, and
-    /// answer on the commit or now.
-    Appended {
-        need_offset: Offset,
-        ack_when_committed: bool,
-        removed_local_leader: bool,
-    },
 }

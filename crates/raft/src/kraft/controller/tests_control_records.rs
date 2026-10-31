@@ -1117,7 +1117,7 @@ async fn an_add_answers_on_append_only_when_asked(ack_when_committed: bool, answ
         leader
             .pending_reconfig
             .as_ref()
-            .is_some_and(|pending| pending.reply.is_some() == !answered)
+            .is_some_and(|pending| pending.reply.is_some() != answered)
     );
     if answered {
         check!(matches!(rx.try_recv(), Ok(Ok(ReconfigOutcome::Committed))));
