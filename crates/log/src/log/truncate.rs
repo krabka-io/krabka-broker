@@ -14,11 +14,7 @@ use {
         txn_index::TxnIndex,
     },
     krabka_ids::Offset,
-    std::{
-        collections::HashSet,
-        sync::{Arc, atomic::Ordering},
-        time::SystemTime,
-    },
+    std::{collections::HashSet, sync::atomic::Ordering, time::SystemTime},
     tracing::{field, instrument},
 };
 
@@ -165,14 +161,7 @@ impl Log {
                     index.truncate_from(offset)?;
                 }
             } else {
-                let mut new_seg = Segment::create(&self.dir, offset)?;
-                new_seg.set_io(Arc::clone(&self.io));
-                self.active_txn_index = TxnIndex::open(new_seg.txn_index_path())?;
-                let stamp_index_path = new_seg.stamp_index_path();
-                self.active = Some(new_seg);
-                #[cfg(not(target_os = "wasi"))]
-                self.restart_writeback_pacing(0);
-                self.dir_sync_needed = true;
+                let (_, stamp_index_path) = self.install_new_active_segment(offset)?;
                 self.stamp_indexes.clear();
                 self.reopen_active_stamp_index(offset, stamp_index_path)?;
             }

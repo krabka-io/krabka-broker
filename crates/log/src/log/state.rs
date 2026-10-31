@@ -5,8 +5,6 @@
 //! transaction state -- together with the config swap and the hard reset
 //! that empties the log at a new base offset.
 
-#[cfg(any(test, feature = "test-helpers"))]
-use crate::io::LogIo;
 use {
     super::Log,
     crate::{
@@ -17,7 +15,7 @@ use {
         log_start_offset_checkpoint,
         producer_snapshot::{self, ProducerSnapshotEntry},
         segment::Segment,
-        txn_index::{AbortedTxn, TxnIndex},
+        txn_index::AbortedTxn,
     },
     krabka_ids::{Offset, ProducerId},
     krabka_protocol::records::{Attributes, CRC_COVERAGE_START, HEADER_LEN, TimestampType},
@@ -25,11 +23,13 @@ use {
     std::{
         iter,
         path::Path,
-        sync::{Arc, PoisonError, atomic::Ordering},
+        sync::{PoisonError, atomic::Ordering},
         time::{Instant, SystemTime},
     },
     tracing::instrument,
 };
+#[cfg(any(test, feature = "test-helpers"))]
+use {crate::io::LogIo, std::sync::Arc};
 
 /// When [`Log::advance_log_start_offset`] writes `log-start-offset-checkpoint`.
 #[derive(Clone, Copy)]
@@ -383,18 +383,11 @@ impl Log {
         log_start_offset_checkpoint::remove(&self.dir)?;
         self.forget_start_checkpoint();
 
-        let mut new_active = Segment::create(&self.dir, new_base)?;
-        new_active.set_io(Arc::clone(&self.io));
-        self.active_txn_index = TxnIndex::open(new_active.txn_index_path())?;
-        let stamp_index_path = new_active.stamp_index_path();
+        let (_, stamp_index_path) = self.install_new_active_segment(new_base)?;
         self.clear_producer_and_transaction_state();
         self.sealed_txn_indexes.clear();
         self.stamp_indexes.clear();
-        self.lso = new_active.last_offset() + 1; // = new_base (empty segment)
-        self.active = Some(new_active);
-        #[cfg(not(target_os = "wasi"))]
-        self.restart_writeback_pacing(0);
-        self.dir_sync_needed = true;
+        self.lso = self.log_end_offset(); // = new_base (empty segment)
         // Preserve any injected stamp source; reopen its (fresh) sidecar.
         self.reopen_active_stamp_index(new_base, stamp_index_path)?;
         // The log now holds no records, so the leader-epoch cache must hold no
