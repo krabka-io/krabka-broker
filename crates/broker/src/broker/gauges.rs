@@ -229,7 +229,7 @@ struct GaugeInputs<'a> {
 }
 
 impl GaugeInputs<'_> {
-    /// Kafka's OfflinePartitionsCount counts every partition with no leader,
+    /// Kafka's `OfflinePartitionsCount` counts every partition with no leader,
     /// internal topics included. A partition has none when its recorded
     /// leader is gone, or when the controller left it leaderless with the
     /// leader still alive, as the KIP-112 offline-dir failover does: krabka's
