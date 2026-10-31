@@ -381,37 +381,14 @@ async fn trim_one(
         }
     };
 
-    let leo = part.log_end_offset();
-    let hw = part.high_watermark().await;
-    // Recompute delivery under the log mutex against the partition's own
-    // clock. This agrees with the cap a fetch at this instant would apply,
-    // rather than with whatever the last scheduler sweep published. It
-    // answers `None` on a topic that delivers immediately. The verified
-    // decision rejects malformed state, preserves stale retries, and caps
-    // every admitted target at both HWM and delivery.
-    let delivery_watermark = part
-        .delivery
-        .publish_now(&part.log)
-        .map(|delivery| delivery.watermark);
-    // A diskless partition's local log start is the flusher's trim frontier:
-    // the records below it are in the object store, not gone. The trim has to
-    // measure against the offset the partition actually starts at, which is
-    // the same one `ListOffsets(EARLIEST)` answers, or every request below the
-    // trim frontier would be a no-op that deletes nothing.
-    let current_start = diskless_logical_start(env, topic, &part)
-        .await
-        .map_or_else(|| part.log_start_offset(), Offset);
-    // `deletes` is what the audit trail keys on: a `Noop` answers the current
-    // start, trims to where the partition already begins, and removes nothing.
-    let (target, deletes) =
-        match trim_decision(fp.offset, hw, leo, current_start, delivery_watermark) {
-            DeleteRecordsTrimDecision::Noop { frontier } => (Offset(frontier), false),
-            DeleteRecordsTrimDecision::Apply { frontier } => (Offset(frontier), true),
-            DeleteRecordsTrimDecision::RejectMalformed
-            | DeleteRecordsTrimDecision::RejectOutOfRange => {
-                return refused(codes::OFFSET_OUT_OF_RANGE);
-            }
-        };
+    let TrimMeasurement {
+        target,
+        deletes,
+        hw,
+    } = match measure_trim(env, topic, &part, fp).await {
+        Ok(measurement) => measurement,
+        Err(code) => return refused(code),
+    };
 
     let audit_target = trim_target(topic, index);
     if let Err(error) = require_transition(
@@ -592,4 +569,60 @@ fn admit_partition(env: &TrimEnv<'_>, topic: &str, index: i32) -> Result<Arc<Par
     }
 
     Ok(part)
+}
+
+/// Where one admitted partition's trim lands.
+struct TrimMeasurement {
+    /// The offset the trim moves the partition's start to.
+    target: Offset,
+    /// Whether the trim removes anything. A `Noop` does not.
+    deletes: bool,
+    /// The high watermark the trim was measured against.
+    hw: Offset,
+}
+
+/// Measure where a trim of `part` to the requested offset lands, or answer the
+/// error code that refuses it.
+async fn measure_trim(
+    env: &TrimEnv<'_>,
+    topic: &str,
+    part: &Partition,
+    fp: &DeleteRecordsPartition,
+) -> Result<TrimMeasurement, i16> {
+    let leo = part.log_end_offset();
+    let hw = part.high_watermark().await;
+    // Recompute delivery under the log mutex against the partition's own
+    // clock. This agrees with the cap a fetch at this instant would apply,
+    // rather than with whatever the last scheduler sweep published. It
+    // answers `None` on a topic that delivers immediately. The verified
+    // decision rejects malformed state, preserves stale retries, and caps
+    // every admitted target at both HWM and delivery.
+    let delivery_watermark = part
+        .delivery
+        .publish_now(&part.log)
+        .map(|delivery| delivery.watermark);
+    // A diskless partition's local log start is the flusher's trim frontier:
+    // the records below it are in the object store, not gone. The trim has to
+    // measure against the offset the partition actually starts at, which is
+    // the same one `ListOffsets(EARLIEST)` answers, or every request below the
+    // trim frontier would be a no-op that deletes nothing.
+    let current_start = diskless_logical_start(env, topic, part)
+        .await
+        .map_or_else(|| part.log_start_offset(), Offset);
+    // `deletes` is what the audit trail keys on: a `Noop` answers the current
+    // start, trims to where the partition already begins, and removes nothing.
+    let (target, deletes) =
+        match trim_decision(fp.offset, hw, leo, current_start, delivery_watermark) {
+            DeleteRecordsTrimDecision::Noop { frontier } => (Offset(frontier), false),
+            DeleteRecordsTrimDecision::Apply { frontier } => (Offset(frontier), true),
+            DeleteRecordsTrimDecision::RejectMalformed
+            | DeleteRecordsTrimDecision::RejectOutOfRange => {
+                return Err(codes::OFFSET_OUT_OF_RANGE);
+            }
+        };
+    Ok(TrimMeasurement {
+        target,
+        deletes,
+        hw,
+    })
 }
