@@ -7,7 +7,7 @@ use {
         bound::Predicates,
         materialize::{
             open_partition_log,
-            prepare::{BatchTally, PrepareBatchSetup, PreparedBatch, prepare_batch},
+            prepare::{PrepareBatchSetup, prepare_batch},
         },
         report::{DisklessPartitionReport, DisklessRestoreReport},
         verify::{MAX_LOG_BYTES, fetch_capped},
@@ -26,6 +26,7 @@ use {
     object_store::path::Path as ObjectPath,
     std::{
         collections::{BTreeMap, HashMap, HashSet},
+        ops::Range,
         path::Path,
     },
     tokio::fs,
@@ -323,34 +324,17 @@ async fn walk_partition(
         let object = fetch_object(store, cached_object, &range.object_key, authenticated).await?;
         object_names.insert(range.object_key.as_str());
         validate_footer_range(&object, range)?;
-        let start = usize::try_from(range.entry.byte_start)
-            .map_err(|_| RestoreError::Integrity("diskless WAL byte start overflow".into()))?;
-        let len = usize::try_from(range.entry.byte_len)
-            .map_err(|_| RestoreError::Integrity("diskless WAL byte length overflow".into()))?;
-        let end = start
-            .checked_add(len)
-            .filter(|end| *end <= object.len())
-            .ok_or_else(|| {
-                RestoreError::Integrity(format!(
-                    "{}: captured byte range is outside object",
-                    range.object_key
-                ))
-            })?;
+        let Range { start, end } = captured_byte_range(range, object.len())?;
         let mut cursor = start;
         let mut first = None;
         let mut last: Option<i64> = None;
         while cursor < end {
-            let outside = || {
-                RestoreError::Integrity(format!(
-                    "{}: captured byte range is outside object",
-                    range.object_key
-                ))
-            };
+            let outside = || outside_object(range);
             let validated = validate_one_v2_batch(object.get(cursor..end).ok_or_else(outside)?)?;
             let header = validated.header;
-            let batch_end = cursor.checked_add(validated.total_len).ok_or_else(|| {
-                RestoreError::Integrity("diskless WAL byte range overflow".into())
-            })?;
+            let batch_end = cursor
+                .checked_add(validated.total_len)
+                .ok_or_else(|| wal_overflow("byte range"))?;
             if validated.total_len == 0 || batch_end > end {
                 return Err(RestoreError::Integrity(format!(
                     "{}: captured range disagrees with batch framing",
@@ -361,9 +345,7 @@ async fn walk_partition(
                 .base_offset
                 .get()
                 .checked_add(i64::from(header.last_offset_delta.get()))
-                .ok_or_else(|| {
-                    RestoreError::Integrity("diskless WAL batch offset overflow".into())
-                })?;
+                .ok_or_else(|| wal_overflow("batch offset"))?;
             if last
                 .is_some_and(|previous| previous.checked_add(1) != Some(header.base_offset.get()))
             {
@@ -404,34 +386,18 @@ async fn walk_partition(
                     .0
                     .checked_add(i64::from(prepared.last_offset_delta()))
                     .and_then(|last| last.checked_add(1))
-                    .ok_or_else(|| {
-                        RestoreError::Integrity("diskless WAL batch offset overflow".into())
-                    })?;
+                    .ok_or_else(|| wal_overflow("batch offset"))?;
                 if let Some(log) = log.as_deref_mut() {
                     if log.log_end_offset() == Offset(0) && base != Offset(0) {
                         log.reset_to(base)?;
                     }
                     log.reconcile_next_offset(base);
-                    match &mut prepared {
-                        PreparedBatch::Verbatim(batch) => {
-                            log.append_verbatim_at(batch, base)?;
-                        }
-                        PreparedBatch::Owned { batch, .. } => {
-                            log.append_at(batch, base)?;
-                        }
-                    }
+                    prepared.append_to(log, base)?;
                 }
                 batches += 1;
-                match tally {
-                    BatchTally::Kept => records = records.saturating_add(records_in_batch),
-                    BatchTally::Rewritten { kept, dropped } => {
-                        records = records.saturating_add(kept);
-                        records_dropped = records_dropped.saturating_add(dropped);
-                    }
-                    BatchTally::Emptied => {
-                        records_dropped = records_dropped.saturating_add(records_in_batch);
-                    }
-                }
+                let (kept, dropped) = tally.records(records_in_batch);
+                records = records.saturating_add(kept);
+                records_dropped = records_dropped.saturating_add(dropped);
             }
             cursor = batch_end;
         }
@@ -445,7 +411,7 @@ async fn walk_partition(
             .entry
             .last_offset
             .checked_add(1)
-            .ok_or_else(|| RestoreError::Integrity("diskless WAL batch offset overflow".into()))?
+            .ok_or_else(|| wal_overflow("batch offset"))?
             .max(partition.delete_floor);
     }
     if observed_end != partition.recovery_cutoff {
@@ -461,6 +427,33 @@ async fn walk_partition(
         records_dropped,
         materialized_end,
     })
+}
+
+/// The byte range `range` captures inside its WAL object of `object_len` bytes.
+fn captured_byte_range(
+    range: &CapturedWalRange,
+    object_len: usize,
+) -> Result<Range<usize>, RestoreError> {
+    let start = usize::try_from(range.entry.byte_start).map_err(|_| wal_overflow("byte start"))?;
+    let len = usize::try_from(range.entry.byte_len).map_err(|_| wal_overflow("byte length"))?;
+    let end = start
+        .checked_add(len)
+        .filter(|end| *end <= object_len)
+        .ok_or_else(|| outside_object(range))?;
+    Ok(start..end)
+}
+
+/// The error for a captured byte range that reaches past its WAL object.
+fn outside_object(range: &CapturedWalRange) -> RestoreError {
+    RestoreError::Integrity(format!(
+        "{}: captured byte range is outside object",
+        range.object_key
+    ))
+}
+
+/// The error for a diskless WAL `what` whose arithmetic overflows.
+fn wal_overflow(what: &str) -> RestoreError {
+    RestoreError::Integrity(format!("diskless WAL {what} overflow"))
 }
 
 fn validate_footer_range(object: &Bytes, range: &CapturedWalRange) -> Result<(), RestoreError> {
@@ -534,15 +527,54 @@ async fn fetch_object(
 #[cfg(test)]
 mod tests {
     use {
-        super::{DisklessNextOffset, check_next_offsets, load},
+        super::{DisklessNextOffset, Range, captured_byte_range, check_next_offsets, load},
         crate::{
             RestoreError,
             report::{DisklessPartitionReport, DisklessRestoreReport},
         },
         assert2::check,
+        krabka_remote_storage::diskless::{WalIndexEntry, capture::CapturedWalRange},
         tokio::fs,
         uuid::Uuid,
     };
+
+    /// A captured range resolves to its byte span only when it lies inside its
+    /// WAL object; otherwise the error names the object key.
+    #[yare::parameterized(
+        inside = { 4, 6, Ok(4..10) },
+        to_the_last_byte = { 0, 16, Ok(0..16) },
+        past_the_end = { 10, 7, Err("wal/0001: captured byte range is outside object".to_owned()) },
+        start_plus_length_overflows = {
+            u64::MAX,
+            1,
+            Err("wal/0001: captured byte range is outside object".to_owned()),
+        },
+    )]
+    fn a_captured_range_must_lie_inside_its_object(
+        byte_start: u64,
+        byte_len: u32,
+        expected: Result<Range<usize>, String>,
+    ) {
+        let range = CapturedWalRange {
+            object_key: "wal/0001".to_owned(),
+            entry: WalIndexEntry {
+                topic_id: Uuid::from_u128(1),
+                partition: 0,
+                first_offset: 0,
+                last_offset: 0,
+                byte_start,
+                byte_len,
+                max_timestamp_ms: 0,
+            },
+        };
+
+        let resolved = captured_byte_range(&range, 16).map_err(|error| match error {
+            RestoreError::Integrity(message) => message,
+            other => other.to_string(),
+        });
+
+        check!(resolved == expected);
+    }
 
     /// A restore whose materialized end differs from the next offset the
     /// target was formatted with fails, because the restored metadata would
