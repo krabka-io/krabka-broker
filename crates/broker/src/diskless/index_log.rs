@@ -1564,21 +1564,14 @@ mod pump_tests {
             assignment: Vec<PartitionStart>,
         ) -> (MetadataEventStream, Arc<dyn AssignmentHandle>) {
             let (_, handle) = self.inner.subscribe(assignment);
-            let events = self
-                .events
-                .lock()
-                .unwrap()
-                .take()
-                .expect("subscribed once");
+            let events = self.events.lock().unwrap().take().expect("subscribed once");
             let stream = futures_util::stream::unfold(events, |mut events| async move {
                 events.recv().await.map(|event| (event, events))
             });
             (Box::pin(stream), handle)
         }
 
-        async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
-            Ok(vec![1, 0])
-        }
+        async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> { Ok(vec![1, 0]) }
     }
 
     /// Everything the pump's work can be observed through.
@@ -1727,9 +1720,7 @@ mod pump_tests {
 
     fn range_key() -> Bytes { WalIndexKey::from(&entry()).to_bytes() }
 
-    fn range_value() -> Bytes {
-        WalFlushRecord::keyed_entry("object-a", entry()).unwrap().1
-    }
+    fn range_value() -> Bytes { WalFlushRecord::keyed_entry("object-a", entry()).unwrap().1 }
 
     fn indexed_range() -> IndexedRange {
         IndexedRange {
@@ -1866,10 +1857,7 @@ mod pump_tests {
             Case {
                 name: "replay fence at the replay target",
                 events: vec![event(REPLAY_TARGET, Some(fence_key()), Some(Bytes::new()))],
-                expected: pump_state()
-                    .consumed(REPLAY_TARGET)
-                    .caught_up(true)
-                    .call(),
+                expected: pump_state().consumed(REPLAY_TARGET).caught_up(true).call(),
             },
             Case {
                 name: "replay fence tombstone",
