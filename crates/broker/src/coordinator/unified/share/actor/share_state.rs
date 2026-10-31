@@ -16,7 +16,10 @@
 //! start offset, so consumers that subscribe again continue from it.
 
 use {
-    super::records::{PendingShareRecords, flush_pending, state_partition_metadata_from},
+    super::{
+        admin_offsets::MetadataSnapshot,
+        records::{PendingShareRecords, flush_pending, state_partition_metadata_from},
+    },
     crate::{
         coordinator::unified::{
             GroupCoordinator,
@@ -121,6 +124,8 @@ pub(super) fn start_initialize(
 /// group: every topic of its `ShareGroupStatePartitionMetadata` that the
 /// metadata image no longer holds leaves the initializing, initialized and
 /// deleting sets, and the group writes the new record when a set changed.
+/// When the record does not reach the log the sets are restored, as Kafka's
+/// coordinator runtime reverts a failed write.
 ///
 /// Kafka runs it for every group when a metadata delta deletes topics. The
 /// group runs it at each heartbeat and each session tick, against the topics
@@ -135,8 +140,14 @@ pub(super) async fn cleanup_deleted_topics(
         return;
     }
     let deleted = deleted_topics(&topic_ids, &TopicImage::current(coordinator));
-    if state.cleanup_deleted_topics(&deleted) {
-        write_state_partition_metadata(state, coordinator, now_ms).await;
+    if deleted.is_empty() {
+        return;
+    }
+    let before = MetadataSnapshot::take(state);
+    if state.cleanup_deleted_topics(&deleted)
+        && !write_state_partition_metadata(state, coordinator, now_ms).await
+    {
+        before.restore(state);
     }
 }
 
@@ -306,7 +317,10 @@ fn spawn_initialize(
 /// to the initialized set; when any one failed, they all leave the
 /// initializing set, so a later heartbeat retries every one of them. Then write the group's
 /// `ShareGroupStatePartitionMetadata`, as Kafka's `initializeShareGroupState`
-/// and `uninitializeShareGroupState` write it.
+/// and `uninitializeShareGroupState` write it. When the record does not
+/// reach the log the sets are restored, as Kafka's coordinator runtime
+/// reverts a failed write, and the partitions stay initializing for a later
+/// heartbeat to retry.
 pub(super) async fn apply_initialized(
     state: &mut ShareGroupState,
     outcomes: &[InitializeOutcome],
@@ -316,6 +330,7 @@ pub(super) async fn apply_initialized(
     if outcomes.is_empty() {
         return;
     }
+    let before = MetadataSnapshot::take(state);
     let all_initialized = outcomes.iter().all(|outcome| outcome.initialized);
     for &InitializeOutcome { partition, .. } in outcomes {
         if all_initialized {
@@ -324,7 +339,9 @@ pub(super) async fn apply_initialized(
             state.uninitialize(&[partition]);
         }
     }
-    write_state_partition_metadata(state, coordinator, now_ms).await;
+    if !write_state_partition_metadata(state, coordinator, now_ms).await {
+        before.restore(state);
+    }
 }
 
 /// Writes the group's `ShareGroupStatePartitionMetadata` record, and says
@@ -353,7 +370,7 @@ async fn write_state_partition_metadata(
             tracing::warn!(
                 group_id = %state.group_id,
                 error = %e,
-                "persisting ShareGroupStatePartitionMetadata failed; in-memory set retained",
+                "persisting ShareGroupStatePartitionMetadata failed; in-memory sets restored",
             );
             false
         }

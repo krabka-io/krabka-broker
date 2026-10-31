@@ -94,7 +94,7 @@ struct TopicToDelete {
 /// The three sets of the share-state partition metadata, kept to undo an
 /// in-memory change whose record did not reach the log, as Kafka's timeline
 /// snapshot reverts a failed write.
-struct MetadataSnapshot {
+pub(super) struct MetadataSnapshot {
     initialized: HashSet<TopicIdPartition>,
     initializing: HashMap<TopicIdPartition, i64>,
     deleting: HashMap<Uuid, String>,
@@ -115,7 +115,7 @@ fn empty_group_persister<'a>(
 }
 
 impl MetadataSnapshot {
-    fn take(state: &ShareGroupState) -> Self {
+    pub(super) fn take(state: &ShareGroupState) -> Self {
         Self {
             initialized: state.initialized.clone(),
             initializing: state.initializing.clone(),
@@ -124,7 +124,7 @@ impl MetadataSnapshot {
         }
     }
 
-    fn restore(self, state: &mut ShareGroupState) {
+    pub(super) fn restore(self, state: &mut ShareGroupState) {
         state.initialized = self.initialized;
         state.initializing = self.initializing;
         state.deleting = self.deleting;
