@@ -247,22 +247,10 @@ pub fn rewrite_segments(
         // The pass reads the batch before it filters its records, as Kafka's
         // `Cleaner.shouldDiscardBatch` does: a transaction whose records all
         // die in this pass still holds its marker until the next one.
-        let (txn, aborted) = if is_control {
-            let discardable = txn_meta.on_control_batch_read(batch)?;
-            let state = if producer_id.get() < 0 {
-                TxnDataState::NotTransactional
-            } else if discardable {
-                TxnDataState::DataFullyGone
-            } else {
-                TxnDataState::DataSurvives
-            };
-            (state, false)
-        } else {
-            (
-                TxnDataState::NotTransactional,
-                txn_meta.on_batch_read(batch),
-            )
-        };
+        let BatchTxn {
+            state: txn,
+            aborted,
+        } = classify_batch(batch, txn_meta)?;
         // `MemoryRecords.filterTo` decompresses every batch but one it deletes
         // outright, which is an aborted batch that is neither the last record
         // of an active producer nor the last batch of the round, and holds the
@@ -414,6 +402,42 @@ pub fn rewrite_segments(
         new_last_offset: last_kept_offset,
         txnindex_swap,
         frontier,
+    })
+}
+
+/// What the transaction tracker says about one batch of the walk.
+#[derive(Debug, Clone, Copy)]
+struct BatchTxn {
+    /// For a marker, whether the data of its transaction survives this pass.
+    /// `NotTransactional` for a data batch and for a marker without a producer.
+    state: TxnDataState,
+    /// Whether the batch is data of an aborted transaction. Never for a marker.
+    aborted: bool,
+}
+
+/// Read `batch` into `txn_meta` and classify it. The read updates the
+/// tracker, so the walk calls this once per batch, in offset order.
+fn classify_batch(
+    batch: &RecordBatch,
+    txn_meta: &mut CleanedTransactionMetadata,
+) -> Result<BatchTxn, LogError> {
+    if !batch.attributes.is_control_batch() {
+        return Ok(BatchTxn {
+            state: TxnDataState::NotTransactional,
+            aborted: txn_meta.on_batch_read(batch),
+        });
+    }
+    let discardable = txn_meta.on_control_batch_read(batch)?;
+    let state = if batch.producer_id < 0 {
+        TxnDataState::NotTransactional
+    } else if discardable {
+        TxnDataState::DataFullyGone
+    } else {
+        TxnDataState::DataSurvives
+    };
+    Ok(BatchTxn {
+        state,
+        aborted: false,
     })
 }
 
