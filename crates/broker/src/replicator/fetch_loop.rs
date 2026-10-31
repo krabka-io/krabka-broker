@@ -67,23 +67,49 @@ struct Round {
     all_throttled: bool,
 }
 
+/// What one fetcher carries from one round to the next.
+struct FetcherState {
+    session: FollowerFetchSession,
+    /// The partitions whose on-disk log this fetcher has already opened. A
+    /// reconcile adds a partition to a running fetcher, and the first round
+    /// that sees it is what opens it; re-checking every partition every round
+    /// would put the registry lookup back on the per-partition path this
+    /// batching exists to leave.
+    materialized: HashSet<FollowedKey>,
+    followed: BTreeMap<FollowedKey, Arc<Config>>,
+    followed_generation: u64,
+    followed_index: FollowedIndex,
+    /// The partitions the next round replans.
+    dirty: BTreeSet<FollowedKey>,
+    /// The `current_leader_epoch` each partition was last asked about with.
+    request_epochs: HashMap<FollowedKey, i32>,
+    /// Session keys the next incremental request tells the leader to forget.
+    forgotten: Vec<SessionKey>,
+    delayed: DelayedUntil,
+    next_partition_audit: Instant,
+}
+
+impl FetcherState {
+    fn new() -> Self {
+        let followed = BTreeMap::new();
+        Self {
+            session: FollowerFetchSession::default(),
+            materialized: HashSet::new(),
+            followed_index: FollowedIndex::new(&followed),
+            followed,
+            followed_generation: 0,
+            dirty: BTreeSet::new(),
+            request_epochs: HashMap::new(),
+            forgotten: Vec::new(),
+            delayed: DelayedUntil::new(),
+            next_partition_audit: Instant::now() + PARTITION_STATE_AUDIT_INTERVAL,
+        }
+    }
+}
+
 pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), String> {
     let replication = &fetcher.connection.replication;
-    let mut session = FollowerFetchSession::default();
-    // The partitions whose on-disk log this fetcher has already opened. A
-    // reconcile adds a partition to a running fetcher, and the first round
-    // that sees it is what opens it; re-checking every partition every round
-    // would put the registry lookup back on the per-partition path this
-    // batching exists to leave.
-    let mut materialized: HashSet<FollowedKey> = HashSet::new();
-    let mut followed = BTreeMap::new();
-    let mut followed_generation = 0;
-    let mut followed_index = FollowedIndex::new(&followed);
-    let mut dirty = BTreeSet::new();
-    let mut request_epochs = HashMap::new();
-    let mut forgotten = Vec::new();
-    let mut delayed: DelayedUntil = DelayedUntil::new();
-    let mut next_partition_audit = Instant::now() + PARTITION_STATE_AUDIT_INTERVAL;
+    let mut state = FetcherState::new();
     // The leader connection, dialled lazily. Opening the local logs must not
     // wait behind the dial: a follower whose leader is not accepting yet still
     // has to have its replicas on disk, because the ISR report, a later
@@ -100,18 +126,24 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
         if let Some(FollowedSnapshot {
             generation,
             entries,
-        }) = fetcher.followed.snapshot_if_changed(followed_generation)
+        }) = fetcher
+            .followed
+            .snapshot_if_changed(state.followed_generation)
         {
-            followed_generation = generation;
-            followed = entries;
-            followed_index = FollowedIndex::new(&followed);
-            dirty = followed.keys().cloned().collect();
-            request_epochs.retain(|key, _| followed.contains_key(key));
-            forgotten.clear();
-            session.reset();
-            materialized.retain(|key| followed.contains_key(key));
-            for (key, cfg) in &followed {
-                if materialized.contains(key) {
+            state.followed_generation = generation;
+            state.followed = entries;
+            state.followed_index = FollowedIndex::new(&state.followed);
+            state.dirty = state.followed.keys().cloned().collect();
+            state
+                .request_epochs
+                .retain(|key, _| state.followed.contains_key(key));
+            state.forgotten.clear();
+            state.session.reset();
+            state
+                .materialized
+                .retain(|key| state.followed.contains_key(key));
+            for (key, cfg) in &state.followed {
+                if state.materialized.contains(key) {
                     continue;
                 }
                 if let Err(error) = ensure_local_partition(cfg) {
@@ -120,25 +152,28 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
                     drop_partition(fetcher, key);
                     continue;
                 }
-                materialized.insert(key.clone());
+                state.materialized.insert(key.clone());
             }
         }
 
         let now = Instant::now();
-        if now >= next_partition_audit {
-            dirty.extend(followed.keys().cloned());
-            next_partition_audit = now + PARTITION_STATE_AUDIT_INTERVAL;
+        if now >= state.next_partition_audit {
+            state.dirty.extend(state.followed.keys().cloned());
+            state.next_partition_audit = now + PARTITION_STATE_AUDIT_INTERVAL;
         }
-        dirty.extend(
-            delayed
+        state.dirty.extend(
+            state
+                .delayed
                 .iter()
                 .filter(|(_, until)| **until <= now)
                 .map(|(key, _)| key.clone()),
         );
-        delayed.retain(|key, until| followed.contains_key(key) && *until > Instant::now());
-        let round = plan_changed(&followed, &delayed, &dirty);
+        state
+            .delayed
+            .retain(|key, until| state.followed.contains_key(key) && *until > Instant::now());
+        let round = plan_changed(&state.followed, &state.delayed, &state.dirty);
         if round.entries.is_empty()
-            && (session.is_full() || followed.is_empty() || round.all_throttled)
+            && (state.session.is_full() || state.followed.is_empty() || round.all_throttled)
         {
             // Nothing to ask for: either this fetcher follows nothing yet, or
             // every partition it follows is out of throttle budget. Wait, and
@@ -159,12 +194,14 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             None => client.insert(connect_with_backoff(fetcher).await?),
         };
         for (key, entry) in round.keys.iter().zip(&round.entries) {
-            request_epochs.insert(key.clone(), entry.request_leader_epoch);
+            state
+                .request_epochs
+                .insert(key.clone(), entry.request_leader_epoch);
         }
-        let removed = mem::take(&mut forgotten);
+        let removed = mem::take(&mut state.forgotten);
         let request = RawFetchRequest(build_fetch_request(
             fetcher,
-            &mut session,
+            &mut state.session,
             round.wanted,
             &removed,
         ));
@@ -180,16 +217,16 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             // Drop the session with the connection; the next round is full.
             Err(ClientError::Disconnected | ClientError::Io(_)) => {
                 client = None;
-                session.reset();
-                dirty = followed.keys().cloned().collect();
+                state.session.reset();
+                state.dirty = state.followed.keys().cloned().collect();
                 continue;
             }
             Err(e) => {
                 warn!(error = %e,
                     "replicator: client.send unexpected error; retrying after backoff");
                 client = None;
-                session.reset();
-                dirty = followed.keys().cloned().collect();
+                state.session.reset();
+                state.dirty = state.followed.keys().cloned().collect();
                 if sleep_or_cancel(&fetcher.shutdown, replication.send_error_backoff)
                     .await
                     .is_err()
@@ -200,9 +237,12 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             }
         };
 
-        if session.handle_response(resp.error_code, resp.session_id) == SessionOutcome::SessionLost
+        if state
+            .session
+            .handle_response(resp.error_code, resp.session_id)
+            == SessionOutcome::SessionLost
         {
-            dirty = followed.keys().cloned().collect();
+            state.dirty = state.followed.keys().cloned().collect();
             info!(
                 leader_node_id = fetcher.leader_node_id.0,
                 error_code = resp.error_code,
@@ -211,34 +251,35 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             continue;
         }
 
-        let actions = apply_response_indexed(&mut resp, &followed_index, &request_epochs).await;
+        let actions =
+            apply_response_indexed(&mut resp, &state.followed_index, &state.request_epochs).await;
         for key in &round.keys {
-            dirty.remove(key);
+            state.dirty.remove(key);
         }
         let mut backoff: Option<Time> = None;
         for KeyedAction { key, action } in actions {
             match action {
                 RowAction::Continue => {
-                    dirty.insert(key);
+                    state.dirty.insert(key);
                 }
                 RowAction::Drop => {
-                    dirty.remove(&key);
+                    state.dirty.remove(&key);
                     info!(topic = %key.topic, partition = key.partition.get(),
                         "replicator.not_leader; holding the partition back until \
                          the metadata image settles");
-                    delayed.insert(
+                    state.delayed.insert(
                         key.clone(),
                         Instant::now() + replication.epoch_fence_backoff.to_std(),
                     );
-                    if let Some(cfg) = followed.get(&key) {
-                        forgotten.push(session_key(cfg));
+                    if let Some(cfg) = state.followed.get(&key) {
+                        state.forgotten.push(session_key(cfg));
                     }
                     // The leader's cached set still holds it; the next round
                     // forgets it, which is what the session handler does with
                     // a key that left the wanted set.
                 }
                 RowAction::Backoff(delay) => {
-                    dirty.insert(key);
+                    state.dirty.insert(key);
                     backoff = Some(match backoff {
                         Some(current) if current > delay => current,
                         _ => delay,
@@ -248,15 +289,15 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
                     // The next round sees the smaller membership, re-opens the
                     // session without the partition, and the supervisor does
                     // not hand it back while its log directory is offline.
-                    dirty.remove(&key);
+                    state.dirty.remove(&key);
                     warn!(topic = %key.topic, partition = key.partition.get(),
                         "replicator: log directory offline; no longer following the partition");
                     drop_partition(fetcher, &key);
                 }
             }
         }
-        if session.is_full() {
-            dirty = followed.keys().cloned().collect();
+        if state.session.is_full() {
+            state.dirty = state.followed.keys().cloned().collect();
         }
         if let Some(delay) = backoff
             && sleep_or_cancel(&fetcher.shutdown, delay).await.is_err()
