@@ -807,7 +807,13 @@ mod tests {
         .await;
 
         check!(outcome == CopyOutcome::Failed);
-        check!(owned.rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
+        check!(
+            owned
+                .rlmm
+                .list_remote_log_segments(&tp())
+                .unwrap()
+                .is_empty()
+        );
         check!(owned.delete_counts() == (1, errors));
     }
 
