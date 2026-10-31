@@ -457,12 +457,6 @@ async fn transaction_initialization_case_4(
 #[tokio::test]
 async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version_2() {
     use crate::api_catalog::UnstableApiVersions::{Disabled, Enabled};
-    let refused = |error_code| InitProducerIdResponse {
-        error_code,
-        producer_id: -1,
-        producer_epoch: -1,
-        ..Default::default()
-    };
     // `keepPreparedTxn` is refused as Kafka 4.3.1 refuses it unless 2PC and
     // `unstable.api.versions.enable` are both on (#784).
     for (two_phase_commit, unstable, enable_2pc, keep_prepared_txn, want) in [
@@ -494,12 +488,7 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
         let HandlerStartedBroker {
             broker: broker_handle,
             dir: _dir,
-        } = start_broker_no_audit_with(|config| {
-            config.features.transaction_two_phase_commit_enable = two_phase_commit;
-            config.features.unstable_api_versions = unstable;
-        })
-        .await;
-        wait_for_transaction_version_2(&broker_handle).await;
+        } = two_phase_commit_broker(two_phase_commit, unstable).await;
         let broker = broker_handle.broker_arc_for_test();
         krabka_macros::request_test_identity! {
             bind(principal, peer, context);
@@ -536,22 +525,16 @@ async fn keep_prepared_txn_with_an_identity_is_invalid_before_the_timeout_check(
     let HandlerStartedBroker {
         broker: broker_handle,
         dir: _dir,
-    } = start_broker_no_audit_with(|config| {
-        config.features.transaction_two_phase_commit_enable = true;
-        config.features.unstable_api_versions = UnstableApiVersions::Enabled;
-        config.transaction_max_timeout = secs(8);
-    })
-    .await;
-    wait_for_transaction_version_2(&broker_handle).await;
+    } = two_phase_commit_broker(true, UnstableApiVersions::Enabled).await;
     let broker = broker_handle.broker_arc_for_test();
     krabka_macros::request_test_identity! {
         bind(principal, peer, context);
         user ["admin"];
         client ["txn-client"];
     };
-    let version = init_producer_id_response::MAX_VERSION;
     // (name, request identity, transaction timeout, expected code). No
-    // FindCoordinator ran, so this broker coordinates nothing.
+    // FindCoordinator ran, so this broker coordinates nothing, and `i32::MAX`
+    // is above the default maximum transaction timeout.
     let cases = [
         (
             "an identity is invalid",
@@ -562,13 +545,13 @@ async fn keep_prepared_txn_with_an_identity_is_invalid_before_the_timeout_check(
         (
             "an identity is invalid before an invalid timeout",
             (5, 1),
-            9_000,
+            i32::MAX,
             codes::INVALID_REQUEST,
         ),
         (
             "no identity reaches the timeout check",
             (-1, -1),
-            9_000,
+            i32::MAX,
             codes::INVALID_TRANSACTION_TIMEOUT,
         ),
         (
@@ -578,8 +561,6 @@ async fn keep_prepared_txn_with_an_identity_is_invalid_before_the_timeout_check(
             codes::NOT_COORDINATOR,
         ),
     ];
-    let mut expected = Vec::new();
-    let mut actual = Vec::new();
     for (name, (producer_id, producer_epoch), transaction_timeout_ms, code) in cases {
         let request = InitProducerIdRequest {
             transactional_id: Some("txn-keep-prepared-identity".to_owned()),
@@ -589,19 +570,42 @@ async fn keep_prepared_txn_with_an_identity_is_invalid_before_the_timeout_check(
             keep_prepared_txn: true,
             ..Default::default()
         };
-        let response = init_producer_id_handle(&broker, request, version, &context)
-            .await
-            .expect("answer the keepPreparedTxn request");
-        expected.push((name, InitProducerIdResponse {
-            error_code: code,
-            producer_id: -1,
-            producer_epoch: -1,
-            ..Default::default()
-        }));
-        actual.push((name, response));
+        let response = init_producer_id_handle(
+            &broker,
+            request,
+            init_producer_id_response::MAX_VERSION,
+            &context,
+        )
+        .await
+        .expect("answer the keepPreparedTxn request");
+        assert!(response == refused(code), "{name}: {response:?}");
     }
-    assert!(actual == expected);
     broker_handle.shutdown().await;
+}
+
+/// A broker with `transaction.two.phase.commit.enable` and
+/// `unstable.api.versions.enable` set, once it runs at transaction version 2.
+async fn two_phase_commit_broker(
+    two_phase_commit: bool,
+    unstable: UnstableApiVersions,
+) -> HandlerStartedBroker {
+    let started = start_broker_no_audit_with(|config| {
+        config.features.transaction_two_phase_commit_enable = two_phase_commit;
+        config.features.unstable_api_versions = unstable;
+    })
+    .await;
+    wait_for_transaction_version_2(&started.broker).await;
+    started
+}
+
+/// The response that refuses an `InitProducerId` with `error_code`.
+fn refused(error_code: i16) -> InitProducerIdResponse {
+    InitProducerIdResponse {
+        error_code,
+        producer_id: -1,
+        producer_epoch: -1,
+        ..Default::default()
+    }
 }
 
 #[tokio::test]

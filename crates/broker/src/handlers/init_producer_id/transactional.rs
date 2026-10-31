@@ -644,6 +644,26 @@ mod tests {
         .await
     }
 
+    /// `InitProducerId` for `tid` at `txnv`, naming `identity`.
+    async fn init_at(
+        coordinator: &Arc<TxnCoordinator>,
+        tid: &str,
+        txnv: TxnVersion,
+        identity: (i64, i16),
+    ) -> InitProducerIdResponse {
+        handle_transactional(
+            coordinator,
+            TransactionalInit::builder()
+                .tid(tid)
+                .txnv(txnv)
+                .txn_timeout(60_000)
+                .request_identity(identity)
+                .build(),
+        )
+        .await
+        .expect("init responds")
+    }
+
     async fn init_near_exhaustion(
         coordinator: &Arc<TxnCoordinator>,
         tid: &str,
@@ -981,17 +1001,7 @@ mod tests {
                 partition: data,
             } = coordinator_with_ongoing_transaction(dir.path(), "tid-fenced").await;
 
-            let fenced = handle_transactional(
-                &coordinator,
-                TransactionalInit::builder()
-                    .tid("tid-fenced")
-                    .txnv(case.txnv)
-                    .txn_timeout(60_000)
-                    .request_identity((1000, 3))
-                    .build(),
-            )
-            .await
-            .expect("init responds");
+            let fenced = init_at(&coordinator, "tid-fenced", case.txnv, (1000, 3)).await;
             check!(
                 fenced == concurrent_transactions_response(),
                 "{}",
@@ -1032,17 +1042,7 @@ mod tests {
             // transaction version 2, where the fence keeps no last epoch, and
             // it is answered the epoch the abort landed on at version 2, where
             // that epoch is the last one.
-            let stale = handle_transactional(
-                &coordinator,
-                TransactionalInit::builder()
-                    .tid("tid-fenced")
-                    .txnv(case.txnv)
-                    .txn_timeout(60_000)
-                    .request_identity((1000, 3))
-                    .build(),
-            )
-            .await
-            .expect("init responds");
+            let stale = init_at(&coordinator, "tid-fenced", case.txnv, (1000, 3)).await;
             check!(
                 stale
                     == InitProducerIdResponse {
@@ -1058,16 +1058,7 @@ mod tests {
             // `initTransactions()` names no identity, so the retry bumps the
             // epoch a second time, as the comment in
             // `prepareInitProducerIdTransit` says.
-            let retried = handle_transactional(
-                &coordinator,
-                TransactionalInit::builder()
-                    .tid("tid-fenced")
-                    .txnv(case.txnv)
-                    .txn_timeout(60_000)
-                    .build(),
-            )
-            .await
-            .expect("init responds");
+            let retried = init_at(&coordinator, "tid-fenced", case.txnv, (-1, -1)).await;
             check!(
                 retried
                     == InitProducerIdResponse {
