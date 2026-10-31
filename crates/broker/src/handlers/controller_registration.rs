@@ -108,15 +108,22 @@ pub async fn handle(
             .await
         {
             Ok(_) => success(),
-            Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-                response(codes::NOT_CONTROLLER, None)
-            }
-            Err(RaftError::Metadata(error)) => {
-                response(codes::INVALID_REGISTRATION, Some(error.to_string()))
-            }
-            Err(error) => response(codes::UNKNOWN_SERVER_ERROR, Some(error.to_string())),
+            Err(error) => submit_error_response(&error),
         },
     )
+}
+
+/// The answer to a registration whose controller write failed with `error`.
+fn submit_error_response(error: &RaftError) -> ControllerRegistrationResponse {
+    match error {
+        RaftError::NotLeader { .. } | RaftError::LeaderUnknown => {
+            response(codes::NOT_CONTROLLER, None)
+        }
+        RaftError::Metadata(error) => {
+            response(codes::INVALID_REGISTRATION, Some(error.to_string()))
+        }
+        error => response(codes::UNKNOWN_SERVER_ERROR, Some(error.to_string())),
+    }
 }
 
 fn decode_listeners(listeners: &[Listener]) -> Result<Vec<BrokerEndpoint>, String> {
