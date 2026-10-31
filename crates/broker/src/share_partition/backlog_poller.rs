@@ -46,6 +46,8 @@ pub struct BacklogPoller {
     pub inter_broker: Arc<InterBrokerClient>,
     pub listener_protocol: ListenerProtocol,
     pub listener_name: String,
+    /// The TLS server name to verify a partition leader against.
+    pub server_name: String,
     pub period: Duration,
     pub metrics: BrokerMetrics,
     pub shutdown: CancellationToken,
@@ -177,7 +179,13 @@ impl BacklogPoller {
         };
         let connection = self
             .inter_broker
-            .connect_as_connection(host, port, self.listener_protocol, "localhost", options)
+            .connect_as_connection(
+                host,
+                port,
+                self.listener_protocol,
+                &self.server_name,
+                options,
+            )
             .await
             .map_err(|error| error.to_string())?;
         let partition_metadata = image
@@ -360,13 +368,23 @@ fn clear(metrics: &BrokerMetrics, last: &mut HashMap<ShareGroupLabel, i64>) {
 mod tests {
     use {
         super::{
-            PartitionOffsets, effective_backlog, fetch_offsets, latest_fetch_offset, owns_group,
-            prune_stale, replace,
+            BacklogPoller, PartitionOffsets, effective_backlog, fetch_offsets, latest_fetch_offset,
+            owns_group, prune_stale, replace,
         },
         crate::{
             codes,
-            coordinator::{bootstrap::OFFSETS_TOPIC, partitioner},
+            coordinator::{
+                bootstrap::OFFSETS_TOPIC, partitioner, unified::test_support::make_coord,
+            },
+            metadata_source::MetadataSource,
             metrics::{BrokerMetrics, ShareGroupLabel},
+            partition_registry::PartitionRegistry,
+            share_coordinator::{
+                config::ShareCoordinatorConfig,
+                coordinator::ShareCoordinator,
+                persister_client::{InterBrokerListener, SharePersister},
+            },
+            test_support::{FakeMetadataSource, assert_dialed_with, capture_server_name},
         },
         krabka_ids::LeaderEpoch,
         krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord},
@@ -379,7 +397,9 @@ mod tests {
             },
             primitives::uuid::Uuid as ProtocolUuid,
         },
-        std::collections::HashMap,
+        krabka_security::ListenerProtocol,
+        std::{collections::HashMap, sync::Arc, time::Duration},
+        tokio_util::sync::CancellationToken,
     };
 
     fn routing_image() -> MetadataImage {
@@ -415,6 +435,56 @@ mod tests {
             .map(|i| format!("group-{i}"))
             .find(|group| partitioner::partition_for_group_with_count(group, 2) == Some(partition))
             .expect("both offsets partitions receive a group")
+    }
+
+    /// The remote watermark probe dials the leader with the configured
+    /// inter-broker server name, so TLS hostname verification checks the
+    /// name the operator set.
+    #[tokio::test]
+    async fn remote_offsets_dial_with_the_configured_server_name() {
+        let capture = capture_server_name().await;
+        let mut image = routing_image();
+        image.apply(&MetadataRecord::V1BrokerRegistration(
+            capture.broker(krabka_raft::NodeId(2), "INTERNAL"),
+        ));
+        let metadata: Arc<dyn MetadataSource> =
+            Arc::new(FakeMetadataSource::builder().image(image.clone()).build());
+        let partitions = Arc::new(PartitionRegistry::new());
+        let inter_broker = Arc::new(capture.client);
+        let persister = Arc::new(SharePersister::new(
+            NodeId(1),
+            Arc::new(ShareCoordinator::new(
+                NodeId(1),
+                Arc::clone(&partitions),
+                ShareCoordinatorConfig::default(),
+            )),
+            Arc::clone(&metadata),
+            Arc::default(),
+            Arc::clone(&inter_broker),
+            InterBrokerListener {
+                protocol: ListenerProtocol::Ssl,
+                name: "INTERNAL".to_owned(),
+                server_name: "broker.internal".to_owned(),
+            },
+        ));
+        let poller = BacklogPoller {
+            node_id: NodeId(1),
+            coordinator: make_coord(),
+            metadata,
+            partitions,
+            persister,
+            inter_broker,
+            listener_protocol: ListenerProtocol::Ssl,
+            listener_name: "INTERNAL".to_owned(),
+            server_name: "broker.internal".to_owned(),
+            period: Duration::from_secs(60),
+            metrics: BrokerMetrics::new(),
+            shutdown: CancellationToken::new(),
+        };
+
+        let result = poller.remote_offsets(&image, NodeId(2), "work", 0).await;
+
+        assert_dialed_with(&result, capture.server_name, "broker.internal").await;
     }
 
     #[test]
