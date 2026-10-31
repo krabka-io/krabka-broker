@@ -2351,6 +2351,60 @@ mod tests {
         assert!(served_base_offsets(&pending[0].out) == vec![0]);
         broker_handle.shutdown().await;
     }
+    /// A read the response budget capped does not shrink the partition's own
+    /// `partition_max_bytes`: once the response has room again, the next
+    /// re-read of the same partition is budgeted from the original request.
+    ///
+    /// Entry 0 stands for an earlier partition that held most of the response
+    /// and later gave all but one byte of it back. That byte keeps the
+    /// response nonempty, so the re-read gets no first-batch allowance and
+    /// its budget alone decides whether the batch goes out.
+    #[tokio::test]
+    async fn a_reread_after_a_capped_read_uses_the_original_partition_max_bytes() {
+        const TOPIC: &str = "capped-then-reread";
+        const PAYLOAD: &[u8; 64] = &[b'c'; 64];
+
+        // A follower fetch reads only from the leader.
+        let ReadSetup {
+            broker_handle,
+            dir: _dir,
+            broker,
+            part,
+        } = leader_read_setup(TOPIC).await;
+        part.produce_batch(sized_batch(PAYLOAD))
+            .await
+            .expect("append");
+        let mut sized = BytesMut::new();
+        sized_batch(PAYLOAD)
+            .encode(&mut sized)
+            .expect("encode one batch");
+        let one_batch = sized.len();
+
+        let earlier = follower_read(TOPIC, &part, NONE);
+        let request = super::EffectivePartition {
+            partition_max_bytes: 1 << 20,
+            ..wide_partition_fetch_request()
+        };
+        let mut pending = [earlier, planned_follower(TOPIC, &part, &request, NONE)];
+        let mut state = state_for().pending(&pending).call();
+        state.response_max_bytes = 2 * one_batch;
+        state.bytes = super::PartitionBytes::from(vec![2 * one_batch - 1, 0]);
+        let phases = RequestPhases::default();
+
+        // One byte of room left: the batch does not fit and goes out as a
+        // metadata-only row.
+        super::reread_woken(&broker, &mut pending, 1, &mut state, &phases).await;
+        let capped = (served_base_offsets(&pending[1].out), state.bytes.get(1));
+
+        // The earlier partition gives back all but one byte.
+        state.bytes.set(0, 1);
+        super::reread_woken(&broker, &mut pending, 1, &mut state, &phases).await;
+        let reread = (served_base_offsets(&pending[1].out), state.bytes.get(1));
+
+        assert!((capped, reread) == ((Vec::new(), 0), (vec![0], one_batch)));
+        broker_handle.shutdown().await;
+    }
+
     /// Read `pending` under an 8 byte response budget and return the topics.
     async fn read_with_tiny_budget(
         broker: &Broker,
