@@ -72,6 +72,7 @@ use {
             },
             offline_replicas::unavailable_brokers,
             partition_materialization::PartitionMaterialization,
+            submit_failure::{GuardedFailure, classify_guarded},
         },
         quota::ControllerMutationQuota,
         site_placement::PlacementRng,
@@ -199,23 +200,15 @@ pub async fn handle(
             grow_topic(&growth, &t, image)
         })
         .await;
-        let out = match attempt {
-            Ok(Ok(row)) => row,
-            failure => {
-                let code = match failure {
-                    Err(_) => codes::REQUEST_TIMED_OUT,
-                    Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => {
-                        codes::NOT_CONTROLLER
-                    }
-                    Ok(Err(error)) => {
-                        tracing::error!(%error, topic = %t.name, "CreatePartitions guarded submission failed");
-                        codes::UNKNOWN_SERVER_ERROR
-                    }
-                    Ok(Ok(_)) => unreachable!("successful response handled above"),
-                };
+        let out = match classify_guarded(attempt) {
+            Ok(row) => row,
+            Err(failure) => {
+                if let GuardedFailure::Failed(error) = &failure {
+                    tracing::error!(%error, topic = %t.name, "CreatePartitions guarded submission failed");
+                }
                 CreatePartitionsTopicResult {
                     name: t.name,
-                    error_code: code,
+                    error_code: failure.code(codes::UNKNOWN_SERVER_ERROR),
                     ..Default::default()
                 }
             }

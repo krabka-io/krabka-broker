@@ -42,11 +42,12 @@ use {
             forward_to_controller::{
                 forward_if_not_controller, guarded_operation_on_source, is_active_controller,
             },
-            submit_failure_code,
+            submit_failure::{GuardedFailure, classify_guarded},
         },
         metrics::QuotaType,
         quota::throttle_time_ms,
     },
+    krabka_metadata::MetadataError,
     krabka_protocol::owned::{
         delete_topics_request::{self, DeleteTopicsRequest},
         delete_topics_response::DeleteTopicsResponse,
@@ -207,22 +208,20 @@ pub async fn handle(
             delete_topic_once(broker, ctx, &name, wire_topic_id, requested_by_id, image)
         })
         .await;
-        let row = match attempt {
-            Ok(Ok(row)) => row,
-            failure => {
-                let code = match failure {
-                    Err(_) => codes::REQUEST_TIMED_OUT,
-                    Ok(Err(RaftError::Metadata(krabka_metadata::MetadataError::UnknownTopic(
-                        _,
-                    )))) => vanished_code(requested_by_id),
-                    Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => {
-                        codes::NOT_CONTROLLER
+        let row = match classify_guarded(attempt) {
+            Ok(row) => row,
+            Err(failure) => {
+                let code = match &failure {
+                    GuardedFailure::Failed(RaftError::Metadata(MetadataError::UnknownTopic(_))) => {
+                        vanished_code(requested_by_id)
                     }
-                    Ok(Err(error)) => {
+                    GuardedFailure::Failed(error) => {
                         tracing::error!(topic = %name, %error, "DeleteTopics guarded submission failed");
-                        submit_failure_code(&error, codes::UNKNOWN_SERVER_ERROR)
+                        failure.code(codes::UNKNOWN_SERVER_ERROR)
                     }
-                    Ok(Ok(_)) => unreachable!("successful row handled above"),
+                    GuardedFailure::TimedOut | GuardedFailure::NotController => {
+                        failure.code(codes::UNKNOWN_SERVER_ERROR)
+                    }
                 };
                 delete_topic_result(Some(name), wire_topic_id, code)
             }
