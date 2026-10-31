@@ -292,19 +292,7 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
         kind: metadata_kind,
     } = resolve_metadata_identity(&args, dynamic_format)?;
 
-    // KIP-853 control records live in the offset-zero metadata checkpoint,
-    // separate from the non-Raft bootstrap record stream.
-    let mut raft_control_records = Vec::new();
-    if dynamic_format {
-        raft_control_records.push(MetadataRecord::V1KRaftVersion(KRaftVersionRecord {
-            kraft_version: 1,
-        }));
-        if !initial_voters.is_empty() {
-            raft_control_records.push(MetadataRecord::V1Voters(VotersRecord {
-                voters: initial_voters,
-            }));
-        }
-    }
+    let raft_control_records = raft_control_records(dynamic_format, initial_voters);
 
     let mut records: Vec<MetadataRecord> =
         krabka_metadata::bootstrap_feature_records_with_overrides(bootstrap_mv, &feature_overrides);
@@ -471,6 +459,25 @@ fn resolve_metadata_identity(
         voters,
         kind,
     })
+}
+
+/// The KIP-853 control records. They live in the offset-zero metadata
+/// checkpoint, separate from the non-Raft bootstrap record stream: the
+/// `KRaft` version of a dynamic format, then its initial voters when it has
+/// any.
+fn raft_control_records(dynamic_format: bool, initial_voters: VoterSet) -> Vec<MetadataRecord> {
+    let mut records = Vec::new();
+    if dynamic_format {
+        records.push(MetadataRecord::V1KRaftVersion(KRaftVersionRecord {
+            kraft_version: 1,
+        }));
+        if !initial_voters.is_empty() {
+            records.push(MetadataRecord::V1Voters(VotersRecord {
+                voters: initial_voters,
+            }));
+        }
+    }
+    records
 }
 
 /// The directories one run formats: `metadata_log_dir` first, then every
