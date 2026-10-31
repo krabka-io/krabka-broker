@@ -181,47 +181,88 @@ fn request_refusal(
 /// `ControllerApis.handleIncrementalAlterConfigs` stores
 /// `AlterConfigOp.OpType.forId(op)`, which is null for an unknown code, and
 /// `ConfigurationControlManager.incrementalAlterConfigResource` then throws on
-/// its `switch`. The controller fails the whole request: every resource in it
-/// answers `UNKNOWN_SERVER_ERROR` with no message, and nothing is written.
+/// its `switch`. The controller fails the whole request: every resource it
+/// received answers `UNKNOWN_SERVER_ERROR` with no message, and nothing is
+/// written. A resource that the broker's `preprocess` refused never reached
+/// it and keeps that refusal.
 async fn handle_on_controller(
     broker: &Broker,
     req: IncrementalAlterConfigsRequest,
     version: i16,
     ctx: &RequestContext<'_>,
 ) -> Result<IncrementalAlterConfigsResponse, BrokerError> {
-    if reaches_unknown_operation(broker, ctx, &req) {
-        return Ok(request_refusal(&req, codes::UNKNOWN_SERVER_ERROR, None));
-    }
-    handle(broker, req, version, ctx).await
-}
-
-/// Whether a resource that Kafka's controller would merge carries an unknown
-/// operation code. `ControllerApis` sets aside `BROKER_LOGGER`, unknown
-/// resource types, duplicate resources and unauthorized ones before the
-/// merge, and the broker's `preprocess` has refused a resource whose shape is
-/// wrong.
-fn reaches_unknown_operation(
-    broker: &Broker,
-    ctx: &RequestContext<'_>,
-    req: &IncrementalAlterConfigsRequest,
-) -> bool {
-    let image = broker.controller.current_image();
     let duplicates = super::alter_configs::duplicate_resource_flags(req.resources.iter());
-    req.resources
+    let refusals: Vec<_> = req
+        .resources
         .iter()
         .zip(duplicates)
-        .any(|(resource, duplicate)| {
-            matches!(
+        .map(|(resource, duplicate)| preprocess_refusal(resource, duplicate))
+        .collect();
+    if !reaches_unknown_operation(broker, ctx, &req, &refusals) {
+        return handle(broker, req, version, ctx).await;
+    }
+    let responses = req
+        .resources
+        .iter()
+        .zip(refusals)
+        .map(|(resource, refusal)| {
+            refusal.map_or_else(
+                || resource_refusal(resource, codes::UNKNOWN_SERVER_ERROR),
+                |(code, message)| resource_refusal(resource, code).with_error(code, message),
+            )
+        })
+        .collect();
+    Ok(IncrementalAlterConfigsResponse {
+        responses,
+        ..Default::default()
+    })
+}
+
+/// What Kafka's broker-side `ConfigAdminManager.preprocess` answers for a
+/// resource it keeps from the controller: a bad shape, then an unknown
+/// resource type.
+fn preprocess_refusal(resource: &AlterConfigsResource, duplicate: bool) -> Option<(i16, String)> {
+    validate_resource_shape(resource, duplicate)
+        .err()
+        .or_else(|| {
+            (!matches!(
                 resource.resource_type,
                 RESOURCE_TYPE_TOPIC
                     | RESOURCE_TYPE_BROKER
                     | RESOURCE_TYPE_GROUP
                     | RESOURCE_TYPE_CLIENT_METRICS
-            ) && resource
-                .configs
-                .iter()
-                .any(|config| !is_known_operation(config.config_operation))
-                && validate_resource_shape(resource, duplicate).is_ok()
+                    | RESOURCE_TYPE_BROKER_LOGGER
+            ))
+            .then(|| {
+                (
+                    codes::INVALID_REQUEST,
+                    format!("Unknown resource type {}", resource.resource_type),
+                )
+            })
+        })
+}
+
+/// Whether a resource that Kafka's controller would merge carries an unknown
+/// operation code. `ControllerApis` sets aside `BROKER_LOGGER` and
+/// unauthorized resources before the merge, and `refusals` are the resources
+/// the broker's `preprocess` kept back.
+fn reaches_unknown_operation(
+    broker: &Broker,
+    ctx: &RequestContext<'_>,
+    req: &IncrementalAlterConfigsRequest,
+    refusals: &[Option<(i16, String)>],
+) -> bool {
+    let image = broker.controller.current_image();
+    req.resources
+        .iter()
+        .zip(refusals)
+        .any(|(resource, refusal)| {
+            refusal.is_none()
+                && resource.resource_type != RESOURCE_TYPE_BROKER_LOGGER
+                && resource
+                    .configs
+                    .iter()
+                    .any(|config| !is_known_operation(config.config_operation))
                 && config_resource_refusal(
                     broker.config.authorizer.as_ref(),
                     &image,
@@ -515,25 +556,37 @@ mod tests {
         handle.shutdown().await;
     }
 
-    /// Kafka's error precedence for a BROKER resource that the principal may
-    /// not alter: a request-shape error answers before authorization, and an
+    /// Kafka's error precedence for a resource that the principal may not
+    /// alter: a request-shape error answers before authorization, and an
     /// authorization error answers before the broker-side preprocess checks.
+    /// `ControllerApis` drops an unauthorized TOPIC before the controller
+    /// merges it, so its unknown operation never fails the request.
     #[yare::parameterized(
         authorization_beats_preprocess = {
+            RESOURCE_TYPE_BROKER,
             vec![make_set_cfg("log.retention.ms", "1")],
             "2",
             codes::CLUSTER_AUTHORIZATION_FAILED,
             "Cluster authorization failed.",
         },
         shape_beats_authorization = {
+            RESOURCE_TYPE_BROKER,
             vec![make_set_cfg("log.retention.ms", "1"), make_set_cfg("log.retention.ms", "2")],
             "1",
             codes::INVALID_REQUEST,
             "Error due to duplicate config keys",
         },
+        authorization_beats_unknown_operation = {
+            RESOURCE_TYPE_TOPIC,
+            vec![config(RETENTION_MS, 4, Some("1"))],
+            "orders",
+            codes::TOPIC_AUTHORIZATION_FAILED,
+            "Topic authorization failed.",
+        },
     )]
     #[test_macro(tokio::test)]
-    async fn unauthorized_broker_resource_precedence(
+    async fn unauthorized_resource_precedence(
+        resource_type: i8,
         configs: Vec<AlterableConfig>,
         name: &str,
         error_code: i16,
@@ -546,11 +599,11 @@ mod tests {
             user ["admin"];
         };
         let request = IncrementalAlterConfigsRequest {
-            resources: vec![make_scoped_resource(RESOURCE_TYPE_BROKER, name, configs)],
+            resources: vec![make_scoped_resource(resource_type, name, configs)],
             ..Default::default()
         };
         let refusal = config_resource_error_response(
-            RESOURCE_TYPE_BROKER,
+            resource_type,
             name,
             error_code,
             Some(error_message.into()),
@@ -629,9 +682,9 @@ mod tests {
 
     /// Kafka's controller fails the whole forwarded request when one resource
     /// carries an unknown operation: every resource that reached it answers
-    /// `UNKNOWN_SERVER_ERROR` and nothing is written. Resources the broker
-    /// answered itself (`BROKER_LOGGER`, and a BROKER that fails preprocess)
-    /// keep their own answers.
+    /// `UNKNOWN_SERVER_ERROR` and nothing is written. Resources the broker's
+    /// `preprocess` answered itself keep their own answers: `BROKER_LOGGER`, a
+    /// BROKER that fails preprocess, a bad shape and an unknown resource type.
     #[tokio::test]
     async fn an_unknown_operation_fails_every_forwarded_resource() {
         allow_all_broker_setup!((handle, _dir, broker, ctx), start_broker, "admin");
@@ -647,9 +700,34 @@ mod tests {
                 make_scoped_resource(RESOURCE_TYPE_BROKER, "1", vec![]),
                 make_scoped_resource(RESOURCE_TYPE_BROKER, "", unknown()),
                 make_scoped_resource(RESOURCE_TYPE_GROUP, "workers", vec![]),
+                make_scoped_resource(RESOURCE_TYPE_TOPIC, "keys", vec![
+                    config(RETENTION_MS, OP_SET, Some("1")),
+                    config(RETENTION_MS, 4, Some("2")),
+                ]),
+                make_scoped_resource(RESOURCE_TYPE_GROUP, "nulls", vec![config(
+                    RETENTION_MS,
+                    4,
+                    None,
+                )]),
+                make_scoped_resource(RESOURCE_TYPE_GROUP, "twice", unknown()),
+                make_scoped_resource(RESOURCE_TYPE_GROUP, "twice", vec![]),
+                make_scoped_resource(3, "unknown-type", unknown()),
             ],
             ..Default::default()
         };
+        let refused = |resource_type, name, message: &str| {
+            config_resource_error_response(
+                resource_type,
+                name,
+                codes::INVALID_REQUEST,
+                Some(message.into()),
+            )
+        };
+        let twice: AlterConfigsResourceResponse = refused(
+            RESOURCE_TYPE_GROUP,
+            "twice",
+            "Each resource must appear at most once.",
+        );
         let responses = vec![
             failed(RESOURCE_TYPE_TOPIC, "missing"),
             config_resource_error_response(RESOURCE_TYPE_BROKER_LOGGER, "1", codes::NONE, None),
@@ -662,37 +740,22 @@ mod tests {
                 Some("Unknown operations type 4".into()),
             ),
             failed(RESOURCE_TYPE_GROUP, "workers"),
+            refused(
+                RESOURCE_TYPE_TOPIC,
+                "keys",
+                "Error due to duplicate config keys",
+            ),
+            refused(
+                RESOURCE_TYPE_GROUP,
+                "nulls",
+                "Null value not supported for : retention.ms",
+            ),
+            twice.clone(),
+            twice,
+            refused(3, "unknown-type", "Unknown resource type 3"),
         ];
         assert_incremental_dispatch(broker.as_ref(), &ctx, &request, responses).await;
         handle.shutdown().await;
-    }
-
-    /// Kafka's `ControllerApis` drops an unauthorized resource before the
-    /// controller sees it, so its unknown operation never fails the request.
-    #[tokio::test]
-    async fn an_unauthorized_unknown_operation_answers_authorization() {
-        let started = start_broker(Arc::new(DenyAll)).await;
-        let broker = started.broker.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
-            bind(ctx);
-            user ["admin"];
-        };
-        let request = IncrementalAlterConfigsRequest {
-            resources: vec![make_topic_resource("orders", vec![config(
-                RETENTION_MS,
-                4,
-                Some("1"),
-            )])],
-            ..Default::default()
-        };
-        let refusal = config_resource_error_response(
-            RESOURCE_TYPE_TOPIC,
-            "orders",
-            codes::TOPIC_AUTHORIZATION_FAILED,
-            Some("Topic authorization failed.".into()),
-        );
-        assert_incremental_dispatch(broker.as_ref(), &ctx, &request, vec![refusal]).await;
-        started.broker.shutdown().await;
     }
 
     /// An incremental SET merges onto the image that the guarded retry reads
