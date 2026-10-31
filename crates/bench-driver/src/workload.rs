@@ -702,23 +702,7 @@ async fn join_consumers(
     while let Some(joined) = tasks.join_next().await {
         match joined {
             Ok(task) => {
-                let _ = merged.latency.add(&task.measurements.latency);
-                merged.msgs += task.measurements.msgs;
-                merged.bytes += task.measurements.bytes;
-                for (total, m) in merged
-                    .interval_msgs
-                    .iter_mut()
-                    .zip(&task.measurements.interval_msgs)
-                {
-                    *total += *m;
-                }
-                for (total, h) in merged
-                    .interval_hist
-                    .iter_mut()
-                    .zip(&task.measurements.interval_hist)
-                {
-                    let _ = total.add(h);
-                }
+                merged.merge(&task.measurements);
                 if !task.error.is_empty() {
                     errors.push(task.error);
                 }
@@ -1066,6 +1050,7 @@ struct ProducerTask {
     histogram: Histogram<u64>,
 }
 
+#[derive(Debug, PartialEq)]
 struct TaskMeasurements {
     latency: Histogram<u64>,
     interval_msgs: Vec<u64>,
@@ -1086,6 +1071,21 @@ impl TaskMeasurements {
                 .collect(),
             msgs: 0,
             bytes: 0,
+        }
+    }
+
+    /// Add `other`'s tallies to these. The interval tallies merge slice by
+    /// slice, up to the shorter of the two lists. A histogram that cannot take
+    /// `other`'s counts is left as it was.
+    fn merge(&mut self, other: &Self) {
+        let _ = self.latency.add(&other.latency);
+        self.msgs += other.msgs;
+        self.bytes += other.bytes;
+        for (total, m) in self.interval_msgs.iter_mut().zip(&other.interval_msgs) {
+            *total += *m;
+        }
+        for (total, h) in self.interval_hist.iter_mut().zip(&other.interval_hist) {
+            let _ = total.add(h);
         }
     }
 }
@@ -1697,6 +1697,71 @@ mod tests {
     }
 
     fn scenario(rf: i16) -> Scenario { short_scenario(rf) }
+
+    /// A histogram holding one count per latency, in milliseconds.
+    fn latencies(ms: &[u32]) -> Histogram<u64> {
+        let mut histogram = hist::new().unwrap();
+        for &latency in ms {
+            hist::record(&mut histogram, millis(latency));
+        }
+        histogram
+    }
+
+    /// One task's tallies: a message per latency, each in its interval and in
+    /// the overall histogram.
+    fn tallies(intervals: &[&[u32]], bytes: u64) -> TaskMeasurements {
+        let all: Vec<u32> = intervals.concat();
+        TaskMeasurements {
+            latency: latencies(&all),
+            interval_msgs: intervals.iter().map(|slice| slice.len() as u64).collect(),
+            interval_hist: intervals.iter().map(|slice| latencies(slice)).collect(),
+            msgs: all.len() as u64,
+            bytes,
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::other_has_more_intervals(
+        tallies(&[&[1], &[2, 3]], 10),
+        tallies(&[&[4], &[5], &[6]], 20),
+        TaskMeasurements {
+            latency: latencies(&[1, 2, 3, 4, 5, 6]),
+            interval_msgs: vec![2, 3],
+            interval_hist: vec![latencies(&[1, 4]), latencies(&[2, 3, 5])],
+            msgs: 6,
+            bytes: 30,
+        },
+    )]
+    #[case::other_has_fewer_intervals(
+        tallies(&[&[1], &[2], &[3]], 0),
+        tallies(&[&[4]], 5),
+        TaskMeasurements {
+            latency: latencies(&[1, 2, 3, 4]),
+            interval_msgs: vec![2, 1, 1],
+            interval_hist: vec![latencies(&[1, 4]), latencies(&[2]), latencies(&[3])],
+            msgs: 4,
+            bytes: 5,
+        },
+    )]
+    #[case::other_failed_to_build(
+        tallies(&[&[1], &[2]], 7),
+        TaskMeasurements {
+            latency: hist::new().unwrap(),
+            interval_msgs: Vec::new(),
+            interval_hist: Vec::new(),
+            msgs: 0,
+            bytes: 0,
+        },
+        tallies(&[&[1], &[2]], 7),
+    )]
+    fn merge_sums_totals_and_merges_intervals_up_to_the_shorter_list(
+        #[case] mut merged: TaskMeasurements,
+        #[case] other: TaskMeasurements,
+        #[case] expected: TaskMeasurements,
+    ) {
+        merged.merge(&other);
+        assert!(merged == expected);
+    }
 
     #[derive(Debug, PartialEq, Eq)]
     struct ProducerCounters {
