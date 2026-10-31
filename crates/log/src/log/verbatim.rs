@@ -268,23 +268,11 @@ impl Log {
         batch: &VerbatimBatch,
         base_offset: Offset,
     ) -> Result<(), LogError> {
-        self.ensure_unfenced()?;
-        self.rollover_flusher.check()?;
-        let Some((last_offset, _)) = krabka_verified::local_append_coordinates(
-            self.append_at_expected_offset().0,
-            base_offset.0,
+        let last_offset = self.check_append_frontier(
+            base_offset,
             batch.last_offset_delta,
-        ) else {
-            return Err(LogError::InvalidArgument(
-                "batch does not form a valid interval at the append frontier".into(),
-            ));
-        };
-        let last_offset = Offset(last_offset);
-        Self::data_producer_tail(
             batch.producer_id,
             batch.base_sequence,
-            batch.last_offset_delta,
-            base_offset,
         )?;
         // The follower uses the same append-time policy and roll check as the
         // owned path, against this replicated batch's bytes and timestamp.
