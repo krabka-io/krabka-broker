@@ -361,75 +361,10 @@ async fn trim_one(
         waiting_for: None,
     };
 
-    // Kafka's `ReplicaManager.deleteRecordsOnLocalLog` refuses every partition
-    // of an internal topic with `INVALID_TOPIC_EXCEPTION` before it looks for
-    // the partition. `KafkaApis` answers a partition the metadata does not
-    // hold before that, with `UNKNOWN_TOPIC_OR_PARTITION`. A trim of an
-    // internal topic deletes committed offsets, transaction state or share
-    // state, and a trim of krabka's own internal topics deletes broker state,
-    // so both sets are refused.
-    // The partition registry is updated apart from this image, so an internal
-    // partition the image lacks never falls through to it.
-    if is_internal_topic(&env.broker.config, topic) {
-        return refused(if env.image.partition(topic, index).is_some() {
-            codes::INVALID_TOPIC_EXCEPTION
-        } else {
-            codes::UNKNOWN_TOPIC_OR_PARTITION
-        });
-    }
-    // `KafkaApis.handleDeleteRecordsRequest` answers a partition the metadata
-    // does not hold with `UNKNOWN_TOPIC_OR_PARTITION`. One the metadata holds
-    // and this broker does not host is `NOT_LEADER_OR_FOLLOWER`
-    // (`ReplicaManager.getPartitionOrError`), which sends the client to
-    // refresh its metadata and find the leader rather than give up.
-    if env.image.partition(topic, index).is_none() {
-        return refused(codes::UNKNOWN_TOPIC_OR_PARTITION);
-    }
-    let Some(part) = env.partitions.get(topic, krabka_ids::PartitionIndex(index)) else {
-        return refused(codes::NOT_LEADER_OR_FOLLOWER);
+    let part = match admit_partition(env, topic, index) {
+        Ok(part) => part,
+        Err(code) => return refused(code),
     };
-
-    let cur_leader = part.current_leader.load(atomic::Ordering::Acquire);
-    if cur_leader != env.broker.config.node_id {
-        return refused(codes::NOT_LEADER_OR_FOLLOWER);
-    }
-
-    // Kafka's `Partition.deleteRecordsOnLeader` refuses a trim on a log whose
-    // `cleanup.policy` compacts and does not delete. A compacted topic holds
-    // the latest value of each key, and a trim would lose keys. The leader's
-    // own log config is the one Kafka reads.
-    if trim_forbidden_by_policy(&part) {
-        tracing::warn!(
-            %topic,
-            partition = index,
-            "DeleteRecords refused: cleanup.policy=compact does not allow deletion"
-        );
-        return refused(codes::POLICY_VIOLATION);
-    }
-
-    // KFC-9: a write freeze refuses every operation that removes data from the
-    // topic it covers, and it answers ahead of the two-person rule. That order
-    // is the rule: a break-glass approval to trim does not defeat a freeze, and
-    // a trim the freeze refuses must not spend an approval on its way to being
-    // refused.
-    //
-    // No version of the `DeleteRecords` response carries an `error_message`, so
-    // the reason reaches the operator through the broker's log alone. Like the
-    // produce gate, this refusal emits no privileged-action audit event: a
-    // freeze is not a break-glass act, and the registry entry that caused it is
-    // already in the metadata log.
-    if let FreezeMutationResolution::Frozen(record) =
-        resolve_freeze_mutation(env.image, topic, true, FreezeMutationKind::DeleteRecords)
-    {
-        let verdict = FreezeVerdict::from(record);
-        tracing::warn!(
-            %topic,
-            partition = index,
-            refusal = %verdict.removal_message(),
-            "DeleteRecords refused by a freeze"
-        );
-        return refused(codes::POLICY_VIOLATION);
-    }
 
     // KFC-9: the two-person rule answers here, before the broker reads a single
     // offset. The approval is not spent yet: a request that then fails its
@@ -577,4 +512,84 @@ async fn trim_one(
             refused(codes::UNKNOWN_SERVER_ERROR)
         }
     }
+}
+
+/// Admit one partition to a trim, or answer the error code that refuses it.
+///
+/// The checks run in Kafka's order: an internal topic, a partition the
+/// metadata does not hold, one this broker does not host or lead, a
+/// `cleanup.policy` that forbids deletion, and last a write freeze. The freeze
+/// stays last so that it answers ahead of the two-person rule that follows.
+fn admit_partition(env: &TrimEnv<'_>, topic: &str, index: i32) -> Result<Arc<Partition>, i16> {
+    // Kafka's `ReplicaManager.deleteRecordsOnLocalLog` refuses every partition
+    // of an internal topic with `INVALID_TOPIC_EXCEPTION` before it looks for
+    // the partition. `KafkaApis` answers a partition the metadata does not
+    // hold before that, with `UNKNOWN_TOPIC_OR_PARTITION`. A trim of an
+    // internal topic deletes committed offsets, transaction state or share
+    // state, and a trim of krabka's own internal topics deletes broker state,
+    // so both sets are refused.
+    // The partition registry is updated apart from this image, so an internal
+    // partition the image lacks never falls through to it.
+    if is_internal_topic(&env.broker.config, topic) {
+        return Err(if env.image.partition(topic, index).is_some() {
+            codes::INVALID_TOPIC_EXCEPTION
+        } else {
+            codes::UNKNOWN_TOPIC_OR_PARTITION
+        });
+    }
+    // `KafkaApis.handleDeleteRecordsRequest` answers a partition the metadata
+    // does not hold with `UNKNOWN_TOPIC_OR_PARTITION`. One the metadata holds
+    // and this broker does not host is `NOT_LEADER_OR_FOLLOWER`
+    // (`ReplicaManager.getPartitionOrError`), which sends the client to
+    // refresh its metadata and find the leader rather than give up.
+    if env.image.partition(topic, index).is_none() {
+        return Err(codes::UNKNOWN_TOPIC_OR_PARTITION);
+    }
+    let Some(part) = env.partitions.get(topic, krabka_ids::PartitionIndex(index)) else {
+        return Err(codes::NOT_LEADER_OR_FOLLOWER);
+    };
+
+    let cur_leader = part.current_leader.load(atomic::Ordering::Acquire);
+    if cur_leader != env.broker.config.node_id {
+        return Err(codes::NOT_LEADER_OR_FOLLOWER);
+    }
+
+    // Kafka's `Partition.deleteRecordsOnLeader` refuses a trim on a log whose
+    // `cleanup.policy` compacts and does not delete. A compacted topic holds
+    // the latest value of each key, and a trim would lose keys. The leader's
+    // own log config is the one Kafka reads.
+    if trim_forbidden_by_policy(&part) {
+        tracing::warn!(
+            %topic,
+            partition = index,
+            "DeleteRecords refused: cleanup.policy=compact does not allow deletion"
+        );
+        return Err(codes::POLICY_VIOLATION);
+    }
+
+    // KFC-9: a write freeze refuses every operation that removes data from the
+    // topic it covers, and it answers ahead of the two-person rule. That order
+    // is the rule: a break-glass approval to trim does not defeat a freeze, and
+    // a trim the freeze refuses must not spend an approval on its way to being
+    // refused.
+    //
+    // No version of the `DeleteRecords` response carries an `error_message`, so
+    // the reason reaches the operator through the broker's log alone. Like the
+    // produce gate, this refusal emits no privileged-action audit event: a
+    // freeze is not a break-glass act, and the registry entry that caused it is
+    // already in the metadata log.
+    if let FreezeMutationResolution::Frozen(record) =
+        resolve_freeze_mutation(env.image, topic, true, FreezeMutationKind::DeleteRecords)
+    {
+        let verdict = FreezeVerdict::from(record);
+        tracing::warn!(
+            %topic,
+            partition = index,
+            refusal = %verdict.removal_message(),
+            "DeleteRecords refused by a freeze"
+        );
+        return Err(codes::POLICY_VIOLATION);
+    }
+
+    Ok(part)
 }
