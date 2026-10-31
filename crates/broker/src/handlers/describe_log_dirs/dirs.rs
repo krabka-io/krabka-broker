@@ -1,6 +1,6 @@
 //! What the handler reports about a log directory itself: its absolute path,
-//! its filesystem capacity, whether it is cordoned, and the result entry an
-//! offline directory gets.
+//! its filesystem capacity, whether it is cordoned, and the result entry a
+//! directory gets when it cannot be described.
 //!
 //! These answers are about the directory rather than about the partitions
 //! inside it, and two of them are platform-specific, so they sit apart from the
@@ -9,12 +9,12 @@
 #[cfg(unix)]
 use rustix::fs;
 use {
-    crate::{codes, cordoned_log_dirs::CordonedLogDirs},
+    crate::cordoned_log_dirs::CordonedLogDirs,
     krabka_metadata::metadata_version,
     krabka_protocol::owned::describe_log_dirs_response::DescribeLogDirsResult,
     std::{
-        path,
-        path::{Path, PathBuf},
+        io,
+        path::{self, Path, PathBuf},
     },
 };
 
@@ -37,9 +37,13 @@ pub(super) fn cordoned_log_dirs_reported(
     }
 }
 
-pub(super) fn offline_result(dir: &Path) -> DescribeLogDirsResult {
+/// The entry for a directory that could not be described: its path and
+/// `error_code` only, as Kafka's `ReplicaManager.describeLogDirs` answers it.
+///
+/// Capacity is `-1`, the schema default, and there are no topics.
+pub(super) fn error_result(dir: &Path, error_code: i16) -> DescribeLogDirsResult {
     DescribeLogDirsResult {
-        error_code: codes::KAFKA_STORAGE_ERROR,
+        error_code,
         log_dir: absolute_path(dir),
         topics: Vec::new(),
         total_bytes: -1,
@@ -68,11 +72,15 @@ pub(super) fn absolute_path(dir: &Path) -> String {
 /// available to a non-root caller, so it respects the typical 5 % root reserve.
 ///
 /// Returns `(-1, -1)`, the Kafka "unknown" sentinel, when the platform has no
-/// `statvfs`, as on Windows, or when the syscall fails. The syscall fails when
-/// the path vanishes during a reconfigure, or on a permission error. The JVM
-/// admin tools tolerate `-1` and skip the column.
-pub(super) fn log_dir_capacity(dir: &Path) -> (i64, i64) {
-    disk_stats(dir).map_or((-1, -1), |stats| (stats.total, stats.usable))
+/// `statvfs`, as on Windows. The JVM admin tools tolerate `-1` and skip the
+/// column.
+///
+/// # Errors
+///
+/// The `statvfs` error, as when the path has vanished or cannot be reached.
+/// This is the `IOException` that Kafka's `Files.getFileStore` raises.
+pub(super) fn log_dir_capacity(dir: &Path) -> io::Result<(i64, i64)> {
+    Ok(disk_stats(dir)?.map_or((-1, -1), |stats| (stats.total, stats.usable)))
 }
 
 /// The capacity of a filesystem, in bytes.
@@ -82,8 +90,8 @@ struct DiskStats {
 }
 
 #[cfg(unix)]
-fn disk_stats(dir: &Path) -> Option<DiskStats> {
-    let stat = fs::statvfs(dir).ok()?;
+fn disk_stats(dir: &Path) -> io::Result<Option<DiskStats>> {
+    let stat = fs::statvfs(dir)?;
     // `f_frsize` is the fragment size in bytes; multiplying by the
     // block counts yields capacity in bytes. Both fields come back as
     // `u64`; clamp to `i64::MAX` rather than overflow on a hypothetical
@@ -95,11 +103,11 @@ fn disk_stats(dir: &Path) -> Option<DiskStats> {
     let usable = i64::try_from(stat.f_bavail)
         .unwrap_or(i64::MAX)
         .saturating_mul(frsize);
-    Some(DiskStats { total, usable })
+    Ok(Some(DiskStats { total, usable }))
 }
 
 #[cfg(not(unix))]
-fn disk_stats(_dir: &Path) -> Option<DiskStats> { None }
+fn disk_stats(_dir: &Path) -> io::Result<Option<DiskStats>> { Ok(None) }
 
 // Both tests below are unix-only, so the module itself is gated: on another
 // platform there would be no test left to use the `assert2` imports.
@@ -122,7 +130,7 @@ mod tests {
     #[test]
     fn log_dir_capacity_returns_sensible_unix_numbers() {
         let tmp = tempfile::tempdir().unwrap();
-        let (total, usable) = log_dir_capacity(tmp.path());
+        let (total, usable) = log_dir_capacity(tmp.path()).expect("statvfs");
         check!(
             total > 0,
             "total_bytes must be positive on unix tempdir, got {total}"
@@ -137,17 +145,15 @@ mod tests {
         );
     }
 
-    /// A vanished path gives the Kafka "unknown" sentinel and not the syscall
-    /// error.
-    ///
-    /// Operators see `-1`, and the JVM tool skips the column. The alternative
-    /// is a `KafkaStorageException`, much like a 500, which would block the
-    /// whole describe.
+    /// A vanished path is the syscall error, which the handler answers for
+    /// that directory alone, as Kafka answers the `IOException` from
+    /// `Files.getFileStore`.
     #[cfg(unix)]
     #[test]
-    fn log_dir_capacity_returns_minus_one_for_missing_path() {
+    fn log_dir_capacity_fails_for_missing_path() {
         let phantom = Path::new("/nonexistent/krabka/test/dir/should/not/exist");
-        assert!(log_dir_capacity(phantom) == (-1, -1));
+        let error = log_dir_capacity(phantom).expect_err("statvfs on a missing path");
+        assert!(error.kind() == io::ErrorKind::NotFound);
     }
 
     /// `Paths.get(logDir).toAbsolutePath` keeps a symbolic link and drops a
