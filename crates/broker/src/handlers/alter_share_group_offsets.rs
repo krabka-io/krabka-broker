@@ -197,13 +197,7 @@ pub async fn handle(
     // empty batch, so its own emptiness/existence checks (e.g.
     // `NON_EMPTY_GROUP`) still run.
     if actor_requests.is_empty() && !group_already_exists {
-        let resp = AlterShareGroupOffsetsResponse {
-            throttle_time_ms: 0,
-            error_code: codes::NONE,
-            responses,
-            ..Default::default()
-        };
-        return Ok(resp);
+        return Ok(ok_response(responses));
     }
 
     // The actor checks emptiness and applies the complete requested batch in
@@ -262,13 +256,19 @@ pub async fn handle(
         }
     }
 
-    let resp = AlterShareGroupOffsetsResponse {
+    Ok(ok_response(responses))
+}
+
+/// The top-level success response carrying each topic's per-partition codes.
+fn ok_response(
+    responses: Vec<AlterShareGroupOffsetsResponseTopic>,
+) -> AlterShareGroupOffsetsResponse {
+    AlterShareGroupOffsetsResponse {
         throttle_time_ms: 0,
         error_code: codes::NONE,
         responses,
         ..Default::default()
-    };
-    Ok(resp)
+    }
 }
 
 #[cfg(test)]
