@@ -1,0 +1,360 @@
+"""Unit tests for `jepsen.axl`."""
+
+load(
+    "./jepsen.axl",
+    "classpath_argv",
+    "detail",
+    "image_build_argv",
+    "manifest_problems",
+    "network_create_argv",
+    "node_names",
+    "node_remove_argv",
+    "node_run_argv",
+    "outcomes",
+    "render_report",
+    "resolve",
+    "select",
+    "selected_manifest",
+    "suite_argv",
+    "verdict",
+)
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+_ROOT = "/src/krabka"
+
+def _entry(name, args = [], requires = None, known_failure = None):
+    entry = {"name": name, "args": args}
+    if requires != None:
+        entry["requires"] = requires
+    if known_failure != None:
+        entry["known_failure"] = known_failure
+    return entry
+
+def _outcome(entry, status, detail = "", bad_error_types = [], error_types = [], store = ""):
+    return struct(
+        entry = entry,
+        status = status,
+        detail = detail,
+        bad_error_types = bad_error_types,
+        error_types = error_types,
+        store = store,
+    )
+
+def _test_a_well_formed_manifest_has_no_problems(_ctx):
+    document = {
+        "defaults": ["--safe", "--time-limit", "120", "--concurrency", "2n"],
+        "tests": [
+            _entry("assign-none", ["--sub-via", "assign"]),
+            _entry("assign-packet", ["--sub-via", "assign", "--nemesis", "packet"], ["netem"]),
+            _entry("subscribe-txn-partition", ["--sub-via", "subscribe", "--txn", "--nemesis", "partition"], None, "why it fails"),
+            _entry("clock-2", [], ["isolated-clock", "netem"]),
+        ],
+    }
+    check_eq("problems", manifest_problems(document), [])
+    check_eq("no defaults", manifest_problems({"tests": [_entry("assign-none")]}), [])
+
+def _test_manifest_problems_name_each_fault(_ctx):
+    cases = [
+        (
+            "defaults that are not a list",
+            {"defaults": "--safe", "tests": [_entry("a")]},
+            ["defaults must be a list of strings"],
+        ),
+        (
+            "defaults with a number",
+            {"defaults": ["--time-limit", 120], "tests": [_entry("a")]},
+            ["defaults must be a list of strings"],
+        ),
+        (
+            "no tests",
+            {"tests": []},
+            ["tests must be a non-empty list"],
+        ),
+        (
+            "tests that are not a list",
+            {"tests": {"name": "a"}},
+            ["tests must be a non-empty list"],
+        ),
+        (
+            "an entry that is not an object",
+            {"tests": ["assign-none"]},
+            ["tests[0] must be an object"],
+        ),
+        (
+            "a misspelled key",
+            {"tests": [{"name": "a", "args": [], "known_failures": "x"}]},
+            ["tests[0] has unknown key \"known_failures\""],
+        ),
+        (
+            "no name",
+            {"tests": [{"args": []}]},
+            ["tests[0] name must be lowercase letters, digits and -, got \"\""],
+        ),
+        (
+            "an uppercase name",
+            {"tests": [_entry("Assign-none")]},
+            ["tests[0] name must be lowercase letters, digits and -, got \"Assign-none\""],
+        ),
+        (
+            "a name with an underscore",
+            {"tests": [_entry("assign_none")]},
+            ["tests[0] name must be lowercase letters, digits and -, got \"assign_none\""],
+        ),
+        (
+            "a name that is not a string",
+            {"tests": [_entry(7)]},
+            ["tests[0] name must be lowercase letters, digits and -, got 7"],
+        ),
+        (
+            "no args",
+            {"tests": [{"name": "a"}]},
+            ["tests[0] args must be a list of strings"],
+        ),
+        (
+            "args as one string",
+            {"tests": [{"name": "a", "args": "--txn"}]},
+            ["tests[0] args must be a list of strings"],
+        ),
+        (
+            "args with a number",
+            {"tests": [_entry("a", ["--time-limit", 60])]},
+            ["tests[0] args must be a list of strings"],
+        ),
+        (
+            "requires as one string",
+            {"tests": [_entry("a", [], "netem")]},
+            ["tests[0] requires must be a list"],
+        ),
+        (
+            "an unknown requirement",
+            {"tests": [_entry("a", [], ["netem", "ntp"])]},
+            ["tests[0] requires \"ntp\", which is not one of netem, isolated-clock"],
+        ),
+        (
+            "an empty known failure",
+            {"tests": [_entry("a", [], None, " ")]},
+            ["tests[0] known_failure must be a non-empty string"],
+        ),
+        (
+            "a known failure that is not a string",
+            {"tests": [_entry("a", [], None, True)]},
+            ["tests[0] known_failure must be a non-empty string"],
+        ),
+        (
+            "the same name twice",
+            {"tests": [_entry("a", ["--txn"]), _entry("b"), _entry("a")]},
+            ["tests[2] repeats the name of tests[0]"],
+        ),
+        (
+            "every fault of one entry",
+            {"tests": [{"name": "A", "args": None, "requires": ["clock"], "known_failure": "", "nemesis": "kill"}]},
+            [
+                "tests[0] has unknown key \"nemesis\"",
+                "tests[0] name must be lowercase letters, digits and -, got \"A\"",
+                "tests[0] args must be a list of strings",
+                "tests[0] requires \"clock\", which is not one of netem, isolated-clock",
+                "tests[0] known_failure must be a non-empty string",
+            ],
+        ),
+    ]
+    for name, document, want in cases:
+        check_eq(name, manifest_problems(document), want)
+
+def _test_select_keeps_entries_under_any_prefix(_ctx):
+    entries = [_entry("assign-none"), _entry("assign-packet"), _entry("subscribe-txn-partition")]
+    check_eq("no filter", select(entries, []), entries)
+    check_eq("one prefix", select(entries, ["assign-"]), entries[:2])
+    check_eq("a whole name", select(entries, ["assign-packet"]), [entries[1]])
+    check_eq("two prefixes", select(entries, ["assign-none", "subscribe"]), [entries[0], entries[2]])
+    check_eq("no match", select(entries, ["poll"]), [])
+
+def _test_selected_manifest_keeps_the_defaults(_ctx):
+    entries = [_entry("assign-none", ["--sub-via", "assign"])]
+    document = {"defaults": ["--safe"], "tests": entries + [_entry("assign-packet")]}
+    check_eq("with defaults", selected_manifest(document, entries), {"defaults": ["--safe"], "tests": entries})
+    check_eq("without defaults", selected_manifest({"tests": entries}, entries), {"defaults": [], "tests": entries})
+
+def _test_resolve_keeps_absolute_paths(_ctx):
+    check_eq("relative", resolve(_ROOT, "target/release"), _ROOT + "/target/release")
+    check_eq("absolute", resolve(_ROOT, "/opt/krabka/bin"), "/opt/krabka/bin")
+
+def _test_node_names_count_from_one(_ctx):
+    check_eq("five", node_names(5), ["n1", "n2", "n3", "n4", "n5"])
+    check_eq("one", node_names(1), ["n1"])
+    check_eq("none", node_names(0), [])
+
+def _test_docker_argv_builds_and_starts_the_nodes(_ctx):
+    check_eq("image", image_build_argv(), [
+        "docker",
+        "build",
+        "-t",
+        "krabka-jepsen-node:latest",
+        "-f",
+        "tools/jepsen/node.Dockerfile",
+        "tools/jepsen",
+    ])
+    check_eq("network", network_create_argv(), ["docker", "network", "create", "jepsen-krabka"])
+    check_eq("remove", node_remove_argv(["n1", "n2", "n3"]), ["docker", "rm", "-f", "n1", "n2", "n3"])
+    check_eq("run", node_run_argv("krabka-jepsen-node:latest", "n3"), [
+        "docker",
+        "run",
+        "-d",
+        "--init",
+        "--name",
+        "n3",
+        "--hostname",
+        "n3",
+        "--network",
+        "jepsen-krabka",
+        "--cap-add",
+        "NET_ADMIN",
+        "krabka-jepsen-node:latest",
+    ])
+
+def _test_classpath_argv_writes_into_the_work_dir(_ctx):
+    check_eq("classpath", classpath_argv(_ROOT), [
+        "mvn",
+        "-q",
+        "-f",
+        "tools/jepsen/pom.xml",
+        "dependency:build-classpath",
+        "-Dmdep.outputFile=/src/krabka/target/jepsen/classpath.txt",
+    ])
+
+def _test_suite_argv_runs_the_harness_from_source(_ctx):
+    def _want(classpath):
+        return [
+            "java",
+            "-Xmx8g",
+            "-Djava.awt.headless=true",
+            "-cp",
+            classpath,
+            "clojure.main",
+            "-m",
+            "jepsen.krabka.core",
+            "suite",
+            "--manifest",
+            "/src/krabka/target/jepsen/selected.json",
+            "--results",
+            "/src/krabka/target/jepsen/results.json",
+            "--bin-dir",
+            "/src/krabka/target/jepsen/bin",
+            "--docker",
+            "--nodes",
+            "n1,n2,n3",
+        ]
+
+    check_eq(
+        "with a classpath",
+        suite_argv(_ROOT, "/m2/jepsen.jar:/m2/clojure.jar", "/src/krabka/target/jepsen/bin", ["n1", "n2", "n3"], "8g"),
+        _want("/src/krabka/tools/jepsen/src:/m2/jepsen.jar:/m2/clojure.jar"),
+    )
+    check_eq(
+        "with no classpath",
+        suite_argv(_ROOT, "", "/src/krabka/target/jepsen/bin", ["n1", "n2", "n3"], "8g"),
+        _want("/src/krabka/tools/jepsen/src"),
+    )
+    check_eq("heap", suite_argv(_ROOT, "", "/b", ["n1"], "512m")[1], "-Xmx512m")
+
+def _test_outcomes_match_results_by_name(_ctx):
+    entries = [_entry("assign-none"), _entry("assign-packet"), _entry("subscribe-txn-partition")]
+    results = [
+        {"name": "subscribe-txn-partition", "status": "invalid", "detail": "", "bad_error_types": ["G1c"], "error_types": ["G1c", "poll-skip"], "store": "store/krabka/20261031T120000"},
+        {"name": "assign-none", "status": "valid", "detail": "", "bad_error_types": [], "error_types": ["poll-skip"], "store": "store/krabka/20261031T110000"},
+        {"name": "assign-none", "status": "crashed", "detail": "a second result", "bad_error_types": [], "error_types": [], "store": ""},
+        {"name": "removed-entry", "status": "valid"},
+    ]
+    check_eq("outcomes", outcomes(entries, results), [
+        _outcome(entries[0], "valid", "", [], ["poll-skip"], "store/krabka/20261031T110000"),
+        _outcome(entries[1], "NOT RUN"),
+        _outcome(entries[2], "invalid", "", ["G1c"], ["G1c", "poll-skip"], "store/krabka/20261031T120000"),
+    ])
+
+def _test_outcomes_read_absent_fields_as_empty(_ctx):
+    entries = [_entry("assign-none")]
+    check_eq("sparse", outcomes(entries, [{"name": "assign-none", "status": "crashed", "detail": None}]), [
+        _outcome(entries[0], "crashed"),
+    ])
+
+def _test_verdicts_compare_status_with_expectation(_ctx):
+    cases = [
+        ("valid", None, "pass"),
+        ("invalid", None, "regression"),
+        ("unknown", None, "regression"),
+        ("crashed", None, "regression"),
+        ("NOT RUN", None, "regression"),
+        ("skipped", None, "skipped"),
+        ("valid", "loses writes", "fixed"),
+        ("invalid", "loses writes", "known failure"),
+        ("unknown", "loses writes", "known failure"),
+        ("crashed", "loses writes", "regression"),
+        ("NOT RUN", "loses writes", "regression"),
+        ("skipped", "loses writes", "skipped"),
+        ("", None, "regression"),
+    ]
+    for status, known_failure, want in cases:
+        outcome = _outcome(_entry("a", [], None, known_failure), status)
+        check_eq("%s with known_failure %r" % (status, known_failure), verdict(outcome), want)
+
+def _test_detail_explains_each_verdict(_ctx):
+    cases = [
+        ("pass", _outcome(_entry("a"), "valid", "ignored"), ""),
+        ("fixed", _outcome(_entry("a", [], None, "loses writes"), "valid", "ignored"), ""),
+        ("known failure", _outcome(_entry("a", [], None, "loses writes"), "invalid", "ignored", ["lost-write"]), "loses writes"),
+        ("regression", _outcome(_entry("a"), "invalid", "ignored", ["G0", "lost-write"]), "G0, lost-write"),
+        ("regression", _outcome(_entry("a"), "crashed", "\nConnectException: n3:9092\n\tat x"), "ConnectException: n3:9092"),
+        ("skipped", _outcome(_entry("a", [], ["netem"]), "skipped", "sch_netem is not loaded"), "sch_netem is not loaded"),
+    ]
+    for kind, outcome, want in cases:
+        check_eq("%s of %s" % (kind, outcome.status), detail(outcome, kind), want)
+
+def _test_render_report_counts_and_explains_each_row(_ctx):
+    results = [
+        _outcome(_entry("assign-none", ["--sub-via", "assign"]), "valid", "", [], ["poll-skip"]),
+        _outcome(_entry("assign-packet", ["--sub-via", "assign", "--nemesis", "packet"], ["netem"]), "skipped", "no | netem"),
+        _outcome(_entry("subscribe-txn", ["--sub-via", "subscribe", "--txn"], None, "G1c | under partitions"), "invalid", "", ["G1c"]),
+        _outcome(_entry("subscribe-kill", ["--nemesis", "kill|pause"]), "invalid", "", ["lost-write", "duplicate"]),
+        _outcome(_entry("subscribe-pause", [], None, "slow"), "valid"),
+        _outcome(_entry("subscribe-clock"), "NOT RUN"),
+    ]
+    check_eq("report", render_report("0.3.15", results), "\n".join([
+        "# Jepsen Kafka workload against krabka",
+        "",
+        "Jepsen `0.3.15`, `jepsen.tests.kafka`: 6 tests, 1 passed, 1 known failures, 2 regressions, 1 fixed, 1 skipped.",
+        "",
+        "| Test | Arguments | Result | Verdict | Detail |",
+        "| :--- | :--- | :--- | :--- | :--- |",
+        "| `assign-none` | `--sub-via assign` | valid | pass |  |",
+        "| `assign-packet` | `--sub-via assign --nemesis packet` | skipped | skipped | no \\| netem |",
+        "| `subscribe-txn` | `--sub-via subscribe --txn` | invalid | known failure | G1c \\| under partitions |",
+        "| `subscribe-kill` | `--nemesis kill\\|pause` | invalid | regression | lost-write, duplicate |",
+        "| `subscribe-pause` |  | valid | fixed |  |",
+        "| `subscribe-clock` |  | NOT RUN | regression |  |",
+    ]) + "\n")
+
+def _test_render_report_names_an_unknown_version(_ctx):
+    check_eq(
+        "totals",
+        render_report("", [_outcome(_entry("a"), "valid")]).splitlines()[2],
+        "Jepsen `unknown`, `jepsen.tests.kafka`: 1 tests, 1 passed, 0 known failures, 0 regressions, 0 fixed, 0 skipped.",
+    )
+
+jepsen_tests = suite("jepsen", [
+    _test_a_well_formed_manifest_has_no_problems,
+    _test_manifest_problems_name_each_fault,
+    _test_select_keeps_entries_under_any_prefix,
+    _test_selected_manifest_keeps_the_defaults,
+    _test_resolve_keeps_absolute_paths,
+    _test_node_names_count_from_one,
+    _test_docker_argv_builds_and_starts_the_nodes,
+    _test_classpath_argv_writes_into_the_work_dir,
+    _test_suite_argv_runs_the_harness_from_source,
+    _test_outcomes_match_results_by_name,
+    _test_outcomes_read_absent_fields_as_empty,
+    _test_verdicts_compare_status_with_expectation,
+    _test_detail_explains_each_verdict,
+    _test_render_report_counts_and_explains_each_row,
+    _test_render_report_names_an_unknown_version,
+])
+
+test_jepsen = suite_task(jepsen_tests)

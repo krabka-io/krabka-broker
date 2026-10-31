@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Jepsen harness for krabka: jepsen.tests.kafka run against a krabka
+  cluster. Maven only resolves the classpath; `aspect jepsen` runs the sources
+  under src/ with `java -cp`, so nothing is compiled ahead of time.
+
+    mvn -q -f tools/jepsen/pom.xml dependency:build-classpath -Dmdep.outputFile=cp.txt
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.krabka</groupId>
+  <artifactId>jepsen-krabka</artifactId>
+  <version>0.0.0</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <repositories>
+    <repository>
+      <id>clojars</id>
+      <url>https://repo.clojars.org/</url>
+    </repository>
+  </repositories>
+
+  <dependencies>
+    <!-- Jepsen comes first: Maven takes the first of two dependencies at the
+         same depth, and Jepsen's logback needs the SLF4J 2 API it brings. -->
+    <dependency>
+      <groupId>jepsen</groupId>
+      <artifactId>jepsen</artifactId>
+      <version>0.3.15</version>
+    </dependency>
+    <!-- Reads the suite manifest and writes the results `aspect jepsen`
+         reports from. -->
+    <dependency>
+      <groupId>org.clojure</groupId>
+      <artifactId>data.json</artifactId>
+      <version>2.5.1</version>
+    </dependency>
+    <!-- The client krabka's support matrix names for its JVM suites. -->
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-clients</artifactId>
+      <version>4.3.1</version>
+      <exclusions>
+        <exclusion>
+          <groupId>org.slf4j</groupId>
+          <artifactId>slf4j-api</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <sourceDirectory>src</sourceDirectory>
+    <testSourceDirectory>test</testSourceDirectory>
+  </build>
+</project>

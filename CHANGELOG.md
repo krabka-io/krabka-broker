@@ -23,6 +23,10 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+### Added
+
+- `aspect jepsen` runs Jepsen's Kafka workload, `jepsen.tests.kafka`, against a five-node krabka cluster in Docker containers. The harness in `tools/jepsen/` supplies the Kafka Java client, the database setup and Jepsen's combined nemesis; the workload, its generator and its checker are Jepsen's. The manifest `tools/jepsen/suite.json` crosses `assign` and `subscribe` consumers, with and without transactions, with network partitions, process kills, process pauses, packet faults and clock faults, and adds crashed clients and KIP-848's `consumer` group protocol. An entry the machine cannot run, such as packet faults on a kernel without `netem` or clock faults on containers that share the host's clock, is reported as skipped. The task writes `target/jepsen/report.md` and gives each entry one of the verdicts that `aspect kafka-system-tests` uses, plus skipped. [Jepsen Kafka workload](docs/jepsen.md) describes the task.
+
 ## [1.1.5] - 2026-10-31
 
 ### Fixed

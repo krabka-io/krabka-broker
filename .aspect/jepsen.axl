@@ -1,0 +1,406 @@
+"""Run Jepsen's Kafka workload against a krabka cluster in Docker containers.
+
+Jepsen's `jepsen.tests.kafka` workload sends records to a set of keys,
+polls them back through assigned or subscribed consumers, and optionally
+wraps both in transactions. A nemesis injects faults on the way: network
+partitions, packet loss and delay, process kills and pauses. The checker then
+looks at the whole history for lost writes, duplicates, out-of-order polls and
+transactional anomalies. This task runs that workload against krabka:
+
+1. It builds `krabka-broker` and `krabka-format` with Bazel into
+   `target/jepsen/bin/`, or it takes them from `--bin-dir`.
+2. It builds the node image from `tools/jepsen/node.Dockerfile`, or it takes
+   the image that `--image` names.
+3. It resolves the harness classpath with Maven from `tools/jepsen/pom.xml`.
+4. It starts the nodes, `n1` and up, on the Docker network `jepsen-krabka`.
+   Jepsen reaches each node with `docker exec` and `docker cp`, uploads the
+   binaries, and starts a broker there for each test.
+5. It runs the selected manifest entries with the Clojure harness under
+   `tools/jepsen/src/`, and compares each result with the entry's
+   expectation.
+
+    aspect jepsen
+    aspect jepsen --test assign-
+    aspect jepsen --test subscribe-txn --keep-nodes
+
+The manifest is `tools/jepsen/suite.json`. Each entry names one test and the
+harness options that make it. An entry that krabka does not pass yet has a
+`known_failure` that tells how it fails. The task fails when an entry
+expected to pass is invalid, unknown, crashes, or does not run. A known
+failure that passes is reported as fixed, so that its `known_failure` can go.
+
+The node containers have fixed names, `n1` to `n<nodes>`. So a run replaces
+any container with one of those names. The task removes the containers at the
+end, unless `--keep-nodes` keeps them for `docker exec`.
+"""
+
+MANIFEST = "tools/jepsen/suite.json"
+WORK_DIR = "target/jepsen"
+HARNESS_DIR = "tools/jepsen"
+NODE_DOCKERFILE = "tools/jepsen/node.Dockerfile"
+NODE_IMAGE = "krabka-jepsen-node:latest"
+NETWORK = "jepsen-krabka"
+HARNESS_NAMESPACE = "jepsen.krabka.core"
+
+# The binaries the harness uploads to each node, by the name it starts them
+# under.
+BINARIES = {
+    "//:broker_bin": "krabka-broker",
+    "//:format_bin": "krabka-format",
+}
+
+# What an entry can need from the machine it runs on. The harness skips an
+# entry whose requirement the machine does not meet, and says why.
+REQUIREMENTS = ["netem", "isolated-clock"]
+
+# Every status the harness writes to `results.json`.
+STATUSES = ["valid", "invalid", "unknown", "crashed", "skipped"]
+
+_ENTRY_KEYS = ["name", "args", "requires", "known_failure"]
+_NAME_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789-"
+
+def _is_string_list(value):
+    return type(value) == "list" and not [item for item in value if type(item) != "string"]
+
+def manifest_problems(document):
+    """Every way `document` falls short of a runnable manifest."""
+    problems = []
+    if not _is_string_list(document.get("defaults", [])):
+        problems.append("defaults must be a list of strings")
+    tests = document.get("tests", [])
+    if type(tests) != "list" or not tests:
+        problems.append("tests must be a non-empty list")
+        return problems
+    for index, entry in enumerate(tests):
+        where = "tests[%d]" % index
+        if type(entry) != "dict":
+            problems.append("%s must be an object" % where)
+            continue
+        for key in entry:
+            if key not in _ENTRY_KEYS:
+                problems.append("%s has unknown key %r" % (where, key))
+        name = entry.get("name", "")
+        if type(name) != "string" or not name or [c for c in name.elems() if c not in _NAME_CHARS]:
+            problems.append("%s name must be lowercase letters, digits and -, got %r" % (where, name))
+        if not _is_string_list(entry.get("args")):
+            problems.append("%s args must be a list of strings" % where)
+        requires = entry.get("requires", [])
+        if type(requires) != "list":
+            problems.append("%s requires must be a list" % where)
+        else:
+            for requirement in requires:
+                if requirement not in REQUIREMENTS:
+                    problems.append("%s requires %r, which is not one of %s" % (where, requirement, ", ".join(REQUIREMENTS)))
+        reason = entry.get("known_failure")
+        if reason != None and (type(reason) != "string" or not reason.strip()):
+            problems.append("%s known_failure must be a non-empty string" % where)
+        for earlier in range(index):
+            other = tests[earlier]
+            if type(other) == "dict" and other.get("name") == name:
+                problems.append("%s repeats the name of tests[%d]" % (where, earlier))
+    return problems
+
+def select(entries, filters):
+    """The entries whose name starts with one of `filters`; all of them when there are none."""
+    if not filters:
+        return entries
+    return [entry for entry in entries if any([entry["name"].startswith(prefix) for prefix in filters])]
+
+def selected_manifest(document, entries):
+    """The manifest the harness runs: the defaults, and only the selected entries."""
+    return {"defaults": document.get("defaults", []), "tests": entries}
+
+def resolve(root, path):
+    """`path` as an absolute path, relative to `root` unless it is absolute already."""
+    return path if path.startswith("/") else root + "/" + path
+
+def node_names(count):
+    """The Jepsen node names, `n1` to `n<count>`."""
+    return ["n%d" % number for number in range(1, count + 1)]
+
+def image_build_argv():
+    """The command that builds the node image, run at the repository root."""
+    return ["docker", "build", "-t", NODE_IMAGE, "-f", NODE_DOCKERFILE, HARNESS_DIR]
+
+def network_create_argv():
+    return ["docker", "network", "create", NETWORK]
+
+def node_remove_argv(names):
+    return ["docker", "rm", "-f"] + names
+
+def node_run_argv(image, name):
+    """The command that starts one idle node.
+
+    The broker is not running yet: Jepsen starts it for each test. `--init`
+    puts an init process at PID 1 that reaps a killed broker; without it the
+    broker stays a zombie and Jepsen's `killall -w` waits for it forever.
+    `NET_ADMIN` lets the nemesis change `iptables` and `tc` on the node. The
+    node gets no `SYS_TIME`: every container shares the host's clock, so the
+    harness refuses clock faults on Docker nodes.
+    """
+    return [
+        "docker",
+        "run",
+        "-d",
+        "--init",
+        "--name",
+        name,
+        "--hostname",
+        name,
+        "--network",
+        NETWORK,
+        "--cap-add",
+        "NET_ADMIN",
+        image,
+    ]
+
+def classpath_argv(root):
+    """The command that writes the harness classpath to `target/jepsen/classpath.txt`."""
+    return [
+        "mvn",
+        "-q",
+        "-f",
+        HARNESS_DIR + "/pom.xml",
+        "dependency:build-classpath",
+        "-Dmdep.outputFile=%s/%s/classpath.txt" % (root, WORK_DIR),
+    ]
+
+def suite_argv(root, classpath, bin_dir, names, heap):
+    """The command that runs the selected entries, from the harness sources."""
+    work = root + "/" + WORK_DIR
+    sources = root + "/" + HARNESS_DIR + "/src"
+    return [
+        "java",
+        "-Xmx" + heap,
+        "-Djava.awt.headless=true",
+        "-cp",
+        sources + ":" + classpath if classpath else sources,
+        "clojure.main",
+        "-m",
+        HARNESS_NAMESPACE,
+        "suite",
+        "--manifest",
+        work + "/selected.json",
+        "--results",
+        work + "/results.json",
+        "--bin-dir",
+        bin_dir,
+        "--docker",
+        "--nodes",
+        ",".join(names),
+    ]
+
+def outcomes(entries, results):
+    """Each entry paired with the harness result that ran it.
+
+    The harness names a result by the entry's name. An entry that no result
+    names did not run: the harness stopped before it reached the entry.
+    """
+    out = []
+    for entry in entries:
+        matched = None
+        for result in results:
+            if result.get("name") == entry["name"]:
+                matched = result
+                break
+        out.append(struct(
+            entry = entry,
+            status = matched.get("status", "") if matched else "NOT RUN",
+            detail = (matched.get("detail") or "") if matched else "",
+            bad_error_types = (matched.get("bad_error_types") or []) if matched else [],
+            error_types = (matched.get("error_types") or []) if matched else [],
+            store = (matched.get("store") or "") if matched else "",
+        ))
+    return out
+
+def verdict(outcome):
+    """`pass`, `regression`, `known failure`, `fixed` or `skipped`."""
+    if outcome.status == "skipped":
+        return "skipped"
+    if outcome.status not in ["valid", "invalid", "unknown"]:
+        return "regression"
+    valid = outcome.status == "valid"
+    if outcome.entry.get("known_failure") == None:
+        return "pass" if valid else "regression"
+    return "fixed" if valid else "known failure"
+
+def tally(verdicts, kind):
+    return len([v for v in verdicts if v == kind])
+
+def first_line(text):
+    for line in text.splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+def _cell(text):
+    return text.replace("|", "\\|")
+
+def detail(outcome, kind):
+    """What the report says about one outcome with the verdict `kind`."""
+    if kind == "known failure":
+        return outcome.entry.get("known_failure", "")
+    if kind == "regression":
+        if outcome.bad_error_types:
+            return ", ".join(outcome.bad_error_types)
+        return first_line(outcome.detail)
+    if kind == "skipped":
+        return first_line(outcome.detail)
+    return ""
+
+def render_report(jepsen_version, results):
+    """The Markdown report of one run: totals, then one row per entry."""
+    verdicts = [verdict(outcome) for outcome in results]
+    lines = [
+        "# Jepsen Kafka workload against krabka",
+        "",
+        "Jepsen `%s`, `jepsen.tests.kafka`: %d tests, %d passed, %d known failures, %d regressions, %d fixed, %d skipped." % (
+            jepsen_version or "unknown",
+            len(results),
+            tally(verdicts, "pass"),
+            tally(verdicts, "known failure"),
+            tally(verdicts, "regression"),
+            tally(verdicts, "fixed"),
+            tally(verdicts, "skipped"),
+        ),
+        "",
+        "| Test | Arguments | Result | Verdict | Detail |",
+        "| :--- | :--- | :--- | :--- | :--- |",
+    ]
+    for outcome, kind in zip(results, verdicts):
+        arguments = outcome.entry.get("args", [])
+        lines.append("| `%s` | %s | %s | %s | %s |" % (
+            outcome.entry["name"],
+            _cell("`%s`" % " ".join(arguments)) if arguments else "",
+            outcome.status,
+            kind,
+            _cell(detail(outcome, kind)),
+        ))
+    return "\n".join(lines) + "\n"
+
+def _run(ctx, argv, cwd):
+    return ctx.std.process.command(argv[0]).args(argv[1:]).current_dir(cwd).spawn().wait().code
+
+def _quiet(ctx, argv, cwd):
+    return ctx.std.process.command(argv[0]).args(argv[1:]).current_dir(cwd).stdout("null").stderr("null").spawn().wait().code
+
+def _output(ctx, argv, cwd):
+    result = ctx.std.process.command(argv[0]).args(argv[1:]).current_dir(cwd).stdout("piped").spawn().wait_with_output()
+    if result.status.code != 0:
+        fail("%s exited with %d" % (" ".join(argv), result.status.code))
+    return result.stdout.strip()
+
+def _must(ctx, argv, cwd):
+    code = _run(ctx, argv, cwd)
+    if code != 0:
+        fail("%s exited with %d" % (" ".join(argv), code))
+
+def _install_krabka(ctx, root, bin_dir):
+    _must(ctx, ["bazel", "build", "-c", "opt"] + list(BINARIES.keys()), root)
+    ctx.std.fs.create_dir_all(bin_dir)
+    for target, name in BINARIES.items():
+        built = _output(ctx, ["bazel", "cquery", "-c", "opt", "--output=files", target], root)
+        _must(ctx, ["install", "-m", "0755", root + "/" + built, bin_dir + "/" + name], root)
+
+def _start_nodes(ctx, root, image, names):
+    if _quiet(ctx, ["docker", "network", "inspect", NETWORK], root) != 0:
+        _must(ctx, network_create_argv(), root)
+    if not ctx.args.keep_nodes:
+        # Deferred before the first start, so that a node which fails to
+        # start does not leave the ones before it running.
+        ctx.defer(lambda: _quiet(ctx, node_remove_argv(names), root))
+    for name in names:
+        _quiet(ctx, node_remove_argv([name]), root)
+        _must(ctx, node_run_argv(image, name), root)
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.std.env.bazel_root_dir()
+    out = ctx.std.io.stdout
+    err = ctx.std.io.stderr
+    document = json.decode(ctx.std.fs.read_to_string(root + "/" + ctx.args.manifest))
+    problems = manifest_problems(document)
+    for problem in problems:
+        err.write("%s: %s\n" % (ctx.args.manifest, problem))
+    if problems:
+        return 2
+    entries = select(document["tests"], ctx.args.test)
+    if not entries:
+        err.write("no manifest entry starts with %s\n" % " or ".join(ctx.args.test))
+        return 2
+    if ctx.args.nodes < 1:
+        err.write("--nodes must be 1 or more, got %d\n" % ctx.args.nodes)
+        return 2
+
+    work = root + "/" + WORK_DIR
+    ctx.std.fs.create_dir_all(work)
+
+    if ctx.args.bin_dir:
+        bin_dir = resolve(root, ctx.args.bin_dir)
+        missing = [name for name in BINARIES.values() if not ctx.std.fs.exists(bin_dir + "/" + name)]
+        if missing:
+            err.write("%s has no %s\n" % (bin_dir, " or ".join(missing)))
+            return 2
+    else:
+        bin_dir = work + "/bin"
+        _install_krabka(ctx, root, bin_dir)
+
+    image = ctx.args.image
+    if not image:
+        _must(ctx, image_build_argv(), root)
+        image = NODE_IMAGE
+
+    # The classpath comes before the nodes, so that a Maven failure leaves no
+    # containers behind.
+    _must(ctx, classpath_argv(root), root)
+    classpath = ctx.std.fs.read_to_string(work + "/classpath.txt").strip()
+
+    names = node_names(ctx.args.nodes)
+    _start_nodes(ctx, root, image, names)
+
+    ctx.std.fs.write(work + "/selected.json", json.encode(selected_manifest(document, entries)) + "\n")
+    results_path = work + "/results.json"
+    if ctx.std.fs.exists(results_path):
+        ctx.std.fs.remove_file(results_path)
+
+    # The harness's exit status only says whether every test was valid; the
+    # expectation of each one is the manifest's, read back from results.json.
+    code = _run(ctx, suite_argv(root, classpath, bin_dir, names, ctx.args.heap), work)
+    if code != 0:
+        err.write("jepsen: the harness exited with %d\n" % code)
+
+    if not ctx.std.fs.exists(results_path):
+        fail("the harness wrote no %s, so no test has a result; see its output above" % results_path)
+    report = json.decode(ctx.std.fs.read_to_string(results_path))
+    results = outcomes(entries, report.get("results", []))
+    ctx.std.fs.write(work + "/report.md", render_report(report.get("jepsen_version", ""), results))
+
+    verdicts = [verdict(outcome) for outcome in results]
+    for outcome, kind in zip(results, verdicts):
+        if kind in ["regression", "fixed"]:
+            # Jepsen names the store relative to the harness's working
+            # directory, which is `work`.
+            where = " " + resolve(work, outcome.store) if outcome.store else ""
+            out.write("%s: %s %s%s\n" % (kind, outcome.status, outcome.entry["name"], where))
+    out.write("jepsen: %d passed, %d known failures, %d regressions, %d fixed, %d skipped\n" % (
+        tally(verdicts, "pass"),
+        tally(verdicts, "known failure"),
+        tally(verdicts, "regression"),
+        tally(verdicts, "fixed"),
+        tally(verdicts, "skipped"),
+    ))
+    out.write("report: %s/report.md\njepsen store: %s/store\n" % (work, work))
+    return 1 if "regression" in verdicts else 0
+
+jepsen = task(
+    summary = "Run Jepsen's Kafka workload against a krabka cluster in Docker",
+    implementation = _impl,
+    args = {
+        "manifest": args.string(default = MANIFEST, description = "The repository-relative test manifest."),
+        "test": args.string_list(description = "Run only the entries whose name starts with this prefix. Repeatable."),
+        "bin_dir": args.string(default = "", description = "Take krabka-broker and krabka-format from this directory instead of building them."),
+        "image": args.string(default = "", description = "Start the nodes from this existing image instead of building tools/jepsen/node.Dockerfile."),
+        "nodes": args.int(default = 5, description = "How many node containers to start."),
+        "heap": args.string(default = "8g", description = "The maximum heap of the Jepsen JVM, as -Xmx takes it."),
+        "keep_nodes": args.boolean(default = False, description = "Leave the node containers up afterwards."),
+    },
+)
