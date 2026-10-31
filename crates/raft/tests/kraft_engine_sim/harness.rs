@@ -20,7 +20,8 @@ pub use {
     krabka_raft::{
         ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax,
         kraft::{
-            KraftConfig, KraftController, KraftLog, NodeId, QuorumState, QuorumTimeouts,
+            KraftConfig, KraftController, KraftLog, KraftOpenConfig, NodeId, QuorumState,
+            QuorumTimeouts,
             snapshot_fetch::MetadataSnapshotFetchMax,
         },
     },
@@ -223,23 +224,17 @@ pub fn reopen_controller(
 ) -> KraftController {
     KraftController::open(
         dir,
-        node,
-        cid,
-        uuid::Uuid::nil(),
-        voter_set(ids),
-        uniform(STAGGERED_TIMEOUTS[usize::try_from(node.0 - 1).unwrap()]),
-        None,
-        ControllerFetchMissLimit::default(),
-        MetadataRaftCommandQueueCapacity::default(),
-        MetadataRaftFetchMax::default(),
-        Arc::new(net.as_peer(node)),
-        0,
-        prelude::bytes(0),
-        prelude::millis(0),
-        MetadataSnapshotFetchMax::default(),
-        metadata_log(),
-        Activation::default(),
-        Arc::new(krabka_raft::NoEventQueueRecorder),
+        KraftOpenConfig::builder()
+            .me(node)
+            .cluster_id(cid)
+            .directory_id(uuid::Uuid::nil())
+            .bootstrap_voters(voter_set(ids))
+            .timeouts(uniform(
+                STAGGERED_TIMEOUTS[usize::try_from(node.0 - 1).unwrap()],
+            ))
+            .peers(Arc::new(net.as_peer(node)))
+            .metadata_log(metadata_log())
+            .build(),
         |_| Ok(()),
     )
     .expect("reopen")

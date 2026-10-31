@@ -11,7 +11,7 @@ use {
             checkpoint::write_checkpoint,
             records::metadata_record_batch,
             test_support::{
-                ControllerOpenSetup, EngineSetup, await_leader, build_engine_only,
+                EngineSetup, await_leader, build_engine_only,
                 open_test_controller_with, voter_set,
             },
         },
