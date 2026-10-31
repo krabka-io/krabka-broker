@@ -750,6 +750,103 @@ mod wire_tests {
         restarted
     }
 
+    /// A request with two faults at once gets the code of the check that
+    /// `ClusterControlManager.registerBroker` runs first.
+    #[tokio::test]
+    async fn a_request_with_two_faults_gets_the_first_code_in_kafka_order() {
+        /// One way to break the registration of a broker the cluster has never
+        /// seen, applied on top of an otherwise valid request.
+        type Fault = fn(&mut BrokerRegistrationRequest);
+        fn wrong_cluster_id(req: &mut BrokerRegistrationRequest) {
+            req.cluster_id = "not-this-cluster".into();
+        }
+        fn no_listeners(req: &mut BrokerRegistrationRequest) { req.listeners.clear(); }
+        fn no_log_dirs(req: &mut BrokerRegistrationRequest) { req.log_dirs.clear(); }
+        fn unsupported_metadata_version(req: &mut BrokerRegistrationRequest) {
+            for feature in &mut req.features {
+                if feature.name == metadata_version::METADATA_VERSION_FEATURE {
+                    feature.max_supported_version = 0;
+                }
+            }
+        }
+        fn migrating_zk_broker(req: &mut BrokerRegistrationRequest) {
+            req.is_migrating_zk_broker = true;
+        }
+        let cases: [(&str, &[Fault], i16); 4] = [
+            (
+                "cluster id before listeners",
+                &[wrong_cluster_id, no_listeners],
+                codes::INCONSISTENT_CLUSTER_ID,
+            ),
+            (
+                "log dirs before features",
+                &[no_log_dirs, unsupported_metadata_version],
+                codes::INVALID_REGISTRATION,
+            ),
+            (
+                "features alone",
+                &[unsupported_metadata_version],
+                codes::UNSUPPORTED_VERSION,
+            ),
+            (
+                "zk migration before log dirs",
+                &[migrating_zk_broker, no_log_dirs],
+                codes::BROKER_ID_NOT_REGISTERED,
+            ),
+        ];
+
+        krabka_macros::broker_test_setup! {
+            bind(broker_handle, _dir, broker);
+            boot [start_broker_with_authorizer(Arc::new(fixture_authorizers::AllowAllAuthorizer))];
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !is_active_controller(&broker) {
+            assert!(
+                Instant::now() <= deadline,
+                "broker did not become controller leader"
+            );
+            time::sleep(Duration::from_millis(25)).await;
+        }
+        let image = broker.controller.current_image();
+        assert!(
+            image
+                .finalized_metadata_version()
+                .is_some_and(|level| level >= metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL),
+            "the log directory checks apply"
+        );
+        let valid = BrokerRegistrationRequest {
+            broker_id: 7,
+            cluster_id: image.cluster_id().to_string(),
+            incarnation_id: Uuid(uuid::Uuid::from_u128(0x7007).into_bytes()),
+            listeners: vec![Listener {
+                name: "PLAINTEXT".into(),
+                host: "broker-7".into(),
+                port: 9092,
+                security_protocol: 0,
+                ..Default::default()
+            }],
+            features: finalized_broker_features(&image),
+            log_dirs: vec![Uuid(uuid::Uuid::from_u128(7007).into_bytes())],
+            ..Default::default()
+        };
+        drop(image);
+        krabka_macros::request_test_identity! {
+            bind(principal, peer, ctx);
+            user ["broker"];
+            client ["broker-client"];
+        };
+        for (case, faults, code) in cases {
+            let mut request = valid.clone();
+            for fault in faults {
+                fault(&mut request);
+            }
+            let response = handle(&broker, request, V3, &ctx).await.expect(case);
+            assert2::check!(response == super::response(code, -1), "{case}");
+        }
+        drop(broker);
+        broker_handle.shutdown().await;
+    }
+
     /// A broker offering the epoch the cluster still holds for it restarted
     /// cleanly and keeps its membership.
     #[tokio::test]
