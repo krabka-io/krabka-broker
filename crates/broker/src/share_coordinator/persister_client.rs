@@ -127,9 +127,10 @@ impl SharePersister {
     ///
     /// # Errors
     ///
-    /// Returns [`BrokerError::Share`] if the local coordinator fences or
-    /// rejects the call, or [`BrokerError`] from the inter-broker dial or send
-    /// on the remote path. The caller logs and retries. It must not fail a
+    /// Returns [`BrokerError::SharePartitionState`] with the coordinator's
+    /// error code when the coordinator, local or remote, fences or rejects the
+    /// call, or [`BrokerError`] from the inter-broker dial or send on the
+    /// remote path. The caller logs and retries. It must not fail a
     /// heartbeat.
     // cargo-mutants: the `topics` payload is only sent on the follower->leader
     // remote path (`send_to_leader` dials a real inter-broker socket); only the
@@ -164,11 +165,12 @@ impl SharePersister {
                 )
                 .await
                 .map_err(|error| {
-                    BrokerError::Share(format!(
-                        "InitializeShareGroupState {group}:{topic_id}:{partition} failed (code {}): {}",
+                    refused(
+                        "InitializeShareGroupState",
+                        partition,
                         error.code(),
-                        error.row_message("initialize"),
-                    ))
+                        &error.row_message("initialize"),
+                    )
                 });
         }
 
@@ -762,8 +764,15 @@ fn check_partition_result<R: PartitionResults>(
 mod tests {
     use {
         super::*,
-        crate::codes::{
-            COORDINATOR_LOAD_IN_PROGRESS, FENCED_LEADER_EPOCH, FENCED_STATE_EPOCH, INVALID_REQUEST,
+        crate::{
+            codes::{
+                COORDINATOR_LOAD_IN_PROGRESS, FENCED_LEADER_EPOCH, FENCED_STATE_EPOCH,
+                INVALID_REQUEST,
+            },
+            handlers::test_support::{
+                StartedBroker, create_topic, share_topic_uuid, start_share_allow_all_no_audit,
+            },
+            share_coordinator::coordinator::message,
         },
         krabka_protocol::{
             owned::initialize_share_group_state_response::{
@@ -857,6 +866,50 @@ mod tests {
             })
             .collect();
         assert2::assert!(actual == expected);
+    }
+
+    /// A local `InitializeShareGroupState` that the coordinator refuses keeps
+    /// the coordinator code, as the remote path does. `AlterShareGroupOffsets`
+    /// answers that code per partition, so the answer must not depend on
+    /// whether this broker leads the `__share_group_state` partition.
+    #[tokio::test]
+    async fn a_refused_local_initialize_keeps_the_coordinator_code() {
+        let StartedBroker { broker, dir: _dir } = start_share_allow_all_no_audit().await;
+        let topic_id = share_topic_uuid(
+            create_topic()
+                .broker(&broker)
+                .client_id("share-persister-test")
+                .name("fenced")
+                .call()
+                .await,
+        );
+        let persister = broker
+            .broker_arc_for_test()
+            .group_coordinator
+            .share_persister()
+            .cloned()
+            .expect("share persister");
+
+        persister
+            .initialize("g", topic_id, 0, 5, Offset(0))
+            .await
+            .expect("first initialize");
+        let actual = match persister.initialize("g", topic_id, 0, 4, Offset(0)).await {
+            Err(BrokerError::SharePartitionState { code, message }) => Ok((code, message)),
+            other => Err(format!("{other:?}")),
+        };
+        broker.shutdown().await;
+
+        assert2::assert!(
+            actual
+                == Ok((
+                    FENCED_STATE_EPOCH,
+                    format!(
+                        "InitializeShareGroupState for partition 0 refused by the leader: {}",
+                        message::FENCED_STATE_EPOCH
+                    ),
+                ))
+        );
     }
 
     #[test]
