@@ -496,8 +496,6 @@ impl GroupState {
     }
 }
 
-/// Kafka's `ownsRevokedPartitions`: `true` when the heartbeat reports any of
-/// the `pending` partitions, or reports nothing at all.
 /// Kafka's `Assignment.equals`: the same partitions of the same topics,
 /// whatever their order.
 pub fn same_assignment(a: &Partitions, b: &Partitions) -> bool {
@@ -515,6 +513,8 @@ pub fn same_assignment(a: &Partitions, b: &Partitions) -> bool {
     set(a) == set(b)
 }
 
+/// Kafka's `ownsRevokedPartitions`: `true` when the heartbeat reports any of
+/// the `pending` partitions, or reports nothing at all.
 fn owns_any(owned: Option<&Partitions>, pending: &Partitions) -> bool {
     owned.is_none_or(|owned| {
         owned.iter().any(|(topic_id, parts)| {
