@@ -16,7 +16,7 @@ use {
         streams::actor::{StreamsGroupActorHandle, StreamsGroupActorMessage},
     },
     dashmap::{DashMap, Entry},
-    std::sync::Arc,
+    std::{hash::BuildHasher, sync::Arc},
     tokio::sync::mpsc::error::TrySendError,
 };
 
@@ -87,8 +87,17 @@ impl RegisteredActor for StreamsGroupActorHandle {
 /// actor is registered, so racing callers agree on one actor and only that
 /// caller spawns one. The fresh actor is hydrated with what `seed` returns
 /// before it is registered, so the seed is the first message it reads.
-fn get_or_spawn<H: RegisteredActor>(
-    map: &DashMap<String, Arc<H>>,
+///
+/// The guard is a write lock on the shard of `map` that holds `group_id`,
+/// and the lock is not reentrant. So `seed`, which reads the seed caches, runs
+/// before the guard is taken, and an undelivered seed is logged after it is
+/// released. Under the guard run only an atomic `is_closed` read, `spawn`, a
+/// non-blocking `try_seed` and the insert. Every `spawn` this module passes
+/// clones `Arc`s, builds an mpsc channel and hands an `async fn` future,
+/// unpolled, to `tokio::spawn`. None of that touches a registry map, takes a
+/// lock a registry caller holds, blocks or awaits.
+fn get_or_spawn<H: RegisteredActor, S: BuildHasher + Clone>(
+    map: &DashMap<String, Arc<H>, S>,
     group_id: &str,
     spawn: impl FnOnce() -> H,
     seed: impl FnOnce() -> Option<H::Seed>,
@@ -100,17 +109,19 @@ fn get_or_spawn<H: RegisteredActor>(
     {
         return Arc::clone(h.value());
     }
-    let entry = match map.entry(group_id.into()) {
+    let seed = seed();
+    let (spawned, undelivered) = match map.entry(group_id.into()) {
         Entry::Occupied(entry) if !entry.get().is_closed() => return Arc::clone(entry.get()),
-        entry => entry,
+        entry => {
+            let spawned = Arc::new(spawn());
+            let undelivered = seed.and_then(|seed| spawned.try_seed(seed).err());
+            entry.insert(Arc::clone(&spawned));
+            (spawned, undelivered)
+        }
     };
-    let spawned = Arc::new(spawn());
-    if let Some(seed) = seed()
-        && let Err(error) = spawned.try_seed(seed)
-    {
+    if let Some(error) = undelivered {
         tracing::warn!(group_id, %error, "dropped the seed of a respawned group actor");
     }
-    entry.insert(Arc::clone(&spawned));
     spawned
 }
 
@@ -404,14 +415,21 @@ mod tests {
         },
         assert2::{assert, check},
         std::{
+            hash::{BuildHasherDefault, Hasher},
             iter,
             sync::{
                 Barrier, Mutex,
                 atomic::{AtomicBool, AtomicUsize, Ordering},
+                mpsc as std_mpsc,
             },
             thread,
+            time::Duration,
         },
-        tokio::sync::{mpsc, oneshot},
+        tokio::{
+            runtime,
+            sync::{mpsc, oneshot},
+            task::{self, JoinSet},
+        },
     };
 
     #[tokio::test]
@@ -648,6 +666,191 @@ mod tests {
             check!(spawns.load(Ordering::SeqCst) == 1);
             assert!(registered.seeds() == vec![7]);
         }
+    }
+
+    /// A hasher that sends every key to the same `DashMap` shard, so a test
+    /// can race keys whose entries contend for one shard lock.
+    #[derive(Debug, Default)]
+    struct OneShard;
+
+    impl Hasher for OneShard {
+        fn finish(&self) -> u64 { 0 }
+
+        fn write(&mut self, _: &[u8]) {}
+    }
+
+    /// Runs `work` on its own thread and fails the test when it does not
+    /// finish within `limit`. The deadline is checked on this thread, so it
+    /// fires even when every thread `work` started is blocked on a lock.
+    fn finishes_within(limit: Duration, work: impl FnOnce() + Send + 'static) {
+        let (done, finished) = std_mpsc::channel();
+        let worker = thread::spawn(move || {
+            work();
+            done.send(()).unwrap_or_default();
+        });
+        check!(finished.recv_timeout(limit).is_ok(), "the racers hung");
+        worker.join().expect("the racers finish without a panic");
+    }
+
+    #[test]
+    fn respawns_racing_removals_on_one_shard_spawn_one_actor_per_key_without_hanging() {
+        const KEYS: usize = 4;
+        const CALLERS_PER_KEY: usize = 6;
+        const CHURNERS: usize = 4;
+        finishes_within(Duration::from_secs(60), || {
+            for _ in 0..100 {
+                let map = DashMap::with_hasher(BuildHasherDefault::<OneShard>::default());
+                let keys: Vec<String> = (0..KEYS).map(|k| format!("contended-{k}")).collect();
+                for key in &keys {
+                    map.insert(key.clone(), Arc::new(FakeActor::closed()));
+                }
+                let spawns: Vec<AtomicUsize> =
+                    iter::repeat_with(AtomicUsize::default).take(KEYS).collect();
+                let start = Barrier::new(KEYS * CALLERS_PER_KEY + CHURNERS);
+
+                let answers: Vec<(usize, Arc<FakeActor>)> = thread::scope(|scope| {
+                    // Churners remove, kill and respawn keys of their own on
+                    // the same shard while the callers race.
+                    for churner in 0..CHURNERS {
+                        let (map, start) = (&map, &start);
+                        scope.spawn(move || {
+                            start.wait();
+                            let key = format!("churn-{churner}");
+                            for _ in 0..20 {
+                                let actor = get_or_spawn(map, &key, FakeActor::default, || Some(1));
+                                actor.closed.store(true, Ordering::SeqCst);
+                                drop(get_or_spawn(map, &key, FakeActor::default, || Some(1)));
+                                map.remove(&key);
+                            }
+                        });
+                    }
+                    let callers: Vec<_> = (0..KEYS * CALLERS_PER_KEY)
+                        .map(|caller| caller % KEYS)
+                        .map(|k| {
+                            let (map, start, spawns, key) = (&map, &start, &spawns, &keys[k]);
+                            scope.spawn(move || {
+                                start.wait();
+                                let spawn = || {
+                                    spawns[k].fetch_add(1, Ordering::SeqCst);
+                                    FakeActor::default()
+                                };
+                                (k, get_or_spawn(map, key, spawn, || Some(7)))
+                            })
+                        })
+                        .collect();
+                    callers
+                        .into_iter()
+                        .map(|caller| caller.join().expect("the caller finishes"))
+                        .collect()
+                });
+
+                for (k, key) in keys.iter().enumerate() {
+                    let registered = Arc::clone(map.get(key).expect("a registered actor").value());
+                    check!(spawns[k].load(Ordering::SeqCst) == 1, "{key}");
+                    check!(
+                        answers
+                            .iter()
+                            .filter(|(answered, _)| *answered == k)
+                            .all(|(_, actor)| Arc::ptr_eq(actor, &registered)),
+                        "{key}"
+                    );
+                    assert!(registered.seeds() == vec![7], "{key}");
+                }
+            }
+        });
+    }
+
+    /// Asks the actor behind `tx` to stop and waits for its mailbox to close.
+    /// Another racer may have stopped it already.
+    async fn stop_if_running<M>(
+        tx: &mpsc::Sender<M>,
+        shutdown: impl FnOnce(oneshot::Sender<()>) -> M,
+    ) {
+        let (reply, stopping) = oneshot::channel();
+        if tx.send(shutdown(reply)).await.is_ok() {
+            // An actor that exits without replying has stopped all the same.
+            stopping.await.unwrap_or_default();
+        }
+        tx.closed().await;
+    }
+
+    #[test]
+    fn real_actors_racing_respawns_and_removals_stay_registered_without_hanging() {
+        const KEYS: usize = 16;
+        finishes_within(Duration::from_secs(60), || {
+            let runtime = runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .enable_all()
+                .build()
+                .expect("a test runtime");
+            runtime.block_on(async {
+                let coord = make_coord();
+                let keys: Vec<String> = (0..KEYS).map(|k| format!("g{k}")).collect();
+                let mut racers = JoinSet::new();
+                for (k, key) in keys.iter().cloned().enumerate() {
+                    for _ in 0..4 {
+                        let (coord, key) = (Arc::clone(&coord), key.clone());
+                        racers.spawn(async move {
+                            for _ in 0..10 {
+                                drop(coord.get_or_create_consumer(&key));
+                                drop(coord.get_or_create_share(&key));
+                                drop(coord.get_or_create_streams(&key));
+                                drop(coord.find_live_streams(&key));
+                                task::yield_now().await;
+                            }
+                        });
+                    }
+                    // A killer stops each kind's actor, as a failed log
+                    // write does, and every other key also loses its
+                    // registry entries now and then.
+                    let (coord, key) = (Arc::clone(&coord), key.clone());
+                    racers.spawn(async move {
+                        for _ in 0..5 {
+                            let consumer = coord.get_or_create_consumer(&key);
+                            stop_if_running(&consumer.tx, GroupActorMessage::Shutdown).await;
+                            let share = coord.get_or_create_share(&key);
+                            stop_if_running(&share.tx, ShareGroupActorMessage::Shutdown).await;
+                            let streams = coord.get_or_create_streams(&key);
+                            stop_if_running(&streams.tx, StreamsGroupActorMessage::Shutdown).await;
+                            if k % 2 == 1 {
+                                coord.groups.remove(&key);
+                                coord.share_groups.remove(&key);
+                                coord.streams_groups.remove(&key);
+                            }
+                        }
+                    });
+                }
+                while let Some(racer) = racers.join_next().await {
+                    racer.expect("a racer finishes without a panic");
+                }
+
+                for key in &keys {
+                    let consumer = coord.get_or_create_consumer(key);
+                    check!(!consumer.tx.is_closed(), "{key}");
+                    check!(
+                        coord.find(key).is_some_and(|r| Arc::ptr_eq(&r, &consumer)),
+                        "{key}"
+                    );
+                    let share = coord.get_or_create_share(key);
+                    check!(!share.tx.is_closed(), "{key}");
+                    check!(
+                        coord
+                            .find_share(key)
+                            .is_some_and(|r| Arc::ptr_eq(&r, &share)),
+                        "{key}"
+                    );
+                    let streams = coord.get_or_create_streams(key);
+                    check!(!streams.tx.is_closed(), "{key}");
+                    check!(
+                        coord
+                            .find_streams(key)
+                            .is_some_and(|r| Arc::ptr_eq(&r, &streams)),
+                        "{key}"
+                    );
+                }
+                coord.shutdown_all().await;
+            });
+        });
     }
 
     /// What the registry holds for the group when `respawn_closed_streams`
