@@ -1,7 +1,7 @@
 //! Adapt a typed extension operation to its raw wire entry point.
 
 use {
-    crate::meta::{compact, edit_native_body, function_signature},
+    crate::meta::{compact, edit_native_body, function_signature, is_concrete_async},
     moxy::{
         ast::{FnParam, FromMeta, Meta, ParseError, PatIdent, PatType, Pattern},
         token::{LitStr, Span, Spanner, TokenStream},
@@ -76,13 +76,7 @@ fn adapter(meta: &TokenStream, item: &TokenStream) -> Result<Adapter, ParseError
     let level = LitStr::new(&level, metadata.span());
     let function = function_signature(item)?;
     if function.ident != "handle"
-        || function.asyncness.is_none()
-        || function.constness.is_some()
-        || function.safety.is_some()
-        || function.abi.is_some()
-        || !function.generics.params.is_empty()
-        || function.generics.where_clause.is_some()
-        || function.params.inner.variadic.is_some()
+        || !is_concrete_async(&function)
         || !function
             .output
             .as_type()

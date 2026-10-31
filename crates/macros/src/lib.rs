@@ -496,6 +496,7 @@ mod krabka_env;
 mod legacy_fixtures;
 mod membership_defaults;
 mod meta;
+mod metadata_log_delegate;
 mod metrics;
 mod model_type;
 mod named_acl_gates;
@@ -1032,7 +1033,7 @@ pub fn metadata_log_delegate(
     meta: TokenStream,
     item: TokenStream,
 ) -> Result<TokenStream, ParseError> {
-    fixtures::metadata_log_delegate(meta, item)
+    metadata_log_delegate::expand(meta, item)
 }
 
 /// Generate the finished remote-segment lookup assertions shared by manager fixtures.

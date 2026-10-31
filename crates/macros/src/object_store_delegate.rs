@@ -1,7 +1,7 @@
 //! Explicit delegation of an object-store wrapper's unchanged methods.
 
 use {
-    crate::meta::{ItemBody, body_group, item_body},
+    crate::meta::{ItemBody, body_group, declares_fn, item_body},
     moxy::{
         ast::ParseError,
         token::{Ident, Span, TokenStream, TokenTree},
@@ -119,12 +119,7 @@ pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, Parse
     let group = body_group(&mut tokens, body)?;
     let existing = Vec::from(group.tokens.clone());
     for name in names {
-        if existing.windows(2).any(|pair| {
-            matches!(pair, [keyword, item] if keyword.is_keyword_fn()
-                && item
-                    .as_ident()
-                    .is_some_and(|item| item.text() == name.text()))
-        }) {
+        if declares_fn(&existing, name.text()) {
             return Err(ParseError::new(
                 name.span(),
                 "delegated method already has an implementation",
