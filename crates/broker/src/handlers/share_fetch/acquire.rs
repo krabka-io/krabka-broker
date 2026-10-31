@@ -318,6 +318,46 @@ fn log_start_moved_past_spso(err: &BrokerError) -> bool {
     matches!(err, BrokerError::Log(LogError::OffsetTooLow { .. }))
 }
 
+/// Runs [`grow_and_acquire`], and recovers once when the log start offset has
+/// moved past the SPSO.
+///
+/// `args` builds the inputs of each attempt. The records of the attempt that
+/// counts land in `fresh`; a retry starts it over.
+async fn acquire_with_log_start_recovery<'a>(
+    broker: &Broker,
+    part: &Arc<Partition>,
+    topic_id: uuid::Uuid,
+    st: &mut AcquisitionState,
+    fresh: &mut PartitionData,
+    args: impl Fn() -> GrowAndAcquireArgs<'a>,
+) -> Result<i64, BrokerError> {
+    let outcome = grow_and_acquire(st, fresh, args()).await;
+    if !outcome.as_ref().is_err_and(log_start_moved_past_spso) {
+        return outcome;
+    }
+    // Kafka's `ShareFetchUtils.processFetchResponse` /
+    // `SharePartition.updateCacheAndOffsets`: the log start offset moved past
+    // the SPSO. Archive the Available/Deferred records below it, move the
+    // SPSO (and the SPEO, if the window had not grown that far). An Acquired
+    // record below the new start stays locked until it times out.
+    let floor = match broker.diskless_read.as_deref().filter(|_| part.diskless) {
+        Some(reader) => diskless_logical_start(reader, part, topic_id).await,
+        None => Ok(part.log_start_offset()),
+    }?;
+    st.advance_past_log_start(floor);
+    *fresh = PartitionData::default();
+    // Retry immediately so a repaired floor with readable records does not
+    // park for the full long-poll timeout.
+    let retried = grow_and_acquire(st, fresh, args()).await;
+    if retried.as_ref().is_err_and(log_start_moved_past_spso) {
+        // A concurrent floor move is retried on the next pass. The local-only
+        // WAL trim frontier cannot establish the logical deletion floor.
+        *fresh = PartitionData::default();
+        return Ok(0);
+    }
+    retried
+}
+
 /// Runs one acquire pass over the pending partitions that this broker can
 /// lead.
 ///
@@ -507,36 +547,15 @@ async fn acquire_pass(
         // This pass's records land in `fresh`, then join what earlier passes
         // put in the row.
         let mut fresh = PartitionData::default();
-        let mut outcome = grow_and_acquire(&mut st, &mut fresh, grow_and_acquire_args()).await;
-        if outcome.as_ref().is_err_and(log_start_moved_past_spso) {
-            // Kafka's `ShareFetchUtils.processFetchResponse` /
-            // `SharePartition.updateCacheAndOffsets`: the log start offset
-            // moved past the SPSO. Archive the Available/Deferred records
-            // below it, move the SPSO (and the SPEO, if the window had not
-            // grown that far). An Acquired record below the new start
-            // stays locked until it times out.
-            let floor = match broker.diskless_read.as_deref().filter(|_| part.diskless) {
-                Some(reader) => diskless_logical_start(reader, &part, p.topic_id).await,
-                None => Ok(part.log_start_offset()),
-            };
-            match floor {
-                Ok(floor) => {
-                    st.advance_past_log_start(floor);
-                    fresh = PartitionData::default();
-                    // Retry immediately so a repaired floor with readable
-                    // records does not park for the full long-poll timeout.
-                    outcome = grow_and_acquire(&mut st, &mut fresh, grow_and_acquire_args()).await;
-                    if outcome.as_ref().is_err_and(log_start_moved_past_spso) {
-                        // A concurrent floor move is retried on the next
-                        // pass. The local-only WAL trim frontier cannot
-                        // establish the logical deletion floor.
-                        fresh = PartitionData::default();
-                        outcome = Ok(0);
-                    }
-                }
-                Err(error) => outcome = Err(error),
-            }
-        }
+        let outcome = acquire_with_log_start_recovery(
+            broker,
+            &part,
+            p.topic_id,
+            &mut st,
+            &mut fresh,
+            grow_and_acquire_args,
+        )
+        .await;
         let acquired_count = match outcome {
             Ok(count) => count,
             Err(err) => {
