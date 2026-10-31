@@ -489,6 +489,33 @@ mod tests {
         }
     }
 
+    /// An RSM whose copy always fails, and whose rollback delete fails too
+    /// when `refuse_delete` is set, as when the object store itself is down.
+    struct FailingCopyRsm {
+        refuse_delete: bool,
+    }
+
+    #[krabka_macros::missing_remote_reads]
+    impl RemoteStorageManager for FailingCopyRsm {
+        fn copy_log_segment_data(
+            &self,
+            _metadata: &RemoteLogSegmentMetadata,
+            _data: &LogSegmentData,
+        ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
+            Err(RemoteStorageError::InvalidArgument("boom".into()))
+        }
+
+        fn delete_log_segment_data(
+            &self,
+            _metadata: &RemoteLogSegmentMetadata,
+        ) -> Result<(), RemoteStorageError> {
+            if self.refuse_delete {
+                return Err(RemoteStorageError::Backend("store unavailable".into()));
+            }
+            Ok(())
+        }
+    }
+
     /// Returns caller-selected metadata without touching storage.
     struct ReturningRsm(Option<CustomMetadata>);
 
@@ -716,6 +743,40 @@ mod tests {
                     deletes: 1,
                 }
         );
+    }
+
+    /// A failed copy's rollback deletes its partial objects, and that delete
+    /// counts as one delete request, and as one delete error when the backend
+    /// refuses it. The metadata is dropped either way, so a refused delete
+    /// leaves objects behind that only the error counter reports.
+    #[yare::parameterized(
+        the_delete_goes = { false, 0 },
+        the_backend_refuses_it = { true, 1 },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_failed_copy_rollback_records_its_delete_request_and_error(
+        refuse_delete: bool,
+        errors: u64,
+    ) {
+        let rsm: Arc<dyn RemoteStorageManager> = Arc::new(FailingCopyRsm { refuse_delete });
+        let owned = fixtures::owned_tier_resources();
+
+        let outcome = copy_one(
+            &owned.tier(&rsm),
+            &tp(),
+            CopyIdentity {
+                broker_id: 1,
+                leader_epoch: LeaderEpoch(0),
+                fence: &FloorFence(None),
+            },
+            &synth_export().call(),
+            ChainPosition::Unchained,
+        )
+        .await;
+
+        check!(outcome == CopyOutcome::Failed);
+        check!(owned.rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
+        check!(owned.delete_counts() == (1, errors));
     }
 
     #[tokio::test]
