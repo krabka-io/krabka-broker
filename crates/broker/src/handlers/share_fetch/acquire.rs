@@ -369,6 +369,29 @@ async fn apply_piggybacked_acks(
     Ok(())
 }
 
+/// The remote tier (KIP-405) that `p`'s reads fall back to, when this broker
+/// has a remote reader and the row names its topic.
+fn tiered_source<'a>(
+    broker: &'a Broker,
+    p: &PendingPartition,
+    read_committed: bool,
+) -> Option<TieredSource<'a>> {
+    broker
+        .remote_reader
+        .as_deref()
+        .zip(p.topic_name.as_ref())
+        .map(|(reader, topic)| TieredSource {
+            reader,
+            metrics: &broker.metrics,
+            tp: krabka_remote_storage::TopicIdPartition::new(
+                p.topic_id,
+                topic.clone(),
+                p.partition_index,
+            ),
+            read_committed,
+        })
+}
+
 /// The highest offset an acquire pass may materialize or read on `part`.
 ///
 /// Under read_committed, never surface records past the last stable offset:
@@ -571,20 +594,7 @@ async fn acquire_pass(
             min_one_batch,
             remaining_records,
         } = partition_read_budget(max_records, max_bytes, total, p.partition_max_bytes, share);
-        let tier = broker
-            .remote_reader
-            .as_deref()
-            .zip(p.topic_name.as_ref())
-            .map(|(reader, topic)| TieredSource {
-                reader,
-                metrics: &broker.metrics,
-                tp: krabka_remote_storage::TopicIdPartition::new(
-                    p.topic_id,
-                    topic.clone(),
-                    p.partition_index,
-                ),
-                read_committed,
-            });
+        let tier = tiered_source(broker, p, read_committed);
         let grow_and_acquire_args = || GrowAndAcquireArgs {
             part: &part,
             upper,
