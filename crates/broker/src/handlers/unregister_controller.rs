@@ -40,6 +40,7 @@ use {
             ApiVersion, DispatchResult, RequestContext, audit_admin_success, cluster_alter_denied,
             encode_response,
             forward_to_controller::{forward_if_not_controller, wrong_controller_message},
+            submit_failure::wrong_controller_write_message,
         },
     },
     bytes::Bytes,
@@ -170,18 +171,35 @@ async fn submit(broker: &Broker, controller_id: i32) -> Unregistration {
             error_code: codes::NONE,
             message: Some(String::new()),
         },
-        Err(RaftError::NotLeader { current_leader }) => Unregistration {
-            error_code: codes::NOT_CONTROLLER,
-            message: Some(wrong_controller_message(current_leader)),
-        },
-        Err(RaftError::LeaderUnknown | RaftError::UncommittedTail) => Unregistration {
-            error_code: codes::NOT_CONTROLLER,
-            message: Some(wrong_controller_message(None)),
-        },
+        Err(error) => {
+            let known_leader = *broker.controller.watch_leader().borrow();
+            submit_failure(&error, controller_id, known_leader)
+        }
+    }
+}
+
+/// The answer to a failed `UnregisterControllerRecord` write for
+/// `controller_id`, given the raft leader this node knows when it failed.
+fn submit_failure(
+    error: &RaftError,
+    controller_id: i32,
+    known_leader: Option<NodeId>,
+) -> Unregistration {
+    match error {
+        // Trunk's `ControllerWriteEvent.run` throws
+        // `newWrongControllerException(latestController())`, which names the
+        // raft leader this controller knows: the redirect of a lost
+        // leadership, and the known leader for a tail not committed yet.
+        RaftError::NotLeader { .. } | RaftError::LeaderUnknown | RaftError::UncommittedTail => {
+            Unregistration {
+                error_code: codes::NOT_CONTROLLER,
+                message: wrong_controller_write_message(error, known_leader),
+            }
+        }
         // The image refuses the record only when the registration went away
         // between the check above and the append.
-        Err(RaftError::Metadata(_)) => not_registered(controller_id),
-        Err(error) => Unregistration {
+        RaftError::Metadata(_) => not_registered(controller_id),
+        error => Unregistration {
             error_code: codes::UNKNOWN_SERVER_ERROR,
             message: Some(error.to_string()),
         },

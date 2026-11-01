@@ -69,6 +69,7 @@ use {
             denied_topics, encode_response,
             forward_to_controller::{
                 forward_if_not_controller, guarded_operation_on_source, is_active_controller,
+                wrong_controller_message,
             },
             partition_materialization::PartitionMaterialization,
             submit_failure::{GuardedFailure, classify_guarded},
@@ -96,10 +97,27 @@ krabka_macros::decoded_dispatch! {
             return answer;
         }
         if !is_active_controller(broker) {
-            return encode_response(&request_refusal(&req, codes::NOT_CONTROLLER, None), version);
+            let known_leader = *broker.controller.watch_leader().borrow();
+            return encode_response(&inactive_controller_refusal(&req, known_leader), version);
         }
         encode_response(&handle(broker, req, version, ctx).await?, version)
     }
+}
+
+/// The answer of a node that is not the active controller to a request that
+/// reached it without forwarding: every topic refused with `NOT_CONTROLLER`.
+///
+/// Kafka's `ControllerApis.handleCreatePartitions` answers it through
+/// `CreatePartitionsRequest.getErrorResponse`, which sets `ApiError.message()`
+/// on every topic: the text of
+/// `ControllerExceptions.newWrongControllerException`, which names
+/// `known_leader`, the raft leader this node knows of.
+fn inactive_controller_refusal(
+    req: &CreatePartitionsRequest,
+    known_leader: Option<NodeId>,
+) -> CreatePartitionsResponse {
+    let message = wrong_controller_message(known_leader);
+    request_refusal(req, codes::NOT_CONTROLLER, Some(&message))
 }
 
 fn request_refusal(
@@ -238,8 +256,13 @@ async fn grow_topic(
     image: Arc<MetadataImage>,
 ) -> Result<CreatePartitionsTopicResult, RaftError> {
     let broker = growth.broker;
+    // Kafka's inactive controller throws `newWrongControllerException` for
+    // `latestController()`, the raft leader it knows of, so the refusal
+    // redirects to that leader rather than claiming none is known.
     if !is_active_controller(broker) {
-        return Err(RaftError::LeaderUnknown);
+        return Err(RaftError::NotLeader {
+            current_leader: *broker.controller.watch_leader().borrow(),
+        });
     }
     if denied_topics(
         broker.config.authorizer.as_ref(),
@@ -376,7 +399,9 @@ fn reconcile_locked_growth_charge(
 }
 
 /// The row for topic `name` from the result of its guarded growth: the grown
-/// row, or the error code of the failure.
+/// row, or the error code of the failure. A `NOT_CONTROLLER` row carries the
+/// message `CreatePartitionsRequest.getErrorResponse` takes from Kafka's
+/// `newWrongControllerException`.
 fn growth_outcome(
     name: String,
     attempt: Result<Result<CreatePartitionsTopicResult, RaftError>, Elapsed>,
@@ -390,6 +415,7 @@ fn growth_outcome(
             CreatePartitionsTopicResult {
                 name,
                 error_code: failure.code(codes::UNKNOWN_SERVER_ERROR),
+                error_message: failure.not_controller_message(),
                 ..Default::default()
             }
         }

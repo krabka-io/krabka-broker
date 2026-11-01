@@ -18,7 +18,8 @@ use {
         RESOURCE_TYPE_TOPIC, RecordBuilders, broker_configs::broker_config_records,
         client_metrics_configs::client_metrics_config_record, empty_resource_response,
         group_configs::group_config_record, guarded_resource_response, resource_preamble_refusal,
-        resource_records, topic_configs::topic_config_record, validate_resource_shape,
+        resource_records, resource_refusal, topic_configs::topic_config_record,
+        validate_resource_shape,
     },
     crate::{
         broker::Broker,
@@ -64,13 +65,7 @@ pub(super) async fn process_resource(
         )
     })
     .await
-    .unwrap_or_else(|code| AlterConfigsResourceResponse {
-        resource_type: resource.resource_type,
-        resource_name: resource.resource_name,
-        error_code: code,
-        error_message: None,
-        ..Default::default()
-    })
+    .unwrap_or_else(|refusal| resource_refusal(&resource, refusal))
 }
 
 async fn process_resource_once(

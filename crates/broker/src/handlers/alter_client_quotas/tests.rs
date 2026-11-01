@@ -13,7 +13,7 @@ use {
         authorizer as fixture_authorizers,
         broker::{Broker, BrokerHandle},
         codes::INVALID_REQUEST,
-        handlers::RequestContext,
+        handlers::{RequestContext, submit_failure::test_support::guarded_failure},
         test_support::{
             FakeMetadataSource, grant_cluster_operation, peer, principal,
             start_broker_with_authorizer as start_broker,
@@ -365,6 +365,45 @@ async fn submit_replans_after_an_intervening_quota_commit() {
             == vec![
                 alice_quota("producer_byte_rate", Some(200.0)),
                 alice_quota("consumer_byte_rate", None),
+            ]
+    );
+}
+
+/// A controller that is not active fails the whole request.
+/// `ControllerApis.handleAlterClientQuotas` hands the exception to
+/// `RequestHandlerHelper.handleError`, and
+/// `AlterClientQuotasRequest.getErrorResponse` writes
+/// `Errors.forException(e).message()` on every entry: `NOT_CONTROLLER`'s
+/// default text, whichever leader the controller knows. The plan and append
+/// are guarded, so `UncommittedTail` retries until the deadline and ends as
+/// `REQUEST_TIMED_OUT`; it has no `NOT_CONTROLLER` row here.
+#[yare::parameterized(
+    not_leader = { || RaftError::NotLeader { current_leader: Some(NodeId(2)) } },
+    not_leader_without_hint = { || RaftError::NotLeader { current_leader: None } },
+    leader_unknown = { || RaftError::LeaderUnknown },
+)]
+#[test_macro(tokio::test)]
+async fn a_controller_that_is_not_active_answers_kafkas_default_text(error: fn() -> RaftError) {
+    let alice = part("user", Some("alice"));
+    let req = request(
+        vec![
+            entry(vec![alice], vec![op("producer_byte_rate", 1024.0)]),
+            entry(vec![part("client-id", None)], vec![op(
+                "consumer_byte_rate",
+                2048.0,
+            )]),
+        ],
+        false,
+    );
+    let message = Some("This is not the correct controller for this cluster.".to_owned());
+
+    let entries = guarded_entries(&req, guarded_failure(error).await);
+
+    assert2::assert!(
+        entries
+            == vec![
+                expected_entry(alice, NOT_CONTROLLER, message.clone()),
+                expected_entry(part("client-id", None), NOT_CONTROLLER, message),
             ]
     );
 }

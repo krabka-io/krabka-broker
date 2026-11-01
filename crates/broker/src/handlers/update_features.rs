@@ -17,7 +17,7 @@ use {
         update_features_request::UpdateFeaturesRequest,
         update_features_response::UpdateFeaturesResponse,
     },
-    krabka_raft::RaftError,
+    krabka_raft::{NodeId, RaftError},
 };
 
 mod java_order;
@@ -26,6 +26,8 @@ mod response;
 mod upgrade_type;
 mod validate;
 
+#[cfg(test)]
+mod not_controller_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -43,6 +45,7 @@ use {
             RequestContext, audit_admin_success, audit_resource, cluster_alter_denied,
             forward_to_controller::{
                 ends_guarded_attempt, guarded_operation_on_source, to_active_controller_or_handle,
+                wrong_controller_message,
             },
         },
         metadata_source::MetadataSource,
@@ -59,23 +62,37 @@ use {
 /// did not admit before the deadline.
 const REQUEST_TIMED_OUT_MESSAGE: &str = "The request timed out.";
 
-/// `NOT_CONTROLLER`'s answer when the write reaches a node that has lost the
-/// quorum leadership.
-const NOT_CONTROLLER_MESSAGE: &str = "This broker is not the active controller.";
+/// `NOT_CONTROLLER`'s answer when the write reaches a node that is not the
+/// active controller, `leader` being the leader the refusal redirected to.
+///
+/// Kafka's `ControllerApis.handleUpdateFeatures` answers a failed
+/// `updateFeatures` through `requestHelper.handleError`, and
+/// `UpdateFeaturesRequest.getErrorResponse` builds
+/// `UpdateFeaturesResponse.createWithErrors(ApiError.fromThrowable(e), ...)`:
+/// the top-level code and the message of
+/// `ControllerExceptions.newWrongControllerException`, with no per-feature
+/// results.
+fn not_controller_error(leader: Option<NodeId>) -> UpdateFeaturesResponse {
+    top_level_error(codes::NOT_CONTROLLER, &wrong_controller_message(leader))
+}
 
 /// The answer that refuses a `kraft.version` upgrade the Raft layer would not
 /// take, or `None` when it would. The real upgrade and its `validate_only`
 /// dry run share this mapping, so a dry run reports what the request would.
+///
+/// Raft's `NotLeaderException` reaches Kafka's client as
+/// `newWrongControllerException` through `EventHandlerExceptionInfo.fromInternal`,
+/// so a lost leadership answers [`not_controller_error`].
 fn kraft_upgrade_refusal(
     outcome: Result<krabka_raft::ReconfigOutcome, RaftError>,
 ) -> Option<UpdateFeaturesResponse> {
     match outcome {
         Ok(krabka_raft::ReconfigOutcome::Committed) => None,
-        Ok(krabka_raft::ReconfigOutcome::NotLeader { .. })
-        | Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => Some(top_level_error(
-            codes::NOT_CONTROLLER,
-            NOT_CONTROLLER_MESSAGE,
-        )),
+        Ok(krabka_raft::ReconfigOutcome::NotLeader { leader })
+        | Err(RaftError::NotLeader {
+            current_leader: leader,
+        }) => Some(not_controller_error(leader)),
+        Err(RaftError::LeaderUnknown) => Some(not_controller_error(None)),
         // `LeaderState.maybeAppendUpgradedKRaftVersion` refuses with an
         // `InvalidUpdateVersionException`, which Kafka answers as the failed
         // feature's error.
@@ -283,10 +300,10 @@ async fn apply_updates(
             codes::REQUEST_TIMED_OUT,
             REQUEST_TIMED_OUT_MESSAGE,
         )),
-        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => Err(top_level_error(
-            codes::NOT_CONTROLLER,
-            NOT_CONTROLLER_MESSAGE,
-        )),
+        Ok(Err(RaftError::NotLeader { current_leader })) => {
+            Err(not_controller_error(current_leader))
+        }
+        Ok(Err(RaftError::LeaderUnknown)) => Err(not_controller_error(None)),
         Ok(Err(error)) => {
             tracing::warn!(%error, "UpdateFeatures: submit_change failed");
             Err(top_level_error(

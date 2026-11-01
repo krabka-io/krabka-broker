@@ -229,7 +229,8 @@ pub async fn handle(
             .collect();
         if let Err(e) = broker.controller.submit_change(records).await {
             tracing::warn!(error = %e, "create-acls submit failed");
-            apply_submit_error(&mut results, &to_submit, &e);
+            let known_leader = *broker.controller.watch_leader().borrow();
+            apply_submit_error(&mut results, &to_submit, &e, known_leader);
         }
     }
 

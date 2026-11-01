@@ -41,11 +41,12 @@ use {
             ApiVersion, RequestContext, audit_admin_success, audit_resource, cluster_alter_denied,
             decode_request, encode_response,
             forward_to_controller::{
-                guarded_operation_on_source, is_active_controller, to_active_controller,
+                guarded_operation_on_source, is_active_controller, not_active_controller_refusal,
+                to_active_controller,
             },
             offline_replicas::live_brokers,
             stamp_unset,
-            submit_failure::{GuardedFailure, classify_guarded},
+            submit_failure::{GuardedFailure, classify_guarded, wrong_controller_write_message},
             submit_failure_code,
         },
         leader_election::ElectionType,
@@ -73,6 +74,8 @@ mod unclean_gate;
 
 #[cfg(test)]
 mod guarded_failure_tests;
+#[cfg(test)]
+mod not_controller_tests;
 #[cfg(test)]
 mod tests;
 
@@ -106,8 +109,9 @@ pub async fn dispatch(
         return answer;
     }
     if !is_active_controller(broker) {
+        let known_leader = *broker.controller.watch_leader().borrow();
         return encode_response(
-            &request_refusal(&request, codes::NOT_CONTROLLER, None),
+            &not_active_controller_refusal(&request, known_leader, request_refusal),
             version,
         );
     }
@@ -140,6 +144,11 @@ pub async fn handle(
 
 /// The response from the result of the guarded election: the election's own
 /// response, or a whole-request refusal with the error code of the failure.
+///
+/// A lost leadership carries the message of Kafka's
+/// `ControllerExceptions.newWrongControllerException`, which names the leader
+/// the refusal redirected to; `ElectLeadersRequest.getErrorResponse` keeps it
+/// on every row.
 fn election_outcome(
     req: &ElectLeadersRequest,
     result: Result<Result<ElectLeadersResponse, RaftError>, Elapsed>,
@@ -149,7 +158,8 @@ fn election_outcome(
         Err(failure) => {
             let message = match &failure {
                 GuardedFailure::Failed(error) => Some(error.to_string()),
-                GuardedFailure::TimedOut | GuardedFailure::NotController => None,
+                GuardedFailure::NotController { .. } => failure.not_controller_message(),
+                GuardedFailure::TimedOut => None,
             };
             request_refusal(
                 req,
@@ -253,13 +263,7 @@ async fn elect_leaders_once(
                 batch.audit_applied(broker, ctx, Some(&error.to_string()));
                 return Err(error);
             }
-            Err(error) => Some((
-                match error {
-                    RaftError::NotLeader { .. } | RaftError::LeaderUnknown => codes::NOT_CONTROLLER,
-                    _ => submit_failure_code(&error, codes::COORDINATOR_NOT_AVAILABLE),
-                },
-                format!("submit failed: {error}"),
-            )),
+            Err(error) => Some(admission_failure(&error)),
         };
         if let Some((code, failure)) = failure {
             tracing::warn!(error = %failure, "elect-leaders submit refused or failed");
@@ -305,6 +309,29 @@ async fn elect_leaders_once(
         replica_election_results: by_topic,
         ..Default::default()
     })
+}
+
+/// The code and row message of an election batch whose append failed with
+/// `error`, one that ends the request rather than retries it.
+///
+/// A lost or unknown leader answers `NOT_CONTROLLER` with the message of
+/// Kafka's `ControllerExceptions.newWrongControllerException`, which
+/// `EventHandlerExceptionInfo.fromInternal` makes of a raft
+/// `NotLeaderException` and `ElectLeadersRequest.getErrorResponse` keeps on
+/// every row. An uncommitted tail is retried before it gets here, so no known
+/// leader is needed. Every other failure keeps its `submit failed` text.
+fn admission_failure(error: &RaftError) -> (i16, String) {
+    match error {
+        RaftError::NotLeader { .. } | RaftError::LeaderUnknown => (
+            codes::NOT_CONTROLLER,
+            wrong_controller_write_message(error, None)
+                .unwrap_or_else(|| format!("submit failed: {error}")),
+        ),
+        _ => (
+            submit_failure_code(error, codes::COORDINATOR_NOT_AVAILABLE),
+            format!("submit failed: {error}"),
+        ),
+    }
 }
 
 /// Admission can await durable audit storage; append only against its original image.

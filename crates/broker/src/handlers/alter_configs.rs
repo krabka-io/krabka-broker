@@ -35,6 +35,8 @@ mod resource;
 mod topic_configs;
 
 #[cfg(test)]
+mod guarded_failure_tests;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;
@@ -62,7 +64,10 @@ use {
                 RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
             },
             encode_response,
-            forward_to_controller::{guarded_operation_on_source, to_active_controller_or_handle},
+            forward_to_controller::{
+                guarded_operation_on_source, to_active_controller_or_handle,
+                wrong_controller_message,
+            },
             response_encoding::{ErrorRow as _, ResourceErrorRow},
         },
         topic_policy::{TopicPolicy, check as check_topic_policy},
@@ -78,7 +83,7 @@ use {
         sync::Arc,
         time::Duration,
     },
-    tokio::time::Instant,
+    tokio::time::{Instant, error::Elapsed},
 };
 
 pub(super) trait ResourceErrorRequestResource {
@@ -166,6 +171,20 @@ pub(super) fn ordered_resource_responses<Row>(mut indexed: Vec<(usize, Row)>) ->
     indexed.into_iter().map(|(_, row)| row).collect()
 }
 
+/// The row of `resource` refused with `refusal`, its error code and message.
+pub(super) fn resource_refusal<Resource, Row>(
+    resource: &Resource,
+    (error_code, error_message): (i16, Option<String>),
+) -> Row
+where
+    Resource: ResourceErrorRequestResource,
+    Row: ResourceErrorRow,
+{
+    let mut row: Row = empty_resource_response(resource);
+    row.set_error(error_code, error_message);
+    row
+}
+
 pub(super) fn resource_error_rows<'a, Resource, Row>(
     resources: impl Iterator<Item = &'a Resource>,
     code: i16,
@@ -176,11 +195,7 @@ where
     Row: ResourceErrorRow,
 {
     resources
-        .map(|resource| {
-            let mut row: Row = empty_resource_response(resource);
-            row.set_error(code, message.map(str::to_owned));
-            row
-        })
+        .map(|resource| resource_refusal(resource, (code, message.map(str::to_owned))))
         .collect()
 }
 
@@ -285,15 +300,13 @@ pub(super) fn group_config_record_from(
 /// still current, so a conflicting commit replans every operation.
 ///
 /// # Errors
-/// Returns the code the resource answers with when the retry gives up:
-/// `REQUEST_TIMED_OUT` at the deadline, `NOT_CONTROLLER` when this node is no
-/// longer the leader, and `UNKNOWN_SERVER_ERROR`, logged under `operation`, for
-/// any other submit failure.
+/// Returns the code and message the resource answers with when the retry
+/// gives up. See [`guarded_resource_outcome`].
 pub(super) async fn guarded_resource_response<Row, Attempt, Fut>(
     broker: &Broker,
     operation: &str,
     attempt: Attempt,
-) -> Result<Row, i16>
+) -> Result<Row, (i16, Option<String>)>
 where
     Attempt: FnMut(Arc<MetadataImage>) -> Fut,
     Fut: Future<Output = Result<Row, RaftError>> + Send,
@@ -304,13 +317,43 @@ where
         attempt,
     )
     .await;
+    guarded_resource_outcome(result, operation)
+}
+
+/// The row of a guarded resource alter, or the code and message the resource
+/// answers with when the retry gave up.
+///
+/// Kafka's `ControllerApis.handleLegacyAlterConfigs` and
+/// `handleIncrementalAlterConfigs` answer a failed write through
+/// `requestHelper.handleError`, whose `AlterConfigsRequest.getErrorResponse`
+/// and `IncrementalAlterConfigsRequest.getErrorResponse` set
+/// `ApiError.message()` on every resource row. A controller that is not
+/// active fails the write with `ControllerExceptions.newWrongControllerException`,
+/// so a `NOT_CONTROLLER` row carries [`wrong_controller_message`] for the
+/// leader the refusal redirected to.
+///
+/// # Errors
+/// Returns `REQUEST_TIMED_OUT` at the deadline, `NOT_CONTROLLER` with Kafka's
+/// message when this node is no longer the leader, and
+/// `UNKNOWN_SERVER_ERROR`, logged under `operation`, for any other submit
+/// failure.
+pub(super) fn guarded_resource_outcome<Row>(
+    result: Result<Result<Row, RaftError>, Elapsed>,
+    operation: &str,
+) -> Result<Row, (i16, Option<String>)> {
     match result {
         Ok(Ok(row)) => Ok(row),
-        Err(_) => Err(REQUEST_TIMED_OUT),
-        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => Err(NOT_CONTROLLER),
+        Err(_) => Err((REQUEST_TIMED_OUT, None)),
+        Ok(Err(RaftError::NotLeader { current_leader })) => Err((
+            NOT_CONTROLLER,
+            Some(wrong_controller_message(current_leader)),
+        )),
+        Ok(Err(RaftError::LeaderUnknown)) => {
+            Err((NOT_CONTROLLER, Some(wrong_controller_message(None))))
+        }
         Ok(Err(error)) => {
             tracing::error!(%error, "{operation} submit_change failed");
-            Err(UNKNOWN_SERVER_ERROR)
+            Err((UNKNOWN_SERVER_ERROR, None))
         }
     }
 }
