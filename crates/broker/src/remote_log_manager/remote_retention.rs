@@ -5,7 +5,10 @@
 //! A write-once archive evicts nothing, so the pass ends before it lists.
 
 use {
-    super::{NO_BYTES, archive::ArchiveMode, delete::delete_segment_metered},
+    super::{
+        NO_BYTES, archive::ArchiveMode, copy_segment::CopiesInFlight,
+        delete::delete_segment_metered,
+    },
     crate::metrics::RemoteTierPath,
     krabka_ids::LeaderEpoch,
     krabka_log::{DeliveryPolicy, LogConfig, Offset, SegmentExport},
@@ -99,23 +102,13 @@ pub fn remote_retention_eviction_set(
     // Kafka's `remainingBreachedSize`: zero when `retention.bytes` is unset
     // or not exceeded.
     let size_debt = retention_size.map_or(NO_BYTES, |budget| (total - budget).max(NO_BYTES));
-    // Kafka's `RetentionTimeData` exists only while `cleanupUntilMs = now -
-    // retention.ms` is non-negative, and a segment breaches it when
-    // `maxTimestampMs < cleanupUntilMs`, which is `now - maxTimestampMs >
-    // retention.ms`. Both sides are compared as `Time`, so a window at the top
-    // of the range converts the same way on either side.
-    let window = retention.filter(|window| Time::from_millis(now_ms) >= *window);
+    let window = time_window(retention, now_ms);
     let facts: Vec<RemoteRetentionSegment> = finished
         .iter()
         .map(|md| RemoteRetentionSegment {
             blocked: protection.first_blocked == Some(md.remote_log_segment_id().id),
-            log_start_breached: matches!(
-                deleted_below,
-                Some(floor) if md.end_offset() < floor.0
-            ),
-            time_expired: window.is_some_and(|window| {
-                Time::from_millis(now_ms.saturating_sub(md.max_timestamp_ms())) > window
-            }),
+            log_start_breached: below_floor(md, deleted_below),
+            time_expired: time_expired(md, window, now_ms),
             size: segment_size(md).bytes_u64(),
         })
         .collect();
@@ -125,6 +118,62 @@ pub fn remote_retention_eviction_set(
         size_debt.bytes_u64(),
     );
     finished.iter().take(len).cloned().collect()
+}
+
+/// Kafka's `RetentionTimeData`: the `retention.ms` window, which exists only
+/// while `cleanupUntilMs = now - retention.ms` is non-negative.
+fn time_window(retention: Option<Time>, now_ms: i64) -> Option<Time> {
+    retention.filter(|window| Time::from_millis(now_ms) >= *window)
+}
+
+/// Kafka's `isSegmentBreachedByRetentionTime`: `maxTimestampMs <
+/// cleanupUntilMs`, which is `now - maxTimestampMs > retention.ms`. Both sides
+/// are compared as `Time`, so a window at the top of the range converts the
+/// same way on either side.
+fn time_expired(md: &RemoteLogSegmentMetadata, window: Option<Time>, now_ms: i64) -> bool {
+    window.is_some_and(|window| {
+        Time::from_millis(now_ms.saturating_sub(md.max_timestamp_ms())) > window
+    })
+}
+
+/// The log-start breach: `md` lies wholly below the floor somebody deleted up
+/// to.
+fn below_floor(md: &RemoteLogSegmentMetadata, deleted_below: Option<Offset>) -> bool {
+    matches!(deleted_below, Some(floor) if md.end_offset() < floor.0)
+}
+
+/// Kafka's `deleteLogSegmentsDueToLeaderEpochCacheTruncation` test: every
+/// leader epoch of `md` lies below `earliest_epoch`.
+fn outside_lineage(md: &RemoteLogSegmentMetadata, earliest_epoch: LeaderEpoch) -> bool {
+    md.segment_leader_epochs()
+        .keys()
+        .all(|epoch| *epoch < earliest_epoch)
+}
+
+/// The copies left in `CopySegmentStarted` that the topic no longer keeps:
+/// each breaches the log-start floor, time retention, or the leader's epoch
+/// lineage. `stalled` holds no copy whose upload still runs.
+///
+/// Kafka's `RLMExpirationTask` puts a `COPY_SEGMENT_STARTED` segment through
+/// the same checks as a finished one. Size retention is left out: the size
+/// debt counts only finished bytes, as Kafka's `buildRetentionSizeData` does,
+/// and a stalled copy whose offsets size retention removed falls below the
+/// floor that removal raised, on the next pass.
+fn stalled_copy_eviction_set(
+    stalled: Vec<RemoteLogSegmentMetadata>,
+    window: Option<Time>,
+    deleted_below: Option<Offset>,
+    earliest_epoch: Option<LeaderEpoch>,
+    now_ms: i64,
+) -> Vec<RemoteLogSegmentMetadata> {
+    stalled
+        .into_iter()
+        .filter(|md| {
+            below_floor(md, deleted_below)
+                || time_expired(md, window, now_ms)
+                || earliest_epoch.is_some_and(|earliest| outside_lineage(md, earliest))
+        })
+        .collect()
 }
 
 /// Whether the archive enforces `floor`: no finished segment lies wholly
@@ -164,11 +213,7 @@ pub fn epoch_cache_eviction_set(
     };
     segments
         .iter()
-        .filter(|md| {
-            md.segment_leader_epochs()
-                .keys()
-                .all(|epoch| *epoch < earliest_epoch)
-        })
+        .filter(|md| outside_lineage(md, earliest_epoch))
         .cloned()
         .collect()
 }
@@ -278,6 +323,13 @@ pub struct RemoteRetentionOutcome {
 /// without moving [`RemoteRetentionOutcome::log_start`], as Kafka moves no log
 /// start for them either: the read path already serves nothing from them.
 ///
+/// A copy left in `CopySegmentStarted` goes the same way once it breaches the
+/// log-start floor, time retention or the epoch lineage; see
+/// [`stalled_copy_eviction_set`]. A copy whose upload still runs on this
+/// broker ([`super::RemoteTier::copies_in_flight`]) is left alone, as Kafka
+/// skips a segment in `segmentIdsBeingCopied`, since a delete racing the
+/// upload could leave objects the upload writes after it.
+///
 /// The pass runs even when neither retention setting is set, because the
 /// log-start breach is an axis of its own: a `DeleteRecords` that moved the
 /// floor has to free the remote bytes below it.
@@ -311,8 +363,12 @@ pub async fn remote_retention_pass(
     let retention = log_config.retention;
     let retention_size = log_config.retention_size;
 
-    let (finished, abandoned) = match rlmm.list_remote_log_segments(tp) {
-        Ok(list) => finished_and_abandoned(list),
+    let ListedSegments {
+        finished,
+        mut abandoned,
+        stalled,
+    } = match rlmm.list_remote_log_segments(tp) {
+        Ok(list) => listed_segments(list, tier.copies_in_flight),
         Err(e) => {
             warn!(topic = %tp.topic, partition = tp.partition, error = %e,
                   "remote-log-manager: failed to list remote segments for retention");
@@ -327,6 +383,15 @@ pub async fn remote_retention_pass(
             return RemoteRetentionOutcome::default();
         }
     };
+    // A stalled copy the topic no longer keeps joins the abandoned deletes:
+    // nothing reads it either, so it runs last and moves no floor.
+    abandoned.extend(stalled_copy_eviction_set(
+        stalled,
+        time_window(retention, now_ms),
+        deleted_below,
+        earliest_epoch,
+        now_ms,
+    ));
     // Kafka's `highestOffsetInRemoteStorage`: the last offset the finished
     // copies reach.
     let highest_offset_in_remote_storage = finished
@@ -422,29 +487,51 @@ pub async fn remote_retention_pass(
     outcome
 }
 
-/// Splits a listing into its `CopySegmentFinished` segments and its
-/// `DeleteSegmentStarted` segments, both sorted by `start_offset`.
-///
-/// The second list is the deletes somebody started and nobody finished. No
-/// rollback of this broker's is in flight while the list is read, because a
-/// partition's copy pass ends before its retention pass begins, so each of
-/// them is a delete to retry.
-fn finished_and_abandoned(
+/// One listing, split by what remote retention may do with each segment.
+/// Every list is sorted by `start_offset`.
+struct ListedSegments {
+    /// `CopySegmentFinished`: the segments the retention axes measure.
+    finished: Vec<RemoteLogSegmentMetadata>,
+    /// `DeleteSegmentStarted`: the deletes somebody started and nobody
+    /// finished. No rollback of this broker's is in flight while the list is
+    /// read, because a partition's copy pass ends before its retention pass
+    /// begins, so each of them is a delete to retry.
+    abandoned: Vec<RemoteLogSegmentMetadata>,
+    /// `CopySegmentStarted` with no upload running on this broker: copies
+    /// that will never finish.
+    stalled: Vec<RemoteLogSegmentMetadata>,
+}
+
+/// Split `listed` into [`ListedSegments`]. A `CopySegmentStarted` segment
+/// whose upload is in `in_flight` is in no list.
+fn listed_segments(
     listed: Vec<RemoteLogSegmentMetadata>,
-) -> (Vec<RemoteLogSegmentMetadata>, Vec<RemoteLogSegmentMetadata>) {
+    in_flight: &CopiesInFlight,
+) -> ListedSegments {
     let mut finished = Vec::new();
     let mut abandoned = Vec::new();
+    let mut stalled = Vec::new();
     for md in listed {
         match md.state() {
             RemoteLogSegmentState::CopySegmentFinished => finished.push(md),
             RemoteLogSegmentState::DeleteSegmentStarted => abandoned.push(md),
             RemoteLogSegmentState::CopySegmentStarted
+                if !in_flight.contains(md.remote_log_segment_id().id) =>
+            {
+                stalled.push(md);
+            }
+            RemoteLogSegmentState::CopySegmentStarted
             | RemoteLogSegmentState::DeleteSegmentFinished => {}
         }
     }
-    finished.sort_by_key(RemoteLogSegmentMetadata::start_offset);
-    abandoned.sort_by_key(RemoteLogSegmentMetadata::start_offset);
-    (finished, abandoned)
+    for list in [&mut finished, &mut abandoned, &mut stalled] {
+        list.sort_by_key(RemoteLogSegmentMetadata::start_offset);
+    }
+    ListedSegments {
+        finished,
+        abandoned,
+        stalled,
+    }
 }
 
 /// Deletes `segments`, oldest first, until one fails, and returns how many

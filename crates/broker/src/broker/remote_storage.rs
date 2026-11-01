@@ -12,7 +12,8 @@ use {
         metrics::{BrokerMetrics, RemoteReaderLevels, RemoteReaderTotals},
         partition_registry::PartitionRegistry,
         remote_log_manager::{
-            ArchiveMode, RemoteLogManagerConfig, RemoteLogManagerContext, SweepConcurrency,
+            ArchiveMode, CopiesInFlight, RemoteLogManagerConfig, RemoteLogManagerContext,
+            SweepConcurrency,
             dynamic_config::{self, WatchedIndexCache},
             quota::RemoteLogQuotas,
             run,
@@ -185,6 +186,7 @@ pub(super) fn start_remote_storage(
             rlmm: Arc::clone(&metadata),
             index_cache: Arc::clone(&index_cache),
             copy_quota: Arc::clone(&quotas.copy),
+            copies_in_flight: CopiesInFlight::default(),
             metrics: metrics.clone(),
             node_id: config.node_id,
             broker_id: config.broker_id,
