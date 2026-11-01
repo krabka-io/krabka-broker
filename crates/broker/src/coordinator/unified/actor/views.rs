@@ -25,7 +25,7 @@ use {
 /// Read-only projection of a classic `Group` for the admin and offset-delete
 /// handlers. Those handlers need member subscriptions that the next-gen
 /// `DescribeView` does not carry.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassicView {
     pub group_id: String,
     pub state: ClassicGroupState,
@@ -35,7 +35,7 @@ pub struct ClassicView {
     pub members: Vec<ClassicMemberView>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassicMemberView {
     pub member_id: String,
     pub client_id: String,

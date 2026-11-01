@@ -324,6 +324,7 @@ async fn unload_partition(
         }
         coordinator.seeds.remove(&group_id);
         coordinator.seeds_cache.remove(&group_id);
+        coordinator.classic_respawn_seeds.remove(&group_id);
         coordinator.share_seeds.remove(&group_id);
         coordinator.share_seeds_cache.remove(&group_id);
         coordinator.streams_seeds.remove(&group_id);
