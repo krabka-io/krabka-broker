@@ -97,49 +97,13 @@ impl ProducerState {
         sequence: (i32, i32),
         append: (LogOffset, i64, bool),
     ) {
-        let (producer_id, producer_epoch) = producer;
-        let (base_sequence, last_offset_delta) = sequence;
-        let (base_offset, last_timestamp, is_transactional) = append;
+        let (producer_id, _) = producer;
         let handle = self.handle(topic, partition);
         let mut s = handle.lock().await;
         let existing = s.entries.get(&ProducerId(producer_id)).copied();
-        let last_sequence = increment_sequence(base_sequence, last_offset_delta);
-        let last_offset = base_offset + i64::from(last_offset_delta);
-        let incoming = RetainedBatch {
-            base_sequence: krabka_verified::decrement_sequence(last_sequence, last_offset_delta),
-            last_sequence,
-            base_offset,
-            last_offset,
-            timestamp: last_timestamp,
-        };
-        let Completion { accepted, earlier } =
-            entry::earlier_after_completion(existing, producer_epoch, incoming);
-        if !accepted {
-            return;
+        if let Some(entry) = committed_entry(existing, producer, sequence, append) {
+            s.entries.insert(ProducerId(producer_id), entry);
         }
-        if let Some(mut tracked) = existing
-            && tracked.epoch == producer_epoch
-            && tracked.last_offset >= last_offset
-        {
-            // Deferred completions can fill an earlier slot, but never undo
-            // newer sequence, timestamp or transaction-marker state.
-            tracked.earlier = earlier;
-            s.entries.insert(ProducerId(producer_id), tracked);
-            return;
-        }
-        let current_txn_first_offset = existing
-            .and_then(|entry| entry.current_txn_first_offset)
-            .or_else(|| is_transactional.then_some(base_offset));
-        s.entries.insert(ProducerId(producer_id), ProducerEntry {
-            epoch: producer_epoch,
-            last_sequence,
-            last_offset,
-            base_offset,
-            last_timestamp,
-            entry_timestamp: last_timestamp,
-            current_txn_first_offset,
-            earlier,
-        });
     }
 
     /// Drop idempotent-producer entries whose last accepted batch was
@@ -252,6 +216,58 @@ impl ProducerState {
             .map(|(pid, e)| (pid.get(), *e))
             .collect()
     }
+}
+
+/// The tracked entry after [`ProducerState::commit`] records one completed
+/// append, or `None` when the completion leaves the entry as it is.
+///
+/// `existing` is the producer's tracked entry. The other arguments are
+/// [`ProducerState::commit`]'s. This is the whole of the commit apart from the
+/// lock, so the models that interleave a commit with later produces drive the
+/// production rule rather than a copy of it.
+#[must_use]
+pub fn committed_entry(
+    existing: Option<ProducerEntry>,
+    (_, producer_epoch): (i64, i16),
+    (base_sequence, last_offset_delta): (i32, i32),
+    (base_offset, last_timestamp, is_transactional): (LogOffset, i64, bool),
+) -> Option<ProducerEntry> {
+    let last_sequence = increment_sequence(base_sequence, last_offset_delta);
+    let last_offset = base_offset + i64::from(last_offset_delta);
+    let incoming = RetainedBatch {
+        base_sequence: krabka_verified::decrement_sequence(last_sequence, last_offset_delta),
+        last_sequence,
+        base_offset,
+        last_offset,
+        timestamp: last_timestamp,
+    };
+    let Completion { accepted, earlier } =
+        entry::earlier_after_completion(existing, producer_epoch, incoming);
+    if !accepted {
+        return None;
+    }
+    if let Some(mut tracked) = existing
+        && tracked.epoch == producer_epoch
+        && tracked.last_offset >= last_offset
+    {
+        // Deferred completions can fill an earlier slot, but never undo
+        // newer sequence, timestamp or transaction-marker state.
+        tracked.earlier = earlier;
+        return Some(tracked);
+    }
+    let current_txn_first_offset = existing
+        .and_then(|entry| entry.current_txn_first_offset)
+        .or_else(|| is_transactional.then_some(base_offset));
+    Some(ProducerEntry {
+        epoch: producer_epoch,
+        last_sequence,
+        last_offset,
+        base_offset,
+        last_timestamp,
+        entry_timestamp: last_timestamp,
+        current_txn_first_offset,
+        earlier,
+    })
 }
 
 #[cfg(test)]

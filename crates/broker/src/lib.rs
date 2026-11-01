@@ -205,6 +205,11 @@ pub(crate) mod log_retention;
 pub(crate) mod metadata_epoch;
 pub mod metadata_observer;
 pub mod metadata_source;
+/// Per-broker metadata application under faults: image delivery, restart
+/// replay, the replicator supervisor's reconcile pass and the partition
+/// write guard, checked for convergence once the system is quiescent.
+#[cfg(test)]
+mod metadata_application_model;
 pub mod metrics;
 pub(crate) mod metrics_server;
 /// Shared breadth-first runner for the exhaustive Stateright models.

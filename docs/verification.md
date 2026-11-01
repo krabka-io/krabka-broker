@@ -594,6 +594,59 @@ generator that dropped a branch, a `next_state` arm that began returning
 `None`, or a derived `Hash` that stopped considering a field, each of which
 leaves a smaller search still passing every upper bound.
 
+### Asynchronous Orchestration
+
+A model that checks a decision kernel with safety properties alone misses a bug
+in the code around the kernel. The Jepsen workload (`aspect jepsen`, whose
+`docs/jepsen.md` lists its known failures) found three such bugs: duplicate
+records, a partition stuck after an unclean re-election, and a transaction that
+never gets its marker. Each one lives in a deferred callback, a lock wait, a
+reconcile loop, or a persist or fan-out retry. The models that covered those
+areas fused into one step what production runs as separate steps that other
+work can interleave with, so the search never reached the window that the bug
+needs.
+
+A model of orchestration therefore splits each production operation at every
+`await` that other work can run across: an admission, the append it admits, the
+wait that follows, and the commit after the wait are four actions, not one. A
+model that cannot split a step says which production lock or channel makes it
+atomic.
+
+Such a model checks liveness as a safety property, with the
+[`Quiescence`](../crates/broker/src/model_check.rs) trait. The model marks its
+fault actions: a crash, a pause, a partition, a lost or indeterminate write. A
+state is *quiescent* when no other action is enabled, and an action that leaves
+the state unchanged counts as disabled, so a retry loop that makes no progress
+is quiescent too. The property asks that the system has converged in every
+quiescent state: `always(!quiescent || converged)`. A counterexample is a
+reachable state where the system has stopped short of its goal and only a new
+fault could move it.
+
+This stands in for `eventually` under weak fairness. Stateright's `eventually`
+reports a path only when the path ends without the condition, and it has no
+fairness, so a fault that can always recur would hide every livelock from it.
+The pattern holds the model to two obligations:
+
+- Bound the faults, never the steps. A fault budget, or a `Heal` action that
+  ends the faults, makes every fault sequence finite. A step that
+  `within_boundary` prunes would make its state look busy forever.
+- Keep the steps acyclic: each step moves some measure in one direction, such
+  as a counter that only rises to its bound. Steps that cycle among states that
+  are not quiescent are a livelock that quiescence cannot see. A model that
+  cannot promise this counts the steps since the last fault and requires
+  `always(steps <= bound)`, a bounded-response property, instead.
+
+A property that reaches a counterexample on the current code, because the bug
+it reproduces is still open, runs through
+[`check_model_with_known_failures`](../crates/broker/src/model_check.rs). The
+runner searches single-threaded and to exhaustion, so the unique-state count is
+deterministic and each counterexample is a shortest one. It pins each failing
+property's counterexample depth beside the unique-state count, and requires
+every other property to hold. The model lands with the property failing, and
+the change that fixes the bug deletes the `KnownFailure` entry and re-pins the
+count. A model that stops reaching the bug fails its test, as a fix that does
+not fix it does.
+
 The paragraphs below take the entry points in table order. Each one names the production code the model drives, what it models instead, its bounds, its properties and reachability witnesses, and its pinned counts, and it ends with what stays outside the model.
 
 ### Broker Data and Fetch
@@ -674,10 +727,19 @@ The audit spool model ([`spool_model`](../crates/audit/src/spool_model.rs)) driv
 
 Code that is not in the Creusot ledger or the Stateright inventory is in
 neither tier. This includes most protocol encoding and decoding, authorization,
-network and async orchestration, file and object-store I/O, and operational
-configuration. Unit, property, integration, differential, and container tests
-cover those areas. Those tests are evidence, but they are not a Creusot proof
-or a Stateright model check.
+the network itself, file and object-store I/O, and operational configuration.
+Unit, property, integration, differential, and container tests cover those
+areas. Those tests are evidence, but they are not a Creusot proof or a
+Stateright model check.
+
+Asynchronous orchestration is in the Stateright tier only where a model splits
+it into its interleavable steps, as
+[Asynchronous Orchestration](#asynchronous-orchestration) describes: the
+in-flight produce window, per-broker metadata application, and transaction
+completion. Everywhere else a model fuses a request or a fan-out into one step,
+and the orchestration around its kernel stays outside both tiers. The Jepsen
+workload (`aspect jepsen`) tests the whole cluster under faults; it is evidence,
+not a model check.
 
 The barrier coordinator's [`__barrier_state` partitioner](../crates/broker/src/barrier/partitioner.rs) is the one coordinator routing decision without a proof. It applies Kafka's `Utils.abs(murmur2(bytes)) % numPartitions` over the group name through the broker's own `murmur2`, and JVM golden vectors test it. The group, transaction, and SHARE coordinator partitioners route through the proved `java_string_hash_partition`, and the KIP-405 metadata partitioner through `remote_metadata_partition`.
 
