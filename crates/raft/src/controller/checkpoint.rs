@@ -101,7 +101,7 @@ impl ControllerHandle {
                 reply,
             })
             .await?;
-        answer.await.map_err(|_| RaftError::Shutdown)
+        self.engine.await_reply(answer).await
     }
 
     /// Manually trigger a metadata snapshot (KIP-630 checkpoint) on this node.
