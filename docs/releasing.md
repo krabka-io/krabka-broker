@@ -123,6 +123,14 @@ git push origin v0.5.2
 Never move or delete a tag that is pushed. The signed image digest and the
 attestations point at it. Release a new patch version instead.
 
+When the full run fails and the fix needs a new commit, do not tag the release
+commit. Prepare the next patch version instead, and in the same pull request
+fold the untagged version's `CHANGELOG.md` entry into the new one: delete its
+heading and its link definition, and say in the new entry that the version
+number was never tagged. Every heading in `CHANGELOG.md` names a pushed tag.
+The nightly `external links` lane checks every link definition, and fails on
+one whose tag does not exist.
+
 ## 4. Check the result
 
 Watch the `release` workflow. Its `verify` job runs before anything is built or
@@ -304,6 +312,15 @@ is not a library for other repositories sets it.
 Those come from krabka-protocol. `cargo publish` ignores `[patch.crates-io]`,
 so each requirement must name a release that crates.io has, and krabka-protocol
 releases before this repository does.
+
+The same rule applies to each API that a published crate calls. A published
+crate may use only the APIs that a crates.io release of its dependency has. A
+git fork in `[patch.crates-io]` may serve unpublished crates only. The rustix
+fork that adds `fs::sync_file_range` is an example. `cargo publish` builds
+`krabka-log` against crates.io rustix, so a call into the fork does not compile
+there. `krabka-log` reaches `sync_file_range` only through the `WriteBack` that
+the broker installs at startup with `krabka_log::set_write_back`. The broker's
+`log_write_back` module holds that `WriteBack`.
 
 Each published crate sets `repository`, `description`, `readme` and an
 `include` list. The list ships the library source and the README, and leaves

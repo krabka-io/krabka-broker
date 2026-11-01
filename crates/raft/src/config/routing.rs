@@ -12,13 +12,13 @@ use {
     crate::{config::kafka_4_3_1_max, error::RaftError},
     bytes::Bytes,
     krabka_metadata::{
-        MetadataRecord,
+        MetadataImage, MetadataRecord,
         metadata_version::{
             CORDONED_LOG_DIRS_MIN_LEVEL, METADATA_VERSION_FEATURE, SHARE_VERSION_FEATURE,
         },
     },
     krabka_protocol::ProtocolRequest,
-    std::{collections::BTreeMap, future::Future, net::SocketAddr, pin::Pin},
+    std::{collections::BTreeMap, future::Future, net::SocketAddr, pin::Pin, sync::Arc},
 };
 
 /// Optional router for KIP-595 traffic addressed to non-metadata quorum shards.
@@ -254,9 +254,32 @@ pub trait ControllerAdminRouter: Send + Sync {
     fn route(&self, request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_>;
 }
 
+/// What [`RegistrationAdmission::admit`] decided for one batch, against the
+/// image it was given.
+pub struct AdmittedBatch {
+    /// The batch to append.
+    pub records: Vec<MetadataRecord>,
+    /// Work that may run only for the batch the leader appends, such as
+    /// handing the partitions it leaves without a leader to unclean recovery.
+    /// The leader runs it once it accepts this batch, and drops it when it
+    /// refuses the batch and asks again.
+    pub on_accept: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl AdmittedBatch {
+    /// `records` with nothing to run on acceptance.
+    #[must_use]
+    pub fn records(records: Vec<MetadataRecord>) -> Self {
+        Self {
+            records,
+            on_accept: None,
+        }
+    }
+}
+
 /// The batch [`RegistrationAdmission::admit`] answers with.
 pub type RegistrationAdmissionFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<MetadataRecord>, RaftError>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = Result<AdmittedBatch, RaftError>> + Send + 'a>>;
 
 /// What the broker crate does to a batch that registers a broker anew, before
 /// the leader appends it.
@@ -270,8 +293,22 @@ pub type RegistrationAdmissionFuture<'a> =
 /// `V1BrokerRegistration` with no epoch yet) to this hook, whether it was
 /// submitted on this node or forwarded by a follower, and appends the batch the
 /// hook returns.
+///
+/// Those changes are whole partition records, so they are only right against
+/// the state they were computed from. The hook decides against `image`, the
+/// leader's published image, and the leader appends its answer only while
+/// that image is still published and nothing it appended is uncommitted, as
+/// Kafka's controller decides each registration on its event thread against
+/// every record before it. Otherwise the leader asks again against the newer
+/// image. Without that, two brokers that re-register at once each retired the
+/// other's partitions from the same old state, and the later batch put back
+/// the leader and the leader epoch the earlier one had replaced.
 pub trait RegistrationAdmission: Send + Sync {
-    fn admit(&self, records: Vec<MetadataRecord>) -> RegistrationAdmissionFuture<'_>;
+    fn admit(
+        &self,
+        image: Arc<MetadataImage>,
+        records: Vec<MetadataRecord>,
+    ) -> RegistrationAdmissionFuture<'_>;
 }
 
 #[cfg(test)]

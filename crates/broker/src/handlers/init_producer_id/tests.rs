@@ -19,6 +19,8 @@ use {
             acl_test_support as acl_fixtures, acl_wire, context::RequestContext,
             find_coordinator::handle as find_coordinator_handle,
         },
+        partition_registry::PartitionRegistry,
+        producer_id_manager::ProducerIdManager,
         test_support::{
             ControllerPeerAllowed, start_broker_no_audit, start_broker_no_audit_with,
             start_broker_with_authorizer_no_audit, wait_for_controller_leader,
@@ -1225,4 +1227,20 @@ async fn find_transaction_coordinator(
         context,
     )
     .await
+}
+
+/// A coordinator with no `__transaction_state` partition for the id answers
+/// `COORDINATOR_NOT_AVAILABLE`. Config validation rejects a non-positive
+/// partition count, so a started broker never gets here, and the coordinator
+/// is built directly.
+#[test]
+fn a_coordinator_without_state_partitions_is_not_available() {
+    let coordinator = TxnCoordinator::new(
+        krabka_audit::NodeId(1),
+        Arc::new(PartitionRegistry::new()),
+        Arc::new(ProducerIdManager::new()),
+        0,
+        krabka_units::mebibytes(1),
+    );
+    assert!(coordinator_partition(&coordinator, "tid") == Err(codes::COORDINATOR_NOT_AVAILABLE));
 }

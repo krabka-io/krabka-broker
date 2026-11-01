@@ -17,7 +17,10 @@ use {
         kraft::{log::KraftLog, types::QuorumState},
     },
     krabka_ids::Offset,
-    krabka_metadata::{MetadataImage, MetadataRecord, metadata_version::METADATA_VERSION_FEATURE},
+    krabka_metadata::{
+        FeatureLevelRecord, MetadataImage, MetadataRecord, from_kraft_value,
+        metadata_version::METADATA_VERSION_FEATURE,
+    },
     krabka_protocol::records::{Record, RecordBatch, metadata::control::ControlRecord},
     krabka_verified::recovery::{
         ReplayCursorDecision, ReplayRecordDecision, replay_cursor_decision, replay_record_decision,
@@ -69,8 +72,13 @@ fn metadata_record_in<'a>(
     rec.value.as_deref().map(|value| (Offset(offset), value))
 }
 
-/// Replay committed log batches starting at `from` into `image` (idempotent:
-/// records that fail `validate` are skipped). Used by restart recovery.
+/// Replay the committed log batches in `[from, hwm)` into `image`. Records
+/// that fail `validate` are skipped, as live apply skips them.
+///
+/// The replay is not idempotent: a `PartitionChangeRecord` bumps the leader
+/// and partition epochs the image holds. So `from` must be the offset `image`
+/// stands at, the end of the checkpoint it was loaded from, and never an
+/// offset below it.
 ///
 /// # Errors
 /// [`RaftError::MetadataReplay`] for a committed record that does not decode,
@@ -156,6 +164,41 @@ pub fn replay_committed_with_timestamp(
     Ok(replay)
 }
 
+/// Applies to `image`, in log order, every `FeatureLevelRecord` in
+/// `[from, target)` that validates against it. `met` sees each one with the
+/// image as it stood before that record.
+///
+/// Only feature levels are decoded. Every other record is passed over without
+/// being judged, so a record that names a topic created in the same range,
+/// which `image` does not hold, is neither applied nor reported.
+fn fold_feature_levels(
+    log: &KraftLog,
+    image: &mut MetadataImage,
+    from: Offset,
+    target: Offset,
+    max: MetadataRaftFetchMax,
+    mut met: impl FnMut(&FeatureLevelRecord, &MetadataImage),
+) -> Result<(), RaftError> {
+    visit_decoded_batches(log, from, target, max, |batches, from, target| {
+        for batch in batches {
+            for rec in &batch.records {
+                let Some((_, value)) = metadata_record_in(batch, rec, from, target) else {
+                    continue;
+                };
+                if let Ok(meta @ MetadataRecord::V1FeatureLevel(_)) = from_kraft_value(value, image)
+                    && image.validate(&meta).is_ok()
+                {
+                    if let MetadataRecord::V1FeatureLevel(feature) = &meta {
+                        met(feature, image);
+                    }
+                    image.apply(&meta);
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
 /// `committed` with every feature level that the log holds above its high
 /// watermark applied, in log order: the levels the image reaches if the
 /// whole durable log commits.
@@ -170,8 +213,9 @@ pub fn replay_committed_with_timestamp(
 /// replays only committed records, but krabka's guard refuses before the
 /// engine writes anything, so it reads every level the log holds.
 ///
-/// A record in the tail that does not decode is skipped: startup does not
-/// replay the tail, and live apply judges the record if it commits.
+/// The tail is not committed, and it may never be: an election can truncate
+/// it. So nothing but its feature levels is decoded, and no other record of
+/// it is judged or reported. Live apply judges each record if it commits.
 ///
 /// # Errors
 /// The error of a log read.
@@ -181,30 +225,50 @@ pub fn with_uncommitted_feature_levels(
     max: MetadataRaftFetchMax,
 ) -> Result<MetadataImage, RaftError> {
     let mut image = committed.clone();
-    visit_decoded_batches(
+    fold_feature_levels(
         log,
+        &mut image,
         log.hwm(),
         log.log_end_offset(),
         max,
-        |batches, from, target| {
-            for batch in batches {
-                for rec in &batch.records {
-                    let Some((record_offset, value)) = metadata_record_in(batch, rec, from, target)
-                    else {
-                        continue;
-                    };
-                    if let Ok(Some(meta @ MetadataRecord::V1FeatureLevel(_))) =
-                        decode_committed_value(value, &image, record_offset.0)
-                        && image.validate(&meta).is_ok()
-                    {
-                        image.apply(&meta);
-                    }
-                }
-            }
-            Ok(())
-        },
+        |_, _| {},
     )?;
     Ok(image)
+}
+
+/// Whether the log below `end_offset` holds a `metadata.version` downgrade,
+/// with `base` the image at the log start.
+///
+/// A restart asks this of the prefix below its latest checkpoint, which it
+/// does not replay. A KIP-1155 downgrade writes its checkpoint and then
+/// prunes the log up to it. A crash between the two leaves the prefix, with
+/// the records written at the higher version, below the checkpoint, and this
+/// finds it there so the restart can finish the prune. Only feature levels
+/// are folded: the prefix is already in the checkpoint.
+///
+/// # Errors
+/// The error of a log read.
+pub fn holds_metadata_version_downgrade(
+    log: &KraftLog,
+    mut base: MetadataImage,
+    end_offset: Offset,
+    max: MetadataRaftFetchMax,
+) -> Result<bool, RaftError> {
+    let mut downgraded = false;
+    fold_feature_levels(
+        log,
+        &mut base,
+        log.log_start_offset(),
+        end_offset,
+        max,
+        |feature, before| {
+            downgraded |= feature.name == METADATA_VERSION_FEATURE
+                && before
+                    .finalized_metadata_version()
+                    .is_some_and(|current| feature.level < current);
+        },
+    )?;
+    Ok(downgraded)
 }
 
 /// Replays the KIP-853 control records of the committed log into `state`.

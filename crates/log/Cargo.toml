@@ -47,8 +47,12 @@ zerocopy = { workspace = true }
 [target.'cfg(target_os = "wasi")'.dependencies]
 rustix = { workspace = true }
 
-# The `posix_fadvise(POSIX_FADV_WILLNEED)` readahead hint of the fetch path,
-# and the `fallocate` block reservation of `preallocate`.
+# The `posix_fadvise` readahead hint of the fetch path and page drop of the
+# page-cache budget, the `fallocate` block reservation and the `O_DIRECT` open
+# of `preallocate`, and the `preadv2(RWF_NOWAIT)` page-cache probe. Only what
+# crates.io rustix has: write-back is the file's `sync_data` unless the
+# embedder installs a `WriteBack`, because `cargo publish` ignores the
+# workspace's `[patch.crates-io]` rustix fork that has `sync_file_range`.
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { workspace = true }
 # The io_uring submitter of the `O_DIRECT` writes of `preallocate`: owned

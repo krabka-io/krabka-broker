@@ -85,6 +85,8 @@ pub(super) async fn prepare_transaction(
     {
         tracing::error!(
             tid = transactional_id,
+            producer_id = state.producer_id.get(),
+            producer_epoch = state.producer_epoch,
             state = ?prepare,
             error = %error,
             "EndTxn: failed to persist PrepareCommit/PrepareAbort"

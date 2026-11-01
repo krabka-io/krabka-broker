@@ -5,9 +5,11 @@
 use {
     super::{
         Engine, KraftController, PendingReconfig,
-        control_state::{voter_set_to_wire, voter_supports_version},
+        control_state::{
+            ControlChange, control_changes, voter_set_to_wire, voter_supports_version,
+        },
         offsets::{hwm_reaches_waiter, validate_append_result},
-        records::{decode_control_record, start_of_epoch_batch, typed_control_batch},
+        records::{start_of_epoch_batch, typed_control_batch},
     },
     crate::{
         NodeId,
@@ -300,13 +302,13 @@ impl Engine {
     ///
     /// A check-only add, a kraft.version validation and a level-0 voter
     /// update preflight answer at once, as does a refusal that is an outcome
-    /// rather than an error. Otherwise the batch is appended and its controls
-    /// are applied.
+    /// rather than an error. Otherwise the batch's controls are checked, the
+    /// batch is appended, and its controls are applied.
     ///
     /// # Errors
     ///
-    /// Returns the refusal of the change, or a failure to build, append or
-    /// apply its control batch.
+    /// Returns the refusal of the change, or a failure to build, check or
+    /// append its control batch. A batch that fails its check is not written.
     fn plan_and_append_reconfiguration(
         &mut self,
         change: VoterChange,
@@ -432,10 +434,13 @@ impl Engine {
 
         let leader_epoch = self.core.quorum_state().leader_epoch;
         let mut batch = typed_control_batch(leader_epoch, &records)?;
+        // Check the records before they are written, so a batch this leader
+        // could not apply is refused with nothing in the log.
+        let changes = control_changes(&batch)?;
         let base = self
             .log
             .append(&mut batch, KraftController::wall_clock_ms())?;
-        self.apply_control_batch(&batch)?;
+        self.apply_control_changes(base.0, changes);
         Ok(ReconfigStep::Appended {
             need_offset: Offset(
                 base.0
@@ -449,19 +454,19 @@ impl Engine {
     /// Apply KIP-853 controls as soon as their batch is appended or fetched.
     /// Consensus always uses the latest local view, even before commitment.
     pub fn apply_control_batch(&mut self, batch: &RecordBatch) -> Result<(), RaftError> {
-        if !batch.attributes.is_control_batch() {
-            return Ok(());
-        }
+        let changes = control_changes(batch)?;
+        self.apply_control_changes(batch.base_offset, changes);
+        Ok(())
+    }
+
+    /// Apply the [`control_changes`] of a batch based at `base_offset`.
+    fn apply_control_changes(&mut self, base_offset: i64, changes: Vec<(i32, ControlChange)>) {
         let previous = self.controls.latest_voters().clone();
-        for record in &batch.records {
-            let control = decode_control_record(record)?;
-            let offset = batch
-                .base_offset
-                .saturating_add(i64::from(record.offset_delta));
-            self.controls.apply(offset, &control)?;
+        for (offset_delta, change) in changes {
+            let offset = base_offset.saturating_add(i64::from(offset_delta));
+            self.controls.apply(offset, change);
         }
         self.apply_changed_voters(&previous);
-        Ok(())
     }
 
     fn apply_changed_voters(&mut self, previous: &VoterSet) {

@@ -83,7 +83,9 @@ allow-git = [
     "https://github.com/testcontainers/testcontainers-rs-modules-community",
     "https://github.com/krabka-io/plotly.rs",
     # rustix with `fs::sync_file_range` (bytecodealliance/rustix#1718), until a
-    # release carries it: see the `[patch.crates-io]` entry in Cargo.toml.
+    # release carries it. Only the unpublished broker's `log_write_back` uses
+    # it. A published crate must not, because `cargo publish` ignores the patch.
+    # See the `[patch.crates-io]` entry in Cargo.toml.
     "https://github.com/robot-head/rustix",
 ]
 

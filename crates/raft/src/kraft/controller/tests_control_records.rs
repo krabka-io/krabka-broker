@@ -7,7 +7,9 @@ use {
     crate::{
         kraft::controller::{
             PendingReconfig,
-            control_state::{voter_set_from_wire, voter_set_to_wire},
+            control_state::{
+                ControlChange, control_change, voter_set_from_wire, voter_set_to_wire,
+            },
             records::{leader_change_batch, typed_control_batch},
             test_support::{
                 EngineInDir, build_engine_only, elect_single_voter_engine,
@@ -57,17 +59,13 @@ fn control_state_applies_before_commit_and_restores_on_truncation() {
     let replacement = voter_set(&[NodeId(1), NodeId(3)]);
     let mut controls = KraftControlState::new(initial.clone(), 0);
 
-    controls
-        .apply(5, &ControlRecord::Voters(voter_set_to_wire(&two_voters)))
-        .unwrap();
+    controls.apply(5, ControlChange::Voters(two_voters.clone()));
     assert!(controls.latest_voters() == &two_voters);
     assert!(controls.committed_voters == initial);
     assert!(controls.commit_to(6));
     assert!(controls.committed_voters == two_voters);
 
-    controls
-        .apply(7, &ControlRecord::Voters(voter_set_to_wire(&replacement)))
-        .unwrap();
+    controls.apply(7, ControlChange::Voters(replacement.clone()));
     assert!(controls.latest_voters() == &replacement);
     controls.truncate_to(7);
     assert!(controls.latest_voters() == &two_voters);
@@ -163,20 +161,16 @@ fn failed_voter_record_does_not_replace_state_and_can_be_retried() {
     let mut controls = KraftControlState::new(initial.clone(), 1);
     let duplicate = wire_voter_record(vec![wire_voter(2, 2), wire_voter(2, 3)]);
 
-    check!(
-        controls
-            .apply(5, &ControlRecord::Voters(duplicate))
-            .is_err()
-    );
+    check!(control_change(&ControlRecord::Voters(duplicate)).is_err());
     check!(controls.latest_voters() == &initial);
     check!(controls.voter_history.len() == 1);
 
-    controls
-        .apply(
-            5,
-            &ControlRecord::Voters(wire_voter_record(vec![wire_voter(2, 2)])),
-        )
-        .expect("corrected record retries at the same offset");
+    let corrected = control_change(&ControlRecord::Voters(wire_voter_record(vec![wire_voter(
+        2, 2,
+    )])))
+    .expect("corrected record decodes")
+    .expect("a voters record changes the voters");
+    controls.apply(5, corrected);
     check!(controls.latest_voters().contains(NodeId(2)));
     check!(!controls.latest_voters().contains(NodeId(1)));
 }
@@ -653,6 +647,37 @@ async fn a_replica_keeps_its_progress_across_joining_and_leaving_the_voter_set()
     check!(matches!(rx.try_recv(), Ok(Ok(ReconfigOutcome::Committed))));
     check!(leader.observers[&key] == as_observer);
     check!(!leader.core.quorum_state().voters.contains(NodeId(4)));
+}
+
+/// A voter set the leader could not read back is refused before it is
+/// written: the requester told the change failed leaves no `VotersRecord` in
+/// the log, and the leader's voters are as they were.
+#[tokio::test]
+async fn an_add_whose_voters_record_does_not_decode_writes_nothing() {
+    let EngineInDir {
+        engine: mut leader,
+        dir: _dir,
+    } = kraft_version_one_leader();
+    let candidate = ReplicaKey {
+        id: NodeId(4),
+        directory_id: uuid::Uuid::from_u128(7),
+    };
+    let end = leader.log.log_end_offset();
+    leader.record_observer_fetch(candidate, end.0);
+    let voters = leader.controls.latest_voters().clone();
+    let mut add = add_request(4, 7);
+    add.voter.endpoints[0].port = 0;
+
+    let (reply, mut rx) = oneshot::channel();
+    leader.on_reconfigure(VoterChange::Add(add), reply);
+
+    check!(matches!(
+        rx.try_recv(),
+        Ok(Err(RaftError::InvalidVoterUpdate(_)))
+    ));
+    check!(leader.log.log_end_offset() == end);
+    check!(leader.controls.latest_voters() == &voters);
+    check!(leader.pending_reconfig.is_none());
 }
 
 /// The `validate_only` half of a `kraft.version` upgrade runs every check the

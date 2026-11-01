@@ -4,16 +4,16 @@
 
 use {
     super::{
-        InitialLeadership, PlacementRng, automatic_leaderships, automatic_placement_exclusions,
-        inactive_brokers, manual_leaderships, manual_replicas, placement_failure_message,
-        resolve_assignments, site_broker_views,
+        InitialLeadership, PlacementCandidates, PlacementRng, automatic_leaderships,
+        automatic_placement_exclusions, inactive_brokers, manual_leaderships, manual_replicas,
+        placement_candidates, placement_failure_message, resolve_assignments, site_broker_views,
     },
     crate::{
         config_keys::{
             BROKER_WITNESS, STRETCH_PREFERRED_LEADER_SITE, WITNESS_TRUE,
             resolve_preferred_leader_site,
         },
-        handlers::test_support::sorted_replica_sites,
+        handlers::test_support::{sorted_replica_sites, start_broker},
         heartbeat::fencing::fenced_node_ids,
         test_support::broker_registration,
     },
@@ -911,5 +911,61 @@ fn fully_cordoned_brokers_are_not_automatic_placement_candidates() {
         placement_failure_message(1, &views)
             == "Unable to replicate the partition 1 time(s): All brokers are currently fenced, \
                 or have all their log directories cordoned."
+    );
+}
+
+/// The candidates of a placement, with each broker as its node id and fence
+/// flag.
+#[derive(Debug, PartialEq, Eq)]
+struct CandidateRows {
+    brokers: Vec<ViewFence>,
+    inactive: HashSet<u64>,
+}
+
+/// A broker that is in controlled shutdown and not fenced is left out of an
+/// automatic placement only. A manual assignment may name it. A fenced broker
+/// stays a tagged candidate of both, and the ISR leaves both brokers out.
+#[yare::parameterized(
+    automatic = { false, &[(101, false), (103, true)] },
+    manual = { true, &[(101, false), (102, false), (103, true)] },
+)]
+#[test_macro(tokio::test)]
+async fn placement_candidates_leave_a_shutting_down_broker_out_of_an_automatic_placement(
+    manual: bool,
+    expected_brokers: &[(u64, bool)],
+) {
+    let started = start_broker().await;
+    let broker = started.broker.broker_arc_for_test();
+    let mut image = stretch_image(
+        &[101, 102, 103].map(|node_id| BrokerRack {
+            node_id,
+            rack: None,
+        }),
+        &[],
+        None,
+    );
+    enter_controlled_shutdown(&mut image, 102);
+    let mut fenced = image.broker(NodeId(103)).expect("registered").clone();
+    fenced.fenced = true;
+    image.apply(&MetadataRecord::V1BrokerRegistration(fenced));
+
+    let PlacementCandidates { brokers, inactive } =
+        placement_candidates(&broker, &image, manual).await;
+
+    let expected = CandidateRows {
+        brokers: expected_brokers
+            .iter()
+            .map(|&(node_id, fenced)| ViewFence {
+                node_id: NodeId(node_id),
+                fenced,
+            })
+            .collect(),
+        inactive: HashSet::from([102, 103]),
+    };
+    assert2::assert!(
+        CandidateRows {
+            brokers: view_fences(&brokers),
+            inactive,
+        } == expected
     );
 }

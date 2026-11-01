@@ -51,7 +51,10 @@ use {
     },
     tokio_rustls::server::TlsStream,
     tokio_util::sync::CancellationToken,
-    tracing::field::{Field, Visit},
+    tracing::{
+        field::{Field, Visit},
+        subscriber::NoSubscriber,
+    },
 };
 
 pub mod paused_audit;
@@ -63,7 +66,7 @@ use {
         io,
         net::SocketAddr,
         sync::{
-            Arc, Mutex,
+            Arc, LazyLock, Mutex,
             atomic::{self, AtomicUsize, Ordering},
         },
         time::Duration,
@@ -132,8 +135,8 @@ use {
         records::{Attributes, Record, RecordBatch},
     },
     krabka_raft::{
-        AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter,
-        SnapshotRange, SubmitChangeResult, UpdateVoter,
+        AddVoter, DelegationTokenMutation, Node, NodeId, QuorumState, RaftError, ReconfigOutcome,
+        RemoveVoter, SnapshotRange, SubmitChangeResult, UpdateVoter,
     },
     krabka_security::{AuthMethod, Principal},
     qubit_clock::{
@@ -141,7 +144,7 @@ use {
         TimerUnavailableError,
     },
     rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
-    tokio::sync::watch,
+    tokio::{sync::watch, task::JoinHandle},
     tokio_rustls::TlsAcceptor,
     tracing_subscriber::{
         Layer,
@@ -1441,6 +1444,85 @@ pub fn plaintext_broker_endpoint(host: &str, port: u16) -> krabka_metadata::Brok
     }
 }
 
+/// A loopback listener that reads the TLS `ClientHello` of the first dial to
+/// it and then drops the connection, with an inter-broker client that dials
+/// it over TLS. A test reads which server name a dial asked for.
+pub struct ServerNameCapture {
+    /// The loopback port the capture listens on.
+    pub port: u16,
+    /// An inter-broker client with a TLS connector that trusts no root.
+    pub client: InterBrokerClient,
+    /// The SNI server name of the first `ClientHello`.
+    pub server_name: JoinHandle<Option<String>>,
+}
+
+impl ServerNameCapture {
+    /// The registration of `node_id` with one SSL endpoint, `listener`, on
+    /// the capture port.
+    pub fn broker(
+        &self,
+        node_id: NodeId,
+        listener: &str,
+    ) -> krabka_metadata::BrokerRegistrationRecord {
+        krabka_metadata::BrokerRegistrationRecord {
+            port: self.port,
+            endpoints: vec![krabka_metadata::BrokerEndpoint {
+                name: listener.into(),
+                host: "127.0.0.1".into(),
+                port: self.port,
+                protocol: krabka_security::ListenerProtocol::Ssl,
+            }],
+            ..broker_registration(node_id)
+        }
+    }
+}
+
+/// Bind a [`ServerNameCapture`].
+pub async fn capture_server_name() -> ServerNameCapture {
+    use tokio_rustls::{
+        LazyConfigAcceptor, TlsConnector,
+        rustls::{
+            ClientConfig, RootCertStore, crypto::aws_lc_rs::default_provider, server::Acceptor,
+        },
+    };
+
+    drop(default_provider().install_default());
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind the ClientHello capture listener");
+    let port = listener
+        .local_addr()
+        .expect("capture listener address")
+        .port();
+    let server_name = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept the dial");
+        let handshake = LazyConfigAcceptor::new(Acceptor::default(), stream)
+            .await
+            .expect("parse the ClientHello");
+        handshake.client_hello().server_name().map(str::to_owned)
+    });
+    let tls = ClientConfig::builder()
+        .with_root_certificates(RootCertStore::empty())
+        .with_no_client_auth();
+    ServerNameCapture {
+        port,
+        client: InterBrokerClient::new(Some(TlsConnector::from(Arc::new(tls))), None),
+        server_name,
+    }
+}
+
+/// Assert that a dial to a [`ServerNameCapture`] failed, since the capture
+/// drops the connection after the `ClientHello`, and that it asked for
+/// `expected` as the server name.
+pub async fn assert_dialed_with<T, E>(
+    result: &Result<T, E>,
+    server_name: JoinHandle<Option<String>>,
+    expected: &str,
+) {
+    assert2::assert!(let Err(_) = result, "the capture stops after the ClientHello");
+    assert2::assert!(server_name.await.expect("join the capture").as_deref() == Some(expected));
+}
+
 /// Wait up to five seconds for `broker` to become the controller leader.
 pub async fn wait_for_controller_leader(broker: &Broker) {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -1983,6 +2065,12 @@ pub async fn start_share_broker(
 type SubmitOutcome =
     Box<dyn Fn(&[MetadataRecord]) -> Result<SubmitChangeResult, RaftError> + Send + Sync>;
 
+/// The outcome a [`FakeMetadataSource`] returns from
+/// `submit_delegation_token_mutations`, as a function of the batch it was
+/// handed.
+type TokenMutationOutcome =
+    Box<dyn Fn(&[DelegationTokenMutation]) -> Result<SubmitChangeResult, RaftError> + Send + Sync>;
+
 /// One intervening metadata or leadership change before guarded admission.
 type BeforeGuardedSubmit = Box<dyn FnOnce(&FakeMetadataSource) + Send>;
 
@@ -2021,6 +2109,7 @@ pub struct FakeMetadataSource {
     controller_node_id: Option<NodeId>,
     submitted: Mutex<Vec<Vec<MetadataRecord>>>,
     on_submit: SubmitOutcome,
+    on_token_mutations: TokenMutationOutcome,
     before_guarded_submit: Mutex<Option<BeforeGuardedSubmit>>,
     stall_submits: bool,
     current_image_calls: AtomicUsize,
@@ -2084,6 +2173,7 @@ impl FakeMetadataSource {
             term: 0,
             owns_controller_epoch: true,
             on_submit: None,
+            on_token_mutations: None,
             before_guarded_submit: None,
             stall_submits: false,
         }
@@ -2154,6 +2244,7 @@ pub struct FakeMetadataSourceBuilder {
     term: u64,
     owns_controller_epoch: bool,
     on_submit: Option<SubmitOutcome>,
+    on_token_mutations: Option<TokenMutationOutcome>,
     before_guarded_submit: Option<BeforeGuardedSubmit>,
     stall_submits: bool,
 }
@@ -2231,6 +2322,20 @@ impl FakeMetadataSourceBuilder {
         self
     }
 
+    /// Decide the result of each `submit_delegation_token_mutations` from the
+    /// batch it was handed. Without one, the fake refuses every batch, as a
+    /// source without generation-bound token mutations does.
+    pub(crate) fn on_token_mutations(
+        mut self,
+        outcome: impl Fn(&[DelegationTokenMutation]) -> Result<SubmitChangeResult, RaftError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.on_token_mutations = Some(Box::new(outcome));
+        self
+    }
+
     /// Never complete a `submit_change`. This models a raft commit that
     /// stalls, so that the caller's own timeout or cancellation path runs.
     pub(crate) fn stall_submits(mut self) -> Self {
@@ -2254,6 +2359,14 @@ impl FakeMetadataSourceBuilder {
             on_submit: self
                 .on_submit
                 .unwrap_or_else(|| Box::new(|_| Ok(SubmitChangeResult::default()))),
+            on_token_mutations: self.on_token_mutations.unwrap_or_else(|| {
+                Box::new(|_| {
+                    Err(RaftError::ChangeRejected(
+                        "fake metadata source does not support generation-bound token mutations"
+                            .to_owned(),
+                    ))
+                })
+            }),
             before_guarded_submit: Mutex::new(self.before_guarded_submit),
             stall_submits: self.stall_submits,
             current_image_calls: AtomicUsize::new(0),
@@ -2343,6 +2456,13 @@ impl MetadataSource for FakeMetadataSource {
             return Err(RaftError::StaleMetadataImage);
         }
         self.submit_change(records).await
+    }
+
+    async fn submit_delegation_token_mutations(
+        &self,
+        mutations: Vec<DelegationTokenMutation>,
+    ) -> Result<SubmitChangeResult, RaftError> {
+        (self.on_token_mutations)(&mutations)
     }
 
     async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
@@ -2486,6 +2606,18 @@ pub struct LoggedEvent {
     pub(crate) message: String,
 }
 
+// `tracing` caches, per log line, whether any dispatcher wants it. While only
+// one dispatcher is alive, the first thread to reach a line sets that cache
+// from its own default dispatcher alone. Tests run on many threads, so a
+// broker that another test starts can reach a line first, from a thread with no
+// dispatcher, and cache it as wanted by no one. The capture then misses the
+// line, though its dispatcher is the default where the test logs it. While two
+// dispatchers are alive, `tracing` sets the cache from every live dispatcher,
+// under the lock that creating a dispatcher takes. This one wants nothing, and
+// it lives as long as the process, so a capture is never the only one.
+static SECOND_DISPATCHER: LazyLock<tracing::Dispatch> =
+    LazyLock::new(|| tracing::Dispatch::new(NoSubscriber::new()));
+
 // Records the `tracing` events logged inside a `LogCapture::span`, so a test
 // sees what one piece of work logged and not what the rest of a running broker
 // logged at the same time.
@@ -2502,6 +2634,7 @@ impl LogCapture {
     // `tracing::dispatcher::set_default` or `with_default` on the thread that
     // does the work.
     pub(crate) fn dispatch(&self) -> tracing::Dispatch {
+        LazyLock::force(&SECOND_DISPATCHER);
         tracing::Dispatch::new(tracing_subscriber::registry().with(self.clone()))
     }
 
@@ -2551,6 +2684,43 @@ impl Visit for MessageField {
         if field.name() == "message" {
             self.0 = format!("{value:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod log_capture_tests {
+    use {
+        super::{LogCapture, LoggedEvent},
+        assert2::assert,
+        std::thread,
+        tracing::{Level, dispatcher},
+    };
+
+    // The line both threads log. Only this test calls it, so no other test
+    // registers its callsite first.
+    fn log_the_line() {
+        tracing::warn!("the line");
+    }
+
+    // Another test's thread can be the first to reach a log line while a
+    // capture is installed, and a test's line must be captured all the same.
+    #[test]
+    fn a_capture_records_a_line_that_another_thread_reached_first() {
+        let capture = LogCapture::default();
+        dispatcher::with_default(&capture.dispatch(), || {
+            thread::spawn(log_the_line)
+                .join()
+                .expect("the other thread logs");
+            LogCapture::span().in_scope(log_the_line);
+        });
+        assert!(
+            capture.events()
+                == vec![LoggedEvent {
+                    level: Level::WARN,
+                    target: module_path!().to_owned(),
+                    message: "the line".to_owned(),
+                }]
+        );
     }
 }
 

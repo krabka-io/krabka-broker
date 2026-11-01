@@ -25,10 +25,14 @@
 
 use {
     crate::{
-        codes::{DELEGATION_TOKEN_EXPIRED, DELEGATION_TOKEN_OWNER_MISMATCH, INVALID_REQUEST},
+        codes::{
+            DELEGATION_TOKEN_EXPIRED, DELEGATION_TOKEN_OWNER_MISMATCH, INVALID_REQUEST,
+            NOT_CONTROLLER, UNKNOWN_SERVER_ERROR,
+        },
         handlers::{
             ErrorCodeResponse as _,
             delegation_token_admission::{admit_token_request, may_renew_or_expire},
+            submit_failure_code,
         },
         metadata_source::MetadataSource,
         network::auth::ConnectionAuth,
@@ -39,7 +43,7 @@ use {
         renew_delegation_token_request::RenewDelegationTokenRequest,
         renew_delegation_token_response::RenewDelegationTokenResponse,
     },
-    krabka_raft::DelegationTokenMutation,
+    krabka_raft::{DelegationTokenMutation, RaftError},
     krabka_security::SecretBytes,
     krabka_verified::{TokenRenewDecision, delegation_token::TokenApi, renew_token_expiry},
 };
@@ -104,7 +108,15 @@ pub async fn handle(
         .await
     {
         tracing::warn!(error = %e, "RenewDelegationToken: submit_change failed");
-        return RenewDelegationTokenResponse::error(INVALID_REQUEST);
+        // Kafka fails the request with the controller's exception and
+        // answers `getErrorResponse` of it: `NOT_CONTROLLER` when there is no
+        // active controller, which the admin client retries, and
+        // `UNKNOWN_SERVER_ERROR` for anything else.
+        let code = match e {
+            RaftError::NotLeader { .. } | RaftError::LeaderUnknown => NOT_CONTROLLER,
+            other => submit_failure_code(&other, UNKNOWN_SERVER_ERROR),
+        };
+        return RenewDelegationTokenResponse::error(code);
     }
 
     RenewDelegationTokenResponse {
@@ -392,4 +404,34 @@ mod tests {
     )]
     #[tokio::test]
     async fn renew_deadlines_case_9(renew_token: RenewTokenScenario) { let _ = (renew_token,); }
+
+    /// A renewal whose controller write fails answers Kafka's error response
+    /// for the controller's exception, not `INVALID_REQUEST`: a failover
+    /// answers the retriable `NOT_CONTROLLER`.
+    #[tokio::test]
+    async fn failed_controller_write_answers_kafka_error_code() {
+        let secret = SecretBytes::new(b"k".to_vec());
+        let req = RenewDelegationTokenRequest {
+            hmac: token_fixtures::hmac_for(token_fixtures::FAILING_WRITE_TOKEN_ID).into(),
+            renew_period_ms: 30_000,
+            ..Default::default()
+        };
+        let (req, secret) = (&req, &secret);
+        token_fixtures::check_failed_writes(
+            "renew",
+            |controller| async move {
+                let auth = token_fixtures::authed("alice");
+                handle(
+                    req,
+                    &auth,
+                    Some(secret),
+                    token_fixtures::DAY_MS,
+                    &controller,
+                )
+                .await
+            },
+            RenewDelegationTokenResponse::error,
+        )
+        .await;
+    }
 }

@@ -87,8 +87,17 @@ pub struct SharePersister {
     /// Creates `__share_group_state` when the first call needs it.
     auto_topic_creation: Arc<AutoTopicCreation>,
     inter_broker_client: Arc<InterBrokerClient>,
-    inter_broker_listener_protocol: ListenerProtocol,
-    inter_broker_listener_name: String,
+    inter_broker_listener: InterBrokerListener,
+}
+
+/// The inter-broker listener that [`SharePersister`] dials a
+/// state-partition leader on.
+pub struct InterBrokerListener {
+    pub protocol: ListenerProtocol,
+    /// The listener name the leader registered its endpoint under.
+    pub name: String,
+    /// The TLS server name to verify the leader against.
+    pub server_name: String,
 }
 
 impl Debug for SharePersister {
@@ -106,8 +115,7 @@ impl SharePersister {
         controller: Arc<dyn MetadataSource>,
         auto_topic_creation: Arc<AutoTopicCreation>,
         inter_broker_client: Arc<InterBrokerClient>,
-        inter_broker_listener_protocol: ListenerProtocol,
-        inter_broker_listener_name: String,
+        inter_broker_listener: InterBrokerListener,
     ) -> Self {
         Self {
             node_id,
@@ -115,8 +123,7 @@ impl SharePersister {
             controller,
             auto_topic_creation,
             inter_broker_client,
-            inter_broker_listener_protocol,
-            inter_broker_listener_name,
+            inter_broker_listener,
         }
     }
 
@@ -127,9 +134,10 @@ impl SharePersister {
     ///
     /// # Errors
     ///
-    /// Returns [`BrokerError::Share`] if the local coordinator fences or
-    /// rejects the call, or [`BrokerError`] from the inter-broker dial or send
-    /// on the remote path. The caller logs and retries. It must not fail a
+    /// Returns [`BrokerError::SharePartitionState`] with the coordinator's
+    /// error code when the coordinator, local or remote, fences or rejects the
+    /// call, or [`BrokerError`] from the inter-broker dial or send on the
+    /// remote path. The caller logs and retries. It must not fail a
     /// heartbeat.
     // cargo-mutants: the `topics` payload is only sent on the follower->leader
     // remote path (`send_to_leader` dials a real inter-broker socket); only the
@@ -164,11 +172,12 @@ impl SharePersister {
                 )
                 .await
                 .map_err(|error| {
-                    BrokerError::Share(format!(
-                        "InitializeShareGroupState {group}:{topic_id}:{partition} failed (code {}): {}",
+                    refused(
+                        "InitializeShareGroupState",
+                        partition,
                         error.code(),
-                        error.row_message("initialize"),
-                    ))
+                        &error.row_message("initialize"),
+                    )
                 });
         }
 
@@ -595,7 +604,7 @@ impl SharePersister {
                 message: format!("share-state leader node {leader} not in metadata image"),
             })?;
         let (host, port) =
-            registered_listener_endpoint(broker_info, &self.inter_broker_listener_name);
+            registered_listener_endpoint(broker_info, &self.inter_broker_listener.name);
         let host = host.to_owned();
 
         let opts = krabka_client_core::ConnectionOptions {
@@ -606,8 +615,8 @@ impl SharePersister {
             .connect_as_connection(
                 &host,
                 port,
-                self.inter_broker_listener_protocol,
-                "localhost",
+                self.inter_broker_listener.protocol,
+                &self.inter_broker_listener.server_name,
                 opts,
             )
             .await
@@ -762,9 +771,19 @@ fn check_partition_result<R: PartitionResults>(
 mod tests {
     use {
         super::*,
-        crate::codes::{
-            COORDINATOR_LOAD_IN_PROGRESS, FENCED_LEADER_EPOCH, FENCED_STATE_EPOCH, INVALID_REQUEST,
+        crate::{
+            codes::{
+                COORDINATOR_LOAD_IN_PROGRESS, FENCED_LEADER_EPOCH, FENCED_STATE_EPOCH,
+                INVALID_REQUEST,
+            },
+            handlers::test_support::{
+                StartedBroker, create_topic, share_topic_uuid, start_share_allow_all_no_audit,
+            },
+            partition_registry::PartitionRegistry,
+            share_coordinator::{config::ShareCoordinatorConfig, coordinator::message},
+            test_support::{FakeMetadataSource, assert_dialed_with, capture_server_name},
         },
+        krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord},
         krabka_protocol::{
             owned::initialize_share_group_state_response::{
                 InitializeStateResult, PartitionResult,
@@ -857,6 +876,102 @@ mod tests {
             })
             .collect();
         assert2::assert!(actual == expected);
+    }
+
+    /// A local `InitializeShareGroupState` that the coordinator refuses keeps
+    /// the coordinator code, as the remote path does. `AlterShareGroupOffsets`
+    /// answers that code per partition, so the answer must not depend on
+    /// whether this broker leads the `__share_group_state` partition.
+    #[tokio::test]
+    async fn a_refused_local_initialize_keeps_the_coordinator_code() {
+        let StartedBroker { broker, dir: _dir } = start_share_allow_all_no_audit().await;
+        let topic_id = share_topic_uuid(
+            create_topic()
+                .broker(&broker)
+                .client_id("share-persister-test")
+                .name("fenced")
+                .call()
+                .await,
+        );
+        let persister = broker
+            .broker_arc_for_test()
+            .group_coordinator
+            .share_persister()
+            .cloned()
+            .expect("share persister");
+
+        persister
+            .initialize("g", topic_id, 0, 5, Offset(0))
+            .await
+            .expect("first initialize");
+        let actual = match persister.initialize("g", topic_id, 0, 4, Offset(0)).await {
+            Err(BrokerError::SharePartitionState { code, message }) => Ok((code, message)),
+            other => Err(format!("{other:?}")),
+        };
+        broker.shutdown().await;
+
+        assert2::assert!(
+            actual
+                == Ok((
+                    FENCED_STATE_EPOCH,
+                    format!(
+                        "InitializeShareGroupState for partition 0 refused by the leader: {}",
+                        message::FENCED_STATE_EPOCH
+                    ),
+                ))
+        );
+    }
+
+    /// A share-state call routed to a remote leader dials it with the
+    /// configured inter-broker server name, so TLS hostname verification
+    /// checks the name the operator set.
+    #[tokio::test]
+    async fn a_routed_share_state_call_dials_with_the_configured_server_name() {
+        let capture = capture_server_name().await;
+        let config = ShareCoordinatorConfig::default();
+        let partitions = config.state_topic_num_partitions;
+        let mut image = MetadataImage::default();
+        image.apply(&MetadataRecord::V1BrokerRegistration(
+            capture.broker(krabka_raft::NodeId(2), "INTERNAL"),
+        ));
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: bootstrap::TOPIC.into(),
+            topic_id: uuid::Uuid::from_u128(9),
+            partitions,
+            replication_factor: 1,
+        }));
+        for partition in 0..partitions {
+            image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+                topic: bootstrap::TOPIC.into(),
+                partition,
+                leader: NodeId(2),
+                replicas: vec![NodeId(2)],
+                isr: vec![NodeId(2)],
+                ..Default::default()
+            }));
+        }
+        let persister = SharePersister::new(
+            NodeId(1),
+            Arc::new(ShareCoordinator::new(
+                NodeId(1),
+                Arc::new(PartitionRegistry::new()),
+                config,
+            )),
+            Arc::new(FakeMetadataSource::builder().image(image).build()),
+            Arc::default(),
+            Arc::new(capture.client),
+            InterBrokerListener {
+                protocol: ListenerProtocol::Ssl,
+                name: "INTERNAL".to_owned(),
+                server_name: "broker.internal".to_owned(),
+            },
+        );
+
+        let result = persister
+            .initialize("g", uuid::Uuid::from_u128(3), 0, 1, Offset(0))
+            .await;
+
+        assert_dialed_with(&result, capture.server_name, "broker.internal").await;
     }
 
     #[test]

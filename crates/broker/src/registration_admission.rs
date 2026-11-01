@@ -45,7 +45,7 @@ use {
         unclean_recovery::UncleanRecoveryHandle,
     },
     krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, NodeId},
-    krabka_raft::{RaftError, RegistrationAdmission, RegistrationAdmissionFuture},
+    krabka_raft::{AdmittedBatch, RaftError, RegistrationAdmission, RegistrationAdmissionFuture},
     std::{collections::HashSet, sync::Arc, time::Duration},
     tokio::{sync::watch::Receiver, task::JoinHandle, time::timeout},
     uuid::Uuid,
@@ -208,15 +208,18 @@ impl BrokerRegistrationAdmission {
     /// session, as [`ControllerLivenessState::replace_incarnation`] leaves it.
     ///
     /// [`ControllerLivenessState::replace_incarnation`]: crate::heartbeat::controller_state::ControllerLivenessState::replace_incarnation
-    fn before_bind(&self, records: Vec<MetadataRecord>) -> Result<Admitted, RaftError> {
-        let image = Arc::clone(&self.images.borrow());
-        if retires_another_broker(&image, self.node_id, &records) {
+    fn before_bind(
+        &self,
+        image: &MetadataImage,
+        records: Vec<MetadataRecord>,
+    ) -> Result<Admitted, RaftError> {
+        if retires_another_broker(image, self.node_id, &records) {
             return Err(RaftError::ControllerAdmin(
                 "broker startup is incomplete".into(),
             ));
         }
-        let alive = active_on_activation(&image, self.node_id);
-        Ok(admit(&image, records, &alive, &self.metrics))
+        let alive = active_on_activation(image, self.node_id);
+        Ok(admit(image, records, &alive, &self.metrics))
     }
 }
 
@@ -276,7 +279,11 @@ fn hand_off_recoveries(
 }
 
 impl RegistrationAdmission for BrokerRegistrationAdmission {
-    fn admit(&self, records: Vec<MetadataRecord>) -> RegistrationAdmissionFuture<'_> {
+    fn admit(
+        &self,
+        image: Arc<MetadataImage>,
+        records: Vec<MetadataRecord>,
+    ) -> RegistrationAdmissionFuture<'_> {
         Box::pin(async move {
             let Admitted {
                 records,
@@ -284,29 +291,34 @@ impl RegistrationAdmission for BrokerRegistrationAdmission {
                 recoveries,
             } = match self.router.broker() {
                 Some(broker) => {
-                    let image = broker.controller.current_image();
                     let alive = broker.liveness.alive_node_ids().await;
                     let admitted = admit(&image, records, &alive, &self.metrics);
                     // `ClusterControlManager.registerBroker` removes the session
                     // of the previous incarnation and registers the new one
-                    // fenced.
+                    // fenced. A refused attempt that is decided again does this
+                    // again, for a process that cannot have heartbeated yet.
                     for (node, _) in &admitted.new_incarnations {
                         broker.liveness.replace_incarnation(node.0).await;
                     }
                     admitted
                 }
-                None => self.before_bind(records)?,
+                None => self.before_bind(&image, records)?,
             };
-            if let Some(first) = new_incarnations.first() {
+            // Only the attempt the leader appends hands its recoveries over:
+            // each refused attempt decided them again.
+            let on_accept = new_incarnations.first().copied().map(|first| {
+                let images = self.images.clone();
                 let bound = self.router.bound();
-                hand_off_recoveries(
-                    self.images.clone(),
-                    async move { bound.await.map(|broker| broker.unclean_recovery.clone()) },
-                    *first,
-                    recoveries,
-                );
-            }
-            Ok(records)
+                Box::new(move || {
+                    hand_off_recoveries(
+                        images,
+                        async move { bound.await.map(|broker| broker.unclean_recovery.clone()) },
+                        first,
+                        recoveries,
+                    );
+                }) as Box<dyn FnOnce() + Send>
+            });
+            Ok(AdmittedBatch { records, on_accept })
         })
     }
 }

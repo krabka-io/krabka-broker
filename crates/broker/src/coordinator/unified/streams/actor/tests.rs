@@ -44,7 +44,7 @@ use {
         records::RecordBatch,
     },
     std::{collections::BTreeMap, sync::Arc, time::Duration},
-    tokio::time::sleep,
+    tokio::{task::yield_now, time::sleep},
 };
 
 fn partition_indices(partitions: Option<Vec<i32>>) -> Option<Vec<krabka_ids::PartitionIndex>> {
@@ -227,6 +227,163 @@ async fn leave_of_an_unknown_member_is_refused_and_writes_nothing() {
         )
     );
     check!(log.batches().await == before);
+}
+
+/// A heartbeat that the coordinator refuses on a group that holds nothing
+/// does not close the actor while another message is queued behind it: both
+/// get their answer, and the group that the second one joins stays.
+#[tokio::test]
+async fn a_refused_heartbeat_with_a_queued_join_answers_both() {
+    let (coord, _log) = make_coordinator();
+    let handle = coord.get_or_create_streams("g");
+    // On this single-threaded runtime the actor runs only once the test
+    // awaits, so both heartbeats are in the mailbox before it handles one.
+    let (refused_tx, refused_rx) = oneshot::channel();
+    let (joined_tx, joined_rx) = oneshot::channel();
+    for (request, reply) in [
+        (
+            StreamsGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m9".into(),
+                member_epoch: -1,
+                ..Default::default()
+            },
+            refused_tx,
+        ),
+        (member_request("m1", 0), joined_tx),
+    ] {
+        handle
+            .tx
+            .try_send(StreamsGroupActorMessage::Heartbeat {
+                request: Box::new(request),
+                version: MAX_VERSION,
+                client_id: "client".into(),
+                client_host: "/127.0.0.1".into(),
+                reply,
+            })
+            .expect("a mailbox with room for two heartbeats");
+    }
+
+    let refused = refused_rx
+        .await
+        .expect("an answer to the refused heartbeat");
+    let joined = joined_rx.await.expect("an answer to the queued join");
+
+    check!(
+        refused.response
+            == super::response::error_resp(
+                codes::UNKNOWN_MEMBER_ID,
+                Some("Member m9 is not a member of group g.".into())
+            )
+    );
+    check!(joined.response.error_code == codes::NONE);
+    check!(joined.response.member_epoch == 2);
+    // The actor still reads its mailbox.
+    let steady = heartbeat(&handle, member_request("m1", 2)).await;
+    check!(steady.error_code == codes::NONE);
+    check!(coord.streams_groups.contains_key("g"));
+}
+
+/// What the mailbox of a group that refused a leave answered, and what the
+/// group left behind.
+#[derive(Debug, PartialEq)]
+struct RefusedDrain {
+    refused: Result<StreamsGroupHeartbeatResponse, oneshot::error::RecvError>,
+    failed: Result<StreamsGroupHeartbeatResponse, oneshot::error::RecvError>,
+    queued: Result<StreamsGroupHeartbeatResponse, oneshot::error::RecvError>,
+    described_members: Result<Vec<String>, oneshot::error::RecvError>,
+    batches: usize,
+    registered: bool,
+}
+
+/// A heartbeat message for `request`, and the receiver of its answer.
+fn heartbeat_message(
+    request: StreamsGroupHeartbeatRequest,
+) -> (
+    StreamsGroupActorMessage,
+    oneshot::Receiver<StreamsHeartbeatResult>,
+) {
+    let (reply, answer) = oneshot::channel();
+    let message = StreamsGroupActorMessage::Heartbeat {
+        request: Box::new(request),
+        version: MAX_VERSION,
+        client_id: "client".into(),
+        client_host: "/127.0.0.1".into(),
+        reply,
+    };
+    (message, answer)
+}
+
+/// Kafka's `CoordinatorRuntime` reverts the shard to its last committed
+/// snapshot when a write fails, so nothing after the failed write sees what it
+/// changed.
+///
+/// Here a leave of an unknown member is refused on an empty group with nothing
+/// queued behind it, so the actor closes its mailbox and drains what raced in:
+/// a join whose write fails, then a join and a describe. Each was sent with a
+/// permit reserved before the close, as `Sender::send` reserves one before it
+/// enqueues. The join and the describe after the failed write are not answered
+/// from it, nothing is written on top of it, and the group, which nothing
+/// persisted, is forgotten.
+#[tokio::test]
+async fn a_failed_write_in_the_refused_heartbeat_drain_ends_on_the_persisted_state() {
+    let (coord, log) = make_coordinator();
+    let handle = coord.get_or_create_streams("g");
+    log.fail_next_append(None);
+
+    let (leave, refused) = heartbeat_message(member_request("m9", -1));
+    handle.tx.try_send(leave).unwrap();
+    let permits = [
+        handle.tx.reserve().await.unwrap(),
+        handle.tx.reserve().await.unwrap(),
+        handle.tx.reserve().await.unwrap(),
+    ];
+    while !handle.tx.is_closed() {
+        yield_now().await;
+    }
+    let (failing_join, failed) = heartbeat_message(member_request("m1", 0));
+    let (join, queued) = heartbeat_message(member_request("m2", 0));
+    let (reply, described) = oneshot::channel();
+    let messages = [failing_join, join, StreamsGroupActorMessage::Describe {
+        reply,
+    }];
+    for (permit, message) in permits.into_iter().zip(messages) {
+        permit.send(message);
+    }
+
+    let drain = RefusedDrain {
+        refused: refused.await.map(|result| result.response),
+        failed: failed.await.map(|result| result.response),
+        queued: queued.await.map(|result| result.response),
+        described_members: described.await.map(|view| {
+            view.members
+                .into_iter()
+                .map(|member| member.member_id)
+                .collect()
+        }),
+        batches: log.batches().await.len(),
+        registered: coord.find_streams("g").is_some(),
+    };
+
+    let (_, closed) = oneshot::channel::<()>();
+    let recv_error = closed.await.unwrap_err();
+    assert!(
+        drain
+            == RefusedDrain {
+                refused: Ok(super::response::error_resp(
+                    codes::UNKNOWN_MEMBER_ID,
+                    Some("Member m9 is not a member of group g.".into())
+                )),
+                failed: Ok(super::response::error_resp(
+                    codes::COORDINATOR_LOAD_IN_PROGRESS,
+                    None
+                )),
+                queued: Err(recv_error.clone()),
+                described_members: Err(recv_error),
+                batches: 0,
+                registered: false,
+            }
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

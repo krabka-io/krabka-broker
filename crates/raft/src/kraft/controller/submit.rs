@@ -7,7 +7,7 @@ use {
         mutation_policy::{
             MutationAdmission, PreparedRecords, created_topic_names, prepare_records,
         },
-        offsets::{hwm_reaches_waiter, submit_waiter_need_offset, validate_append_result},
+        offsets::{hwm_reaches_waiter, submit_waiter_need_offset},
         records::{
             decode_committed_value, is_kip835_noop, metadata_record_batch, next_batch_offset,
         },
@@ -300,8 +300,8 @@ impl Engine {
     /// # Errors
     ///
     /// Returns the first check that refuses the records, or a failure to
-    /// build or append their batch. A batch whose append does not land at the
-    /// log end it was stamped for is an error after the append.
+    /// build or append their batch. A batch the log would not place at the
+    /// log end its offsets were assigned from is refused with nothing written.
     fn admit_and_append(
         &mut self,
         records: &[krabka_metadata::MetadataRecord],
@@ -398,15 +398,11 @@ impl Engine {
         }
 
         let mut batch = metadata_record_batch(leader_epoch, &value_blobs)?;
-        let base = self
-            .log
-            .append(&mut batch, KraftController::wall_clock_ms())?;
-        validate_append_result(
-            "submit-change",
-            assign_base,
-            base,
-            self.log.log_end_offset(),
-        )?;
+        // The records carry offsets assigned from `assign_base` (KIP-903
+        // broker epochs among them), so the batch goes there or nowhere.
+        self.log
+            .append_at_end(&mut batch, KraftController::wall_clock_ms(), assign_base)?;
+        let base = assign_base;
         Ok(Admitted::Appended(AppendedSubmit {
             leader_epoch,
             base_offset: base,
@@ -471,24 +467,12 @@ impl Engine {
                 return -1;
             }
         };
-        let expected_base = self.log.log_end_offset();
-        let base = match self
+        let base = self.log.log_end_offset();
+        if let Err(e) = self
             .log
-            .append(&mut batch, KraftController::wall_clock_ms())
+            .append_at_end(&mut batch, KraftController::wall_clock_ms(), base)
         {
-            Ok(off) => off,
-            Err(e) => {
-                tracing::error!(?e, "kraft: test append failed");
-                return -1;
-            }
-        };
-        if let Err(e) = validate_append_result(
-            "test append",
-            expected_base,
-            base,
-            self.log.log_end_offset(),
-        ) {
-            tracing::error!(?e, "kraft: test append invariant failed");
+            tracing::error!(?e, "kraft: test append failed");
             return -1;
         }
         self.advance_and_apply(self.log.log_end_offset());

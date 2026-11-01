@@ -3,7 +3,7 @@
 //! the election and submission helpers the behaviour tests drive them with.
 
 use {
-    super::*,
+    super::{startup::Assembled, *},
     crate::{
         MetadataLogConfig, NoEventQueueRecorder,
         kraft::{Activation, transport::NullPeerSender},
@@ -125,11 +125,11 @@ pub fn build(
     #[builder(into, default = ControllerSetup::default().snapshot_interval_records)]
     snapshot_interval_records: SnapshotRecordCount,
     heartbeat_interval: Option<Time>,
-    #[builder(into, default = ControllerSetup::default().controller_fetch_miss_limit)]
+    #[builder(default = ControllerSetup::default().controller_fetch_miss_limit)]
     controller_fetch_miss_limit: ControllerFetchMissLimit,
-    #[builder(into, default = ControllerSetup::default().metadata_raft_command_queue_capacity)]
+    #[builder(default = ControllerSetup::default().metadata_raft_command_queue_capacity)]
     metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity,
-    #[builder(into, default = ControllerSetup::default().metadata_raft_fetch_max)]
+    #[builder(default = ControllerSetup::default().metadata_raft_fetch_max)]
     metadata_raft_fetch_max: MetadataRaftFetchMax,
     #[builder(default = ControllerSetup::default().max_bytes_between_snapshots)]
     max_bytes_between_snapshots: krabka_units::ByteSize,
@@ -209,21 +209,47 @@ pub fn open_test_controller_with(
 ) -> Result<KraftController, RaftError> {
     KraftController::open(
         data_dir,
-        KraftOpenConfig::builder()
-            .me(NodeId(1))
-            .cluster_id(cluster_id)
-            .directory_id(uuid::Uuid::nil())
-            .bootstrap_voters(voters)
-            .timeouts(QuorumTimeouts {
-                election: election_timeout,
-                fetch: TEST_FETCH_TIMEOUT,
-            })
-            .peers(Arc::new(NullPeerSender))
-            .metadata_log(test_metadata_log())
-            .activation(activation)
-            .build(),
+        test_open_config(cluster_id, voters, election_timeout, activation),
         validate_image,
     )
+}
+
+/// The engine that [`open_test_controller`] recovers from `data_dir` as
+/// voter 1 of `voters`, assembled and not spawned, so a test drives it turn
+/// by turn.
+pub fn open_test_engine(data_dir: PathBuf, voters: VoterSet) -> Result<Assembled, RaftError> {
+    KraftController::open_assembled(
+        data_dir,
+        test_open_config(
+            uuid::Uuid::nil(),
+            voters,
+            TEST_ELECTION_TIMEOUT,
+            Activation::default(),
+        ),
+        |_| Ok(()),
+    )
+}
+
+/// The open configuration of voter 1 under test.
+fn test_open_config(
+    cluster_id: uuid::Uuid,
+    voters: VoterSet,
+    election_timeout: krabka_units::Time,
+    activation: Activation,
+) -> KraftOpenConfig {
+    KraftOpenConfig::builder()
+        .me(NodeId(1))
+        .cluster_id(cluster_id)
+        .directory_id(uuid::Uuid::nil())
+        .bootstrap_voters(voters)
+        .timeouts(QuorumTimeouts {
+            election: election_timeout,
+            fetch: TEST_FETCH_TIMEOUT,
+        })
+        .peers(Arc::new(NullPeerSender))
+        .metadata_log(test_metadata_log())
+        .activation(activation)
+        .build()
 }
 
 fn spawn_test_controller(
@@ -266,9 +292,9 @@ impl Default for EngineSetup<'_> {
 pub fn build_engine_only(
     #[builder(into, default = EngineSetup::default().me)] me: NodeId,
     #[builder(default = EngineSetup::default().ids)] ids: &'_ [NodeId],
-    #[builder(into, default = EngineSetup::default().controller_fetch_miss_limit)]
+    #[builder(default = EngineSetup::default().controller_fetch_miss_limit)]
     controller_fetch_miss_limit: ControllerFetchMissLimit,
-    #[builder(into, default = EngineSetup::default().metadata_raft_fetch_max)]
+    #[builder(default = EngineSetup::default().metadata_raft_fetch_max)]
     metadata_raft_fetch_max: MetadataRaftFetchMax,
     #[builder(default = EngineSetup::default().metadata_log)] metadata_log: MetadataLogConfig,
 ) -> (Engine, tempfile::TempDir) {
