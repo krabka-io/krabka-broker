@@ -2,8 +2,14 @@
 //! host's retained-batch bookkeeping ([`ProducerEntry::retained_batches`] and
 //! [`super::entry::earlier_after_completion`]) around the proved
 //! `producer_decision` kernel, as `check_retained` runs them. There is one
-//! producer id per partition, and the broker serializes its requests, so the
-//! model enumerates every bounded submit sequence.
+//! producer id per partition, and each submit is checked and committed in one
+//! step, so the model enumerates every bounded serialized submit sequence.
+//!
+//! The broker does not serialize one producer's requests. A produce holds only
+//! a shared read guard of the partition's transition barrier, and it commits
+//! into the tracker only after its `acks=all` gate resolves, so a retry can be
+//! checked between the original's append and its commit. That window is the
+//! subject of `producer_state::inflight_model`, not of this model.
 //!
 //! The oracle is independent of the host's representation. The state carries a
 //! ghost [`Window`]: the producer's epoch, its last accepted sequence, and the

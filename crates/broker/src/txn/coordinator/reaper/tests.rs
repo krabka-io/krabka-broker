@@ -477,3 +477,61 @@ async fn a_timed_out_transaction_aborts_at_the_fenced_epoch_at_every_transaction
         );
     }
 }
+
+/// The sweep resumes only a `PrepareAbort` that has a timeout, prepares the
+/// abort of an `Ongoing` transaction past its timeout, and leaves every other
+/// entry alone, a `PrepareCommit` among them.
+#[test]
+fn reaper_step_resumes_only_a_prepare_abort_and_prepares_only_a_timed_out_ongoing() {
+    let entry = |state, timeout_ms| {
+        let mut e = TxnEntry::new_empty("tid-step".to_owned(), ProducerId(7), 0, timeout_ms, 0);
+        e.state = state;
+        e.start_ms = 0;
+        e
+    };
+    let cases = [
+        (
+            "prepare abort",
+            entry(TxnState::PrepareAbort, 1_000),
+            0,
+            ReaperStep::ResumeAbort,
+        ),
+        (
+            "2pc prepare abort",
+            entry(TxnState::PrepareAbort, NO_TIMEOUT_MS),
+            5_000,
+            ReaperStep::Skip,
+        ),
+        (
+            "timed-out ongoing",
+            entry(TxnState::Ongoing, 1_000),
+            1_001,
+            ReaperStep::PrepareAbort,
+        ),
+        (
+            "ongoing at its timeout",
+            entry(TxnState::Ongoing, 1_000),
+            1_000,
+            ReaperStep::Skip,
+        ),
+        (
+            "prepare commit",
+            entry(TxnState::PrepareCommit, 1_000),
+            5_000,
+            ReaperStep::Skip,
+        ),
+        (
+            "complete abort",
+            entry(TxnState::CompleteAbort, 1_000),
+            5_000,
+            ReaperStep::Skip,
+        ),
+    ];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (label, entry, now_ms, step) in cases {
+        actual.push((label, reaper_step(&entry, now_ms)));
+        expected.push((label, step));
+    }
+    assert!(actual == expected);
+}

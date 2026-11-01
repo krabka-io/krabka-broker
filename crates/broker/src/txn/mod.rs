@@ -4,6 +4,12 @@ pub mod bootstrap;
 /// The background task that completes transactions whose `Prepare*` record is
 /// durable.
 pub mod completion;
+/// Exhaustive model of transaction completion across indeterminate
+/// `__transaction_state` writes, coordinator failover, marker refusals and
+/// data-leader changes: every transaction must end once the faults stop.
+#[cfg(test)]
+#[path = "completion_model.rs"]
+mod completion_model;
 pub mod coordinator;
 pub mod decision;
 #[cfg(test)]

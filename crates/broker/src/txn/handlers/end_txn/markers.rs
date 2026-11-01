@@ -33,7 +33,7 @@ use {
 
 /// The outcome of one attempt to fan out `WriteTxnMarkers`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum MarkerFanOutOutcome {
+pub enum MarkerFanOutOutcome {
     /// Every partition's marker is durable.
     Complete,
     /// At least one partition failed with a retriable code, and no fenced
@@ -84,25 +84,24 @@ pub(super) async fn dispatch_transaction_markers(
     marker_type: MarkerType,
     transactional_id: &str,
 ) -> MarkerFanOutOutcome {
-    match broker
+    let result = broker
         .txn_coordinator
         .dispatch_transaction_markers(snapshot, marker_type)
-        .await
-    {
-        Ok(()) => MarkerFanOutOutcome::Complete,
-        Err(error) if classify_marker_failure(&error).stops_fan_out() => {
+        .await;
+    let class = result.as_ref().err().map(classify_marker_failure);
+    let outcome = fan_out_outcome(class);
+    if let Err(error) = &result {
+        if outcome == MarkerFanOutOutcome::GivenUp {
             tracing::warn!(
                 tid = transactional_id,
                 producer_id = snapshot.producer_id.get(),
                 producer_epoch = snapshot.producer_epoch,
                 outstanding = ?snapshot.partitions,
                 error = %error,
-                class = ?classify_marker_failure(&error),
+                class = ?class,
                 "EndTxn: WriteTxnMarkers fan-out cannot succeed; giving up"
             );
-            MarkerFanOutOutcome::GivenUp
-        }
-        Err(error) => {
+        } else {
             tracing::warn!(
                 tid = transactional_id,
                 producer_id = snapshot.producer_id.get(),
@@ -111,8 +110,18 @@ pub(super) async fn dispatch_transaction_markers(
                 error = %error,
                 "EndTxn: WriteTxnMarkers fan-out failed; queued for completion"
             );
-            MarkerFanOutOutcome::Retry
         }
+    }
+    outcome
+}
+
+/// What `EndTxn` does after its fan-out: `failure` is the class of its worst
+/// failed marker, `None` when every marker is written.
+pub fn fan_out_outcome(failure: Option<MarkerFailureClass>) -> MarkerFanOutOutcome {
+    match failure {
+        None => MarkerFanOutOutcome::Complete,
+        Some(class) if class.stops_fan_out() => MarkerFanOutOutcome::GivenUp,
+        Some(_) => MarkerFanOutOutcome::Retry,
     }
 }
 

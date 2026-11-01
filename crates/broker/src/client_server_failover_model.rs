@@ -8,7 +8,9 @@
 //! bounded cluster and client shape, [`witness`] the bitset that keeps the
 //! `sometimes` properties honest, [`state`] the search space and the pure
 //! queries over it, [`produce`] one client produce attempt against the real
-//! `check_pure`, [`properties`] what the checker proves, [`model`] the
+//! `check_pure`, which reads a leader tracker that takes each append only
+//! when its `acks=all` gate resolves, through the real `committed_entry`,
+//! [`properties`] what the checker proves, [`model`] the
 //! stateright [`Model`](stateright::Model) implementation, and [`runner`] the
 //! checker bounds.
 

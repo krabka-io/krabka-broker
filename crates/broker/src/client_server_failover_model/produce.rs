@@ -3,22 +3,21 @@
 //!
 //! This is the composition the model exists to check: the client's own retry
 //! and sequence bookkeeping runs against `check_pure`, the real broker-side
-//! idempotent-producer check, rather than against a restatement of it.
+//! idempotent-producer check, rather than against a restatement of it. The
+//! check reads the leader's tracker, which an append reaches only through a
+//! later [`Action::Commit`](super::state::Action::Commit).
 
 use {
     super::{
-        bounds::{
-            BASE_OFFSET, BASE_SEQUENCE, MAX_LOG_LEN, MAX_SEND_ATTEMPTS, PRODUCER_EPOCH, PRODUCER_ID,
-        },
+        bounds::{BASE_SEQUENCE, MAX_LOG_LEN, MAX_SEND_ATTEMPTS, PRODUCER_EPOCH, PRODUCER_ID},
         state::{
-            AcceptedBatch, BatchState, FailoverState, LogBatch, ProduceResult,
-            ProducerEntryProjection, RequestOutcome,
+            AcceptedBatch, BatchState, FailoverState, LogBatch, ProduceResult, RequestOutcome,
         },
         witness::{
             WITNESS_APPENDED_UNACKED, WITNESS_DUPLICATE_AFTER_UNKNOWN, WITNESS_DUPLICATE_RESPONSE,
             WITNESS_FAILOVER, WITNESS_NOT_LEADER, WITNESS_PREPARED_RETRY, WITNESS_RETRY,
-            WITNESS_RETRY_AFTER_FAILOVER, WITNESS_TIMED_OUT_UNKNOWN,
-            WITNESS_UNKNOWN_RETRY_AFTER_FAILOVER,
+            WITNESS_RETRY_AFTER_FAILOVER, WITNESS_RETRY_DURING_PENDING_COMMIT,
+            WITNESS_TIMED_OUT_UNKNOWN, WITNESS_UNKNOWN_RETRY_AFTER_FAILOVER,
         },
     },
     crate::producer_state::{Decision, check_pure},
@@ -88,9 +87,14 @@ impl FailoverState {
             return None;
         }
 
-        s.refresh_leader_producer_entry();
-        let entry = s.producer_entry();
-        match check_pure(entry.as_ref(), PRODUCER_EPOCH, base_sequence, 0) {
+        if kind == SendKind::Retry
+            && s.leader_contains_accepted()
+            && s.accepted
+                .is_some_and(|accepted| s.commit_pending(accepted.offset))
+        {
+            s.witnesses.mark(WITNESS_RETRY_DURING_PENDING_COMMIT);
+        }
+        match check_pure(s.tracker.as_ref(), PRODUCER_EPOCH, base_sequence, 0) {
             Decision::Append => {
                 if !matches!(
                     outcome,
@@ -98,22 +102,24 @@ impl FailoverState {
                 ) {
                     return None;
                 }
-                if s.log_len(s.leader) >= MAX_LOG_LEN || (s.hwm > 0 && s.accepted.is_some()) {
+                let slot = s.log_len(s.leader);
+                if slot >= MAX_LOG_LEN {
                     return None;
                 }
-                let batch = LogBatch::initial();
-                s.logs[s.leader][0] = Some(batch);
-                s.accepted = Some(AcceptedBatch {
-                    producer_id: PRODUCER_ID,
-                    producer_epoch: PRODUCER_EPOCH,
-                    base_sequence,
-                    offset: BASE_OFFSET,
-                });
-                s.producer_entry = Some(ProducerEntryProjection {
-                    epoch: PRODUCER_EPOCH,
-                    last_sequence: base_sequence,
-                    base_offset: BASE_OFFSET,
-                });
+                let batch = LogBatch::at(i64::try_from(slot).ok()?);
+                s.logs[s.leader][slot] = Some(batch);
+                // The commit waits for the `acks=all` gate: `PendingAck::finish`
+                // runs `AppendCommit::record` after it resolves.
+                s.pending_commit[slot] = true;
+                // The client's batch is the first copy in the leader's log.
+                if !s.leader_contains_accepted() {
+                    s.accepted = Some(AcceptedBatch {
+                        producer_id: PRODUCER_ID,
+                        producer_epoch: PRODUCER_EPOCH,
+                        base_sequence,
+                        offset: batch.offset,
+                    });
+                }
                 s.batch = BatchState::Appended;
                 s.next_sequence = base_sequence + 1;
                 match outcome {
@@ -136,7 +142,6 @@ impl FailoverState {
                 if accepted.producer_id != PRODUCER_ID
                     || accepted.producer_epoch != PRODUCER_EPOCH
                     || accepted.base_sequence != base_sequence
-                    || accepted.offset != base_offset
                 {
                     return None;
                 }
@@ -150,7 +155,9 @@ impl FailoverState {
                         s.witnesses.mark(WITNESS_UNKNOWN_RETRY_AFTER_FAILOVER);
                     }
                 }
-                if s.hwm == 1 {
+                // A duplicate under `acks=all` waits for the high watermark to
+                // cover the batch it repeats.
+                if i64::from(s.hwm) > base_offset {
                     s.acked_offset = Some(base_offset);
                     s.batch = BatchState::Acked;
                     s.last_result = Some(ProduceResult::Acked);

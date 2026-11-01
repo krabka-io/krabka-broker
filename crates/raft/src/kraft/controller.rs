@@ -128,6 +128,7 @@ mod vote_response;
 pub use self::{
     activation::Activation,
     control_state::control_batch_image_records,
+    mutation_policy::encode_record,
     records::{decode_committed_value, is_kip835_noop},
 };
 
