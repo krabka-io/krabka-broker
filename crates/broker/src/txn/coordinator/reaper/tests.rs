@@ -146,27 +146,6 @@ async fn sweep_candidates(backend: &MockReaperBackend, candidates: &[&str]) -> V
     .await
 }
 
-#[tokio::test]
-async fn sweep_hands_a_prepared_abort_to_the_completion_task() {
-    let mut backend = MockReaperBackend::new();
-    backend
-        .expect_is_coordinator_for()
-        .withf(|t| t == "tid-a")
-        .returning(|_| true);
-    backend
-        .expect_prepare_abort()
-        .times(1)
-        .returning(|t, _, _| Some(prepared_entry(t, 1000, 3)));
-    backend
-        .expect_queue_completion()
-        .times(1)
-        .withf(|t| t == "tid-a")
-        .return_const(());
-
-    let out = sweep_candidates(&backend, &["tid-a"]).await;
-    check!(out == vec!["tid-a".to_owned()]);
-}
-
 #[yare::parameterized(
     not_coordinator = { false },
     prepare_declines = { true },
@@ -193,15 +172,21 @@ async fn sweep_queues_nothing_it_did_not_prepare(is_coordinator: bool) {
     assert2::assert!(out.is_empty());
 }
 
-#[tokio::test]
-async fn sweep_aborts_each_expired_tid_independently() {
+/// The sweep prepares and queues the abort of each coordinated, expired tid,
+/// once, and skips the others. Only `tid-a` is coordinated and expired.
+#[yare::parameterized(
+    alone = { &["tid-a"] },
+    beside_one_it_does_not_coordinate = { &["tid-a", "tid-b"] },
+)]
+#[test_macro(tokio::test)]
+async fn sweep_hands_each_prepared_abort_to_the_completion_task(candidates: &[&str]) {
     let mut backend = MockReaperBackend::new();
-    // tid-a coordinated + expired; tid-b not coordinated.
     backend
         .expect_is_coordinator_for()
         .returning(|t| t == "tid-a");
     backend
         .expect_prepare_abort()
+        .times(1)
         .withf(|t, _, _| t == "tid-a")
         .returning(|t, _, _| Some(prepared_entry(t, 1000, 3)));
     backend
@@ -210,7 +195,7 @@ async fn sweep_aborts_each_expired_tid_independently() {
         .withf(|t| t == "tid-a")
         .return_const(());
 
-    let out = sweep_candidates(&backend, &["tid-a", "tid-b"]).await;
+    let out = sweep_candidates(&backend, candidates).await;
     check!(out == vec!["tid-a".to_owned()]);
 }
 
