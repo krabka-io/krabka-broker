@@ -699,6 +699,6 @@ async fn plugin_sees_durable_uncertain_before_external_side_effect() {
         ..Default::default()
     });
     let coordinator = native_coordinator(backend, Arc::clone(&log));
-    let handle = store_native_topology(&coordinator).await;
+    let _handle = store_native_topology(&coordinator).await;
     assert!(last_group_metadata(&log).await.description.stored == 0);
 }
