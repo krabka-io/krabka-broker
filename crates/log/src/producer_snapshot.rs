@@ -69,6 +69,15 @@ pub struct ProducerBatchMetadata {
     pub timestamp: i64,
 }
 
+impl ProducerBatchMetadata {
+    /// The offset of the batch's first record. Kafka's
+    /// `BatchMetadata.firstOffset`.
+    #[must_use]
+    pub fn base_offset(&self) -> Offset {
+        Offset(self.last_offset.0 - i64::from(self.offset_delta))
+    }
+}
+
 /// One producer's state as the log holds it: its snapshot entry, whose last
 /// batch is the producer's last one, and the batches the producer appended
 /// before that one at the same epoch, oldest first.

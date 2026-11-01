@@ -9,7 +9,7 @@ use {
     crate::{
         blocking::run_page_cache_io,
         error::BrokerError,
-        partition::{AppendedBatch, ProduceData, ProducerAppendCheck},
+        partition::{AppendOrigin, AppendedBatch, ProduceData, ProducerAppendCheck},
         time_util::now_ms,
     },
     krabka_log::{Log, Offset},
@@ -130,6 +130,37 @@ fn at_offset(base_offset: Offset) -> AppendedBatch {
     }
 }
 
+/// The answer for a client batch that repeats one of its producer's retained
+/// batches, or `None` when the batch must go on to the transaction check and
+/// the append.
+///
+/// This is the duplicate lookup that Kafka's
+/// `UnifiedLog.analyzeAndValidateProducerState` runs for an
+/// `AppendOrigin.CLIENT` batch, first among its producer checks and under the
+/// append's own lock. The answer is the retained batch's first offset and its
+/// max timestamp, and nothing is appended. The produce path's own dedup gate
+/// runs earlier, outside this lock, against a tracker that a concurrent
+/// request may not have updated yet. A retry that passes it while the first
+/// copy is queued, appending, or waiting for `acks=all` is caught here.
+fn duplicate_of(log: &Log, check: Option<&Option<ProducerAppendCheck>>) -> Option<AppendedBatch> {
+    let check = check.copied().flatten()?;
+    let AppendOrigin::Client { last_offset_delta } = check.origin else {
+        return None;
+    };
+    if check.batch.is_control {
+        return None;
+    }
+    let retained = log.find_duplicate_batch(
+        check.batch.producer_id,
+        check.batch.producer_epoch,
+        (check.batch.base_sequence, last_offset_delta),
+    )?;
+    Some(AppendedBatch {
+        base_offset: retained.base_offset(),
+        log_append_time_ms: Some(retained.timestamp),
+    })
+}
+
 /// The refusal for a client batch whose producer transaction check fails, or
 /// `None` when the batch may append. The check runs under the append's own
 /// lock, so no marker can land between the check and the append.
@@ -183,6 +214,10 @@ fn append_produce_batch(
     let mut control_entries = Vec::new();
     for (index, data) in datas.into_iter().enumerate() {
         let control_producer = data.control_producer_id();
+        if let Some(duplicate) = duplicate_of(guard, checks.get(index)) {
+            results.push(Ok(duplicate));
+            continue;
+        }
         if let Some(refused) = refuse_transactional_append(guard, checks.get(index)) {
             results.push(Err(refused));
             continue;
@@ -291,8 +326,13 @@ fn append_produce_batch_at(
     for (index, data) in datas.into_iter().enumerate() {
         let count = data.record_count();
         let control_producer = data.control_producer_id();
-        let result = refuse_transactional_append(guard, checks.get(index))
-            .map_or_else(|| append_data(guard, data, Some(next)), Err);
+        let result = duplicate_of(guard, checks.get(index)).map_or_else(
+            || {
+                refuse_transactional_append(guard, checks.get(index))
+                    .map_or_else(|| append_data(guard, data, Some(next)), Err)
+            },
+            Ok,
+        );
         capture_control_entry(
             guard,
             result.is_ok(),
@@ -1020,5 +1060,100 @@ mod tests {
                 == 0
         );
         check_control_append(&log, &control_entries);
+    }
+
+    /// Where a group's offsets come from.
+    #[derive(Debug, Clone, Copy)]
+    enum Placement {
+        /// The leader log stamps them from 0.
+        Leader,
+        /// A diskless sequencer assigns them, from 10.
+        Diskless,
+    }
+
+    /// Kafka's `UnifiedLog.analyzeAndValidateProducerState` looks a client
+    /// batch up among its producer's retained batches under the append's
+    /// lock, ahead of the transaction check: a copy of a batch the log
+    /// already holds answers with that batch's first offset and max
+    /// timestamp, and appends nothing. That holds for a copy in the same
+    /// group, which is how two concurrent requests for one batch reach the
+    /// writer, and for a copy in a later group. A coordinator's batch is
+    /// never looked up, because every `TxnOffsetCommit` batch of a
+    /// transaction carries sequence 0.
+    #[yare::parameterized(
+        client_leader = { AppendOrigin::Client { last_offset_delta: 0 }, Placement::Leader, [0, 0, 0], 1 },
+        client_diskless = {
+            AppendOrigin::Client { last_offset_delta: 0 },
+            Placement::Diskless,
+            [10, 10, 10],
+            11,
+        },
+        coordinator_leader = { AppendOrigin::Coordinator, Placement::Leader, [0, 1, 2], 3 },
+        coordinator_diskless = { AppendOrigin::Coordinator, Placement::Diskless, [10, 11, 12], 13 },
+    )]
+    fn a_client_copy_of_a_retained_batch_answers_with_its_offset(
+        origin: AppendOrigin,
+        placement: Placement,
+        want_offsets: [i64; 3],
+        want_leo: i64,
+    ) {
+        const TIMESTAMP: i64 = 4_242;
+        let dir = tempdir().expect("tempdir");
+        let log = Mutex::new(Log::open(dir.path(), LogConfig::default()).expect("open log"));
+        let mut copy = gate_batch(&[b"30"], 0);
+        copy.max_timestamp = TIMESTAMP;
+        let transactional = krabka_log::TransactionalBatch {
+            producer_id: krabka_log::ProducerId(copy.producer_id),
+            producer_epoch: copy.producer_epoch,
+            base_sequence: 0,
+            is_transactional: true,
+            is_control: false,
+        };
+        let guard = lock_log(&log)
+            .maybe_start_transaction_verification(transactional, true, (0, i64::MAX))
+            .expect("verification starts");
+        let check = Some(ProducerAppendCheck {
+            batch: transactional,
+            guard,
+            origin,
+        });
+        let append = |copies: usize, next: Offset| {
+            let datas = iter::repeat_with(|| ProduceData::Owned(copy.clone()))
+                .take(copies)
+                .collect();
+            let checks = vec![check; copies];
+            match placement {
+                Placement::Diskless => {
+                    append_produce_batch_at(&mut lock_log(&log), next, None, (datas, checks))
+                }
+                Placement::Leader => {
+                    append_produce_batch(&mut lock_log(&log), None, (datas, checks))
+                }
+            }
+        };
+        let base = match placement {
+            Placement::Leader => Offset(0),
+            Placement::Diskless => Offset(10),
+        };
+        let (mut results, _, _) = append(2, base);
+        let (later, leo, _) = append(1, Offset(base.0 + 2));
+        results.extend(later);
+
+        let offsets: Vec<i64> = results
+            .iter()
+            .map(|result| result.as_ref().expect("answered").base_offset.0)
+            .collect();
+        assert2::check!(offsets == want_offsets);
+        assert2::check!(leo == Offset(want_leo));
+        let duplicate_stamps: Vec<Option<i64>> = results
+            .iter()
+            .skip(1)
+            .map(|result| result.as_ref().expect("answered").log_append_time_ms)
+            .collect();
+        let want_stamp = match origin {
+            AppendOrigin::Client { .. } => Some(TIMESTAMP),
+            AppendOrigin::Coordinator => None,
+        };
+        assert2::check!(duplicate_stamps == [want_stamp; 2]);
     }
 }

@@ -30,6 +30,11 @@ pub mod handlers;
 pub mod id_expiration;
 pub mod log_record;
 pub mod marker;
+/// Exhaustive stateright model of transaction-marker delivery under write
+/// timeouts, coordinator crashes and partition failures.
+#[cfg(test)]
+#[path = "marker_delivery_model.rs"]
+mod marker_delivery_model;
 pub mod partitioner;
 pub mod state;
 /// KIP-939 two-phase-commit decision cores: timeout resolution and the
