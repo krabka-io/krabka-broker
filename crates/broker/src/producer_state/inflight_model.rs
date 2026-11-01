@@ -275,19 +275,19 @@ struct Violation {
     kafka: Answer,
 }
 
-/// A transition a `sometimes` witness looks for. It is recorded only on the
-/// transition that produced it and cleared by the next. One transition can
+/// A retry outcome a `sometimes` witness looks for. It is recorded only on
+/// the transition that produced it and cleared by the next. One transition can
 /// produce several, so the state holds them as a set.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Witness {
     /// A retry was admitted while an earlier send of its batch was appended
     /// and waiting at the gate: the window the Jepsen failure needs.
-    RetryDuringPendingCommit,
+    AdmittedDuringPendingCommit,
     /// A retry answered as a duplicate.
-    RetryDeduplicated,
+    Deduplicated,
     /// A retry answered as a duplicate of a batch that the other producer's
     /// batch was appended behind.
-    RetryDeduplicatedAfterOtherProducer,
+    DeduplicatedAfterOtherProducer,
 }
 
 /// The witnesses of one transition.
@@ -366,7 +366,7 @@ impl InflightState {
                     && request.appended.is_some()
             })
         {
-            self.witnesses.mark(Witness::RetryDuringPendingCommit);
+            self.witnesses.mark(Witness::AdmittedDuringPendingCommit);
         }
         match host {
             Answer::Append => {
@@ -383,13 +383,12 @@ impl InflightState {
                     let after = usize::try_from(offset).map_or(&[][..], |index| {
                         self.log.get(index + 1..).unwrap_or_default()
                     });
-                    self.witnesses.mark(Witness::RetryDeduplicated);
+                    self.witnesses.mark(Witness::Deduplicated);
                     if after
                         .iter()
                         .any(|slot| slot.producer_id != PRODUCER_IDS[producer])
                     {
-                        self.witnesses
-                            .mark(Witness::RetryDeduplicatedAfterOtherProducer);
+                        self.witnesses.mark(Witness::DeduplicatedAfterOtherProducer);
                     }
                 }
                 self.clients[producer].acknowledge(sequence);
@@ -564,17 +563,14 @@ impl Model for InflightModel {
                 s.violation.is_none()
             }),
             Property::sometimes("retry_during_pending_commit", |_, s: &InflightState| {
-                s.witnesses.seen(Witness::RetryDuringPendingCommit)
+                s.witnesses.seen(Witness::AdmittedDuringPendingCommit)
             }),
             Property::sometimes("retry_deduplicated", |_, s: &InflightState| {
-                s.witnesses.seen(Witness::RetryDeduplicated)
+                s.witnesses.seen(Witness::Deduplicated)
             }),
             Property::sometimes(
                 "retry_deduplicated_after_other_producer",
-                |_, s: &InflightState| {
-                    s.witnesses
-                        .seen(Witness::RetryDeduplicatedAfterOtherProducer)
-                },
+                |_, s: &InflightState| s.witnesses.seen(Witness::DeduplicatedAfterOtherProducer),
             ),
             Property::sometimes(
                 "every_batch_acknowledged",
