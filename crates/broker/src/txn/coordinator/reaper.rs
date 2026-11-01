@@ -167,7 +167,12 @@ async fn sweep_with_backend<B: ReaperBackend + ?Sized>(
             .await
             .is_some()
         {
-            info!(tid, "txn reaper: aborted timed-out transaction");
+            info!(
+                tid,
+                producer_id = prepared.producer_id.get(),
+                producer_epoch = prepared.producer_epoch,
+                "txn reaper: aborted timed-out transaction"
+            );
             aborted.push(tid);
         }
     }
@@ -252,17 +257,30 @@ impl ReaperBackend for TxnCoordinator {
         if let Err(error) =
             prepare_server_abort_identities(&mut prepared, txnv, &self.producer_ids).await
         {
-            warn!(tid, %error, "txn reaper: failed to allocate completion identity");
+            warn!(
+                tid,
+                producer_id = entry.producer_id.get(),
+                producer_epoch = entry.producer_epoch,
+                %error,
+                "txn reaper: failed to allocate completion identity"
+            );
             return None;
         }
         // `complete_abort` compares the snapshot this returns against the live
         // entry by full equality, so it has to be the entry publication holds.
         let persisted = self.put_under_state_partition_lock(prepared, txnv).await;
+        let (producer_id, producer_epoch) = (entry.producer_id.get(), entry.producer_epoch);
         drop(entry);
         match persisted {
             Ok(persisted) => Some(persisted),
             Err(e) => {
-                warn!(tid, error = %e, "txn reaper: failed to persist PrepareAbort; skipping");
+                warn!(
+                    tid,
+                    producer_id,
+                    producer_epoch,
+                    error = %e,
+                    "txn reaper: failed to persist PrepareAbort; skipping"
+                );
                 None
             }
         }
@@ -279,6 +297,9 @@ impl ReaperBackend for TxnCoordinator {
             Err(error) => {
                 warn!(
                     tid = %entry.transactional_id,
+                    producer_id = entry.producer_id.get(),
+                    producer_epoch = entry.producer_epoch,
+                    outstanding = ?entry.partitions,
                     %error,
                     "txn reaper: abort marker fan-out failed; queued for completion"
                 );
@@ -318,7 +339,13 @@ impl ReaperBackend for TxnCoordinator {
         match persisted {
             Ok(persisted) => Some(persisted),
             Err(e) => {
-                warn!(tid, error = %e, "txn reaper: failed to persist CompleteAbort; skipping");
+                warn!(
+                    tid,
+                    producer_id = prepared.producer_id.get(),
+                    producer_epoch = prepared.producer_epoch,
+                    error = %e,
+                    "txn reaper: failed to persist CompleteAbort; skipping"
+                );
                 None
             }
         }

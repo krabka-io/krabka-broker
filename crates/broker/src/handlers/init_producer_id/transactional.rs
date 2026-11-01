@@ -273,6 +273,9 @@ async fn fence_ongoing(
         // retries.
         tracing::warn!(
             tid,
+            producer_id = prepared.producer_id.get(),
+            producer_epoch = prepared.producer_epoch,
+            outstanding = ?prepared.partitions,
             %error,
             "InitProducerId: abort marker fan-out failed; queued for completion"
         );
@@ -357,6 +360,8 @@ async fn complete_fenced_abort(
     if let Err(error) = written {
         tracing::warn!(
             tid,
+            producer_id = prepared.producer_id.get(),
+            producer_epoch = prepared.producer_epoch,
             %error,
             "InitProducerId: CompleteAbort append failed; queued for completion"
         );

@@ -156,10 +156,12 @@ pub async fn handle(
                 prepared_completion_epoch,
             ));
         }
-        // A fenced generation has already superseded this fan-out attempt
-        // (#882): retrying cannot succeed, so the transaction is left in
-        // Prepare* for whatever superseded it to resolve, rather than queued
-        // for a completion retry that would never converge.
+        // A fenced generation has already superseded this fan-out attempt, or
+        // every partition that failed answered a code Kafka's completion
+        // handler throws on (#882): retrying cannot succeed, so the
+        // transaction is left in Prepare* for whatever superseded it, or the
+        // coordinator's next load, to resolve, rather than queued for a
+        // completion retry that would never converge.
         MarkerFanOutOutcome::GivenUp => {
             return Ok(ok_response(
                 prepared_completion_pid.get(),
@@ -262,6 +264,8 @@ pub async fn handle(
     {
         tracing::error!(
             tid,
+            producer_id = prepare_snap.producer_id.get(),
+            producer_epoch = prepare_snap.producer_epoch,
             state = ?complete,
             error = %e,
             "EndTxn: failed to persist CompleteCommit/CompleteAbort; queued for completion"

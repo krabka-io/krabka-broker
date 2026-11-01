@@ -15,6 +15,8 @@
 use std::iter;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
+#[cfg(not(target_os = "wasi"))]
+use std::sync::OnceLock;
 use std::{
     fmt::Debug,
     fs::{self, File},
@@ -25,10 +27,7 @@ use std::{
 #[cfg(target_os = "linux")]
 use {
     rustix::{
-        fs::{
-            Advice, FallocateFlags, SyncFileRangeFlags, fadvise, fallocate, open, statx,
-            sync_file_range,
-        },
+        fs::{Advice, FallocateFlags, fadvise, fallocate, open, statx},
         io::{Errno, ReadWriteFlags, preadv2},
     },
     std::num::NonZeroU64,
@@ -91,12 +90,16 @@ pub trait LogIo: Debug + Send + Sync {
     fn sync_data(&self, file: &File) -> io::Result<()> { file.sync_data() }
 
     /// Start the write-out of `len` bytes of `file`'s page-cache data from
-    /// `offset`, without waiting for it and without a journal commit or a
-    /// disk-cache flush. On Linux this is `sync_file_range(2)` with
-    /// `SYNC_FILE_RANGE_WRITE`; elsewhere it is [`Self::sync_data`], which
-    /// does more and blocks. `Log` paces the active segment's dirty data with
-    /// it, so an `fdatasync` of the file, which stalls the appends that run
-    /// while it is in progress, happens only at the roll and on request.
+    /// `offset`. `Log` paces the active segment's dirty data with it, so an
+    /// `fdatasync` of the whole file, which stalls the appends that run while
+    /// it is in progress, happens only at the roll and on request.
+    ///
+    /// The default is [`WriteBack::write_back`] of the write-back that
+    /// [`set_write_back`] installed. Without one, it is the file's
+    /// `sync_data`, which also commits the journal and flushes the disk
+    /// cache, and blocks until the write-out is done. krabka-broker installs a write-back that
+    /// is `sync_file_range(2)` with `SYNC_FILE_RANGE_WRITE`, which starts the
+    /// write-out and does not wait for it.
     ///
     /// # Errors
     /// Returns the underlying write-out error.
@@ -184,18 +187,22 @@ pub trait LogIo: Debug + Send + Sync {
     /// Drop the page cache's copy of the `len` bytes of a `.log` file from
     /// `offset`, once the kernel has written them out.
     ///
-    /// This waits for the range's write-out with `sync_file_range`, then
-    /// gives `posix_fadvise(POSIX_FADV_DONTNEED)`. The kernel frees only
-    /// clean pages, so a drop of a range whose write-out had only been
-    /// started, as the budget's are when the budget is smaller than the
-    /// write-out in flight, would leave its pages cached and the ledger no
-    /// longer counting them; the wait is what makes a drop a drop. On pages
-    /// written out long ago, every drop of a sealed segment, it returns at
-    /// once. No data is lost either way; a later read of the range comes
-    /// from the disk. A failure changes nothing a reader can observe, so it
-    /// is dropped. The targets without these calls do nothing, and
-    /// `wasm32-wasip1`, which has no flush pool, has no caller. See
-    /// `log::page_cache`.
+    /// The default is [`WriteBack::drop_cached`] of the write-back that
+    /// [`set_write_back`] installed. Without one, it is
+    /// `posix_fadvise(POSIX_FADV_DONTNEED)` on Linux. The kernel frees only
+    /// clean pages, so this drops only the pages that are already written
+    /// out. The default [`Self::write_back`] waits for its write-out, so the
+    /// ranges it wrote back are clean. krabka-broker installs a write-back
+    /// whose write-out does not wait, and whose drop first waits for the
+    /// range's write-out with `sync_file_range(2)`: a range whose write-out
+    /// had only been started, as the budget's are when the budget is smaller
+    /// than the write-out in flight, would otherwise stay cached while the
+    /// ledger no longer counts it. On pages written out long ago, every drop
+    /// of a sealed segment, that wait returns at once. No data is lost
+    /// either way; a later read of the range comes from the disk. A failure
+    /// changes nothing a reader can observe, so it is dropped. The other
+    /// targets do nothing, and `wasm32-wasip1`, which has no flush pool, has
+    /// no caller. See `log::page_cache`.
     #[cfg(not(target_os = "wasi"))]
     fn drop_cached(&self, file: &File, offset: u64, len: u64) { drop_cached(file, offset, len); }
 
@@ -411,39 +418,97 @@ fn advise_will_need(file: &File, offset: u64, len: u64) {
 #[cfg(not(target_os = "linux"))]
 fn advise_will_need(file: &File, offset: u64, len: u64) { let _ = (file, offset, len); }
 
-#[cfg(target_os = "linux")]
-fn write_back(file: &File, offset: u64, len: u64) -> io::Result<()> {
-    sync_file_range(file, offset, len, SyncFileRangeFlags::WRITE)?;
-    Ok(())
+/// How a process writes back a `.log` file's dirty pages and drops its clean
+/// ones.
+///
+/// A [`Log`](crate::Log) starts the write-out of its active segment's dirty
+/// pages with it, and drops written ranges from the page cache with it to
+/// keep the logs under their page-cache budget.
+///
+/// krabka-log has no write-back of its own beyond `sync_data` and
+/// `posix_fadvise`, because the crates it builds against on crates.io give no
+/// safe `sync_file_range(2)`. A process that has one installs it with
+/// [`set_write_back`]: krabka-broker installs `sync_file_range(2)`.
+#[cfg(not(target_os = "wasi"))]
+pub trait WriteBack: Debug + Send + Sync {
+    /// Start the write-out of `len` bytes of `file`'s page-cache data from
+    /// `offset`, without waiting for it and without a journal commit or a
+    /// disk-cache flush.
+    ///
+    /// # Errors
+    /// Returns the error of the call that starts the write-out. `Log`
+    /// reports it as a failed flush.
+    fn write_back(&self, file: &File, offset: u64, len: u64) -> io::Result<()>;
+
+    /// Drop the page cache's copy of the `len` bytes of `file` from `offset`,
+    /// once the kernel has written them out. A failure changes nothing a
+    /// reader can observe, so it is dropped.
+    fn drop_cached(&self, file: &File, offset: u64, len: u64);
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "wasi")))]
-fn write_back(file: &File, offset: u64, len: u64) -> io::Result<()> {
-    let _ = (offset, len);
-    file.sync_data()
+/// The write-back that [`set_write_back`] installed for this process.
+#[cfg(not(target_os = "wasi"))]
+static WRITE_BACK: OnceLock<Box<dyn WriteBack>> = OnceLock::new();
+
+/// Install the process's write-back.
+///
+/// Every [`Log`](crate::Log) in the process then writes back and drops its
+/// page-cache ranges through it. Install it before any log opens: a log that writes back before the install
+/// uses the built-in default.
+///
+/// # Errors
+/// Returns `write_back` back when this process already installed one.
+#[cfg(not(target_os = "wasi"))]
+pub fn set_write_back(write_back: Box<dyn WriteBack>) -> Result<(), Box<dyn WriteBack>> {
+    WRITE_BACK.set(write_back)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "wasi"))]
+fn write_back(file: &File, offset: u64, len: u64) -> io::Result<()> {
+    write_back_with(WRITE_BACK.get().map(Box::as_ref), file, offset, len)
+}
+
+/// [`LogIo::write_back`] through `installed`, or through `sync_data` without
+/// one.
+#[cfg(not(target_os = "wasi"))]
+fn write_back_with(
+    installed: Option<&dyn WriteBack>,
+    file: &File,
+    offset: u64,
+    len: u64,
+) -> io::Result<()> {
+    installed.map_or_else(
+        || file.sync_data(),
+        |installed| installed.write_back(file, offset, len),
+    )
+}
+
+#[cfg(not(target_os = "wasi"))]
 fn drop_cached(file: &File, offset: u64, len: u64) {
+    drop_cached_with(WRITE_BACK.get().map(Box::as_ref), file, offset, len);
+}
+
+/// [`LogIo::drop_cached`] through `installed`, or through
+/// `posix_fadvise(POSIX_FADV_DONTNEED)` without one.
+#[cfg(not(target_os = "wasi"))]
+fn drop_cached_with(installed: Option<&dyn WriteBack>, file: &File, offset: u64, len: u64) {
+    match installed {
+        Some(installed) => installed.drop_cached(file, offset, len),
+        None => advise_dont_need(file, offset, len),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn advise_dont_need(file: &File, offset: u64, len: u64) {
     if let Some(len) = NonZeroU64::new(len) {
-        // The pages must be clean to go: wait for a write-out still in
-        // flight, and start one for a page that is still dirty. A failure
-        // here leaves the hint to do what it can.
-        let _ = sync_file_range(
-            file,
-            offset,
-            len.get(),
-            SyncFileRangeFlags::WAIT_BEFORE
-                | SyncFileRangeFlags::WRITE
-                | SyncFileRangeFlags::WAIT_AFTER,
-        );
-        // A refused hint leaves the pages as they were.
+        // The kernel frees only the clean pages of the range. A refused hint
+        // leaves the pages as they were.
         let _ = fadvise(file, offset, Some(len), Advice::DontNeed);
     }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "wasi")))]
-fn drop_cached(file: &File, offset: u64, len: u64) { let _ = (file, offset, len); }
+fn advise_dont_need(file: &File, offset: u64, len: u64) { let _ = (file, offset, len); }
 
 /// `preadv2(RWF_NOWAIT)` of one byte: it fails with `EAGAIN` instead of
 /// reading from the disk when the page cache does not hold the byte. Linux
@@ -735,6 +800,122 @@ mod tests {
             let io = Scripted::new(script);
             let error = write_all(&io, IoTarget::OffsetIndex, &file, b"abcdef").unwrap_err();
             check!(error.kind() == expected);
+        }
+    }
+
+    /// The installed write-back and the built-in default behind
+    /// [`LogIo::write_back`] and [`LogIo::drop_cached`]. No test installs a
+    /// write-back for the process: each passes its own to the `_with` form.
+    #[cfg(not(target_os = "wasi"))]
+    mod write_back {
+        use super::*;
+
+        /// Which of the two [`WriteBack`] methods a call is.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum WriteBackOp {
+            WriteBack,
+            DropCached,
+        }
+
+        /// One call a [`Recording`] write-back took: the method, the length of
+        /// the file it was given, and the range.
+        #[derive(Debug, PartialEq, Eq)]
+        struct WriteBackCall {
+            op: WriteBackOp,
+            file_len: u64,
+            offset: u64,
+            len: u64,
+        }
+
+        /// A write-back that records every call and fails every write-out with
+        /// [`HOOK_ERROR`], so a caller that answers with its result shows which
+        /// write-back ran.
+        #[derive(Debug, Default)]
+        struct Recording {
+            calls: Mutex<Vec<WriteBackCall>>,
+        }
+
+        const HOOK_ERROR: &str = "the installed write-back's error";
+
+        impl Recording {
+            fn record(&self, op: WriteBackOp, file: &File, offset: u64, len: u64) {
+                self.calls.lock().unwrap().push(WriteBackCall {
+                    op,
+                    file_len: file.metadata().unwrap().len(),
+                    offset,
+                    len,
+                });
+            }
+        }
+
+        impl WriteBack for Recording {
+            fn write_back(&self, file: &File, offset: u64, len: u64) -> io::Result<()> {
+                self.record(WriteBackOp::WriteBack, file, offset, len);
+                Err(io::Error::other(HOOK_ERROR))
+            }
+
+            fn drop_cached(&self, file: &File, offset: u64, len: u64) {
+                self.record(WriteBackOp::DropCached, file, offset, len);
+            }
+        }
+
+        /// A scratch file holding `len` bytes of a repeating 251-byte pattern.
+        fn scratch_file_of(len: usize) -> (ScratchFile, Vec<u8>) {
+            let mut scratch = scratch_file();
+            let contents: Vec<u8> = (0..=250).cycle().take(len).collect();
+            scratch.file.write_all(&contents).unwrap();
+            (scratch, contents)
+        }
+
+        /// An installed write-back takes each call with the file and the range it
+        /// was given, and its result is the answer: the built-in default, whose
+        /// `sync_data` would succeed, does not run.
+        #[yare::parameterized(
+            write_back = { WriteBackOp::WriteBack },
+            drop_cached = { WriteBackOp::DropCached },
+        )]
+        fn an_installed_write_back_takes_the_call_with_its_file_range(op: WriteBackOp) {
+            let (ScratchFile { dir: _dir, file }, _) = scratch_file_of(3 * 4096);
+            let installed = Recording::default();
+
+            match op {
+                WriteBackOp::WriteBack => {
+                    let error = write_back_with(Some(&installed), &file, 4096, 8192).unwrap_err();
+                    check!(error.to_string() == HOOK_ERROR);
+                }
+                WriteBackOp::DropCached => drop_cached_with(Some(&installed), &file, 4096, 8192),
+            }
+
+            check!(
+                *installed.calls.lock().unwrap()
+                    == vec![WriteBackCall {
+                        op,
+                        file_len: 3 * 4096,
+                        offset: 4096,
+                        len: 8192,
+                    }]
+            );
+        }
+
+        /// Without an installed write-back, a range is synced and then dropped
+        /// from the page cache, and every byte of the file reads back as it was
+        /// written.
+        #[yare::parameterized(
+            whole_file = { 0, 3 * 4096 + 100 },
+            one_inner_page = { 4096, 4096 },
+            unaligned_tail = { 2 * 4096 + 7, 4096 + 93 },
+            empty = { 4096, 0 },
+        )]
+        fn without_an_installed_write_back_a_range_is_synced_and_dropped_intact(
+            offset: u64,
+            len: u64,
+        ) {
+            let (ScratchFile { dir, file }, contents) = scratch_file_of(3 * 4096 + 100);
+
+            write_back_with(None, &file, offset, len).unwrap();
+            drop_cached_with(None, &file, offset, len);
+
+            check!(fs::read(dir.path().join("scratch")).unwrap() == contents);
         }
     }
 

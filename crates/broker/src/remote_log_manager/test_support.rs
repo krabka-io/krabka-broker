@@ -13,7 +13,9 @@ use {
         partition::Partition,
         partition_registry::PartitionRegistry,
         producer_state::ProducerState,
-        remote_log_manager::{ArchiveMode, RemoteTier, SweepingBroker, quota::RlmQuotaManager},
+        remote_log_manager::{
+            ArchiveMode, CopiesInFlight, RemoteTier, SweepingBroker, quota::RlmQuotaManager,
+        },
         test_support::{
             FakeMetadataSource, KeyedBatchSetup, KeyedRecordCount, UnixMillis, keyed_records_batch,
         },
@@ -69,6 +71,13 @@ fn shared_test_copy_quota() -> &'static RlmQuotaManager {
     QUOTA.get_or_init(RlmQuotaManager::unlimited)
 }
 
+/// The uploads in flight for every test tier that does not watch its own.
+/// Segment ids are fresh UUIDs, so tests sharing it never see each other's.
+fn shared_test_copies_in_flight() -> &'static CopiesInFlight {
+    static COPIES: OnceLock<CopiesInFlight> = OnceLock::new();
+    COPIES.get_or_init(CopiesInFlight::default)
+}
+
 /// The copy deadline a unit test sweeps under when it is not the thing being
 /// tested. It is long enough that no in-process fake reaches it.
 pub const TEST_COPY_TIMEOUT: krabka_units::Time = krabka_units::secs(60);
@@ -95,6 +104,7 @@ pub struct TierSetup<'a> {
     pub metrics: &'a BrokerMetrics,
     pub index_cache: &'a Arc<krabka_remote_storage::RemoteIndexCache>,
     pub copy_quota: &'a RlmQuotaManager,
+    pub copies_in_flight: &'a CopiesInFlight,
 }
 
 impl Default for TierSetup<'_> {
@@ -106,6 +116,7 @@ impl Default for TierSetup<'_> {
             metrics: shared_test_metrics(),
             index_cache: shared_test_index_cache(),
             copy_quota: shared_test_copy_quota(),
+            copies_in_flight: shared_test_copies_in_flight(),
         }
     }
 }
@@ -124,6 +135,8 @@ pub fn configured_tier<'a>(
         krabka_remote_storage::RemoteIndexCache,
     >,
     #[builder(default = TierSetup::default().copy_quota)] copy_quota: &'a RlmQuotaManager,
+    #[builder(default = TierSetup::default().copies_in_flight)]
+    copies_in_flight: &'a CopiesInFlight,
 ) -> RemoteTier<'a> {
     let setup = TierSetup {
         archive,
@@ -132,6 +145,7 @@ pub fn configured_tier<'a>(
         metrics,
         index_cache,
         copy_quota,
+        copies_in_flight,
     };
     RemoteTier {
         archive: setup.archive,
@@ -142,6 +156,7 @@ pub fn configured_tier<'a>(
         copy_quota: setup.copy_quota,
         unstable_api_versions: setup.unstable_api_versions,
         copy_timeout: setup.copy_timeout,
+        copies_in_flight: setup.copies_in_flight,
     }
 }
 

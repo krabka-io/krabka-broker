@@ -172,24 +172,18 @@ pub(super) async fn acquire_read_records(
             // read, whose `OffsetTooLow` moves the share-partition start offset
             // past it.
             Some(tier) if RemoteReader::serves(partition, from) => {
-                let Some(read) = tier.read(partition, from, request.max_bytes).await? else {
-                    return Ok(0);
-                };
-                for span in &read.unreadable {
-                    state.archive_internal(span.first, span.last);
-                }
-                for span in &read.not_due {
-                    state.defer_internal(span.first, span.last);
-                }
-                read.bytes
-            }
-            _ => {
-                let Some(read) =
-                    read_raw(partition, from, request.upper, request.max_bytes).await?
+                let Some(bytes) =
+                    read_tier(tier, partition, state, from, request.max_bytes).await?
                 else {
                     return Ok(0);
                 };
-                read.bytes
+                bytes
+            }
+            _ => {
+                let Some(bytes) = read_local(partition, state, from, request).await? else {
+                    return Ok(0);
+                };
+                bytes
             }
         }
     };
@@ -232,6 +226,55 @@ pub(super) async fn acquire_read_records(
         .iter()
         .map(|range| range.last.0 - range.first.0 + 1)
         .sum())
+}
+
+/// Reads the batches at `from` out of the remote tier, and takes the offsets
+/// of the read that a share consumer must not get yet, or ever, out of the
+/// window. It returns `None` when no finished remote segment holds `from`.
+async fn read_tier(
+    tier: &TieredSource<'_>,
+    partition: &Partition,
+    state: &mut AcquisitionState,
+    from: Offset,
+    max_bytes: i32,
+) -> Result<Option<Bytes>, BrokerError> {
+    let Some(read) = tier.read(partition, from, max_bytes).await? else {
+        return Ok(None);
+    };
+    for span in &read.unreadable {
+        state.archive_internal(span.first, span.last);
+    }
+    for span in &read.not_due {
+        state.defer_internal(span.first, span.last);
+    }
+    Ok(Some(read.bytes))
+}
+
+/// Reads the batches at `from` out of the local log, or out of the tier once
+/// local retention has deleted them.
+///
+/// The caller chose the local log under one lock of it, and the read takes
+/// another. The local-retention pass can delete the segment that holds
+/// `from` between the two, and the offset is then the tier's to serve.
+/// Kafka's `ReplicaManager.readFromLog` sends the `OffsetOutOfRangeException`
+/// of an offset below the local log start of a tiered partition to the
+/// remote tier in the same way, and does not fail the fetch.
+async fn read_local(
+    partition: &Partition,
+    state: &mut AcquisitionState,
+    from: Offset,
+    request: &AcquireRequest<'_>,
+) -> Result<Option<Bytes>, BrokerError> {
+    match (
+        read_raw(partition, from, request.upper, request.max_bytes).await,
+        &request.tier,
+    ) {
+        (Ok(read), _) => Ok(read.map(|read| read.bytes)),
+        (Err(BrokerError::Log(LogError::OffsetBelowLocalStart { .. })), Some(tier)) => {
+            read_tier(tier, partition, state, from, request.max_bytes).await
+        }
+        (Err(error), _) => Err(error),
+    }
 }
 
 /// The `AcquiredRecords` rows of one acquired run.
@@ -600,6 +643,11 @@ pub(super) async fn unreadable_batch_ranges(
         return Ok(Vec::new());
     }
     scan_log(part, "control", move |log| {
+        // The caller read the local log start under an earlier lock, and the
+        // local-retention pass can have moved it since. The offsets below it
+        // are the tier's, and the acquire step classifies them from the
+        // batches it reads there.
+        let start = start.max(log.local_log_start_offset());
         let mut aborted = AbortedRanges::default();
         if read_committed {
             for txn in log.aborted_in_range(start, end) {
@@ -698,13 +746,18 @@ mod tests {
     use {
         super::*,
         crate::{
-            delivery::test_support::{NOW_MS, scheduled_partition, wall_at},
-            test_support::UnixMillis,
+            delivery::test_support::{
+                NOW_MS, partition_with_batches, scheduled_partition, wall_at,
+            },
+            metrics::BrokerMetrics,
+            remote_reader::test_support::{copy_log_to_reader, tp},
+            test_support::{KeyedBatchSetup, KeyedRecordCount, UnixMillis, keyed_records_batch},
         },
         assert2::assert,
-        krabka_log::DeliveryPolicy,
+        krabka_log::{DeliveryPolicy, LogConfig},
         krabka_protocol::records::{Record, RecordBatch},
         qubit_clock::{FixedWallClock, WallClock},
+        tempfile::TempDir,
     };
 
     #[tokio::test]
@@ -1002,5 +1055,135 @@ mod tests {
             expected.push((mode, range.delivery_count, want));
         }
         assert2::assert!(actual == expected);
+    }
+
+    /// The first offset that [`evicted_partition`] still holds on local disk.
+    const LOCAL_START: Offset = Offset(8);
+
+    /// The log end offset of [`evicted_partition`].
+    const LOG_END: Offset = Offset(24);
+
+    /// A tiered partition after a local-retention pass, and the tier that
+    /// holds what the pass deleted.
+    struct EvictedPartition {
+        partition: Arc<Partition>,
+        reader: RemoteReader,
+        _dirs: [TempDir; 2],
+    }
+
+    /// Twelve two-record batches, one per 256-byte segment, whose sealed
+    /// segments are in the remote tier and gone from local disk below
+    /// [`LOCAL_START`].
+    fn evicted_partition() -> EvictedPartition {
+        let dir = tempfile::tempdir().expect("a log root");
+        let remote_dir = tempfile::tempdir().expect("a remote root");
+        let clock: Arc<dyn WallClock> = Arc::new(FixedWallClock::new(wall_at(NOW_MS)));
+        let batch = keyed_records_batch(KeyedBatchSetup {
+            records: KeyedRecordCount(2),
+            ..Default::default()
+        });
+        let partition = partition_with_batches()
+            .dir(&dir)
+            .clock(&clock)
+            .topic(&tp().topic)
+            .config(LogConfig {
+                segment_size: krabka_units::bytes(256),
+                remote_storage_enable: true,
+                ..LogConfig::default()
+            })
+            .batches(vec![batch; 12])
+            .call();
+        let mut log = partition.log.lock().expect("log mutex");
+        log.sync().expect("flush the sealed segments");
+        let reader = copy_log_to_reader(&log, remote_dir.path());
+        log.delete_local_segments_through(LOCAL_START)
+            .expect("evict the tiered segments");
+        let bounds = (log.local_log_start_offset(), log.log_end_offset());
+        drop(log);
+        assert!(bounds == (LOCAL_START, LOG_END));
+        EvictedPartition {
+            partition,
+            reader,
+            _dirs: [dir, remote_dir],
+        }
+    }
+
+    impl EvictedPartition {
+        fn tier<'a>(&'a self, metrics: &'a BrokerMetrics) -> TieredSource<'a> {
+            TieredSource {
+                reader: &self.reader,
+                metrics,
+                tp: tp(),
+                read_committed: true,
+            }
+        }
+    }
+
+    /// The share-fetch path picks the local log for an offset under one lock
+    /// of it, and local retention deletes that offset's segment before the
+    /// read takes the next. The read then goes to the tier, as Kafka's
+    /// `ReplicaManager.readFromLog` sends it, and does not fail the row.
+    #[tokio::test]
+    async fn a_local_read_that_local_retention_overtook_is_served_by_the_tier() {
+        let evicted = evicted_partition();
+        let metrics = BrokerMetrics::new();
+        let request = |tier| AcquireRequest {
+            member: "member",
+            max_records: 100,
+            max_bytes: 1 << 20,
+            min_one_batch: true,
+            upper: LOG_END,
+            now: Instant::now(),
+            lock_duration: Duration::from_secs(30),
+            max_attempts: 5,
+            mode: AcquireMode::RecordLimit,
+            tier,
+            diskless: None,
+        };
+        let mut state = AcquisitionState::new(Offset(0));
+        state.materialize(LOG_END, 100);
+
+        // A partition with no tier has nowhere else to read offset 0.
+        let untiered = read_local(&evicted.partition, &mut state, Offset(0), &request(None)).await;
+        assert!(matches!(
+            untiered,
+            Err(BrokerError::Log(LogError::OffsetBelowLocalStart {
+                requested: Offset(0),
+                local_log_start: LOCAL_START,
+            }))
+        ));
+
+        let tier = evicted.tier(&metrics);
+        let served = read_local(
+            &evicted.partition,
+            &mut state,
+            Offset(0),
+            &request(Some(tier.clone())),
+        )
+        .await
+        .expect("the tier serves the evicted offset");
+        let direct = tier
+            .read(&evicted.partition, Offset(0), 1 << 20)
+            .await
+            .expect("a direct tier read")
+            .map(|read| read.bytes);
+        assert!(served == direct);
+        let bounds = batch_bounds(&served.expect("tier bytes")).expect("whole batches");
+        assert!(bounds.first() == Some(&BatchBounds { base: 0, last: 1 }));
+    }
+
+    /// The acquire pass reads the local log start, then scans for control and
+    /// aborted batches under a later lock of the log. Local retention can
+    /// move the start in between, and the scan then covers only what the
+    /// local log still holds.
+    #[tokio::test]
+    async fn a_control_scan_from_below_a_moved_local_log_start_scans_the_local_log() {
+        let evicted = evicted_partition();
+        assert!(
+            unreadable_batch_ranges(&evicted.partition, Offset(0), LOG_END, true)
+                .await
+                .expect("the scan skips the evicted prefix")
+                == Vec::new()
+        );
     }
 }

@@ -51,7 +51,10 @@ use {
     },
     tokio_rustls::server::TlsStream,
     tokio_util::sync::CancellationToken,
-    tracing::field::{Field, Visit},
+    tracing::{
+        field::{Field, Visit},
+        subscriber::NoSubscriber,
+    },
 };
 
 pub mod paused_audit;
@@ -63,7 +66,7 @@ use {
         io,
         net::SocketAddr,
         sync::{
-            Arc, Mutex,
+            Arc, LazyLock, Mutex,
             atomic::{self, AtomicUsize, Ordering},
         },
         time::Duration,
@@ -2603,6 +2606,18 @@ pub struct LoggedEvent {
     pub(crate) message: String,
 }
 
+// `tracing` caches, per log line, whether any dispatcher wants it. While only
+// one dispatcher is alive, the first thread to reach a line sets that cache
+// from its own default dispatcher alone. Tests run on many threads, so a
+// broker that another test starts can reach a line first, from a thread with no
+// dispatcher, and cache it as wanted by no one. The capture then misses the
+// line, though its dispatcher is the default where the test logs it. While two
+// dispatchers are alive, `tracing` sets the cache from every live dispatcher,
+// under the lock that creating a dispatcher takes. This one wants nothing, and
+// it lives as long as the process, so a capture is never the only one.
+static SECOND_DISPATCHER: LazyLock<tracing::Dispatch> =
+    LazyLock::new(|| tracing::Dispatch::new(NoSubscriber::new()));
+
 // Records the `tracing` events logged inside a `LogCapture::span`, so a test
 // sees what one piece of work logged and not what the rest of a running broker
 // logged at the same time.
@@ -2619,6 +2634,7 @@ impl LogCapture {
     // `tracing::dispatcher::set_default` or `with_default` on the thread that
     // does the work.
     pub(crate) fn dispatch(&self) -> tracing::Dispatch {
+        LazyLock::force(&SECOND_DISPATCHER);
         tracing::Dispatch::new(tracing_subscriber::registry().with(self.clone()))
     }
 
@@ -2668,6 +2684,43 @@ impl Visit for MessageField {
         if field.name() == "message" {
             self.0 = format!("{value:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod log_capture_tests {
+    use {
+        super::{LogCapture, LoggedEvent},
+        assert2::assert,
+        std::thread,
+        tracing::{Level, dispatcher},
+    };
+
+    // The line both threads log. Only this test calls it, so no other test
+    // registers its callsite first.
+    fn log_the_line() {
+        tracing::warn!("the line");
+    }
+
+    // Another test's thread can be the first to reach a log line while a
+    // capture is installed, and a test's line must be captured all the same.
+    #[test]
+    fn a_capture_records_a_line_that_another_thread_reached_first() {
+        let capture = LogCapture::default();
+        dispatcher::with_default(&capture.dispatch(), || {
+            thread::spawn(log_the_line)
+                .join()
+                .expect("the other thread logs");
+            LogCapture::span().in_scope(log_the_line);
+        });
+        assert!(
+            capture.events()
+                == vec![LoggedEvent {
+                    level: Level::WARN,
+                    target: module_path!().to_owned(),
+                    message: "the line".to_owned(),
+                }]
+        );
     }
 }
 

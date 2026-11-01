@@ -513,6 +513,28 @@ impl KraftLog {
         Ok(())
     }
 
+    /// Brings the log level with the latest checkpoint, which ends at
+    /// `end_offset`, when the controller opens.
+    ///
+    /// A checkpoint holds only committed records, so its end is committed,
+    /// and the high watermark moves up to it when the cached one is lower.
+    /// The engine applies records from the high watermark on, and the image
+    /// starts from the checkpoint, so a high watermark below the checkpoint
+    /// would apply the records between the two a second time. A checkpoint
+    /// past the log end, which a crash during [`Self::install_snapshot`]
+    /// leaves, replaces the log as that install would have, as Kafka's
+    /// `KafkaRaftLog.truncateToLatestSnapshot` does.
+    ///
+    /// # Errors
+    /// Returns [`RaftError`] if the reset of the log fails.
+    pub fn recover_to_snapshot(&mut self, end_offset: Offset) -> Result<(), RaftError> {
+        if end_offset > self.log.log_end_offset() {
+            return self.install_snapshot(end_offset);
+        }
+        self.advance_hwm(end_offset);
+        Ok(())
+    }
+
     /// Writes the high watermark to a temporary file and renames it over the
     /// high-watermark file, so a crash leaves the old value or the new one.
     /// Neither write is synced: the file is a cache (see
@@ -936,6 +958,40 @@ mod tests {
         );
         let base = log.append(&mut batch(0, 1, b"x"), 0).unwrap();
         assert2::assert!(base == 100);
+    }
+
+    /// A checkpoint end inside the log raises a lower high watermark to it
+    /// and keeps a higher one. One past the log end replaces the log with an
+    /// empty one that starts there. Each case reads `(log start, log end,
+    /// high watermark)` after the call and again after a reopen.
+    #[test]
+    fn recover_to_snapshot_meets_the_checkpoint_end() {
+        // (cached high watermark, checkpoint end, expected)
+        let cases = [
+            (1, 3, (0, 5, 3)),
+            (4, 3, (0, 5, 4)),
+            (5, 5, (0, 5, 5)),
+            (2, 9, (9, 9, 9)),
+        ];
+        for (hwm, end_offset, want) in cases {
+            let LogInDir { mut log, dir } = seeded_log().call();
+            log.advance_hwm(Offset(hwm));
+            log.recover_to_snapshot(Offset(end_offset)).unwrap();
+            let bounds = |log: &KraftLog| {
+                (
+                    log.log_start_offset().0,
+                    log.log_end_offset().0,
+                    log.hwm().0,
+                )
+            };
+            check!(bounds(&log) == want, "hwm {hwm}, checkpoint {end_offset}");
+            drop(log);
+            let reopened = KraftLog::open(dir.path(), &MetadataLogConfig::default()).unwrap();
+            check!(
+                bounds(&reopened) == want,
+                "reopened: hwm {hwm}, checkpoint {end_offset}"
+            );
+        }
     }
 
     #[test]

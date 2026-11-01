@@ -20,11 +20,64 @@ use {
         TopicIdPartition, WormChainRecord,
     },
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
-    std::{collections::BTreeMap, sync::Arc},
+    std::{
+        collections::{BTreeMap, HashSet},
+        sync::{Arc, Mutex, PoisonError},
+    },
     tokio::time,
     tracing::{debug, error, warn},
     uuid::Uuid,
 };
+
+/// The segments whose RSM upload is still running on this broker: Kafka's
+/// `RemoteLogManager.segmentIdsBeingCopied`.
+///
+/// An upload stays here until it returns, not until its copy does. A copy
+/// whose deadline expired leaves its segment in `CopySegmentStarted` and its
+/// upload running on the blocking pool, and remote retention must not delete
+/// that segment's objects while the upload can still write them again. The
+/// set lives as long as the broker, so a later tick's retention pass sees it.
+#[derive(Debug, Clone, Default)]
+pub struct CopiesInFlight(Arc<Mutex<HashSet<Uuid>>>);
+
+impl CopiesInFlight {
+    /// Record `segment`'s upload until the returned guard drops.
+    pub(super) fn track(&self, segment: Uuid) -> InFlightCopy {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(segment);
+        InFlightCopy {
+            copies: self.clone(),
+            segment,
+        }
+    }
+
+    /// Whether `segment`'s upload is still running.
+    pub(super) fn contains(&self, segment: Uuid) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&segment)
+    }
+}
+
+/// One upload in [`CopiesInFlight`], removed when this drops.
+#[derive(Debug)]
+pub(super) struct InFlightCopy {
+    copies: CopiesInFlight,
+    segment: Uuid,
+}
+
+impl Drop for InFlightCopy {
+    fn drop(&mut self) {
+        self.copies
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.segment);
+    }
+}
 
 /// What one [`copy_one`] attempt left behind.
 #[derive(Debug, PartialEq, Eq)]
@@ -209,11 +262,19 @@ async fn copy_one_inner(
     // the upload is abandoned rather than stopped — it keeps running on the
     // blocking pool against a segment id no metadata will ever finish, and
     // its objects are what the next tick's fresh id copies again.
+    //
+    // The upload is tracked from here until it returns, past any deadline, so
+    // remote retention leaves its `CopySegmentStarted` segment alone.
     let rsm_copy = Arc::clone(rsm);
     let md_copy = metadata.clone();
+    let in_flight = tier.copies_in_flight.track(id.id);
     let copy_result = time::timeout(
         tier.copy_timeout.to_std(),
-        spawn_blocking(move || rsm_copy.copy_log_segment_data(&md_copy, &data)),
+        spawn_blocking(move || {
+            let returned = rsm_copy.copy_log_segment_data(&md_copy, &data);
+            drop(in_flight);
+            returned
+        }),
     )
     .await;
 
