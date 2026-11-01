@@ -919,14 +919,7 @@ mod tests {
         coord.seed_classic("g", Box::new(group));
         let stopping = coord.find("g").unwrap();
         if matches!(expiry, Expiry::Session) {
-            let waiting = Arc::clone(&clock);
-            let parked = spawn_blocking(move || waiting.wait_for_waiters(1, PROMPT))
-                .await
-                .unwrap();
-            assert!(parked, "the actor parks on the session tick");
-            clock
-                .advance(tick_interval)
-                .expect("manual time moves forward");
+            fire_session_tick(&clock, tick_interval).await;
         }
 
         timeout(PROMPT, log.until_log_end(1))
@@ -952,6 +945,22 @@ mod tests {
         check!(stopped, "the actor stops after the uncertain write");
         check!(rpc::classic_inspect(&live).await == reloaded);
         check!(rpc::fetch_committed(&live).await == committed);
+    }
+
+    /// Waits until the actor parks on its session tick, then moves `clock`
+    /// on by `tick_interval`, so that the tick fires once.
+    async fn fire_session_tick(
+        clock: &Arc<qubit_clock::ManualMonotonicClock>,
+        tick_interval: Duration,
+    ) {
+        let waiting = Arc::clone(clock);
+        let parked = spawn_blocking(move || waiting.wait_for_waiters(1, PROMPT))
+            .await
+            .unwrap();
+        assert!(parked, "the actor parks on the session tick");
+        clock
+            .advance(tick_interval)
+            .expect("manual time moves forward");
     }
 
     /// The live actor that serves group `g`, once one does.
@@ -1049,14 +1058,7 @@ mod tests {
             FailedWrite::SessionTick => {
                 // The member's 1 ms session runs out before the tick.
                 sleep(Duration::from_millis(5)).await;
-                let waiting = Arc::clone(&clock);
-                let parked = spawn_blocking(move || waiting.wait_for_waiters(1, PROMPT))
-                    .await
-                    .unwrap();
-                assert!(parked, "the actor parks on the session tick");
-                clock
-                    .advance(tick_interval)
-                    .expect("manual time moves forward");
+                fire_session_tick(&clock, tick_interval).await;
             }
             FailedWrite::Heartbeat => {
                 let refused = rpc::consumer_heartbeat(&stopping, "", 0, Some("t")).await;
