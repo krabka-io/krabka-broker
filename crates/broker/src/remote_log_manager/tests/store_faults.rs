@@ -259,12 +259,15 @@ async fn a_stalled_copy_is_abandoned_at_its_deadline() {
         index_cache,
     } = fixtures::owned_tier_resources();
 
+    let copies = CopiesInFlight::default();
+
     let started = Instant::now();
     let copied = copy_exports(
         &fixtures::configured_tier()
             .rsm(&rsm)
             .rlmm(&rlmm)
             .copy_timeout(SHORT_COPY_DEADLINE)
+            .copies_in_flight(&copies)
             .metrics(&metrics)
             .index_cache(&index_cache)
             .call(),
@@ -289,6 +292,12 @@ async fn a_stalled_copy_is_abandoned_at_its_deadline() {
     // still running against this segment id, so the metadata stays in
     // `CopySegmentStarted` and the next tick re-copies under a fresh id.
     fixtures::check_one_segment_state(&rlmm, RemoteLogSegmentState::CopySegmentStarted);
+    // The upload is still tracked as in flight past the deadline, so remote
+    // retention does not delete objects it may still write.
+    let stalled = rlmm.list_remote_log_segments(&tp()).unwrap()[0]
+        .remote_log_segment_id()
+        .id;
+    check!(copies.contains(stalled));
 }
 
 /// A partition whose copy stalls must not stop the sweep from reaching the

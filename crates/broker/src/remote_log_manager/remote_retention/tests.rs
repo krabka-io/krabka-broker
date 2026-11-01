@@ -5,10 +5,10 @@ use {
     crate::{
         metrics::BrokerMetrics,
         remote_log_manager::{
-            test_support as fixtures,
+            CopiesInFlight,
             test_support::{
-                Backends, FakeWormArchive, RefusesDeleteRsm, archived_backends, copy_exports,
-                local_backends, seed_finished_segments, synth_export, tier, tp,
+                self as fixtures, Backends, FakeWormArchive, RefusesDeleteRsm, archived_backends,
+                copy_exports, local_backends, seed_finished_segments, synth_export, tier, tp,
             },
         },
         time_util::now_ms,
@@ -1255,6 +1255,54 @@ async fn a_retention_pass_deletes_a_stuck_copy_that_breaches_retention(
             }
     );
     check!(segment_states(&rlmm) == remaining);
+}
+
+/// A stuck copy whose upload still runs on this broker, as one its copy
+/// deadline abandoned does, is left alone even though it breaches the floor:
+/// a delete racing the upload could leave objects the upload writes after it.
+/// The first pass after the upload returns deletes it.
+#[tokio::test]
+async fn a_retention_pass_leaves_a_stuck_copy_whose_upload_still_runs() {
+    let rlmm = fixtures::in_memory_metadata();
+    let stuck = fixtures::stuck_started_segment(&rlmm, 0x6001, 0);
+    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(AcceptingRsm);
+    let copies = CopiesInFlight::default();
+    let tier = fixtures::configured_tier()
+        .rsm(&rsm)
+        .rlmm(&rlmm)
+        .copies_in_flight(&copies)
+        .call();
+    let cfg = LogConfig {
+        retention: None,
+        retention_size: None,
+        ..LogConfig::default()
+    };
+    let tp = tp();
+    let pass = || {
+        remote_retention_pass(
+            &tp,
+            1,
+            empty_local_bounds(&cfg, Offset(10), Some(Offset(10)), now_ms()),
+            &tier,
+        )
+    };
+    let upload = copies.track(stuck);
+
+    let while_uploading = pass().await;
+    let left = segment_states(&rlmm);
+    drop(upload);
+    let after_upload = pass().await;
+
+    check!(while_uploading == RemoteRetentionOutcome::default());
+    check!(left == [(0, STARTED)]);
+    check!(
+        after_upload
+            == RemoteRetentionOutcome {
+                deleted: 1,
+                log_start: None,
+            }
+    );
+    check!(segment_states(&rlmm).is_empty());
 }
 
 #[derive(Default)]

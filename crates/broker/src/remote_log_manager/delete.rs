@@ -127,8 +127,11 @@ pub(super) struct DeleteTargets<'a> {
     pub(super) index_cache: &'a Arc<RemoteIndexCache>,
 }
 
-/// Drive one `CopySegmentFinished` (or in-flight) segment through the
-/// `DeleteSegmentStarted` → RSM delete → `DeleteSegmentFinished` chain.
+/// Drive one segment through the `DeleteSegmentStarted` → RSM delete →
+/// `DeleteSegmentFinished` chain. A `CopySegmentFinished` or
+/// `CopySegmentStarted` segment records `DeleteSegmentStarted` first, since
+/// neither may step straight to `DeleteSegmentFinished`; a segment already
+/// `DeleteSegmentStarted` picks up from there.
 /// Returns `true` when the lifecycle completes cleanly. Shared by
 /// [`remote_retention_pass`](super::remote_retention::remote_retention_pass)
 /// and [`cascade_remote_partition_delete`].
@@ -157,15 +160,17 @@ pub(super) async fn delete_one_segment(
     index_cache.remove_segment(id.id);
     // Transition to DeleteSegmentStarted unless the segment is already
     // there (cascade may retry against a partially-cleaned partition).
-    if md.state() == RemoteLogSegmentState::CopySegmentFinished
-        && let Err(e) = super::rlmm::update_segment(
-            rlmm,
-            id.clone(),
-            None,
-            RemoteLogSegmentState::DeleteSegmentStarted,
-            broker_id,
-        )
-        .await
+    if matches!(
+        md.state(),
+        RemoteLogSegmentState::CopySegmentFinished | RemoteLogSegmentState::CopySegmentStarted
+    ) && let Err(e) = super::rlmm::update_segment(
+        rlmm,
+        id.clone(),
+        None,
+        RemoteLogSegmentState::DeleteSegmentStarted,
+        broker_id,
+    )
+    .await
     {
         warn!(topic = %tp.topic, partition = tp.partition, base = md.start_offset(),
               error = %e,
