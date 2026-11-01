@@ -16,7 +16,13 @@
 use {
     crate::time_util::sleep_until_opt,
     krabka_protocol::primitives::uuid::Uuid,
-    std::{borrow::Cow, collections::HashMap, fmt::Debug, sync::Arc, time::Instant},
+    std::{
+        borrow::Cow,
+        collections::HashMap,
+        fmt::Debug,
+        sync::{Arc, Mutex, PoisonError},
+        time::Instant,
+    },
     tokio::{
         sync::{mpsc, oneshot},
         task::JoinHandle,
@@ -91,6 +97,78 @@ use {
 /// A Kafka wire `error_code` value, as carried in response `error_code`
 /// fields. The values live in [`crate::codes`].
 pub type ErrorCode = i16;
+
+/// What a classic actor that stops after a write that may still commit leaves
+/// for the actor that replaces it.
+///
+/// It holds the group a reload of the log builds, and the waits of the
+/// commits still replicating, which the next actor completes as the stopped
+/// one would have.
+#[derive(derive_more::Debug)]
+pub struct ClassicRespawnSeed {
+    group: Box<CoordinatorGroup>,
+    #[debug(skip)]
+    /// Behind a lock only because the coordinator is shared between threads
+    /// and the waits are not: one actor puts them in and one takes them out.
+    commits: Option<Mutex<CommitWaits>>,
+}
+
+impl GroupCoordinator {
+    /// Leave `group` for the actor that replaces a classic actor which stops
+    /// after a write that may still commit.
+    pub(crate) fn leave_classic_respawn_seed(&self, group: CoordinatorGroup) {
+        self.classic_respawn_seeds
+            .insert(group.group_id.clone(), ClassicRespawnSeed {
+                group: Box::new(group),
+                commits: None,
+            });
+    }
+
+    /// `true` while a stopped actor's classic group waits for `group_id`'s
+    /// next actor.
+    #[must_use]
+    pub(crate) fn holds_classic_respawn_seed(&self, group_id: &str) -> bool {
+        self.classic_respawn_seeds.contains_key(group_id)
+    }
+
+    /// The live actor of `group_id`, respawned first when a stopped actor
+    /// left it a classic respawn seed, or `None` when no actor serves the
+    /// group.
+    #[must_use]
+    pub(crate) fn live_or_respawned(
+        self: &Arc<Self>,
+        group_id: &str,
+    ) -> Option<Arc<GroupActorHandle>> {
+        if self.holds_classic_respawn_seed(group_id) {
+            return Some(self.get_or_create_classic(group_id));
+        }
+        self.find(group_id).filter(|handle| !handle.tx.is_closed())
+    }
+
+    /// Give the stopping actor's commit waits to the seed it left, or hand
+    /// them back when it left none.
+    fn attach_respawn_commits(&self, group_id: &str, commits: CommitWaits) -> Option<CommitWaits> {
+        match self.classic_respawn_seeds.get_mut(group_id) {
+            Some(mut seed) => {
+                seed.commits = Some(Mutex::new(commits));
+                None
+            }
+            None => Some(commits),
+        }
+    }
+
+    /// Hand the classic respawn seed of `group`'s id, if any, to the actor
+    /// that replaces the stopped one: its group, and its commit waits.
+    fn apply_classic_respawn_seed(&self, group: &mut CoordinatorGroup, commits: &mut CommitWaits) {
+        let Some((_, seed)) = self.classic_respawn_seeds.remove(&group.group_id) else {
+            return;
+        };
+        *group = *seed.group;
+        if let Some(waits) = seed.commits {
+            *commits = waits.into_inner().unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+}
 
 /// Fallback session timeout (30 s, in ms) for a persisted or requested classic
 /// `session_timeout_ms` that the target type cannot represent.
@@ -401,10 +479,14 @@ async fn run_actor(
             break;
         }
     }
-    // No turn is left to publish a commit that is still replicating. Its
-    // client still hears how its own write ended, and after an unload it has
-    // already heard `NOT_COORDINATOR`.
-    commits.detach();
+    // A classic actor that left a respawn seed hands its commits still
+    // replicating to the next actor, which publishes them as they commit.
+    // Otherwise no turn is left to publish them: each client still hears how
+    // its own write ended, and after an unload it has already heard
+    // `NOT_COORDINATOR`.
+    if let Some(commits) = coordinator.attach_respawn_commits(&group.group_id, commits) {
+        commits.detach();
+    }
     // A sender can enqueue using a permit reserved before closure. Drain those
     // sends too, dropping their replies, so callers cannot wait on a dead actor.
     rx.close();

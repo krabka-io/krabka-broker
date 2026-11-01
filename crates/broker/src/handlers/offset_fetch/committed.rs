@@ -54,7 +54,7 @@ pub(super) async fn fetch_offsets(
     {
         return Err(error_code);
     }
-    let Some(handle) = broker.group_coordinator.find(group_id) else {
+    let Some(handle) = broker.group_coordinator.live_or_respawned(group_id) else {
         return Ok(GroupOffsets::default());
     };
     ask(&handle.tx, |reply| {

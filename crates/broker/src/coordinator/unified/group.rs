@@ -21,7 +21,10 @@ pub use crate::coordinator::unified::{
 };
 use {
     crate::codes::{ILLEGAL_GENERATION, STALE_MEMBER_EPOCH, UNKNOWN_MEMBER_ID},
-    std::collections::{HashMap, HashSet, VecDeque},
+    std::{
+        collections::{HashMap, HashSet, VecDeque},
+        mem,
+    },
 };
 
 /// Which protocol the members of a [`Group`] speak. The variant carries that
@@ -212,37 +215,23 @@ impl CoordinatorGroup {
         }
     }
 
-    /// This group with `kind` in place of its own, and with the offsets and
-    /// the open transactions' keys it holds: what an actor that stops after
-    /// a write that may still commit leaves for the next one.
+    /// This group with `kind` in place of its own: what an actor that stops
+    /// after a write that may still commit leaves for the next one.
     ///
-    /// The offsets are the [`latest`](Self::latest_offsets) ones. A commit
-    /// still in flight is in the log like the write that stopped the actor,
-    /// and a reload of the log would read it; its client hears its own
-    /// outcome from the stopped actor.
+    /// The copy keeps the committed offsets and the open transactions' keys,
+    /// and takes the commits still staged, which the next actor publishes once
+    /// their writes commit or drops if their term ends.
     #[must_use]
-    pub(crate) fn respawn_seed(&self, kind: GroupKind) -> Self {
+    pub(crate) fn respawn_seed(&mut self, kind: GroupKind) -> Self {
         Self {
             group_id: self.group_id.clone(),
             kind,
-            committed_offsets: self
-                .latest_offsets()
-                .into_iter()
-                .map(|(key, entry)| (key.clone(), entry.clone()))
-                .collect(),
+            committed_offsets: self.committed_offsets.clone(),
             empty_since_ms: self.empty_since_ms,
             pending_txn_offsets: self.pending_txn_offsets.clone(),
             pending_txn_key_counts: self.pending_txn_key_counts.clone(),
-            pending_commits: VecDeque::new(),
+            pending_commits: mem::take(&mut self.pending_commits),
         }
-    }
-
-    /// A copy of this classic group, as [`respawn_seed`](Self::respawn_seed)
-    /// builds it, or `None` for a consumer group.
-    #[must_use]
-    pub(crate) fn respawn_copy(&self) -> Option<Self> {
-        self.as_classic()
-            .map(|state| self.respawn_seed(GroupKind::Classic(state.clone())))
     }
 
     /// `true` while the group has at least one member, whichever protocol

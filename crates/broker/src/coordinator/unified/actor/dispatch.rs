@@ -240,11 +240,12 @@ pub(super) async fn handle_actor_message(
         }
         GroupActorMessage::ClassicSeed(seeded) => {
             *group = *seeded;
-            // A respawned actor now holds the group its stopped predecessor
-            // left, so the next respawn must not read that group again.
+            true
+        }
+        GroupActorMessage::ClassicRespawn => {
             services
                 .coordinator
-                .drop_classic_respawn_seed(&group.group_id);
+                .apply_classic_respawn_seed(group, commits);
             true
         }
         GroupActorMessage::Shutdown(reply) => {

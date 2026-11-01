@@ -193,12 +193,10 @@ pub(super) async fn resolve_pending_offsets(
         // An abort skips a stopped actor, whose marks went with it, unless the
         // actor left a classic respawn seed that holds them: the respawned
         // actor resolves them instead.
-        let handle = if (commit && !entries.is_empty())
-            || coordinator.holds_classic_respawn_seed(&group_id)
-        {
+        let handle = if commit && !entries.is_empty() {
             Some(coordinator.get_or_create_group(&group_id, GroupKindTag::Classic))
         } else {
-            coordinator.find(&group_id).filter(|h| !h.tx.is_closed())
+            coordinator.live_or_respawned(&group_id)
         };
         let Some(handle) = handle else {
             continue;

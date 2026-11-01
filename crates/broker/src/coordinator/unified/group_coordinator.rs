@@ -9,9 +9,8 @@
 
 use {
     super::{
-        actor::{GroupActorHandle, MetadataProvider},
+        actor::{ClassicRespawnSeed, GroupActorHandle, MetadataProvider},
         config::NextGenConfig,
-        group::CoordinatorGroup,
         offsets_log::OffsetsLog,
         seeds::{GroupSeed, ShareGroupSeed, StreamsGroupSeed},
         share::{actor::ShareGroupActorHandle, config::ShareGroupConfig},
@@ -96,7 +95,7 @@ pub struct GroupCoordinator {
     /// still commit leaves for the actor that replaces it, rebuilt from the
     /// records it wrote as a reload of the log would rebuild it. The next
     /// spawn of the group takes it.
-    pub(crate) classic_respawn_seeds: DashMap<String, Box<CoordinatorGroup>>,
+    pub(crate) classic_respawn_seeds: DashMap<String, ClassicRespawnSeed>,
     /// KIP-1071 metadata authority.
     ///
     /// `Broker::start` sets it once. Per-group streams actors read it through

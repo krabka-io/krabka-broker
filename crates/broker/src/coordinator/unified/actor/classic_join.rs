@@ -687,7 +687,7 @@ mod tests {
             collections::HashSet,
             sync::{Arc, atomic::Ordering},
         },
-        tokio::{sync::oneshot, time},
+        tokio::{sync::oneshot, task, time},
     };
 
     /// Kafka's `group.initial.rebalance.delay.ms = 0`: the first member of a
@@ -906,14 +906,27 @@ mod tests {
 
     /// A static rejoin of `stable_static_group_and_rejoin`, whose group also
     /// holds a committed offset and an offset commit still in flight, after
-    /// both writes timed out with their records in the log and the records
-    /// then committed.
+    /// both writes timed out with their records in the log. The high
+    /// watermark still holds them back.
     struct UncertainStaticRejoin {
         coord: Arc<GroupCoordinator>,
         log: Arc<InMemoryOffsetsLog>,
         generation: i32,
-        /// The offsets the log holds: the seeded one and the in-flight one.
-        committed: HashMap<(String, i32), OffsetEntry>,
+        /// The client of the commit still in flight.
+        in_flight: oneshot::Receiver<Result<(), i16>>,
+    }
+
+    /// The offset committed before the rejoin.
+    fn committed_before() -> HashMap<(String, i32), OffsetEntry> {
+        HashMap::from([(("t".to_owned(), 0), offset_entry(42))])
+    }
+
+    /// The offsets once the commit in flight commits too.
+    fn committed_after() -> HashMap<(String, i32), OffsetEntry> {
+        HashMap::from([
+            (("t".to_owned(), 0), offset_entry(42)),
+            (("t".to_owned(), 1), offset_entry(9)),
+        ])
     }
 
     /// Runs the rejoin of [`UncertainStaticRejoin`]: the reply is Kafka's
@@ -921,7 +934,7 @@ mod tests {
     async fn uncertain_static_rejoin() -> UncertainStaticRejoin {
         let (coord, log) = make_coordinator();
         let mut rejoin = stable_static_group_and_rejoin();
-        rejoin.group.committed_offsets = HashMap::from([(("t".to_owned(), 0), offset_entry(42))]);
+        rejoin.group.committed_offsets = committed_before();
         let seeded = super::super::test_support::seed_classic_group(&coord, rejoin.group);
         log.hold_commits();
         let in_flight = rpc::begin(&seeded.handle, |reply| GroupActorMessage::CommitOffsets {
@@ -965,32 +978,23 @@ mod tests {
         );
         let stopped = time::timeout(PROMPT, seeded.handle.tx.closed()).await;
         assert!(stopped.is_ok(), "the actor stops");
-        check!(
-            time::timeout(PROMPT, in_flight)
-                .await
-                .expect("the in-flight commit is answered")
-                .unwrap()
-                == Err(codes::COORDINATOR_NOT_AVAILABLE)
-        );
-        log.release_commits();
         UncertainStaticRejoin {
             coord,
             log,
             generation: seeded.generation,
-            committed: HashMap::from([
-                (("t".to_owned(), 0), offset_entry(42)),
-                (("t".to_owned(), 1), offset_entry(9)),
-            ]),
+            in_flight,
         }
     }
 
     /// A static rejoin whose write times out with the record in the log
     /// answers the append error, and the actor stops: the record may still
     /// commit, and the reverted replacement in memory would then disagree
-    /// with the log. The next actor holds the group that a reload of the log
-    /// builds: the replacement under the generation, the subscription and the
-    /// assignment it was written with, and the offsets, the commit that was
-    /// in flight included.
+    /// with the log. An `OffsetFetch` respawns the group: the next actor holds
+    /// the group that a reload of the log builds, the replacement under the
+    /// generation, the subscription and the assignment it was written with.
+    /// It serves only the committed offset, and takes over the commit still
+    /// in flight: it answers that commit's timeout, and publishes its offset
+    /// once the high watermark passes it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_static_rejoin_whose_write_may_still_commit_respawns_the_persisted_group() {
         let rejoin = uncertain_static_rejoin().await;
@@ -998,7 +1002,10 @@ mod tests {
         let replacement = persisted.members[0].member_id.clone();
         check!(replacement.starts_with("instance-1-"));
 
-        let respawned = rejoin.coord.get_or_create_classic("g");
+        let respawned = rejoin
+            .coord
+            .live_or_respawned("g")
+            .expect("an offset fetch respawns the stopped group");
 
         check!(
             rpc::classic_inspect(&respawned).await
@@ -1018,7 +1025,23 @@ mod tests {
                     }],
                 }
         );
-        check!(rpc::fetch_committed(&respawned).await == rejoin.committed);
+        check!(rpc::fetch_committed(&respawned).await == committed_before());
+        check!(
+            time::timeout(PROMPT, rejoin.in_flight)
+                .await
+                .expect("the in-flight commit is answered")
+                .unwrap()
+                == Err(codes::COORDINATOR_NOT_AVAILABLE)
+        );
+
+        rejoin.log.release_commits();
+        time::timeout(PROMPT, async {
+            while rpc::fetch_committed(&respawned).await != committed_after() {
+                task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the commit that was in flight is published once it commits");
     }
 
     /// The client retries the rejoin after the actor stopped: the retry
@@ -1027,6 +1050,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_static_rejoin_retried_after_the_stop_reaches_the_persisted_group() {
         let rejoin = uncertain_static_rejoin().await;
+        rejoin.log.release_commits();
         let persisted = last_classic_metadata(&rejoin.log).await.members[0]
             .member_id
             .clone();
