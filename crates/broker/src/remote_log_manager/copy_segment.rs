@@ -799,6 +799,23 @@ mod tests {
         );
     }
 
+    /// Copy the fixture segment, offsets 0 to 9, as a leader whose fence
+    /// always holds over a partition with no established log start.
+    async fn copy_fixture_segment(tier: &RemoteTier<'_>) -> CopyOutcome {
+        copy_one(
+            tier,
+            &tp(),
+            CopyIdentity {
+                broker_id: 1,
+                leader_epoch: LeaderEpoch(0),
+                fence: &FloorFence(None),
+            },
+            &synth_export().call(),
+            ChainPosition::Unchained,
+        )
+        .await
+    }
+
     /// A failed copy's rollback deletes its partial objects, and that delete
     /// counts as one delete request, and as one delete error when the backend
     /// refuses it. A delete that goes drops the metadata; a refused one leaves
@@ -816,18 +833,7 @@ mod tests {
         let rsm: Arc<dyn RemoteStorageManager> = Arc::new(FailingCopyRsm { refuse_delete });
         let owned = fixtures::owned_tier_resources();
 
-        let outcome = copy_one(
-            &owned.tier(&rsm),
-            &tp(),
-            CopyIdentity {
-                broker_id: 1,
-                leader_epoch: LeaderEpoch(0),
-                fence: &FloorFence(None),
-            },
-            &synth_export().call(),
-            ChainPosition::Unchained,
-        )
-        .await;
+        let outcome = copy_fixture_segment(&owned.tier(&rsm)).await;
 
         check!(outcome == CopyOutcome::Failed);
         let states: Vec<_> = owned
@@ -896,18 +902,7 @@ mod tests {
         let owned = fixtures::owned_tier_resources();
         let tier = owned.tier(&rsm);
 
-        let outcome = copy_one(
-            &tier,
-            &tp(),
-            CopyIdentity {
-                broker_id: 1,
-                leader_epoch: LeaderEpoch(0),
-                fence: &FloorFence(None),
-            },
-            &synth_export().call(),
-            ChainPosition::Unchained,
-        )
-        .await;
+        let outcome = copy_fixture_segment(&tier).await;
         check!(outcome == CopyOutcome::Failed);
         let copied = rsm_impl
             .copied
