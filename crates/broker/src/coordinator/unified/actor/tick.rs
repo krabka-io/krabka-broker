@@ -908,7 +908,11 @@ mod tests {
         match expiry {
             Expiry::Session => {
                 state.state = ClassicGroupState::Stable;
-                state.members.get_mut("m1").unwrap().session_timeout = Duration::ZERO;
+                let member = state.members.get_mut("m1").unwrap();
+                member.session_timeout = Duration::ZERO;
+                // A session is live through its timeout, so a heartbeat in
+                // the past expires it whatever instant the tick reads.
+                member.last_heartbeat = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
             }
             Expiry::PendingSync => {
                 state.arm_pending_sync(Instant::now());
@@ -919,7 +923,7 @@ mod tests {
         coord.seed_classic("g", Box::new(group));
         let stopping = coord.find("g").unwrap();
         if matches!(expiry, Expiry::Session) {
-            fire_session_tick(&clock, tick_interval).await;
+            fire_session_tick(&stopping, &clock, tick_interval).await;
         }
 
         timeout(PROMPT, log.until_log_end(1))
@@ -947,12 +951,23 @@ mod tests {
         check!(rpc::fetch_committed(&live).await == committed);
     }
 
-    /// Waits until the actor parks on its session tick, then moves `clock`
-    /// on by `tick_interval`, so that the tick fires once.
+    /// Moves `clock` on by `tick_interval`, so that the actor behind `handle`
+    /// runs its session tick once, on the group that every message sent to it
+    /// so far has built.
+    ///
+    /// The actor arms its tick before it reads its mailbox, so the clock
+    /// counts the tick's waiter while a message such as a seed may still be
+    /// queued. A tick that fires then races that message in the actor's
+    /// `select!`, and if it wins it sweeps the group without the message's
+    /// change, and the next tick is a whole `tick_interval` of manual time
+    /// away. A reply from the actor proves that it has handled everything
+    /// queued before it, because the mailbox is FIFO with one reader.
     async fn fire_session_tick(
+        handle: &GroupActorHandle,
         clock: &Arc<qubit_clock::ManualMonotonicClock>,
         tick_interval: Duration,
     ) {
+        rpc::fetch_offsets(handle).await;
         let waiting = Arc::clone(clock);
         let parked = spawn_blocking(move || waiting.wait_for_waiters(1, PROMPT))
             .await
@@ -1058,7 +1073,7 @@ mod tests {
             FailedWrite::SessionTick => {
                 // The member's 1 ms session runs out before the tick.
                 sleep(Duration::from_millis(5)).await;
-                fire_session_tick(&clock, tick_interval).await;
+                fire_session_tick(&stopping, &clock, tick_interval).await;
             }
             FailedWrite::Heartbeat => {
                 let refused = rpc::consumer_heartbeat(&stopping, "", 0, Some("t")).await;
