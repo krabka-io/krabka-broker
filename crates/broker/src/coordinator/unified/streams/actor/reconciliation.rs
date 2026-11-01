@@ -15,7 +15,7 @@ use {
         coordinator::unified::{
             can_compute_next_target_assignment,
             streams::{
-                assignor::{self, AssignorInput, AssignorMember},
+                assignor::{AssignorInput, AssignorMember},
                 config::StreamsGroupConfig,
                 persistence::{NO_VALIDATED_TOPOLOGY_EPOCH, StreamsGroupTopologyValue},
                 state::{StreamsGroupStatePhase, StreamsTargetAssignment},
@@ -290,7 +290,14 @@ fn install_computed_target(
         stateful,
         num_standby_replicas: config.num_standby_replicas,
     };
-    let assignment = assignor::assign(&members, &input);
+    let assignment = match config.assign_tasks(&members, &input) {
+        Ok(assignment) => assignment,
+        Err(error) => {
+            tracing::warn!(%error, "Streams task assignor failed; retaining previous target");
+            actor.state.dirty = true;
+            return;
+        }
+    };
 
     // Kafka's default assignment refiner hands out no warmup tasks.
     let target = StreamsTargetAssignment {
@@ -303,4 +310,62 @@ fn install_computed_target(
     // A computed target ends `NotReady`; the members then reconcile toward it.
     actor.state.phase = StreamsGroupStatePhase::Reconciling;
     actor.state.refresh_phase();
+}
+
+#[cfg(test)]
+mod custom_assignor_tests {
+    use {
+        super::*,
+        crate::coordinator::unified::streams::{
+            assignor::test_support::registered_config,
+            persistence::StoredSubtopology,
+            state::{RoleTasks, StreamsMemberState},
+        },
+        assert2::assert,
+    };
+    #[test]
+    fn task_assignor_registry_reassignment_uses_cooperative_revocation_and_retains_target_on_error()
+    {
+        let mut actor = ActorState::new("custom-group".into());
+        for id in ["a", "b"] {
+            let mut member = StreamsMemberState::joining(id, "client", "host");
+            member.process_id = id.into();
+            actor.state.add_or_update_member(member);
+        }
+        let topology = StreamsGroupTopologyValue {
+            epoch: 1,
+            subtopologies: vec![StoredSubtopology {
+                subtopology_id: "s".into(),
+                ..Default::default()
+            }],
+        };
+        let tasks = [("s".into(), 1)].into();
+        let mut config = registered_config();
+        compute_and_install_target(&mut actor, &config, &topology, &tasks);
+        actor
+            .state
+            .reconcile_member("a", Some(&RoleTasks::default()));
+        assert!(actor.state.members["a"].active["s"] == vec![0]);
+        config.task_assignor_name = Some("second".into());
+        compute_and_install_target(&mut actor, &config, &topology, &tasks);
+        assert!(actor.state.target.active["b"]["s"] == vec![0]);
+        actor
+            .state
+            .reconcile_member("b", Some(&RoleTasks::default()));
+        assert!(actor.state.members["b"].active.is_empty());
+        actor.state.reconcile_member("a", None);
+        assert!(actor.state.members["a"].active_pending_revocation["s"] == vec![0]);
+        actor
+            .state
+            .reconcile_member("a", Some(&RoleTasks::default()));
+        actor
+            .state
+            .reconcile_member("b", Some(&RoleTasks::default()));
+        assert!(actor.state.members["b"].active["s"] == vec![0]);
+        let old_target = actor.state.target.active.clone();
+        config.task_assignor_name = Some("missing".into());
+        compute_and_install_target(&mut actor, &config, &topology, &tasks);
+        assert!(actor.state.target.active == old_target);
+        assert!(actor.state.dirty);
+    }
 }

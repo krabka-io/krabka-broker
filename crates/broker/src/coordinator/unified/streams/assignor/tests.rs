@@ -236,3 +236,192 @@ fn expected_task_owners(
     assert!(task_placement.reversed.as_ref() == Some(&expected));
 }
 scenarios!("tests/features/migrated/src/coordinator/unified/streams/assignor/tests.feature",fixtures=[task_placement:TaskPlacement]);
+
+/// Distinct native implementations must execute, not merely report names.
+#[test]
+fn task_assignor_registry_executes_selected_logic_and_rejects_ambiguous_names() {
+    use {
+        super::test_support::{Fail, Pin, registered_config},
+        crate::coordinator::unified::streams::config::KEY_ASSIGNOR_NAME,
+        std::sync::Arc,
+    };
+    let mut config = registered_config();
+    config.task_assignors.register(Arc::new(Fail)).unwrap();
+    assert!(
+        config
+            .task_assignors
+            .register(Arc::new(Pin("first", "b")))
+            .is_err()
+    );
+    assert!(
+        config
+            .task_assignors
+            .register(Arc::new(Pin("sticky", "b")))
+            .is_err()
+    );
+    assert!(
+        config
+            .task_assignors
+            .register(Arc::new(Pin("", "b")))
+            .is_err()
+    );
+    let members = [
+        AssignorMember {
+            member_id: "a".into(),
+            ..Default::default()
+        },
+        AssignorMember {
+            member_id: "b".into(),
+            ..Default::default()
+        },
+    ];
+    let input = AssignorInput {
+        tasks: [("sub".into(), vec![0, 1])].into(),
+        ..Default::default()
+    };
+    let bounds = crate::config_keys::group::GroupBounds {
+        streams: config.clone(),
+        ..Default::default()
+    };
+    assert!(
+        crate::config_keys::group::validate_group_configs(
+            &[(KEY_ASSIGNOR_NAME.into(), "second".into())].into(),
+            &bounds,
+            crate::api_catalog::UnstableApiVersions::Enabled,
+        )
+        .is_ok()
+    );
+    assert!(config.registered_task_assignor_names() == "first,second,fail,sticky");
+    assert!(config.selected_task_assignor_name() == "first");
+    assert!(
+        config
+            .assign_tasks(&members, &input)
+            .unwrap()
+            .active
+            .contains_key("a")
+    );
+    let selected = config
+        .with_group_overrides(&[(KEY_ASSIGNOR_NAME.into(), "second".into())].into())
+        .unwrap();
+    assert!(selected.selected_task_assignor_name() == "second");
+    assert!(
+        selected
+            .assign_tasks(&members, &input)
+            .unwrap()
+            .active
+            .contains_key("b")
+    );
+    assert!(
+        config
+            .with_group_overrides(&[(KEY_ASSIGNOR_NAME.into(), "missing".into())].into())
+            .is_err()
+    );
+    let failed = config
+        .with_group_overrides(&[(KEY_ASSIGNOR_NAME.into(), "fail".into())].into())
+        .unwrap();
+    assert!(failed.assign_tasks(&members, &input) == Err("extension failed".into()));
+}
+
+#[test]
+fn task_assignor_registry_validates_extension_output() {
+    let members = [AssignorMember {
+        member_id: "a".into(),
+        process_id: "a".into(),
+        ..Default::default()
+    }];
+    let input = AssignorInput {
+        tasks: [("s".into(), vec![0])].into(),
+        ..Default::default()
+    };
+    assert!(validate_assignment(&StreamsAssignment::default(), &members, &input).is_err());
+    let valid = StreamsAssignment {
+        active: [("a".into(), input.tasks.clone())].into(),
+        ..Default::default()
+    };
+    assert!(validate_assignment(&valid, &members, &input).is_ok());
+    let mut unknown = valid.clone();
+    unknown.active = [("missing".into(), input.tasks.clone())].into();
+    assert!(validate_assignment(&unknown, &members, &input).is_err());
+    let mut duplicate = valid.clone();
+    duplicate
+        .active
+        .get_mut("a")
+        .unwrap()
+        .get_mut("s")
+        .unwrap()
+        .push(0);
+    assert!(validate_assignment(&duplicate, &members, &input).is_err());
+    let mut unknown_task = valid;
+    unknown_task
+        .active
+        .get_mut("a")
+        .unwrap()
+        .get_mut("s")
+        .unwrap()
+        .push(1);
+    assert!(validate_assignment(&unknown_task, &members, &input).is_err());
+}
+
+mod task_assignor_registry_scenarios {
+    use {
+        super::{super::test_support::registered_config, *},
+        crate::coordinator::unified::streams::config::{KEY_ASSIGNOR_NAME, StreamsGroupConfig},
+        assert2::assert,
+        rstest::fixture,
+        rstest_bdd_macros::{given, scenarios, then, when},
+    };
+    #[derive(Default)]
+    struct NativeRegistry {
+        config: StreamsGroupConfig,
+        selected: Option<StreamsGroupConfig>,
+        result: Option<StreamsAssignment>,
+    }
+    #[fixture]
+    fn native_registry() -> NativeRegistry {
+        // Each scenario owns a fresh registry and observations.
+        NativeRegistry::default()
+    }
+    #[given("native Streams assignors first and second pin tasks to different members")]
+    fn registered(native_registry: &mut NativeRegistry) {
+        native_registry.config = registered_config();
+    }
+    #[when("the Streams group selects {selection} and computes its target")]
+    fn compute(native_registry: &mut NativeRegistry, selection: String) {
+        let overrides = if selection == "default" {
+            BTreeMap::new()
+        } else {
+            [(KEY_ASSIGNOR_NAME.into(), selection)].into()
+        };
+        let config = native_registry
+            .config
+            .with_group_overrides(&overrides)
+            .unwrap();
+        let members = [
+            AssignorMember {
+                member_id: "a".into(),
+                process_id: "a".into(),
+                ..Default::default()
+            },
+            AssignorMember {
+                member_id: "b".into(),
+                process_id: "b".into(),
+                ..Default::default()
+            },
+        ];
+        let input = AssignorInput {
+            tasks: [("s".into(), vec![0, 1])].into(),
+            ..Default::default()
+        };
+        native_registry.result = Some(config.assign_tasks(&members, &input).unwrap());
+        native_registry.selected = Some(config);
+    }
+    #[then("the selected assignor is {reported} and all active tasks belong to {owner}")]
+    fn assigned(native_registry: &NativeRegistry, reported: String, owner: String) {
+        let config = native_registry.selected.as_ref().unwrap();
+        let result = native_registry.result.as_ref().unwrap();
+        assert!(config.selected_task_assignor_name() == reported);
+        assert!(result.active.len() == 1);
+        assert!(result.active[&owner]["s"] == vec![0, 1]);
+    }
+    scenarios!("tests/features/streams/task_assignor_registry.feature", fixtures = [native_registry: NativeRegistry]);
+}
