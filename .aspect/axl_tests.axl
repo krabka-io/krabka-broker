@@ -31,6 +31,7 @@ load("./creusot_image_tag_test.axl", "creusot_image_tag_tests")
 load("./freeze_candidate_test.axl", "freeze_candidate_tests")
 load("./generate_config_reference_test.axl", "generate_config_reference_tests")
 load("./generate_kip_matrix_test.axl", "generate_kip_matrix_tests")
+load("./jepsen_test.axl", "jepsen_tests")
 load("./kafka_system_tests_test.axl", "kafka_system_tests_tests")
 load("./kind_smoke_test.axl", "kind_smoke_tests")
 load("./mutants_shard_test.axl", "mutants_shard_tests")
@@ -62,6 +63,7 @@ SUITES = [
     freeze_candidate_tests,
     generate_config_reference_tests,
     generate_kip_matrix_tests,
+    jepsen_tests,
     kafka_system_tests_tests,
     kind_smoke_tests,
     mutants_shard_tests,
