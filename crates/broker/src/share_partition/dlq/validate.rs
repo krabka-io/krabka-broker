@@ -184,6 +184,45 @@ mod tests {
         })
     }
 
+    #[test]
+    fn dlq_runtime_replays_and_resets_both_broker_layers() {
+        let uuid = uuid::Uuid::nil();
+        let mut image = MetadataImage::new(uuid);
+        let mut records = Vec::new();
+        for (node_id, auto, prefix, expected_auto, expected_prefix) in [
+            (
+                DEFAULT_BROKER_CONFIG_NODE_ID,
+                Some("true"),
+                Some("cluster."),
+                true,
+                "cluster.",
+            ),
+            (NODE, Some("false"), Some(""), false, ""),
+            (NODE, None, None, true, "cluster."),
+            (DEFAULT_BROKER_CONFIG_NODE_ID, None, None, false, "dlq."),
+        ] {
+            for (key, value) in [(KEY_AUTO_CREATE, auto), (KEY_TOPIC_PREFIX, prefix)] {
+                let record = MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                    node_id,
+                    config_name: key.to_owned(),
+                    config_value: value.map(str::to_owned),
+                });
+                image.apply(&record);
+                records.push(record);
+            }
+            let expected = ClusterSettings {
+                auto_create: expected_auto,
+                topic_prefix: expected_prefix.into(),
+            };
+            assert!(ClusterSettings::resolve(&image, NODE) == expected);
+            let mut restarted = MetadataImage::new(uuid);
+            for record in &records {
+                restarted.apply(record);
+            }
+            assert!(ClusterSettings::resolve(&restarted, NODE) == expected);
+        }
+    }
+
     /// An image with `group` configured as `group_configs`, and the topic
     /// `topic` if `topic_configs` is `Some`.
     fn image(

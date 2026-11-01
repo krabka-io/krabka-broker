@@ -21,7 +21,7 @@ use {
         wire::HeaderEncoding,
     },
     assert2::assert,
-    krabka_broker::codes,
+    krabka_broker::{api_catalog::UnstableApiVersions, codes},
     krabka_protocol::owned::{
         describe_configs_request::DescribeConfigsRequest,
         describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResponse},
@@ -641,4 +641,112 @@ async fn listener_cap_applies_and_lifts_without_restart(dynamic: DynamicBroker) 
 async fn creation_rate_holds_the_acceptor_without_restart(dynamic: DynamicBroker, key: String) {
     let _ = key;
     dynamic.shutdown().await;
+}
+
+/// Exercise the actual alter/describe handlers, not only the typed roster.
+#[tokio::test]
+async fn dlq_configs_alter_describe_reset_and_reject_invalid_values() {
+    let (broker, directory, addr) = start_plaintext_configured(|config| {
+        config.features.unstable_api_versions = UnstableApiVersions::Enabled;
+    })
+    .await;
+    let local = broker.node_id().to_string();
+    for (key, default, cluster, own, kind) in [
+        (
+            "errors.deadletterqueue.auto.create.topics.enable",
+            "false",
+            "true",
+            "false",
+            1,
+        ),
+        (
+            "errors.deadletterqueue.topic.name.prefix",
+            "dlq.",
+            "cluster.",
+            "",
+            2,
+        ),
+    ] {
+        for (resource, operation, value, expected) in [
+            (String::new(), ConfigOperation::Set, Some(cluster), cluster),
+            (local.clone(), ConfigOperation::Set, Some(own), own),
+            (local.clone(), ConfigOperation::Delete, None, cluster),
+            (String::new(), ConfigOperation::Delete, None, default),
+        ] {
+            let changed = alter_broker()
+                .addr(addr)
+                .resource_name(resource)
+                .configs(vec![(key, operation, value)])
+                .call()
+                .await;
+            assert!(changed.error_code == codes::NONE);
+            let entry = describe_broker(addr, local.clone(), key)
+                .await
+                .expect("DLQ key");
+            assert!(entry.value.as_deref() == Some(expected));
+            assert!(entry.config_type == kind);
+            assert!(!entry.read_only && !entry.is_sensitive);
+        }
+    }
+    let invalid = alter_broker()
+        .addr(addr)
+        .resource_name(local.clone())
+        .configs(vec![(
+            "errors.deadletterqueue.auto.create.topics.enable",
+            ConfigOperation::Set,
+            Some("yes"),
+        )])
+        .call()
+        .await;
+    assert!(invalid.error_code == codes::INVALID_REQUEST);
+    let scalar_append = alter_broker()
+        .addr(addr)
+        .resource_name(local)
+        .configs(vec![(
+            "errors.deadletterqueue.topic.name.prefix",
+            ConfigOperation::Append,
+            Some("x"),
+        )])
+        .call()
+        .await;
+    assert!(scalar_append.error_code == codes::INVALID_CONFIG);
+    let persisted = alter_broker()
+        .addr(addr)
+        .resource_name(String::new())
+        .configs(vec![
+            (
+                "errors.deadletterqueue.auto.create.topics.enable",
+                ConfigOperation::Set,
+                Some("true"),
+            ),
+            (
+                "errors.deadletterqueue.topic.name.prefix",
+                ConfigOperation::Set,
+                Some("persisted."),
+            ),
+        ])
+        .call()
+        .await;
+    assert!(persisted.error_code == codes::NONE);
+    broker.shutdown().await;
+    let mut config = support::heartbeat_config(directory.path());
+    config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
+    config.features.unstable_api_versions = UnstableApiVersions::Enabled;
+    let restarted = krabka_broker::Broker::start(config)
+        .await
+        .expect("restart broker");
+    for (key, value) in [
+        ("errors.deadletterqueue.auto.create.topics.enable", "true"),
+        ("errors.deadletterqueue.topic.name.prefix", "persisted."),
+    ] {
+        let entry = describe_broker(
+            restarted.listen_addr(),
+            restarted.node_id().to_string(),
+            key,
+        )
+        .await
+        .expect("persisted DLQ config");
+        assert!(entry.value.as_deref() == Some(value));
+    }
+    restarted.shutdown().await;
 }

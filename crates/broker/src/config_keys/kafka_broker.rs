@@ -105,6 +105,7 @@ pub struct KafkaBrokerConfig {
     /// leaves out of a named broker's `DescribeConfigs`.
     pub(crate) internal: bool,
     check: Check,
+    doc: &'static str,
 }
 
 const fn k(
@@ -121,6 +122,7 @@ const fn k(
         dynamic,
         internal: false,
         check,
+        doc: "",
     }
 }
 
@@ -137,6 +139,33 @@ const fn ki(
         ..k(name, config_type, default, dynamic, check)
     }
 }
+
+/// Released Kafka 4.4 KIP-1191 settings, served only in unstable API mode
+/// until the broker's compatibility baseline graduates from 4.3.1.
+/// `GroupCoordinatorConfig.CONFIG_DEF` and `RECONFIGURABLE_CONFIGS` at tag 4.4.0:
+/// both are public cluster-dynamic keys, with no additional validator.
+pub const KAFKA_44_DLQ_CONFIGS: &[KafkaBrokerConfig] = &[
+    KafkaBrokerConfig {
+        doc: "Whether automatic creation of DLQ topics is enabled (KIP-1191). When a share group has a DLQ topic configured, this setting controls whether the broker will automatically create the topic if it does not exist.",
+        ..k(
+            "errors.deadletterqueue.auto.create.topics.enable",
+            Bool,
+            Some("false"),
+            Cluster,
+            Free,
+        )
+    },
+    KafkaBrokerConfig {
+        doc: "The required prefix of topic names used by dead-letter queue topics for share groups. When set to \"\", there is no restriction on the names used for dead-letter queue topics.",
+        ..k(
+            "errors.deadletterqueue.topic.name.prefix",
+            Str,
+            Some("dlq."),
+            Cluster,
+            Free,
+        )
+    },
+];
 
 /// Every `KafkaConfig` key of Apache Kafka 4.3.1, sorted by name.
 pub const KAFKA_BROKER_CONFIGS: &[KafkaBrokerConfig] = &[
@@ -2229,7 +2258,7 @@ pub fn resolve(name: &str) -> Option<&'static KafkaBrokerConfig> {
 
 impl KafkaBrokerConfig {
     /// The registry-shaped row `DescribeConfigs` shapes an entry from. The
-    /// roster carries no documentation string, so the row has none.
+    /// 4.3.1 roster carries no documentation string; the 4.4 additions do.
     pub(crate) const fn row(&self) -> ConfigKey {
         ConfigKey {
             name: self.name,
@@ -2237,7 +2266,7 @@ impl KafkaBrokerConfig {
             config_type: self.config_type,
             type_note: None,
             default: self.default,
-            doc: "",
+            doc: self.doc,
             read_only: matches!(self.dynamic, ReadOnly),
             sensitive: matches!(self.config_type, Password),
             internal: self.internal,
