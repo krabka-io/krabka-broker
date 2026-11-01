@@ -2,16 +2,20 @@
 
 use {
     crate::{
-        codes::NONE,
+        codes::{NONE, NOT_CONTROLLER, UNKNOWN_SERVER_ERROR},
+        features::METADATA_VERSION,
         network::auth::ConnectionAuth,
-        test_support::{KafkaErrorCode, UnixMillis, principal},
+        test_support::{FakeMetadataSource, KafkaErrorCode, UnixMillis, principal},
         time_util::now_ms,
     },
     assert2::assert,
-    krabka_metadata::{DelegationTokenRecord, MetadataRecord},
-    krabka_raft::{Controller, ControllerConfig, ControllerHandle, NodeId},
+    krabka_metadata::{
+        DelegationTokenRecord, FeatureLevelRecord, MetadataRecord, metadata_version,
+    },
+    krabka_raft::{Controller, ControllerConfig, ControllerHandle, NodeId, RaftError},
     krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism},
     std::{
+        fmt::Debug,
         future::Future,
         path::PathBuf,
         sync::Arc,
@@ -568,4 +572,92 @@ pub(super) fn stored_expiry(controller: &ControllerHandle, token_id: &str) -> Op
         .current_image()
         .delegation_token_by_id(token_id)
         .map(|token| token.expiry_timestamp_ms)
+}
+
+/// The id of the token that [`failing_writes_source`] serves.
+pub(super) const FAILING_WRITE_TOKEN_ID: &str = "tok-failing-write";
+
+/// A metadata source that admits every token request and fails every write.
+///
+/// It serves an image at the delegation-token `metadata.version` holding one
+/// live token, [`FAILING_WRITE_TOKEN_ID`], that `alice` owns and may renew.
+/// Both `submit_change` and `submit_delegation_token_mutations` fail with the
+/// error `failure` builds, as a controller write fails during a failover.
+fn failing_writes_source(failure: fn() -> RaftError) -> FakeMetadataSource {
+    let now = now_ms();
+    FakeMetadataSource::builder()
+        .records(&[
+            MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                name: METADATA_VERSION.to_owned(),
+                level: metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
+            }),
+            MetadataRecord::V1DelegationToken(DelegationTokenRecord {
+                token_id: FAILING_WRITE_TOKEN_ID.to_owned(),
+                owner: kp("alice"),
+                requester: kp("alice"),
+                issue_timestamp_ms: now,
+                expiry_timestamp_ms: now + 60_000,
+                max_timestamp_ms: now + DAY_MS,
+                renewers: vec![],
+            }),
+        ])
+        .on_submit(move |_| Err(failure()))
+        .on_token_mutations(move |_| Err(failure()))
+        .build()
+}
+
+/// One failed-write case: its name, the error the write fails with, and the
+/// error code the handler answers.
+type FailedWriteCase = (&'static str, fn() -> RaftError, i16);
+
+/// The error code a token handler answers when its controller write fails,
+/// for each kind of failure: Kafka's `ApiError.fromThrowable` of the
+/// controller's exception. A write that lost or never found the active
+/// controller is `NOT_CONTROLLER`, which the admin client retries. Anything
+/// else is `UNKNOWN_SERVER_ERROR`.
+fn failed_write_cases() -> [FailedWriteCase; 5] {
+    [
+        (
+            "not leader",
+            || RaftError::NotLeader {
+                current_leader: Some(NodeId(2)),
+            },
+            NOT_CONTROLLER,
+        ),
+        (
+            "leader unknown",
+            || RaftError::LeaderUnknown,
+            NOT_CONTROLLER,
+        ),
+        (
+            "uncommitted tail",
+            || RaftError::UncommittedTail,
+            NOT_CONTROLLER,
+        ),
+        ("shutdown", || RaftError::Shutdown, UNKNOWN_SERVER_ERROR),
+        (
+            "rejected",
+            || RaftError::ChangeRejected("stale".to_owned()),
+            UNKNOWN_SERVER_ERROR,
+        ),
+    ]
+}
+
+/// Run a token request once for each failed-write case, against a
+/// [`failing_writes_source`] whose writes fail with that case's error, and
+/// check that it answers `expected` of the case's error code.
+///
+/// `context` names the request shape in a failure message.
+pub(super) async fn check_failed_writes<Response, Answer>(
+    context: &str,
+    request: impl Fn(FakeMetadataSource) -> Answer,
+    expected: impl Fn(i16) -> Response,
+) where
+    Answer: Future<Output = Response>,
+    Response: PartialEq + Debug,
+{
+    for (case, failure, code) in failed_write_cases() {
+        let actual = request(failing_writes_source(failure)).await;
+        assert!(actual == expected(code), "{context}: {case}");
+    }
 }

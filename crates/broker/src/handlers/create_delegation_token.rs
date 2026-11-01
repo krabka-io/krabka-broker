@@ -44,9 +44,9 @@ use {
         codes::{
             DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_AUTHORIZATION_FAILED,
             DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, INVALID_PRINCIPAL_TYPE, INVALID_REQUEST,
-            UNKNOWN_SERVER_ERROR, UNSUPPORTED_VERSION,
+            NOT_CONTROLLER, UNKNOWN_SERVER_ERROR, UNSUPPORTED_VERSION,
         },
-        handlers::delegation_token_admission::delegation_tokens_supported,
+        handlers::{delegation_token_admission::delegation_tokens_supported, submit_failure_code},
         metadata_source::MetadataSource,
         network::auth::ConnectionAuth,
         time_util::now_ms,
@@ -56,6 +56,7 @@ use {
         create_delegation_token_request::CreateDelegationTokenRequest,
         create_delegation_token_response::CreateDelegationTokenResponse,
     },
+    krabka_raft::RaftError,
     krabka_security::{KafkaPrincipal, SecretBytes, compute_token_hmac},
     krabka_verified::delegation_token::{TokenApi, TokenApiAdmission},
     std::net::SocketAddr,
@@ -198,7 +199,16 @@ pub async fn handle(
         .await
     {
         tracing::warn!(error = %e, "CreateDelegationToken: submit_change failed");
-        return controller_refusal(INVALID_REQUEST, &owner, &requester);
+        // Kafka fails the request with the controller's exception and
+        // answers `getErrorResponse` of it: ANONYMOUS as both principals,
+        // and `NOT_CONTROLLER` when there is no active controller, which the
+        // admin client retries, or `UNKNOWN_SERVER_ERROR` for anything else.
+        let code = match e {
+            RaftError::NotLeader { .. } | RaftError::LeaderUnknown => NOT_CONTROLLER,
+            other => submit_failure_code(&other, UNKNOWN_SERVER_ERROR),
+        };
+        let anonymous = anonymous_principal();
+        return broker_refusal(code, &anonymous, &anonymous);
     }
 
     minted_response(&owner, &requester, now, &deadlines, token_id, hmac)

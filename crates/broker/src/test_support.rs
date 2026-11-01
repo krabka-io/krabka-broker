@@ -132,8 +132,8 @@ use {
         records::{Attributes, Record, RecordBatch},
     },
     krabka_raft::{
-        AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter,
-        SnapshotRange, SubmitChangeResult, UpdateVoter,
+        AddVoter, DelegationTokenMutation, Node, NodeId, QuorumState, RaftError, ReconfigOutcome,
+        RemoveVoter, SnapshotRange, SubmitChangeResult, UpdateVoter,
     },
     krabka_security::{AuthMethod, Principal},
     qubit_clock::{
@@ -2062,6 +2062,12 @@ pub async fn start_share_broker(
 type SubmitOutcome =
     Box<dyn Fn(&[MetadataRecord]) -> Result<SubmitChangeResult, RaftError> + Send + Sync>;
 
+/// The outcome a [`FakeMetadataSource`] returns from
+/// `submit_delegation_token_mutations`, as a function of the batch it was
+/// handed.
+type TokenMutationOutcome =
+    Box<dyn Fn(&[DelegationTokenMutation]) -> Result<SubmitChangeResult, RaftError> + Send + Sync>;
+
 /// One intervening metadata or leadership change before guarded admission.
 type BeforeGuardedSubmit = Box<dyn FnOnce(&FakeMetadataSource) + Send>;
 
@@ -2100,6 +2106,7 @@ pub struct FakeMetadataSource {
     controller_node_id: Option<NodeId>,
     submitted: Mutex<Vec<Vec<MetadataRecord>>>,
     on_submit: SubmitOutcome,
+    on_token_mutations: TokenMutationOutcome,
     before_guarded_submit: Mutex<Option<BeforeGuardedSubmit>>,
     stall_submits: bool,
     current_image_calls: AtomicUsize,
@@ -2163,6 +2170,7 @@ impl FakeMetadataSource {
             term: 0,
             owns_controller_epoch: true,
             on_submit: None,
+            on_token_mutations: None,
             before_guarded_submit: None,
             stall_submits: false,
         }
@@ -2233,6 +2241,7 @@ pub struct FakeMetadataSourceBuilder {
     term: u64,
     owns_controller_epoch: bool,
     on_submit: Option<SubmitOutcome>,
+    on_token_mutations: Option<TokenMutationOutcome>,
     before_guarded_submit: Option<BeforeGuardedSubmit>,
     stall_submits: bool,
 }
@@ -2310,6 +2319,20 @@ impl FakeMetadataSourceBuilder {
         self
     }
 
+    /// Decide the result of each `submit_delegation_token_mutations` from the
+    /// batch it was handed. Without one, the fake refuses every batch, as a
+    /// source without generation-bound token mutations does.
+    pub(crate) fn on_token_mutations(
+        mut self,
+        outcome: impl Fn(&[DelegationTokenMutation]) -> Result<SubmitChangeResult, RaftError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.on_token_mutations = Some(Box::new(outcome));
+        self
+    }
+
     /// Never complete a `submit_change`. This models a raft commit that
     /// stalls, so that the caller's own timeout or cancellation path runs.
     pub(crate) fn stall_submits(mut self) -> Self {
@@ -2333,6 +2356,14 @@ impl FakeMetadataSourceBuilder {
             on_submit: self
                 .on_submit
                 .unwrap_or_else(|| Box::new(|_| Ok(SubmitChangeResult::default()))),
+            on_token_mutations: self.on_token_mutations.unwrap_or_else(|| {
+                Box::new(|_| {
+                    Err(RaftError::ChangeRejected(
+                        "fake metadata source does not support generation-bound token mutations"
+                            .to_owned(),
+                    ))
+                })
+            }),
             before_guarded_submit: Mutex::new(self.before_guarded_submit),
             stall_submits: self.stall_submits,
             current_image_calls: AtomicUsize::new(0),
@@ -2422,6 +2453,13 @@ impl MetadataSource for FakeMetadataSource {
             return Err(RaftError::StaleMetadataImage);
         }
         self.submit_change(records).await
+    }
+
+    async fn submit_delegation_token_mutations(
+        &self,
+        mutations: Vec<DelegationTokenMutation>,
+    ) -> Result<SubmitChangeResult, RaftError> {
+        (self.on_token_mutations)(&mutations)
     }
 
     async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
