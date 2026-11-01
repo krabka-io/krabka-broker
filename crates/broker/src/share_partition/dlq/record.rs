@@ -105,11 +105,9 @@ pub(super) fn destination_partition(source_partition: i32, dlq_partitions: i32) 
 /// that would take the batch past `max_message_bytes`. It always takes at
 /// least one record, the first of the round, even when that one record alone
 /// is over the limit: the broker then reports the limit, and the range does not
-/// stall. A first record whose copied key and value take it over the limit goes
-/// with its headers alone, as the fetch does for a source record that is too
-/// big for the topic; only a record that its headers alone take over the limit
-/// is sent over it. A record with no entry in `sources` gets its headers and no
-/// key and no value.
+/// stall. The first record keeps its copied key and value even when adding the
+/// headers puts it over the limit: the destination reports MESSAGE_TOO_LARGE.
+/// A record with no entry in `sources` gets its headers and no key and no value.
 ///
 /// Every record has `now_ms` as its timestamp. It has to be the wall clock, as
 /// log retention judges a segment by the timestamps of its records.
@@ -127,26 +125,16 @@ pub(super) fn build_round(
     let mut size = i64::try_from(HEADER_LEN).unwrap_or(i64::MAX);
     for offset in bounds.next..=end {
         let source = sources.get(&offset);
-        let mut record = Record {
+        let record = Record {
             offset_delta: i32::try_from(records.len()).unwrap_or(i32::MAX),
             key: source.and_then(|source| source.key.clone()),
             value: source.and_then(|source| source.value.clone()),
             headers: headers(context, offset),
             ..Default::default()
         };
-        let mut record_size = i64::try_from(record.encoded_len()).unwrap_or(i64::MAX);
-        if size.saturating_add(record_size) > limit {
-            if !records.is_empty() {
-                break;
-            }
-            // The first record of the round is over the limit by itself. The
-            // source record fit the read budget, but the headers and the batch
-            // header add to it. The copy is best effort, so the record goes
-            // with its headers alone rather than have the broker refuse the
-            // whole write as too large.
-            record.key = None;
-            record.value = None;
-            record_size = i64::try_from(record.encoded_len()).unwrap_or(i64::MAX);
+        let record_size = i64::try_from(record.encoded_len()).unwrap_or(i64::MAX);
+        if size.saturating_add(record_size) > limit && !records.is_empty() {
+            break;
         }
         records.push(record);
         size = size.saturating_add(record_size);
@@ -436,11 +424,10 @@ mod tests {
 
     /// A source record that fit the fetch budget can still be over
     /// `max.message.bytes` once the six headers and the batch header are added.
-    /// The record then goes with its headers alone: the write is not lost to a
-    /// `MESSAGE_TOO_LARGE` that ends it. A record that fits, and one that its
-    /// headers alone take over the limit, are packed as before.
+    /// The record keeps its payload: MESSAGE_TOO_LARGE is a terminal write
+    /// failure, not permission to silently replace the source contents.
     #[test]
-    fn a_copied_record_that_the_headers_push_over_the_limit_goes_without_the_copy() {
+    fn a_copied_record_keeps_its_payload_at_and_over_the_exact_size_boundary() {
         let sources = BTreeMap::from([(4, source_of_offset_4())]);
         let size_of = |sources: &BTreeMap<i64, SourceRecord>| {
             i32::try_from(
@@ -453,12 +440,13 @@ mod tests {
         let (with_copy, headers_only) = (size_of(&sources), size_of(&BTreeMap::new()));
         // (max.message.bytes, whether the round keeps the copy)
         let cases = [
+            (with_copy + 1, true),
             (with_copy, true),
-            (with_copy - 1, false),
-            (headers_only, false),
+            (with_copy - 1, true),
+            (headers_only, true),
             // The headers alone are over the limit: sent anyway, for the
             // broker to report.
-            (headers_only - 1, false),
+            (headers_only - 1, true),
         ];
         let expected: Vec<Round> = cases
             .iter()
@@ -481,6 +469,24 @@ mod tests {
             .collect();
 
         assert!(actual == expected);
+    }
+
+    #[test]
+    fn a_headers_only_record_is_sent_intact_at_the_exact_size_boundary() {
+        let expected = round_of_offset_4(false);
+        let size = i32::try_from(expected.batch.encoded_batch_len()).unwrap();
+        for max_message_bytes in [size - 1, size, size + 1] {
+            let actual = build_round(
+                &context(DlqCause::ClientReject),
+                &BTreeMap::new(),
+                RoundBounds {
+                    max_message_bytes,
+                    ..bounds(4, 4)
+                },
+                0,
+            );
+            assert!(actual == expected);
+        }
     }
 
     /// Kafka's `dlqDestinationPartition`.
