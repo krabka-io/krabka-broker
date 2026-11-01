@@ -36,6 +36,6 @@
     {"name": "assign-txn-mixed-crash-clients", "args": ["--sub-via", "assign", "--txn", "--nemesis", "partition,kill,pause", "--crash-clients"], "known_failure": "A partition re-elected after an unclean restart stays unavailable: the new leader, or its followers, never apply the new leader epoch, so acknowledged records cannot be read and writes time out. See docs/jepsen.md, Known failures."},
     {"name": "subscribe-txn-mixed-crash-clients", "args": ["--sub-via", "subscribe", "--txn", "--nemesis", "partition,kill,pause", "--crash-clients"]},
     {"name": "subscribe-kip848-mixed", "args": ["--sub-via", "subscribe", "--group-protocol", "consumer", "--nemesis", "partition,kill,pause"]},
-    {"name": "subscribe-kip848-txn-mixed", "args": ["--sub-via", "subscribe", "--group-protocol", "consumer", "--txn", "--nemesis", "partition,kill,pause"], "known_failure": "A transaction left open after broker kills blocks read_committed consumers, and partitions re-elected after an unclean restart stay unavailable. See docs/jepsen.md, Known failures."}
+    {"name": "subscribe-kip848-txn-mixed", "args": ["--sub-via", "subscribe", "--group-protocol", "consumer", "--txn", "--nemesis", "partition,kill,pause"]}
   ]
 }
