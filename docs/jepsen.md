@@ -24,9 +24,10 @@ setup, and the nemesis.
 aspect jepsen
 ```
 
-The task needs Docker, Bazel, Maven, and a JDK for the Jepsen JVM. It
-starts five node containers and a Jepsen JVM with a heap of up to 8 GB. The
-first run downloads the Jepsen and Kafka client libraries into the local Maven
+The task needs Docker, Bazel, Maven, and a JDK 21 or later for the Jepsen JVM.
+Jepsen 0.3.15 depends on a library compiled for Java 21. The task starts five
+node containers and a Jepsen JVM with a heap of up to 8 GB. The first run
+downloads the Jepsen and Kafka client libraries into the local Maven
 repository.
 
 The task does these steps:

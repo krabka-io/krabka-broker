@@ -1284,12 +1284,14 @@ jobs:
 
       # The harness runs on the runner's JVM, and `reclaim-disk` deletes
       # `/opt/hostedtoolcache` with the JDKs in it, so this comes after it.
-      # The pin is the one `benchmarks.yml` uses. `cache: maven` keeps
+      # The pin is the one `benchmarks.yml` uses. Java 21, not that file's
+      # 17: Jepsen 0.3.15's graph library, bifurcan, is compiled for Java 21
+      # (class file version 65) and does not load on 17. `cache: maven` keeps
       # Jepsen's dependencies across runs.
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
           cache: maven
 
       # Maven resolves the harness classpath. The runner image ships it outside
