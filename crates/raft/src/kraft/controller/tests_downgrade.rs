@@ -34,11 +34,30 @@ fn reopen_single_voter(data_dir: PathBuf) -> Result<KraftController, RaftError> 
     open_test_controller(data_dir, uuid::Uuid::nil(), voter_set(&[NodeId(1)]))
 }
 
-fn uncheckpointed_downgrade() -> EngineInDir {
+fn uncheckpointed_downgrade() -> EngineInDir { uncheckpointed_downgrade_over(LogStart::Zero) }
+
+/// Where the log starts when the downgrade commits.
+#[derive(Debug, Clone, Copy)]
+enum LogStart {
+    /// At offset 0, below every record.
+    Zero,
+    /// At a checkpoint taken at level 25, where a cleaning moves it, so the
+    /// log holds the downgrade record and none of the levels before it.
+    OlderCheckpoint,
+}
+
+/// A committed downgrade from level 25 to 16 whose mandatory checkpoint
+/// keeps failing, over a log that starts at `start`.
+fn uncheckpointed_downgrade_over(start: LogStart) -> EngineInDir {
     let (mut engine, dir) = super::test_support::single_voter_leader_engine();
 
     let mut rx = super::test_support::submit_on_engine(&mut engine, &metadata_version_update(25));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+    if matches!(start, LogStart::OlderCheckpoint) {
+        engine.write_snapshot_and_clean().expect("older checkpoint");
+        let older_checkpoint = engine.log.hwm();
+        engine.log.prune_to(older_checkpoint).expect("clean");
+    }
     engine.downgrade_snapshot_failures_remaining = usize::MAX;
     let mut rx = super::test_support::submit_on_engine(&mut engine, &metadata_version_update(16));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
@@ -204,9 +223,18 @@ async fn restart_finishes_downgrade_checkpoint_before_exposing_the_image() {
     );
 }
 
-#[tokio::test]
-async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
-    let EngineInDir { engine, dir } = uncheckpointed_downgrade();
+/// A crash after the downgrade checkpoint is written and before the log is
+/// pruned up to it leaves the prefix below the checkpoint, and a restart
+/// finishes the prune. It does so as well when the log starts at an older
+/// checkpoint, where the prefix holds only the downgrade record and the level
+/// it lowers is the older checkpoint's.
+#[yare::parameterized(
+    log_start_zero = { LogStart::Zero },
+    log_start_at_an_older_checkpoint = { LogStart::OlderCheckpoint },
+)]
+#[test_macro(tokio::test)]
+async fn restart_recovers_checkpoint_written_before_downgrade_prune(start: LogStart) {
+    let EngineInDir { engine, dir } = uncheckpointed_downgrade_over(start);
     let data_dir = dir.path().to_path_buf();
     let pending = engine
         .downgrade_snapshot_pending
@@ -224,41 +252,6 @@ async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
     drop(controller);
     let log_cfg = MetadataLogConfig::default();
     let recovered_log = KraftLog::open(dir.path(), &log_cfg).expect("inspect recovered log");
-    assert2::assert!(recovered_log.log_start_offset() == pending.end_offset);
-}
-
-/// The prune of a downgrade that a crash interrupted is finished on restart
-/// when the log starts at an older checkpoint, which is where a cleaning
-/// leaves it. The prefix then holds only the downgrade record of the
-/// `metadata.version` history, and the level it lowers is the older
-/// checkpoint's.
-#[tokio::test]
-async fn restart_finishes_a_downgrade_prune_over_a_log_that_starts_at_an_older_checkpoint() {
-    let (mut engine, dir) = super::test_support::single_voter_leader_engine();
-    let mut rx = super::test_support::submit_on_engine(&mut engine, &metadata_version_update(25));
-    assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
-    engine.write_snapshot_and_clean().expect("older checkpoint");
-    let older_checkpoint = engine.log.hwm();
-    engine.log.prune_to(older_checkpoint).expect("clean");
-    engine.downgrade_snapshot_failures_remaining = usize::MAX;
-    let mut rx = super::test_support::submit_on_engine(&mut engine, &metadata_version_update(16));
-    assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
-    let pending = engine
-        .downgrade_snapshot_pending
-        .clone()
-        .expect("downgrade remains pending");
-    let bytes = SnapshotWriter::serialize(&pending.image, 0).expect("serialize pending image");
-    write_checkpoint(dir.path(), pending.end_offset.0, pending.epoch, &bytes)
-        .expect("simulate checkpoint-before-prune crash");
-    assert2::assert!(engine.log.log_start_offset() == older_checkpoint);
-    drop(engine);
-
-    let controller = reopen_single_voter(dir.path().to_path_buf())
-        .expect("restart finishes checkpoint-before-prune recovery");
-    assert2::assert!(controller.current_image().finalized_metadata_version() == Some(16));
-    drop(controller);
-    let recovered_log =
-        KraftLog::open(dir.path(), &MetadataLogConfig::default()).expect("inspect recovered log");
     assert2::assert!(recovered_log.log_start_offset() == pending.end_offset);
 }
 
