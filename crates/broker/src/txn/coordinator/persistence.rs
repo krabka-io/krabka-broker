@@ -111,7 +111,7 @@ impl TxnCoordinator {
 
         // Byte-exact Kafka TransactionLogKey(v0) + TransactionLogValue(v0/v1).
         let key = encode_key(&tid)?;
-        let value = encode_value(&entry, format_txnv, self.persist_last_producer_epoch);
+        let value = encode_value(&entry, format_txnv, self.persist_last_producer_epoch)?;
 
         let batch = state_batch(
             Bytes::from(key),
@@ -495,7 +495,7 @@ mod tests {
         let key = |tid: &str| Some(encode_key(tid).unwrap());
         let value_of = |tid: &str, producer_id: i64| {
             let entry = TxnEntry::new_empty(tid.to_owned(), ProducerId(producer_id), 0, 60_000, 0);
-            encode_value(&entry, TxnVersion::Classic, false)
+            encode_value(&entry, TxnVersion::Classic, false).unwrap()
         };
         let with_version = |mut bytes: Vec<u8>, version: i16| {
             bytes[..2].copy_from_slice(&version.to_be_bytes());

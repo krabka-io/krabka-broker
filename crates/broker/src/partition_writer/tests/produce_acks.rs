@@ -162,7 +162,7 @@ async fn writer_appends_verbatim_byte_exact() {
     producer.partition_leader_epoch = -1;
     producer.max_timestamp = 1_234;
     let mut wire = bytes::BytesMut::new();
-    producer.encode(&mut wire).unwrap();
+    producer.encode_batch(&mut wire).unwrap();
     let wire = wire.freeze();
 
     let (ack, ack_rx) = oneshot::channel();
@@ -195,7 +195,7 @@ async fn writer_appends_verbatim_byte_exact() {
     assert!(&r.bytes[17..21] == &wire[17..21], "CRC unchanged");
     // Decodes with the assigned offset + stamped epoch.
     let mut cur: &[u8] = &r.bytes;
-    let decoded = ProtoBatch::decode(&mut cur).unwrap();
+    let decoded = ProtoBatch::decode_batch(&mut cur).unwrap();
     assert!(decoded.base_offset == 0);
     assert!(decoded.partition_leader_epoch == 5);
 

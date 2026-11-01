@@ -44,7 +44,7 @@ impl HotTailCache {
         let mut offset = 0usize;
         while offset < bytes.len() {
             let mut cur = bytes.slice(offset..);
-            let Ok(batch) = RecordBatch::decode(&mut cur) else {
+            let Ok(batch) = RecordBatch::decode_batch(&mut cur) else {
                 return;
             };
             // What the decode consumed is the batch's length on the wire.
@@ -366,7 +366,7 @@ mod tests {
             record.value = Some(Bytes::copy_from_slice(value));
         }
         let mut buf = BytesMut::new();
-        batch.encode(&mut buf).unwrap();
+        batch.encode_batch(&mut buf).unwrap();
         buf.freeze()
     }
 
@@ -408,7 +408,7 @@ mod tests {
         let mut batch = default_records_batch().count(records).call();
         batch.base_offset = base_offset;
         let mut buf = BytesMut::new();
-        batch.encode(&mut buf).unwrap();
+        batch.encode_batch(&mut buf).unwrap();
         buf.freeze()
     }
 }

@@ -13,6 +13,7 @@
 use {
     assert2::{assert, check},
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    krabka_client_admin::AdminClientLike as _,
     std::{
         collections::BTreeMap,
         slice,

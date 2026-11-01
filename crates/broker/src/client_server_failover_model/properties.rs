@@ -1,7 +1,7 @@
 //! The eleven `always` properties that state what must never happen, and the
-//! eleven `sometimes` properties that prove the search reached the
-//! interleavings those claims are about, with a twelfth, a duplicate answered
-//! by the writer's lookup, when the model has the lookup.
+//! `sometimes` properties that prove the search reached the interleavings
+//! those claims are about: eleven, and a twelfth where the leader's writer
+//! looks a batch up.
 //!
 //! They are stated apart from the transition function so the claims can be
 //! read without the mechanics that make them reachable.
@@ -12,7 +12,7 @@ use {
             BASE_OFFSET, BASE_SEQUENCE, INITIAL_LEADER, MAX_METADATA_REFRESHES, MAX_SEND_ATTEMPTS,
             PRODUCER_EPOCH, PRODUCER_ID,
         },
-        model::ClientServerFailoverModel,
+        model::{ClientServerFailoverModel, Orchestration},
         state::{AcceptedBatch, FailoverState, ProduceResult},
         witness::{
             WITNESS_ACKED_BEFORE_FAILOVER, WITNESS_APPENDED_UNACKED,
@@ -103,18 +103,8 @@ impl ClientServerFailoverModel {
         ]
     }
 
-    /// The witness only the writer's lookup can reach: a retry that the
-    /// tracker let through, answered as a duplicate of the copy already in the
-    /// leader's log.
-    pub fn writer_witness_properties() -> Vec<Property<Self>> {
-        vec![Property::sometimes(
-            "writer_answers_duplicate",
-            |_, s: &FailoverState| s.witnesses.seen(WITNESS_WRITER_DUPLICATE),
-        )]
-    }
-
-    pub fn witness_properties() -> Vec<Property<Self>> {
-        vec![
+    pub fn witness_properties(&self) -> Vec<Property<Self>> {
+        let mut properties = vec![
             Property::sometimes("not_leader_response", |_, s: &FailoverState| {
                 s.witnesses.seen(WITNESS_NOT_LEADER)
             }),
@@ -143,8 +133,8 @@ impl ClientServerFailoverModel {
                 s.witnesses.seen(WITNESS_DUPLICATE_RESPONSE)
             }),
             // A retry reached the leader while the commit of the client's
-            // append still waited for its gate: the window in which only the
-            // log, not the tracker, holds the batch.
+            // append was still owed: the window in which only the log, not
+            // the tracker, holds the batch.
             Property::sometimes("retry_during_pending_commit", |_, s: &FailoverState| {
                 s.witnesses.seen(WITNESS_RETRY_DURING_PENDING_COMMIT)
             }),
@@ -155,7 +145,17 @@ impl ClientServerFailoverModel {
                     && s.acked_offset == Some(BASE_OFFSET)
                     && s.log_contains_base(s.leader)
             }),
-        ]
+        ];
+        if self.orchestration == Orchestration::WriterLookup {
+            // A batch the dedup check passed, because the tracker had not
+            // committed its first copy, that the writer answered as a
+            // duplicate of that copy.
+            properties.push(Property::sometimes(
+                "writer_duplicate",
+                |_, s: &FailoverState| s.witnesses.seen(WITNESS_WRITER_DUPLICATE),
+            ));
+        }
+        properties
     }
 }
 

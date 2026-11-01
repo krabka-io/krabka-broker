@@ -26,7 +26,7 @@ use {
     krabka_broker::{
         BootstrapMode, Broker, BrokerHandle, NodeId, bootstrap, codes, config::NodeRole,
     },
-    krabka_client_admin::{AdminClient, AdminError, RaftVoterEndpoint},
+    krabka_client_admin::{AdminClient, AdminClientLike as _, AdminError, RaftVoterEndpoint},
     std::{
         collections::BTreeSet,
         net::SocketAddr,

@@ -172,7 +172,7 @@ impl SnapshotWriter {
             };
             data_batch.base_offset = SNAPSHOT_DATA_BASE_OFFSET;
             data_batch.last_offset_delta = last_offset_delta;
-            data_batch.encode(&mut out)?;
+            data_batch.encode_batch(&mut out)?;
         }
 
         // (4) SnapshotFooter control batch (real KIP-630 `SnapshotFooterRecord`).
@@ -207,7 +207,7 @@ mod tests {
     }
 
     fn check_header(cursor: &mut &[u8], expected: SnapshotHeaderRecord) {
-        let header = RecordBatch::decode(cursor).expect("header batch");
+        let header = RecordBatch::decode_batch(cursor).expect("header batch");
         check!(
             (
                 header.base_offset,
@@ -234,7 +234,7 @@ mod tests {
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         });
 
-        let kraft_version = RecordBatch::decode(&mut cur).expect("kraft.version batch");
+        let kraft_version = RecordBatch::decode_batch(&mut cur).expect("kraft.version batch");
         check!(
             (
                 kraft_version.base_offset,
@@ -251,7 +251,7 @@ mod tests {
                 })
         );
 
-        let voters = RecordBatch::decode(&mut cur).expect("voters batch");
+        let voters = RecordBatch::decode_batch(&mut cur).expect("voters batch");
         check!(
             (
                 voters.base_offset,
@@ -263,7 +263,7 @@ mod tests {
             decode_single_control(&voters) == ControlRecord::Voters(WireVotersRecord::default())
         );
 
-        let data = RecordBatch::decode(&mut cur).expect("data batch");
+        let data = RecordBatch::decode_batch(&mut cur).expect("data batch");
         check!(
             (
                 data.base_offset,
@@ -280,7 +280,7 @@ mod tests {
             assert2::assert!(record.value.is_some());
         }
 
-        let footer = RecordBatch::decode(&mut cur).expect("footer batch");
+        let footer = RecordBatch::decode_batch(&mut cur).expect("footer batch");
         check!(
             footer.base_offset == 3 + i64::try_from(data.records.len()).expect("record count fits")
         );
@@ -303,17 +303,17 @@ mod tests {
             ..Default::default()
         });
 
-        let kraft_version = RecordBatch::decode(&mut cur).expect("kraft.version batch");
+        let kraft_version = RecordBatch::decode_batch(&mut cur).expect("kraft.version batch");
         check!(
             (
                 kraft_version.base_offset,
                 kraft_version.attributes.is_control_batch()
             ) == (1, true)
         );
-        let voters = RecordBatch::decode(&mut cur).expect("voters batch");
+        let voters = RecordBatch::decode_batch(&mut cur).expect("voters batch");
         check!((voters.base_offset, voters.attributes.is_control_batch()) == (2, true));
 
-        let footer = RecordBatch::decode(&mut cur).expect("footer batch");
+        let footer = RecordBatch::decode_batch(&mut cur).expect("footer batch");
         check!(
             (
                 footer.base_offset,
@@ -485,7 +485,7 @@ mod tests {
             .expect("the snapshot was serialized");
         let mut api_keys = Vec::new();
         while !cur.is_empty() {
-            let batch = RecordBatch::decode(&mut cur).expect("batch");
+            let batch = RecordBatch::decode_batch(&mut cur).expect("batch");
             if batch.attributes.is_control_batch() {
                 continue;
             }

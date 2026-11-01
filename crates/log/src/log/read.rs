@@ -423,7 +423,7 @@ impl Log {
                 continue;
             };
             current_offset = Offset(last.base_offset + i64::from(last.last_offset_delta) + 1);
-            let consumed: usize = bs.iter().map(RecordBatch::encoded_len).sum();
+            let consumed: usize = bs.iter().map(RecordBatch::encoded_batch_len).sum();
             remaining = (remaining - size_from_len(consumed)).max(ByteSize::ZERO);
             batches.extend(bs);
             if remaining == ByteSize::ZERO || !emptied(seg, current_offset) {

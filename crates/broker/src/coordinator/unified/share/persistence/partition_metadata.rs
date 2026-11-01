@@ -82,20 +82,22 @@ pub struct ShareGroupStatePartitionMetadataValue {
 
 #[krabka_macros::flexible_value(record = "ShareGroupStatePartitionMetadataValue")]
 impl ShareGroupStatePartitionMetadataValue {
-    fn encode_fields(&self, buf: &mut BytesMut) {
+    fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         for topics in [&self.initializing, &self.initialized] {
             put_compact_array(buf, topics.iter(), |buf, topic| {
                 put_uuid(buf, *topic.topic_id.as_bytes());
-                put_compact_string(buf, &topic.topic_name);
-                put_i32_array(buf, &topic.partitions);
+                put_compact_string(buf, &topic.topic_name)?;
+                put_i32_array(buf, &topic.partitions)?;
                 put_empty_tagged_fields(buf);
-            });
+                Ok(())
+            })?;
         }
         put_compact_array(buf, self.deleting.iter(), |buf, topic| {
             put_uuid(buf, *topic.topic_id.as_bytes());
-            put_compact_string(buf, &topic.topic_name);
+            put_compact_string(buf, &topic.topic_name)?;
             put_empty_tagged_fields(buf);
-        });
+            Ok(())
+        })
     }
 
     fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -189,7 +191,9 @@ mod tests {
             },
         ];
         for v in cases {
-            assert!(ShareGroupStatePartitionMetadataValue::decode(&v.encode()).unwrap() == v);
+            assert!(
+                ShareGroupStatePartitionMetadataValue::decode(&v.encode().unwrap()).unwrap() == v
+            );
         }
     }
 
@@ -218,7 +222,9 @@ mod tests {
 
     #[test]
     fn state_partition_metadata_rejects_a_missing_tagged_trailer() {
-        let full = ShareGroupStatePartitionMetadataValue::default().encode();
+        let full = ShareGroupStatePartitionMetadataValue::default()
+            .encode()
+            .unwrap();
         assert!(ShareGroupStatePartitionMetadataValue::decode(&full[..full.len() - 1]).is_err());
     }
     mod bdd_state_partition_metadata {
@@ -265,7 +271,14 @@ mod tests {
         }
         #[when("the coordinator persists and reads this state_partition_metadata record")]
         fn record_codec(record: &mut RecordCompatibility) {
-            record.encoded = Some(record.value.as_ref().expect("record prepared").encode());
+            record.encoded = Some(
+                record
+                    .value
+                    .as_ref()
+                    .expect("record prepared")
+                    .encode()
+                    .unwrap(),
+            );
             record.decoded = Some(ShareGroupStatePartitionMetadataValue::decode(
                 record.encoded.as_ref().expect("record encoded"),
             ));

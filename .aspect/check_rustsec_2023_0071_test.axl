@@ -13,7 +13,7 @@ def _dep(name, version, kind = None):
 # reached only by its reviewed parents. Every case is a mutation of this.
 _VERSIONS = {
     "krabka-broker": "1.0.0",
-    "krabka-security": "0.7.0",
+    "krabka-security": "0.8.0",
     "krabka-sspi": "0.23.0",
     "picky": "7.0.0-rc.26",
     "rsa": "0.10.0-rc.18",
@@ -80,9 +80,9 @@ def _test_a_version_change_is_reported(_ctx):
     ])
 
 def _test_a_security_crate_version_change_is_reported(_ctx):
-    versions = _with(_VERSIONS, "krabka-security", "0.8.0")
+    versions = _with(_VERSIONS, "krabka-security", "0.9.0")
     check_eq("problems", problems(_metadata(versions = versions)), [
-        "krabka-security changed from reviewed 0.7.0 to 0.8.0; " +
+        "krabka-security changed from reviewed 0.8.0 to 0.9.0; " +
         "review RUSTSEC-2023-0071 reachability",
     ])
 

@@ -352,8 +352,8 @@ impl GroupMetadataValue {
             put_string(&mut buf, &m.client_host)?;
             buf.put_i32(m.rebalance_timeout_ms);
             buf.put_i32(m.session_timeout_ms);
-            put_bytes(&mut buf, &m.subscription);
-            put_bytes(&mut buf, &m.assignment);
+            put_bytes(&mut buf, &m.subscription)?;
+            put_bytes(&mut buf, &m.assignment)?;
         }
         Ok(buf.freeze())
     }
@@ -493,7 +493,14 @@ pub fn put_nullable_string<B: BufMut>(buf: &mut B, s: Option<&str>) -> Result<()
     }
 }
 
-pub fn put_bytes<B: BufMut>(buf: &mut B, b: &Bytes) { string_bytes::put_bytes(buf, b); }
+/// Writes `b` with an `INT32` length.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when `b` is longer than `i32::MAX` bytes.
+pub fn put_bytes<B: BufMut>(buf: &mut B, b: &Bytes) -> Result<(), BrokerError> {
+    Ok(string_bytes::put_bytes(buf, b)?)
+}
 
 /// The topics in id order and the partitions ascending, so that two equal
 /// assignments give equal records.
@@ -659,8 +666,8 @@ mod tests {
                 buf.put_i32(60_000);
             }
             buf.put_i32(30_000);
-            put_bytes(&mut buf, &Bytes::from_static(b"sub"));
-            put_bytes(&mut buf, &Bytes::from_static(b"asn"));
+            put_bytes(&mut buf, &Bytes::from_static(b"sub")).unwrap();
+            put_bytes(&mut buf, &Bytes::from_static(b"asn")).unwrap();
             buf.freeze()
         }
 

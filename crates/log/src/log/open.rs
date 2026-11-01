@@ -64,7 +64,7 @@ impl PendingStampRecoveryStats {
         #[cfg(test)]
         {
             self.batches = self.batches.saturating_add(1);
-            self.bytes = self.bytes.saturating_add(batch.encoded_len());
+            self.bytes = self.bytes.saturating_add(batch.encoded_batch_len());
         }
         // Only a test build counts; the others take the arguments and drop
         // them.
@@ -643,20 +643,18 @@ impl Log {
             .producer_state
             .entry(producer_id)
             .or_insert_with(|| ProducerSnapshotEntry::empty(producer_id, producer_epoch));
-        let earlier = self.earlier_batches.entry(producer_id).or_default();
-        entry.add_data_batch(
-            earlier,
-            producer_epoch,
-            ProducerBatchMetadata {
-                last_sequence,
-                last_offset,
-                offset_delta: last_offset_delta,
-                timestamp,
-            },
-            is_transactional,
-        );
-        if earlier.is_empty() {
-            self.earlier_batches.remove(&producer_id);
+        let mut earlier = self.earlier_batches.remove(&producer_id);
+        entry.add_data_batch(&mut earlier, producer_epoch, ProducerBatchMetadata {
+            last_sequence,
+            last_offset,
+            offset_delta: last_offset_delta,
+            timestamp,
+        });
+        if let Some(earlier) = earlier {
+            self.earlier_batches.insert(producer_id, earlier);
+        }
+        if is_transactional && entry.current_txn_first_offset.is_none() {
+            entry.current_txn_first_offset = Some(base_offset);
         }
         Ok(())
     }

@@ -11,7 +11,7 @@ use {
         bounds::{BASE_SEQUENCE, MAX_LOG_LEN, NB, PRODUCER_EPOCH, PRODUCER_ID},
         witness::{WITNESS_ACKED_BEFORE_FAILOVER, WITNESS_FAILOVER, Witnesses},
     },
-    crate::producer_state::{ProducerEntry, committed_entry},
+    crate::producer_state::{LoggedProducer, ProducerEntry, committed_entry},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -68,8 +68,8 @@ pub struct FailoverState {
     pub accepted: Option<AcceptedBatch>,
     /// The leader's idempotent-producer tracker: what the dedup check reads.
     pub tracker: Option<ProducerEntry>,
-    /// The leader's appends, by offset, whose `acks=all` gate has not resolved,
-    /// so the tracker has not committed them yet.
+    /// The leader's answers, by offset, whose requests have not committed
+    /// them into the tracker yet.
     pub pending_commit: [bool; MAX_LOG_LEN],
     pub acked_offset: Option<i64>,
     pub last_result: Option<ProduceResult>,
@@ -88,8 +88,12 @@ pub enum Action {
     KillLeader,
     ElectClean(usize),
     RefreshMetadata,
-    /// The gate of the leader's append at this offset resolves, replicated or
-    /// timed out, and the leader commits the append into its tracker.
+    /// The request that the leader's writer answered with this offset
+    /// commits the answer into the leader's tracker. Since #1947 it commits
+    /// as soon as the writer answers, before the `acks=all` wait. Before, it
+    /// committed once the gate resolved, replicated or timed out. Either way
+    /// it can run at any point after the answer, and the client's
+    /// acknowledgement waits for it.
     Commit(usize),
 }
 
@@ -142,21 +146,26 @@ impl FailoverState {
                 >= 2
     }
 
-    /// The producer state of `broker`'s log. The log tracks every batch as it
-    /// appends it, so this is each batch committed in offset order.
-    pub fn log_producer_entry(&self, broker: usize) -> Option<ProducerEntry> {
-        self.logs[broker]
-            .iter()
-            .flatten()
-            .filter(|batch| batch.producer_id == PRODUCER_ID)
-            .fold(None, |tracker, batch| commit_into(tracker, *batch))
+    /// The producer state `broker`'s log holds, which the log updates as it
+    /// appends each batch, whether the leader wrote it or a follower
+    /// replicated it.
+    pub fn logged_producer(&self, broker: usize) -> LoggedProducer {
+        LoggedProducer::replay(
+            PRODUCER_ID,
+            PRODUCER_EPOCH,
+            self.logs[broker]
+                .iter()
+                .flatten()
+                .filter(|batch| batch.producer_id == PRODUCER_ID)
+                .map(|batch| (batch.base_sequence, batch.offset)),
+        )
     }
 
     /// The new leader's tracker, which `Partition::install_local_leadership`
-    /// replaces with the state of its log on promotion. The gates of the
-    /// previous leader's appends resolve on that leader, not on this one.
+    /// replaces with the state of its log on promotion. The commits the
+    /// previous leader's requests owed run on that leader, not on this one.
     pub fn install_leader_tracker(&mut self) {
-        self.tracker = self.log_producer_entry(self.leader);
+        self.tracker = self.logged_producer(self.leader).tracked_entry();
         self.pending_commit = [false; MAX_LOG_LEN];
     }
 
@@ -178,7 +187,7 @@ impl FailoverState {
     }
 
     /// Whether the client can take the acknowledgement of its append. The
-    /// leader answers only after the gate resolves and the commit runs.
+    /// leader answers only after the commit runs and the gate resolves.
     pub fn can_ack_committed(&self) -> bool {
         self.batch == BatchState::Appended
             && self.acked_offset.is_none()

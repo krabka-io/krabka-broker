@@ -38,12 +38,12 @@ assert2 = { workspace = true }
 bon = { workspace = true }
 maplit = { workspace = true }
 krabka-audit = { workspace = true }
-krabka-protocol = { version = "0.7.0", default-features = false }
+krabka-protocol = { version = "0.8.0", default-features = false }
 krabka-telemetry = { version = "1.1.5", path = "../telemetry" }
 krabka-records-legacy = { version = "1.1.5", path = "../records-legacy" }
 krabka-log = { version = "1.1.5", path = "../log" }
-krabka-ids = { version = "0.7.0" }
-krabka-compression = { version = "0.7.0", default-features = false }
+krabka-ids = { version = "0.8.0" }
+krabka-compression = { version = "0.8.0", default-features = false }
 krabka-raft = { version = "1.1.5", path = "../raft" }
 krabka-kraft-core = { version = "1.1.5", path = "../kraft-core" }
 krabka-verified = { version = "1.1.5", path = "../verified" }
@@ -57,8 +57,8 @@ krabka-macros = { version = "1.1.5", path = "../macros" }
 # format a log directory before they boot a broker: a subprocess would need a
 # Cargo working tree, which a Bazel test sandbox does not have.
 krabka-format = { version = "1.1.5", path = "../format" }
-krabka-voters = { version = "0.7.0" }
-krabka-metadata = { version = "0.7.0" }
+krabka-voters = { version = "0.8.0" }
+krabka-metadata = { version = "0.8.0" }
 krabka-authz = { version = "1.1.5", path = "../authz" }
 krabka-remote-storage = { version = "1.1.5", path = "../remote-storage" }
 krabka-remote-storage-topic = { version = "1.1.5", path = "../remote-storage-topic" }
@@ -66,7 +66,7 @@ krabka-object-store = { version = "1.1.5", path = "../object-store" }
 # `gssapi`: the broker serves SASL/GSSAPI and dials other brokers with it.
 # Both turn on the Kerberos stack that brings in `rsa`; see
 # docs/operations/security/rustsec-2023-0071.md.
-krabka-client-core = { version = "0.7.1", features = ["gssapi"] }
+krabka-client-core = { version = "0.8.0", features = ["gssapi"] }
 krabka-throttle = { version = "1.1.5", path = "../throttle" }
 krabka-units = { workspace = true }
 krabka-security = { workspace = true, features = ["gssapi"] }
@@ -224,15 +224,15 @@ krabka-raft = { version = "1.1.5", path = "../raft", features = ["scenarios"] }
 krabka-restore = { version = "1.1.5", path = "../restore" }
 # Drives the relocated `client_admin_*` suites, which boot an in-process
 # broker to exercise the admin client end to end.
-krabka-client-admin = { version = "0.7.1" }
-krabka-client-consumer = { version = "0.7.1" }
-krabka-client-producer = { version = "0.7.1" }
+krabka-client-admin = { version = "0.8.0" }
+krabka-client-consumer = { version = "0.8.0" }
+krabka-client-producer = { version = "0.8.0" }
 # Host-side raw `Client::send(DescribeGroupsRequest)` against the
 # real-Kafka Docker capture (`describe_groups_jvm.rs`).
-krabka-client-core = { version = "0.7.1", features = ["mock"] }
-krabka-ids = { version = "0.7.0" }
+krabka-client-core = { version = "0.8.0", features = ["mock"] }
+krabka-ids = { version = "0.8.0" }
 krabka-records-legacy = { version = "1.1.5", path = "../records-legacy" }
-krabka-protocol = { version = "0.7.0", default-features = false }
+krabka-protocol = { version = "0.8.0", default-features = false }
 # Serialize the captured real-Kafka DescribeGroups fixture as JSON.
 serde_json = { workspace = true }
 bytes = { workspace = true }

@@ -240,7 +240,7 @@ impl Log {
             .ok_or_else(|| LogError::Corrupt("verbatim batch is missing its attributes".into()))?;
         if Attributes(i16::from_be_bytes(attributes)).is_control_batch() {
             let mut wire = batch.bytes.as_ref();
-            let mut decoded = RecordBatch::decode(&mut wire)?;
+            let mut decoded = RecordBatch::decode_batch(&mut wire)?;
             if !wire.is_empty() {
                 return Err(LogError::Corrupt(
                     "verbatim control append contains trailing bytes".into(),

@@ -4,7 +4,10 @@ mod support;
 
 use {
     crate::support::client_admin::*,
-    krabka_client_admin::groups::{GroupListing, ListGroupsOptions},
+    krabka_client_admin::{
+        AdminClientLike as _,
+        groups::{GroupListing, ListGroupsOptions},
+    },
     krabka_client_consumer::{AutoOffsetReset, Consumer},
     std::time::Duration,
     tokio::time,

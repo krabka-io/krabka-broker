@@ -53,7 +53,8 @@ async fn share_group_records_replay_into_seed() {
                 epoch: 4,
                 metadata_hash: 0,
             }
-            .encode(),
+            .encode()
+            .unwrap(),
         ),
         LogRecord::put(
             sp::encode_share_key(&sp::ShareGroupKey::MemberMetadata {
@@ -67,7 +68,8 @@ async fn share_group_records_replay_into_seed() {
                 client_host: "/127.0.0.1".into(),
                 subscribed_topic_names: vec!["t".into()],
             }
-            .encode(),
+            .encode()
+            .unwrap(),
         ),
         LogRecord::put(
             sp::encode_share_key(&sp::ShareGroupKey::CurrentMemberAssignment {
@@ -80,7 +82,8 @@ async fn share_group_records_replay_into_seed() {
                 previous_member_epoch: 3,
                 assigned_partitions: vec![(tid, vec![0, 1])],
             }
-            .encode(),
+            .encode()
+            .unwrap(),
         ),
     ];
     super::test_support::replay_stream(&coord, recs);
@@ -146,7 +149,8 @@ async fn streams_group_records_replay_into_seed() {
                     failed: -1,
                 },
             }
-            .encode(),
+            .encode()
+            .unwrap(),
         ),
         LogRecord::put(
             sp::encode_streams_key(&sp::StreamsGroupKey::MemberMetadata {
@@ -154,7 +158,7 @@ async fn streams_group_records_replay_into_seed() {
                 member_id: "m1".into(),
             })
             .unwrap(),
-            plain_streams_member(2).encode(),
+            plain_streams_member(2).encode().unwrap(),
         ),
         LogRecord::put(
             sp::encode_streams_key(&sp::StreamsGroupKey::CurrentMemberAssignment {
@@ -163,7 +167,8 @@ async fn streams_group_records_replay_into_seed() {
             })
             .unwrap(),
             stable_streams_assignment((7, 6), maplit::btreemap! {"0".to_owned() => vec![0, 1]})
-                .encode(),
+                .encode()
+                .unwrap(),
         ),
     ];
     super::test_support::replay_stream(&coord, recs);
@@ -261,7 +266,8 @@ fn a_malformed_record_publishes_nothing_and_a_child_record_creates_its_group() {
             rebalance_timeout_ms: 1,
             topology_epoch: 0,
         }
-        .encode(),
+        .encode()
+        .unwrap(),
         &batch,
     )
     .unwrap();

@@ -265,7 +265,7 @@ fn batch_index_entries(
             let mut cursor = object
                 .get(byte_start..run_end)
                 .ok_or_else(|| BrokerError::Txn("diskless WAL run exceeds the object".into()))?;
-            let batch = RecordBatch::decode(&mut cursor)
+            let batch = RecordBatch::decode_batch(&mut cursor)
                 .map_err(|error| BrokerError::Txn(format!("diskless WAL batch: {error}")))?;
             let byte_len = run_end - byte_start - cursor.len();
             entries.push(WalIndexEntry {
@@ -354,7 +354,7 @@ mod tests {
         });
         let mut run = BytesMut::new();
         for batch in &batches {
-            batch.encode(&mut run).unwrap();
+            batch.encode_batch(&mut run).unwrap();
         }
         let object = WalObjectBuilder::new()
             .finish_with_run(topic_id, 0, 4, 5, &run)

@@ -30,8 +30,12 @@ struct Scalar {
 #[derive(moxy::ToTokens)]
 #[moxy(template {
     #[doc = {{ self.encode_doc }}]
-    #[must_use]
-    pub fn encode(&self) -> bytes::Bytes {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a batch array or the tagged-field trailer is
+    /// too long for its wire-format prefix.
+    pub fn encode(&self) -> Result<::bytes::Bytes, crate::error::BrokerError> {
         let mut buf = bytes::BytesMut::new();
         bytes::BufMut::put_i16(&mut buf, 0);
         @for field in &self.fields {
@@ -41,9 +45,9 @@ struct Scalar {
                 ScalarKind::Offset => { bytes::BufMut::put_i64(&mut buf, self.{{ field.ident }}.0); }
             }
         }
-        put_batches(&mut buf, &self.state_batches);
-        put_value_tags(&mut buf, self.delivery_complete_count);
-        buf.freeze()
+        put_batches(&mut buf, &self.state_batches)?;
+        put_value_tags(&mut buf, self.delivery_complete_count)?;
+        Ok(buf.freeze())
     }
 
     /// # Errors

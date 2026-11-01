@@ -64,7 +64,7 @@ use {
         run,
     },
     krabka_broker::{BrokerConfig, BrokerHandle},
-    krabka_client_admin::AdminClient,
+    krabka_client_admin::{AdminClient, AdminClientLike as _},
     krabka_client_core::Client,
     krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord, TopicRecord},
     krabka_restore::restore,

@@ -76,7 +76,7 @@ fn remote_segments(root: &Path) -> Vec<RemoteSegment> {
             let mut first: Option<i64> = None;
             let mut last: Option<i64> = None;
             while !cursor.is_empty() {
-                let batch = RecordBatch::decode(&mut cursor).ok()?;
+                let batch = RecordBatch::decode_batch(&mut cursor).ok()?;
                 first.get_or_insert(batch.base_offset);
                 last = Some(batch.base_offset + i64::from(batch.last_offset_delta));
             }

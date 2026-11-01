@@ -108,7 +108,7 @@ async fn expanded_append(gate: &mut BatchGate, size: usize) {
     let batch = gzip_batch(size);
     if size == 100_000 {
         check!(wire_len(&batch) < 2048);
-        check!(batch.encoded_len() > 2048);
+        check!(batch.encoded_batch_len() > 2048);
     }
     gate.response =
         Some(produce_batch(&process.client, "orders", gate.topics["orders"], batch).await);

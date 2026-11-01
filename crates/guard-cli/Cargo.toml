@@ -26,8 +26,8 @@ path = "src/main.rs"
 # `FileEd25519Signer` is the signer the audit checkpoints already use. The
 # operator key trust set and signer share one crypto owner here.
 krabka-audit = { workspace = true }
-krabka-client-core = { version = "0.7.1" }
-krabka-protocol = { version = "0.7.0" }
+krabka-client-core = { version = "0.8.0" }
+krabka-protocol = { version = "0.8.0" }
 krabka-units = { workspace = true }
 
 clap = { workspace = true, features = ["env"] }
@@ -45,7 +45,7 @@ uuid = { workspace = true }
 assert2 = { workspace = true }
 # Broker integration fixtures and value checks stay out of the production graph.
 krabka-broker = { version = "1.1.5", path = "../broker", features = ["test-helpers"] }
-krabka-security = { version = "0.7.0" }
+krabka-security = { version = "0.8.0" }
 # Signing goes through `FileEd25519Signer`, so `ring` is here only to mint the
 # PKCS#8 key pair that a signature case hands to `--sign-with`.
 ring = { workspace = true }

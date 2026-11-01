@@ -453,7 +453,7 @@ async fn replicate_v2_batches(
         // Revisit only if the replicator's shape mix moves to very
         // wide batches of tiny records, where the walk is a
         // per-record cost and the append is not.
-        let batch_bytes = batch.encoded_len();
+        let batch_bytes = batch.encoded_batch_len();
         if let Err(e) = part.replicate_batch(batch).await {
             warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
             "replicator: replicate_batch failed");
@@ -506,7 +506,7 @@ async fn replicate_raw_batches(
             return action;
         }
         let mut cursor: &[u8] = &batch_bytes;
-        let result = match RecordBatch::decode(&mut cursor) {
+        let result = match RecordBatch::decode_batch(&mut cursor) {
             Ok(batch) => part.replicate_batch(batch).await,
             Err(error) => {
                 warn!(%error, topic = %cfg.topic, partition = cfg.partition.get(),
@@ -1314,7 +1314,7 @@ mod tests {
         batch.partition_leader_epoch = cfg.leader_epoch.0;
         let records = if raw {
             let mut encoded = BytesMut::new();
-            batch.encode(&mut encoded).unwrap();
+            batch.encode_batch(&mut encoded).unwrap();
             RecordsPayload::Raw(encoded.freeze())
         } else {
             RecordsPayload::V2(vec![batch])
@@ -1504,7 +1504,7 @@ mod tests {
             ..one_record_batch(0)
         };
         let mut encoded = BytesMut::new();
-        batch.encode(&mut encoded).unwrap();
+        batch.encode_batch(&mut encoded).unwrap();
         let last = encoded.len() - 1;
         encoded[last] ^= 1;
         let response = fetch_response(TOPIC, WIRE_TOPIC_ID, PartitionData {
@@ -1532,7 +1532,7 @@ mod tests {
         batch.partition_leader_epoch = cfg.leader_epoch.0;
         batch.attributes = batch.attributes.with_compression(CompressionType::Lz4);
         let mut encoded = BytesMut::new();
-        batch.encode(&mut encoded).unwrap();
+        batch.encode_batch(&mut encoded).unwrap();
         let encoded = encoded.freeze();
         let response = fetch_response(TOPIC, WIRE_TOPIC_ID, PartitionData {
             partition_index: PARTITION,

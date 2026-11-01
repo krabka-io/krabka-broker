@@ -35,7 +35,7 @@ krabka-broker = { version = "1.1.5", path = "../broker" }
 # The simulator the failure-scenario page renders. No production build turns
 # this feature on; the page is its one consumer.
 krabka-raft = { version = "1.1.5", path = "../raft", features = ["scenarios"] }
-krabka-protocol = { version = "0.7.0", default-features = false }
+krabka-protocol = { version = "0.8.0", default-features = false }
 serde_json = { workspace = true }
 
 [dev-dependencies]

@@ -13,7 +13,7 @@ use {
         kafka_log::{self, config::KafkaMetadataLogConfig},
     },
     krabka_client_admin::{
-        AdminClient, AlterConfigOp, ConfigResource, CreateTopicSpec,
+        AdminClient, AdminClientLike as _, AlterConfigOp, ConfigResource, CreateTopicSpec,
         IncrementalAlterConfigsOptions, TopicMutationOptions,
     },
     krabka_protocol::primitives::uuid::Uuid as WireUuid,

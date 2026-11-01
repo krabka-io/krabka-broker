@@ -2131,7 +2131,8 @@ mod tests {
             }
             Some(encoded.to_vec())
         })
-        .await;
+        .await
+        .expect("start the mock producer broker");
         port.store(broker.addr.port(), Ordering::SeqCst);
         ProducerBrokerFixture {
             broker,

@@ -407,7 +407,8 @@ mod tests {
                 sent_for_mock.lock().unwrap().push((api_key, version));
                 Some(submit_change_response_body(0, -1))
             })
-            .await;
+            .await
+            .unwrap();
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for level in [None, Some(0), Some(1)] {

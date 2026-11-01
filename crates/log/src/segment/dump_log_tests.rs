@@ -80,7 +80,7 @@ fn dump_log_problems(dir: &Path, base: i64) -> Vec<String> {
         let position = u32::try_from(log.len() - cursor.len()).unwrap();
         batches.push(BatchAtPosition {
             position,
-            batch: RecordBatch::decode(&mut cursor).unwrap(),
+            batch: RecordBatch::decode_batch(&mut cursor).unwrap(),
         });
     }
     let last_offset = |batch: &RecordBatch| batch.base_offset + i64::from(batch.last_offset_delta);
@@ -198,7 +198,7 @@ fn encoded(base_offset: i64, records: i32, timestamp: i64) -> EncodedBatch {
         .timestamp(timestamp)
         .call();
     let mut wire = BytesMut::new();
-    batch.encode(&mut wire).unwrap();
+    batch.encode_batch(&mut wire).unwrap();
     EncodedBatch {
         batch,
         wire: wire.freeze(),
@@ -393,7 +393,7 @@ fn the_index_takes_an_entry_only_once_more_than_the_interval_was_written() {
             .records(ONE_RECORD_BATCH.records.0)
             .timestamp(ONE_RECORD_BATCH.timestamp.0)
             .call()
-            .encoded_len(),
+            .encoded_batch_len(),
     )
     .unwrap();
     let cases = [

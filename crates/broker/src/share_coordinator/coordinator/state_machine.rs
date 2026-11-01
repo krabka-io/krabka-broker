@@ -245,8 +245,11 @@ impl ShareCoordinator {
             check_topic_partition(image, topic_id, partition)?;
             let snapshot = self.initial_snapshot(0, state_epoch, start_offset);
             let key = state_key(KEY_SHARE_SNAPSHOT, group, topic_id, partition);
+            let value = snapshot
+                .encode()
+                .map_err(|e| AppendError::Failed(e).share_error())?;
             let offset = self
-                .persist_record(term, key, Some(snapshot.encode()))
+                .persist_record(term, key, Some(value))
                 .await
                 .map_err(|e| {
                     warn!(error = %e, "share initialize persist failed");
@@ -499,6 +502,7 @@ impl ShareCoordinator {
             StateRecord::Snapshot(snapshot) => (KEY_SHARE_SNAPSHOT, snapshot.encode()),
             StateRecord::Update(update) => (KEY_SHARE_UPDATE, update.encode()),
         };
+        let value = value.map_err(|e| AppendError::Failed(e).share_error())?;
         let key = state_key(record_type, group, topic_id, partition);
         let offset = self
             .persist_record(term, key, Some(value))

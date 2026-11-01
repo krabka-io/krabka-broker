@@ -5,14 +5,14 @@ use {
     bytes::{Bytes, BytesMut},
 };
 
-pub fn encode_value<W>(write: W) -> Bytes
+pub fn encode_value<W>(write: W) -> Result<Bytes, BrokerError>
 where
-    W: FnOnce(&mut BytesMut),
+    W: FnOnce(&mut BytesMut) -> Result<(), BrokerError>,
 {
     let mut framed = BytesMut::from(&b"\0\0"[..]);
-    write(&mut framed);
+    write(&mut framed)?;
     framed.extend_from_slice(&[0]);
-    framed.freeze()
+    Ok(framed.freeze())
 }
 
 pub fn decode_value<T, R>(

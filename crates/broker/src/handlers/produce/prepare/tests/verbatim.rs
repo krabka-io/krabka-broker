@@ -47,7 +47,7 @@ fn topic() -> Arc<str> { Arc::from("t") }
 
 fn encode(b: &RecordBatch) -> Bytes {
     let mut buf = BytesMut::new();
-    b.encode(&mut buf).unwrap();
+    b.encode_batch(&mut buf).unwrap();
     buf.freeze()
 }
 
@@ -374,8 +374,8 @@ fn fallback_on_multiple_batches_in_slice() {
     // batch is invalid and must never be silently discarded.
     let b = plain_batch();
     let mut two = BytesMut::new();
-    b.encode(&mut two).unwrap();
-    b.encode(&mut two).unwrap();
+    b.encode_batch(&mut two).unwrap();
+    b.encode_batch(&mut two).unwrap();
     let err = prepare_for_topic(
         PartitionPayload::Slice(two.freeze()),
         None,
@@ -508,7 +508,7 @@ fn header_fields_drive_dedup_on_verbatim_path() {
     // Cross-check: an owned decode of the same compressed bytes yields
     // the same header identity (proving the header read is correct).
     let mut cur: &[u8] = &wire;
-    let owned = RecordBatch::decode(&mut cur).unwrap();
+    let owned = RecordBatch::decode_batch(&mut cur).unwrap();
     check!(owned.producer_id == prepared.producer_id);
     check!(owned.producer_epoch == prepared.producer_epoch);
     check!(owned.base_sequence == prepared.base_sequence);

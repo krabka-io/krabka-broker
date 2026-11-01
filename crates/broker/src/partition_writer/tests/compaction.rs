@@ -324,7 +324,7 @@ async fn append(
         }
         Role::Follower => {
             let mut wire = BytesMut::new();
-            batch.encode(&mut wire).expect("encode");
+            batch.encode_batch(&mut wire).expect("encode");
             let verbatim = VerbatimBatch {
                 bytes: wire.freeze(),
                 last_offset_delta: batch.last_offset_delta,

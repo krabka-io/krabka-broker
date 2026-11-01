@@ -34,14 +34,14 @@ pub struct ShareGroupMemberMetadataValue {
 
 #[krabka_macros::flexible_value(record = "ShareGroupMemberMetadataValue")]
 impl ShareGroupMemberMetadataValue {
-    fn encode_fields(&self, buf: &mut BytesMut) {
+    fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         put_member_client(
             buf,
             self.rack_id.as_deref(),
             &self.client_id,
             &self.client_host,
-        );
-        put_string_array(buf, &self.subscribed_topic_names);
+        )?;
+        put_string_array(buf, &self.subscribed_topic_names)
     }
 
     fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -84,7 +84,7 @@ mod tests {
             client_host: "/127.0.0.1".into(),
             subscribed_topic_names: vec!["a".into(), "b".into()],
         };
-        assert!(ShareGroupMemberMetadataValue::decode(&v.encode()).unwrap() == v);
+        assert!(ShareGroupMemberMetadataValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
 
     #[test]
@@ -95,7 +95,7 @@ mod tests {
             client_host: "h".into(),
             subscribed_topic_names: vec![],
         };
-        let full = v.encode();
+        let full = v.encode().unwrap();
         assert!(ShareGroupMemberMetadataValue::decode(&full[..full.len() - 1]).is_err());
     }
 
@@ -107,7 +107,7 @@ mod tests {
             client_host: "/127.0.0.1".into(),
             subscribed_topic_names: vec![],
         };
-        assert!(ShareGroupMemberMetadataValue::decode(&v.encode()).unwrap() == v);
+        assert!(ShareGroupMemberMetadataValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
     mod bdd_member_metadata {
         use {
@@ -139,7 +139,8 @@ mod tests {
                     .value
                     .as_ref()
                     .expect("group record prepared")
-                    .encode(),
+                    .encode()
+                    .unwrap(),
             );
         }
         #[then(

@@ -647,7 +647,8 @@ mod tests {
                 .unwrap();
                 MockReply::Respond(body.to_vec())
             })
-            .await;
+            .await
+            .unwrap();
             Self { broker, seen }
         }
 

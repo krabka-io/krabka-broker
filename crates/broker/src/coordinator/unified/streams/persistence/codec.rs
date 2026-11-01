@@ -33,8 +33,11 @@ const TAG_ASSIGNMENT_EPOCHS: u32 = 0;
 /// then per entry the compact `SubtopologyId`, the compact `Partitions`
 /// (`[]int32`) and the struct's tagged-field count. [`decode_task_map`] reads
 /// the same layout.
-pub(super) fn encode_task_map(buf: &mut BytesMut, map: &BTreeMap<String, Vec<i32>>) {
-    encode_task_map_with_epochs(buf, map, &BTreeMap::new());
+pub(super) fn encode_task_map(
+    buf: &mut BytesMut,
+    map: &BTreeMap<String, Vec<i32>>,
+) -> Result<(), BrokerError> {
+    encode_task_map_with_epochs(buf, map, &BTreeMap::new())
 }
 
 /// Encodes a role's task assignment as the `[]TaskIds` of
@@ -47,20 +50,21 @@ pub(super) fn encode_task_map_with_epochs(
     buf: &mut BytesMut,
     map: &BTreeMap<String, Vec<i32>>,
     epochs: &BTreeMap<String, Vec<i32>>,
-) {
-    put_compact_array_len(buf, map.len());
+) -> Result<(), BrokerError> {
+    put_compact_array_len(buf, map.len())?;
     for (subtopology_id, partitions) in map {
-        put_compact_string(buf, subtopology_id);
-        put_i32_array(buf, partitions);
+        put_compact_string(buf, subtopology_id)?;
+        put_i32_array(buf, partitions)?;
         match epochs.get(subtopology_id) {
             Some(epochs) => {
                 let mut payload = BytesMut::new();
-                put_i32_array(&mut payload, epochs);
-                put_tagged_fields(buf, vec![(TAG_ASSIGNMENT_EPOCHS, payload.freeze())]);
+                put_i32_array(&mut payload, epochs)?;
+                put_tagged_fields(buf, vec![(TAG_ASSIGNMENT_EPOCHS, payload.freeze())])?;
             }
             None => put_empty_tagged_fields(buf),
         }
     }
+    Ok(())
 }
 
 pub(super) fn decode_task_map(buf: &mut &[u8]) -> Result<BTreeMap<String, Vec<i32>>, BrokerError> {
@@ -109,12 +113,16 @@ pub(super) fn decode_task_map_with_epochs(
 /// Encodes a `[]KeyValue`-shaped list: a compact count, then per entry two
 /// compact strings and the struct's tagged-field count. Kafka's `ClientTags`
 /// and `TopicConfigs` both have this shape.
-pub(super) fn encode_key_value_list(buf: &mut BytesMut, items: &[(String, String)]) {
+pub(super) fn encode_key_value_list(
+    buf: &mut BytesMut,
+    items: &[(String, String)],
+) -> Result<(), BrokerError> {
     put_compact_array(buf, items.iter(), |buf, (k, v)| {
-        put_compact_string(buf, k);
-        put_compact_string(buf, v);
+        put_compact_string(buf, k)?;
+        put_compact_string(buf, v)?;
         put_empty_tagged_fields(buf);
-    });
+        Ok(())
+    })
 }
 
 pub(super) fn decode_key_value_list(buf: &mut &[u8]) -> Result<Vec<(String, String)>, BrokerError> {
@@ -128,8 +136,11 @@ pub(super) fn decode_key_value_list(buf: &mut &[u8]) -> Result<Vec<(String, Stri
 
 /// Encodes an `[]int16`, which the copartition groups of the topology record
 /// use for their indices into the subtopology's own topic lists.
-pub(super) fn encode_i16_list(buf: &mut BytesMut, items: &[i16]) {
-    put_compact_array(buf, items.iter(), |buf, &v| buf.put_i16(v));
+pub(super) fn encode_i16_list(buf: &mut BytesMut, items: &[i16]) -> Result<(), BrokerError> {
+    put_compact_array(buf, items.iter(), |buf, &v| {
+        buf.put_i16(v);
+        Ok(())
+    })
 }
 
 pub(super) fn decode_i16_list(buf: &mut &[u8]) -> Result<Vec<i16>, BrokerError> {

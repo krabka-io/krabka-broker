@@ -23,8 +23,8 @@ use {
     },
     krabka_audit::FileEd25519Signer,
     krabka_client_admin::{
-        AdminClient, AdminError, ConfigResource, DescribeConfigsOptions, TopicMetadata,
-        groups::ListGroupsOptions,
+        AdminClient, AdminClientLike as _, AdminError, ConfigResource, DescribeConfigsOptions,
+        TopicMetadata, groups::ListGroupsOptions,
     },
     krabka_client_core::security::ClientSecurity,
     krabka_raft::{deserialize_metadata_snapshot, metadata_snapshot_last_contained_log_timestamp},
@@ -458,7 +458,7 @@ async fn capture_diskless_index(
         .metadata(&[])
         .await
         .map_err(|error| BackupError::Cluster(format!("Metadata: {error}")))?;
-    let configs = topic_overrides(&admin, &metadata, TOPIC).await?;
+    let configs = topic_overrides(&mut admin, &metadata, TOPIC).await?;
     let topics = diskless_topic_topology(&metadata, &configs, TOPIC)?;
     let mut config = KafkaMetadataLogConfig::new(bootstrap);
     TOPIC.clone_into(&mut config.topic);
@@ -490,7 +490,7 @@ async fn capture_diskless_index(
 
 /// Each non-index topic's dynamic config overrides, by topic name.
 async fn topic_overrides(
-    admin: &AdminClient,
+    admin: &mut AdminClient,
     metadata: &TopicMetadata,
     index_topic: &str,
 ) -> Result<BTreeMap<String, BTreeMap<String, String>>, BackupError> {

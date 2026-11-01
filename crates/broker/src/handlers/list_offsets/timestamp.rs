@@ -654,7 +654,7 @@ mod tests {
                     .collect(),
                 ..Default::default()
             };
-            batch.encode(&mut log_bytes).expect("encode batch");
+            batch.encode_batch(&mut log_bytes).expect("encode batch");
             assert!(
                 partition
                     .produce_batch(batch)

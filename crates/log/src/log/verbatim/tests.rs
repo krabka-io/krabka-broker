@@ -80,7 +80,7 @@ fn append_verbatim_assigns_offsets_and_is_byte_exact() {
         let mut stamped = producer.clone();
         stamped.base_offset = (log.log_end_offset() - 1).0;
         stamped.partition_leader_epoch = 4;
-        stamped.encode(&mut expected_wire).unwrap();
+        stamped.encode_batch(&mut expected_wire).unwrap();
     }
     assert2::assert!(log.log_end_offset() == 3);
 
@@ -92,7 +92,9 @@ fn append_verbatim_assigns_offsets_and_is_byte_exact() {
     let mut cur: &[u8] = &r.bytes;
     let mut bases = Vec::new();
     while !cur.is_empty() {
-        bases.push(Offset(RecordBatch::decode(&mut cur).unwrap().base_offset));
+        bases.push(Offset(
+            RecordBatch::decode_batch(&mut cur).unwrap().base_offset,
+        ));
     }
     assert2::assert!(bases == vec![Offset(0), Offset(1), Offset(2)]);
     drop(dir);
@@ -130,11 +132,11 @@ fn append_verbatim_at_stamps_base_byte_exact() {
     );
 
     let mut expected_wire = bytes::BytesMut::new();
-    prefix.encode(&mut expected_wire).unwrap();
+    prefix.encode_batch(&mut expected_wire).unwrap();
     let mut stamped = producer;
     stamped.base_offset = 1;
     stamped.partition_leader_epoch = 4;
-    stamped.encode(&mut expected_wire).unwrap();
+    stamped.encode_batch(&mut expected_wire).unwrap();
 
     let r = log
         .read_raw(Offset(0), log.log_end_offset(), mebibytes(10))
@@ -173,7 +175,7 @@ fn append_verbatim_at_refuses_a_base_below_the_log_end_offset_and_takes_one_abov
         .read_raw(Offset(1), log.log_end_offset(), kibibytes(1))
         .unwrap();
     let mut cursor = &read.bytes[..];
-    let stored = RecordBatch::decode(&mut cursor).unwrap();
+    let stored = RecordBatch::decode_batch(&mut cursor).unwrap();
     assert!(stored.base_offset == 4 && cursor.is_empty());
     drop(dir);
 }
@@ -316,7 +318,7 @@ fn verbatim_log_append_time_patches_three_header_fields_and_nothing_else() {
     assert!(&stored[..] == &expected[..]);
     // And the stored bytes decode, which is the CRC check the reader runs.
     let mut cursor: &[u8] = &stored;
-    let decoded = RecordBatch::decode(&mut cursor).unwrap();
+    let decoded = RecordBatch::decode_batch(&mut cursor).unwrap();
     assert!(
         decoded
             == RecordBatch {
@@ -378,7 +380,7 @@ fn verbatim_stamped_with_log_append_time_patches_attributes_and_crc() {
     let stamped = vb.stamped_with_log_append_time(98765).unwrap();
     assert!(stamped.max_timestamp == 98765);
     let mut cur = &stamped.bytes[..];
-    let decoded = RecordBatch::decode(&mut cur).unwrap();
+    let decoded = RecordBatch::decode_batch(&mut cur).unwrap();
     assert!(decoded.max_timestamp == 98765);
     assert!(decoded.attributes.timestamp_type() == TimestampType::LogAppendTime);
     assert!(decoded.attributes.is_transactional());

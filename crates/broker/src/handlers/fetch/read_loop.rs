@@ -1594,7 +1594,7 @@ mod tests {
             }],
             ..Default::default()
         }
-        .encode(&mut buf)
+        .encode_batch(&mut buf)
         .expect("encode a diskless WAL batch");
         buf.freeze()
     }
@@ -1774,7 +1774,7 @@ mod tests {
             }],
             ..Default::default()
         }
-        .encode(&mut flushed)
+        .encode_batch(&mut flushed)
         .expect("encode flushed batch");
         let flushed = flushed.freeze();
         let read_handle = broker.diskless_read.as_ref().expect("diskless read handle");
@@ -2254,7 +2254,7 @@ mod tests {
         // appends and three.
         let mut sized = BytesMut::new();
         sized_batch(PAYLOAD)
-            .encode(&mut sized)
+            .encode_batch(&mut sized)
             .expect("encode one batch");
         let one_batch = sized.len();
         let min_bytes = i32::try_from(one_batch * 2 + 1).expect("small floor");
@@ -2372,7 +2372,7 @@ mod tests {
             .expect("append");
         let mut sized = BytesMut::new();
         sized_batch(PAYLOAD)
-            .encode(&mut sized)
+            .encode_batch(&mut sized)
             .expect("encode one batch");
         let one_batch = sized.len();
 

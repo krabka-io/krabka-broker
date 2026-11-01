@@ -296,6 +296,7 @@ mod tests {
             }
         })
         .await
+        .unwrap()
     }
 
     /// Prefix every mock response body with the flexible `ResponseHeader` v1

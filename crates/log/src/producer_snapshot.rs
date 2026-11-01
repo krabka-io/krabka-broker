@@ -47,7 +47,7 @@ pub struct SnapshotFile {
 }
 
 /// Durable producer metadata stored in Kafka's `.snapshot` sidecar format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProducerSnapshotEntry {
     pub producer_id: ProducerId,
     pub producer_epoch: i16,
@@ -64,7 +64,7 @@ pub struct ProducerSnapshotEntry {
 pub const NUM_BATCHES_TO_RETAIN: usize = 5;
 
 /// One data batch a producer appended: Kafka's `BatchMetadata`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProducerBatchMetadata {
     pub last_sequence: i32,
     pub last_offset: Offset,
@@ -110,25 +110,25 @@ impl ProducerSnapshotEntry {
     /// The retained batch that a client batch repeats, or `None` when it
     /// repeats none. Kafka's `ProducerStateEntry.findDuplicateBatch`.
     ///
-    /// `earlier` holds the producer's batches before its last one, oldest
-    /// first. A batch repeats a retained batch when `producer_epoch` is the
-    /// entry's epoch and its sequence range, from `base_sequence` to
-    /// `base_sequence + last_offset_delta` as sequences wrap, is that batch's
-    /// range.
+    /// `earlier` is what the log holds of the producer's batches before this
+    /// entry's last one, oldest first. A batch repeats a retained batch when
+    /// its epoch is this entry's and its sequence range, from `base_sequence`
+    /// to `base_sequence + last_offset_delta` as sequences wrap, is that
+    /// batch's range. [`Log::find_duplicate_batch`](crate::Log::find_duplicate_batch)
+    /// runs this over the log's own state.
     #[must_use]
-    pub fn find_duplicate_batch<'a>(
+    pub fn find_duplicate_batch(
         &self,
-        earlier: impl IntoIterator<Item = &'a ProducerBatchMetadata>,
+        earlier: impl IntoIterator<Item = ProducerBatchMetadata>,
         producer_epoch: i16,
         (base_sequence, last_offset_delta): (i32, i32),
     ) -> Option<ProducerBatchMetadata> {
-        if self.producer_epoch != producer_epoch || base_sequence < 0 || last_offset_delta < 0 {
+        if base_sequence < 0 || last_offset_delta < 0 || self.producer_epoch != producer_epoch {
             return None;
         }
         let last_sequence = increment_sequence(base_sequence, last_offset_delta);
         earlier
             .into_iter()
-            .copied()
             .chain(self.last_batch())
             .find(|retained| {
                 retained.last_sequence == last_sequence
@@ -137,25 +137,24 @@ impl ProducerSnapshotEntry {
             })
     }
 
-    /// Record a data batch that the producer appended at `producer_epoch`.
-    /// Kafka's `ProducerStateEntry.addBatch` and
-    /// `ProducerAppendInfo.appendDataBatch`.
+    /// Record one data batch that the log appended at `producer_epoch`.
+    /// Kafka's `ProducerStateEntry.addBatch`.
     ///
-    /// A new epoch clears `earlier`. At the same epoch the batch that was last
-    /// joins `earlier`, and the oldest leaves once the entry and `earlier`
-    /// would retain more than [`NUM_BATCHES_TO_RETAIN`]. `batch` becomes the
-    /// last batch, and a transactional batch opens a transaction when none is
-    /// open.
+    /// A new epoch clears the earlier batches. Otherwise the batch that was
+    /// last joins them, and the oldest leaves at capacity, so the earlier
+    /// batches and the last one are at most [`NUM_BATCHES_TO_RETAIN`].
+    /// `earlier` is `None` when the log holds no earlier batches for the
+    /// producer, and this leaves it `None` unless a batch joins it.
     pub fn add_data_batch(
         &mut self,
-        earlier: &mut VecDeque<ProducerBatchMetadata>,
+        earlier: &mut Option<VecDeque<ProducerBatchMetadata>>,
         producer_epoch: i16,
         batch: ProducerBatchMetadata,
-        is_transactional: bool,
     ) {
         if self.producer_epoch != producer_epoch {
-            earlier.clear();
+            *earlier = None;
         } else if let Some(previous) = self.last_batch() {
+            let earlier = earlier.get_or_insert_default();
             earlier.push_back(previous);
             if earlier.len() >= NUM_BATCHES_TO_RETAIN {
                 earlier.pop_front();
@@ -166,12 +165,11 @@ impl ProducerSnapshotEntry {
         self.last_offset = batch.last_offset;
         self.offset_delta = batch.offset_delta;
         self.timestamp = batch.timestamp;
-        if is_transactional && self.current_txn_first_offset.is_none() {
-            self.current_txn_first_offset = Some(batch.base_offset());
-        }
     }
 
-    pub(crate) fn empty(producer_id: ProducerId, producer_epoch: i16) -> Self {
+    /// The entry of a producer that has appended nothing yet.
+    #[must_use]
+    pub const fn empty(producer_id: ProducerId, producer_epoch: i16) -> Self {
         Self {
             producer_id,
             producer_epoch,

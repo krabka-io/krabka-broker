@@ -40,10 +40,11 @@ pub struct RegularExpressionValue {
 
 #[krabka_macros::flexible_value(record = "ConsumerGroupRegularExpressionValue")]
 impl RegularExpressionValue {
-    fn encode_fields(&self, buf: &mut BytesMut) {
-        put_string_array(buf, &self.topics);
+    fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
+        put_string_array(buf, &self.topics)?;
         buf.put_i64(self.version);
         buf.put_i64(self.timestamp_ms);
+        Ok(())
     }
 
     fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -73,17 +74,17 @@ mod tests {
     #[test]
     fn roundtrip() {
         let v = value();
-        assert!(RegularExpressionValue::decode(&v.encode()).unwrap() == v);
+        assert!(RegularExpressionValue::decode(&v.encode().unwrap()).unwrap() == v);
         let empty = RegularExpressionValue {
             topics: vec![],
             ..v
         };
-        assert!(RegularExpressionValue::decode(&empty.encode()).unwrap() == empty);
+        assert!(RegularExpressionValue::decode(&empty.encode().unwrap()).unwrap() == empty);
     }
 
     #[test]
     fn a_truncated_record_is_refused() {
-        let full = value().encode();
+        let full = value().encode().unwrap();
         assert!(RegularExpressionValue::decode(&full[..full.len() - 1]).is_err());
     }
     mod bdd_regex_value {
@@ -116,7 +117,8 @@ mod tests {
                     .value
                     .as_ref()
                     .expect("group record prepared")
-                    .encode(),
+                    .encode()
+                    .unwrap(),
             );
         }
         #[then(

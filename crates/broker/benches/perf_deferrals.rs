@@ -318,7 +318,7 @@ async fn replicate_once(
     replica: &mut BoundedReplica,
     template: &RecordBatch,
 ) -> Result<Duration, BenchError> {
-    let replica = replica.rotate_if_full(template.encoded_len())?;
+    let replica = replica.rotate_if_full(template.encoded_batch_len())?;
     let mut batch = template.clone();
     batch.base_offset = replica.seam.next_offset().0;
     let start = Instant::now();
@@ -355,7 +355,7 @@ fn timed_encoded_len(template: &RecordBatch, iters: u64) -> Duration {
     let start = Instant::now();
     let mut total: usize = 0;
     for _ in 0..iters {
-        total = total.wrapping_add(black_box(template).encoded_len());
+        total = total.wrapping_add(black_box(template).encoded_batch_len());
     }
     let elapsed = start.elapsed();
     black_box(total);
@@ -413,7 +413,7 @@ fn bench_replication(c: &mut Criterion) -> Result<(), BenchError> {
         } in SHAPES
         {
             let template = make_batch(records, payload);
-            group.throughput(Throughput::Bytes(template.encoded_len() as u64));
+            group.throughput(Throughput::Bytes(template.encoded_batch_len() as u64));
             group.bench_function(format!("{shape}/encoded_len"), |b| {
                 b.iter_custom(|iters| timed_encoded_len(&template, iters));
             });

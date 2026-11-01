@@ -39,7 +39,7 @@ pub fn first_record_at_or_after_timestamp(
 ) -> Result<Option<(LogOffset, TimestampMs)>, RemoteStorageError> {
     let mut cur = data;
     while !cur.is_empty() {
-        let batch = RecordBatch::decode(&mut cur).map_err(corrupt_log)?;
+        let batch = RecordBatch::decode_batch(&mut cur).map_err(corrupt_log)?;
         let limit = max_record_body.filter(|_| {
             batch.attributes.compression() != Attributes::default().compression()
                 && batch.max_timestamp >= target_timestamp
@@ -85,7 +85,7 @@ pub fn first_record_at_or_after_timestamp(
 pub fn first_batch_at_or_after(data: &[u8], floor: LogOffset) -> Option<RecordBatch> {
     let mut cur: &[u8] = data;
     while !cur.is_empty() {
-        let Ok(batch) = RecordBatch::decode(&mut cur) else {
+        let Ok(batch) = RecordBatch::decode_batch(&mut cur) else {
             break;
         };
         let last_offset = batch
@@ -128,7 +128,7 @@ mod tests {
     fn encoded(batches: &[RecordBatch]) -> Bytes {
         let mut buf = BytesMut::new();
         for batch in batches {
-            batch.encode(&mut buf).unwrap();
+            batch.encode_batch(&mut buf).unwrap();
         }
         buf.freeze()
     }

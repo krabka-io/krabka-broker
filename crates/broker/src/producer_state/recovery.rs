@@ -114,7 +114,7 @@ impl ProducerState {
     }
 }
 
-fn entries_from_snapshot(
+pub(super) fn entries_from_snapshot(
     snapshot: Vec<krabka_log::RecoveredProducer>,
 ) -> HashMap<ProducerId, ProducerEntry> {
     snapshot

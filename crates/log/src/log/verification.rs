@@ -227,7 +227,11 @@ impl Log {
             return None;
         }
         self.producer_state.get(&producer_id)?.find_duplicate_batch(
-            self.earlier_batches.get(&producer_id).into_iter().flatten(),
+            self.earlier_batches
+                .get(&producer_id)
+                .into_iter()
+                .flatten()
+                .copied(),
             producer_epoch,
             (base_sequence, last_offset_delta),
         )

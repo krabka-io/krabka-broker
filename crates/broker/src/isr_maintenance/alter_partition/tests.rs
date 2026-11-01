@@ -216,7 +216,8 @@ impl ScriptedListener {
             drop(recorded);
             MockReply::Respond(encode_body(&answer, version, true))
         })
-        .await;
+        .await
+        .unwrap();
         Self { mock, received }
     }
 

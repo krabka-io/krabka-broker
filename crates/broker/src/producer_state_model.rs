@@ -7,10 +7,9 @@
 //!
 //! The broker does not serialize one producer's requests. A produce holds only
 //! a shared read guard of the partition's transition barrier, and it commits
-//! into the tracker only after the writer answers, so a retry can be checked
-//! between the original's append and its commit, or while both copies wait for
-//! the writer. Those windows are the subject of `producer_state::inflight_model`,
-//! not of this model.
+//! into the tracker only after its `acks=all` gate resolves, so a retry can be
+//! checked between the original's append and its commit. That window is the
+//! subject of `producer_state::inflight_model`, not of this model.
 //!
 //! The oracle is independent of the host's representation. The state carries a
 //! ghost [`Window`]: the producer's epoch, its last accepted sequence, and the

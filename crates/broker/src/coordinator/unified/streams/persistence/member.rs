@@ -61,27 +61,27 @@ pub struct StreamsGroupMemberMetadataValue {
 
 #[krabka_macros::flexible_value(record = "StreamsGroupMemberMetadataValue")]
 impl StreamsGroupMemberMetadataValue {
-    fn encode_fields(&self, buf: &mut BytesMut) {
-        put_compact_nullable_string(buf, self.instance_id.as_deref());
+    fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
+        put_compact_nullable_string(buf, self.instance_id.as_deref())?;
         put_member_client(
             buf,
             self.rack_id.as_deref(),
             &self.client_id,
             &self.client_host,
-        );
+        )?;
         buf.put_i32(self.rebalance_timeout_ms);
         buf.put_i32(self.topology_epoch);
-        put_compact_string(buf, &self.process_id);
+        put_compact_string(buf, &self.process_id)?;
         match &self.user_endpoint {
             Some(ep) => {
                 buf.put_i8(1);
-                put_compact_string(buf, &ep.host);
+                put_compact_string(buf, &ep.host)?;
                 buf.put_u16(ep.port);
                 put_empty_tagged_fields(buf);
             }
             None => buf.put_i8(-1),
         }
-        encode_key_value_list(buf, &self.client_tags);
+        encode_key_value_list(buf, &self.client_tags)
     }
 
     fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -152,7 +152,7 @@ mod tests {
             client_tags: vec![],
             ..sample()
         };
-        let bytes = v.encode();
+        let bytes = v.encode().unwrap();
         // ... ProcessId "p-uuid", then -1, then the empty ClientTags and the
         // message's tagged-field count.
         assert!(&bytes[bytes.len() - 3..] == b"\xff\x01\x00");
@@ -172,7 +172,7 @@ mod tests {
         );
 
         let v = sample();
-        assert!(StreamsGroupMemberMetadataValue::decode(&v.encode()).unwrap() == v);
+        assert!(StreamsGroupMemberMetadataValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
 
     #[test]
@@ -186,7 +186,7 @@ mod tests {
             topology_epoch: 0,
             ..sample()
         };
-        assert!(StreamsGroupMemberMetadataValue::decode(&v.encode()).unwrap() == v);
+        assert!(StreamsGroupMemberMetadataValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
 
     #[test]
@@ -198,12 +198,12 @@ mod tests {
             }),
             ..sample()
         };
-        assert!(StreamsGroupMemberMetadataValue::decode(&v.encode()).unwrap() == v);
+        assert!(StreamsGroupMemberMetadataValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
 
     #[test]
     fn member_metadata_rejects_a_missing_tagged_trailer() {
-        let full = sample().encode();
+        let full = sample().encode().unwrap();
         assert!(StreamsGroupMemberMetadataValue::decode(&full[..full.len() - 1]).is_err());
     }
     mod bdd_member_metadata {
@@ -246,7 +246,8 @@ mod tests {
                     .value
                     .as_ref()
                     .expect("group record prepared")
-                    .encode(),
+                    .encode()
+                    .unwrap(),
             );
         }
         #[then(

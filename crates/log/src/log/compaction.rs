@@ -1253,8 +1253,8 @@ mod tests {
             key: b"corrupt",
             value: b"suffix",
         }]);
-        let mut encoded = BytesMut::with_capacity(batch.encoded_len());
-        batch.encode(&mut encoded).unwrap();
+        let mut encoded = BytesMut::with_capacity(batch.encoded_batch_len());
+        batch.encode_batch(&mut encoded).unwrap();
         // The stored CRC occupies bytes 17..21. Changing it preserves framing
         // while making the complete suffix fail integrity validation.
         encoded[17] ^= 1;

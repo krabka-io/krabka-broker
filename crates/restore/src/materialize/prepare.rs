@@ -258,8 +258,8 @@ fn prepare_owned_batch(batch: RecordBatch) -> Result<PreparedBatch, RestoreError
         previous_offset_delta = Some(record.offset_delta);
     }
 
-    let mut encoded = BytesMut::with_capacity(batch.encoded_len());
-    batch.encode(&mut encoded)?;
+    let mut encoded = BytesMut::with_capacity(batch.encoded_batch_len());
+    batch.encode_batch(&mut encoded)?;
     let validated = validate_one_v2_batch(&encoded)?;
     if validated.total_len != encoded.len()
         || validated.header.records_count.get() != records_count
@@ -364,7 +364,7 @@ mod tests {
             panic!("rewrite must stay owned");
         };
         let mut encoded = BytesMut::new();
-        batch.encode(&mut encoded).expect("re-encode");
+        batch.encode_batch(&mut encoded).expect("re-encode");
         let validated = validate_one_v2_batch(&encoded).expect("fresh CRC");
         check!(validated.total_len == encoded_len);
         check!(validated.header.records_count.get() == 2);
@@ -529,7 +529,7 @@ mod tests {
             }],
         };
         let mut encoded = BytesMut::new();
-        marker.encode(&mut encoded).expect("encode marker");
+        marker.encode_batch(&mut encoded).expect("encode marker");
         let marker_bytes = encoded.freeze();
         let mut cursor: &[u8] = &marker_bytes;
         let borrowed = RecordBatchBorrowed::decode_borrow_with_policy(&mut cursor, <_>::default())

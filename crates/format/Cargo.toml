@@ -24,7 +24,7 @@ path = "src/main.rs"
 
 [dependencies]
 bon = { workspace = true }
-krabka-metadata = { version = "0.7.0" }
+krabka-metadata = { version = "0.8.0" }
 krabka-security = { workspace = true }
 # The singleton VotersRecord this writes is the one the consensus engine reads
 # back on the node's first boot.
@@ -53,7 +53,7 @@ rstest = { workspace = true }
 rstest-bdd = { workspace = true }
 rstest-bdd-macros = { workspace = true }
 rust-embed = { workspace = true }
-krabka-ids = { version = "0.7.0" }
+krabka-ids = { version = "0.8.0" }
 krabka-broker = { version = "1.1.5", path = "../broker" }
 tempfile = { workspace = true }
 yare = { workspace = true }

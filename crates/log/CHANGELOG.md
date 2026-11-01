@@ -10,6 +10,8 @@ release that contains `krabka-log`.
 
 - `WriteBack` and `set_write_back` let an embedder install, once per process and before any log opens, how a log starts the write-out of its active segment's dirty pages and how it drops a written range from the page cache. krabka-broker installs one that uses `sync_file_range(2)`.
 
+- `ProducerSnapshotEntry::find_duplicate_batch` and `ProducerSnapshotEntry::add_data_batch` are the pure halves of `Log::find_duplicate_batch` and of the data-batch update of a producer's retained batches, Kafka's `ProducerStateEntry.findDuplicateBatch` and `addBatch`, and `ProducerSnapshotEntry::empty` is public, so a caller can replay a producer's batches without a `Log`.
+
 ### Changed
 
 - On Linux, the default write-back is the file's `sync_data`, as on the other non-WASI targets, and the default page drop is `posix_fadvise(POSIX_FADV_DONTNEED)` alone, without a wait for the range's write-out. krabka-log called `sync_file_range` from a rustix fork that the workspace applies through `[patch.crates-io]`, which `cargo publish` ignores, and the rustix on crates.io has no `sync_file_range`, so every 1.1.x publish of krabka-log failed to build.

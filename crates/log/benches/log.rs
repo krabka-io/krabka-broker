@@ -42,8 +42,8 @@ fn make_verbatim_batch(n: i32, payload_size: usize) -> BenchResult<VerbatimBatch
 }
 
 fn make_verbatim_from_batch(batch: &RecordBatch) -> BenchResult<VerbatimBatch> {
-    let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
-    batch.encode(&mut buf)?;
+    let mut buf = bytes::BytesMut::with_capacity(batch.encoded_batch_len());
+    batch.encode_batch(&mut buf)?;
     let is_txn = batch.attributes.is_transactional();
     let epoch = LeaderEpoch(batch.partition_leader_epoch);
     let pid = ProducerId(batch.producer_id);

@@ -80,7 +80,15 @@ fn group_partitions(partitions: &HashSet<TopicPartition>) -> Vec<TopicGroup<'_>>
 /// (KAFKA-20357). Kafka 4.3.1 defines tags 0 to 3 only, keeps the last epoch in
 /// memory and reloads it as `NO_PRODUCER_EPOCH`, so without the tag a v1 record
 /// carries exactly the tags 4.3.1 writes.
-pub fn encode_value(entry: &TxnEntry, txnv: TxnVersion, last_epoch_tag: bool) -> Vec<u8> {
+///
+/// # Errors
+/// Returns [`BrokerError::Protocol`] when a topic name or an array is too long
+/// for its wire-format length prefix.
+pub fn encode_value(
+    entry: &TxnEntry,
+    txnv: TxnVersion,
+    last_epoch_tag: bool,
+) -> Result<Vec<u8>, BrokerError> {
     let flexible = txnv.flexible_records();
     let version: i16 = i16::from(flexible);
     let mut buf = BytesMut::new();
@@ -95,23 +103,23 @@ pub fn encode_value(entry: &TxnEntry, txnv: TxnVersion, last_epoch_tag: bool) ->
     // for an `Empty` transaction, and an empty array in every other state.
     let groups = group_partitions(&entry.partitions);
     if entry.state == TxnState::Empty {
-        put_nullable_array_len(&mut buf, None, flexible);
+        put_nullable_array_len(&mut buf, None, flexible)?;
     } else {
-        put_nullable_array_len(&mut buf, Some(groups.len()), flexible);
+        put_nullable_array_len(&mut buf, Some(groups.len()), flexible)?;
         for TopicGroup { topic, ids } in &groups {
             if flexible {
-                put_compact_string(&mut buf, topic);
+                put_compact_string(&mut buf, topic)?;
             } else {
-                put_string(&mut buf, topic);
+                put_string(&mut buf, topic)?;
             }
-            put_array_len(&mut buf, ids.len(), flexible);
+            put_array_len(&mut buf, ids.len(), flexible)?;
             for id in ids {
                 put_i32(&mut buf, *id);
             }
             // PartitionsSchema has no tagged fields of its own; in v1 it still
             // ends with an (always-empty) tagged-field section.
             if flexible {
-                WriteTaggedFields::new().write(&mut buf, &UnknownTaggedFields::default());
+                WriteTaggedFields::new().write(&mut buf, &UnknownTaggedFields::default())?;
             }
         }
     }
@@ -153,10 +161,10 @@ pub fn encode_value(entry: &TxnEntry, txnv: TxnVersion, last_epoch_tag: bool) ->
                 i16_to_bytes(entry.last_producer_epoch),
             );
         }
-        tagged.write(&mut buf, &UnknownTaggedFields::default());
+        tagged.write(&mut buf, &UnknownTaggedFields::default())?;
     }
 
-    buf.to_vec()
+    Ok(buf.to_vec())
 }
 
 fn i64_to_bytes(v: i64) -> Bytes {
@@ -358,7 +366,7 @@ mod tests {
 
     #[test]
     fn sample_bytes_encode_byte_identical() {
-        let encoded = encode_value(&sample_entry(), TxnVersion::Flexible, false);
+        let encoded = encode_value(&sample_entry(), TxnVersion::Flexible, false).unwrap();
         assert!(
             encoded == SAMPLE,
             "encode_value did not byte-match SAMPLE\n  expected: {:02x?}\n  actual:   {:02x?}",
@@ -399,7 +407,7 @@ mod tests {
             client_transaction_version: 2,
         };
 
-        let first = encode_value(&entry, TxnVersion::Verified, false);
+        let first = encode_value(&entry, TxnVersion::Verified, false).unwrap();
         let decoded = decode_value(&first, "tid".into(), false).unwrap();
 
         check!(decoded.producer_id == 42);
@@ -414,7 +422,7 @@ mod tests {
         check!(decoded.partitions == entry.partitions);
 
         // Re-encode is byte-identical (determinism).
-        let second = encode_value(&decoded, TxnVersion::Verified, false);
+        let second = encode_value(&decoded, TxnVersion::Verified, false).unwrap();
         assert!(first == second);
     }
 
@@ -444,7 +452,7 @@ mod tests {
             client_transaction_version: 0,
         };
 
-        let encoded = encode_value(&entry, TxnVersion::Classic, false);
+        let encoded = encode_value(&entry, TxnVersion::Classic, false).unwrap();
         // version header is `00 00`.
         assert!(encoded[0] == 0x00 && encoded[1] == 0x00);
 
@@ -507,12 +515,12 @@ mod tests {
             insert("b", 2),
         ]);
         assert!(
-            encode_value(&a, TxnVersion::Flexible, false)
-                == encode_value(&b, TxnVersion::Flexible, false)
+            encode_value(&a, TxnVersion::Flexible, false).unwrap()
+                == encode_value(&b, TxnVersion::Flexible, false).unwrap()
         );
         assert!(
-            encode_value(&a, TxnVersion::Classic, false)
-                == encode_value(&b, TxnVersion::Classic, false)
+            encode_value(&a, TxnVersion::Classic, false).unwrap()
+                == encode_value(&b, TxnVersion::Classic, false).unwrap()
         );
     }
 
@@ -554,7 +562,7 @@ mod tests {
             // The array length sits right after the one-byte status.
             let length_at = 2 + 8 + 2 + 4 + 1;
             entry.state = TxnState::Empty;
-            let empty = encode_value(&entry, txnv, false);
+            let empty = encode_value(&entry, txnv, false).unwrap();
             let null_length: &[u8] = if flexible {
                 &[0x00]
             } else {
@@ -572,7 +580,7 @@ mod tests {
             );
 
             entry.state = TxnState::CompleteCommit;
-            let completed = encode_value(&entry, txnv, false);
+            let completed = encode_value(&entry, txnv, false).unwrap();
             let empty_length: &[u8] = if flexible {
                 &[0x01]
             } else {
@@ -608,7 +616,7 @@ mod tests {
         {
             for txnv in [TxnVersion::Flexible, TxnVersion::Verified] {
                 let decoded = decode_value(
-                    &encode_value(&entry, txnv, last_epoch_tag),
+                    &encode_value(&entry, txnv, last_epoch_tag).unwrap(),
                     "tid".into(),
                     last_epoch_tag,
                 )
@@ -622,7 +630,7 @@ mod tests {
 
             // v0 has no tagged section, so both fields come back at their default.
             let decoded = decode_value(
-                &encode_value(&entry, TxnVersion::Classic, last_epoch_tag),
+                &encode_value(&entry, TxnVersion::Classic, last_epoch_tag).unwrap(),
                 "tid".into(),
                 last_epoch_tag,
             )
@@ -634,10 +642,10 @@ mod tests {
         // A default last epoch is not written, and the tag is written only for
         // trunk.
         entry.last_producer_epoch = -1;
-        let without = encode_value(&entry, TxnVersion::Flexible, true);
+        let without = encode_value(&entry, TxnVersion::Flexible, true).unwrap();
         entry.last_producer_epoch = 8;
-        let with = encode_value(&entry, TxnVersion::Flexible, true);
-        let as_4_3_1 = encode_value(&entry, TxnVersion::Flexible, false);
+        let with = encode_value(&entry, TxnVersion::Flexible, true).unwrap();
+        let as_4_3_1 = encode_value(&entry, TxnVersion::Flexible, false).unwrap();
         assert!(with.len() > without.len());
         assert!(as_4_3_1 == without);
     }
@@ -649,7 +657,7 @@ mod tests {
         let mut entry = TxnEntry::new_empty("tid".into(), ProducerId(5), 9, 30_000, 100);
         entry.state = TxnState::CompleteAbort;
         entry.last_producer_epoch = 8;
-        let trunk_bytes = encode_value(&entry, TxnVersion::Verified, true);
+        let trunk_bytes = encode_value(&entry, TxnVersion::Verified, true).unwrap();
 
         let decoded = decode_value(&trunk_bytes, "tid".into(), false).expect("decode");
         assert!(decoded.last_producer_epoch == -1);

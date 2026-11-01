@@ -49,8 +49,8 @@ mod linux {
     /// sends it.
     fn verbatim_batch(records: usize) -> VerbatimBatch {
         let batch = make_batch(i32::try_from(records).unwrap(), RECORD_BYTES);
-        let mut bytes = bytes::BytesMut::with_capacity(batch.encoded_len());
-        batch.encode(&mut bytes).unwrap();
+        let mut bytes = bytes::BytesMut::with_capacity(batch.encoded_batch_len());
+        batch.encode_batch(&mut bytes).unwrap();
         VerbatimBatch {
             bytes: bytes.freeze(),
             last_offset_delta: batch.last_offset_delta,

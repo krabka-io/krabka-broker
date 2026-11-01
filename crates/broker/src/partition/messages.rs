@@ -83,7 +83,7 @@ impl EncodedBatch {
     /// Bytes that `batch.encode_with_compression_level(level)` writes for
     /// `batch` as it is, under its own codec.
     pub(crate) fn encode(batch: &RecordBatch, level: Option<i32>) -> Result<Self, RecordsError> {
-        let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
+        let mut buf = bytes::BytesMut::with_capacity(batch.encoded_batch_len());
         batch.encode_with_compression_level(&mut buf, level)?;
         // The buffer is sized for the uncompressed batch. A compressed encode
         // fills a fraction of it, and the bytes are held until the append, so
@@ -214,7 +214,9 @@ impl ProduceData {
             Self::Owned(batch)
             | Self::OwnedEncoded { batch, .. }
             | Self::OwnedControl(batch)
-            | Self::OwnedCommitMarker { batch, .. } => (batch.encoded_len(), batch.max_timestamp),
+            | Self::OwnedCommitMarker { batch, .. } => {
+                (batch.encoded_batch_len(), batch.max_timestamp)
+            }
         }
     }
 }
@@ -466,9 +468,9 @@ mod tests {
             batch: batch.clone(),
             encoded: Box::new(encoded.clone()),
         };
-        check!(job.append_footprint() == (batch.encoded_len(), batch.max_timestamp));
+        check!(job.append_footprint() == (batch.encoded_batch_len(), batch.max_timestamp));
         drop(job);
-        check!(len < batch.encoded_len() / 10);
+        check!(len < batch.encoded_batch_len() / 10);
         let held = encoded
             .bytes
             .try_into_mut()

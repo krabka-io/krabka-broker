@@ -488,7 +488,7 @@ mod tests {
             };
             seg.append(&batch, DEFAULT_INDEX_INTERVAL).unwrap();
             if base == next + gap {
-                batch.encode(&mut expected).unwrap();
+                batch.encode_batch(&mut expected).unwrap();
             }
         }
         let last = next + gap + i64::from(records) - 1;
@@ -524,7 +524,7 @@ mod tests {
         // but its header says 188. Offset 126 is still inside that batch.
         seg.offset_index.append(125, 0).unwrap();
         let mut expected = Vec::new();
-        batch.encode(&mut expected).unwrap();
+        batch.encode_batch(&mut expected).unwrap();
 
         let (desc, _) = counted_read(&seg, Offset(126), Offset(189));
 
@@ -588,7 +588,7 @@ mod tests {
             for (off, size) in payload_sizes.iter().enumerate() {
                 let mut batch = test_batch_at(Offset(i64::try_from(off).unwrap()));
                 batch.records[0].value = Some(Bytes::from(vec![0; *size]));
-                batch_len = batch.encoded_len();
+                batch_len = batch.encoded_batch_len();
                 first_batch_len.get_or_insert(batch_len);
                 seg.append(&batch, DENSE_INDEX).unwrap();
             }
@@ -649,7 +649,7 @@ mod tests {
             seg.append(&test_batch_at(Offset(off)), DENSE_INDEX)
                 .unwrap();
         }
-        let batch_len = u32::try_from(test_batch_at(Offset(0)).encoded_len()).unwrap();
+        let batch_len = u32::try_from(test_batch_at(Offset(0)).encoded_batch_len()).unwrap();
         let cases = [
             ("all batches", 0i64, 5i64, mebibytes(10)),
             ("limit clamp", 0, 3, mebibytes(10)),
@@ -727,7 +727,7 @@ mod tests {
                 .unwrap();
         }
         let advice = recording_advice(&mut seg);
-        let batch_len = u64::try_from(test_batch_at(Offset(0)).encoded_len()).unwrap();
+        let batch_len = u64::try_from(test_batch_at(Offset(0)).encoded_batch_len()).unwrap();
         let budget = 3 * batch_len;
 
         let desc = seg

@@ -432,7 +432,7 @@ mod tests {
         let encoded = encode_batch(&batch);
         let payload = PartitionPayload::Slice(encoded.clone());
         assert!(payload.largest_batch_len() == encoded.len());
-        assert!(payload.largest_batch_len() == batch.encoded_len());
+        assert!(payload.largest_batch_len() == batch.encoded_batch_len());
     }
 
     #[test]
@@ -476,7 +476,7 @@ mod tests {
     #[test]
     fn largest_batch_len_of_an_owned_payload_is_its_one_batch() {
         let batch = batch_with_value(100);
-        let want = batch.encoded_len();
+        let want = batch.encoded_batch_len();
         let payload = PartitionPayload::Owned(RecordsPayload::V2(vec![batch]));
         assert!(payload.largest_batch_len() == want);
     }

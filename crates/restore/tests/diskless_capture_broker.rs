@@ -32,7 +32,9 @@ use {
         Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId, RemoteStorageBackend,
         RlmmKind, testing,
     },
-    krabka_client_admin::{AdminClient, CreateTopicSpec, TopicMutationOptions},
+    krabka_client_admin::{
+        AdminClient, AdminClientLike as _, CreateTopicSpec, TopicMutationOptions,
+    },
     krabka_client_consumer::Consumer,
     krabka_client_core::Client,
     krabka_compression::CompressionType,

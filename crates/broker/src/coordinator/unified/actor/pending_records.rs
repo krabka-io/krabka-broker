@@ -287,7 +287,7 @@ impl PendingRecords {
                         group_id: group(),
                         member_id: member_id.clone(),
                     })?,
-                    Some(v.encode()),
+                    Some(v.encode()?),
                 );
             }
         }
@@ -297,13 +297,13 @@ impl PendingRecords {
                     group_id: group(),
                     regex: regex.clone(),
                 })?,
-                v.as_ref().map(RegularExpressionValue::encode),
+                v.as_ref().map(RegularExpressionValue::encode).transpose()?,
             );
         }
         if let Some(v) = self.group_metadata {
             batch.push(
                 key(NextGenKey::GroupMetadata { group_id: group() })?,
-                Some(v.encode()),
+                Some(v.encode()?),
             );
         }
         // Kafka's `updateSubscriptionMetadata` adds the k4 tombstone right
@@ -320,13 +320,15 @@ impl PendingRecords {
                     group_id: group(),
                     member_id: member_id.clone(),
                 })?,
-                v.as_ref().map(TargetAssignmentMemberValue::encode),
+                v.as_ref()
+                    .map(TargetAssignmentMemberValue::encode)
+                    .transpose()?,
             );
         }
         if let Some(v) = self.target_metadata {
             batch.push(
                 key(NextGenKey::TargetAssignmentMetadata { group_id: group() })?,
-                Some(v.encode()),
+                Some(v.encode()?),
             );
         }
         for (member_id, v) in &self.current_per_member {
@@ -338,7 +340,9 @@ impl PendingRecords {
                     group_id: group(),
                     member_id: member_id.clone(),
                 })?,
-                v.as_ref().map(CurrentMemberAssignmentValue::encode),
+                v.as_ref()
+                    .map(CurrentMemberAssignmentValue::encode)
+                    .transpose()?,
             );
         }
         if let Some(tombstone) = &self.group_tombstone {
@@ -754,7 +758,7 @@ mod tests {
                     .unwrap()[..]
                 )
         );
-        assert!(batch.records[0].value.as_deref() == Some(&value.encode()[..]));
+        assert!(batch.records[0].value.as_deref() == Some(&value.encode().unwrap()[..]));
 
         let (coordinator, _) = make_coordinator();
         write.apply_to_cache(&coordinator, "g");

@@ -64,7 +64,7 @@ pub fn idempotent_lz4_batch(producer_id: i64, base_sequence: i32, n: usize) -> R
 
 pub fn encode_batch(b: &RecordBatch) -> Bytes {
     let mut buf = bytes::BytesMut::new();
-    b.encode(&mut buf).unwrap();
+    b.encode_batch(&mut buf).unwrap();
     buf.freeze()
 }
 

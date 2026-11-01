@@ -284,7 +284,7 @@ pub fn sparse_fixture_second_batch_len() -> usize { sparse_fixture_batch_bytes()
 pub fn sparse_fixture_batch_bytes() -> [bytes::Bytes; 2] {
     let encode = |batch: RecordBatch| {
         let mut buf = bytes::BytesMut::new();
-        batch.encode(&mut buf).unwrap();
+        batch.encode_batch(&mut buf).unwrap();
         buf.freeze()
     };
     [
@@ -345,9 +345,9 @@ fn remote_segment_reader(
     let remote_dir = tempfile::tempdir().unwrap();
 
     let mut log_bytes = bytes::BytesMut::new();
-    first.encode(&mut log_bytes).unwrap();
+    first.encode_batch(&mut log_bytes).unwrap();
     let second_position = u32::try_from(log_bytes.len()).unwrap();
-    second.encode(&mut log_bytes).unwrap();
+    second.encode_batch(&mut log_bytes).unwrap();
     let log_bytes = log_bytes.freeze();
 
     let log_path = write_test_file(source_dir.path(), "00000000000000000010.log", &log_bytes);
@@ -473,7 +473,7 @@ pub fn tier_reader(segments: &[TierSegment]) -> ReaderWithDir {
         let mut end = base;
         for batch in &segment.batches {
             let position = u32::try_from(log_bytes.len()).unwrap();
-            batch.encode(&mut log_bytes).unwrap();
+            batch.encode_batch(&mut log_bytes).unwrap();
             end = batch.base_offset + i64::from(batch.last_offset_delta);
             let relative_offset = u32::try_from(end - base).unwrap();
             offsets.push(OffsetIndexEntry {

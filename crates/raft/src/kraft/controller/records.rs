@@ -302,7 +302,7 @@ pub fn start_of_epoch_batch(
 pub fn encode_batches(batches: &[RecordBatch]) -> bytes::Bytes {
     let mut out = bytes::BytesMut::new();
     for batch in batches {
-        if let Err(e) = batch.encode(&mut out) {
+        if let Err(e) = batch.encode_batch(&mut out) {
             tracing::error!(?e, "kraft: encode batch for fetch serve failed");
         }
     }
@@ -315,7 +315,7 @@ pub fn encode_batches(batches: &[RecordBatch]) -> bytes::Bytes {
 pub fn decode_batches(mut buf: &[u8]) -> Result<Vec<RecordBatch>, RaftError> {
     let mut out = Vec::new();
     while !buf.is_empty() {
-        match RecordBatch::decode(&mut buf) {
+        match RecordBatch::decode_batch(&mut buf) {
             Ok(batch) => out.push(batch),
             Err(e) => {
                 return Err(RaftError::ChangeRejected(format!(

@@ -302,7 +302,7 @@ async fn diskless_writer_invalidates_hot_tail_after_log_rewrite() {
     sample_batch()
         .count(2)
         .call()
-        .encode(&mut encoded)
+        .encode_batch(&mut encoded)
         .expect("encode batch");
     let encoded = encoded.freeze();
     cache.insert_run(topic_id, partition, &encoded);
