@@ -68,3 +68,18 @@ a separately scoped follow-up; do not advertise this capability as parity.
 Existing Krabka tests cover failed writes still archiving, recovered cause
 inference, and per-attempt leader lookup. They do not replace multi-broker crash
 qualification. #1969's qualification lane must retain this limitation.
+
+## Candidate verification
+
+`cargo test -p krabka-broker --lib share_partition::dlq:: -- --test-threads=2`:
+43 passed, 0 failed (including both copied and headers-only exact boundaries).
+
+`cargo test -p krabka-broker --test share_consume a_copied_record_too_big_for_the_topic_fails_and_still_archives -- --nocapture`:
+1 passed, 0 failed; verifies source advancement, empty DLQ, zero written records,
+one produce attempt and one failed attempt for a 1000-byte copied source value
+at destination limit 1100. This is the in-process candidate regression, not a
+released-reference share-consumer run.
+
+`cargo test -p krabka-broker --lib share_partition::manager::dead_letter:: -- --test-threads=2`:
+6 passed, 0 failed, including durability-before-write and failed-write/recovered-
+cause component cases. These are not process-restart or multi-broker tests.
