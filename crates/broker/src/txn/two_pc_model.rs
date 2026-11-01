@@ -51,8 +51,9 @@
 //!   transaction opens. The cluster's transaction version is a model
 //!   parameter, `TV_2` and below it.
 //! - Each `Prepare*` completes atomically in one `Complete` action that
-//!   stands for the `EndTxn` Phase 3, the reaper's `complete_abort`, and the
-//!   completion task alike. `decision_model` covers the marker window.
+//!   stands for the `EndTxn` Phase 3 and the completion task alike, which
+//!   also finishes the aborts the reaper hands it. `decision_model` covers
+//!   the marker window.
 //! - The `InitProducerId` request names no producer identity, and the
 //!   `keepPreparedTxn` recovery branch is not modeled.
 //!

@@ -4,7 +4,8 @@
 //! refreshes the coordinator's leader-partition view from the live metadata
 //! image, then asks [`TxnCoordinator::sweep_expired`] to abort every
 //! locally-coordinated, `Ongoing`, non-2PC transaction whose timeout has
-//! elapsed.
+//! elapsed. The sweep prepares each abort and leaves its markers to the
+//! completion task, so it never waits for a partition.
 //!
 //! **KIP-939 invariant:** this task *never* reaps a two-phase-commit
 //! transaction, which is persisted with the
@@ -66,7 +67,7 @@ async fn sweep_once(coord: &Arc<TxnCoordinator>, controller: &dyn MetadataSource
     } else {
         info!(
             count = aborted.len(),
-            "txn reaper: aborted timed-out transactions"
+            "txn reaper: queued the aborts of timed-out transactions"
         );
     }
 }

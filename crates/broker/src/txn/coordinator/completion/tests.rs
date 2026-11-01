@@ -6,7 +6,10 @@ use {
     super::*,
     crate::{
         test_support::PartitionCount,
-        txn::{coordinator::test_support::test_prelude::*, state::TopicPartition},
+        txn::{
+            coordinator::test_support::{entry, test_prelude::*},
+            state::TopicPartition,
+        },
     },
     assert2::{assert, check},
     std::path::Path,
@@ -330,4 +333,120 @@ async fn recovery_queues_every_prepared_transaction_for_completion() {
 
     check!(coordinator.take_completion_requests() == vec![TID.to_owned()]);
     check!(coordinator.take_completion_requests().is_empty());
+}
+
+// ── The completion of an abort, as the reaper hands it over ────────────
+
+fn abort_entry() -> TxnEntry { entry().call() }
+
+#[test]
+fn an_abort_completion_records_prev_only_on_a_pid_roll() {
+    // No roll: same pid, epoch bumped → prev untouched.
+    let mut e = abort_entry();
+    e.state = TxnState::PrepareAbort;
+    e.producer_epoch = 4;
+    e.partitions.insert(TopicPartition {
+        topic: "orders".into(),
+        partition: PartitionIndex(2),
+    });
+    apply_completion(&mut e, TxnState::CompleteAbort, (ProducerId(1000), 5), 42);
+    check!(e.state == TxnState::CompleteAbort);
+    check!(e.producer_id == 1000);
+    check!(e.producer_epoch == 5);
+    check!(e.prev_producer_id == -1, "no roll must not set prev");
+    check!(e.partitions.is_empty());
+    check!(e.last_update_ms == 42);
+
+    // Roll: fresh pid at epoch 0 → prior pid recorded as prev.
+    let mut rolled = abort_entry();
+    rolled.state = TxnState::PrepareAbort;
+    apply_completion(
+        &mut rolled,
+        TxnState::CompleteAbort,
+        (ProducerId(2000), 0),
+        43,
+    );
+    check!(rolled.producer_id == 2000);
+    check!(rolled.producer_epoch == 0);
+    check!(
+        rolled.prev_producer_id == 1000,
+        "roll must record prior pid"
+    );
+}
+
+#[derive(Clone, Copy)]
+enum PreparedSnapshotCase {
+    Exact,
+    ProducerIdChanged,
+    ProducerEpochChanged,
+    StateChanged,
+    LatePartitionRegistered,
+    StagedIdentityChanged,
+    AlreadyComplete,
+    MalformedEpoch,
+}
+
+#[yare::parameterized(
+    exact = { PreparedSnapshotCase::Exact },
+    producer_id_changed = { PreparedSnapshotCase::ProducerIdChanged },
+    producer_epoch_changed = { PreparedSnapshotCase::ProducerEpochChanged },
+    state_changed = { PreparedSnapshotCase::StateChanged },
+    late_partition_registered = { PreparedSnapshotCase::LatePartitionRegistered },
+    staged_identity_changed = { PreparedSnapshotCase::StagedIdentityChanged },
+    already_complete = { PreparedSnapshotCase::AlreadyComplete },
+    malformed_epoch = { PreparedSnapshotCase::MalformedEpoch },
+)]
+fn an_abort_completion_decision_checks_the_prepared_snapshot(case: PreparedSnapshotCase) {
+    let mut prepared = abort_entry();
+    prepared.producer_epoch = 7;
+    prepared.state = TxnState::PrepareAbort;
+
+    let mut current = prepared.clone();
+    let expected = match case {
+        PreparedSnapshotCase::Exact => CompletionDecision::Proceed,
+        PreparedSnapshotCase::ProducerIdChanged => {
+            current.producer_id = ProducerId(9999);
+            CompletionDecision::RejectStaleIdentity
+        }
+        PreparedSnapshotCase::ProducerEpochChanged => {
+            current.producer_epoch = 8;
+            CompletionDecision::RejectStaleIdentity
+        }
+        PreparedSnapshotCase::StateChanged => {
+            current.state = TxnState::Ongoing;
+            CompletionDecision::RejectChangedPreparedState
+        }
+        // A partition registered after preparation must not be cleared by
+        // completion, even when identity and state are unchanged.
+        PreparedSnapshotCase::LatePartitionRegistered => {
+            current.partitions.insert(TopicPartition {
+                topic: "late-registration".into(),
+                partition: PartitionIndex(4),
+            });
+            CompletionDecision::RejectChangedPreparedState
+        }
+        // A staged recovery identity changed while markers were in flight.
+        PreparedSnapshotCase::StagedIdentityChanged => {
+            current.next_producer_id = ProducerId(2000);
+            current.next_producer_epoch = 0;
+            CompletionDecision::RejectChangedPreparedState
+        }
+        // Completed is an idempotent success, not a second completion write.
+        PreparedSnapshotCase::AlreadyComplete => {
+            current.state = TxnState::CompleteAbort;
+            CompletionDecision::AlreadyComplete
+        }
+        PreparedSnapshotCase::MalformedEpoch => {
+            current.producer_epoch = -1;
+            CompletionDecision::RejectMalformed
+        }
+    };
+
+    assert2::assert!(
+        completion_decision(
+            &current,
+            &prepared,
+            (TxnState::PrepareAbort, TxnState::CompleteAbort)
+        ) == expected
+    );
 }
