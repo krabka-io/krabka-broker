@@ -97,6 +97,23 @@ impl SolicitationBackoff {
         true
     }
 
+    /// Kafka's `armOrExtend`: a failed push advances the retry chain even
+    /// while its solicitation window is active. Never replace a newer epoch.
+    pub fn arm_or_extend(&mut self, topology_epoch: i32, now: Instant, jitter: Jitter) {
+        let attempts = match self.window {
+            Some(window) if window.topology_epoch > topology_epoch => return,
+            Some(window) if window.topology_epoch == topology_epoch => {
+                window.attempts.saturating_add(1)
+            }
+            _ => 0,
+        };
+        self.window = Some(Window {
+            topology_epoch,
+            attempts,
+            ends: now + delay(attempts, jitter),
+        });
+    }
+
     /// Kafka's `clear`: drops the window when it is at `topology_epoch`, after
     /// the description of that epoch is stored. A window that a heartbeat
     /// armed at a newer epoch stays.
@@ -319,4 +336,22 @@ mod tests {
         }
     }
     scenarios!("tests/features/migrated/src/coordinator/unified/streams/description/backoff.feature",fixtures=[retry_jitter:RetryJitter]);
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use {super::*, assert2::assert};
+    #[test]
+    fn failure_extends_active_window_but_cannot_replace_a_newer_epoch() {
+        let mut backoff = SolicitationBackoff::default();
+        let now = Instant::now();
+        let jitter = Jitter::per_mille(1000);
+        assert!(backoff.arm_if_not_active(2, now, jitter));
+        backoff.arm_or_extend(2, now, jitter);
+        assert!(!backoff.arm_if_not_active(2, now + Duration::from_secs(30), jitter));
+        assert!(backoff.arm_if_not_active(2, now + Duration::from_secs(60), jitter));
+        let newer = backoff;
+        backoff.arm_or_extend(1, now, jitter);
+        assert!(backoff == newer);
+    }
 }

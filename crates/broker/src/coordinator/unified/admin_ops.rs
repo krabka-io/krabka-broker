@@ -126,6 +126,13 @@ impl GroupCoordinator {
         if !view.members.is_empty() {
             return Err(DeleteGroupError::NonEmpty);
         }
+        if !ask(&handle.tx, StreamsGroupActorMessage::DeleteDescription)
+            .await
+            .map_err(|_| DeleteGroupError::Internal)?
+            .map_err(|_| DeleteGroupError::Internal)?
+        {
+            return Err(DeleteGroupError::TopologyDescription);
+        }
         // Drained group: per-member records (k16/k20/k21) were already tombstoned
         // on member leave/expiry, so only the group-level keys remain.
         let batch = streams::migration::streams_records_tombstone_batch(group_id, &[], now_ms())

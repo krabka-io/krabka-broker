@@ -84,12 +84,7 @@ async fn answer(
             return (codes::GROUP_AUTHORIZATION_FAILED, None);
         }
     }
-    if !broker
-        .config
-        .streams_group
-        .topology_description_plugin
-        .is_configured()
-    {
+    if !broker.config.streams_group.description_plugin_configured() {
         return (
             codes::UNSUPPORTED_VERSION,
             Some(NO_PLUGIN_MESSAGE.to_owned()),

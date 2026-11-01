@@ -64,6 +64,8 @@ pub async fn handle(
         results.push(DeletableGroupResult {
             group_id: gid,
             error_code,
+            error_message: (error_code == codes::GROUP_DELETION_FAILED)
+                .then(|| "Topology description plugin failed to delete the topology.".to_owned()),
             ..Default::default()
         });
     }
@@ -90,6 +92,7 @@ async fn delete_one(broker: &Broker, group_id: &str) -> i16 {
         Err(DeleteGroupError::NotFound) => codes::GROUP_ID_NOT_FOUND,
         Err(DeleteGroupError::NonEmpty) => codes::NON_EMPTY_GROUP,
         Err(DeleteGroupError::ShareState(error_code)) => error_code,
+        Err(DeleteGroupError::TopologyDescription) => codes::GROUP_DELETION_FAILED,
         Err(DeleteGroupError::Internal) => codes::UNKNOWN_SERVER_ERROR,
     }
 }

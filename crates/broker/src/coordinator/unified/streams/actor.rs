@@ -140,6 +140,8 @@ pub enum StreamsGroupActorMessage {
         reply: oneshot::Sender<PushAnswer>,
     },
     Seed(super::super::StreamsGroupSeed),
+    DeleteDescription(oneshot::Sender<Result<bool, BrokerError>>),
+    PrepareConversion(oneshot::Sender<Result<bool, BrokerError>>),
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -172,6 +174,8 @@ pub struct StreamsDescribeView {
     /// KIP-1331: the topology description that the plugin holds for the
     /// group's current topology epoch.
     pub topology_description: Option<TopologyDescription>,
+    /// The backend failed while reading an otherwise reliably stored epoch.
+    pub topology_description_error: bool,
 }
 
 /// One member of a [`StreamsDescribeView`].
@@ -626,7 +630,7 @@ impl ActorState {
         let next = resolve_broker_and_group_config(defaults, image, node, &self.state.group_id);
         if next != *config {
             *config = next;
-            self.trunk_records = config.topology_description_plugin.is_configured();
+            self.trunk_records = config.description_plugin_configured();
             *tick = session_tick(config);
         }
     }
@@ -716,7 +720,7 @@ async fn actor_loop(
         |image| resolve_broker_and_group_config(&default_config, &image, node, &group_id),
     );
     let mut actor = ActorState::new(group_id);
-    actor.trunk_records = config.topology_description_plugin.is_configured();
+    actor.trunk_records = config.description_plugin_configured();
     let mut tick = session_tick(&config);
     loop {
         let wake = tokio::select! {
@@ -759,6 +763,9 @@ async fn actor_loop(
                 break;
             }
             Wake::SessionCheck => {
+                if description::cleanup(&mut actor, turn, false).await.is_err() {
+                    break;
+                }
                 if handle_session_tick(&mut actor, turn).await.is_err() {
                     break;
                 }
@@ -977,7 +984,10 @@ async fn handle_message(
                 actor.topology.as_ref(),
                 actor.ready_topology(),
             );
-            view.topology_description = description::stored_description(actor);
+            match description::stored_description(actor, turn.config).await {
+                Ok(description) => view.topology_description = description,
+                Err(_) => view.topology_description_error = true,
+            }
             let _ = reply.send(view);
         }
         StreamsGroupActorMessage::PushDescription { push, reply } => {
@@ -1028,6 +1038,22 @@ async fn handle_message(
         }
         StreamsGroupActorMessage::Seed(seed) => {
             apply_seed(actor, seed);
+        }
+        StreamsGroupActorMessage::PrepareConversion(reply) => {
+            let result = description::prepare_conversion(actor, turn).await;
+            let failed = result.is_err();
+            let _ = reply.send(result);
+            if failed {
+                return Step::Stop;
+            }
+        }
+        StreamsGroupActorMessage::DeleteDescription(reply) => {
+            let result = description::cleanup(actor, turn, true).await;
+            let failed = result.is_err();
+            let _ = reply.send(result);
+            if failed {
+                return Step::Stop;
+            }
         }
         StreamsGroupActorMessage::Shutdown(reply) => {
             let _ = reply.send(());
