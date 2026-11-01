@@ -12,7 +12,7 @@ use {
             INVALID_PRODUCER_ID_MAPPING, INVALID_REQUEST, NONE, NOT_COORDINATOR, PRODUCER_FENCED,
         },
         txn::{
-            state::{TopicPartition, TxnState},
+            state::{TopicPartition, TxnEntry, TxnState},
             util::{PRODUCER_FENCED_MIN_VERSION, now_millis},
             version::TxnVersion,
         },
@@ -92,28 +92,8 @@ impl TxnCoordinator {
             return self.missing_entry_error(tid).await;
         };
         let mut entry = entry_mutex.lock().await;
-        let decision = transaction_partition_registration(TransactionRegistrationFacts {
-            ownership: TransactionRegistrationOwnershipFacts {
-                is_coordinator: true,
-                producer_id_valid: producer_id.get() >= 0,
-                entry_exists: true,
-            },
-            identity: TransactionRegistrationIdentityFacts {
-                pending_transition: entry.has_staged_producer_identity(),
-                matching: TransactionRegistrationIdentityMatchFacts {
-                    transactional_id_matches: entry.transactional_id == tid,
-                    producer_id_matches: entry.producer_id == producer_id,
-                    producer_epoch_matches: entry.producer_epoch == producer_epoch,
-                },
-            },
-            state: TransactionRegistrationStateFacts {
-                state_allows_registration: entry.state.can_transition_to(TxnState::Ongoing),
-                state_is_ongoing: entry.state == TxnState::Ongoing,
-                exact_partitions_registered: partitions
-                    .iter()
-                    .all(|partition| entry.partitions.contains(partition)),
-            },
-        });
+        let decision =
+            registration_decision(&entry, tid, (producer_id, producer_epoch), &partitions);
         match decision {
             // Kafka's optimization: every requested partition is already in
             // an Ongoing transaction's set, so the answer is NONE with no
@@ -132,24 +112,12 @@ impl TxnCoordinator {
         // subsequent identical retry take the no-write `PersistRetry` path
         // above and wrongly report success for a registration that was never
         // made durable.
-        let mut snapshot = entry.clone();
-        let prior_state = snapshot.state;
-        if matches!(
-            prior_state,
-            TxnState::CompleteCommit | TxnState::CompleteAbort
-        ) {
-            snapshot.partitions.clear();
-        }
-        snapshot.state = TxnState::Ongoing;
-        if prior_state != TxnState::Ongoing {
-            snapshot.start_ms = now_millis();
-        }
-        snapshot.partitions.extend(partitions);
-        snapshot.last_update_ms = now_millis();
-        // Kafka `prepareAddPartitions` stamps the request's transaction
-        // version, whatever level the cluster has finalized.
-        snapshot.client_transaction_version =
-            TxnVersion::for_add_partitions_to_txn(version).level();
+        let snapshot = stage_registration(
+            &entry,
+            partitions,
+            now_millis(),
+            TxnVersion::for_add_partitions_to_txn(version).level(),
+        );
 
         // Still holding both the entry lock and the state-partition write
         // lock acquired above: a second concurrent caller for this tid blocks
@@ -175,6 +143,69 @@ impl TxnCoordinator {
             }
         }
     }
+}
+
+/// The registration decision on this coordinator for `partitions` of the
+/// producer `(producer_id, producer_epoch)` against its live `entry`.
+pub fn registration_decision(
+    entry: &TxnEntry,
+    tid: &str,
+    (producer_id, producer_epoch): (ProducerId, i16),
+    partitions: &[TopicPartition],
+) -> TransactionRegistrationDecision {
+    transaction_partition_registration(TransactionRegistrationFacts {
+        ownership: TransactionRegistrationOwnershipFacts {
+            is_coordinator: true,
+            producer_id_valid: producer_id.get() >= 0,
+            entry_exists: true,
+        },
+        identity: TransactionRegistrationIdentityFacts {
+            pending_transition: entry.has_staged_producer_identity(),
+            matching: TransactionRegistrationIdentityMatchFacts {
+                transactional_id_matches: entry.transactional_id == tid,
+                producer_id_matches: entry.producer_id == producer_id,
+                producer_epoch_matches: entry.producer_epoch == producer_epoch,
+            },
+        },
+        state: TransactionRegistrationStateFacts {
+            state_allows_registration: entry.state.can_transition_to(TxnState::Ongoing),
+            state_is_ongoing: entry.state == TxnState::Ongoing,
+            exact_partitions_registered: partitions
+                .iter()
+                .all(|partition| entry.partitions.contains(partition)),
+        },
+    })
+}
+
+/// The entry a registration of `partitions` persists, staged on a clone of
+/// `entry` at `now_ms`, Kafka's `prepareAddPartitions`.
+///
+/// A completed transaction starts over with no partitions, and a transaction
+/// that was not `Ongoing` starts at `now_ms`. `client_transaction_version` is
+/// the version of the request, which Kafka stamps whatever level the cluster
+/// has finalized.
+pub fn stage_registration(
+    entry: &TxnEntry,
+    partitions: impl IntoIterator<Item = TopicPartition>,
+    now_ms: i64,
+    client_transaction_version: i16,
+) -> TxnEntry {
+    let mut snapshot = entry.clone();
+    let prior_state = snapshot.state;
+    if matches!(
+        prior_state,
+        TxnState::CompleteCommit | TxnState::CompleteAbort
+    ) {
+        snapshot.partitions.clear();
+    }
+    snapshot.state = TxnState::Ongoing;
+    if prior_state != TxnState::Ongoing {
+        snapshot.start_ms = now_ms;
+    }
+    snapshot.partitions.extend(partitions);
+    snapshot.last_update_ms = now_ms;
+    snapshot.client_transaction_version = client_transaction_version;
+    snapshot
 }
 
 /// Maps a registration decision to its wire code, at the given

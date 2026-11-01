@@ -31,8 +31,9 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
+// `metadata_application_model` drives the per-row decision directly.
+pub use self::isr_update::handle_partition_with_recovery;
 use {
-    self::isr_update::handle_partition_with_recovery,
     crate::{
         broker::Broker,
         codes,

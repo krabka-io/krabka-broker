@@ -76,7 +76,7 @@ pub(super) async fn dispatch_with_router(
         engine
             .deliver(Inbound::new(api, body, version, reply))
             .await?;
-        return rx.await.map_err(|_| RaftError::Shutdown);
+        return engine.await_reply(rx).await;
     }
     // A krabka-private request at a version this build does not implement
     // gets `UNSUPPORTED_VERSION` in the v0 response shape, which every 1.x

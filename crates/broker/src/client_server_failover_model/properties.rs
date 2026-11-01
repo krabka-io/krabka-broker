@@ -1,5 +1,5 @@
 //! The eleven `always` properties that state what must never happen, and the
-//! ten `sometimes` properties that prove the search reached the
+//! eleven `sometimes` properties that prove the search reached the
 //! interleavings those claims are about.
 //!
 //! They are stated apart from the transition function so the claims can be
@@ -16,7 +16,8 @@ use {
         witness::{
             WITNESS_ACKED_BEFORE_FAILOVER, WITNESS_APPENDED_UNACKED,
             WITNESS_DUPLICATE_AFTER_UNKNOWN, WITNESS_DUPLICATE_RESPONSE, WITNESS_NOT_LEADER,
-            WITNESS_PREPARED_RETRY, WITNESS_RETRY_AFTER_FAILOVER, WITNESS_TIMED_OUT_UNKNOWN,
+            WITNESS_PREPARED_RETRY, WITNESS_RETRY_AFTER_FAILOVER,
+            WITNESS_RETRY_DURING_PENDING_COMMIT, WITNESS_TIMED_OUT_UNKNOWN,
             WITNESS_UNKNOWN_RETRY_AFTER_FAILOVER,
         },
     },
@@ -129,6 +130,12 @@ impl ClientServerFailoverModel {
             }),
             Property::sometimes("duplicate_response", |_, s: &FailoverState| {
                 s.witnesses.seen(WITNESS_DUPLICATE_RESPONSE)
+            }),
+            // A retry reached the leader while the commit of the client's
+            // append still waited for its gate: the window in which only the
+            // log, not the tracker, holds the batch.
+            Property::sometimes("retry_during_pending_commit", |_, s: &FailoverState| {
+                s.witnesses.seen(WITNESS_RETRY_DURING_PENDING_COMMIT)
             }),
             Property::sometimes("clean_failover_preserves_ack", |_, s: &FailoverState| {
                 s.leader != INITIAL_LEADER

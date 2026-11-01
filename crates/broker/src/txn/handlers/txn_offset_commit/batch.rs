@@ -239,7 +239,7 @@ mod tests {
                 bootstrap::{OFFSETS_PARTITION, OFFSETS_TOPIC},
                 test_support::offsets_partition_image,
             },
-            partition::{Partition, ProducerAppendCheck},
+            partition::{AppendOrigin, Partition, ProducerAppendCheck},
             test_support::{FakeMetadataSource, open_partition},
             txn::handlers::txn_offset_commit::{test_support::request, verification::offset_batch},
         },
@@ -386,7 +386,11 @@ mod tests {
             .start_transaction_verification(batch, false, (0, i64::MAX))
             .await
             .expect("verification starts");
-        ProducerAppendCheck { batch, guard }
+        ProducerAppendCheck {
+            batch,
+            guard,
+            origin: AppendOrigin::Coordinator,
+        }
     }
 
     async fn append_here(
@@ -474,6 +478,7 @@ mod tests {
         let unverified = ProducerAppendCheck {
             batch: offset_batch(&req),
             guard: krabka_log::VerificationGuard::SENTINEL,
+            origin: AppendOrigin::Coordinator,
         };
         let err = append_as_test_leader(
             &req,
@@ -682,6 +687,7 @@ mod tests {
             let unverified = ProducerAppendCheck {
                 batch: offset_batch(&req),
                 guard: krabka_log::VerificationGuard::SENTINEL,
+                origin: AppendOrigin::Coordinator,
             };
             let refused = append_as_test_leader(
                 &req,

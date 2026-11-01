@@ -228,14 +228,14 @@ mod tests {
             ack,
             producer_check: None,
         };
-        let appended = produce_inline(
+        let handed_back = produce_inline(
             partition,
             job,
             &LogDirRegistry::default(),
             &Arc::new(ProducerState::new()),
         )
         .await;
-        assert!(appended.is_ok());
+        assert!(handed_back.is_none());
         answer
             .now_or_never()
             .expect("answered inline")

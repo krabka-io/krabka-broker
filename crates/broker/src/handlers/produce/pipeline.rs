@@ -881,13 +881,11 @@ pub(super) async fn complete_partition(
             // A recognized retry under `acks=-1` waits for the same frontier a
             // fresh append of those records would have waited for, so it joins
             // the request's one overlapped gate rather than opening a second
-            // kind of wait. It owes no producer-state commit: the append it
-            // deduplicates against already recorded one.
+            // kind of wait.
             return Ok(PartitionOutcome::AwaitingHighWatermark(PendingAck::new(
                 response,
                 Arc::clone(&part),
                 target,
-                None,
                 transition,
             )));
         }
@@ -939,17 +937,14 @@ pub(super) async fn complete_partition(
     .await?;
     Ok(match appended {
         AppendOutcome::Answered(response) => PartitionOutcome::Done(response),
-        AppendOutcome::AwaitDurability {
-            response,
-            target,
-            commit,
-        } => PartitionOutcome::AwaitingHighWatermark(PendingAck::new(
-            response,
-            Arc::clone(&part),
-            target,
-            commit,
-            transition,
-        )),
+        AppendOutcome::AwaitDurability { response, target } => {
+            PartitionOutcome::AwaitingHighWatermark(PendingAck::new(
+                response,
+                Arc::clone(&part),
+                target,
+                transition,
+            ))
+        }
     })
 }
 

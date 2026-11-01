@@ -136,11 +136,12 @@ jobs:
 
       # Pull requests and pushes run the kind smoke test and the Creusot proofs
       # only when a change reaches their inputs, and the full container matrix,
-      # the upgrade smoke, GSSAPI, netem and the soak not at all. Those run on
-      # the nightly schedule and on a dispatch, so a release needs one such run
-      # of this exact commit with every lane green. `links` (external sites
-      # answer bots inconsistently) and `bench` (it measures and reports, and
-      # gates nothing) may be red; the nightly report files those regardless.
+      # the upgrade smoke, GSSAPI, netem, the soak and the Jepsen Kafka workload
+      # not at all. Those run on the nightly schedule and on a dispatch, so a
+      # release needs one such run of this exact commit with every lane green.
+      # `links` (external sites answer bots inconsistently) and `bench` (it
+      # measures and reports, and gates nothing) may be red; the nightly report
+      # files those regardless.
       - name: a full CI run succeeded for this commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

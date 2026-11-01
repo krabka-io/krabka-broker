@@ -65,20 +65,19 @@ async fn duplicate_returns_cached_offset() {
     assert!(d == Decision::Duplicate { base_offset: 0 });
 }
 
-/// A deferred `acks=all` commit for a pre-marker batch must not undo a
-/// marker's epoch bump.
+/// A late commit for a pre-marker batch must not undo a marker's epoch bump.
 ///
-/// `AppendCommit::record` waits on the high-watermark gate for its own
-/// append, so it can resolve long after a later transaction marker mirrored
-/// a bumped epoch into the tracker. `commit` must skip a write that would
+/// `AppendCommit::record` runs on the request's task after the writer
+/// answers, so it can resolve after a later transaction marker mirrored a
+/// bumped epoch into the tracker. `commit` must skip a write that would
 /// regress the tracked epoch, or the tracker would fence the wrong epoch, or
 /// accept a first sequence at the new epoch that is not 0, until the next
 /// restart.
 #[tokio::test]
 async fn a_late_commit_at_an_older_epoch_does_not_undo_a_marker() {
     let s = ProducerState::new();
-    // The marker's mirror lands first, well before the older batch's deferred
-    // acks=all commit resolves.
+    // The marker's mirror lands first, before the older batch's commit
+    // resolves.
     mirror_marker(&s).await;
 
     // The stale, pre-marker commit for epoch 3 resolves after the marker.

@@ -101,6 +101,8 @@ mod compacted_key_tests;
 #[cfg(test)]
 mod overlap_tests;
 #[cfg(test)]
+mod retry_tests;
+#[cfg(test)]
 mod topic_resolution_tests;
 #[cfg(test)]
 mod transaction_check_tests;

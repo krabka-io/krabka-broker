@@ -53,6 +53,14 @@ mod reaper;
 mod registration;
 mod verification_client;
 
+// Only the #[cfg(test)] stateright models in txn/ reach these.
+#[cfg(test)]
+pub use self::{
+    markers::{remove_marked_partitions, remove_marked_partitions_from},
+    reaper::{ReaperStep, apply_prepare_abort, reaper_step},
+    registration::{registration_decision, stage_registration},
+};
+
 #[cfg(test)]
 mod test_support;
 

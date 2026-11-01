@@ -1232,6 +1232,132 @@ jobs:
             --test_output=streamed \
             //crates/broker:soak_contract_docker_test
 
+  # Jepsen's Kafka workload against a five-node cluster in Docker: every entry
+  # of `tools/jepsen/suite.json`, through `aspect jepsen` (see
+  # `docs/jepsen.md`). Scheduled and dispatched only, like `soak` and `netem`,
+  # and so it gates a release: `release.yml` needs a full run of the tagged
+  # commit with every lane green, and this lane is not one of its optional
+  # ones.
+  #
+  # The binaries are built with `--config=release`, the config every shipped
+  # image is built with. So the gate tests the shipped build, and the broker
+  # comes from the remote cache that `delivery` filled for the same commit.
+  #
+  # `sch_netem` is loaded first, as in `netem`, so that the packet-fault
+  # entries run. `--no-skips` makes an entry the harness skips a regression,
+  # so a runner without the qdisc fails the lane instead of passing it with
+  # those entries silently left out. Clock faults need nothing of the host:
+  # each broker reads its wall clock through libfaketime.
+  #
+  # An entry with a `known_failure` in the manifest does not fail the lane. A
+  # regression does: an entry expected to pass that is invalid, unknown,
+  # crashes or does not run. The report, the results and the Jepsen store are
+  # uploaded either way. 36 entries at about three and a half minutes each is
+  # two to two and a half hours on a 4-core runner; the rest is the release
+  # build, the node image and the Maven classpath.
+  jepsen:
+    name: jepsen · Kafka workload
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 300
+    steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The release build and the node image need the space.
+      - uses: ./.github/actions/reclaim-disk
+
+      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+        with:
+          bazelisk-cache: true
+          # Off explicitly, as in `soak`: the remote cache covers it.
+          disk-cache: false
+          repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
+          client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
+          upload: ${{ env.TRUSTED_RUN }}
+
+      # The harness runs on the runner's JVM, and `reclaim-disk` deletes
+      # `/opt/hostedtoolcache` with the JDKs in it, so this comes after it.
+      # The pin is the one `benchmarks.yml` uses. Java 21, not that file's
+      # 17: Jepsen 0.3.15's graph library, bifurcan, is compiled for Java 21
+      # (class file version 65) and does not load on 17. `cache: maven` keeps
+      # Jepsen's dependencies across runs.
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      # Maven resolves the harness classpath. The runner image ships it outside
+      # `/opt/hostedtoolcache`; install it if an image does not. gnuplot draws
+      # Jepsen's performance plots and graphviz Elle's cycle graphs: without
+      # them the perf checker reports unknown.
+      - name: install Maven, gnuplot and graphviz
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          if ! command -v mvn >/dev/null; then
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install --yes maven
+          fi
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install --yes gnuplot-nox graphviz
+          mvn --version
+
+      - name: load sch_netem
+        run: |
+          set -euo pipefail
+          sudo modprobe sch_netem
+          grep -w sch_netem /proc/modules
+
+      - name: jepsen
+        run: aspect jepsen --bazel-config release --no-skips
+
+      - name: summary
+        if: always()
+        run: |
+          if [ -f target/jepsen/report.md ]; then
+            cat target/jepsen/report.md >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo 'No Jepsen report: the run stopped before the harness wrote results.' >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: jepsen-report
+          path: |
+            target/jepsen/report.md
+            target/jepsen/results.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      # Each test's history, logs, data and checker output, as one tarball.
+      # Jepsen names each test's directory by its start time,
+      # `2026-11-01T02:33:04Z`, and upload-artifact refuses a path with a
+      # colon in it, so the store cannot be uploaded as files. Jepsen's
+      # `latest` and `current` links point back into the same tree, so they
+      # are left out rather than archived twice.
+      - name: archive the Jepsen store
+        if: always()
+        run: |
+          if [ -d target/jepsen/store ]; then
+            tar -czf target/jepsen/jepsen-store.tar.gz -C target/jepsen \
+              --exclude='store/current' --exclude='*/latest' store
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: jepsen-store
+          path: target/jepsen/jepsen-store.tar.gz
+          if-no-files-found: warn
+          retention-days: 14
+
   # The external half of the link check.
   #
   # `checks` runs lychee with `--offline`, which resolves file-relative links
@@ -1630,7 +1756,7 @@ jobs:
   # point `mutants.yml`'s schedule at the same mechanism.
   nightly-report:
     name: nightly report
-    needs: [select, docker, gssapi, links, bench, soak, netem, kubernetes, proofs, upgrade]
+    needs: [select, docker, gssapi, links, bench, soak, netem, jepsen, kubernetes, proofs, upgrade]
     # `always()`: the whole point is to run when a dependency failed, and a
     # plain `needs` would skip this job exactly then.
     if: always() && github.event_name == 'schedule'
@@ -1668,7 +1794,7 @@ jobs:
 
       # `contains(needs.*.result, 'failure')` and nothing else. `needs.*.result`
       # also yields `skipped` and `cancelled`, and neither is a red lane:
-      # `gssapi`, `soak` and `netem` are skipped on any event that is not a schedule or a
+      # `gssapi`, `soak`, `netem` and `jepsen` are skipped on any event that is not a schedule or a
       # dispatch, `docker` is skipped when the suite selection is empty, and a
       # cancelled run means a human or the concurrency group stopped it.
       # (`links` and `bench` are the two dependencies that cannot be skipped
@@ -1692,6 +1818,11 @@ jobs:
           # against, so the issue says where this run's numbers went.
           if [ "$(jq -r '.bench.result' <<<"${NEEDS}")" = failure ]; then
             hint="${hint}"$'\nThe criterion lane failed, so no `main` baseline was published and the next run measures absolute times only. This run\'s partial output is in the job summary; the `criterion-baseline` artifact, if the upload got that far, holds the samples.\n'
+          fi
+          # A red `jepsen` lane blocks a release, so the issue says where its
+          # verdicts and the evidence behind them went.
+          if [ "$(jq -r '.jepsen.result' <<<"${NEEDS}")" = failure ]; then
+            hint="${hint}"$'\nThe Jepsen lane failed. Its job summary and the `jepsen-report` artifact give each entry\'s verdict; the `jepsen-store` artifact holds each test\'s history and checker output.\n'
           fi
           body="$(printf '%s\n\nFailed jobs:\n\n%s\n%s\nRun: %s\n' \
             "The scheduled \`${GITHUB_WORKFLOW}\` run failed." "${failed}" "${hint}" "${RUN_URL}")"

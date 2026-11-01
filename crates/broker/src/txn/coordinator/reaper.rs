@@ -67,10 +67,44 @@ pub trait ReaperBackend: Send + Sync {
     fn queue_completion(&self, tid: &str);
 }
 
+/// What one sweep does with one entry, as [`ReaperBackend::prepare_abort`]
+/// decides it under the entry lock and before it persists anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReaperStep {
+    /// The entry is a `PrepareAbort` with a timeout: queue it for the
+    /// completion task again.
+    ResumeAbort,
+    /// The entry is an `Ongoing` transaction past its timeout: prepare its
+    /// abort.
+    PrepareAbort,
+    /// Leave the entry alone. Every other state is here, `PrepareCommit`
+    /// among them, and a prepared 2PC transaction.
+    Skip,
+}
+
+/// The sweep's decision for `entry` at `now_ms`. Only a `PrepareAbort` is
+/// resumed; [`should_abort_idle_txn`] decides the rest.
+pub fn reaper_step(entry: &TxnEntry, now_ms: i64) -> ReaperStep {
+    if entry.state == TxnState::PrepareAbort {
+        // A prepared 2PC transaction remains under its external
+        // coordinator's control, including after recovery.
+        return if entry.txn_timeout_ms == NO_TIMEOUT_MS {
+            ReaperStep::Skip
+        } else {
+            ReaperStep::ResumeAbort
+        };
+    }
+    if should_abort_idle_txn(entry.state, entry.txn_timeout_ms, entry.start_ms, now_ms) {
+        ReaperStep::PrepareAbort
+    } else {
+        ReaperStep::Skip
+    }
+}
+
 /// Applies the `Ongoing → PrepareAbort` mutation for an idle-reaped entry. It
 /// changes the state and stamps `last_update_ms`. The function is pure, so a
 /// unit test can kill the transition without any persistence.
-fn apply_prepare_abort(entry: &mut TxnEntry, now_ms: i64) {
+pub fn apply_prepare_abort(entry: &mut TxnEntry, now_ms: i64) {
     entry.state = TxnState::PrepareAbort;
     entry.last_update_ms = now_ms;
 }
@@ -180,13 +214,10 @@ impl ReaperBackend for TxnCoordinator {
     async fn prepare_abort(&self, tid: &str, now_ms: i64, txnv: TxnVersion) -> Option<TxnEntry> {
         let _partition_lock = self.lock_state_partition_for(tid).await;
         let entry = self.current_entry_guard(tid).await?;
-        if entry.state == TxnState::PrepareAbort {
-            // A prepared 2PC transaction remains under its external
-            // coordinator's control, including after recovery.
-            return (entry.txn_timeout_ms != NO_TIMEOUT_MS).then(|| entry.clone());
-        }
-        if !should_abort_idle_txn(entry.state, entry.txn_timeout_ms, entry.start_ms, now_ms) {
-            return None;
+        match reaper_step(&entry, now_ms) {
+            ReaperStep::ResumeAbort => return Some(entry.clone()),
+            ReaperStep::Skip => return None,
+            ReaperStep::PrepareAbort => {}
         }
         // Stage on a clone. Allocation or persistence failure must leave the
         // live entry exactly as it was before this sweep.

@@ -50,7 +50,29 @@ impl KraftController {
             .send(make(reply))
             .await
             .map_err(|_| RaftError::Shutdown)?;
-        rx.await.map_err(|_| RaftError::Shutdown)
+        self.await_reply(rx).await
+    }
+
+    /// Await the engine's reply to a command it was sent.
+    ///
+    /// The engine answers every command it reads, or drops its reply sender.
+    /// A command sent while the engine task stops can be left unread in the
+    /// queue, which keeps its reply sender alive as long as this handle is.
+    /// So the wait also ends once the engine has dropped the queue. A reply
+    /// that arrived first still wins.
+    ///
+    /// # Errors
+    /// Returns [`RaftError::Shutdown`] if the engine task is gone without
+    /// answering.
+    pub(crate) async fn await_reply<T>(
+        &self,
+        answer: oneshot::Receiver<T>,
+    ) -> Result<T, RaftError> {
+        tokio::select! {
+            biased;
+            reply = answer => reply.map_err(|_| RaftError::Shutdown),
+            () = self.cmd_tx.closed() => Err(RaftError::Shutdown),
+        }
     }
 
     /// Epoch milliseconds: the clock the server stamps connection expiries

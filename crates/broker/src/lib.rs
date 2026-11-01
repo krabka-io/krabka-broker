@@ -203,6 +203,11 @@ pub mod log_dir_id;
 mod log_dir_status;
 pub(crate) mod log_retention;
 pub mod log_write_back;
+/// Per-broker metadata application under faults: image delivery, restart
+/// replay, the replicator supervisor's reconcile pass and the partition
+/// write guard, checked for convergence once the system is quiescent.
+#[cfg(test)]
+mod metadata_application_model;
 pub(crate) mod metadata_epoch;
 pub mod metadata_observer;
 pub mod metadata_source;
