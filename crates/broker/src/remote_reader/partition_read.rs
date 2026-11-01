@@ -51,14 +51,15 @@ impl RemoteReader {
     ///
     /// The read looks the segment up under the leader epoch that owned
     /// `offset`. That epoch comes from the partition's leader-epoch
-    /// checkpoint, as Kafka's `epochForOffset` does, and is the current leader
-    /// epoch when the checkpoint has no entry. The read holds one permit of the
+    /// checkpoint, as Kafka's `epochForOffset` does; see
+    /// [`Self::owning_epoch_for`]. The read holds one permit of the
     /// reader pool, and a pool whose queue is full refuses it.
     ///
     /// # Errors
     ///
-    /// Returns the tier's error, or [`RemoteStorageError::Backend`] when the
-    /// reader pool refuses the read.
+    /// Returns the tier's error, the RLMM's error when the epoch lookup cannot
+    /// list the partition's segments, or [`RemoteStorageError::Backend`] when
+    /// the reader pool refuses the read.
     pub(crate) async fn read_partition(
         &self,
         partition: &Partition,
@@ -68,7 +69,13 @@ impl RemoteReader {
         metrics: &BrokerMetrics,
     ) -> Result<Option<Bytes>, RemoteStorageError> {
         metrics.record_remote_request(RemoteTierPath::Fetch, &tp.topic);
-        let leader_epoch = owning_epoch(partition, offset);
+        let leader_epoch = match self.owning_epoch_for(partition, tp, offset).await {
+            Ok(epoch) => epoch,
+            Err(error) => {
+                metrics.record_remote_error(RemoteTierPath::Fetch, &tp.topic);
+                return Err(error);
+            }
+        };
         let Ok(_permit) = self.pool.acquire().await else {
             metrics.record_remote_error(RemoteTierPath::Fetch, &tp.topic);
             return Err(RemoteStorageError::Backend(
@@ -107,25 +114,51 @@ impl RemoteReader {
         from: Offset,
         to: Offset,
     ) -> Result<Vec<AbortedTxnEntry>, RemoteStorageError> {
-        self.aborted_transactions(tp, owning_epoch(partition, from), from.0, to.0)
+        let leader_epoch = self.owning_epoch_for(partition, tp, from).await?;
+        self.aborted_transactions(tp, leader_epoch, from.0, to.0)
             .await
     }
-}
 
-/// The leader epoch that owned `offset` of `partition`: Kafka's
-/// `epochForOffset` over the leader-epoch checkpoint, or the current leader
-/// epoch when the checkpoint has no entry for it.
-///
-/// The checkpoint is cut only from its end and by an established log start,
-/// never by local eviction, so a tiered offset still finds the epoch it was
-/// copied under.
-fn owning_epoch(partition: &Partition, offset: Offset) -> LeaderEpoch {
-    let current = LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
-    partition
-        .log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .epoch_checkpoint()
-        .epoch_for_offset(offset)
-        .unwrap_or(current)
+    /// The leader epoch that owned `offset` of `partition`: Kafka's
+    /// `epochForOffset` over the leader-epoch checkpoint, or the current
+    /// leader epoch when the checkpoint has no entry for it.
+    ///
+    /// The checkpoint is cut only from its end and by an established log
+    /// start, never by local eviction, so a tiered offset still finds the
+    /// epoch it was copied under. An offset below the checkpoint's first
+    /// entry is one a floor established too high cut out of it, and that a
+    /// follower later took back from its leader
+    /// (`Log::follow_leader_log_start`). The archive is the record of which
+    /// epoch owned it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the RLMM's error when the archive lookup cannot list the
+    /// partition's segments.
+    pub(crate) async fn owning_epoch_for(
+        &self,
+        partition: &Partition,
+        tp: &TopicIdPartition,
+        offset: Offset,
+    ) -> Result<LeaderEpoch, RemoteStorageError> {
+        let current = LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
+        let (cached, earliest) = {
+            let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+            let checkpoint = log.epoch_checkpoint();
+            let epochs = (
+                checkpoint.epoch_for_offset(offset),
+                checkpoint.entries().first().map(|entry| entry.epoch),
+            );
+            drop(log);
+            epochs
+        };
+        match (cached, earliest) {
+            (Some(epoch), _) => Ok(epoch),
+            (None, Some(ceiling)) => Ok(self
+                .archived_epoch_for_offset(tp, offset.0, ceiling)
+                .await?
+                .unwrap_or(current)),
+            (None, None) => Ok(current),
+        }
+    }
 }
