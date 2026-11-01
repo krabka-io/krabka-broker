@@ -20,6 +20,7 @@ pub enum StorageFailure {
 }
 
 /// A backend supplied through `StreamsGroupConfig::topology_description_backend`.
+///
 /// `get` must return `None` for a missing or mismatched epoch. `delete` must
 /// succeed when the group is already absent. After success, `set` must be visible
 /// to `get`, including after coordinator movement when the backend is shared.

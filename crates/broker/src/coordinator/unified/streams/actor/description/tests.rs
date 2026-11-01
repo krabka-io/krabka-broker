@@ -482,6 +482,38 @@ fn native_coordinator(
     coordinator
 }
 
+fn native_setup() -> (Arc<NativeStore>, Arc<GroupCoordinator>) {
+    let backend = Arc::new(NativeStore::default());
+    let coordinator = native_coordinator(
+        Arc::clone(&backend),
+        Arc::new(InMemoryOffsetsLog::default()),
+    );
+    (backend, coordinator)
+}
+
+async fn store_native_topology(
+    coordinator: &Arc<GroupCoordinator>,
+) -> Arc<StreamsGroupActorHandle> {
+    let handle = coordinator.get_or_create_streams("app");
+    heartbeat(&handle, join("a"), 1).await;
+    assert!(push(&handle, description_push("a", 0, 1)).await.0 == codes::NONE);
+    handle
+}
+
+async fn leave_native_member(handle: &StreamsGroupActorHandle) {
+    heartbeat(
+        handle,
+        StreamsGroupHeartbeatRequest {
+            group_id: "app".into(),
+            member_id: "a".into(),
+            member_epoch: -1,
+            ..Default::default()
+        },
+        1,
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn native_store_failures_leave_durable_uncertainty_and_permanent_epoch() {
     for failure in [StorageFailure::Transient, StorageFailure::Permanent] {
@@ -517,14 +549,8 @@ async fn native_store_failures_leave_durable_uncertainty_and_permanent_epoch() {
 
 #[tokio::test]
 async fn native_get_failure_is_error_not_missing_and_missing_is_not_error() {
-    let backend = Arc::new(NativeStore::default());
-    let coordinator = native_coordinator(
-        Arc::clone(&backend),
-        Arc::new(InMemoryOffsetsLog::default()),
-    );
-    let handle = coordinator.get_or_create_streams("app");
-    heartbeat(&handle, join("a"), 1).await;
-    assert!(push(&handle, description_push("a", 0, 1)).await.0 == codes::NONE);
+    let (backend, coordinator) = native_setup();
+    let handle = store_native_topology(&coordinator).await;
     backend.fail_get.store(true, Ordering::SeqCst);
     assert!(describe(&handle).await.topology_description_error);
     backend.fail_get.store(false, Ordering::SeqCst);
@@ -538,20 +564,8 @@ async fn native_cleanup_failure_is_retried_and_never_claims_reliable_storage() {
     let backend = Arc::new(NativeStore::default());
     let log = Arc::new(InMemoryOffsetsLog::default());
     let coordinator = native_coordinator(Arc::clone(&backend), Arc::clone(&log));
-    let handle = coordinator.get_or_create_streams("app");
-    heartbeat(&handle, join("a"), 1).await;
-    assert!(push(&handle, description_push("a", 0, 1)).await.0 == codes::NONE);
-    heartbeat(
-        &handle,
-        StreamsGroupHeartbeatRequest {
-            group_id: "app".into(),
-            member_id: "a".into(),
-            member_epoch: -1,
-            ..Default::default()
-        },
-        1,
-    )
-    .await;
+    let handle = store_native_topology(&coordinator).await;
+    leave_native_member(&handle).await;
     backend.fail_delete.store(true, Ordering::SeqCst);
     assert!(
         !ask(&handle.tx, StreamsGroupActorMessage::DeleteDescription)
@@ -626,14 +640,8 @@ async fn shared_native_backend_survives_coordinator_movement_and_epoch_change() 
 #[tokio::test]
 async fn native_delete_failure_preserves_group_and_success_allows_clean_recreation() {
     use crate::coordinator::DeleteGroupError;
-    let backend = Arc::new(NativeStore::default());
-    let coordinator = native_coordinator(
-        Arc::clone(&backend),
-        Arc::new(InMemoryOffsetsLog::default()),
-    );
-    let handle = coordinator.get_or_create_streams("app");
-    heartbeat(&handle, join("a"), 1).await;
-    assert!(push(&handle, description_push("a", 0, 1)).await.0 == codes::NONE);
+    let (backend, coordinator) = native_setup();
+    let handle = store_native_topology(&coordinator).await;
     let leave = StreamsGroupHeartbeatRequest {
         group_id: "app".into(),
         member_id: "a".into(),
@@ -658,29 +666,10 @@ async fn native_delete_failure_preserves_group_and_success_allows_clean_recreati
 
 #[tokio::test]
 async fn failed_classic_conversion_keeps_streams_group_and_throttles_cleanup() {
-    use {
-        crate::coordinator::unified::streams::migration::DowngradeOutcome,
-        std::sync::atomic::Ordering,
-    };
-    let backend = Arc::new(NativeStore::default());
-    let coordinator = native_coordinator(
-        Arc::clone(&backend),
-        Arc::new(InMemoryOffsetsLog::default()),
-    );
-    let handle = coordinator.get_or_create_streams("app");
-    heartbeat(&handle, join("a"), 1).await;
-    assert!(push(&handle, description_push("a", 0, 1)).await.0 == codes::NONE);
-    heartbeat(
-        &handle,
-        StreamsGroupHeartbeatRequest {
-            group_id: "app".into(),
-            member_id: "a".into(),
-            member_epoch: -1,
-            ..Default::default()
-        },
-        1,
-    )
-    .await;
+    use crate::coordinator::unified::streams::migration::DowngradeOutcome;
+    let (backend, coordinator) = native_setup();
+    let handle = store_native_topology(&coordinator).await;
+    leave_native_member(&handle).await;
     backend.fail_delete.store(true, Ordering::SeqCst);
     assert!(
         coordinator
@@ -710,8 +699,6 @@ async fn plugin_sees_durable_uncertain_before_external_side_effect() {
         ..Default::default()
     });
     let coordinator = native_coordinator(backend, Arc::clone(&log));
-    let handle = coordinator.get_or_create_streams("app");
-    heartbeat(&handle, join("a"), 1).await;
-    assert!(push(&handle, description_push("a", 0, 1)).await.0 == codes::NONE);
+    let handle = store_native_topology(&coordinator).await;
     assert!(last_group_metadata(&log).await.description.stored == 0);
 }

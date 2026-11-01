@@ -19,7 +19,8 @@ use {
         coordinator::unified::streams::{
             config::StreamsGroupConfig,
             description::{
-                DescriptionEpochs, Jitter, StorageFailure, StoredDescription, TopologyDescription,
+                DescriptionEpochs, Jitter, SolicitationBackoff, StorageFailure, StoredDescription,
+                TopologyDescription,
             },
             persistence::PendingStreamsRecords,
             topology::status,
@@ -223,7 +224,7 @@ pub(super) async fn stored_description(
 }
 
 /// Persist a backend operation's epoch boundary.
-async fn persist_epochs(actor: &mut ActorState, turn: StreamsTurn<'_>) -> Result<(), BrokerError> {
+async fn persist_epochs(actor: &ActorState, turn: StreamsTurn<'_>) -> Result<(), BrokerError> {
     if actor.trunk_records {
         let pending = PendingStreamsRecords {
             group_metadata: Some(group_metadata_value(actor)),
@@ -257,14 +258,14 @@ pub(super) async fn cleanup(
     }
     actor.description_epochs.stored = DescriptionEpochs::UNCERTAIN;
     persist_epochs(actor, turn).await?;
-    if let Some(backend) = &turn.config.topology_description_backend {
-        if backend.delete(&actor.state.group_id).await.is_err() {
-            return Ok(false);
-        }
+    if let Some(backend) = &turn.config.topology_description_backend
+        && backend.delete(&actor.state.group_id).await.is_err()
+    {
+        return Ok(false);
     }
     actor.description = None;
     actor.description_epochs.stored = DescriptionEpochs::NONE;
-    actor.description_backoff = Default::default();
+    actor.description_backoff = SolicitationBackoff::default();
     persist_epochs(actor, turn).await?;
     Ok(true)
 }
@@ -275,6 +276,9 @@ pub(super) async fn prepare_conversion(
     actor: &mut ActorState,
     turn: StreamsTurn<'_>,
 ) -> Result<bool, BrokerError> {
+    if !actor.state.members.is_empty() {
+        return Ok(false);
+    }
     if actor.description_epochs.stored == DescriptionEpochs::NONE {
         return Ok(true);
     }
@@ -287,7 +291,7 @@ pub(super) async fn prepare_conversion(
     }
     let result = cleanup(actor, turn, true).await?;
     if result {
-        actor.description_backoff = Default::default();
+        actor.description_backoff = SolicitationBackoff::default();
     }
     Ok(result)
 }
