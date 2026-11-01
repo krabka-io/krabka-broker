@@ -1200,6 +1200,63 @@ async fn finishing_abandoned_deletes_records_its_delete_requests_and_errors(
     check!(owned.delete_counts() == (requests, errors));
 }
 
+const STARTED: RemoteLogSegmentState = RemoteLogSegmentState::CopySegmentStarted;
+
+/// A copy left in `CopySegmentStarted` -- its rollback could not record a
+/// delete state, or the broker died mid-copy -- is deleted by the retention
+/// pass once it breaches the log-start floor, time retention or the leader's
+/// epoch lineage, as Kafka's `RLMExpirationTask` deletes a
+/// `COPY_SEGMENT_STARTED` segment that no copy of its own holds. It moves no
+/// floor: nothing reads an unfinished copy. One that breaches nothing stays.
+///
+/// The stuck segment covers offsets 0 to 9 in epoch 0, with a maximum
+/// timestamp of 100.
+#[yare::parameterized(
+    below_the_floor = { None, Some(10), None, 1, &[] },
+    past_time_retention = { Some(hours(1)), None, None, 1, &[] },
+    outside_the_epoch_lineage = { None, None, Some(1), 1, &[] },
+    breaching_nothing = { None, None, None, 0, &[(0, STARTED)] },
+    the_floor_falls_inside = { None, Some(5), None, 0, &[(0, STARTED)] },
+)]
+#[test_macro(tokio::test)]
+async fn a_retention_pass_deletes_a_stuck_copy_that_breaches_retention(
+    retention: Option<Time>,
+    deleted_below: Option<i64>,
+    earliest_epoch: Option<i32>,
+    deleted: usize,
+    remaining: &[(i64, RemoteLogSegmentState)],
+) {
+    let rlmm = fixtures::in_memory_metadata();
+    fixtures::stuck_started_segment(&rlmm, 0x6000, 0);
+    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(AcceptingRsm);
+    let cfg = LogConfig {
+        retention,
+        retention_size: None,
+        ..LogConfig::default()
+    };
+    let floor = deleted_below.map(Offset);
+
+    let outcome = remote_retention_pass(
+        &tp(),
+        1,
+        RemoteRetentionBounds {
+            earliest_epoch: earliest_epoch.map(LeaderEpoch),
+            ..empty_local_bounds(&cfg, floor.unwrap_or(NO_FLOOR), floor, now_ms())
+        },
+        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
+    )
+    .await;
+
+    check!(
+        outcome
+            == RemoteRetentionOutcome {
+                deleted,
+                log_start: None,
+            }
+    );
+    check!(segment_states(&rlmm) == remaining);
+}
+
 #[derive(Default)]
 struct RemoteTimeRetention {
     segments: Vec<RemoteLogSegmentMetadata>,
