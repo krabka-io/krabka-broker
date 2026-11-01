@@ -30,7 +30,8 @@
             [jepsen.tests.kafka :as kafka]
             [jepsen.krabka [client :as client]
                            [db :as db]
-                           [docker :as docker]]))
+                           [docker :as docker]
+                           [faketime :as faketime]]))
 
 (def jepsen-version
   "The Jepsen release this harness runs, as pom.xml pins it."
@@ -72,7 +73,8 @@
   faults, and the setup of its file-corruption and clock nemeses downloads and
   compiles tools on each node."
   [opts db]
-  (let [faults (set (:nemesis opts))
+  (let [faults     (set (:nemesis opts))
+        clock-mode (:clock-mode opts)
         opts   {:db        db
                 :nodes     (:nodes opts)
                 :faults    faults
@@ -90,7 +92,9 @@
       (cond-> []
         (faults :partition)                   (conj (nc/partition-package opts))
         (faults :packet)                      (conj (nc/packet-package opts))
-        (faults :clock)                       (conj (nc/clock-package opts))
+        (faults :clock)                       (conj (if (= :faketime clock-mode)
+                                                      (faketime/package opts)
+                                                      (nc/clock-package opts)))
         (some faults [:kill :pause])          (conj (nc/db-package opts))))))
 
 ;; Test
@@ -168,6 +172,8 @@
             :db        db
             :os        (if (:docker opts) os/noop debian/os)
             :remote    (if (:docker opts) docker/remote c/ssh)
+            ; :nemesis becomes the nemesis itself below; keep the faults.
+            :faults    (set (:nemesis opts))
             :node-ips  (atom {})
             :client    (client/client)
             :nemesis   (:nemesis nemesis)
@@ -190,6 +196,7 @@
                           :perf     (perf-checker (:perf nemesis))
                           :ex       (checker/unhandled-exceptions)
                           ; A broker panic is a bug whatever the history says.
+                          :clock    (checker/clock-plot)
                           :panic    (checker/log-file-pattern
                                       #"panicked at" "broker.log")
                           :workload (:checker workload)})
@@ -242,6 +249,10 @@
 
    [nil "--disable-server-auto-create-topics" "Brokers do not create topics on request."
     :assoc-fn (fn [m _ _] (assoc m :enable-server-auto-create-topics false))]
+
+   [nil "--clock-mode MODE" "How clock faults move a node's clock: faketime (each broker reads its wall-clock offset through libfaketime) or system (Jepsen steps the node's system clock). Defaults to faketime with --docker, system without."
+    :parse-fn keyword
+    :validate [#{:faketime :system} "Must be faketime or system"]]
 
    [nil "--docker" "The nodes are local Docker containers named after them: run commands with docker exec, and skip OS setup."]
 
@@ -326,12 +337,18 @@
   [parsed]
   (let [{:keys [options]} parsed]
     (cond-> parsed
-      (and (:docker options) (contains? (:nemesis options) :clock))
+      (and (:docker options) (= :system (:clock-mode options))
+           (contains? (:nemesis options) :clock))
       (update :errors conj
-              "--nemesis clock needs a clock per node; Docker containers share the host's")
+              "--clock-mode system needs a clock per node; Docker containers share the host's")
 
       (not (:bin-dir options))
-      (update :errors conj "--bin-dir is required"))))
+      (update :errors conj "--bin-dir is required")
+
+      ; Docker containers share the host's clock, which Jepsen's own clock
+      ; nemesis would step for every node at once.
+      (nil? (:clock-mode options))
+      (assoc-in [:options :clock-mode] (if (:docker options) :faketime :system)))))
 
 (def test-opt-spec
   (cli/merge-opt-specs cli/test-opt-spec cli-opts))
@@ -371,13 +388,11 @@
 
 (defn unmet-requirement
   "Why an entry cannot run on this cluster, or nil when it can."
-  [requires {:keys [docker netem?]}]
+  [requires {:keys [netem?]}]
   (some (fn [r]
           (case r
             "netem"          (when-not netem?
                                "the nodes' kernel has no netem qdisc (packet faults)")
-            "isolated-clock" (when docker
-                               "Docker nodes share the host clock (clock faults)")
             (str "unknown requirement " r)))
         requires))
 

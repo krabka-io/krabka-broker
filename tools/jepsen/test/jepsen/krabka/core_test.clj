@@ -9,7 +9,8 @@
   (:require [clojure.test :refer [deftest is are testing run-tests]]
             [jepsen.krabka [client :as client]
                            [core :as core]
-                           [db :as db]]))
+                           [db :as db]
+                           [faketime :as faketime]]))
 
 (def nodes ["n1" "n2" "n3" "n4" "n5"])
 
@@ -48,8 +49,15 @@
     ["--nodes" "n1"]
     "--bin-dir is required"
 
-    ["--bin-dir" "/b" "--docker" "--nemesis" "clock"]
-    "--nemesis clock needs a clock per node; Docker containers share the host's"))
+    ["--bin-dir" "/b" "--docker" "--clock-mode" "system" "--nemesis" "clock"]
+    "--clock-mode system needs a clock per node; Docker containers share the host's"))
+
+(deftest clock-mode-defaults-to-the-remote
+  (are [args mode] (= mode (:clock-mode (:options (core/parse-test-args args))))
+    ["--bin-dir" "/b" "--docker"]                           :faketime
+    ["--bin-dir" "/b"]                                      :system
+    ["--bin-dir" "/b" "--docker" "--clock-mode" "faketime"] :faketime
+    ["--bin-dir" "/b" "--clock-mode" "faketime"]            :faketime))
 
 (deftest split-suite-args-takes-out-the-suite-flags
   (is (= ["m.json" "r.json" ["--docker" "--nodes" "n1,n2"]]
@@ -58,14 +66,11 @@
 
 (deftest unmet-requirements
   (are [requires env why] (= why (core/unmet-requirement requires env))
-    []                 {:docker true,  :netem? false} nil
-    ["netem"]          {:docker true,  :netem? true}  nil
-    ["netem"]          {:docker false, :netem? false}
+    []                 {:netem? false} nil
+    ["netem"]          {:netem? true}  nil
+    ["netem"]          {:netem? false}
     "the nodes' kernel has no netem qdisc (packet faults)"
-    ["isolated-clock"] {:docker false, :netem? false} nil
-    ["isolated-clock"] {:docker true,  :netem? true}
-    "Docker nodes share the host clock (clock faults)"
-    ["warp-drive"]     {}                             "unknown requirement warp-drive"))
+    ["warp-drive"]     {}              "unknown requirement warp-drive"))
 
 (deftest test-names-are-directory-safe
   (are [opts name] (= name (core/test-name opts))
@@ -163,6 +168,32 @@
 
     {:valid? :unknown, :workload {:valid? :unknown}, :perf {:valid? true}}
     "unknown" [] "invalid checkers: workload"))
+
+(deftest faketime-offsets-round-trip
+  (are [ms text] (and (= text (faketime/offset-string ms))
+                      (= ms (faketime/parse-offset text)))
+    0       "+0.000"
+    250     "+0.250"
+    -12000  "-12.000"
+    262144  "+262.144"))
+
+(deftest faketime-reads-an-empty-file-as-no-offset
+  (is (= 0 (faketime/parse-offset "")))
+  (is (= -1500 (faketime/parse-offset " -1.500\n"))))
+
+(deftest faketime-only-with-clock-faults
+  (are [test on?] (= on? (db/faketime? test))
+    {:clock-mode :faketime :faults #{:clock :kill}} true
+    {:clock-mode :faketime :faults #{:kill}}        false
+    {:clock-mode :system   :faults #{:clock}}       false))
+
+(deftest test-map-keeps-the-faults
+  (let [opts (:options (core/parse-test-args
+                         ["--bin-dir" "/b" "--docker" "--nodes" "n1,n2,n3"
+                          "--nemesis" "clock,kill"]))
+        test (core/krabka-test opts)]
+    (is (= #{:clock :kill} (:faults test)))
+    (is (db/faketime? test))))
 
 (defn -main
   [& _]

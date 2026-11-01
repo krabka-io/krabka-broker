@@ -13,7 +13,8 @@
                     [util :as util]]
             [jepsen.control [net :as cn]
                             [util :as cu]]
-            [jepsen.krabka.client :as kc]
+            [jepsen.krabka [client :as kc]
+                           [faketime :as faketime]]
             [clj-commons.slingshot :refer [try+ throw+]])
   (:import (java.util.concurrent TimeUnit)
            (org.apache.kafka.clients.admin Admin QuorumInfo)))
@@ -193,6 +194,13 @@
         nil)
       (finally (kc/close-admin! admin)))))
 
+(defn faketime?
+  "Whether the brokers of this test take their wall clock from libfaketime:
+  the test has clock faults and moves clocks that way."
+  [test]
+  (and (= :faketime (:clock-mode test))
+       (contains? (:faults test) :clock)))
+
 (defrecord DB []
   db/DB
   (setup! [this test node]
@@ -200,6 +208,8 @@
     (swap! (:node-ips test) assoc node (cn/local-ip))
     (install! test)
     (configure! test node)
+    (when (faketime? test)
+      (faketime/set-offset! 0))
     (db/start! this test node)
     (await-started! 120000)
     ; Every node must be up before the first client creates a topic.
@@ -213,9 +223,10 @@
   (start! [_ test node]
     (c/su
       (cu/start-daemon!
-        {:chdir   dir
-         :logfile log-file
-         :pidfile pid-file}
+        (cond-> {:chdir   dir
+                 :logfile log-file
+                 :pidfile pid-file}
+          (faketime? test) (assoc :env faketime/env))
         broker-bin
         :--config-file config-file
         :--controller-listen-addr (str "0.0.0.0:" controller-port)
