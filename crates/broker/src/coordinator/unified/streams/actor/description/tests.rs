@@ -539,6 +539,17 @@ async fn native_cleanup_failure_is_retried_and_never_claims_reliable_storage() {
     let handle = coordinator.get_or_create_streams("app");
     heartbeat(&handle, join("a"), 1).await;
     assert!(push(&handle, description_push("a", 0, 1)).await.0 == codes::NONE);
+    heartbeat(
+        &handle,
+        StreamsGroupHeartbeatRequest {
+            group_id: "app".into(),
+            member_id: "a".into(),
+            member_epoch: -1,
+            ..Default::default()
+        },
+        1,
+    )
+    .await;
     backend.fail_delete.store(true, Ordering::SeqCst);
     assert!(
         !ask(&handle.tx, StreamsGroupActorMessage::DeleteDescription)

@@ -244,6 +244,11 @@ pub(super) async fn cleanup(
     if !turn.config.description_plugin_configured() {
         return Ok(true);
     }
+    // Recheck membership in the actor after the caller's read: a joining
+    // member may have revived the group before this message arrived.
+    if force && !actor.state.members.is_empty() {
+        return Ok(false);
+    }
     let stored = actor.description_epochs.stored;
     if stored == DescriptionEpochs::NONE
         || (!force && (stored == current_topology_epoch(actor) || !actor.state.members.is_empty()))
