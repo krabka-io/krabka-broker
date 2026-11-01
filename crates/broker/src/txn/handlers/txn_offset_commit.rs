@@ -284,14 +284,15 @@ struct GroupActors {
 /// for a commit without a generation (-1, and every commit below v3, which has
 /// no such field). Any other commit names a group that is gone, which v6
 /// answers `GROUP_ID_NOT_FOUND` (KIP-1319) and older versions
-/// `ILLEGAL_GENERATION`. A streams actor that exited after a failed write is
-/// respawned, so it never refuses the commit with `UNKNOWN_SERVER_ERROR`.
+/// `ILLEGAL_GENERATION`. An actor that exited after a failed write, of a
+/// classic, consumer or streams group, is respawned, so it never refuses the
+/// commit with `UNKNOWN_SERVER_ERROR`.
 fn resolve_group_actors(
     broker: &Broker,
     req: &TxnOffsetCommitRequest,
     version: i16,
 ) -> Result<GroupActors, i16> {
-    let existing = broker.group_coordinator.find(&req.group_id);
+    let existing = broker.group_coordinator.live_or_respawned(&req.group_id);
     let streams = broker.group_coordinator.find_live_streams(&req.group_id);
     if existing.is_none() && streams.is_none() && req.generation_id_or_member_epoch >= 0 {
         return Err(if version >= FIRST_TOPIC_ID_VERSION {

@@ -21,7 +21,7 @@ use {
                 CurrentTopicPartitions, MemberAssignmentState, MemberMetadataValue,
                 TargetAssignmentMemberValue,
             },
-            test_support::{seed_streams_group, stop_streams_actor},
+            test_support::{seed_streams_group, stop_group_actor, stop_streams_actor},
         },
         handlers::{RequestContext, test_support::configured_topic_request},
         test_support::{
@@ -94,6 +94,9 @@ enum Group {
     /// A streams (KIP-1071) group whose actor exited, as one does after a
     /// failed write. A respawned actor holds no member.
     StoppedStreams,
+    /// An empty consumer (KIP-848) group whose actor exited without leaving a
+    /// respawn seed. The registry keeps the closed handle.
+    StoppedConsumer,
 }
 
 /// The partitions of `TOPIC` in the KIP-1251 test: partition 2 exists but is
@@ -150,6 +153,12 @@ async fn seed(broker: &Broker, group_id: &str, group: Group) {
                 .await;
             stop_streams_actor(&broker.group_coordinator, group_id).await;
         }
+        Group::StoppedConsumer => {
+            let _ = broker
+                .group_coordinator
+                .get_or_create_group(group_id, GroupKindTag::Consumer);
+            stop_group_actor(&broker.group_coordinator, group_id).await;
+        }
     }
 }
 
@@ -176,6 +185,7 @@ async fn offset_commit_group_state(commit_group: &mut CommitGroupScenario, state
         "classic stable with member m1 at generation 3" => Group::ClassicWithMember,
         "an empty consumer group" => Group::EmptyConsumer,
         "a streams group whose actor stopped" => Group::StoppedStreams,
+        "a consumer group whose actor stopped" => Group::StoppedConsumer,
         _ => panic!("unknown commit group state: {state}"),
     };
     let started = start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
@@ -328,6 +338,14 @@ async fn commit_is_fenced_by_kafka_group_rule_case_7(commit_group: CommitGroupSc
 )]
 #[tokio::test]
 async fn commit_is_fenced_by_kafka_group_rule_case_8(commit_group: CommitGroupScenario) {
+    let _ = (commit_group,);
+}
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_offset_commit_group_fencing/group.feature",
+    name = "Group kind membership generation and protocol version determine commit fencing: state=a consumer group whose actor stopped, version=9, member=empty (9)"
+)]
+#[tokio::test]
+async fn commit_is_fenced_by_kafka_group_rule_case_9(commit_group: CommitGroupScenario) {
     let _ = (commit_group,);
 }
 

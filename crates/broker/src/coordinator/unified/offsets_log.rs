@@ -436,6 +436,9 @@ pub mod fake {
         pub fail_next: AtomicBool,
         /// The error the next append fails with, ahead of `fail_next`.
         pub fail_next_with: sync::Mutex<Option<BrokerError>>,
+        /// How many more appends succeed before one fails, ahead of
+        /// `fail_next_with`.
+        fail_after: sync::Mutex<Option<usize>>,
         /// The simulated high watermark, which every append moves past itself
         /// unless a test holds it back.
         commit_gate: Arc<CommitGate>,
@@ -488,6 +491,26 @@ pub mod fake {
             _group_id: &str,
             batch: RecordBatch,
         ) -> Result<PendingWrite, BrokerError> {
+            let counted_down = {
+                let mut fail_after = self
+                    .fail_after
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                match *fail_after {
+                    Some(0) => fail_after.take().is_some(),
+                    Some(ref mut successes) => {
+                        *successes -= 1;
+                        false
+                    }
+                    None => false,
+                }
+            };
+            if counted_down {
+                return Err(BrokerError::PartitionWriterDied {
+                    topic: OFFSETS_TOPIC.into(),
+                    partition: 0,
+                });
+            }
             let failure = self
                 .fail_next_with
                 .lock()
@@ -559,6 +582,15 @@ pub mod fake {
         pub fn time_out_uncommitted(&self) {
             self.commit_gate
                 .update(|state| state.timed_out_through = state.log_end);
+        }
+
+        /// Let `successes` appends through, then refuse the next one, as a
+        /// writer that dies between two batches of one transition does.
+        pub fn fail_append_after(&self, successes: usize) {
+            *self
+                .fail_after
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(successes);
         }
 
         /// Refuse the next append with the selected error, or the default failure.

@@ -17,6 +17,7 @@ use {
         metadata_update::on_metadata_update,
         offset_delete::{delete_held_offsets, offset_delete_guard},
         pending_commits::CommitWaits,
+        persistence::leave_written_consumer_group,
         retention::handle_reap_message,
         seed::apply_seed,
         topic_deletion::reply_delete_topic_offsets,
@@ -45,7 +46,8 @@ fn handle_classic_heartbeat_message(
 }
 
 /// Answers a classic `LeaveGroup` and returns the actor's keep-running flag,
-/// which is false only when a consumer-kind group's leave fails.
+/// which is false only when a consumer-kind group's leave fails. The group
+/// then waits for the next actor in a respawn seed.
 async fn reply_classic_leave(
     group: &mut CoordinatorGroup,
     parked: &mut ParkedWaiters,
@@ -56,9 +58,9 @@ async fn reply_classic_leave(
 ) -> bool {
     let consumer_kind = group.is_consumer();
     let result = handle_classic_leave_message(group, parked, services, request, version).await;
-    let keep_running = result.is_ok() || !consumer_kind;
+    let failed = consumer_kind && result.is_err();
     let _ = reply.send(classic_leave_result(version, result));
-    keep_running
+    !failed || leave_written_consumer_group(group, services.coordinator)
 }
 
 pub(super) async fn handle_actor_message(
@@ -242,10 +244,8 @@ pub(super) async fn handle_actor_message(
             *group = *seeded;
             true
         }
-        GroupActorMessage::ClassicRespawn => {
-            services
-                .coordinator
-                .apply_classic_respawn_seed(group, commits);
+        GroupActorMessage::Respawn => {
+            services.coordinator.apply_respawn_seed(group, commits);
             true
         }
         GroupActorMessage::Shutdown(reply) => {

@@ -192,7 +192,7 @@ pub(super) async fn resolve_pending_offsets(
         // tombstone removed every offset, and `DeleteGroups` may have
         // removed the group too.
         // An abort skips a stopped actor, whose marks went with it, unless the
-        // actor left a classic respawn seed that holds them: the respawned
+        // actor left a respawn seed that holds them: the respawned
         // actor resolves them instead.
         let handle = if commit && !entries.is_empty() {
             Some(coordinator.get_or_create_group(&group_id, GroupKindTag::Classic))
@@ -306,7 +306,7 @@ mod tests {
             HashMap::new(),
         );
         group.add_pending_txn_offsets(7, 3, [("t".to_owned(), 0)]);
-        coordinator.leave_classic_respawn_seed(group);
+        coordinator.leave_respawn_seed(group);
 
         resolve_pending_offsets(
             &coordinator,

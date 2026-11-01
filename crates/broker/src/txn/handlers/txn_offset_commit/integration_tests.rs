@@ -28,7 +28,7 @@ use {
                     AssignedTopicPartitions, CurrentMemberAssignmentValue, CurrentTopicPartitions,
                     MemberAssignmentState, MemberMetadataValue, TargetAssignmentMemberValue,
                 },
-                test_support::{seed_streams_group, stop_streams_actor},
+                test_support::{seed_streams_group, stop_group_actor, stop_streams_actor},
             },
         },
         handlers::{RequestContext, test_support::StartedBroker},
@@ -914,6 +914,58 @@ async fn an_older_member_epoch_commits_a_partition_assigned_before_it() {
         actual.push((version, epoch, response.topics[0].partitions[0].error_code));
     }
     check!(actual == rows);
+
+    handle.shutdown().await;
+}
+
+/// A `TxnOffsetCommit` from an `assign` consumer, which carries no group
+/// metadata, to a consumer group whose actor stopped. The registry still held
+/// the closed handle, and the commit asked it to validate and got no answer,
+/// which it reported as `UNKNOWN_SERVER_ERROR`; the Jepsen
+/// `subscribe-kip848-txn-mixed` run lost every final read to it. Kafka
+/// accepts the commit, and so does a live actor in the stopped one's place.
+#[tokio::test]
+async fn an_assign_consumer_commits_to_a_consumer_group_whose_actor_stopped() {
+    let SeededBroker { handle, dir: _dir } = start_seeded_broker().await;
+    let broker = handle.broker_arc_for_test();
+    let ReadIdentity { address, user } = read_identity();
+    let ctx = request_context(&user, &address, "txn-offset-commit-stopped-actor");
+    let a_id = Uuid(
+        broker
+            .controller
+            .current_image()
+            .topic("a")
+            .expect("topic a")
+            .topic_id
+            .into_bytes(),
+    );
+    let group_id = "stopped-consumer";
+    broker
+        .group_coordinator
+        .get_or_create_consumer(group_id)
+        .tx
+        .send(GroupActorMessage::Seed(kip_1251_seed(a_id)))
+        .await
+        .expect("seed");
+    stop_group_actor(&broker.group_coordinator, group_id).await;
+
+    let request = open_commit_request(&broker, super::test_support::TxnCommitSetup {
+        transactional_id: "tid-stopped-consumer".into(),
+        group_id,
+        producer: super::test_support::TxnCommitProducer::initial(krabka_ids::ProducerId(61)),
+        topics: vec![topic("a", &[0])],
+    })
+    .await;
+    let response = commit_response(&broker, &request, 5, &ctx).await;
+    check!(
+        response_rows(&response)
+            == vec![ResponseRow {
+                topic: "a".into(),
+                partition: 0,
+                code: codes::NONE,
+            }]
+    );
+    check!(log_holds_key(&broker, group_id, "a", 0));
 
     handle.shutdown().await;
 }

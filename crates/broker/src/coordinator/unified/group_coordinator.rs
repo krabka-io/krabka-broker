@@ -9,7 +9,7 @@
 
 use {
     super::{
-        actor::{ClassicRespawnSeed, GroupActorHandle, MetadataProvider},
+        actor::{GroupActorHandle, MetadataProvider, RespawnSeed},
         config::NextGenConfig,
         offsets_log::OffsetsLog,
         seeds::{GroupSeed, ShareGroupSeed, StreamsGroupSeed},
@@ -95,7 +95,7 @@ pub struct GroupCoordinator {
     /// still commit leaves for the actor that replaces it, rebuilt from the
     /// records it wrote as a reload of the log would rebuild it. The next
     /// spawn of the group takes it.
-    pub(crate) classic_respawn_seeds: DashMap<String, ClassicRespawnSeed>,
+    pub(crate) respawn_seeds: DashMap<String, RespawnSeed>,
     /// KIP-1071 metadata authority.
     ///
     /// `Broker::start` sets it once. Per-group streams actors read it through
@@ -174,7 +174,7 @@ impl GroupCoordinator {
             streams_groups: Arc::new(DashMap::new()),
             streams_seeds: Arc::new(DashMap::new()),
             streams_seeds_cache: Arc::new(DashMap::new()),
-            classic_respawn_seeds: DashMap::new(),
+            respawn_seeds: DashMap::new(),
             metadata_source: OnceLock::new(),
             metrics: OnceLock::new(),
             recent_topic_deletions: Mutex::default(),

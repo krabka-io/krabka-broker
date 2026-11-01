@@ -45,11 +45,11 @@ fn undelivered<T>(error: &TrySendError<T>) -> TrySendError<()> {
 }
 
 /// What hydrates a respawned group actor: the cached state of a consumer
-/// group, or the classic respawn seed that the stopped actor left, which the
-/// fresh actor takes itself.
+/// group, or the respawn seed that the stopped actor left, which the fresh
+/// actor takes itself.
 enum GroupActorSeed {
     Consumer(Box<GroupSeed>),
-    Classic,
+    Respawn,
 }
 
 impl RegisteredActor for GroupActorHandle {
@@ -61,7 +61,7 @@ impl RegisteredActor for GroupActorHandle {
         self.tx
             .try_send(match seed {
                 GroupActorSeed::Consumer(seed) => GroupActorMessage::Seed(*seed),
-                GroupActorSeed::Classic => GroupActorMessage::ClassicRespawn,
+                GroupActorSeed::Respawn => GroupActorMessage::Respawn,
             })
             .map_err(|error| undelivered(&error))
     }
@@ -190,8 +190,8 @@ impl GroupCoordinator {
             // stopped actor left, whatever kind the request asks for, and
             // otherwise a consumer group from its last-known-good state.
             || {
-                self.holds_classic_respawn_seed(group_id)
-                    .then_some(GroupActorSeed::Classic)
+                self.holds_respawn_seed(group_id)
+                    .then_some(GroupActorSeed::Respawn)
                     .or_else(|| {
                         (initial_kind == GroupKindTag::Consumer)
                             .then(|| self.cached_seed(group_id))
