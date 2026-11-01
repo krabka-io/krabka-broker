@@ -89,9 +89,9 @@ scheduled run of the `bench` job in
 from the tables in the source comments. Those tables record why a decision was
 made and are not re-measured when the code around them changes, so a release
 that repeats one is republishing an undated figure. The job summary of that run
-holds the `bench_ratio` tables, and its `criterion-baseline` artifact holds the
-samples; if the newest scheduled run is red, say no number rather than reaching
-for an older one. The same applies to the `sendfile_min` default and the two
+holds the verdict, and its `benchmark-regression-evidence` artifact holds the
+raw samples of every pass and `verdict.json`. If the newest scheduled run is
+red, say no number rather than reaching for an older one. The same applies to the `sendfile_min` default and the two
 `PERF -- measured; decision: KEEP` sites: check the run before repeating them in
 release notes.
 

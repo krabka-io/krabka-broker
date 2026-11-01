@@ -1511,6 +1511,13 @@ jobs:
             for side in "${sides[@]}"; do
               run_dir="benchmark-artifacts/${side}/run-${run}"
               mkdir -p "${run_dir}"
+              # Criterion compares each benchmark with the baseline it finds
+              # under `<target>/criterion`, and the candidate's `target/` comes
+              # from rust-cache. A restored baseline without its `sample.json`
+              # makes Criterion print an error in the middle of each bencher
+              # line, and the parser then reads no metric at all. The verdict
+              # compares the passes itself, so every pass starts without one.
+              rm -rf "${target_dirs[${side}]}/criterion"
               # Cargo's standard error names each executable it runs. Keep it
               # plain text: `dtolnay/rust-toolchain` sets CARGO_TERM_COLOR=always,
               # which wraps each `Running` label in ANSI escapes (#1600).
@@ -1814,10 +1821,10 @@ jobs:
           if [ "$(jq -r '.links.result' <<<"${NEEDS}")" = failure ]; then
             hint=$'\nA broken link is either wrong -- fix the markdown -- or correct but permanently unreachable to a checker, Confluence answering 403 to bots being the usual case, and that one goes in `.lycheeignore` with a line saying why.\n'
           fi
-          # A red `bench` lane leaves no baseline for the next run to compare
-          # against, so the issue says where this run's numbers went.
+          # A red `bench` lane is either a regression or a pass that measured
+          # nothing, so the issue says where this run's numbers went.
           if [ "$(jq -r '.bench.result' <<<"${NEEDS}")" = failure ]; then
-            hint="${hint}"$'\nThe criterion lane failed, so no `main` baseline was published and the next run measures absolute times only. This run\'s partial output is in the job summary; the `criterion-baseline` artifact, if the upload got that far, holds the samples.\n'
+            hint="${hint}"$'\nThe criterion lane failed: either the candidate regressed against the reference, or a pass produced no metric and there is no verdict. The job summary says which. The `benchmark-regression-evidence` artifact holds each pass\'s raw bencher output, Cargo\'s standard error and, when there is one, `verdict.json`.\n'
           fi
           # A red `jepsen` lane blocks a release, so the issue says where its
           # verdicts and the evidence behind them went.
