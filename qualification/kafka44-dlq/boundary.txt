@@ -1,11 +1,17 @@
 copy=true limit=343 batch_bytes=344 value_bytes=100 oversize=true
+live_destination topic=boundary-true-343 limit=343 result=MESSAGE_TOO_LARGE
 copy=true limit=344 batch_bytes=344 value_bytes=100 oversize=false
+live_destination topic=boundary-true-344 limit=344 result=NONE
 copy=true limit=345 batch_bytes=344 value_bytes=100 oversize=false
+live_destination topic=boundary-true-345 limit=345 result=NONE
 copy=false limit=241 batch_bytes=242 value_bytes=-1 oversize=true
+live_destination topic=boundary-false-241 limit=241 result=MESSAGE_TOO_LARGE
 copy=false limit=242 batch_bytes=242 value_bytes=-1 oversize=false
+live_destination topic=boundary-false-242 limit=242 result=NONE
 copy=false limit=243 batch_bytes=242 value_bytes=-1 oversize=false
+live_destination topic=boundary-false-243 limit=243 result=NONE
 injected_error=NONE complete=true exceptional=false failed_meter=0 written_meter=1 scheduled_retries=0
-2026-11-01T23:27:26.619950147Z main ERROR Unable to produce ProduceRequestHandler(param: ShareGroupDLQRecordParameter[groupId=g1, topicIdPartition=AAAAAAAAAAAAAAAAAAAAAA:orders-3, firstOffset=4, lastOffset=4, deliveryCount=Optional[5], cause=Optional[org.apache.kafka.server.share.dlq.ShareGroupDLQManager$ShareGroupDLQThrowable: Offset rejected by client.]]
+2026-11-01T23:29:23.379715728Z main ERROR Unable to produce ProduceRequestHandler(param: ShareGroupDLQRecordParameter[groupId=g1, topicIdPartition=AAAAAAAAAAAAAAAAAAAAAA:orders-3, firstOffset=4, lastOffset=4, deliveryCount=Optional[5], cause=Optional[org.apache.kafka.server.share.dlq.ShareGroupDLQManager$ShareGroupDLQThrowable: Offset rejected by client.]]
 dlqTopicData: TopicPartitionData[topicName=dlq.orders, numPartitions=Optional[1], topicId=Optional[AAAAAAAAAAAAAAAAAAAAAA], partitionLeaderNodes=[]]
 ) to DLQ topic node null - null.
 injected_error=MESSAGE_TOO_LARGE complete=true exceptional=true failed_meter=1 written_meter=0 scheduled_retries=0

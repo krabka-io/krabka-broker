@@ -1,6 +1,7 @@
 # Released Kafka 4.4 DLQ component qualification (#1974)
 
-This is **partial qualification**, not released-broker interoperability proof.
+This is **partial qualification**: released handler components plus live destination
+Produce boundaries, not end-to-end share-DLQ interoperability proof.
 
 ## Reproduction
 
@@ -10,6 +11,8 @@ Extract `/opt/kafka/libs/` from that image to `$KAFKA_LIBS`, then run with JDK 2
 ```sh
 javac -cp "$KAFKA_LIBS/*" -d /tmp/dlq-classes qualification/kafka44-dlq/Boundary.java
 java -cp "/tmp/dlq-classes:$KAFKA_LIBS/*" org.apache.kafka.server.share.dlq.Boundary
+# Optional: send the handler-built records to a fresh released broker:
+java -cp "/tmp/dlq-classes:$KAFKA_LIBS/*" org.apache.kafka.server.share.dlq.Boundary 127.0.0.1:39744
 ```
 
 `boundary.txt` is observed output from these released jars, not a reimplementation.
@@ -17,13 +20,16 @@ The probe invokes the real `ProduceRequestHandler.topicProduceData`. Metadata an
 transport are test doubles; the source record is injected after resolution, so
 `copy=true/false` labels denote resolved/absent source data, **not an end-to-end
 exercise of the copy-record configuration or source fetch**. Reflection accesses
-package/private state. No producer or share consumer connects to a broker.
+package/private state. The optional bootstrap argument uses Admin/Producer to create six fresh topics
+and send each handler-built record to a real broker with no compression,
+idempotence disabled, acks=all and retries=0. This does not run a share consumer.
 
 For source topic `orders`, partition 3, offset 4, group `g1`, delivery count 5,
 client-reject cause, one-byte key and 100-byte value, the released encoded batch
 is 344 bytes. At limits 343, 344 and 345 it retains both key and value. Without
 resolved source data the headers-only batch is 242 bytes, tested at 241/242/243.
-Only the below-size limit is oversized. Krabka previously silently removed the
+Observed live destination Produce agrees: below-size limits return
+`MESSAGE_TOO_LARGE`; exactly-at/above-size limits succeed. Krabka previously silently removed the
 payload when the first copied record exceeded the destination limit; it now
 keeps the record intact, allowing the destination to reject it.
 
@@ -31,8 +37,10 @@ The same binary probe injects produce responses. `MESSAGE_TOO_LARGE` completes
 exceptionally, increments the failed meter once, writes zero records, and
 schedules no retry. Success increments the written meter by one. A
 `NOT_LEADER_OR_FOLLOWER` response schedules one retry without completing or
-counting a failure. These are component observations; there is no measured
-network request count or server-side size rejection here.
+counting a failure. The manager metrics/retry observations remain component observations: the
+live destination sends do not execute the manager transport or archival path.
+The observed live broker was the pinned image, single combined KRaft node,
+PLAINTEXT, one partition/replica per fresh topic; no changes to production.
 
 ## Released source audit and extension boundary
 

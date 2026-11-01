@@ -4,6 +4,9 @@ import java.lang.reflect.*;
 import java.util.*;
 import java.util.concurrent.*;
 import org.apache.kafka.clients.KafkaClient;
+import org.apache.kafka.clients.admin.*;
+import org.apache.kafka.clients.producer.*;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.clients.ClientResponse;
 import org.apache.kafka.common.message.ProduceResponseData;
 import org.apache.kafka.common.protocol.*;
@@ -60,6 +63,28 @@ public class Boundary {
                     var output=batch.records().iterator().next();
                     if (output.hasValue()!=copy || batch.sizeInBytes()!=size) throw new AssertionError("payload changed");
                     System.out.printf("copy=%s limit=%d batch_bytes=%d value_bytes=%d oversize=%s%n",copy,boundary,batch.sizeInBytes(),output.valueSize(),size>boundary);
+                    if (args.length>0) {
+                        String topic="boundary-"+copy+"-"+boundary;
+                        Properties config=new Properties(); config.put("bootstrap.servers",args[0]);
+                        try (Admin admin=Admin.create(config)) {
+                            admin.createTopics(List.of(new NewTopic(topic,1,(short)1).configs(Map.of("max.message.bytes",""+boundary)))).all().get();
+                        }
+                        config.put("key.serializer",ByteArraySerializer.class.getName()); config.put("value.serializer",ByteArraySerializer.class.getName());
+                        config.put("enable.idempotence","false"); config.put("retries","0"); config.put("acks","all");
+                        config.put("compression.type","none");
+                        String result="NONE";
+                        byte[] key=null, value=null;
+                        if (output.hasKey()) { key=new byte[output.keySize()]; output.key().get(key); }
+                        if (output.hasValue()) { value=new byte[output.valueSize()]; output.value().get(value); }
+                        try (KafkaProducer<byte[],byte[]> producer=new KafkaProducer<>(config)) {
+                            try { producer.send(new ProducerRecord<>(topic,0,output.timestamp(),key,value,List.of(output.headers()))).get(); }
+                            catch (ExecutionException ex) { result=Errors.forException(ex.getCause()).name(); }
+                        }
+                        String expected=size>boundary ? "MESSAGE_TOO_LARGE" : "NONE";
+                        if (!result.equals(expected)) throw new AssertionError("live produce "+result+" expected "+expected);
+                        System.out.printf("live_destination topic=%s limit=%d result=%s%n",topic,boundary,result);
+                    }
+
                 }
             }
             for (Errors error : new Errors[]{Errors.NONE,Errors.MESSAGE_TOO_LARGE,Errors.NOT_LEADER_OR_FOLLOWER}) {
