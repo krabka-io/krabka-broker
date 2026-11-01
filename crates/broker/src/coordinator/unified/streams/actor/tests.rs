@@ -2818,3 +2818,21 @@ fn streams_internal_topic_specs(streams_actor_behavior: &StreamsActorBehavior, t
         .collect::<Vec<_>>();
     check!(streams_actor_behavior.creatable_topics == expected);
 }
+
+#[test]
+fn task_assignor_registry_unavailable_persisted_name_preserves_other_overrides() {
+    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&krabka_metadata::MetadataRecord::V1GroupConfig(
+        krabka_metadata::GroupConfigRecord {
+            group_id: "streams-app".into(),
+            configs: maplit::btreemap! {
+                KEY_NUM_STANDBY_REPLICAS.into() => "1".into(),
+                "streams.assignor.name".into() => "unavailable-extension".into(),
+            },
+        },
+    ));
+    let config =
+        resolve_group_config_from_image(&StreamsGroupConfig::default(), &image, "streams-app");
+    assert!(config.num_standby_replicas == 1);
+    assert!(config.selected_task_assignor_name() == "sticky");
+}

@@ -43,19 +43,13 @@ pub(super) fn render_group(view: StreamsDescribeView) -> DescribedGroup {
         assignment_epoch: view.assignment_epoch,
         topology,
         members: view.members.into_iter().map(render_member).collect(),
-        // KIP-1357: the assignor the next assignment will use. Every group
-        // runs krabka's port of Kafka's `StickyTaskAssignor`, whatever its
-        // `streams.assignor.name` says, and "sticky" is that assignor's name.
-        assignor_name: Some(STICKY_ASSIGNOR_NAME.to_owned()),
+        assignor_name: Some(view.assignor_name),
         // The handler fills the authorized operations when they are asked
         // for; the wire default (INT32_MIN) means "not set". It also sets the
         // topology description status when the request asks for one.
         ..Default::default()
     }
 }
-
-/// Kafka's `StickyTaskAssignor.STICKY_ASSIGNOR_NAME`.
-const STICKY_ASSIGNOR_NAME: &str = "sticky";
 
 /// Map a describe-view member into a wire `Member`, as Kafka's
 /// `StreamsGroupMember.asStreamsGroupDescribeMember` does.
@@ -240,6 +234,7 @@ mod tests {
     #[test]
     fn render_group_preserves_group_member_and_topology_fields() {
         let rendered = render_group(StreamsDescribeView {
+            assignor_name: "custom-policy".into(),
             group_id: "streams-app".into(),
             group_epoch: 11,
             assignment_epoch: 10,
@@ -303,7 +298,7 @@ mod tests {
             // v1 fields, at their schema defaults: the handler serves v0.
             topology_description: None,
             topology_description_status: 0,
-            assignor_name: Some("sticky".into()),
+            assignor_name: Some("custom-policy".into()),
         });
         assert!(rendered == expected);
     }

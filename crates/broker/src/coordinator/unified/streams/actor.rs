@@ -155,6 +155,7 @@ pub struct StreamsHeartbeatResult {
 /// `StreamsGroupDescribe` handler.
 #[derive(Debug, Clone)]
 pub struct StreamsDescribeView {
+    pub assignor_name: String,
     pub group_id: String,
     pub group_epoch: i32,
     pub assignment_epoch: i32,
@@ -977,6 +978,9 @@ async fn handle_message(
                 actor.topology.as_ref(),
                 actor.ready_topology(),
             );
+            turn.config
+                .selected_task_assignor_name()
+                .clone_into(&mut view.assignor_name);
             view.topology_description = description::stored_description(actor);
             let _ = reply.send(view);
         }
@@ -1074,7 +1078,16 @@ pub(crate) fn resolve_group_config_from_image(
     let Some(overrides) = image.group_config(group_id) else {
         return defaults.clone();
     };
-    match defaults.with_group_overrides(overrides) {
+    // Kafka 4.4 falls back to the broker default if a persisted selection is
+    // unavailable on this node. Preserve all unrelated group overrides.
+    let mut applicable = overrides.clone();
+    if let Some(name) = applicable.get(super::config::KEY_ASSIGNOR_NAME)
+        && defaults.task_assignors.get(name.trim()).is_none()
+        && super::config::StreamsAssignorKind::from_config_name(name.trim()).is_none()
+    {
+        applicable.remove(super::config::KEY_ASSIGNOR_NAME);
+    }
+    match defaults.with_group_overrides(&applicable) {
         Ok(config) => config,
         Err(error) => {
             tracing::error!(group_id, %error, "ignoring invalid persisted streams group config");
