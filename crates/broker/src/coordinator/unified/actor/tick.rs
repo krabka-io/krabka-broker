@@ -221,6 +221,41 @@ mod tests {
         },
     };
 
+    /// A `Stable` group whose only member, `m1`, is past its session timeout
+    /// at the next tick.
+    fn expiring_classic_group() -> CoordinatorGroup {
+        let mut group = completing_classic_group(&["m1"]);
+        let state = group.as_classic_mut().unwrap();
+        state.state = ClassicGroupState::Stable;
+        state.members.get_mut("m1").unwrap().session_timeout = Duration::ZERO;
+        group
+    }
+
+    /// A coordinator over `log` whose session tick, every `tick_interval`,
+    /// fires only when the test advances `clock`.
+    fn manual_tick_coordinator(
+        clock: &Arc<qubit_clock::ManualMonotonicClock>,
+        tick_interval: Duration,
+        log: &Arc<InMemoryOffsetsLog>,
+    ) -> Arc<GroupCoordinator> {
+        use qubit_clock::MonotonicClock as _;
+
+        Arc::new(
+            GroupCoordinator::new(
+                NextGenConfig {
+                    timer: clock.new_timer(),
+                    session_expiry_tick: tick_interval,
+                    ..NextGenConfig::assigning_at_once()
+                },
+                ShareGroupConfig::assigning_at_once(),
+                empty_metadata(),
+                Arc::<InMemoryOffsetsLog>::clone(log),
+                StreamsGroupConfig::default(),
+            )
+            .expect("valid test assignor configuration"),
+        )
+    }
+
     /// A group-metadata write that never reached the log cannot commit, so
     /// the expiry restores the group and the actor keeps running, with no
     /// respawn seed. The next tick expires the member again and writes the
@@ -236,10 +271,8 @@ mod tests {
         #[case] failure: Option<BrokerError>,
     ) {
         let (coord, log) = make_coordinator();
-        let mut group = completing_classic_group(&["m1"]);
+        let mut group = expiring_classic_group();
         let state = group.as_classic_mut().unwrap();
-        state.state = ClassicGroupState::Stable;
-        state.members.get_mut("m1").unwrap().session_timeout = Duration::ZERO;
         let before = build_classic_view(state);
         let mut parked = ParkedWaiters::default();
         let services = super::super::test_support::actor_services(&coord, log.as_ref());
@@ -266,10 +299,8 @@ mod tests {
     #[tokio::test]
     async fn classic_last_member_expiration_persists_empty_generation() {
         let (coord, log) = make_coordinator();
-        let mut group = completing_classic_group(&["m1"]);
+        let mut group = expiring_classic_group();
         let state = group.as_classic_mut().unwrap();
-        state.state = ClassicGroupState::Stable;
-        state.members.get_mut("m1").unwrap().session_timeout = Duration::ZERO;
         let prior_generation = state.generation_id;
         let mut parked = ParkedWaiters::default();
         let services = super::super::test_support::actor_services(&coord, log.as_ref());
@@ -646,25 +677,12 @@ mod tests {
     /// sleep. The test is therefore deterministic and instant.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn actor_tick_does_not_panic_after_in_place_flip() {
-        use qubit_clock::{ManualMonotonicClock, MonotonicClock as _};
+        use qubit_clock::ManualMonotonicClock;
 
         let clock = ManualMonotonicClock::new_shared();
         let log = Arc::new(InMemoryOffsetsLog::default());
         let tick_interval = Duration::from_millis(37);
-        let coord = Arc::new(
-            GroupCoordinator::new(
-                NextGenConfig {
-                    timer: clock.new_timer(),
-                    session_expiry_tick: tick_interval,
-                    ..NextGenConfig::assigning_at_once()
-                },
-                ShareGroupConfig::assigning_at_once(),
-                empty_metadata(),
-                Arc::<InMemoryOffsetsLog>::clone(&log),
-                StreamsGroupConfig::default(),
-            )
-            .expect("valid test assignor configuration"),
-        );
+        let coord = manual_tick_coordinator(&clock, tick_interval, &log);
 
         let handle = coord.get_or_create_group("g", GroupKindTag::Classic);
 
@@ -870,30 +888,14 @@ mod tests {
     async fn an_expiry_whose_write_may_still_commit_respawns_the_persisted_group(
         #[case] expiry: Expiry,
     ) {
-        use {
-            crate::coordinator::test_support::offset_entry,
-            qubit_clock::{ManualMonotonicClock, MonotonicClock as _},
-        };
+        use {crate::coordinator::test_support::offset_entry, qubit_clock::ManualMonotonicClock};
 
         let clock = ManualMonotonicClock::new_shared();
         let log = Arc::new(InMemoryOffsetsLog::default());
         // The session tick fires only when the test moves the clock, so no
         // later tick retries the write behind the test's back.
         let tick_interval = Duration::from_hours(1);
-        let coord = Arc::new(
-            GroupCoordinator::new(
-                NextGenConfig {
-                    timer: clock.new_timer(),
-                    session_expiry_tick: tick_interval,
-                    ..NextGenConfig::assigning_at_once()
-                },
-                ShareGroupConfig::assigning_at_once(),
-                empty_metadata(),
-                Arc::<InMemoryOffsetsLog>::clone(&log),
-                StreamsGroupConfig::default(),
-            )
-            .expect("valid test assignor configuration"),
-        );
+        let coord = manual_tick_coordinator(&clock, tick_interval, &log);
         let committed = HashMap::from([(("t".to_owned(), 0), offset_entry(42))]);
         let mut group = completing_classic_group(&["m1"]);
         group.committed_offsets = committed.clone();
