@@ -142,8 +142,8 @@ async fn answer(
         && let Err(e) = broker.controller.submit_change(records).await
     {
         tracing::warn!(error = %e, "AlterUserScramCredentials: submit_change failed");
-        let msg = format!("submit failed: {e}");
-        apply_submit_error(&mut user_results, &msg);
+        let known_leader = *broker.controller.watch_leader().borrow();
+        apply_submit_error(&mut user_results, &e, known_leader);
     }
 
     // KIP-554 redaction: the request carries the client-side PBKDF2 output and

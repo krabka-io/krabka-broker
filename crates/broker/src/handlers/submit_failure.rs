@@ -332,6 +332,66 @@ pub mod test_support {
             },
         ]
     }
+
+    /// A controller failure that ends a write the handler submits once, the
+    /// leader this node knows when it fails, and the message of the
+    /// `NOT_CONTROLLER` answer Kafka gives for it.
+    pub struct SubmitRow {
+        /// The case's name, reported when its answer differs.
+        pub name: &'static str,
+        /// The failure the write ends in.
+        pub error: fn() -> RaftError,
+        /// The controller leader this node knows when the write fails.
+        pub known_leader: Option<NodeId>,
+        /// The message of `ControllerExceptions.newWrongControllerException`.
+        pub error_message: &'static str,
+    }
+
+    /// The failures of a write submitted once that Kafka answers
+    /// `NOT_CONTROLLER`, where the response keeps
+    /// `ApiError.fromThrowable(e).message()`.
+    ///
+    /// A lost leader names the leader it was redirected to, an unknown leader
+    /// names none, and an uncommitted tail names the leader this node knows.
+    /// See [`wrong_controller_write_message`](super::wrong_controller_write_message).
+    pub fn submit_not_controller_rows() -> [SubmitRow; 5] {
+        [
+            SubmitRow {
+                name: "not_leader",
+                error: || RaftError::NotLeader {
+                    current_leader: Some(NodeId(2)),
+                },
+                known_leader: Some(NodeId(3)),
+                error_message: "The active controller appears to be node 2.",
+            },
+            SubmitRow {
+                name: "not_leader_without_hint",
+                error: || RaftError::NotLeader {
+                    current_leader: None,
+                },
+                known_leader: Some(NodeId(3)),
+                error_message: "No controller appears to be active.",
+            },
+            SubmitRow {
+                name: "leader_unknown",
+                error: || RaftError::LeaderUnknown,
+                known_leader: None,
+                error_message: "No controller appears to be active.",
+            },
+            SubmitRow {
+                name: "uncommitted_tail",
+                error: || RaftError::UncommittedTail,
+                known_leader: Some(NodeId(1)),
+                error_message: "The active controller appears to be node 1.",
+            },
+            SubmitRow {
+                name: "uncommitted_tail_without_leader",
+                error: || RaftError::UncommittedTail,
+                known_leader: None,
+                error_message: "No controller appears to be active.",
+            },
+        ]
+    }
 }
 
 #[cfg(test)]
