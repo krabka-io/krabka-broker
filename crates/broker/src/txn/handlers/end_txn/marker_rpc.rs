@@ -165,7 +165,7 @@ fn build_write_txn_markers_request(
 }
 
 /// Splits the requested partitions into those that leave the transaction's
-/// pending set and the most severe failure, per Kafka's
+/// pending set and the failure that decides the next step, per Kafka's
 /// `TransactionMarkerRequestCompletionHandler`. A partition leaves when the
 /// leader wrote its marker, and also when the leader answered
 /// `UNSUPPORTED_FOR_MESSAGE_FORMAT` or `UNSUPPORTED_VERSION`: the producer

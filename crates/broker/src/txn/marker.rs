@@ -96,7 +96,8 @@ pub enum MarkerFailureClass {
     /// Retrying cannot succeed, so the fan-out must stop.
     Fenced,
     /// The leader answered a code Kafka's completion handler treats as an
-    /// illegal state. The fan-out stops, and the transaction waits in its
+    /// illegal state. When no other partition of the attempt failed
+    /// retriably, the fan-out stops, and the transaction waits in its
     /// `Prepare*` state for the coordinator's next load to resend it.
     Unexpected,
 }

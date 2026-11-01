@@ -36,14 +36,15 @@ use {
 pub(super) enum MarkerFanOutOutcome {
     /// Every partition's marker is durable.
     Complete,
-    /// At least one partition failed with a retriable code. The `Prepare*`
-    /// record is durable, so the caller hands the transaction to the
-    /// completion task, which retries the fan-out.
+    /// At least one partition failed with a retriable code, and no fenced
+    /// generation cancelled the fan-out. The `Prepare*` record is durable, so
+    /// the caller hands the transaction to the completion task, which retries
+    /// the fan-out.
     Retry,
     /// A fenced producer or coordinator generation cancelled the fan-out, or
-    /// a leader answered a code Kafka's completion handler treats as an
-    /// illegal state (#882). Retrying cannot succeed, so the caller must not
-    /// queue it for completion.
+    /// every partition that failed answered a code Kafka's completion handler
+    /// treats as an illegal state (#882). Retrying cannot succeed, so the
+    /// caller must not queue it for completion.
     GivenUp,
 }
 
@@ -56,14 +57,15 @@ pub struct MarkerFanOut {
     /// `TransactionMarkerRequestCompletionHandler` removes each of them from
     /// the transaction's partition set.
     pub(crate) written: Vec<TopicPartition>,
-    /// The most severe failure of the attempt, if any partition failed.
+    /// The failure that decides what the caller does next, if any partition
+    /// failed, as `record_deciding_failure` picks it.
     pub(crate) failure: Option<BrokerError>,
 }
 
 impl MarkerFanOut {
-    /// Records `error`, keeping the most severe failure seen so far.
+    /// Records `error`, keeping the failure that decides the next step.
     pub(crate) fn fail(&mut self, error: BrokerError) {
-        record_worse_failure(&mut self.failure, error);
+        record_deciding_failure(&mut self.failure, error);
     }
 
     /// Folds another group's outcome into this one.
@@ -91,6 +93,9 @@ pub(super) async fn dispatch_transaction_markers(
         Err(error) if classify_marker_failure(&error).stops_fan_out() => {
             tracing::warn!(
                 tid = transactional_id,
+                producer_id = snapshot.producer_id.get(),
+                producer_epoch = snapshot.producer_epoch,
+                outstanding = ?snapshot.partitions,
                 error = %error,
                 class = ?classify_marker_failure(&error),
                 "EndTxn: WriteTxnMarkers fan-out cannot succeed; giving up"
@@ -100,6 +105,9 @@ pub(super) async fn dispatch_transaction_markers(
         Err(error) => {
             tracing::warn!(
                 tid = transactional_id,
+                producer_id = snapshot.producer_id.get(),
+                producer_epoch = snapshot.producer_epoch,
+                outstanding = ?snapshot.partitions,
                 error = %error,
                 "EndTxn: WriteTxnMarkers fan-out failed; queued for completion"
             );
@@ -201,9 +209,10 @@ pub async fn dispatch_markers(
     };
     // Every leader group is attempted, even after another group fails: a
     // partition whose marker already landed must not be abandoned because a
-    // different partition in the same fan-out round needs a retry (#882). The
-    // worst classified failure (a fatal one over a retriable one) is what the
-    // caller sees, so a fenced generation still cancels the whole attempt.
+    // different partition in the same fan-out round needs a retry (#882).
+    // `record_deciding_failure` picks the failure the caller sees: a fenced
+    // generation still cancels the whole attempt, and any retriable failure
+    // keeps it queued.
     let (local, remote) = tokio::join!(
         write_local_markers(node_id, context.group_coordinator, marker, local),
         join_all(by_leader.iter().map(|(leader, tps)| {
@@ -254,27 +263,39 @@ pub async fn write_local_markers(
     outcome
 }
 
-/// Keeps `worst` at the most severe of what it already holds and `error`: a
-/// failure that stops the fan-out always wins over a retriable one, a fenced
-/// generation wins over an unexpected code, and the first error is kept when
-/// both are the same class. Kafka's completion handler cancels on the first
-/// fenced partition and throws on the first unexpected one; either way the
-/// attempt does not retry.
-fn record_worse_failure(worst: &mut Option<BrokerError>, error: BrokerError) {
-    let replace = worst.as_ref().is_none_or(|existing| {
-        failure_severity(classify_marker_failure(&error))
-            > failure_severity(classify_marker_failure(existing))
+/// Keeps `deciding` at the failure of the attempt that decides what the
+/// caller does next, of what it already holds and `error`. The first error is
+/// kept when both are the same class.
+///
+/// - A fenced generation wins over every other failure. Kafka's
+///   `TransactionMarkerRequestCompletionHandler` cancels every queued marker
+///   of the transaction on the first fenced partition
+///   (`removeMarkersForTxn`), so the attempt does not retry.
+/// - A retriable failure wins over an unexpected code. Kafka handles each
+///   broker's answer on its own: it throws on an unexpected code, which ends
+///   the handling of that one answer, and it still re-enqueues the retriable
+///   partitions of every other answer. An attempt that stopped on the
+///   unexpected code instead would never write the marker of a partition
+///   that was only briefly short of replicas, and a prepared commit, which
+///   nothing else retries, would leave that partition's last stable offset
+///   at the transaction's first record for good.
+/// - An unexpected code is reported only when no partition failed in another
+///   way. The attempt then stops, as Kafka's does.
+fn record_deciding_failure(deciding: &mut Option<BrokerError>, error: BrokerError) {
+    let replace = deciding.as_ref().is_none_or(|existing| {
+        failure_precedence(classify_marker_failure(&error))
+            > failure_precedence(classify_marker_failure(existing))
     });
     if replace {
-        *worst = Some(error);
+        *deciding = Some(error);
     }
 }
 
-/// The order [`record_worse_failure`] keeps failures in.
-fn failure_severity(class: MarkerFailureClass) -> u8 {
+/// The order [`record_deciding_failure`] keeps failures in.
+fn failure_precedence(class: MarkerFailureClass) -> u8 {
     match class {
-        MarkerFailureClass::Retriable => 0,
-        MarkerFailureClass::Unexpected => 1,
+        MarkerFailureClass::Unexpected => 0,
+        MarkerFailureClass::Retriable => 1,
         MarkerFailureClass::Fenced => 2,
     }
 }
@@ -284,13 +305,86 @@ mod tests {
     use {
         super::*,
         crate::{
-            codes::NOT_LEADER_OR_FOLLOWER,
+            codes::{
+                INVALID_PRODUCER_EPOCH, NOT_ENOUGH_REPLICAS, NOT_LEADER_OR_FOLLOWER,
+                TRANSACTION_COORDINATOR_FENCED, UNKNOWN_SERVER_ERROR,
+            },
             test_support::{broker_registration, open_partition},
             txn::handlers::end_txn::test_support::{marker_entry, plaintext_client, tps},
         },
         assert2::assert,
         krabka_ids::PartitionIndex,
     };
+
+    /// The failure that decides an attempt: a fenced generation cancels it,
+    /// any retriable failure keeps the transaction queued, and an unexpected
+    /// code stops it only when nothing else failed. The first failure of a
+    /// class is the one reported.
+    ///
+    /// A prepared commit whose marker reaches one partition with an
+    /// unexpected code, and another partition while it is short of replicas,
+    /// must be retried: nothing else writes the second partition's marker,
+    /// and its last stable offset would stay at the transaction's first
+    /// record for good.
+    #[test]
+    fn a_retriable_partition_keeps_the_attempt_queued_past_an_unexpected_code() {
+        let refused = |code| BrokerError::MarkerWriteRefused {
+            code,
+            message: format!("code {code}"),
+        };
+        let reported = |failures: &[i16]| {
+            let mut outcome = MarkerFanOut::default();
+            for code in failures {
+                outcome.fail(refused(*code));
+            }
+            outcome.failure.map(|error| {
+                let class = classify_marker_failure(&error);
+                let code = match error {
+                    BrokerError::MarkerWriteRefused { code, .. } => code,
+                    _ => UNKNOWN_SERVER_ERROR,
+                };
+                (code, class)
+            })
+        };
+        let unexpected = UNKNOWN_SERVER_ERROR;
+        let retriable = NOT_ENOUGH_REPLICAS;
+        let fenced = INVALID_PRODUCER_EPOCH;
+        // (label, failure codes in the order they arrive, the code reported)
+        let cases = [
+            (
+                "unexpected, then retriable",
+                vec![unexpected, retriable],
+                retriable,
+            ),
+            (
+                "retriable, then unexpected",
+                vec![retriable, unexpected],
+                retriable,
+            ),
+            ("unexpected alone", vec![unexpected], unexpected),
+            ("retriable, then fenced", vec![retriable, fenced], fenced),
+            ("fenced, then retriable", vec![fenced, retriable], fenced),
+            ("unexpected, then fenced", vec![unexpected, fenced], fenced),
+            (
+                "two retriable keep the first",
+                vec![retriable, NOT_LEADER_OR_FOLLOWER],
+                retriable,
+            ),
+            (
+                "two fenced keep the first",
+                vec![TRANSACTION_COORDINATOR_FENCED, fenced],
+                TRANSACTION_COORDINATOR_FENCED,
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (label, failures, code) in cases {
+            actual.push((label, reported(&failures)));
+            let class = classify_marker_failure(&refused(code));
+            expected.push((label, Some((code, class))));
+        }
+        assert!(actual == expected);
+    }
 
     fn marker_context<'a>(
         image: &'a MetadataImage,
