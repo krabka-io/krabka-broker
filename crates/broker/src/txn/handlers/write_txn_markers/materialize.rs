@@ -281,9 +281,9 @@ pub struct MarkerAppend {
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
+        super::{super::marker_error_code, *},
         crate::{
-            codes::{INVALID_PRODUCER_EPOCH, NONE, from_broker_error},
+            codes::{INVALID_PRODUCER_EPOCH, NONE, NOT_LEADER_OR_FOLLOWER, from_broker_error},
             coordinator::{
                 persistence::OffsetCommitValue,
                 unified::{actor::test_support::rpc, classic_state::OffsetEntry},
@@ -291,12 +291,15 @@ mod tests {
             handlers::test_support::StartedBroker,
             partition::Partition,
             test_support::StandalonePartitionSetup,
-            txn::handlers::write_txn_markers::{
-                CommittedOffsets,
-                test_support::{
-                    local_offsets_partition, open_partition, single_transactional_batch,
-                    start_broker, transactional_offset_batch,
+            txn::{
+                handlers::write_txn_markers::{
+                    CommittedOffsets,
+                    test_support::{
+                        local_offsets_partition, open_partition, single_transactional_batch,
+                        start_broker, transactional_offset_batch,
+                    },
                 },
+                marker::{MarkerFailureClass, classify_marker_failure},
             },
         },
         assert2::assert,
@@ -764,6 +767,71 @@ mod tests {
                 .get(&("orders".into(), 0))
                 .map(|entry| (entry.offset, entry.metadata.as_str()))
                 == Some((Offset(55), "committed"))
+        );
+        broker_handle.shutdown().await;
+    }
+
+    /// A marker whose acknowledgement the partition writer drops, and one
+    /// that finds the writer gone, answer Kafka's `NOT_LEADER_OR_FOLLOWER`:
+    /// what Kafka answers for a partition that stops on its broker, and a
+    /// code the transaction coordinator retries. Either one answered as
+    /// `UNKNOWN_SERVER_ERROR` would stop the coordinator's fan-out for the
+    /// transaction, and a prepared commit would never mark its partitions.
+    #[tokio::test]
+    async fn a_marker_that_loses_its_writer_answers_a_retriable_code() {
+        let StartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_broker().await;
+        let broker = broker_handle.broker_arc_for_test();
+        let part = local_offsets_partition(&broker, "writer-gone-group");
+        let marker = |producer_id| MarkerAppend {
+            producer_id: krabka_log::ProducerId(producer_id),
+            producer_epoch: 1,
+            marker_type: MarkerType::Abort,
+            coordinator_epoch: 0,
+            commit_stamp: None,
+            transaction_version: 0,
+        };
+        let group_coordinator = Some(&broker.group_coordinator);
+
+        let lost_ack = append_marker_and_materialize(
+            &dropping_acks(&part),
+            group_coordinator,
+            OFFSETS_TOPIC,
+            marker(705),
+        )
+        .await;
+        let writer = part.take_writer_handle().expect("partition writer");
+        writer.abort();
+        let _ = writer.await;
+        let writer_gone =
+            append_marker_and_materialize(&part, group_coordinator, OFFSETS_TOPIC, marker(706))
+                .await;
+
+        let answers =
+            [("lost ack", lost_ack), ("writer gone", writer_gone)].map(|(label, appended)| {
+                let error = appended.expect_err(label);
+                (
+                    label,
+                    marker_error_code(OFFSETS_TOPIC, part.index.get(), &error),
+                    classify_marker_failure(&error),
+                )
+            });
+        assert!(
+            answers
+                == [
+                    (
+                        "lost ack",
+                        NOT_LEADER_OR_FOLLOWER,
+                        MarkerFailureClass::Retriable
+                    ),
+                    (
+                        "writer gone",
+                        NOT_LEADER_OR_FOLLOWER,
+                        MarkerFailureClass::Retriable
+                    ),
+                ]
         );
         broker_handle.shutdown().await;
     }

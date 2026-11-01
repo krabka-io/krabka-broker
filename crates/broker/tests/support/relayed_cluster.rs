@@ -135,6 +135,15 @@ impl RelayedCluster {
             .expect("the broker runs")
     }
 
+    /// The broker `node`, or `None` while it does not run.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `node` is not a member.
+    pub fn running(&self, node: u64) -> Option<&BrokerHandle> {
+        self.brokers[self.index_of(node)].as_ref()
+    }
+
     /// The real listen address of `node`, past its relay.
     pub fn address(&self, node: u64) -> SocketAddr { self.configs[self.index_of(node)].listen_addr }
 
