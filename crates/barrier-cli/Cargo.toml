@@ -24,8 +24,8 @@ path = "src/main.rs"
 [dependencies]
 # The barrier control-record decoder and type live with the log's control records.
 krabka-log = { version = "1.1.5", path = "../log" }
-krabka-client-core = { version = "0.7.1" }
-krabka-protocol = { version = "0.7.0" }
+krabka-client-core = { version = "0.8.0" }
+krabka-protocol = { version = "0.8.0" }
 krabka-units = { workspace = true }
 
 clap = { workspace = true, features = ["env"] }
@@ -38,7 +38,7 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
-krabka-client-admin = { version = "0.7.1" }
+krabka-client-admin = { version = "0.8.0" }
 # Broker fixtures and the production encoder remain test-only dependencies.
 krabka-broker = { version = "1.1.5", path = "../broker", features = ["test-helpers"] }
 tempfile = { workspace = true }

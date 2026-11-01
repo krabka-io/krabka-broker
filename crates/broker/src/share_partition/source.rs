@@ -75,7 +75,7 @@ pub mod test_support {
                 log.append(&mut batch).unwrap();
                 if offset < 2 {
                     let start = bytes.len();
-                    batch.encode(&mut bytes).unwrap();
+                    batch.encode_batch(&mut bytes).unwrap();
                     entries.push(WalIndexEntry {
                         topic_id,
                         partition: 0,

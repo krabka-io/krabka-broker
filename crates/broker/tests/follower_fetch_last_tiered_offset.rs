@@ -51,7 +51,9 @@ use {
     },
     assert2::{assert, check},
     krabka_broker::{BrokerHandle, metrics::PartitionLabel},
-    krabka_client_admin::{AdminClient, CreateTopicSpec, TopicMutationOptions},
+    krabka_client_admin::{
+        AdminClient, AdminClientLike as _, CreateTopicSpec, TopicMutationOptions,
+    },
     krabka_client_core::Client,
     krabka_protocol::owned::alter_partition_reassignments_request::{
         AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,

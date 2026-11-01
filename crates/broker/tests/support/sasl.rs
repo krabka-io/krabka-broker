@@ -202,7 +202,8 @@ pub async fn provision_scram(
         iterations,
     };
     let credential =
-        krabka_security::hash_scram_password(&setup.password, setup.mechanism, setup.iterations.0);
+        krabka_security::hash_scram_password(&setup.password, setup.mechanism, setup.iterations.0)
+            .expect("hash the SCRAM password");
     broker
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ScramCredential(
             krabka_metadata::ScramCredentialRecord {

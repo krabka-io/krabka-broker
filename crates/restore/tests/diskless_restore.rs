@@ -50,7 +50,7 @@ fn fixture_with_second_base(
         }],
         ..Default::default()
     }
-    .encode(&mut first)
+    .encode_batch(&mut first)
     .unwrap();
     let mut second = BytesMut::new();
     RecordBatch {
@@ -61,7 +61,7 @@ fn fixture_with_second_base(
         }],
         ..Default::default()
     }
-    .encode(&mut second)
+    .encode_batch(&mut second)
     .unwrap();
     let mut encoded = first.clone();
     encoded.extend_from_slice(&second);

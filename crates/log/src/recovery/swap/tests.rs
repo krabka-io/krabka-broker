@@ -34,7 +34,7 @@ fn batches(spans: &[BatchSpan]) -> Vec<u8> {
                 .collect(),
             ..RecordBatch::default()
         };
-        batch.encode(&mut wire).unwrap();
+        batch.encode_batch(&mut wire).unwrap();
     }
     wire.to_vec()
 }

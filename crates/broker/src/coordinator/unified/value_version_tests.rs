@@ -40,17 +40,18 @@ fn every_coordinator_value_refuses_an_unknown_version() {
                 epoch: 1,
                 metadata_hash: 0,
             }
-            .encode(),
+            .encode()
+            .unwrap(),
             decode: |b| ng::GroupMetadataValue::decode(b).map(|_| ()),
         },
         VersionRow {
             name: "ConsumerGroupPartitionMetadataValue",
-            value: ng::PartitionMetadataValue::default().encode(),
+            value: ng::PartitionMetadataValue::default().encode().unwrap(),
             decode: |b| ng::PartitionMetadataValue::decode(b).map(|_| ()),
         },
         VersionRow {
             name: "ConsumerGroupMemberMetadataValue",
-            value: next_member("c").encode(),
+            value: next_member("c").encode().unwrap(),
             decode: |b| ng::MemberMetadataValue::decode(b).map(|_| ()),
         },
         VersionRow {
@@ -59,17 +60,18 @@ fn every_coordinator_value_refuses_an_unknown_version() {
                 assignment_epoch: 1,
                 assignment_timestamp_ms: 0,
             }
-            .encode(),
+            .encode()
+            .unwrap(),
             decode: |b| ng::TargetAssignmentMetadataValue::decode(b).map(|_| ()),
         },
         VersionRow {
             name: "ConsumerGroupTargetAssignmentMemberValue",
-            value: ng::TargetAssignmentMemberValue::default().encode(),
+            value: ng::TargetAssignmentMemberValue::default().encode().unwrap(),
             decode: |b| ng::TargetAssignmentMemberValue::decode(b).map(|_| ()),
         },
         VersionRow {
             name: "ConsumerGroupCurrentMemberAssignmentValue",
-            value: next_current(1).encode(),
+            value: next_current(1).encode().unwrap(),
             decode: |b| ng::CurrentMemberAssignmentValue::decode(b).map(|_| ()),
         },
         VersionRow {
@@ -79,12 +81,13 @@ fn every_coordinator_value_refuses_an_unknown_version() {
                 version: 1,
                 timestamp_ms: 1,
             }
-            .encode(),
+            .encode()
+            .unwrap(),
             decode: |b| ng::RegularExpressionValue::decode(b).map(|_| ()),
         },
         VersionRow {
             name: "ShareGroupMemberMetadataValue",
-            value: share_member("c").encode(),
+            value: share_member("c").encode().unwrap(),
             decode: |b| sp::ShareGroupMemberMetadataValue::decode(b).map(|_| ()),
         },
         VersionRow {
@@ -93,7 +96,8 @@ fn every_coordinator_value_refuses_an_unknown_version() {
                 epoch: 1,
                 metadata_hash: 0,
             }
-            .encode(),
+            .encode()
+            .unwrap(),
             decode: |b| sp::ShareGroupMetadataValue::decode(b).map(|_| ()),
         },
         VersionRow {
@@ -102,22 +106,29 @@ fn every_coordinator_value_refuses_an_unknown_version() {
                 assignment_epoch: 1,
                 assignment_timestamp_ms: 0,
             }
-            .encode(),
+            .encode()
+            .unwrap(),
             decode: |b| sp::ShareGroupTargetAssignmentMetadataValue::decode(b).map(|_| ()),
         },
         VersionRow {
             name: "ShareGroupTargetAssignmentMemberValue",
-            value: sp::ShareGroupTargetAssignmentMemberValue::default().encode(),
+            value: sp::ShareGroupTargetAssignmentMemberValue::default()
+                .encode()
+                .unwrap(),
             decode: |b| sp::ShareGroupTargetAssignmentMemberValue::decode(b).map(|_| ()),
         },
         VersionRow {
             name: "ShareGroupCurrentMemberAssignmentValue",
-            value: sp::ShareGroupCurrentMemberAssignmentValue::default().encode(),
+            value: sp::ShareGroupCurrentMemberAssignmentValue::default()
+                .encode()
+                .unwrap(),
             decode: |b| sp::ShareGroupCurrentMemberAssignmentValue::decode(b).map(|_| ()),
         },
         VersionRow {
             name: "ShareGroupStatePartitionMetadataValue",
-            value: sp::ShareGroupStatePartitionMetadataValue::default().encode(),
+            value: sp::ShareGroupStatePartitionMetadataValue::default()
+                .encode()
+                .unwrap(),
             decode: |b| sp::ShareGroupStatePartitionMetadataValue::decode(b).map(|_| ()),
         },
         VersionRow {
@@ -129,12 +140,13 @@ fn every_coordinator_value_refuses_an_unknown_version() {
                 last_assignment_configs: None,
                 description: st::DescriptionEpochs::default(),
             }
-            .encode(),
+            .encode()
+            .unwrap(),
             decode: |b| st::StreamsGroupMetadataValue::decode(b).map(|_| ()),
         },
         VersionRow {
             name: "StreamsGroupMemberMetadataValue",
-            value: streams_member("c").encode(),
+            value: streams_member("c").encode().unwrap(),
             decode: |b| st::StreamsGroupMemberMetadataValue::decode(b).map(|_| ()),
         },
         VersionRow {
@@ -143,22 +155,27 @@ fn every_coordinator_value_refuses_an_unknown_version() {
                 assignment_epoch: 1,
                 assignment_timestamp_ms: 0,
             }
-            .encode(),
+            .encode()
+            .unwrap(),
             decode: |b| st::StreamsGroupTargetAssignmentMetadataValue::decode(b).map(|_| ()),
         },
         VersionRow {
             name: "StreamsGroupTargetAssignmentMemberValue",
-            value: st::StreamsGroupTargetAssignmentMemberValue::default().encode(),
+            value: st::StreamsGroupTargetAssignmentMemberValue::default()
+                .encode()
+                .unwrap(),
             decode: |b| st::StreamsGroupTargetAssignmentMemberValue::decode(b).map(|_| ()),
         },
         VersionRow {
             name: "StreamsGroupCurrentMemberAssignmentValue",
-            value: st::StreamsGroupCurrentMemberAssignmentValue::default().encode(),
+            value: st::StreamsGroupCurrentMemberAssignmentValue::default()
+                .encode()
+                .unwrap(),
             decode: |b| st::StreamsGroupCurrentMemberAssignmentValue::decode(b).map(|_| ()),
         },
         VersionRow {
             name: "StreamsGroupTopologyValue",
-            value: st::StreamsGroupTopologyValue::default().encode(),
+            value: st::StreamsGroupTopologyValue::default().encode().unwrap(),
             decode: |b| st::StreamsGroupTopologyValue::decode(b).map(|_| ()),
         },
     ];

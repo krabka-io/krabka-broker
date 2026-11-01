@@ -330,10 +330,10 @@ mod tests {
             let FilteredBatch::Filtered(out) = got else {
                 panic!("dropping {dropped:?} must produce a filtered batch");
             };
-            let mut buf = BytesMut::with_capacity(out.encoded_len());
-            out.encode(&mut buf).unwrap();
+            let mut buf = BytesMut::with_capacity(out.encoded_batch_len());
+            out.encode_batch(&mut buf).unwrap();
             let mut cursor: &[u8] = &buf[..];
-            let decoded = RecordBatch::decode(&mut cursor).unwrap();
+            let decoded = RecordBatch::decode_batch(&mut cursor).unwrap();
 
             assert!(cursor.is_empty());
             check!(decoded == expected(offset_deltas, survivors, last_offset_delta));

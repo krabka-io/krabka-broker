@@ -878,9 +878,11 @@ mod tests {
         let mut overflowing_offset = batch(2);
         overflowing_offset.base_offset = i64::MAX;
         let mut negative_wire = BytesMut::new();
-        negative_delta.encode(&mut negative_wire).unwrap();
+        negative_delta.encode_batch(&mut negative_wire).unwrap();
         let mut overflowing_wire = BytesMut::new();
-        overflowing_offset.encode(&mut overflowing_wire).unwrap();
+        overflowing_offset
+            .encode_batch(&mut overflowing_wire)
+            .unwrap();
 
         for (name, wire) in [
             ("truncated batch", Bytes::from_static(&[0])),
@@ -921,7 +923,9 @@ mod tests {
             {
                 let mut record_batch = batch(records);
                 record_batch.base_offset = base_offset;
-                record_batch.encode(&mut wire).expect("encode test batch");
+                record_batch
+                    .encode_batch(&mut wire)
+                    .expect("encode test batch");
             }
             let decoded = split_batches(&wire.freeze()).expect("decode test batches");
             batches::exact_batches(decoded, Offset(start), Offset(target)).is_ok()

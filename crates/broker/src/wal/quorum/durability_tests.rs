@@ -36,7 +36,7 @@ fn split_batches_preserves_compressed_wire_boundaries() {
         for record in &mut compressed.records {
             record.value = Some(bytes::Bytes::from(vec![b'x'; 256]));
         }
-        compressed.encode(&mut wire).unwrap();
+        compressed.encode_batch(&mut wire).unwrap();
     }
 
     let batches = engine::split_batches(&wire.freeze()).unwrap();

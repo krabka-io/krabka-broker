@@ -501,7 +501,7 @@ impl Log {
                 .read()
                 .unwrap_or_else(PoisonError::into_inner)
                 .compression_level(batch.attributes.compression());
-            let mut bytes = BytesMut::with_capacity(batch.encoded_len());
+            let mut bytes = BytesMut::with_capacity(batch.encoded_batch_len());
             batch.encode_with_compression_level(&mut bytes, level)?;
             StoredBytes::Encoded(bytes.freeze())
         };

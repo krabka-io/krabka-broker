@@ -54,10 +54,12 @@ pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
         |buf| Ok(Self { {{ field }}: {{ decode }}(buf)? })
     });
     Ok(impl_block(item, &TokenStream::new(), &moxy::template! {
-        #[must_use]
-        pub fn encode(&self) -> bytes::Bytes {
+        /// # Errors
+        /// Returns the array writer's error, such as a length that its
+        /// wire-format prefix cannot hold.
+        pub fn encode(&self) -> Result<::bytes::Bytes, crate::error::BrokerError> {
             crate::coordinator::unified::persistence::flex::encode_value(|buf| {
-                {{ encode }}(buf, &self.{{ field }});
+                {{ encode }}(buf, &self.{{ field }})
             })
         }
 

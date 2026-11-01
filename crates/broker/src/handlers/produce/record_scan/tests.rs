@@ -41,7 +41,7 @@ fn reference(body: &[u8], count: i32, base: i64) -> Option<Walked> {
         base_timestamp: base,
         ..RecordBatch::default()
     }
-    .encode(&mut bytes)
+    .encode_batch(&mut bytes)
     .unwrap();
     bytes.truncate(HEADER_LEN);
     bytes.extend_from_slice(body);
@@ -271,7 +271,7 @@ proptest! {
             ..RecordBatch::default()
         };
         let mut bytes = Vec::new();
-        batch.encode(&mut bytes).unwrap();
+        batch.encode_batch(&mut bytes).unwrap();
         let body = &mut bytes[HEADER_LEN..];
         assert2::assert!(fast(body, count, base) == Some(expected));
         compare(body, count, base);

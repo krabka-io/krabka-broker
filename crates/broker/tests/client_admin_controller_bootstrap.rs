@@ -5,7 +5,9 @@ mod support;
 use {
     crate::support::admin::topic_spec,
     assert2::check,
-    krabka_client_admin::{AdminClient, AdminError, ConfigResource, DescribeConfigsOptions},
+    krabka_client_admin::{
+        AdminClient, AdminClientLike as _, AdminError, ConfigResource, DescribeConfigsOptions,
+    },
     std::slice,
 };
 
@@ -24,7 +26,7 @@ async fn start_broker() -> StartedBroker {
 }
 
 async fn describe_topic(
-    controller_admin: &AdminClient,
+    controller_admin: &mut AdminClient,
     topic: &ConfigResource,
 ) -> krabka_client_admin::DescribeConfigsResults {
     controller_admin
@@ -101,7 +103,7 @@ async fn bootstrap_controller_admin(routing: &mut ControllerAdminRouting) {
 async fn controller_admin_describe(routing: &mut ControllerAdminRouting) {
     routing.configs = Some(
         describe_topic(
-            routing.admin.as_ref().expect("controller admin connected"),
+            routing.admin.as_mut().expect("controller admin connected"),
             &ConfigResource::topic("controller-admin"),
         )
         .await,

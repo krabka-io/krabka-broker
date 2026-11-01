@@ -86,7 +86,7 @@ impl Segment {
         fields(
             base_offset = self.base_offset.0,
             batch_base = batch.base_offset,
-            bytes = batch.encoded_len(),
+            bytes = batch.encoded_batch_len(),
             position = field::Empty,
         ),
         err,
@@ -100,8 +100,8 @@ impl Segment {
     ) -> Result<u64, LogError> {
         self.ensure_writable()?;
 
-        let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
-        batch.encode(&mut buf)?;
+        let mut buf = bytes::BytesMut::with_capacity(batch.encoded_batch_len());
+        batch.encode_batch(&mut buf)?;
         let bytes = buf.freeze();
 
         self.append_encoded(batch, index_interval, &bytes)
@@ -513,7 +513,7 @@ mod tests {
         producer.last_offset_delta = 0;
         producer.max_timestamp = 1_000;
         let mut wire = bytes::BytesMut::new();
-        producer.encode(&mut wire).unwrap();
+        producer.encode_batch(&mut wire).unwrap();
         let wire = wire.freeze();
 
         // Append verbatim with an assigned base_offset and a stamped epoch.
@@ -540,7 +540,7 @@ mod tests {
 
         // And it decodes (CRC still valid).
         let mut cur: &[u8] = &on_disk;
-        let decoded = RecordBatch::decode(&mut cur).unwrap();
+        let decoded = RecordBatch::decode_batch(&mut cur).unwrap();
         assert2::assert!(decoded.base_offset == assigned_base.0);
         assert2::assert!(decoded.partition_leader_epoch == stamped_epoch);
         drop(dir);
@@ -556,7 +556,7 @@ mod tests {
         producer.last_offset_delta = 2; // spans 3 offsets
         producer.max_timestamp = 5_000;
         let mut wire = bytes::BytesMut::new();
-        producer.encode(&mut wire).unwrap();
+        producer.encode_batch(&mut wire).unwrap();
         let wire = wire.freeze();
 
         seg.append_verbatim(&wire, Offset(0), 2, 5_000, LeaderEpoch(0), DENSE_INDEX)
@@ -577,7 +577,7 @@ mod tests {
         } = test_segment();
         seg.seal().unwrap();
         let mut wire = bytes::BytesMut::new();
-        test_batch_at(Offset(0)).encode(&mut wire).unwrap();
+        test_batch_at(Offset(0)).encode_batch(&mut wire).unwrap();
         let err = seg
             .append_verbatim(&wire.freeze(), Offset(0), 0, 0, LeaderEpoch(0), DENSE_INDEX)
             .unwrap_err();

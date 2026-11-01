@@ -207,7 +207,7 @@ fn single_record_bytes(
 fn encode_all(batches: &[RecordBatch]) -> Bytes {
     let mut buf = BytesMut::new();
     for b in batches {
-        b.encode(&mut buf).expect("encode batch");
+        b.encode_batch(&mut buf).expect("encode batch");
     }
     buf.freeze()
 }
@@ -356,7 +356,7 @@ fn segment_bytes(batch1_max_ts: i64, batch2_max_ts: i64) -> SegmentBytes {
         .max_timestamp(batch2_max_ts)
         .record_count(2)
         .call();
-    let batch1_len = batch1.encoded_len();
+    let batch1_len = batch1.encoded_batch_len();
     let log = encode_all(&[batch1, batch2]);
     let max_timestamp_ms = [batch1_max_ts, batch2_max_ts]
         .into_iter()

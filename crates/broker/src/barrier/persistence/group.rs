@@ -50,7 +50,7 @@ pub struct GroupValue {
 pub fn encode_group(value: &GroupValue) -> Result<Vec<u8>, codec::BrokerError> {
     let mut out = Vec::new();
     codec::put_i16(&mut out, codec::RECORD_VERSION);
-    codec::put_array_len(&mut out, value.topics.len(), false);
+    codec::put_array_len(&mut out, value.topics.len(), false)?;
     for topic in &value.topics {
         codec::put_string(&mut out, topic)?;
     }

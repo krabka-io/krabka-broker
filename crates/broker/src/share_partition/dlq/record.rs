@@ -362,7 +362,7 @@ mod tests {
         let max_message_bytes = i32::try_from(
             build_round(&context(DlqCause::ClientReject), &sources, bounds(0, 1), 0)
                 .batch
-                .encoded_len(),
+                .encoded_batch_len(),
         )
         .unwrap();
 
@@ -383,7 +383,7 @@ mod tests {
             rounds.push((
                 next,
                 round.last_offset,
-                round.batch.encoded_len() <= usize::try_from(max_message_bytes).unwrap(),
+                round.batch.encoded_batch_len() <= usize::try_from(max_message_bytes).unwrap(),
             ));
             next = round.last_offset + 1;
         }
@@ -446,7 +446,7 @@ mod tests {
             i32::try_from(
                 build_round(&context(DlqCause::ClientReject), sources, bounds(4, 4), 0)
                     .batch
-                    .encoded_len(),
+                    .encoded_batch_len(),
             )
             .unwrap()
         };

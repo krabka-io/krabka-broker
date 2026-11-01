@@ -120,7 +120,7 @@ pub fn metadata_batches(mut wire: &[u8]) -> impl Iterator<Item = RecordBatch> + 
         if wire.is_empty() {
             None
         } else {
-            Some(RecordBatch::decode(&mut wire).expect("decode a metadata batch"))
+            Some(RecordBatch::decode_batch(&mut wire).expect("decode a metadata batch"))
         }
     })
 }

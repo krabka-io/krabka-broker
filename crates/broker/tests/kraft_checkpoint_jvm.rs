@@ -34,7 +34,8 @@ fn bootstrap_feature_levels(jvm_checkpoint: &mut JvmCheckpoint, levels: String) 
         .iter()
         .map(|(name, level)| (name.as_str(), *level))
         .collect::<Vec<_>>();
-    jvm_checkpoint.bytes = build_bootstrap_checkpoint(&borrowed);
+    jvm_checkpoint.bytes =
+        build_bootstrap_checkpoint(&borrowed).expect("build the bootstrap checkpoint");
     jvm_checkpoint.directory_guard = Some(tempfile::tempdir().expect("checkpoint directory"));
 }
 #[rstest_bdd_macros::when(

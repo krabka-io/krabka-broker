@@ -104,7 +104,7 @@ pub(super) fn batch(base_offset: i64, records: Vec<Record>) -> RecordBatch {
 fn encode(batches: &[RecordBatch]) -> Bytes {
     let mut buf = BytesMut::new();
     for b in batches {
-        b.encode(&mut buf).expect("encode");
+        b.encode_batch(&mut buf).expect("encode");
     }
     buf.freeze()
 }

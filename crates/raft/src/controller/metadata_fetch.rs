@@ -122,7 +122,7 @@ mod tests {
         let mut buf = records;
         let mut found = false;
         while !buf.is_empty() {
-            let batch = RecordBatch::decode(&mut buf).expect("decode");
+            let batch = RecordBatch::decode_batch(&mut buf).expect("decode");
             if batch.attributes.is_control_batch() {
                 continue;
             }

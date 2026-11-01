@@ -48,15 +48,16 @@ pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let tagged = field_ident(tagged, "FlexibleEpochValue")?.clone();
     let record = LitStr::new(&args.record, item.ident.span());
     Ok(impl_block(item, &TokenStream::new(), &moxy::template! {
-        #[must_use]
-        pub fn encode(self) -> bytes::Bytes {
+        /// # Errors
+        /// Returns an error when the tagged-field trailer cannot be written.
+        pub fn encode(self) -> Result<::bytes::Bytes, crate::error::BrokerError> {
             let mut buf = bytes::BytesMut::new();
             bytes::BufMut::put_i16(&mut buf, 0);
             bytes::BufMut::put_i32(&mut buf, self.{{ epoch }});
             crate::coordinator::unified::persistence::flex::put_tag0_i64(
                 &mut buf, self.{{ tagged }},
-            );
-            buf.freeze()
+            )?;
+            Ok(buf.freeze())
         }
 
         /// # Errors

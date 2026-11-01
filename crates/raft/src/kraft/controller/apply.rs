@@ -110,9 +110,9 @@ impl Engine {
                         // log, so this runs before the control-batch skip
                         // below (a LeaderChange batch still occupies log
                         // bytes even though it carries no metadata records).
-                        self.bytes_since_snapshot = self
-                            .bytes_since_snapshot
-                            .saturating_add(u64::try_from(batch.encoded_len()).unwrap_or(u64::MAX));
+                        self.bytes_since_snapshot = self.bytes_since_snapshot.saturating_add(
+                            u64::try_from(batch.encoded_batch_len()).unwrap_or(u64::MAX),
+                        );
                         // The LeaderChange control batch carries no metadata records;
                         // never feed it to the metadata decoder.
                         if batch.attributes.is_control_batch() {

@@ -43,7 +43,8 @@ fn consumer_epoch() -> LogRecord {
             epoch: 2,
             metadata_hash: 0,
         }
-        .encode(),
+        .encode()
+        .unwrap(),
     )
 }
 
@@ -57,7 +58,8 @@ fn share_epoch() -> LogRecord {
             epoch: 2,
             metadata_hash: 0,
         }
-        .encode(),
+        .encode()
+        .unwrap(),
     )
 }
 

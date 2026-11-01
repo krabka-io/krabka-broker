@@ -87,8 +87,10 @@ pub struct StreamsGroupMetadataValue {
 }
 
 impl StreamsGroupMetadataValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
+    /// # Errors
+    /// Returns [`BrokerError::Protocol`] when a field is too long for its
+    /// wire-format prefix.
+    pub fn encode(&self) -> Result<Bytes, BrokerError> {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
         buf.put_i32(self.epoch);
@@ -102,10 +104,10 @@ impl StreamsGroupMetadataValue {
         }
         if let Some(configs) = &self.last_assignment_configs {
             let mut payload = BytesMut::new();
-            put_compact_array_len(&mut payload, configs.len());
+            put_compact_array_len(&mut payload, configs.len())?;
             for config in configs {
-                put_compact_string(&mut payload, &config.key);
-                put_compact_string(&mut payload, &config.value);
+                put_compact_string(&mut payload, &config.key)?;
+                put_compact_string(&mut payload, &config.value)?;
                 put_empty_tagged_fields(&mut payload);
             }
             tags.push((TAG_LAST_ASSIGNMENT_CONFIGS, payload.freeze()));
@@ -124,8 +126,8 @@ impl StreamsGroupMetadataValue {
                 tags.push((tag, Bytes::copy_from_slice(&epoch.to_be_bytes())));
             }
         }
-        put_tagged_fields(&mut buf, tags);
-        buf.freeze()
+        put_tagged_fields(&mut buf, tags)?;
+        Ok(buf.freeze())
     }
 
     /// # Errors
@@ -250,7 +252,7 @@ mod tests {
                 failed: -1,
             },
         };
-        assert!(StreamsGroupMetadataValue::decode(&v.encode()).unwrap() == v);
+        assert!(StreamsGroupMetadataValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
 
     /// i16 version | i32 `AssignmentEpoch` | tagged-field trailer, which holds
@@ -272,7 +274,9 @@ mod tests {
             assignment_epoch: 12,
             assignment_timestamp_ms: 7,
         };
-        assert!(StreamsGroupTargetAssignmentMetadataValue::decode(&v.encode()).unwrap() == v);
+        assert!(
+            StreamsGroupTargetAssignmentMetadataValue::decode(&v.encode().unwrap()).unwrap() == v
+        );
     }
 
     #[test]
@@ -284,7 +288,8 @@ mod tests {
             last_assignment_configs: None,
             description: DescriptionEpochs::default(),
         }
-        .encode();
+        .encode()
+        .unwrap();
         assert!(StreamsGroupMetadataValue::decode(&g[..g.len() - 1]).is_err());
     }
     use {
@@ -379,7 +384,7 @@ mod tests {
                 ),
             ),
         };
-        streams_epochs.encoded = Some(encoded);
+        streams_epochs.encoded = Some(encoded.unwrap());
         streams_epochs.decoded = Some(decoded);
     }
     #[then(

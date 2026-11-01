@@ -518,7 +518,8 @@ impl FakeController {
                     plain_answer(answer, version)
                 }
             })
-            .await;
+            .await
+            .unwrap();
         Self { broker, state }
     }
 

@@ -62,7 +62,8 @@ mod tests {
             epoch: 7,
             metadata_hash: 0,
         }
-        .encode();
+        .encode()
+        .unwrap();
         let truncated = &full[..full.len() - 1];
         assert!(GroupMetadataValue::decode(truncated).is_err());
     }
@@ -118,7 +119,7 @@ mod tests {
                 ),
             ),
         };
-        epochs.encoded = Some(encoded);
+        epochs.encoded = Some(encoded.unwrap());
         epochs.decoded = Some(decoded);
     }
     #[then("the consumer epoch bytes match Kafka exactly and all epoch fields are recovered")]

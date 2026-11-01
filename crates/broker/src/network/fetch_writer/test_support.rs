@@ -27,7 +27,7 @@ pub(super) fn raw_batch(base: i64) -> Bytes {
         ..RecordBatch::default()
     };
     let mut buf = BytesMut::new();
-    rb.encode(&mut buf).unwrap();
+    rb.encode_batch(&mut buf).unwrap();
     buf.freeze()
 }
 

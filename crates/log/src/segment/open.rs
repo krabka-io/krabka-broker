@@ -344,7 +344,7 @@ impl Segment {
         let mut cur: &[u8] = &buf;
         while !cur.is_empty() {
             let before = cur.len();
-            let Ok(batch) = RecordBatch::decode(&mut cur) else {
+            let Ok(batch) = RecordBatch::decode_batch(&mut cur) else {
                 break;
             };
             let encoded_len = u64::try_from(before - cur.len())

@@ -135,12 +135,12 @@ pub struct CurrentMemberAssignmentValue {
 
 #[krabka_macros::flexible_value(record = "ConsumerGroupCurrentMemberAssignmentValue")]
 impl CurrentMemberAssignmentValue {
-    fn encode_fields(&self, buf: &mut BytesMut) {
+    fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         buf.put_i32(self.member_epoch);
         buf.put_i32(self.previous_member_epoch);
         buf.put_i8(self.state as i8);
-        encode_current_topic_partitions(buf, &self.assigned_partitions);
-        encode_current_topic_partitions(buf, &self.partitions_pending_revocation);
+        encode_current_topic_partitions(buf, &self.assigned_partitions)?;
+        encode_current_topic_partitions(buf, &self.partitions_pending_revocation)
     }
 
     fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -164,8 +164,11 @@ impl CurrentMemberAssignmentValue {
     }
 }
 
-fn encode_topic_partitions(buf: &mut BytesMut, items: &[AssignedTopicPartitions]) {
-    put_assigned_topics(buf, items, |tp| (&tp.topic_id, &tp.partitions));
+fn encode_topic_partitions(
+    buf: &mut BytesMut,
+    items: &[AssignedTopicPartitions],
+) -> Result<(), BrokerError> {
+    put_assigned_topics(buf, items, |tp| (&tp.topic_id, &tp.partitions))
 }
 
 fn decode_topic_partitions(buf: &mut &[u8]) -> Result<Vec<AssignedTopicPartitions>, BrokerError> {
@@ -175,18 +178,21 @@ fn decode_topic_partitions(buf: &mut &[u8]) -> Result<Vec<AssignedTopicPartition
     })
 }
 
-fn encode_current_topic_partitions(buf: &mut BytesMut, items: &[CurrentTopicPartitions]) {
+fn encode_current_topic_partitions(
+    buf: &mut BytesMut,
+    items: &[CurrentTopicPartitions],
+) -> Result<(), BrokerError> {
     put_compact_array(buf, items.iter(), |buf, tp| {
         put_uuid(buf, tp.topic_id.0);
-        put_i32_array(buf, &tp.partitions);
+        put_i32_array(buf, &tp.partitions)?;
         let mut tags = Vec::new();
         if let Some(epochs) = &tp.assignment_epochs {
             let mut payload = BytesMut::new();
-            put_i32_array(&mut payload, epochs);
+            put_i32_array(&mut payload, epochs)?;
             tags.push((TAG_ASSIGNMENT_EPOCHS, payload.freeze()));
         }
-        put_tagged_fields(buf, tags);
-    });
+        put_tagged_fields(buf, tags)
+    })
 }
 
 fn decode_current_topic_partitions(
@@ -243,7 +249,7 @@ mod tests {
                 partitions: vec![0, 1, 2],
             }],
         };
-        assert!(TargetAssignmentMemberValue::decode(&v.encode()).unwrap() == v);
+        assert!(TargetAssignmentMemberValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
 
     /// Kafka's `Utils.assignmentFromTopicPartitions`: the stored epochs when
@@ -311,7 +317,7 @@ mod tests {
 
     #[test]
     fn assignment_records_reject_a_missing_tagged_trailer() {
-        let t = TargetAssignmentMemberValue::default().encode();
+        let t = TargetAssignmentMemberValue::default().encode().unwrap();
         assert!(TargetAssignmentMemberValue::decode(&t[..t.len() - 1]).is_err());
     }
     mod bdd_target_assignment_member {
@@ -344,7 +350,8 @@ mod tests {
                     .value
                     .as_ref()
                     .expect("group record prepared")
-                    .encode(),
+                    .encode()
+                    .unwrap(),
             );
         }
         #[then(
@@ -423,7 +430,14 @@ mod tests {
         }
         #[when("the coordinator persists and reads this current_member_assignment record")]
         fn record_codec(record: &mut RecordCompatibility) {
-            record.encoded = Some(record.value.as_ref().expect("record prepared").encode());
+            record.encoded = Some(
+                record
+                    .value
+                    .as_ref()
+                    .expect("record prepared")
+                    .encode()
+                    .unwrap(),
+            );
             record.decoded = Some(CurrentMemberAssignmentValue::decode(
                 record.encoded.as_ref().expect("record encoded"),
             ));

@@ -119,8 +119,8 @@ fn make_batch(records: i32, payload: usize) -> RecordBatch {
 /// The wire bytes of one partition's records field, as a producer sends it.
 fn v2_records(records: i32, payload: usize) -> Result<Bytes, BenchError> {
     let batch = make_batch(records, payload);
-    let mut buf = BytesMut::with_capacity(batch.encoded_len());
-    batch.encode(&mut buf)?;
+    let mut buf = BytesMut::with_capacity(batch.encoded_batch_len());
+    batch.encode_batch(&mut buf)?;
     Ok(buf.freeze())
 }
 

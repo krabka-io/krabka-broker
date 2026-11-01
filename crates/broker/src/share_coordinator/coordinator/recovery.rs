@@ -249,7 +249,7 @@ fn read_replay_batches(
     let mut cursor = raw.bytes.as_ref();
     let mut batches = Vec::new();
     while !cursor.is_empty() {
-        batches.push(RecordBatch::decode(&mut cursor).map_err(|error| {
+        batches.push(RecordBatch::decode_batch(&mut cursor).map_err(|error| {
             BrokerError::Share(format!(
                 "share-state batch at {offset} does not decode: {error}"
             ))

@@ -965,7 +965,7 @@ mod tests {
                     }],
                     ..Default::default()
                 }
-                .encode(&mut one)
+                .encode_batch(&mut one)
                 .expect("encode a batch");
                 one.freeze()
             })

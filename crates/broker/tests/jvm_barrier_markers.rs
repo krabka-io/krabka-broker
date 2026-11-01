@@ -40,7 +40,7 @@ use {
         start_host_broker_with,
     },
     krabka_broker::BrokerHandle,
-    krabka_client_admin::AdminClient,
+    krabka_client_admin::{AdminClient, AdminClientLike as _},
     krabka_client_core::Client,
     krabka_client_producer::{Producer, ProducerRecord},
     krabka_protocol::krabka::barrier::{

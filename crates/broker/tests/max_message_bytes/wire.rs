@@ -77,7 +77,7 @@ pub fn batch_of_wire_len(target: usize) -> RecordBatch {
     let mut value_len = target.saturating_sub(70);
     for _ in 0..8 {
         let batch = one_record(value_len);
-        let encoded = batch.encoded_len();
+        let encoded = batch.encoded_batch_len();
         if encoded == target {
             return batch;
         }
@@ -115,7 +115,7 @@ pub fn gzip_batch(value_len: usize) -> RecordBatch {
 /// Bytes `batch` occupies on the wire, with its own compression applied.
 pub fn wire_len(batch: &RecordBatch) -> usize {
     let mut buf = bytes::BytesMut::new();
-    batch.encode(&mut buf).expect("encode batch");
+    batch.encode_batch(&mut buf).expect("encode batch");
     buf.len()
 }
 

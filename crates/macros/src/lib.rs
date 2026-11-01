@@ -356,7 +356,9 @@
 //!
 //! `#[flexible_value(record = "KafkaRecord")]` goes on an inherent impl with
 //! private `encode_fields(self or &self, buf: &mut BytesMut)` and
-//! `decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError>` methods.
+//! `decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError>` methods. An
+//! `encode_fields` that can fail returns `Result<(), BrokerError>`; the
+//! generated `encode` returns `Result<Bytes, BrokerError>` either way.
 //! It retains those methods and adds the public framed codecs. The field
 //! methods keep wire order explicit; the encoder retains its receiver ownership.
 //!
@@ -450,7 +452,8 @@
 //!
 //! `#[derive(FlexibleArrayValue)]` wraps one `Vec` field in version-zero
 //! framing. `#[array_value(record = "RecordName", encode = writer, decode = reader)]`
-//! selects the existing array callbacks and decoding error name.
+//! selects the existing array callbacks and decoding error name. The writer
+//! returns `Result<(), BrokerError>`, and so does the generated `encode`.
 //!
 //! `tagged_wire!` and `unthrottled_wire!` construct exhaustive struct values.
 //! Both supply an empty tagged-field set; the second supplies zero throttle.

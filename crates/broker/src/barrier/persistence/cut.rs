@@ -84,16 +84,16 @@ pub fn encode_cut(value: &CutValue) -> Result<Vec<u8>, codec::BrokerError> {
     codec::put_i64(&mut out, value.triggered_at);
     codec::put_i64(&mut out, value.completed_at);
     codec::put_i8(&mut out, value.status.code());
-    codec::put_array_len(&mut out, value.topics.len(), false);
+    codec::put_array_len(&mut out, value.topics.len(), false)?;
     for topic in &value.topics {
         codec::put_string(&mut out, &topic.topic)?;
-        codec::put_array_len(&mut out, topic.partitions.len(), false);
+        codec::put_array_len(&mut out, topic.partitions.len(), false)?;
         for entry in &topic.partitions {
             codec::put_i32(&mut out, entry.partition.get());
             codec::put_i64(&mut out, entry.offset.0);
         }
     }
-    codec::put_array_len(&mut out, value.missing.len(), false);
+    codec::put_array_len(&mut out, value.missing.len(), false)?;
     for entry in &value.missing {
         codec::put_string(&mut out, &entry.topic)?;
         codec::put_i32(&mut out, entry.partition.get());

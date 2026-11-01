@@ -372,7 +372,7 @@ mod tests {
             .records(3)
             .timestamp(1_000)
             .call()
-            .encoded_len();
+            .encoded_batch_len();
         let count = 3 * window / batch_size + 2;
         let mut actual = Vec::new();
         let mut expected = Vec::new();
@@ -418,10 +418,10 @@ mod tests {
         let interval = bytes(u32::try_from(4 * window).unwrap());
         let mut first = sample_batch().offset(10).timestamp(1_000).call();
         first.records[0].value = Some(Bytes::from(vec![b'x'; window]));
-        let overhead = first.encoded_len() - window;
+        let overhead = first.encoded_batch_len() - window;
         let first_size = window - HEADER_LEN / 2;
         first.records[0].value = Some(Bytes::from(vec![b'x'; first_size - overhead]));
-        assert2::assert!(first.encoded_len() == first_size);
+        assert2::assert!(first.encoded_batch_len() == first_size);
         seg.append(&first, interval).unwrap();
         let split_header = seg.log_size;
         seg.append(&sample_batch().offset(11).timestamp(1_000).call(), interval)

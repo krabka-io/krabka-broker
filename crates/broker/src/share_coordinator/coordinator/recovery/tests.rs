@@ -192,7 +192,8 @@ async fn recover_honors_nondefault_read_bound() {
                 start_offset: Offset(1),
                 ..snapshot.clone()
             }
-            .encode(),
+            .encode()
+            .unwrap(),
         ),
         ..Record::default()
     });
@@ -200,7 +201,7 @@ async fn recover_honors_nondefault_read_bound() {
     let mut batch = RecordBatch::default();
     batch.records.push(Record {
         key: Some(encode_state_key(&key).unwrap()),
-        value: Some(snapshot.encode()),
+        value: Some(snapshot.encode().unwrap()),
         ..Record::default()
     });
     // Padding that pushes the batch past the initial read window: a record of a type
@@ -230,7 +231,8 @@ async fn recover_honors_nondefault_read_bound() {
                 delivery_complete_count: 8,
                 state_batches: vec![],
             }
-            .encode(),
+            .encode()
+            .unwrap(),
         ),
         ..Record::default()
     });
@@ -432,7 +434,8 @@ async fn replay_uses_per_record_and_inter_batch_offsets() {
                 write_timestamp: 0,
                 state_batches: vec![batch(Offset(50)..=Offset(59))],
             }
-            .encode(),
+            .encode()
+            .unwrap(),
         ),
         ..Default::default()
     });
@@ -935,7 +938,8 @@ fn update_then_snapshot(snap_key: bytes::Bytes, upd_key: bytes::Bytes) -> Record
                 delivery_complete_count: 0,
                 state_batches: vec![],
             }
-            .encode(),
+            .encode()
+            .unwrap(),
         ),
         ..Default::default()
     });
@@ -953,7 +957,8 @@ fn update_then_snapshot(snap_key: bytes::Bytes, upd_key: bytes::Bytes) -> Record
                 write_timestamp: 0,
                 state_batches: vec![batch(Offset(20)..=Offset(29))],
             }
-            .encode(),
+            .encode()
+            .unwrap(),
         ),
         ..Default::default()
     });
@@ -1013,11 +1018,11 @@ async fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
         }],
         ..RecordBatch::default()
     };
-    let mut unsupported_version = snapshot(20).encode().to_vec();
+    let mut unsupported_version = snapshot(20).encode().unwrap().to_vec();
     unsupported_version[..2].copy_from_slice(&1_i16.to_be_bytes());
     let unsupported_version = Bytes::from(unsupported_version);
-    let truncated_snapshot = snapshot(20).encode().slice(..10);
-    let truncated_update = update.encode().slice(..10);
+    let truncated_snapshot = snapshot(20).encode().unwrap().slice(..10);
+    let truncated_update = update.encode().unwrap().slice(..10);
     let both_snapshots = HashMap::from([
         (
             ("g".to_owned(), topic_id, 0),
@@ -1032,7 +1037,7 @@ async fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
     let cases: Vec<Case> = vec![
         Case {
             name: "unknown type 2 with a value",
-            odd: data(Some(key_of(2, 2)), Some(snapshot(20).encode())),
+            odd: data(Some(key_of(2, 2)), Some(snapshot(20).encode().unwrap())),
             expected: Some(both_snapshots.clone()),
         },
         Case {
@@ -1090,12 +1095,15 @@ async fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
         },
         Case {
             name: "key shorter than its record type",
-            odd: data(Some(Bytes::from_static(&[0x00])), Some(update.encode())),
+            odd: data(
+                Some(Bytes::from_static(&[0x00])),
+                Some(update.encode().unwrap()),
+            ),
             expected: None,
         },
         Case {
             name: "record without a key",
-            odd: data(None, Some(update.encode())),
+            odd: data(None, Some(update.encode().unwrap())),
             expected: None,
         },
     ];
@@ -1116,13 +1124,13 @@ async fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
             let mut log = part.log.lock().unwrap();
             log.append(&mut data(
                 Some(key_of(KEY_SHARE_SNAPSHOT, 0)),
-                Some(snapshot(0).encode()),
+                Some(snapshot(0).encode().unwrap()),
             ))
             .unwrap();
             log.append(&mut odd).unwrap();
             log.append(&mut data(
                 Some(key_of(KEY_SHARE_SNAPSHOT, 1)),
-                Some(snapshot(10).encode()),
+                Some(snapshot(10).encode().unwrap()),
             ))
             .unwrap();
         }

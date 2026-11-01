@@ -1486,7 +1486,7 @@ mod tests {
                 ..Default::default()
             };
             let mut out = BytesMut::new();
-            batch.encode(&mut out).expect("encode");
+            batch.encode_batch(&mut out).expect("encode");
             out.freeze()
         }
 

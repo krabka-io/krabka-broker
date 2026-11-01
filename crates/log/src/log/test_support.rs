@@ -290,7 +290,7 @@ pub struct EncodedVerbatim {
 /// leader epoch. Return both the wire bytes and a `VerbatimBatch`.
 pub fn verbatim_from(producer: &RecordBatch, leader_epoch: LeaderEpoch) -> EncodedVerbatim {
     let mut wire = bytes::BytesMut::new();
-    producer.encode(&mut wire).unwrap();
+    producer.encode_batch(&mut wire).unwrap();
     let wire = wire.freeze();
     let vb = VerbatimBatch {
         bytes: wire.clone(),

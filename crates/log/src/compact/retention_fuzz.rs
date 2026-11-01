@@ -302,10 +302,10 @@ proptest! {
             .collect();
 
         let stamped = batch.with_delete_horizon(horizon);
-        let mut buf = BytesMut::with_capacity(stamped.encoded_len());
-        stamped.encode(&mut buf).unwrap();
+        let mut buf = BytesMut::with_capacity(stamped.encoded_batch_len());
+        stamped.encode_batch(&mut buf).unwrap();
         let mut cursor: &[u8] = &buf[..];
-        let decoded = RecordBatch::decode(&mut cursor).unwrap();
+        let decoded = RecordBatch::decode_batch(&mut cursor).unwrap();
 
         prop_assert_eq!(decoded.delete_horizon_ms(), Some(horizon));
         // Reconstructed absolute timestamps (base + delta, delta is i64)

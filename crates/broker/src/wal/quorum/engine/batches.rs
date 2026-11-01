@@ -94,7 +94,7 @@ pub(in crate::wal::quorum) fn split_batches(bytes: &Bytes) -> Result<Vec<BatchBy
     while offset < bytes.len() {
         let mut cur = bytes.slice(offset..);
         let remaining = cur.len();
-        let batch = RecordBatch::decode(&mut cur)
+        let batch = RecordBatch::decode_batch(&mut cur)
             .map_err(|err| BrokerError::Replication(format!("decode WAL batch: {err}")))?;
         let consumed = remaining
             .checked_sub(cur.len())

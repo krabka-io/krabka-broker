@@ -286,7 +286,7 @@ fn first_batch_bytes_at_or_after(
     while offset < run.len() {
         let slice = run.slice(offset..);
         let mut cur: &[u8] = &slice;
-        let batch = RecordBatch::decode(&mut cur).map_err(|error| {
+        let batch = RecordBatch::decode_batch(&mut cur).map_err(|error| {
             BrokerError::Txn(format!(
                 "diskless WAL indexed range contains an invalid batch: {error}"
             ))
@@ -371,7 +371,7 @@ mod tests {
     fn encode_batches(batches: &[RecordBatch]) -> Bytes {
         let mut bytes = BytesMut::new();
         for batch in batches {
-            batch.encode(&mut bytes).unwrap();
+            batch.encode_batch(&mut bytes).unwrap();
         }
         bytes.freeze()
     }
@@ -593,7 +593,7 @@ mod tests {
         let second = batch(1, b"b");
         let run = encode_batches(&[first, second.clone()]);
         let mut expected = BytesMut::new();
-        second.encode(&mut expected).unwrap();
+        second.encode_batch(&mut expected).unwrap();
 
         let got = first_batch_bytes_at_or_after(&run, 1, usize::MAX)
             .unwrap()

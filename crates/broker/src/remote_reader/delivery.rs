@@ -212,7 +212,7 @@ mod tests {
             let timestamp = activation_ms(offset);
             max_timestamp = max_timestamp.max(timestamp);
             batch_at(offset, &[timestamp], b'x')
-                .encode(&mut bytes)
+                .encode_batch(&mut bytes)
                 .unwrap();
         }
         let log_path = source.path().join("segment.log");

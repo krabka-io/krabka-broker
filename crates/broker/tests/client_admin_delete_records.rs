@@ -5,7 +5,7 @@ mod support;
 use {
     crate::support::client_admin::*,
     assert2::assert,
-    krabka_client_admin::DeleteRecordsOp,
+    krabka_client_admin::{AdminClientLike as _, DeleteRecordsOp},
     krabka_client_core::{ClientError, Connection, ConnectionOptions, fetch_partition},
     krabka_protocol::primitives::uuid::Uuid as WireUuid,
     tokio::net,

@@ -80,22 +80,22 @@ fn decode(mut bytes: &[u8]) -> Result<Request, BrokerError> {
     Ok(Request { replica_id, topics })
 }
 
-fn encode(topics: &[TopicResponse]) -> Bytes {
+fn encode(topics: &[TopicResponse]) -> Result<Bytes, BrokerError> {
     let mut buf = BytesMut::new();
-    put_array_len(&mut buf, topics.len(), false);
+    put_array_len(&mut buf, topics.len(), false)?;
     for topic in topics {
-        put_string(&mut buf, &topic.name);
-        put_array_len(&mut buf, topic.partitions.len(), false);
+        put_string(&mut buf, &topic.name)?;
+        put_array_len(&mut buf, topic.partitions.len(), false)?;
         for partition in &topic.partitions {
             put_i32(&mut buf, partition.index);
             put_i16(&mut buf, partition.error_code);
-            put_array_len(&mut buf, partition.offsets.len(), false);
+            put_array_len(&mut buf, partition.offsets.len(), false)?;
             for offset in &partition.offsets {
                 put_i64(&mut buf, *offset);
             }
         }
     }
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 async fn resolve_partition(
@@ -239,7 +239,7 @@ pub(super) async fn handle(
         }
     }));
 
-    Ok(encode(&topics))
+    encode(&topics)
 }
 
 /// What a v0 lookup of the latest offset of one partition answered.
@@ -347,9 +347,9 @@ mod tests {
 
         let mut request = BytesMut::new();
         put_i32(&mut request, -2); // debugging replica: no high-watermark cap
-        put_array_len(&mut request, 1, false);
-        put_string(&mut request, TOPIC);
-        put_array_len(&mut request, 1, false);
+        put_array_len(&mut request, 1, false).unwrap();
+        put_string(&mut request, TOPIC).unwrap();
+        put_array_len(&mut request, 1, false).unwrap();
         put_i32(&mut request, 0);
         put_i64(&mut request, LATEST_TIMESTAMP);
         put_i32(&mut request, 3);
@@ -393,10 +393,10 @@ mod tests {
 
         let mut request = BytesMut::new();
         put_i32(&mut request, -1);
-        put_array_len(&mut request, 3, false);
+        put_array_len(&mut request, 3, false).unwrap();
         for name in ["a", "denied", "c"] {
-            put_string(&mut request, name);
-            put_array_len(&mut request, 1, false);
+            put_string(&mut request, name).unwrap();
+            put_array_len(&mut request, 1, false).unwrap();
             put_i32(&mut request, 0);
             put_i64(&mut request, LATEST_TIMESTAMP);
             put_i32(&mut request, 1);
@@ -441,9 +441,9 @@ mod tests {
 
         let mut request = BytesMut::new();
         put_i32(&mut request, -1);
-        put_array_len(&mut request, 1, false);
-        put_string(&mut request, TOPIC);
-        put_array_len(&mut request, 2, false);
+        put_array_len(&mut request, 1, false).unwrap();
+        put_string(&mut request, TOPIC).unwrap();
+        put_array_len(&mut request, 2, false).unwrap();
         // The same partition index named twice: every row of it must come
         // back INVALID_REQUEST, matching Kafka's duplicatePartitions check.
         put_i32(&mut request, 0);

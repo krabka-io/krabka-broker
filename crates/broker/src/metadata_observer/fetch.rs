@@ -345,7 +345,7 @@ fn apply_fetch_records(
         // decode holds records that do not parse. Kafka's raft layer appends
         // such a batch, and its `RecordsIterator` throws when the
         // `MetadataLoader` reads it: the load error above.
-        let batch = match RecordBatch::decode(&mut bytes) {
+        let batch = match RecordBatch::decode_batch(&mut bytes) {
             Ok(batch) => batch,
             Err(error) => {
                 error!(
@@ -494,7 +494,7 @@ mod tests {
     fn encode_batches(batches: &[RecordBatch]) -> Bytes {
         let mut out = Vec::new();
         for batch in batches {
-            batch.encode(&mut out).expect("encode batch");
+            batch.encode_batch(&mut out).expect("encode batch");
         }
         Bytes::from(out)
     }

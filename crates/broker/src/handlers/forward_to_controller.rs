@@ -238,7 +238,7 @@ pub fn build(
         client_id: ctx.client_id.map(ToOwned::to_owned),
         body: Bytes::copy_from_slice(req_bytes),
         body_flexible: broker.handlers().body_flexible(api_key, version),
-    });
+    })?;
     let principal = ForwardedPrincipal {
         name: ctx.principal.name.clone(),
         token_authenticated: false,

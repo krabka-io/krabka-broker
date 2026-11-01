@@ -173,7 +173,7 @@ fn a_reopened_segment_keeps_a_maximum_that_predates_its_newest_batch() {
     // Three batches per sealed segment. Kafka rolls before an append that
     // would push the active segment past `segment.bytes`, so the limit is
     // exactly three batches' worth.
-    let batch_len = u32::try_from(batch_at(0).encoded_len()).unwrap();
+    let batch_len = u32::try_from(batch_at(0).encoded_batch_len()).unwrap();
     let config = LogConfig {
         segment_size: bytes(3 * batch_len),
         // Index every batch, so the unindexed tail is the last batch alone.

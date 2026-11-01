@@ -94,8 +94,8 @@ pub(super) fn batch(producer_id: i64, records: Vec<Record>) -> RecordBatch {
 }
 
 fn encode(batch: &RecordBatch) -> Vec<u8> {
-    let mut buf = BytesMut::with_capacity(batch.encoded_len());
-    batch.encode(&mut buf).expect("encode");
+    let mut buf = BytesMut::with_capacity(batch.encoded_batch_len());
+    batch.encode_batch(&mut buf).expect("encode");
     buf.to_vec()
 }
 

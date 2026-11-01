@@ -25,7 +25,7 @@ impl SnapshotReader {
     /// `Snapshots.lastContainedLogTimestamp`.
     pub(crate) fn last_contained_log_timestamp(bytes: &[u8]) -> Result<i64, RaftError> {
         let mut cursor: &[u8] = bytes;
-        let batch = RecordBatch::decode(&mut cursor)?;
+        let batch = RecordBatch::decode_batch(&mut cursor)?;
         let header = batch
             .attributes
             .is_control_batch()
@@ -56,7 +56,7 @@ impl SnapshotReader {
         // to translation, so a nil placeholder suffices.
         let mut ctx = MetadataImage::new(Uuid::nil());
         while !cursor.is_empty() {
-            let batch = RecordBatch::decode(&mut cursor)?;
+            let batch = RecordBatch::decode_batch(&mut cursor)?;
             if batch.attributes.is_control_batch() {
                 for record in &batch.records {
                     let (Some(key), Some(value)) = (&record.key, &record.value) else {
@@ -296,12 +296,14 @@ mod tests {
         let mut input = encoded.as_ref();
         let mut legacy = BytesMut::new();
         while !input.is_empty() {
-            let batch = RecordBatch::decode(&mut input).expect("decode current batch");
+            let batch = RecordBatch::decode_batch(&mut input).expect("decode current batch");
             if !matches!(
                 batch.base_offset,
                 SNAPSHOT_KRAFT_VERSION_BASE_OFFSET | SNAPSHOT_VOTERS_BASE_OFFSET
             ) {
-                batch.encode(&mut legacy).expect("encode legacy batch");
+                batch
+                    .encode_batch(&mut legacy)
+                    .expect("encode legacy batch");
             }
         }
 

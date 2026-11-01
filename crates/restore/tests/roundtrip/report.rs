@@ -235,7 +235,7 @@ async fn json_report_matches_the_fixtures_exact_record_and_segment_counts() {
                             records_kept: u64::try_from(segment.batch.records.len())
                                 .expect("fixture batches stay tiny"),
                             records_dropped: 0,
-                            bytes_written: u64::try_from(segment.batch.encoded_len())
+                            bytes_written: u64::try_from(segment.batch.encoded_batch_len())
                                 .expect("fixture batches stay tiny"),
                         }
                     })
