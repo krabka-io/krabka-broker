@@ -67,6 +67,22 @@
 (def partition-targets
   #{:one :primaries :minority-third :majority :majorities-ring})
 
+(defn db-package
+  "Jepsen's DB package, except that kills and pauses keep schedules of their
+  own. Jepsen's mixes the kill-start and pause-resume flip-flops, so each step
+  takes one of the two at random. A kill of every node can then wait the whole
+  test for its start while the pauses take the steps, and the test checks a
+  history with nothing in it."
+  [opts]
+  (let [interval (:interval opts nc/default-interval)
+        schedule (fn [fault]
+                   (when (contains? (:faults opts) fault)
+                     (->> (nc/db-generators (assoc opts :faults #{fault}))
+                          :generator
+                          (gen/stagger interval))))]
+    (assoc (nc/db-package opts)
+           :generator (apply gen/any (keep schedule [:kill :pause])))))
+
 (defn nemesis-package
   "Jepsen's combined nemesis, built from the packages of the selected faults
   only. `nc/nemesis-package` sets up every package's nemesis whatever the
@@ -95,7 +111,7 @@
         (faults :clock)                       (conj (if (= :faketime clock-mode)
                                                       (faketime/package opts)
                                                       (nc/clock-package opts)))
-        (some faults [:kill :pause])          (conj (nc/db-package opts))))))
+        (some faults [:kill :pause])          (conj (db-package opts))))))
 
 ;; Test
 

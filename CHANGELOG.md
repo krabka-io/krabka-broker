@@ -29,6 +29,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- The `aspect jepsen` nemesis heals each fault on time. Kills and pauses now keep separate schedules: Jepsen's DB package chose between them at random at each step, so in a nightly run a kill of every node, and in another a pause of every node, lasted the whole test, and the Kafka checker failed both tests for a history with no successful operation. The nemesis also asks every node for the controller leader at once, where it had waited three seconds for each paused node in turn.
+
 - `krabka-log` no longer needs the rustix git fork, one of the two reasons that no 1.1.x release of it is on crates.io. Its write-back called `rustix::fs::sync_file_range`, which only the fork in the workspace's `[patch.crates-io]` has, and `cargo publish` ignores that patch. `krabka-log` now builds against crates.io rustix. The other reason is `krabka_protocol::records::crc32c`, which no krabka-protocol release before 0.8.0 has; `krabka-log` publishes again once this repository moves to krabka-protocol 0.8. Its default write-back is `fdatasync`, and its default page drop is `posix_fadvise(POSIX_FADV_DONTNEED)` with no wait. A process installs another with the new `krabka_log::set_write_back` and `WriteBack`. The broker installs `sync_file_range` at startup, before any log opens, so its write-back and page drops do not change.
 
 ## [1.1.5] - 2026-10-31
