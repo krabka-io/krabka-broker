@@ -636,16 +636,17 @@ The pattern holds the model to two obligations:
   cannot promise this counts the steps since the last fault and requires
   `always(steps <= bound)`, a bounded-response property, instead.
 
-A property that reaches a counterexample on the current code, because the bug
-it reproduces is still open, runs through
+An `always` property that reaches a counterexample on the current code,
+because the bug it reproduces is still open, runs through
 [`check_model_with_known_failures`](../crates/broker/src/model_check.rs). The
 runner searches single-threaded and to exhaustion, so the unique-state count is
-deterministic and each counterexample is a shortest one. It pins each failing
-property's counterexample depth beside the unique-state count, and requires
-every other property to hold. The model lands with the property failing, and
-the change that fixes the bug deletes the `KnownFailure` entry and re-pins the
-count. A model that stops reaching the bug fails its test, as a fix that does
-not fix it does.
+deterministic. Stateright's own discovery for a property is the last violating
+state the search visits, so the runner records the first one instead, which a
+breadth-first search reaches by a shortest path. It pins that path's depth
+beside the unique-state count, and requires every other property to hold. The
+model lands with the property failing, and the change that fixes the bug
+deletes the `KnownFailure` entry and re-pins the count. A model that stops
+reaching the bug fails its test, as a fix that does not fix it does.
 
 The paragraphs below take the entry points in table order. Each one names the production code the model drives, what it models instead, its bounds, its properties and reachability witnesses, and its pinned counts, and it ends with what stays outside the model.
 

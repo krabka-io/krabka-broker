@@ -17,8 +17,13 @@
 //!   the pattern.
 
 use {
-    stateright::{Checker as _, Expectation, HasDiscoveries, Model},
-    std::{collections::BTreeSet, fmt::Debug, hash::Hash},
+    stateright::{Checker as _, CheckerVisitor, Expectation, HasDiscoveries, Model, Path},
+    std::{
+        collections::{BTreeMap, BTreeSet},
+        fmt::Debug,
+        hash::Hash,
+        sync::{Arc, Mutex},
+    },
 };
 
 krabka_macros::bounded_bfs!(run_bfs);
@@ -68,12 +73,57 @@ pub struct KnownFailure {
     pub depth: usize,
 }
 
+/// The `always` condition a [`KnownFailure`] names.
+type Condition<M> = fn(&M, &<M as Model>::State) -> bool;
+
+/// The first visited path that breaks each watched `always` condition.
+type FirstBreaks<A> = Arc<Mutex<BTreeMap<&'static str, Vec<A>>>>;
+
+/// A visitor that records, for each watched condition, the actions of the
+/// first visited state that breaks it.
+///
+/// Stateright replaces a property's discovery with every later state that
+/// breaks it, so the path its checker reports is the last one, not the
+/// shortest. A single-threaded breadth-first search visits states in depth
+/// order, so the first path this visitor sees is a shortest one.
+struct FirstCounterexamples<M: Model> {
+    watched: Vec<(&'static str, Condition<M>)>,
+    found: FirstBreaks<M::Action>,
+}
+
+impl<M: Model> CheckerVisitor<M> for FirstCounterexamples<M>
+where
+    M::Action: Clone,
+{
+    fn visit(&self, model: &M, path: Path<M::State, M::Action>) {
+        let mut found = self
+            .found
+            .lock()
+            .expect("no visitor panics while it holds the lock");
+        let broken: Vec<&'static str> = self
+            .watched
+            .iter()
+            .filter(|(name, condition)| {
+                !found.contains_key(name) && !condition(model, path.last_state())
+            })
+            .map(|(name, _)| *name)
+            .collect();
+        if broken.is_empty() {
+            return;
+        }
+        let actions = path.into_actions();
+        for name in broken {
+            found.insert(name, actions.clone());
+        }
+    }
+}
+
 /// [`check_model`] for a model with properties that fail on the current code.
 ///
 /// The search runs single-threaded and to exhaustion, so the unique-state
-/// count is deterministic and every counterexample is a shortest one. Each
-/// property in `known` must reach a counterexample of exactly the pinned depth.
-/// Every other property must hold, as [`check_model`] requires.
+/// count is deterministic. Each property in `known` must be an `always`
+/// property whose shortest counterexample has exactly the pinned depth. Every
+/// other property must hold, as [`check_model`] requires.
 pub fn check_model_with_known_failures<M>(
     model: M,
     label: &str,
@@ -83,25 +133,37 @@ pub fn check_model_with_known_failures<M>(
 ) where
     M: Model + Send + Sync + 'static,
     M::State: Debug + Hash + Send + Sync + Clone + PartialEq + 'static,
-    M::Action: Debug + Clone + PartialEq,
+    M::Action: Debug + Clone + PartialEq + Send + 'static,
 {
     let (max_depth, max_states, unique) = limits;
     let properties = model.properties();
-    for failure in known {
-        assert2::assert!(
-            properties
+    let watched = known
+        .iter()
+        .map(|failure| {
+            let property = properties
                 .iter()
-                .any(|property| property.name == failure.property
-                    && property.expectation != Expectation::Sometimes),
-            "[{label}] known failure {} names no always or eventually property",
-            failure.property
-        );
-    }
+                .find(|property| {
+                    property.name == failure.property && property.expectation == Expectation::Always
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "[{label}] known failure {} names no always property",
+                        failure.property
+                    )
+                });
+            (property.name, property.condition)
+        })
+        .collect();
+    let found = FirstBreaks::<M::Action>::default();
     let checker = model
         .checker()
         .target_max_depth(max_depth)
         .target_state_count(max_states)
         .finish_when(HasDiscoveries::AllOf(BTreeSet::from([EXHAUSTIVE])))
+        .visitor(FirstCounterexamples {
+            watched,
+            found: Arc::clone(&found),
+        })
         .spawn_bfs()
         .join();
     eprintln!(
@@ -123,20 +185,24 @@ pub fn check_model_with_known_failures<M>(
         "[{label}] unique-state bound exceeded"
     );
     assert_pinned_count(checker.unique_state_count(), pinned, label);
+    let found = found.lock().expect("the search has ended");
     for property in &properties {
-        let discovery = checker.discovery(property.name);
         if let Some(failure) = known
             .iter()
             .find(|failure| failure.property == property.name)
         {
-            let Some(path) = discovery else {
+            let Some(actions) = found.get(property.name) else {
                 panic!(
                     "[{label}] {} no longer fails: if its fix merged, remove it from the known \
                      failures",
                     property.name
                 );
             };
-            let actions = path.into_actions();
+            eprintln!(
+                "[{label}] {} fails at depth {}: {actions:?}",
+                property.name,
+                actions.len()
+            );
             assert2::assert!(
                 actions.len() == failure.depth,
                 "[{label}] {} fails at a changed depth: {actions:?}",
@@ -144,11 +210,11 @@ pub fn check_model_with_known_failures<M>(
             );
         } else if property.expectation == Expectation::Sometimes {
             assert2::assert!(
-                discovery.is_some(),
+                checker.discovery(property.name).is_some(),
                 "[{label}] {} is never witnessed",
                 property.name
             );
-        } else if let Some(path) = discovery {
+        } else if let Some(path) = checker.discovery(property.name) {
             panic!(
                 "[{label}] {} fails: {:?}",
                 property.name,
