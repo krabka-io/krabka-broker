@@ -583,6 +583,15 @@ async fn shared_native_backend_survives_coordinator_movement_and_epoch_change() 
         .await
         .expect("seed moved actor");
     assert!(describe(&moved).await.topology_description == expected);
+    // Live topology mutation is rejected by Kafka too. Replay a later
+    // topology epoch to exercise storage fencing without changing that rule.
+    let mut advanced = second.cached_streams_seed("app").expect("advanced seed");
+    advanced.topology.as_mut().expect("stored topology").epoch = 1;
+    moved
+        .tx
+        .send(StreamsGroupActorMessage::Seed(advanced))
+        .await
+        .expect("advance replay");
     let mut changed = join("a");
     changed.topology.as_mut().expect("topology").epoch = 1;
     let response = heartbeat(&moved, changed, 1).await;
