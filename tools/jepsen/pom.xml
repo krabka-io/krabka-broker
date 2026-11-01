@@ -40,7 +40,7 @@
     <dependency>
       <groupId>org.clojure</groupId>
       <artifactId>data.json</artifactId>
-      <version>2.5.1</version>
+      <version>2.5.2</version>
     </dependency>
     <!-- The client krabka's support matrix names for its JVM suites. -->
     <dependency>
