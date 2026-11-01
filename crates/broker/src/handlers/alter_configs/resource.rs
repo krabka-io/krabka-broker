@@ -64,13 +64,22 @@ pub(super) async fn process_resource(
         )
     })
     .await
-    .unwrap_or_else(|code| AlterConfigsResourceResponse {
+    .unwrap_or_else(|refusal| resource_refusal(&resource, refusal))
+}
+
+/// The row of `resource` whose guarded alter gave up with `refusal`, its
+/// error code and message.
+pub(super) fn resource_refusal(
+    resource: &AlterConfigsResource,
+    (error_code, error_message): (i16, Option<String>),
+) -> AlterConfigsResourceResponse {
+    AlterConfigsResourceResponse {
         resource_type: resource.resource_type,
-        resource_name: resource.resource_name,
-        error_code: code,
-        error_message: None,
+        resource_name: resource.resource_name.clone(),
+        error_code,
+        error_message,
         ..Default::default()
-    })
+    }
 }
 
 async fn process_resource_once(

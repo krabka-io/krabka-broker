@@ -115,8 +115,9 @@ where
         return ControlFlow::Continue(request);
     }
     if !is_active_controller(broker) {
+        let known_leader = *broker.controller.watch_leader().borrow();
         return ControlFlow::Break(encode_response(
-            &refusal(&request, codes::NOT_CONTROLLER, None),
+            &not_active_controller_refusal(&request, known_leader, refusal),
             version,
         ));
     }
@@ -124,6 +125,26 @@ where
         local(broker, request, version, ctx)
             .await
             .and_then(|response| encode_response(&response, version)),
+    )
+}
+
+/// The answer of a node that is not the active controller to a request that
+/// only the active controller runs, built by the API's own `refusal`.
+///
+/// Kafka's `QuorumController.ControllerWriteEvent.run` fails such a request
+/// with `ControllerExceptions.newWrongControllerException(latestController())`,
+/// which names `known_leader`, the controller leader this node knows of. The
+/// `getErrorResponse` of each API that routes here keeps
+/// `ApiError.fromThrowable(e).message()`, so the refusal carries that text.
+pub(super) fn not_active_controller_refusal<Request, Response>(
+    request: &Request,
+    known_leader: Option<krabka_metadata::NodeId>,
+    refusal: impl FnOnce(&Request, i16, Option<&str>) -> Response,
+) -> Response {
+    refusal(
+        request,
+        codes::NOT_CONTROLLER,
+        Some(&wrong_controller_message(known_leader)),
     )
 }
 
@@ -276,9 +297,9 @@ fn unwrap(
 #[cfg(test)]
 mod tests {
     use {
-        super::guarded_operation_on_source,
-        crate::test_support::FakeMetadataSource,
-        krabka_raft::RaftError,
+        super::{guarded_operation_on_source, not_active_controller_refusal},
+        crate::{codes, test_support::FakeMetadataSource},
+        krabka_raft::{NodeId, RaftError},
         std::{
             sync::atomic::{AtomicUsize, Ordering},
             time::Duration,
@@ -307,5 +328,33 @@ mod tests {
 
         assert2::assert!(let Err(_) = result);
         assert2::assert!(attempts.load(Ordering::SeqCst) > 1);
+    }
+
+    /// A controller-listener request that reaches a node that is not the
+    /// active controller answers `NOT_CONTROLLER` with the message of
+    /// Kafka's `ControllerExceptions.newWrongControllerException`, which
+    /// `QuorumController.ControllerWriteEvent.run` builds from
+    /// `latestController()`, the raft leader this node knows of. The
+    /// `getErrorResponse` of `AlterConfigsRequest`,
+    /// `IncrementalAlterConfigsRequest` and `ElectLeadersRequest` keeps
+    /// `ApiError.fromThrowable(e).message()`, so the refusal carries that text.
+    #[yare::parameterized(
+        known_leader = {
+            Some(NodeId(3)),
+            (codes::NOT_CONTROLLER, Some("The active controller appears to be node 3.".to_owned())),
+        },
+        no_known_leader = {
+            None,
+            (codes::NOT_CONTROLLER, Some("No controller appears to be active.".to_owned())),
+        },
+    )]
+    fn a_node_that_is_not_the_active_controller_names_the_leader_it_knows(
+        known_leader: Option<NodeId>,
+        expected: (i16, Option<String>),
+    ) {
+        let refusal = not_active_controller_refusal(&(), known_leader, |(), code, message| {
+            (code, message.map(str::to_owned))
+        });
+        assert2::assert!(refusal == expected);
     }
 }

@@ -143,9 +143,12 @@ mod tests {
     fn top_level_error_has_no_rows() {
         let expected = krabka_macros::unthrottled_wire!(UpdateFeaturesResponse {
             error_code: codes::NOT_CONTROLLER,
-            error_message: Some("not the controller".into()),
+            error_message: Some("No controller appears to be active.".into()),
             results: vec![],
         });
-        assert!(top_level_error(codes::NOT_CONTROLLER, "not the controller") == expected);
+        assert!(
+            top_level_error(codes::NOT_CONTROLLER, "No controller appears to be active.")
+                == expected
+        );
     }
 }

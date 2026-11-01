@@ -20,7 +20,7 @@ use {
     },
     krabka_raft::RaftError,
     std::{collections::HashSet, time::Duration},
-    tokio::time::Instant,
+    tokio::time::{Instant, error::Elapsed},
 };
 
 mod entries;
@@ -41,8 +41,11 @@ use {
             CLUSTER_AUTHORIZATION_FAILED, NONE, NOT_CONTROLLER, REQUEST_TIMED_OUT,
             UNKNOWN_SERVER_ERROR,
         },
-        handlers::forward_to_controller::{
-            ends_guarded_attempt, guarded_operation_on_source, to_active_controller_or_handle,
+        handlers::{
+            forward_to_controller::{
+                ends_guarded_attempt, guarded_operation_on_source, to_active_controller_or_handle,
+            },
+            submit_failure::NOT_CONTROLLER_MESSAGE,
         },
         metadata_source::MetadataSource,
         quota::parse_ip_literal,
@@ -162,18 +165,29 @@ async fn alter_and_submit(
         }
     })
     .await;
-    // A controller failure fails the whole request, as
-    // `AlterClientQuotasRequest.getErrorResponse` answers it.
-    let code = match result {
+    guarded_entries(req, result)
+}
+
+/// The rows of `req` for the result of its guarded plan-and-append.
+///
+/// A controller failure fails the whole request, as
+/// `AlterClientQuotasRequest.getErrorResponse` answers it.
+fn guarded_entries(
+    req: &AlterClientQuotasRequest,
+    result: Result<Result<Vec<EntryData>, RaftError>, Elapsed>,
+) -> Vec<EntryData> {
+    let (code, message) = match result {
         Ok(Ok(entry_results)) => return entry_results,
-        Err(_) => REQUEST_TIMED_OUT,
-        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => NOT_CONTROLLER,
+        Err(_) => (REQUEST_TIMED_OUT, None),
+        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => {
+            (NOT_CONTROLLER, Some(NOT_CONTROLLER_MESSAGE))
+        }
         Ok(Err(error)) => {
             tracing::error!(%error, "alter-client-quotas submit failed");
-            UNKNOWN_SERVER_ERROR
+            (UNKNOWN_SERVER_ERROR, None)
         }
     };
-    request_refusal(req, code, None).entries
+    request_refusal(req, code, message).entries
 }
 
 /// Every entry of `req` answered with `code` and `message`: the answer

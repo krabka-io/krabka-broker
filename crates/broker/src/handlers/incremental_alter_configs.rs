@@ -59,6 +59,8 @@ mod broker_scope;
 mod client_metrics_scope;
 mod group_scope;
 #[cfg(test)]
+mod guarded_failure_tests;
+#[cfg(test)]
 mod test_support;
 mod topic_scope;
 
@@ -128,7 +130,7 @@ krabka_macros::decoded_dispatch! {
             if let Some((code, message)) = refusal.flatten() {
                 indexed_responses.push((
                     index,
-                    resource_refusal(&resource, code).with_error(code, message),
+                    resource_refusal(&resource, (code, Some(message))),
                 ));
                 continue;
             }
@@ -207,8 +209,8 @@ async fn handle_on_controller(
         .zip(refusals)
         .map(|(resource, refusal)| {
             refusal.map_or_else(
-                || resource_refusal(resource, codes::UNKNOWN_SERVER_ERROR),
-                |(code, message)| resource_refusal(resource, code).with_error(code, message),
+                || resource_refusal(resource, (codes::UNKNOWN_SERVER_ERROR, None)),
+                |(code, message)| resource_refusal(resource, (code, Some(message))),
             )
         })
         .collect();
@@ -349,15 +351,20 @@ async fn process_resource(
         )
     })
     .await
-    .unwrap_or_else(|code| resource_refusal(&resource, code))
+    .unwrap_or_else(|refusal| resource_refusal(&resource, refusal))
 }
 
-fn resource_refusal(resource: &AlterConfigsResource, code: i16) -> AlterConfigsResourceResponse {
+/// The row of `resource` whose guarded alter gave up with `refusal`, its
+/// error code and message.
+fn resource_refusal(
+    resource: &AlterConfigsResource,
+    (error_code, error_message): (i16, Option<String>),
+) -> AlterConfigsResourceResponse {
     AlterConfigsResourceResponse {
         resource_type: resource.resource_type,
         resource_name: resource.resource_name.clone(),
-        error_code: code,
-        error_message: None,
+        error_code,
+        error_message,
         ..Default::default()
     }
 }

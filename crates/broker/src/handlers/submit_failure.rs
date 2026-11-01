@@ -47,6 +47,17 @@ pub fn controller_write_code(error: &RaftError, otherwise: i16) -> i16 {
     }
 }
 
+/// `Errors.NOT_CONTROLLER`'s default message.
+///
+/// A response that writes `Errors.forException(e).message()`, not the message
+/// of the exception the controller threw, carries this text. Kafka's
+/// `ControllerRegistrationRequest.getErrorResponse` and
+/// `AlterClientQuotasRequest.getErrorResponse` do, for the failed write that
+/// `ControllerApis.handleControllerRegistration` and
+/// `ControllerApis.handleAlterClientQuotas` hand to
+/// `RequestHandlerHelper.handleError`.
+pub const NOT_CONTROLLER_MESSAGE: &str = "This is not the correct controller for this cluster.";
+
 /// The message of Kafka's `ControllerExceptions.newWrongControllerException`
 /// for a controller write that failed with `error`, or `None` when `error` is
 /// not one that [`controller_write_code`] answers `NOT_CONTROLLER`.
@@ -368,9 +379,7 @@ mod tests {
         known_leader: Option<NodeId>,
         expected: Option<&str>,
     ) {
-        check!(
-            wrong_controller_write_message(&error, known_leader).as_deref() == expected
-        );
+        check!(wrong_controller_write_message(&error, known_leader).as_deref() == expected);
     }
 
     #[yare::parameterized(

@@ -123,6 +123,55 @@ fn wrong_controller_message_names_the_leader_when_there_is_one() {
     assert!(wrong_controller_message(None) == "No controller appears to be active.");
 }
 
+/// A failed write answers what trunk's `ControllerWriteEvent.run` throws:
+/// `ControllerExceptions.newWrongControllerException(latestController())`,
+/// which names the raft leader this controller knows, and
+/// `UnregisterControllerRequest.getErrorResponse` copies `e.getMessage()`.
+#[yare::parameterized(
+    not_leader = {
+        RaftError::NotLeader { current_leader: Some(NodeId(2)) },
+        Some(NodeId(3)),
+        expected(codes::NOT_CONTROLLER, "The active controller appears to be node 2."),
+    },
+    not_leader_without_hint = {
+        RaftError::NotLeader { current_leader: None },
+        Some(NodeId(3)),
+        expected(codes::NOT_CONTROLLER, "No controller appears to be active."),
+    },
+    leader_unknown = {
+        RaftError::LeaderUnknown,
+        None,
+        expected(codes::NOT_CONTROLLER, "No controller appears to be active."),
+    },
+    uncommitted_tail = {
+        RaftError::UncommittedTail,
+        Some(NodeId(1)),
+        expected(codes::NOT_CONTROLLER, "The active controller appears to be node 1."),
+    },
+    uncommitted_tail_without_leader = {
+        RaftError::UncommittedTail,
+        None,
+        expected(codes::NOT_CONTROLLER, "No controller appears to be active."),
+    },
+    registration_gone = {
+        RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord("controller")),
+        Some(NodeId(1)),
+        expected(codes::CONTROLLER_ID_NOT_REGISTERED, "Controller ID 7 is not currently registered."),
+    },
+    shutdown = {
+        RaftError::Shutdown,
+        Some(NodeId(1)),
+        expected(codes::UNKNOWN_SERVER_ERROR, &RaftError::Shutdown.to_string()),
+    },
+)]
+fn a_failed_write_answers_kafkas_unregistration(
+    error: RaftError,
+    known_leader: Option<NodeId>,
+    want: Unregistration,
+) {
+    assert2::assert!(submit_failure(&error, 7, known_leader) == want);
+}
+
 /// Finalizes `metadata.version` at `level` through the `UpdateFeatures`
 /// handler, as `kafka-features upgrade` does.
 async fn finalize_metadata_version(broker: &Broker, level: i16) {
