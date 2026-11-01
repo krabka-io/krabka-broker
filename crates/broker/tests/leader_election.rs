@@ -152,6 +152,9 @@ struct ElectionBehavior {
     killed_at: Option<Instant>,
     acked: Vec<String>,
     after_offset: Option<i64>,
+    /// The two partitions the crashed controller led, each with the epoch it
+    /// had before the crash, keyed by the replica that follows the victim.
+    successor_topics: Vec<(NodeId, String, PartitionRecord)>,
 }
 
 #[rstest::fixture]
@@ -668,12 +671,48 @@ async fn produce_during_leader_failover(election_behavior: ElectionBehavior) {
     drop(election_behavior);
 }
 
+/// Which surviving broker an unclean restart of the partition leader elects:
+/// the first live ISR member after the victim in replica order.
+#[derive(Clone, Copy)]
+enum Successor {
+    /// Whichever broker follows the victim in cluster order.
+    ClusterOrder,
+    /// The active controller, which then has to promote its own broker side
+    /// from the election its controller side wrote.
+    ActiveController,
+}
+
 #[rstest_bdd_macros::given(
     "three brokers use nine-second heartbeat sessions and an RF3 restart-fencing partition is led by a non-controller broker"
 )]
 async fn session_fenced_leader(election_behavior: &mut ElectionBehavior) {
+    session_fenced_leader_with(
+        election_behavior,
+        "restart-fencing",
+        Successor::ClusterOrder,
+    )
+    .await;
+}
+
+#[rstest_bdd_macros::given(
+    "three brokers use nine-second heartbeat sessions and an RF3 controller-successor partition is led by a non-controller broker whose next replica is the active controller"
+)]
+async fn session_fenced_leader_succeeded_by_controller(election_behavior: &mut ElectionBehavior) {
+    session_fenced_leader_with(
+        election_behavior,
+        "controller-successor",
+        Successor::ActiveController,
+    )
+    .await;
+}
+
+async fn session_fenced_leader_with(
+    election_behavior: &mut ElectionBehavior,
+    topic: &str,
+    successor: Successor,
+) {
     election_behavior.guard = Some(cluster_lock().lock().await);
-    election_behavior.topic = "restart-fencing".into();
+    election_behavior.topic = topic.into();
     election_behavior.cluster = support::start_n_node_with(3, |_, config| {
         config.heartbeat_timeout = RESTART_SESSION_TIMEOUT;
     })
@@ -690,15 +729,20 @@ async fn session_fenced_leader(election_behavior: &mut ElectionBehavior) {
         .iter()
         .map(|(_, config, _)| (config.node_id, config.listen_addr))
         .collect();
-    let mut replicas = vec![i32::try_from(victim.0).expect("node id")];
-    replicas.extend(
-        election_behavior
-            .cluster
-            .iter()
-            .map(|(_, config, _)| config.node_id)
-            .filter(|node| *node != victim)
-            .map(|node| i32::try_from(node.0).expect("node id")),
-    );
+    let mut survivors: Vec<NodeId> = election_behavior
+        .cluster
+        .iter()
+        .map(|(_, config, _)| config.node_id)
+        .filter(|node| *node != victim)
+        .collect();
+    if matches!(successor, Successor::ActiveController) {
+        let controller_id = election_behavior.cluster[controller].1.node_id;
+        survivors.sort_by_key(|node| *node != controller_id);
+    }
+    let replicas: Vec<i32> = iter::once(victim)
+        .chain(survivors)
+        .map(|node| i32::try_from(node.0).expect("node id"))
+        .collect();
     election_behavior
         .create_session_partition(controller, &replicas)
         .await;
@@ -773,6 +817,151 @@ async fn session_fenced_controller(election_behavior: &mut ElectionBehavior) {
             .partition_record_for_test(&election_behavior.topic, 0)
             .expect("partition"),
     );
+}
+
+/// The topic of the partition the active controller leads with `successor`
+/// next in its replica order.
+fn successor_topic(successor: NodeId) -> String { format!("controller-successor-{}", successor.0) }
+
+#[rstest_bdd_macros::given(
+    "three brokers use nine-second heartbeat sessions and the active controller leads one RF3 partition per survivor, with that survivor next in its replica order"
+)]
+async fn controller_leads_one_partition_per_successor(election_behavior: &mut ElectionBehavior) {
+    election_behavior.guard = Some(cluster_lock().lock().await);
+    election_behavior.cluster = support::start_n_node_with(3, |_, config| {
+        config.heartbeat_timeout = RESTART_SESSION_TIMEOUT;
+    })
+    .await
+    .expect("start the cluster");
+    support::wait_for_all_brokers_registered(&election_behavior.cluster, 3).await;
+    let controller = find_controller_leader(&election_behavior.cluster).await;
+    let victim = election_behavior.cluster[controller].1.node_id;
+    election_behavior.victim = Some(victim);
+    election_behavior.observer_index = (controller + 1) % election_behavior.cluster.len();
+    election_behavior.addresses = election_behavior
+        .cluster
+        .iter()
+        .map(|(_, config, _)| (config.node_id, config.listen_addr))
+        .collect();
+    let survivors: Vec<NodeId> = election_behavior
+        .cluster
+        .iter()
+        .map(|(_, config, _)| config.node_id)
+        .filter(|node| *node != victim)
+        .collect();
+    // Whichever survivor wins the controller election after the crash, one
+    // of these partitions elects it as partition leader too.
+    for (successor, other) in [(survivors[0], survivors[1]), (survivors[1], survivors[0])] {
+        election_behavior.topic = successor_topic(successor);
+        let replicas: Vec<i32> = [victim, successor, other]
+            .into_iter()
+            .map(|node| i32::try_from(node.0).expect("node id"))
+            .collect();
+        election_behavior
+            .create_session_partition(controller, &replicas)
+            .await;
+        election_behavior.cluster[controller]
+            .0
+            .wait_until_local_partition_leader(&election_behavior.topic, 0, victim)
+            .await;
+        for value in ["a", "b", "c", "d", "e"] {
+            produce_to_current_leader(
+                &election_behavior.cluster[election_behavior.observer_index].0,
+                &election_behavior.addresses,
+                &election_behavior.topic,
+                value,
+            )
+            .await
+            .expect("acks=all before the kill");
+        }
+        let before = election_behavior.cluster[election_behavior.observer_index]
+            .0
+            .partition_record_for_test(&election_behavior.topic, 0)
+            .expect("partition");
+        election_behavior.successor_topics.push((
+            successor,
+            election_behavior.topic.clone(),
+            before,
+        ));
+    }
+    election_behavior.acked = ["a", "b", "c", "d", "e"].map(str::to_owned).to_vec();
+}
+
+#[rstest_bdd_macros::when("a survivor takes over the metadata quorum")]
+async fn survivor_takes_over_quorum(election_behavior: &mut ElectionBehavior) {
+    wait_for_controller_leader_other_than(
+        &election_behavior.cluster,
+        election_behavior.victim.expect("victim controller"),
+    )
+    .await;
+}
+
+#[rstest_bdd_macros::then(
+    "within twenty-five seconds the new active controller leads the partition it succeeds to at a higher epoch, serves acks all on it, and holds exactly a,b,c,d,e,after"
+)]
+async fn new_controller_serves_its_partition(election_behavior: &ElectionBehavior) {
+    let killed_at = election_behavior.killed_at.expect("crash instant");
+    let deadline = killed_at + RESTART_FAILOVER_DEADLINE;
+    let victim = election_behavior.victim.expect("victim controller");
+    let observer = &election_behavior.cluster[election_behavior.observer_index].0;
+    let new_controller = observer
+        .controller_leader_id()
+        .expect("a controller leader");
+    assert!(new_controller != victim);
+    let (_, topic, before) = election_behavior
+        .successor_topics
+        .iter()
+        .find(|(successor, _, _)| *successor == new_controller)
+        .expect("a partition that the new controller succeeds to");
+    let (controller, _, _) = election_behavior
+        .cluster
+        .iter()
+        .find(|(_, config, _)| config.node_id == new_controller)
+        .expect("new controller broker");
+    let moved = time::timeout(
+        deadline.saturating_duration_since(Instant::now()),
+        controller.wait_for_image(|image| {
+            leadership_moved_off(image, topic, victim, before)
+                && image
+                    .partition(topic, 0)
+                    .is_some_and(|partition| partition.leader == new_controller)
+        }),
+    )
+    .await;
+    assert!(
+        moved.is_ok(),
+        "{topic} did not move to the new controller {new_controller}; now {:?}",
+        controller.partition_record_for_test(topic, 0)
+    );
+    // The election the controller side wrote must reach its own broker side:
+    // the acks=all write needs it to lead at the new epoch, and a follower to
+    // fetch from it there.
+    let offset = loop {
+        match produce_to_current_leader(observer, &election_behavior.addresses, topic, "after")
+            .await
+        {
+            Ok(offset) => break offset,
+            Err(code) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "acks=all on {topic} still failing with {code} {RESTART_FAILOVER_DEADLINE:?} after the kill; partition {:?}",
+                    controller.partition_record_for_test(topic, 0)
+                );
+                time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    };
+    let held: Vec<String> = controller
+        .local_batches_for_test(topic, 0)
+        .expect("leader log")
+        .iter()
+        .flat_map(|batch| &batch.records)
+        .filter_map(|record| record.value.as_ref())
+        .map(|value| String::from_utf8_lossy(value).into_owned())
+        .collect();
+    let mut expected = election_behavior.acked.clone();
+    expected.push("after".to_owned());
+    assert!((held, offset) == (expected, 5));
 }
 
 #[rstest_bdd_macros::when(
@@ -918,6 +1107,24 @@ async fn fenced_controller_partition_leadership(election_behavior: &ElectionBeha
     );
 }
 
+#[rstest_bdd_macros::then(
+    "the active controller leads the partition locally at the new epoch while it remains controller leader"
+)]
+async fn controller_leads_after_unclean_restart(election_behavior: &ElectionBehavior) {
+    let (controller, config, _) = &election_behavior.cluster[election_behavior.observer_index];
+    let record = controller
+        .partition_record_for_test(&election_behavior.topic, 0)
+        .expect("partition");
+    assert!(record.leader == config.node_id, "{record:?}");
+    assert!(controller.controller_leader_id() == Some(config.node_id));
+    // The local partition serves at the epoch the controller wrote, with the
+    // ISR it wrote: the acks=all write above already needed a follower to
+    // fetch from it at that epoch.
+    controller
+        .wait_until_local_partition_leader(&election_behavior.topic, 0, config.node_id)
+        .await;
+}
+
 #[rstest_bdd_macros::then("the restarted broker rejoins the ISR unfenced as a follower")]
 async fn rejoined_session_fenced_broker(election_behavior: &ElectionBehavior) {
     let victim = election_behavior.victim.expect("victim broker");
@@ -948,6 +1155,30 @@ async fn rejoined_session_fenced_controller(election_behavior: &ElectionBehavior
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_leader_restarted_inside_its_session_is_fenced_and_loses_leadership(
+    election_behavior: ElectionBehavior,
+) {
+    election_behavior.shutdown().await;
+    drop(election_behavior);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "a controller and partition leader restarted inside its session hands leadership to the next controller"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_controller_and_partition_leader_restarted_inside_its_session_hands_leadership_to_the_next_controller(
+    election_behavior: ElectionBehavior,
+) {
+    election_behavior.shutdown().await;
+    drop(election_behavior);
+}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/migrated/tests/leader_election.feature",
+    name = "a leader restarted inside its session hands leadership to the active controller"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_leader_restarted_inside_its_session_hands_leadership_to_the_active_controller(
     election_behavior: ElectionBehavior,
 ) {
     election_behavior.shutdown().await;

@@ -46,6 +46,22 @@ Feature: tests leader election
     Then a surviving broker leads at a higher epoch and its local records are exactly a,b,c,d,e,after
     And the restarted broker rejoins the ISR unfenced as a follower
 
+  Scenario: a leader restarted inside its session hands leadership to the active controller
+    Given three brokers use nine-second heartbeat sessions and an RF3 controller-successor partition is led by a non-controller broker whose next replica is the active controller
+    When acks all commits a,b,c,d,e and the observer records the leader epoch before restart
+    And the partition leader crashes inside its existing heartbeat session
+    And the leader restarts concurrently with failover and an acks all after record must commit within twenty-five seconds of the crash
+    Then a surviving broker leads at a higher epoch and its local records are exactly a,b,c,d,e,after
+    And the active controller leads the partition locally at the new epoch while it remains controller leader
+    And the restarted broker rejoins the ISR unfenced as a follower
+
+  Scenario: a controller and partition leader restarted inside its session hands leadership to the next controller
+    Given three brokers use nine-second heartbeat sessions and the active controller leads one RF3 partition per survivor, with that survivor next in its replica order
+    When the partition leader crashes inside its existing heartbeat session
+    And a survivor takes over the metadata quorum
+    And the stopped broker rejoins from its original log and addresses
+    Then within twenty-five seconds the new active controller leads the partition it succeeds to at a higher epoch, serves acks all on it, and holds exactly a,b,c,d,e,after
+
   Scenario: a controller leader restarted inside its session loses its partition leadership
     Given node 1 alone votes as controller and leads RF3 controller-restart-fencing with broker-only replicas 2 and 3 and nine-second heartbeat sessions
     When the partition leader crashes inside its existing heartbeat session
