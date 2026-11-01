@@ -85,16 +85,9 @@ mod tests {
     use {
         super::SyncFileRange,
         assert2::assert,
-        krabka_log::WriteBack,
-        rustix::{
-            fs::fstatfs,
-            io::{Errno, ReadWriteFlags, preadv2},
-        },
-        std::{
-            fs::File,
-            io::{IoSliceMut, Write},
-            os::unix::fs::FileExt,
-        },
+        krabka_log::{LogIo, WriteBack},
+        rustix::fs::fstatfs,
+        std::{fs::File, io::Write, os::unix::fs::FileExt},
     };
 
     /// The length of the test file: sixteen 4 KiB pages.
@@ -121,23 +114,13 @@ mod tests {
         bytes
     }
 
-    /// Whether the page cache holds the byte at `offset`, or `None` when the
-    /// filesystem cannot tell. This is the probe `krabka-log` reads with: a
-    /// `preadv2(RWF_NOWAIT)` gives `EAGAIN` for a byte that is not cached.
-    /// Linux 5.9 and 5.10 can read zero bytes instead.
-    fn is_cached(file: &File, offset: u64) -> Option<bool> {
-        let mut byte = [0u8; 1];
-        match preadv2(
-            file,
-            &mut [IoSliceMut::new(&mut byte)],
-            offset,
-            ReadWriteFlags::NOWAIT,
-        ) {
-            Err(Errno::OPNOTSUPP | Errno::NOSYS) => None,
-            Err(Errno::AGAIN) | Ok(0) => Some(false),
-            _ => Some(true),
-        }
-    }
+    /// A `LogIo` with no overrides, for the page-cache probe that `krabka-log`
+    /// reads with: [`LogIo::is_cached`] is `Some(false)` for a byte the page
+    /// cache does not hold, and `None` where the filesystem cannot tell.
+    #[derive(Debug)]
+    struct Probe;
+
+    impl LogIo for Probe {}
 
     #[test]
     fn write_back_of_a_written_range_succeeds() {
@@ -166,13 +149,16 @@ mod tests {
     fn drop_cached_frees_a_dirty_range_where_the_filesystem_can() {
         let (file, bytes) = written_file();
         let f_type = i128::from(fstatfs(&file).unwrap().f_type);
-        if !EVICTING_FILESYSTEMS.contains(&f_type) || is_cached(&file, 0).is_none() {
+        if !EVICTING_FILESYSTEMS.contains(&f_type) || Probe.is_cached(&file, 0).is_none() {
             return;
         }
-        assert!(is_cached(&file, 0) == Some(true));
+        assert!(Probe.is_cached(&file, 0) == Some(true));
         SyncFileRange.drop_cached(&file, 0, LEN);
         for offset in [0, LEN / 2, LEN - 1] {
-            assert!(is_cached(&file, offset) == Some(false), "offset {offset}");
+            assert!(
+                Probe.is_cached(&file, offset) == Some(false),
+                "offset {offset}"
+            );
         }
         assert!(read_back(&file) == bytes);
     }
