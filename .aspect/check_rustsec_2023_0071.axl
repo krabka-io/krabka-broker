@@ -24,7 +24,7 @@ REVIEWED_VERSIONS = {
     "rsa": "0.10.0-rc.18",
     "krabka-sspi": "0.23.0",
     "picky": "7.0.0-rc.26",
-    "krabka-security": "0.7.0",
+    "krabka-security": "0.8.0",
 }
 
 # The complete set of normal-dependency parents each of them may have.
