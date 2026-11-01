@@ -158,7 +158,7 @@ async fn sweep_hands_a_prepared_abort_to_the_completion_task() {
         .times(1)
         .returning(|t, _, _| Some(prepared_entry(t, 1000, 3)));
     backend
-        .expect_request_completion()
+        .expect_queue_completion()
         .times(1)
         .withf(|t| t == "tid-a")
         .return_const(());
@@ -187,7 +187,7 @@ async fn sweep_queues_nothing_it_did_not_prepare(is_coordinator: bool) {
         // A non-coordinator must not start the abort protocol.
         backend.expect_prepare_abort().never();
     }
-    backend.expect_request_completion().never();
+    backend.expect_queue_completion().never();
 
     let out = sweep_candidates(&backend, &["tid-a"]).await;
     assert2::assert!(out.is_empty());
@@ -205,7 +205,7 @@ async fn sweep_aborts_each_expired_tid_independently() {
         .withf(|t, _, _| t == "tid-a")
         .returning(|t, _, _| Some(prepared_entry(t, 1000, 3)));
     backend
-        .expect_request_completion()
+        .expect_queue_completion()
         .times(1)
         .withf(|t| t == "tid-a")
         .return_const(());

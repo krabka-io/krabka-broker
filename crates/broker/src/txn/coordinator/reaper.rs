@@ -64,7 +64,7 @@ pub trait ReaperBackend: Send + Sync {
 
     /// Queues `tid`, whose `PrepareAbort` record is durable, for the
     /// completion task, which writes its markers and its `CompleteAbort`.
-    fn request_completion(&self, tid: &str);
+    fn queue_completion(&self, tid: &str);
 }
 
 /// Applies the `Ongoing → PrepareAbort` mutation for an idle-reaped entry. It
@@ -109,7 +109,7 @@ async fn sweep_with_backend<B: ReaperBackend + ?Sized>(
         let Some(prepared) = backend.prepare_abort(&tid, now_ms, txnv).await else {
             continue;
         };
-        backend.request_completion(&tid);
+        backend.queue_completion(&tid);
         info!(
             tid,
             producer_id = prepared.producer_id.get(),
@@ -229,5 +229,5 @@ impl ReaperBackend for TxnCoordinator {
         }
     }
 
-    fn request_completion(&self, tid: &str) { Self::request_completion(self, tid); }
+    fn queue_completion(&self, tid: &str) { self.request_completion(tid); }
 }
