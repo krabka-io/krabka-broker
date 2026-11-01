@@ -89,6 +89,9 @@ impl SeriesStats {
         }
     }
 
+    /// Sets the `retained` gauge to `series`. Callers hold the store lock
+    /// while they call it, so writers publish in the order they changed the
+    /// store and a later write never loses to an earlier count.
     fn publish_retained(&self, series: usize) {
         self.retained.set(i64::try_from(series).unwrap_or(i64::MAX));
     }
@@ -305,8 +308,8 @@ impl ClientMetricsCollector {
             tally.add(principal, &key, after);
             self.stats.accepted.inc_by(widen(after));
         }
-        drop(guard);
         self.stats.publish_retained(tally.total);
+        drop(guard);
     }
 
     /// Removes the series that outlived the TTL, counting them as `ttl`
@@ -343,10 +346,9 @@ impl ClientMetricsCollector {
             }
             keep
         });
-        let retained_now = retained(&guard);
+        self.stats.publish_retained(retained(&guard));
         drop(guard);
         self.stats.evict(ClientMetricsEviction::Disconnect, evicted);
-        self.stats.publish_retained(retained_now);
     }
 
     /// The series a scrape would render now, stale ones included until the
@@ -378,7 +380,14 @@ mod tests {
     use {
         super::{super::test_support::data_point, *},
         assert2::assert,
-        std::{sync::Arc, thread, time::Duration},
+        std::{
+            sync::{
+                Arc,
+                atomic::{AtomicBool, Ordering},
+            },
+            thread,
+            time::Duration,
+        },
     };
 
     const PRINCIPAL: &str = "User:telemetry";
@@ -845,6 +854,54 @@ mod tests {
         }
         assert_within(&sink, ceilings);
         assert!(sink.retained_series() > 0);
+    }
+
+    /// Every write publishes the `retained` gauge before it releases the
+    /// store, so a reader holding the lock never sees the gauge disagree with
+    /// the store, and no writer can overwrite a newer count with an older one.
+    #[test]
+    fn the_retained_gauge_moves_with_the_store() {
+        let sink = Arc::new(collector(SeriesCeilings::default()));
+        let done = Arc::new(AtomicBool::new(false));
+        let writers = (0..4_u8)
+            .map(|thread| {
+                let sink = Arc::clone(&sink);
+                thread::spawn(move || {
+                    for round in 0..200_u8 {
+                        let instance =
+                            Uuid::from_u128((u128::from(thread) << 8) | u128::from(round % 3));
+                        let points = (0..=round % 5)
+                            .map(|index| gauge(&format!("m{index}"), &instance.to_string(), "c"))
+                            .collect::<Vec<_>>();
+                        sink.ingest(PRINCIPAL, &points);
+                        if round % 2 == 1 {
+                            sink.remove_instance(instance);
+                        }
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let reader = {
+            let sink = Arc::clone(&sink);
+            let done = Arc::clone(&done);
+            thread::spawn(move || {
+                let mut torn = 0_usize;
+                while !done.load(Ordering::Acquire) {
+                    let guard = sink.points.lock().unwrap();
+                    if sink.stats().retained.get() != i64::try_from(retained(&guard)).unwrap() {
+                        torn += 1;
+                    }
+                }
+                torn
+            })
+        };
+        for writer in writers {
+            writer.join().expect("ingest thread");
+        }
+        done.store(true, Ordering::Release);
+        let torn = reader.join().expect("reader thread");
+        assert!(torn == 0);
+        assert!(sink.stats().retained.get() == i64::try_from(sink.retained_series()).unwrap());
     }
 
     /// A series past its TTL leaves on the eviction tick and counts as a

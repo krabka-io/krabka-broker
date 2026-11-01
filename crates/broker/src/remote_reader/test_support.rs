@@ -621,7 +621,10 @@ fn populated_log(log_dir: &Path, segment_bytes: u32) -> Log {
     log
 }
 
-fn copy_log_to_reader(log: &Log, remote_dir: &Path) -> RemoteReader {
+/// Copies every sealed segment of `log` into a fresh `LocalTieredStorage`
+/// under `remote_dir` and an `InmemoryRemoteLogMetadataManager`, all as
+/// partition [`tp`], and returns the reader over them.
+pub fn copy_log_to_reader(log: &Log, remote_dir: &Path) -> RemoteReader {
     let exports = log.tierable_segments();
     let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir));
     let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());

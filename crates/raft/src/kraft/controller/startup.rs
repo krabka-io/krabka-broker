@@ -8,12 +8,16 @@ use {
         METADATA_LOG_CLEAN_INTERVAL, PendingDowngradeSnapshot,
         activation::{Activation, check_bootstrap_records},
         applied_image::AppliedImage,
-        checkpoint::{BOOTSTRAP_SNAPSHOT_ID, latest_checkpoint_id, load_latest_checkpoint},
+        checkpoint::{
+            BOOTSTRAP_SNAPSHOT_ID, checkpoint_ids, latest_checkpoint_id, load_checkpoint_by_id,
+            load_latest_checkpoint,
+        },
         quorum_state_file::load_quorum_state,
         records::features_epoch_after_snapshot,
         recovery::{
-            CommittedReplay, control_state_at, replay_committed_with_timestamp,
-            replay_control_records, with_uncommitted_feature_levels,
+            CommittedReplay, control_state_at, holds_metadata_version_downgrade,
+            replay_committed_with_timestamp, replay_control_records,
+            with_uncommitted_feature_levels,
         },
         timing::initial_election_at,
     },
@@ -27,8 +31,8 @@ use {
         kraft::{
             core::{QuorumStateMachine, QuorumTimeouts},
             log::KraftLog,
-            snapshot_fetch::MetadataSnapshotFetchMax,
-            transport::{CommandSender, PeerSender},
+            snapshot_fetch::{MetadataSnapshotFetchMax, SnapshotId},
+            transport::{CommandSender, PeerSender, QueuedCommand},
             types::{NodeId, QuorumState},
         },
         snapshot::{SnapshotReader, mirror_controls},
@@ -39,7 +43,13 @@ use {
         fmt::Human as _,
         prelude::{ByteSize, Time},
     },
-    std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc, time::SystemTime},
+    std::{
+        collections::BTreeMap,
+        fs,
+        path::{Path, PathBuf},
+        sync::Arc,
+        time::SystemTime,
+    },
     tokio::{
         sync::{mpsc, watch},
         time::{Duration, Instant},
@@ -96,6 +106,23 @@ impl KraftController {
         data_dir: PathBuf,
         recovered: RecoveredMetadata,
     ) -> Result<Self, RaftError> {
+        let Assembled {
+            controller,
+            engine,
+            cmd_rx,
+        } = Self::assemble(config, log, data_dir, recovered)?;
+        tokio::spawn(engine.run(cmd_rx));
+        Ok(controller)
+    }
+
+    /// The engine over `log` and `recovered`, the handle that drives it, and
+    /// the queue the handle sends to, before the engine loop is spawned.
+    fn assemble(
+        config: KraftConfig,
+        log: KraftLog,
+        data_dir: PathBuf,
+        recovered: RecoveredMetadata,
+    ) -> Result<Assembled, RaftError> {
         let RecoveredMetadata {
             image,
             last_snapshot_end_offset,
@@ -250,18 +277,20 @@ impl KraftController {
             engine.write_downgrade_snapshot_and_prune()?;
         }
 
-        tokio::spawn(engine.run(cmd_rx));
-
-        Ok(Self {
-            cmd_tx,
-            image_rx,
-            features_epoch_rx,
-            fault_rx,
-            leader_rx,
-            quorum_rx,
-            peers: engine_peers,
-            me,
-            registration_admission: Arc::default(),
+        Ok(Assembled {
+            controller: Self {
+                cmd_tx,
+                image_rx,
+                features_epoch_rx,
+                fault_rx,
+                leader_rx,
+                quorum_rx,
+                peers: engine_peers,
+                me,
+                registration_admission: Arc::default(),
+            },
+            engine,
+            cmd_rx,
         })
     }
 
@@ -296,13 +325,39 @@ impl KraftController {
     )]
     pub fn open(
         data_dir: PathBuf,
-        mut config: KraftOpenConfig,
+        config: KraftOpenConfig,
         validate_image: impl Fn(&MetadataImage) -> Result<(), RaftError>,
     ) -> Result<Self, RaftError> {
+        let (config, log, recovered) = Self::recover(&data_dir, config, validate_image)?;
+        Self::spawn_with_image(config, log, data_dir, recovered)
+    }
+
+    /// The engine [`Self::open`] spawns, assembled over `data_dir` but not
+    /// spawned, so a test can drive the recovered engine turn by turn.
+    ///
+    /// # Errors
+    /// As [`Self::open`].
+    #[cfg(test)]
+    pub(super) fn open_assembled(
+        data_dir: PathBuf,
+        config: KraftOpenConfig,
+        validate_image: impl Fn(&MetadataImage) -> Result<(), RaftError>,
+    ) -> Result<Assembled, RaftError> {
+        let (config, log, recovered) = Self::recover(&data_dir, config, validate_image)?;
+        Self::assemble(config, log, data_dir, recovered)
+    }
+
+    /// The recovery half of [`Self::open`]: the log, the image and the seed
+    /// quorum state that `data_dir` holds, checked by `validate_image`.
+    fn recover(
+        data_dir: &Path,
+        mut config: KraftOpenConfig,
+        validate_image: impl Fn(&MetadataImage) -> Result<(), RaftError>,
+    ) -> Result<(KraftConfig, KraftLog, RecoveredMetadata), RaftError> {
         let cluster_id = config.cluster_id;
         let metadata_raft_fetch_max = config.metadata_raft_fetch_max;
-        fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
-        let log = KraftLog::open(&data_dir, &config.metadata_log)?;
+        fs::create_dir_all(data_dir).map_err(krabka_log::LogError::Io)?;
+        let mut log = KraftLog::open(data_dir, &config.metadata_log)?;
 
         // Recover the image from the checkpoint plus only the durable committed
         // prefix. An uncommitted voter record can remain at the log end after a
@@ -313,13 +368,13 @@ impl KraftController {
         let mut last_snapshot_timestamp_ms = 0;
         let mut features_epoch = -1;
         let mut bootstrap_source = "the controller configuration";
-        if let Some(bytes) = load_latest_checkpoint(&data_dir)? {
+        if let Some(bytes) = load_latest_checkpoint(data_dir)? {
             let contents = SnapshotReader::read(&bytes)?;
             // The records this checkpoint contains are below its boundary and
             // gone from the log, so its header is the only place their
             // create-time survives a restart.
             last_snapshot_timestamp_ms = contents.last_contained_log_timestamp;
-            if latest_checkpoint_id(&data_dir) == Some(BOOTSTRAP_SNAPSHOT_ID) {
+            if latest_checkpoint_id(data_dir) == Some(BOOTSTRAP_SNAPSHOT_ID) {
                 // Kafka's `KafkaRaftClient` gives the bootstrap checkpoint to
                 // `handleLoadBootstrap` and not to `handleLoadSnapshot`. Its
                 // records are not in the log, so they are not in the image:
@@ -335,7 +390,7 @@ impl KraftController {
                 }
             } else {
                 image = MetadataImage::from_records(cluster_id, &contents.metadata_records);
-                if let Some((end_offset, _)) = latest_checkpoint_id(&data_dir) {
+                if let Some((end_offset, _)) = latest_checkpoint_id(data_dir) {
                     features_epoch = features_epoch_after_snapshot(
                         &contents.metadata_records,
                         end_offset,
@@ -347,32 +402,48 @@ impl KraftController {
                 mirror_controls(&mut image, control.kraft_version, control.voters.clone());
                 snapshot_control = Some(control);
             }
-            if let Some((off, _ep)) = latest_checkpoint_id(&data_dir) {
+            if let Some((off, _ep)) = latest_checkpoint_id(data_dir) {
                 // Checkpoint filenames encode the raw offset (on-disk boundary).
                 last_snapshot_end_offset = Offset(off);
             }
-            // Replay starts at the durable log start below. This deliberately
-            // rediscovers a downgrade when a crash landed after checkpoint
-            // rename but before prefix pruning.
         }
         check_bootstrap_records(&config.activation.bootstrap_records, bootstrap_source)?;
+        // The image stands at the checkpoint end, and the replay continues
+        // from there, as Kafka's `MetadataLoader` applies only the batches
+        // after the snapshot it loaded. The log keeps the prefix below the
+        // checkpoint until retention cleans it, and a second apply of that
+        // prefix would bump the epochs of every partition it changed again.
+        let downgrade_below_checkpoint = match latest_checkpoint_id(data_dir) {
+            Some(id) if id != BOOTSTRAP_SNAPSHOT_ID => {
+                log.recover_to_snapshot(last_snapshot_end_offset)?;
+                unfinished_downgrade_prune(
+                    data_dir,
+                    &log,
+                    cluster_id,
+                    &image,
+                    id,
+                    metadata_raft_fetch_max,
+                )?
+            }
+            _ => None,
+        };
         let CommittedReplay {
-            pending: mut downgrade_snapshot_pending,
+            pending: replayed_downgrade,
             last_applied_timestamp_ms: replayed_timestamp_ms,
             features_epoch: replayed_features_epoch,
         } = replay_committed_with_timestamp(
             &log,
             &mut image,
-            log.log_start_offset(),
+            log.log_start_offset().max(last_snapshot_end_offset),
             metadata_raft_fetch_max,
         )?;
+        // The prune of a downgrade below the checkpoint comes first. Its
+        // repair replays the log above the checkpoint again, and finds there
+        // any downgrade that follows it.
+        let mut downgrade_snapshot_pending = downgrade_below_checkpoint.or(replayed_downgrade);
         let last_applied_record_timestamp_ms =
             replayed_timestamp_ms.unwrap_or(last_snapshot_timestamp_ms);
-        // The replay starts at the log start, which can sit below a checkpoint
-        // whose prefix is not yet cleaned. A feature batch met there is older
-        // than the checkpoint's epoch and must not move it back.
-        let features_epoch =
-            replayed_features_epoch.map_or(features_epoch, |replayed| replayed.max(features_epoch));
+        let features_epoch = replayed_features_epoch.unwrap_or(features_epoch);
 
         let mut boundary_state =
             QuorumState::bootstrap(cluster_id, config.bootstrap_voters.clone());
@@ -383,7 +454,7 @@ impl KraftController {
 
         // Seed the durable quorum state from the file, falling back to a fresh
         // bootstrap when absent.
-        let mut initial_state = load_quorum_state(&data_dir, cluster_id, &config.bootstrap_voters)?
+        let mut initial_state = load_quorum_state(data_dir, cluster_id, &config.bootstrap_voters)?
             .unwrap_or_else(|| QuorumState::bootstrap(cluster_id, config.bootstrap_voters.clone()));
         if let Some(control) = &snapshot_control {
             initial_state.kraft_version = control.kraft_version;
@@ -423,10 +494,9 @@ impl KraftController {
             metadata_raft_fetch_max,
         )?)?;
 
-        Self::spawn_with_image(
+        Ok((
             config.into_kraft_config(initial_state),
             log,
-            data_dir,
             RecoveredMetadata {
                 image,
                 last_snapshot_end_offset,
@@ -435,6 +505,56 @@ impl KraftController {
                 downgrade_snapshot_pending,
                 features_epoch,
             },
-        )
+        ))
     }
+}
+
+/// A controller handle, the engine behind it, and the queue between them,
+/// before the engine loop is spawned.
+pub(super) struct Assembled {
+    pub(super) controller: KraftController,
+    pub(super) engine: Engine,
+    pub(super) cmd_rx: mpsc::Receiver<QueuedCommand>,
+}
+
+/// The repair a restart owes the checkpoint `checkpoint` when the log prefix
+/// below it holds a `metadata.version` downgrade: a crash after the
+/// downgrade checkpoint was written and before the prefix was pruned. The
+/// repair rewrites `image`, the checkpoint's image, at the same boundary and
+/// prunes the prefix. `None` when the log starts at the checkpoint or the
+/// prefix holds no downgrade.
+///
+/// The fold starts from the image at the log start: an empty image at offset
+/// 0, and otherwise the checkpoint the log start sits on, which is where a
+/// cleaning moves it. Without one, the first level in the prefix counts as no
+/// downgrade.
+fn unfinished_downgrade_prune(
+    data_dir: &Path,
+    log: &KraftLog,
+    cluster_id: Uuid,
+    image: &MetadataImage,
+    checkpoint: SnapshotId,
+    max: MetadataRaftFetchMax,
+) -> Result<Option<PendingDowngradeSnapshot>, RaftError> {
+    let (end_offset, epoch) = checkpoint;
+    let log_start = log.log_start_offset();
+    if log_start >= Offset(end_offset) {
+        return Ok(None);
+    }
+    let base = checkpoint_ids(data_dir)
+        .into_iter()
+        .find(|(offset, _)| Offset(*offset) == log_start)
+        .and_then(|(offset, epoch)| load_checkpoint_by_id(data_dir, offset, epoch))
+        .map(|bytes| SnapshotReader::read(&bytes))
+        .transpose()?
+        .map_or_else(
+            || MetadataImage::new(cluster_id),
+            |contents| MetadataImage::from_records(cluster_id, &contents.metadata_records),
+        );
+    let downgraded = holds_metadata_version_downgrade(log, base, Offset(end_offset), max)?;
+    Ok(downgraded.then(|| PendingDowngradeSnapshot {
+        image: image.clone(),
+        end_offset: Offset(end_offset),
+        epoch,
+    }))
 }

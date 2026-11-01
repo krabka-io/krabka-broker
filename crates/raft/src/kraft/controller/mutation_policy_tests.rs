@@ -6,7 +6,8 @@ use {
     },
     assert2::assert,
     krabka_metadata::{
-        BreakGlassAction, BrokerRegistrationRecord, PartitionOffsetAdvanceRecord, PatternType,
+        BreakGlassAction, BrokerRegistrationRecord, LeaderRecoveryState,
+        PartitionOffsetAdvanceRecord, PartitionUpdateRecord, PatternType,
     },
     krabka_security::KafkaPrincipal,
     std::{collections::BTreeMap, iter, slice},
@@ -287,4 +288,88 @@ fn preparation_reserves_after_pending_contiguous_ends_and_refuses_gaps() {
         &pending.iter(),
     );
     assert!(matches!(result, Err(RaftError::ChangeRejected(_))));
+}
+
+/// The image every replica holds after applying the encoded `blobs` to `base`,
+/// as `advance_and_apply` decodes and applies them.
+fn replayed(base: &MetadataImage, blobs: &[bytes::Bytes]) -> MetadataImage {
+    let mut replica = base.clone();
+    for blob in blobs {
+        let decoded = from_kraft_value(blob, &replica).unwrap();
+        replica.apply(&decoded);
+    }
+    replica
+}
+
+/// A `PartitionChangeRecord` bumps the leader epoch on replay only when it names
+/// a leader, so an update that keeps the leader and raises the epoch must not
+/// travel as one: every replica would apply it at the old epoch, and a broker
+/// that fetches at the epoch the controller meant would be fenced forever.
+/// Whatever form the record takes on the log, each replica ends at the leader,
+/// leader epoch, partition epoch, ISR, ELR and recovery state the update named.
+#[test]
+fn a_same_leader_epoch_bump_replays_at_the_new_epoch() {
+    let mut metadata = MetadataImage::default();
+    for record in topic_record("orders") {
+        metadata.apply(&record);
+    }
+    let current = metadata.partition("orders", 0).unwrap().clone();
+    let bumped = PartitionRecord {
+        leader_epoch: krabka_metadata::LeaderEpoch(current.leader_epoch.0 + 1),
+        partition_epoch: current.partition_epoch + 1,
+        ..current
+    };
+    let cases = [
+        ("leader epoch only", None, None),
+        (
+            "with the recovery and ELR state of an unclean election",
+            Some(LeaderRecoveryState::Recovering),
+            Some((Vec::new(), Vec::new())),
+        ),
+        (
+            "with a published ELR",
+            None,
+            Some((vec![NodeId(1)], vec![NodeId(1)])),
+        ),
+    ];
+    for (case, recovery_state, elr) in cases {
+        let (image, _rx) = AppliedImage::new(metadata.clone());
+        let update = MetadataRecord::V1PartitionUpdate(PartitionUpdateRecord {
+            partition: bumped.clone(),
+            eligible_leader_replicas: elr.as_ref().map(|(eligible, _)| eligible.clone()),
+            last_known_elr: elr.as_ref().map(|(_, last_known)| last_known.clone()),
+            recovery_state,
+        });
+        let prepared = prepare_records(
+            slice::from_ref(&update),
+            image.overlay(),
+            image.overlay(),
+            Offset(42),
+            3,
+            &iter::empty(),
+        )
+        .unwrap();
+        let mut intended = metadata.clone();
+        intended.apply(&update);
+        let replica = replayed(&metadata, &prepared.value_blobs);
+        let partition = replica.partition("orders", 0).unwrap();
+        assert!(
+            (
+                partition.leader,
+                partition.leader_epoch,
+                partition.partition_epoch,
+                &partition.isr,
+                replica.partition_elr("orders", 0),
+                replica.leader_recovery_state("orders", 0),
+            ) == (
+                bumped.leader,
+                bumped.leader_epoch,
+                bumped.partition_epoch,
+                &bumped.isr,
+                intended.partition_elr("orders", 0),
+                intended.leader_recovery_state("orders", 0),
+            ),
+            "{case}"
+        );
+    }
 }

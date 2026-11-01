@@ -3,7 +3,7 @@
 //! the election and submission helpers the behaviour tests drive them with.
 
 use {
-    super::*,
+    super::{startup::Assembled, *},
     crate::{
         MetadataLogConfig, NoEventQueueRecorder,
         kraft::{Activation, transport::NullPeerSender},
@@ -209,21 +209,47 @@ pub fn open_test_controller_with(
 ) -> Result<KraftController, RaftError> {
     KraftController::open(
         data_dir,
-        KraftOpenConfig::builder()
-            .me(NodeId(1))
-            .cluster_id(cluster_id)
-            .directory_id(uuid::Uuid::nil())
-            .bootstrap_voters(voters)
-            .timeouts(QuorumTimeouts {
-                election: election_timeout,
-                fetch: TEST_FETCH_TIMEOUT,
-            })
-            .peers(Arc::new(NullPeerSender))
-            .metadata_log(test_metadata_log())
-            .activation(activation)
-            .build(),
+        test_open_config(cluster_id, voters, election_timeout, activation),
         validate_image,
     )
+}
+
+/// The engine that [`open_test_controller`] recovers from `data_dir` as
+/// voter 1 of `voters`, assembled and not spawned, so a test drives it turn
+/// by turn.
+pub fn open_test_engine(data_dir: PathBuf, voters: VoterSet) -> Result<Assembled, RaftError> {
+    KraftController::open_assembled(
+        data_dir,
+        test_open_config(
+            uuid::Uuid::nil(),
+            voters,
+            TEST_ELECTION_TIMEOUT,
+            Activation::default(),
+        ),
+        |_| Ok(()),
+    )
+}
+
+/// The open configuration of voter 1 under test.
+fn test_open_config(
+    cluster_id: uuid::Uuid,
+    voters: VoterSet,
+    election_timeout: krabka_units::Time,
+    activation: Activation,
+) -> KraftOpenConfig {
+    KraftOpenConfig::builder()
+        .me(NodeId(1))
+        .cluster_id(cluster_id)
+        .directory_id(uuid::Uuid::nil())
+        .bootstrap_voters(voters)
+        .timeouts(QuorumTimeouts {
+            election: election_timeout,
+            fetch: TEST_FETCH_TIMEOUT,
+        })
+        .peers(Arc::new(NullPeerSender))
+        .metadata_log(test_metadata_log())
+        .activation(activation)
+        .build()
 }
 
 fn spawn_test_controller(

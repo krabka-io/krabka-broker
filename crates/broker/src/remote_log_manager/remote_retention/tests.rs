@@ -1105,28 +1105,24 @@ fn segment_states(rlmm: &Arc<dyn RemoteLogMetadataManager>) -> Vec<(i64, RemoteL
         .collect()
 }
 
-/// A delete somebody started under an established floor and nobody finished
-/// is finished by the next pass, and counts as deleted without moving the
-/// floor: it lies below one already. A `DeleteSegmentStarted` segment that is
-/// not wholly below the floor is a rolled-back copy's to finish, and stays.
+/// A delete somebody started and nobody finished is finished by the next
+/// pass, and counts as deleted without moving the floor, wherever it lies
+/// against that floor: one below it was marked by a `DeleteRecords`, and one
+/// at or above it was left by a failed delete, such as a copy rollback's that
+/// the store refused. Kafka's `RLMExpirationTask` retries every
+/// `DELETE_SEGMENT_STARTED` segment the same way.
 ///
 /// The four seeded segments start at 0, 10, 20 and 30, ten offsets each, and
 /// no retention setting is on, so the floor is the only axis in play.
 #[yare::parameterized(
     every_mark_below_the_floor = { &[0, 1], Some(20), 2, &[(20, FINISHED), (30, FINISHED)] },
-    a_mark_above_the_floor_stays = {
-        &[0, 2], Some(10), 1, &[(10, FINISHED), (20, DELETING), (30, FINISHED)]
-    },
-    a_mark_the_floor_falls_inside_stays = {
-        &[1], Some(15), 1, &[(10, DELETING), (20, FINISHED), (30, FINISHED)]
-    },
+    a_mark_above_the_floor = { &[0, 2], Some(10), 2, &[(10, FINISHED), (30, FINISHED)] },
+    a_mark_the_floor_falls_inside = { &[1], Some(15), 2, &[(20, FINISHED), (30, FINISHED)] },
     beside_a_breached_finished_segment = { &[0], Some(20), 2, &[(20, FINISHED), (30, FINISHED)] },
-    no_established_floor = {
-        &[0], None, 0, &[(0, DELETING), (10, FINISHED), (20, FINISHED), (30, FINISHED)]
-    },
+    no_established_floor = { &[0], None, 1, &[(10, FINISHED), (20, FINISHED), (30, FINISHED)] },
 )]
 #[test_macro(tokio::test)]
-async fn a_retention_pass_finishes_the_deletes_started_below_the_floor(
+async fn a_retention_pass_finishes_every_started_delete(
     marked: &[u128],
     deleted_below: Option<i64>,
     deleted: usize,
