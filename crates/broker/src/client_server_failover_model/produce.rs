@@ -5,7 +5,10 @@
 //! and sequence bookkeeping runs against `check_pure`, the real broker-side
 //! idempotent-producer check, rather than against a restatement of it. The
 //! check reads the leader's tracker, which an append reaches only through a
-//! later [`Action::Commit`](super::state::Action::Commit).
+//! later [`Action::Commit`](super::state::Action::Commit). A batch the check
+//! lets through then reaches the writer, which looks it up in the leader's log
+//! under the append lock (`duplicate_of` in `partition_writer/append.rs`) and
+//! answers a copy with the offset already there.
 
 use {
     super::{
@@ -18,10 +21,21 @@ use {
             WITNESS_FAILOVER, WITNESS_NOT_LEADER, WITNESS_PREPARED_RETRY, WITNESS_RETRY,
             WITNESS_RETRY_AFTER_FAILOVER, WITNESS_RETRY_DURING_PENDING_COMMIT,
             WITNESS_TIMED_OUT_UNKNOWN, WITNESS_UNKNOWN_RETRY_AFTER_FAILOVER,
+            WITNESS_WRITER_DUPLICATE,
         },
     },
     crate::producer_state::{Decision, check_pure},
 };
+
+/// Whether the writer looks a batch up in the leader's log before it appends.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum WriterLookup {
+    /// It does, under the append lock, as production does.
+    UnderLock,
+    /// It appends every batch the check lets through, as the broker did
+    /// before #1947.
+    Off,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SendKind {
@@ -63,7 +77,28 @@ impl FailoverState {
         Some(base_sequence)
     }
 
-    pub fn apply_client_send(&self, kind: SendKind, outcome: RequestOutcome) -> Option<Self> {
+    /// The offset of the batch's copy in the leader's log, which the writer's
+    /// lookup answers with, or `None` when the writer appends.
+    fn writer_duplicate(&self, lookup: WriterLookup) -> Option<i64> {
+        if lookup == WriterLookup::Off {
+            return None;
+        }
+        self.logs[self.leader]
+            .iter()
+            .flatten()
+            .find(|batch| {
+                batch.producer_id == PRODUCER_ID
+                    && batch.producer_epoch == PRODUCER_EPOCH
+                    && batch.base_sequence == BASE_SEQUENCE
+            })
+            .map(|batch| batch.offset)
+    }
+
+    pub fn apply_client_send(
+        &self,
+        lookup: WriterLookup,
+        (kind, outcome): (SendKind, RequestOutcome),
+    ) -> Option<Self> {
         if self.send_attempts >= MAX_SEND_ATTEMPTS {
             return None;
         }
@@ -94,7 +129,12 @@ impl FailoverState {
         {
             s.witnesses.mark(WITNESS_RETRY_DURING_PENDING_COMMIT);
         }
-        match check_pure(s.tracker.as_ref(), PRODUCER_EPOCH, base_sequence, 0) {
+        let checked = check_pure(s.tracker.as_ref(), PRODUCER_EPOCH, base_sequence, 0);
+        let writer_offset = (checked == Decision::Append)
+            .then(|| s.writer_duplicate(lookup))
+            .flatten();
+        let writer_duplicate = writer_offset.is_some();
+        match writer_offset.map_or(checked, |base_offset| Decision::Duplicate { base_offset }) {
             Decision::Append => {
                 if !matches!(
                     outcome,
@@ -149,6 +189,13 @@ impl FailoverState {
                     return None;
                 }
                 s.witnesses.mark(WITNESS_DUPLICATE_RESPONSE);
+                if writer_duplicate {
+                    // `finalize_ack` commits the writer's answer before the
+                    // `acks=all` gate, as it does a fresh append's.
+                    s.witnesses.mark(WITNESS_WRITER_DUPLICATE);
+                    *s.pending_commit
+                        .get_mut(usize::try_from(base_offset).ok()?)? = true;
+                }
                 if self.last_result == Some(ProduceResult::TimedOutUnknown) {
                     s.witnesses.mark(WITNESS_DUPLICATE_AFTER_UNKNOWN);
                     if self.witnesses.seen(WITNESS_FAILOVER) {

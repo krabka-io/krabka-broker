@@ -10,7 +10,7 @@ use {
             BASE_OFFSET, BASE_SEQUENCE, INITIAL_LEADER, MAX_HWM, MAX_LOG_LEN,
             MAX_METADATA_REFRESHES, MAX_SEND_ATTEMPTS, NB,
         },
-        produce::SendKind,
+        produce::{SendKind, WriterLookup},
         state::{Action, BatchState, FailoverState, ProduceResult, RequestOutcome, commit_into},
         witness::{WITNESS_FAILOVER, Witnesses},
     },
@@ -18,7 +18,9 @@ use {
 };
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct ClientServerFailoverModel;
+pub struct ClientServerFailoverModel {
+    pub lookup: WriterLookup,
+}
 
 impl Model for ClientServerFailoverModel {
     type Action = Action;
@@ -26,8 +28,12 @@ impl Model for ClientServerFailoverModel {
 
     krabka_macros::model_transition!(last, action, s; {
             match action {
-                Action::ClientSend(outcome) => last.apply_client_send(SendKind::Send, outcome),
-                Action::ClientRetry(outcome) => last.apply_client_send(SendKind::Retry, outcome),
+                Action::ClientSend(outcome) => {
+                    last.apply_client_send(self.lookup, (SendKind::Send, outcome))
+                }
+                Action::ClientRetry(outcome) => {
+                    last.apply_client_send(self.lookup, (SendKind::Retry, outcome))
+                }
                 Action::Replicate(follower) => {
                     if follower == s.leader || !s.live(s.leader) || !s.live(follower) {
                         return None;
@@ -195,6 +201,9 @@ impl Model for ClientServerFailoverModel {
     fn properties(&self) -> Vec<Property<Self>> {
         let mut properties = Self::safety_properties();
         properties.extend(Self::witness_properties());
+        if self.lookup == WriterLookup::UnderLock {
+            properties.extend(Self::writer_witness_properties());
+        }
         properties
     }
 
