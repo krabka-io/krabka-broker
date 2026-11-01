@@ -12,7 +12,7 @@ use {
     super::{
         ActorServices, ParkedWaiters,
         downgrade::{FenceFailure, FenceOutcome, fence_or_downgrade},
-        persistence::flush_classic_metadata,
+        persistence::{flush_classic_metadata, leave_written_classic_group, written_classic_state},
         waiters::settle_removed_classic_waiters,
     },
     crate::{
@@ -46,7 +46,7 @@ pub(super) async fn handle_actor_tick(
         if !dropped.is_empty() || !expired_pending.is_empty() {
             tracing::info!(group = %group_id, ?dropped, ?expired_pending,
                 "expired members; waking joiners");
-            return settle_classic_removal(state, previous, &dropped, parked, services).await;
+            return settle_classic_removal(group, previous, &dropped, parked, services).await;
         }
     }
     true
@@ -74,7 +74,7 @@ pub(super) async fn handle_classic_sync_expiry(
     }
     tracing::info!(group = %state.group_id, ?removed,
         "removed members that never sent SyncGroup; preparing a rebalance");
-    let keep_running = settle_classic_removal(state, previous, &removed, parked, services).await;
+    let keep_running = settle_classic_removal(group, previous, &removed, parked, services).await;
     // A failed write restores the group with its timer already due. Retry on
     // the session-expiry cadence instead of spinning on the log.
     if let Some(state) = group.as_classic_mut()
@@ -93,13 +93,21 @@ pub(super) async fn handle_classic_sync_expiry(
 /// `prepareRebalance` answers them, and a join phase the survivors have all
 /// rejoined completes. `previous` is the group before the removal, which a
 /// failed write restores. It returns the actor's keep-running flag.
+///
+/// A write that never reached the log is retried by the next timer. One that
+/// may still commit stops the actor instead: Kafka's `CoordinatorRuntime`
+/// keeps the records of a timed-out write, and a reload builds the group from
+/// them, so the actor leaves the group the log holds for its replacement.
 async fn settle_classic_removal(
-    state: &mut ClassicState,
+    group: &mut CoordinatorGroup,
     previous: ClassicState,
     removed: &[String],
     parked: &mut ParkedWaiters,
     services: ActorServices<'_>,
 ) -> bool {
+    let Some(state) = group.as_classic_mut() else {
+        return true;
+    };
     if state.members.is_empty() && !removed.is_empty() {
         let Some(generation_id) = next_i32(state.generation_id) else {
             *state = previous;
@@ -109,10 +117,17 @@ async fn settle_classic_removal(
         };
         state.generation_id = generation_id;
         if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
+            let written = written_classic_state(state, &error);
             *state = previous;
+            let Some(written) = written else {
+                tracing::warn!(group = %state.group_id, %error,
+                    "classic expiration log write failed; retrying on the next tick");
+                return true;
+            };
             tracing::warn!(group = %state.group_id, %error,
-                "classic expiration log write failed; retrying on the next tick");
-            return true;
+                "classic expiration log write may still commit; stopping the actor");
+            leave_written_classic_group(group, written, services.coordinator);
+            return false;
         }
     }
     settle_removed_classic_waiters(state, previous.state, removed, parked);
@@ -165,27 +180,32 @@ mod tests {
         super::*,
         crate::{
             codes,
-            coordinator::unified::{
-                ClientIdentity, GroupCoordinator,
-                actor::{
-                    GroupActorMessage, GroupKindTag, PendingRecords, RegexResolution, SyncResult,
-                    test_support::{
-                        actor_services_with, bidirectional_coordinator, classic_member_for_topic,
-                        completing_classic_group, empty_metadata, last_classic_metadata,
-                        log_has_classic_group_metadata_write, make_coordinator, parked_follower,
-                        rpc, subscribed_member,
+            coordinator::{
+                bootstrap::apply_group_metadata,
+                unified::{
+                    ClientIdentity, GroupCoordinator,
+                    actor::{
+                        ClassicView, GroupActorMessage, GroupKindTag, PendingRecords,
+                        RegexResolution, SyncResult,
+                        test_support::{
+                            actor_services_with, bidirectional_coordinator,
+                            classic_member_for_topic, completing_classic_group, empty_metadata,
+                            last_classic_metadata, log_has_classic_group_metadata_write,
+                            make_coordinator, parked_follower, rpc, subscribed_member,
+                        },
+                        views::build_classic_view,
                     },
+                    classic_state::{ClassicGroup, GroupState as ClassicGroupState},
+                    config::NextGenConfig,
+                    consumer_state::GroupState,
+                    group::GroupKind,
+                    migration,
+                    offsets_log::{OFFSETS_TOPIC, fake::InMemoryOffsetsLog},
+                    persistence_next_gen::GroupMetadataValue,
+                    reconciler::ReconcileInput,
+                    regex_resolver::no_topic_regex_resolver,
+                    test_support::{check_two_members_expired, expired_session_last_seen},
                 },
-                classic_state::{ClassicGroup, GroupState as ClassicGroupState},
-                config::NextGenConfig,
-                consumer_state::GroupState,
-                group::GroupKind,
-                migration,
-                offsets_log::fake::InMemoryOffsetsLog,
-                persistence_next_gen::GroupMetadataValue,
-                reconciler::ReconcileInput,
-                regex_resolver::no_topic_regex_resolver,
-                test_support::{check_two_members_expired, expired_session_last_seen},
             },
         },
         assert2::{assert, check},
@@ -200,6 +220,48 @@ mod tests {
             time::{sleep, timeout},
         },
     };
+
+    /// A group-metadata write that never reached the log cannot commit, so
+    /// the expiry restores the group and the actor keeps running, with no
+    /// respawn seed. The next tick expires the member again and writes the
+    /// empty generation.
+    #[rstest::rstest]
+    #[case::refused(None)]
+    #[case::writer_gone(Some(BrokerError::PartitionWriterDied {
+        topic: OFFSETS_TOPIC.into(),
+        partition: 0,
+    }))]
+    #[tokio::test]
+    async fn an_expiry_whose_write_never_reached_the_log_retries_on_the_next_tick(
+        #[case] failure: Option<BrokerError>,
+    ) {
+        let (coord, log) = make_coordinator();
+        let mut group = completing_classic_group(&["m1"]);
+        let state = group.as_classic_mut().unwrap();
+        state.state = ClassicGroupState::Stable;
+        state.members.get_mut("m1").unwrap().session_timeout = Duration::ZERO;
+        let before = build_classic_view(state);
+        let mut parked = ParkedWaiters::default();
+        let services = super::super::test_support::actor_services(&coord, log.as_ref());
+        log.fail_next_append(failure);
+
+        check!(handle_actor_tick(&mut group, &mut parked, services).await);
+        check!(build_classic_view(group.as_classic().unwrap()) == before);
+        check!(!coord.holds_classic_respawn_seed("g"));
+        check!(log.batches().await.is_empty());
+
+        check!(handle_actor_tick(&mut group, &mut parked, services).await);
+        let expired = ClassicView {
+            group_id: "g".into(),
+            state: ClassicGroupState::Empty,
+            protocol_type: Some("consumer".into()),
+            protocol_name: None,
+            generation_id: before.generation_id + 1,
+            members: Vec::new(),
+        };
+        check!(build_classic_view(group.as_classic().unwrap()) == expired);
+        check!(reloaded_view(&log).await == expired);
+    }
 
     #[tokio::test]
     async fn classic_last_member_expiration_persists_empty_generation() {
@@ -771,5 +833,127 @@ mod tests {
         check!(view.state == ClassicGroupState::PreparingRebalance);
         check!(view.members.len() == 1);
         check!(view.members[0].member_id == "m2");
+    }
+
+    /// How long a step that should happen at once may take before the test
+    /// fails instead of hanging.
+    const PROMPT: Duration = Duration::from_secs(5);
+
+    /// The classic timer that removes the group's only member.
+    #[derive(Clone, Copy, Debug)]
+    enum Expiry {
+        /// The session tick finds `m1` past its session timeout.
+        Session,
+        /// The pending-sync timer finds that `m1` never sent `SyncGroup`.
+        PendingSync,
+    }
+
+    /// The group that a reload of `log` builds, as bootstrap replay applies
+    /// the last group-metadata record.
+    async fn reloaded_view(log: &InMemoryOffsetsLog) -> ClassicView {
+        let mut reloaded = ClassicGroup::new("g");
+        apply_group_metadata(&mut reloaded, last_classic_metadata(log).await, 0);
+        build_classic_view(&reloaded)
+    }
+
+    /// A timer empties the group, and its group-metadata write times out
+    /// after the record reached the log, so the record may still commit. The
+    /// actor stops, as Kafka's `CoordinatorRuntime` keeps a timed-out write's
+    /// records and a reload builds the group from them. Its replacement takes
+    /// over at once with the group the log holds once the record commits:
+    /// `Empty` under the next generation, with the committed offset. A
+    /// reverted actor would keep serving `m1` under the old generation.
+    #[rstest::rstest]
+    #[case::session(Expiry::Session)]
+    #[case::pending_sync(Expiry::PendingSync)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_expiry_whose_write_may_still_commit_respawns_the_persisted_group(
+        #[case] expiry: Expiry,
+    ) {
+        use {
+            crate::coordinator::test_support::offset_entry,
+            qubit_clock::{ManualMonotonicClock, MonotonicClock as _},
+        };
+
+        let clock = ManualMonotonicClock::new_shared();
+        let log = Arc::new(InMemoryOffsetsLog::default());
+        // The session tick fires only when the test moves the clock, so no
+        // later tick retries the write behind the test's back.
+        let tick_interval = Duration::from_hours(1);
+        let coord = Arc::new(
+            GroupCoordinator::new(
+                NextGenConfig {
+                    timer: clock.new_timer(),
+                    session_expiry_tick: tick_interval,
+                    ..NextGenConfig::assigning_at_once()
+                },
+                ShareGroupConfig::assigning_at_once(),
+                empty_metadata(),
+                Arc::<InMemoryOffsetsLog>::clone(&log),
+                StreamsGroupConfig::default(),
+            )
+            .expect("valid test assignor configuration"),
+        );
+        let committed = HashMap::from([(("t".to_owned(), 0), offset_entry(42))]);
+        let mut group = completing_classic_group(&["m1"]);
+        group.committed_offsets = committed.clone();
+        let state = group.as_classic_mut().unwrap();
+        let generation = state.generation_id;
+        match expiry {
+            Expiry::Session => {
+                state.state = ClassicGroupState::Stable;
+                state.members.get_mut("m1").unwrap().session_timeout = Duration::ZERO;
+            }
+            Expiry::PendingSync => {
+                state.arm_pending_sync(Instant::now());
+                state.sync_deadline = Some(Instant::now() + Duration::from_millis(50));
+            }
+        }
+        log.hold_commits();
+        coord.seed_classic("g", Box::new(group));
+        let stopping = coord.find("g").unwrap();
+        if matches!(expiry, Expiry::Session) {
+            let waiting = Arc::clone(&clock);
+            let parked = spawn_blocking(move || waiting.wait_for_waiters(1, PROMPT))
+                .await
+                .unwrap();
+            assert!(parked, "the actor parks on the session tick");
+            clock
+                .advance(tick_interval)
+                .expect("manual time moves forward");
+        }
+
+        timeout(PROMPT, log.until_log_end(1))
+            .await
+            .expect("the expiry is appended");
+        log.time_out_uncommitted();
+        let stopped = timeout(PROMPT, stopping.tx.closed()).await.is_ok();
+        log.release_commits();
+
+        let reloaded = reloaded_view(&log).await;
+        check!(
+            reloaded
+                == ClassicView {
+                    group_id: "g".into(),
+                    state: ClassicGroupState::Empty,
+                    protocol_type: Some("consumer".into()),
+                    protocol_name: None,
+                    generation_id: generation + 1,
+                    members: Vec::new(),
+                }
+        );
+        let live = timeout(PROMPT, async {
+            loop {
+                match coord.find("g") {
+                    Some(handle) if !handle.tx.is_closed() => return handle,
+                    _ => sleep(Duration::from_millis(1)).await,
+                }
+            }
+        })
+        .await
+        .expect("a live actor serves the group");
+        check!(stopped, "the actor stops after the uncertain write");
+        check!(rpc::classic_inspect(&live).await == reloaded);
+        check!(rpc::fetch_committed(&live).await == committed);
     }
 }
