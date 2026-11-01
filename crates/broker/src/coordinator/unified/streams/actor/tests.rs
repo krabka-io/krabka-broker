@@ -77,15 +77,22 @@ fn input_topic_source(partitions: i32) -> Arc<FakeMetadataSource> {
     )
 }
 
-#[test]
-fn persisted_group_config_overrides_actor_defaults() {
+fn persisted_streams_configs(configs: BTreeMap<String, String>) -> krabka_metadata::MetadataImage {
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
     image.apply(&krabka_metadata::MetadataRecord::V1GroupConfig(
         krabka_metadata::GroupConfigRecord {
             group_id: "streams-app".into(),
-            configs: maplit::btreemap! {KEY_NUM_STANDBY_REPLICAS.into() => "1".into()},
+            configs,
         },
     ));
+    image
+}
+
+#[test]
+fn persisted_group_config_overrides_actor_defaults() {
+    let image = persisted_streams_configs(
+        maplit::btreemap! {KEY_NUM_STANDBY_REPLICAS.into() => "1".into()},
+    );
     let config =
         resolve_group_config_from_image(&StreamsGroupConfig::default(), &image, "streams-app");
     assert!(config.num_standby_replicas == 1);
@@ -2821,16 +2828,10 @@ fn streams_internal_topic_specs(streams_actor_behavior: &StreamsActorBehavior, t
 
 #[test]
 fn task_assignor_registry_unavailable_persisted_name_preserves_other_overrides() {
-    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    image.apply(&krabka_metadata::MetadataRecord::V1GroupConfig(
-        krabka_metadata::GroupConfigRecord {
-            group_id: "streams-app".into(),
-            configs: maplit::btreemap! {
-                KEY_NUM_STANDBY_REPLICAS.into() => "1".into(),
-                "streams.assignor.name".into() => "unavailable-extension".into(),
-            },
-        },
-    ));
+    let image = persisted_streams_configs(maplit::btreemap! {
+        KEY_NUM_STANDBY_REPLICAS.into() => "1".into(),
+        "streams.assignor.name".into() => "unavailable-extension".into(),
+    });
     let config =
         resolve_group_config_from_image(&StreamsGroupConfig::default(), &image, "streams-app");
     assert!(config.num_standby_replicas == 1);

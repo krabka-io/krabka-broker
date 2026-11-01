@@ -317,29 +317,12 @@ mod custom_assignor_tests {
     use {
         super::*,
         crate::coordinator::unified::streams::{
-            assignor::{StreamsAssignment, TaskAssignor},
+            assignor::test_support::registered_config,
             persistence::StoredSubtopology,
             state::{RoleTasks, StreamsMemberState},
         },
         assert2::assert,
-        std::sync::Arc,
     };
-    #[derive(Debug)]
-    struct Pin(&'static str, &'static str);
-    impl TaskAssignor for Pin {
-        fn name(&self) -> &str { self.0 }
-
-        fn assign(
-            &self,
-            _: &[AssignorMember],
-            input: &AssignorInput,
-        ) -> Result<StreamsAssignment, String> {
-            Ok(StreamsAssignment {
-                active: [(self.1.into(), input.tasks.clone())].into(),
-                ..Default::default()
-            })
-        }
-    }
     #[test]
     fn task_assignor_registry_reassignment_uses_cooperative_revocation_and_retains_target_on_error()
     {
@@ -357,15 +340,7 @@ mod custom_assignor_tests {
             }],
         };
         let tasks = [("s".into(), 1)].into();
-        let mut config = StreamsGroupConfig::default();
-        config
-            .task_assignors
-            .register(Arc::new(Pin("first", "a")))
-            .unwrap();
-        config
-            .task_assignors
-            .register(Arc::new(Pin("second", "b")))
-            .unwrap();
+        let mut config = registered_config();
         compute_and_install_target(&mut actor, &config, &topology, &tasks);
         actor
             .state

@@ -241,19 +241,11 @@ scenarios!("tests/features/migrated/src/coordinator/unified/streams/assignor/tes
 #[test]
 fn task_assignor_registry_executes_selected_logic_and_rejects_ambiguous_names() {
     use {
-        crate::coordinator::unified::streams::config::{KEY_ASSIGNOR_NAME, StreamsGroupConfig},
-        native_registry_support::{Fail, Pin},
+        super::test_support::{Fail, Pin, registered_config},
+        crate::coordinator::unified::streams::config::KEY_ASSIGNOR_NAME,
         std::sync::Arc,
     };
-    let mut config = StreamsGroupConfig::default();
-    config
-        .task_assignors
-        .register(Arc::new(Pin("first", "a")))
-        .unwrap();
-    config
-        .task_assignors
-        .register(Arc::new(Pin("second", "b")))
-        .unwrap();
+    let mut config = registered_config();
     config.task_assignors.register(Arc::new(Fail)).unwrap();
     assert!(
         config
@@ -372,29 +364,12 @@ fn task_assignor_registry_validates_extension_output() {
 
 mod task_assignor_registry_scenarios {
     use {
-        super::*,
+        super::{super::test_support::registered_config, *},
         crate::coordinator::unified::streams::config::{KEY_ASSIGNOR_NAME, StreamsGroupConfig},
         assert2::assert,
         rstest::fixture,
         rstest_bdd_macros::{given, scenarios, then, when},
-        std::sync::Arc,
     };
-    #[derive(Debug)]
-    struct Pin(&'static str, &'static str);
-    impl TaskAssignor for Pin {
-        fn name(&self) -> &str { self.0 }
-
-        fn assign(
-            &self,
-            _: &[AssignorMember],
-            input: &AssignorInput,
-        ) -> Result<StreamsAssignment, String> {
-            Ok(StreamsAssignment {
-                active: [(self.1.into(), input.tasks.clone())].into(),
-                ..Default::default()
-            })
-        }
-    }
     #[derive(Default)]
     struct NativeRegistry {
         config: StreamsGroupConfig,
@@ -408,16 +383,7 @@ mod task_assignor_registry_scenarios {
     }
     #[given("native Streams assignors first and second pin tasks to different members")]
     fn registered(native_registry: &mut NativeRegistry) {
-        native_registry
-            .config
-            .task_assignors
-            .register(Arc::new(Pin("first", "a")))
-            .unwrap();
-        native_registry
-            .config
-            .task_assignors
-            .register(Arc::new(Pin("second", "b")))
-            .unwrap();
+        native_registry.config = registered_config();
     }
     #[when("the Streams group selects {selection} and computes its target")]
     fn compute(native_registry: &mut NativeRegistry, selection: String) {
@@ -458,37 +424,4 @@ mod task_assignor_registry_scenarios {
         assert!(result.active[&owner]["s"] == vec![0, 1]);
     }
     scenarios!("tests/features/streams/task_assignor_registry.feature", fixtures = [native_registry: NativeRegistry]);
-}
-
-mod native_registry_support {
-    use super::*;
-    #[derive(Debug)]
-    pub(super) struct Pin(pub(super) &'static str, pub(super) &'static str);
-    impl TaskAssignor for Pin {
-        fn name(&self) -> &str { self.0 }
-
-        fn assign(
-            &self,
-            _: &[AssignorMember],
-            input: &AssignorInput,
-        ) -> Result<StreamsAssignment, String> {
-            Ok(StreamsAssignment {
-                active: [(self.1.into(), input.tasks.clone())].into(),
-                ..Default::default()
-            })
-        }
-    }
-    #[derive(Debug)]
-    pub(super) struct Fail;
-    impl TaskAssignor for Fail {
-        fn name(&self) -> &str { "fail" }
-
-        fn assign(
-            &self,
-            _: &[AssignorMember],
-            _: &AssignorInput,
-        ) -> Result<StreamsAssignment, String> {
-            Err("extension failed".into())
-        }
-    }
 }
