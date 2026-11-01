@@ -13,7 +13,9 @@ use {
         heartbeat::{MemberUpdateRecords, member_update_records, replace_static_member},
         member_state::{MemberChange, after_member_update, update_subscription},
         pending_records::PendingRecords,
-        persistence::{Recorder, flush_classic_metadata, replayed_classic_state},
+        persistence::{
+            Recorder, flush_classic_metadata, leave_written_classic_group, written_classic_state,
+        },
         regex_resolution::{RegexResolution, maybe_update_regular_expressions},
         waiters::{
             complete_classic_rebalance, drain_followers_with, fence_replaced_classic_member,
@@ -162,8 +164,7 @@ pub(super) async fn handle_classic_join_message(
                     // log may still commit the replacement, so the actor then
                     // stops and leaves the next one the group that a reload
                     // of the log builds, the replacement included.
-                    let written = matches!(error, BrokerError::CoordinatorWriteUncommitted { .. })
-                        .then(|| replayed_classic_state(state));
+                    let written = written_classic_state(state, &error);
                     let leader = previous.leader_id.clone().unwrap_or_default();
                     *state = previous;
                     tracing::warn!(group_id = %state.group_id, %error,
@@ -179,13 +180,7 @@ pub(super) async fn handle_classic_join_message(
                     let Some(written) = written else {
                         return true;
                     };
-                    match written {
-                        Ok(replayed) => services.coordinator.leave_classic_respawn_seed(
-                            group.respawn_seed(GroupKind::Classic(replayed)),
-                        ),
-                        Err(error) => tracing::warn!(group_id = %group.group_id, %error,
-                            "classic static rejoin could not rebuild the written group"),
-                    }
+                    leave_written_classic_group(group, written, services.coordinator);
                     return false;
                 }
                 let _ = reply.send(result);

@@ -20,6 +20,7 @@ use {
                 GroupCoordinator,
                 classic_state::ClassicGroup,
                 consumer_state::{GroupState, MemberState},
+                group::{CoordinatorGroup, GroupKind},
                 member_records::{MemberValues, append_target_records},
                 offsets_log::OffsetsLog,
                 persistence::{GroupMetadataValue, sorted_assigned_partitions, sorted_partitions},
@@ -310,7 +311,7 @@ pub(super) async fn flush_classic_metadata(
 /// # Errors
 ///
 /// Returns the error of encoding or decoding the snapshot.
-pub(super) fn replayed_classic_state(state: &ClassicGroup) -> Result<ClassicGroup, BrokerError> {
+fn replayed_classic_state(state: &ClassicGroup) -> Result<ClassicGroup, BrokerError> {
     let now_ms = chrono_now_ms();
     let encoded = classic_group_metadata_record(state, now_ms).encode_value()?;
     let mut replayed = ClassicGroup::new(state.group_id.clone());
@@ -320,6 +321,36 @@ pub(super) fn replayed_classic_state(state: &ClassicGroup) -> Result<ClassicGrou
         now_ms,
     );
     Ok(replayed)
+}
+
+/// The group that a reload of the log builds when a k2 write of `state`
+/// failed with `error` after its record reached the log, so that the record
+/// may still commit; `None` when the write never reached the log. Take it
+/// before reverting `state`.
+pub(super) fn written_classic_state(
+    state: &ClassicGroup,
+    error: &BrokerError,
+) -> Option<Result<ClassicGroup, BrokerError>> {
+    matches!(error, BrokerError::CoordinatorWriteUncommitted { .. })
+        .then(|| replayed_classic_state(state))
+}
+
+/// Leave `written`, from [`written_classic_state`], as the classic respawn
+/// seed of `group`'s next actor. The caller's actor then stops, and the next
+/// one serves the group a reload of the log builds, with `group`'s offsets.
+pub(super) fn leave_written_classic_group(
+    group: &mut CoordinatorGroup,
+    written: Result<ClassicGroup, BrokerError>,
+    coordinator: &GroupCoordinator,
+) {
+    match written {
+        Ok(replayed) => {
+            coordinator
+                .leave_classic_respawn_seed(group.respawn_seed(GroupKind::Classic(replayed)));
+        }
+        Err(error) => tracing::warn!(group_id = %group.group_id, %error,
+            "classic actor could not rebuild the group it wrote"),
+    }
 }
 
 #[krabka_macros::flush_group_records(group [&state.group_id]; encode [pending.to_batch(&state.group_id, now_ms)];)]
