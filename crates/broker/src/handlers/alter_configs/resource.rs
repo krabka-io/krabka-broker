@@ -18,7 +18,8 @@ use {
         RESOURCE_TYPE_TOPIC, RecordBuilders, broker_configs::broker_config_records,
         client_metrics_configs::client_metrics_config_record, empty_resource_response,
         group_configs::group_config_record, guarded_resource_response, resource_preamble_refusal,
-        resource_records, topic_configs::topic_config_record, validate_resource_shape,
+        resource_records, resource_refusal, topic_configs::topic_config_record,
+        validate_resource_shape,
     },
     crate::{
         broker::Broker,
@@ -65,21 +66,6 @@ pub(super) async fn process_resource(
     })
     .await
     .unwrap_or_else(|refusal| resource_refusal(&resource, refusal))
-}
-
-/// The row of `resource` whose guarded alter gave up with `refusal`, its
-/// error code and message.
-pub(super) fn resource_refusal(
-    resource: &AlterConfigsResource,
-    (error_code, error_message): (i16, Option<String>),
-) -> AlterConfigsResourceResponse {
-    AlterConfigsResourceResponse {
-        resource_type: resource.resource_type,
-        resource_name: resource.resource_name.clone(),
-        error_code,
-        error_message,
-        ..Default::default()
-    }
 }
 
 async fn process_resource_once(

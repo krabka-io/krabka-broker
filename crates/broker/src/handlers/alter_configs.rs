@@ -171,6 +171,20 @@ pub(super) fn ordered_resource_responses<Row>(mut indexed: Vec<(usize, Row)>) ->
     indexed.into_iter().map(|(_, row)| row).collect()
 }
 
+/// The row of `resource` refused with `refusal`, its error code and message.
+pub(super) fn resource_refusal<Resource, Row>(
+    resource: &Resource,
+    (error_code, error_message): (i16, Option<String>),
+) -> Row
+where
+    Resource: ResourceErrorRequestResource,
+    Row: ResourceErrorRow,
+{
+    let mut row: Row = empty_resource_response(resource);
+    row.set_error(error_code, error_message);
+    row
+}
+
 pub(super) fn resource_error_rows<'a, Resource, Row>(
     resources: impl Iterator<Item = &'a Resource>,
     code: i16,
@@ -181,11 +195,7 @@ where
     Row: ResourceErrorRow,
 {
     resources
-        .map(|resource| {
-            let mut row: Row = empty_resource_response(resource);
-            row.set_error(code, message.map(str::to_owned));
-            row
-        })
+        .map(|resource| resource_refusal(resource, (code, message.map(str::to_owned))))
         .collect()
 }
 

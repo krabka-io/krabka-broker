@@ -9,7 +9,9 @@ use {
         handlers::{
             create_partitions::test_support::{PartitionMutation, request, topic_req},
             forward_to_controller::wrong_controller_message,
-            submit_failure::test_support::{every_raft_error, guarded_failure},
+            submit_failure::test_support::{
+                every_raft_error, guarded_failure, guarded_not_controller_rows,
+            },
         },
     },
     assert2::check,
@@ -62,32 +64,16 @@ async fn a_failed_growth_answers_kafkas_row() {
 /// `createPartitions` through `CreatePartitionsRequest.getErrorResponse`,
 /// which sets `ApiError.message()` on the row: for a controller that is not
 /// active, the message of `ControllerExceptions.newWrongControllerException`.
-/// A guarded growth retries `UncommittedTail` until the deadline, so that row
-/// answers `REQUEST_TIMED_OUT` whatever leader this node knows; the case
-/// without a known leader is the same row and is left out.
-#[yare::parameterized(
-    not_leader = {
-        || RaftError::NotLeader { current_leader: Some(NodeId(2)) },
-        row(codes::NOT_CONTROLLER, Some("The active controller appears to be node 2.")),
-    },
-    not_leader_without_hint = {
-        || RaftError::NotLeader { current_leader: None },
-        row(codes::NOT_CONTROLLER, Some("No controller appears to be active.")),
-    },
-    leader_unknown = {
-        || RaftError::LeaderUnknown,
-        row(codes::NOT_CONTROLLER, Some("No controller appears to be active.")),
-    },
-    uncommitted_tail = { || RaftError::UncommittedTail, row(codes::REQUEST_TIMED_OUT, None) },
-    shutdown = { || RaftError::Shutdown, row(codes::UNKNOWN_SERVER_ERROR, None) },
-)]
-#[test_macro(tokio::test(start_paused = true))]
-async fn a_failed_growth_carries_kafkas_not_controller_message(
-    error: fn() -> RaftError,
-    expected: CreatePartitionsTopicResult,
-) {
-    let answered = growth_outcome("orders".to_owned(), guarded_failure(error).await);
-    check!(answered == expected);
+#[tokio::test(start_paused = true)]
+async fn a_failed_growth_carries_kafkas_not_controller_message() {
+    for case in guarded_not_controller_rows(codes::UNKNOWN_SERVER_ERROR) {
+        let answered = growth_outcome("orders".to_owned(), guarded_failure(case.error).await);
+        check!(
+            answered == row(case.error_code, case.error_message),
+            "{}",
+            case.name
+        );
+    }
 }
 
 /// The row of topic `orders` with `error_code` and `error_message`.

@@ -153,7 +153,7 @@ pub fn classify_guarded<T>(
 pub mod test_support {
     use {
         super::super::forward_to_controller::guarded_operation_on_source,
-        crate::test_support::FakeMetadataSource,
+        crate::{codes, test_support::FakeMetadataSource},
         krabka_client_core::ClientError,
         krabka_log::LogError,
         krabka_metadata::MetadataError,
@@ -271,6 +271,66 @@ pub mod test_support {
             |_| async move { Err(error()) },
         )
         .await
+    }
+
+    /// A controller failure that ends a guarded write, and the error code and
+    /// message of the row Kafka answers for it.
+    pub struct GuardedRow {
+        /// The case's name, reported when its row differs.
+        pub name: &'static str,
+        /// The failure every attempt of the write ends in.
+        pub error: fn() -> RaftError,
+        /// The row's error code.
+        pub error_code: i16,
+        /// The row's error message.
+        pub error_message: Option<&'static str>,
+    }
+
+    /// The rows Kafka answers for a guarded write that failed, where the
+    /// response keeps `ApiError.fromThrowable(e).message()`.
+    ///
+    /// A lost or unknown leader answers `NOT_CONTROLLER` with the message of
+    /// `ControllerExceptions.newWrongControllerException`. A guarded write
+    /// retries `UncommittedTail` until the deadline, so that row answers
+    /// `REQUEST_TIMED_OUT` with no message, whatever leader this node knows.
+    /// Any other failure answers `otherwise` with no message.
+    pub fn guarded_not_controller_rows(otherwise: i16) -> [GuardedRow; 5] {
+        [
+            GuardedRow {
+                name: "not_leader",
+                error: || RaftError::NotLeader {
+                    current_leader: Some(NodeId(2)),
+                },
+                error_code: codes::NOT_CONTROLLER,
+                error_message: Some("The active controller appears to be node 2."),
+            },
+            GuardedRow {
+                name: "not_leader_without_hint",
+                error: || RaftError::NotLeader {
+                    current_leader: None,
+                },
+                error_code: codes::NOT_CONTROLLER,
+                error_message: Some("No controller appears to be active."),
+            },
+            GuardedRow {
+                name: "leader_unknown",
+                error: || RaftError::LeaderUnknown,
+                error_code: codes::NOT_CONTROLLER,
+                error_message: Some("No controller appears to be active."),
+            },
+            GuardedRow {
+                name: "uncommitted_tail",
+                error: || RaftError::UncommittedTail,
+                error_code: codes::REQUEST_TIMED_OUT,
+                error_message: None,
+            },
+            GuardedRow {
+                name: "shutdown",
+                error: || RaftError::Shutdown,
+                error_code: otherwise,
+                error_message: None,
+            },
+        ]
     }
 }
 

@@ -35,6 +35,7 @@ use {
             alter_configs::{
                 BrokerPreprocess, RecordBuilders, broker_preprocess_refusal,
                 guarded_resource_response, resource_preamble_refusal, resource_records,
+                resource_refusal,
             },
             audit_resource, encode_response,
             forward_to_controller::to_active_controller_or_handle,
@@ -58,8 +59,6 @@ mod broker_logger_scope;
 mod broker_scope;
 mod client_metrics_scope;
 mod group_scope;
-#[cfg(test)]
-mod guarded_failure_tests;
 #[cfg(test)]
 mod test_support;
 mod topic_scope;
@@ -330,45 +329,6 @@ const RECORD_BUILDERS: RecordBuilders<AlterConfigsResource> = RecordBuilders {
     client_metrics: client_metrics_records,
 };
 
-async fn process_resource(
-    broker: &Broker,
-    _image: &MetadataImage,
-    ctx: &RequestContext<'_>,
-    resource: AlterConfigsResource,
-    validate_only: bool,
-    is_duplicate: bool,
-) -> AlterConfigsResourceResponse {
-    // Read and admission are optimistic; the engine atomically checks that
-    // image when it appends. Rebuild every operation after a conflicting commit.
-    guarded_resource_response(broker, "IncrementalAlterConfigs", |image| {
-        process_resource_once(
-            broker,
-            image,
-            ctx,
-            resource.clone(),
-            validate_only,
-            is_duplicate,
-        )
-    })
-    .await
-    .unwrap_or_else(|refusal| resource_refusal(&resource, refusal))
-}
-
-/// The row of `resource` whose guarded alter gave up with `refusal`, its
-/// error code and message.
-fn resource_refusal(
-    resource: &AlterConfigsResource,
-    (error_code, error_message): (i16, Option<String>),
-) -> AlterConfigsResourceResponse {
-    AlterConfigsResourceResponse {
-        resource_type: resource.resource_type,
-        resource_name: resource.resource_name.clone(),
-        error_code,
-        error_message,
-        ..Default::default()
-    }
-}
-
 async fn process_resource_once(
     broker: &Broker,
     image: Arc<MetadataImage>,
@@ -432,6 +392,30 @@ async fn process_resource_once(
         .submit_change_if_image(to_submit, image)
         .await?;
     Ok(out)
+}
+
+async fn process_resource(
+    broker: &Broker,
+    _image: &MetadataImage,
+    ctx: &RequestContext<'_>,
+    resource: AlterConfigsResource,
+    validate_only: bool,
+    is_duplicate: bool,
+) -> AlterConfigsResourceResponse {
+    // Read and admission are optimistic; the engine atomically checks that
+    // image when it appends. Rebuild every operation after a conflicting commit.
+    guarded_resource_response(broker, "IncrementalAlterConfigs", |image| {
+        process_resource_once(
+            broker,
+            image,
+            ctx,
+            resource.clone(),
+            validate_only,
+            is_duplicate,
+        )
+    })
+    .await
+    .unwrap_or_else(|refusal| resource_refusal(&resource, refusal))
 }
 
 #[cfg(test)]

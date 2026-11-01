@@ -7,7 +7,7 @@
 //! `not_controller_tests` covers it.
 
 use {
-    super::{election_outcome, request_refusal},
+    super::{election_outcome, not_controller_tests::request, request_refusal},
     crate::{
         codes,
         handlers::{
@@ -17,8 +17,7 @@ use {
     },
     assert2::check,
     krabka_protocol::owned::{
-        elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
-        elect_leaders_response::ElectLeadersResponse,
+        elect_leaders_request::ElectLeadersRequest, elect_leaders_response::ElectLeadersResponse,
     },
     krabka_raft::RaftError,
     tokio::time::error::Elapsed,
@@ -45,15 +44,7 @@ fn response_on_main(
 
 #[tokio::test(start_paused = true)]
 async fn a_failed_election_answers_the_response_main_answered() {
-    let req = ElectLeadersRequest {
-        topic_partitions: Some(vec![TopicPartitions {
-            topic: "orders".to_owned(),
-            partitions: vec![0, 1],
-            ..Default::default()
-        }]),
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
+    let req = request();
     let not_controller = ["not_leader", "leader_unknown"];
     for (name, error) in every_raft_error()
         .into_iter()

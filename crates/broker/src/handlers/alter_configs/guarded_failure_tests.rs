@@ -1,65 +1,71 @@
-//! The row of an `AlterConfigs` resource whose guarded alter gave up, for each
-//! controller failure that ends the retry.
+//! The row of an `AlterConfigs` or `IncrementalAlterConfigs` resource whose
+//! guarded alter gave up, for each controller failure that ends the retry.
 
 use {
-    super::{RESOURCE_TYPE_TOPIC, guarded_resource_outcome, resource::resource_refusal},
-    crate::{codes, handlers::submit_failure::test_support::guarded_failure},
+    super::{RESOURCE_TYPE_TOPIC, guarded_resource_outcome, resource_refusal},
+    crate::{
+        codes,
+        handlers::submit_failure::test_support::{guarded_failure, guarded_not_controller_rows},
+    },
     assert2::check,
     krabka_protocol::owned::{
-        alter_configs_request::AlterConfigsResource,
-        alter_configs_response::AlterConfigsResourceResponse,
+        alter_configs_request, alter_configs_response, incremental_alter_configs_request,
+        incremental_alter_configs_response,
     },
-    krabka_raft::{NodeId, RaftError},
 };
 
-/// The row of a resource whose guarded alter failed with a controller error.
+/// The rows of a resource whose guarded alter failed with a controller error,
+/// in both config APIs, which share the guarded alter.
 ///
-/// Kafka's `ControllerApis.handleLegacyAlterConfigs` answers a failed
-/// `legacyAlterConfigs` through `requestHelper.handleError`, and
-/// `AlterConfigsRequest.getErrorResponse` sets `ApiError.message()` on every
-/// resource row: for a controller that is not active, the message of
-/// `ControllerExceptions.newWrongControllerException`. A guarded alter retries
-/// `UncommittedTail` until the deadline, so that row answers
-/// `REQUEST_TIMED_OUT` whatever leader this node knows; the case without a
-/// known leader is the same row and is left out.
-#[yare::parameterized(
-    not_leader = {
-        || RaftError::NotLeader { current_leader: Some(NodeId(2)) },
-        row(codes::NOT_CONTROLLER, Some("The active controller appears to be node 2.")),
-    },
-    not_leader_without_hint = {
-        || RaftError::NotLeader { current_leader: None },
-        row(codes::NOT_CONTROLLER, Some("No controller appears to be active.")),
-    },
-    leader_unknown = {
-        || RaftError::LeaderUnknown,
-        row(codes::NOT_CONTROLLER, Some("No controller appears to be active.")),
-    },
-    uncommitted_tail = { || RaftError::UncommittedTail, row(codes::REQUEST_TIMED_OUT, None) },
-    shutdown = { || RaftError::Shutdown, row(codes::UNKNOWN_SERVER_ERROR, None) },
-)]
-#[test_macro(tokio::test(start_paused = true))]
-async fn a_failed_alter_carries_kafkas_not_controller_message(
-    error: fn() -> RaftError,
-    expected: AlterConfigsResourceResponse,
-) {
-    let resource = AlterConfigsResource {
+/// Kafka's `ControllerApis.handleLegacyAlterConfigs` and
+/// `ControllerApis.handleIncrementalAlterConfigs` answer a failed write
+/// through `requestHelper.handleError`. `AlterConfigsRequest.getErrorResponse`
+/// and `IncrementalAlterConfigsRequest.getErrorResponse` set
+/// `ApiError.message()` on every resource row: for a controller that is not
+/// active, the message of `ControllerExceptions.newWrongControllerException`.
+#[tokio::test(start_paused = true)]
+async fn a_failed_alter_carries_kafkas_not_controller_message() {
+    let legacy = alter_configs_request::AlterConfigsResource {
         resource_type: RESOURCE_TYPE_TOPIC,
         resource_name: "orders".to_owned(),
         ..Default::default()
     };
-    let answered = guarded_resource_outcome(guarded_failure(error).await, "AlterConfigs")
-        .unwrap_or_else(|refusal| resource_refusal(&resource, refusal));
-    check!(answered == expected);
-}
-
-/// The row of topic `orders` with `error_code` and `error_message`.
-fn row(error_code: i16, error_message: Option<&str>) -> AlterConfigsResourceResponse {
-    AlterConfigsResourceResponse {
+    let incremental = incremental_alter_configs_request::AlterConfigsResource {
         resource_type: RESOURCE_TYPE_TOPIC,
         resource_name: "orders".to_owned(),
-        error_code,
-        error_message: error_message.map(str::to_owned),
         ..Default::default()
+    };
+    for case in guarded_not_controller_rows(codes::UNKNOWN_SERVER_ERROR) {
+        let error_message = case.error_message.map(str::to_owned);
+        let legacy_row: alter_configs_response::AlterConfigsResourceResponse =
+            guarded_resource_outcome(guarded_failure(case.error).await, "AlterConfigs")
+                .unwrap_or_else(|refusal| resource_refusal(&legacy, refusal));
+        check!(
+            legacy_row
+                == alter_configs_response::AlterConfigsResourceResponse {
+                    resource_type: RESOURCE_TYPE_TOPIC,
+                    resource_name: "orders".to_owned(),
+                    error_code: case.error_code,
+                    error_message: error_message.clone(),
+                    ..Default::default()
+                },
+            "{}",
+            case.name
+        );
+        let incremental_row: incremental_alter_configs_response::AlterConfigsResourceResponse =
+            guarded_resource_outcome(guarded_failure(case.error).await, "IncrementalAlterConfigs")
+                .unwrap_or_else(|refusal| resource_refusal(&incremental, refusal));
+        check!(
+            incremental_row
+                == incremental_alter_configs_response::AlterConfigsResourceResponse {
+                    resource_type: RESOURCE_TYPE_TOPIC,
+                    resource_name: "orders".to_owned(),
+                    error_code: case.error_code,
+                    error_message,
+                    ..Default::default()
+                },
+            "{}",
+            case.name
+        );
     }
 }

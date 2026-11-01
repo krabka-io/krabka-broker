@@ -25,7 +25,7 @@ use {
 };
 
 /// An election of `orders` partitions 0 and 1.
-fn request() -> ElectLeadersRequest {
+pub(super) fn request() -> ElectLeadersRequest {
     ElectLeadersRequest {
         topic_partitions: Some(vec![TopicPartitions {
             topic: "orders".to_owned(),
