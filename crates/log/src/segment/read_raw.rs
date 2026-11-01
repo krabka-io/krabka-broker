@@ -482,7 +482,7 @@ mod tests {
                 .records(TWO_RECORD_BATCH.records.0)
                 .timestamp(TWO_RECORD_BATCH.timestamp.0)
                 .call()
-                .encoded_len(),
+                .encoded_batch_len(),
         )
         .unwrap();
         let two_batches = seg
@@ -519,7 +519,7 @@ mod tests {
         for off in 0..3i64 {
             let b = test_batch_at(Offset(off));
             seg.append(&b, DENSE_INDEX).unwrap();
-            b.encode(&mut wire).unwrap();
+            b.encode_batch(&mut wire).unwrap();
         }
         let wire = wire.freeze();
         let r = seg.read_raw(Offset(0), Offset(3), mebibytes(10)).unwrap();
@@ -540,7 +540,7 @@ mod tests {
             let batch = test_batch_at(Offset(off));
             seg.append(&batch, DENSE_INDEX).unwrap();
             if off < 2 {
-                batch.encode(&mut expected).unwrap();
+                batch.encode_batch(&mut expected).unwrap();
             }
         }
         let r = seg.read_raw(Offset(0), Offset(2), mebibytes(10)).unwrap();
@@ -558,7 +558,7 @@ mod tests {
         } = test_segment();
         let batch = test_batch_at(Offset(0));
         let mut expected = bytes::BytesMut::new();
-        batch.encode(&mut expected).unwrap();
+        batch.encode_batch(&mut expected).unwrap();
         seg.append(&batch, DENSE_INDEX).unwrap();
         let r = seg.read_raw(Offset(0), Offset(1), bytes(1)).unwrap();
         assert2::assert!(r.start_offset == Offset(0));

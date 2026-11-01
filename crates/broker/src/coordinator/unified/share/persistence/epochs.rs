@@ -93,7 +93,7 @@ mod tests {
             epoch: 7,
             metadata_hash: 0,
         };
-        assert!(ShareGroupMetadataValue::decode(&v.encode()).unwrap() == v);
+        assert!(ShareGroupMetadataValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
 
     /// i16 version | i32 `AssignmentEpoch` | tagged-field trailer, which holds
@@ -113,7 +113,9 @@ mod tests {
             assignment_epoch: 12,
             assignment_timestamp_ms: 7,
         };
-        assert!(ShareGroupTargetAssignmentMetadataValue::decode(&v.encode()).unwrap() == v);
+        assert!(
+            ShareGroupTargetAssignmentMetadataValue::decode(&v.encode().unwrap()).unwrap() == v
+        );
     }
 
     #[test]
@@ -122,13 +124,15 @@ mod tests {
             epoch: 1,
             metadata_hash: 0,
         }
-        .encode();
+        .encode()
+        .unwrap();
         assert!(ShareGroupMetadataValue::decode(&g[..g.len() - 1]).is_err());
         let t = ShareGroupTargetAssignmentMetadataValue {
             assignment_epoch: 1,
             assignment_timestamp_ms: 0,
         }
-        .encode();
+        .encode()
+        .unwrap();
         assert!(ShareGroupTargetAssignmentMetadataValue::decode(&t[..t.len() - 1]).is_err());
     }
     #[derive(Debug, PartialEq)]
@@ -181,7 +185,7 @@ mod tests {
                 ),
             ),
         };
-        epochs.encoded = Some(encoded);
+        epochs.encoded = Some(encoded.unwrap());
         epochs.decoded = Some(decoded);
     }
     #[then("the Share epoch bytes match Kafka exactly and all epoch fields are recovered")]

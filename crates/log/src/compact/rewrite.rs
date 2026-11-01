@@ -49,8 +49,8 @@ fn write_rewritten_batch(
     previous_last: Offset,
     frontier: &mut FrontierScan,
 ) -> Result<Offset, LogError> {
-    let mut bytes = BytesMut::with_capacity(batch.encoded_len());
-    batch.encode(&mut bytes)?;
+    let mut bytes = BytesMut::with_capacity(batch.encoded_batch_len());
+    batch.encode_batch(&mut bytes)?;
     write_all(io, IoTarget::CompactionSwap, file, &bytes)?;
     // No supported target has a `usize` wider than a `u64`.
     let encoded_len = bytes.len() as u64;

@@ -116,14 +116,14 @@ impl PendingShareRecords {
                         group_id: group(),
                         member_id,
                     })?,
-                    Some(v.encode()),
+                    Some(v.encode()?),
                 );
             }
         }
         if let Some(v) = self.group_metadata {
             batch.push(
                 key(ShareGroupKey::GroupMetadata { group_id: group() })?,
-                Some(v.encode()),
+                Some(v.encode()?),
             );
         }
         for (member_id, v) in self.target_per_member {
@@ -135,13 +135,13 @@ impl PendingShareRecords {
                     group_id: group(),
                     member_id,
                 })?,
-                v.map(|x| x.encode()),
+                v.map(|x| x.encode()).transpose()?,
             );
         }
         if let Some(v) = self.target_metadata {
             batch.push(
                 key(ShareGroupKey::TargetAssignmentMetadata { group_id: group() })?,
-                Some(v.encode()),
+                Some(v.encode()?),
             );
         }
         for (member_id, assignment) in self.current_per_member {
@@ -154,7 +154,7 @@ impl PendingShareRecords {
                     group_id: group(),
                     member_id,
                 })?,
-                assignment.map(|x| x.encode()),
+                assignment.map(|x| x.encode()).transpose()?,
             );
         }
         if let Some(v) = self.state_partition_metadata {
@@ -162,7 +162,7 @@ impl PendingShareRecords {
                 encode_share_key(&ShareGroupKey::StatePartitionMetadata {
                     group_id: group_id.into(),
                 })?,
-                Some(v.encode()),
+                Some(v.encode()?),
             );
         }
 

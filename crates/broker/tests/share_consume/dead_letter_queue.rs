@@ -222,7 +222,7 @@ fn records_of(payload: Option<&RecordsPayload>) -> Vec<Record> {
             let mut cursor = bytes.clone();
             let mut records = Vec::new();
             while !cursor.is_empty() {
-                let batch = RecordBatch::decode(&mut cursor).expect("decode a record batch");
+                let batch = RecordBatch::decode_batch(&mut cursor).expect("decode a record batch");
                 records.extend(batch.records);
             }
             records

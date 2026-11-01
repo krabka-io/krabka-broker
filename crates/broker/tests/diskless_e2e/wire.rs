@@ -193,7 +193,9 @@ pub async fn fetch_log(
                     if batch.base_offset < next {
                         continue;
                     }
-                    batch.encode(&mut bytes).expect("re-encode fetched batch");
+                    batch
+                        .encode_batch(&mut bytes)
+                        .expect("re-encode fetched batch");
                     for record in &batch.records {
                         let offset = batch.base_offset + i64::from(record.offset_delta);
                         records.push(FetchedRecord {

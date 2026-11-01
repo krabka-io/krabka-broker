@@ -326,7 +326,7 @@ impl KraftLog {
             let mut batches = Vec::new();
             while !bytes.is_empty() {
                 batches.push(
-                    RecordBatch::decode(&mut bytes)
+                    RecordBatch::decode_batch(&mut bytes)
                         .map_err(|error| RaftError::ChangeRejected(error.to_string()))?,
                 );
             }

@@ -321,7 +321,7 @@ async fn the_walk_the_perf_note_prices_counts_the_bytes_the_append_lands() {
         for _ in 0..3 {
             let mut batch = make_batch(records, payload);
             batch.base_offset = seam.next_offset().0;
-            walked += batch.encoded_len();
+            walked += batch.encoded_batch_len();
             seam.replicate(batch)
                 .await
                 .unwrap_or_else(|error| panic!("{name}: seam rejected the batch: {error}"));

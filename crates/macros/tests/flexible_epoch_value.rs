@@ -34,13 +34,18 @@ mod coordinator {
                     }
                 }
 
-                pub fn put_tag0_i64(buf: &mut BytesMut, value: i64) {
+                pub fn put_tag0_i64(buf: &mut BytesMut, value: i64) -> Result<(), BrokerError> {
+                    // A writer failure the derive must pass through.
+                    if value == i64::MIN {
+                        return Err("unwritable tag zero");
+                    }
                     if value == 0 {
                         buf.put_u8(0);
                     } else {
                         buf.extend_from_slice(&[1, 0, 8]);
                         buf.put_i64(value);
                     }
+                    Ok(())
                 }
 
                 pub fn get_tag0_i64(buf: &mut &[u8]) -> Result<i64, BrokerError> {
@@ -122,7 +127,11 @@ fn epoch_bytes(epoch_codec: &mut EpochCodecScenario, golden: String) {
     "the epoch value and every shorter byte prefix are passed through the codec"
 )]
 fn code_epoch_value(epoch_codec: &mut EpochCodecScenario) {
-    epoch_codec.encoded = epoch_codec.value.encode().to_vec();
+    epoch_codec.encoded = epoch_codec
+        .value
+        .encode()
+        .expect("encode the epoch value")
+        .to_vec();
     epoch_codec.decoded = Some(Value::decode(&epoch_codec.golden));
     epoch_codec.prefixes = (0..epoch_codec.golden.len())
         .map(|end| Value::decode(&epoch_codec.golden[..end]))
@@ -158,4 +167,13 @@ fn retains_record_specific_version_errors_and_codec_errors() {
                 assignment_timestamp_ms: 0,
             })
     );
+}
+
+#[test]
+fn tag_writer_errors_reach_the_encoder_caller() {
+    let value = Value {
+        assignment_epoch: 1,
+        assignment_timestamp_ms: i64::MIN,
+    };
+    assert!(value.encode() == Err("unwritable tag zero"));
 }

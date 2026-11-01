@@ -59,11 +59,11 @@ pub struct ShareGroupCurrentMemberAssignmentValue {
 
 #[krabka_macros::flexible_value(record = "ShareGroupCurrentMemberAssignmentValue")]
 impl ShareGroupCurrentMemberAssignmentValue {
-    fn encode_fields(&self, buf: &mut BytesMut) {
+    fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         buf.put_i32(self.member_epoch);
         buf.put_i32(self.previous_member_epoch);
         buf.put_i8(MEMBER_STATE_STABLE);
-        encode_topic_partitions(buf, &self.assigned_partitions);
+        encode_topic_partitions(buf, &self.assigned_partitions)
     }
 
     fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -79,8 +79,11 @@ impl ShareGroupCurrentMemberAssignmentValue {
     }
 }
 
-fn encode_topic_partitions(buf: &mut BytesMut, items: &[(Uuid, Vec<i32>)]) {
-    put_assigned_topics(buf, items, |(topic, partitions)| (topic, partitions));
+fn encode_topic_partitions(
+    buf: &mut BytesMut,
+    items: &[(Uuid, Vec<i32>)],
+) -> Result<(), BrokerError> {
+    put_assigned_topics(buf, items, |(topic, partitions)| (topic, partitions))
 }
 
 fn decode_topic_partitions(buf: &mut &[u8]) -> Result<Vec<(Uuid, Vec<i32>)>, BrokerError> {
@@ -117,7 +120,7 @@ mod tests {
         let v = ShareGroupTargetAssignmentMemberValue {
             topic_partitions: vec![(Uuid([1; 16]), vec![0, 1, 2]), (Uuid([2; 16]), vec![])],
         };
-        assert!(ShareGroupTargetAssignmentMemberValue::decode(&v.encode()).unwrap() == v);
+        assert!(ShareGroupTargetAssignmentMemberValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
 
     #[test]
@@ -136,14 +139,18 @@ mod tests {
             previous_member_epoch: 2,
             assigned_partitions: vec![(Uuid([3; 16]), vec![0, 1])],
         };
-        assert!(ShareGroupCurrentMemberAssignmentValue::decode(&v.encode()).unwrap() == v);
+        assert!(ShareGroupCurrentMemberAssignmentValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
 
     #[test]
     fn assignment_records_reject_a_missing_tagged_trailer() {
-        let t = ShareGroupTargetAssignmentMemberValue::default().encode();
+        let t = ShareGroupTargetAssignmentMemberValue::default()
+            .encode()
+            .unwrap();
         assert!(ShareGroupTargetAssignmentMemberValue::decode(&t[..t.len() - 1]).is_err());
-        let c = ShareGroupCurrentMemberAssignmentValue::default().encode();
+        let c = ShareGroupCurrentMemberAssignmentValue::default()
+            .encode()
+            .unwrap();
         assert!(ShareGroupCurrentMemberAssignmentValue::decode(&c[..c.len() - 1]).is_err());
     }
     mod bdd_target_assignment_member {
@@ -171,7 +178,8 @@ mod tests {
                     .value
                     .as_ref()
                     .expect("group record prepared")
-                    .encode(),
+                    .encode()
+                    .unwrap(),
             );
         }
         #[then(
@@ -218,7 +226,8 @@ mod tests {
                     .value
                     .as_ref()
                     .expect("group record prepared")
-                    .encode(),
+                    .encode()
+                    .unwrap(),
             );
         }
         #[then(

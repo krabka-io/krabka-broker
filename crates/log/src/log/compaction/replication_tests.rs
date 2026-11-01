@@ -94,7 +94,7 @@ fn batches_from(log: &Log, from: Offset) -> Vec<RecordBatch> {
     let mut cursor = &read.bytes[..];
     let mut batches = Vec::new();
     while !cursor.is_empty() {
-        batches.push(RecordBatch::decode(&mut cursor).unwrap());
+        batches.push(RecordBatch::decode_batch(&mut cursor).unwrap());
     }
     batches
 }

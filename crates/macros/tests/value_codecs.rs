@@ -39,9 +39,9 @@ fn check_version(buf: &mut &[u8]) -> Result<(), BrokerError> {
     }
 }
 
-fn put_batches(buf: &mut BytesMut, batches: &[StateBatch]) {
+fn put_batches(buf: &mut BytesMut, batches: &[StateBatch]) -> Result<(), BrokerError> {
     // shortcut: fixture array counts and tag sizes fit one byte; use protocol helpers for wider values.
-    buf.put_u8(u8::try_from(batches.len() + 1).unwrap());
+    buf.put_u8(u8::try_from(batches.len() + 1).map_err(|_| "too many batches")?);
     for batch in batches {
         buf.put_i64(batch.first_offset.0);
         buf.put_i64(batch.last_offset.0);
@@ -49,6 +49,7 @@ fn put_batches(buf: &mut BytesMut, batches: &[StateBatch]) {
         buf.put_i16(batch.delivery_count);
         buf.put_u8(0);
     }
+    Ok(())
 }
 
 fn get_batches(buf: &mut &[u8]) -> Result<Vec<StateBatch>, BrokerError> {
@@ -69,13 +70,17 @@ fn get_batches(buf: &mut &[u8]) -> Result<Vec<StateBatch>, BrokerError> {
     Ok(batches)
 }
 
-fn put_value_tags(buf: &mut BytesMut, count: i32) {
+fn put_value_tags(buf: &mut BytesMut, count: i32) -> Result<(), BrokerError> {
+    if count < -1 {
+        return Err("negative delivery count");
+    }
     if count == -1 {
         buf.put_u8(0);
     } else {
         buf.extend_from_slice(&[1, 0, 4]);
         buf.put_i32(count);
     }
+    Ok(())
 }
 
 fn get_value_tags(buf: &mut &[u8]) -> Result<i32, BrokerError> {
@@ -191,7 +196,7 @@ fn share_value_codec(share_codec: &mut ShareCodecScenario) {
         .expect("a share-state value was supplied")
     {
         ShareValue::Snapshot(value) => {
-            share_codec.encoded = value.encode().to_vec();
+            share_codec.encoded = value.encode().expect("encode the snapshot").to_vec();
             share_codec.decoded =
                 Some(SnapshotValue::decode(&share_codec.golden).map(ShareValue::Snapshot));
             share_codec.truncated = (0..share_codec.golden.len())
@@ -201,7 +206,7 @@ fn share_value_codec(share_codec: &mut ShareCodecScenario) {
                 .collect();
         }
         ShareValue::Update(value) => {
-            share_codec.encoded = value.encode().to_vec();
+            share_codec.encoded = value.encode().expect("encode the update").to_vec();
             share_codec.decoded = Some(Update::decode(&share_codec.golden).map(ShareValue::Update));
             share_codec.truncated = (0..share_codec.golden.len())
                 .map(|end| Update::decode(&share_codec.golden[..end]).map(ShareValue::Update))
@@ -231,13 +236,26 @@ fn share_truncation(share_codec: &ShareCodecScenario) {
     assert!(share_codec.unsupported == Some(Err("unsupported share-state value version")));
 }
 
+#[test]
+fn tag_writer_errors_reach_the_share_state_encoder_caller() {
+    let update = Update {
+        snapshot_epoch: 3,
+        leader_epoch: 4,
+        start_offset: Offset(12),
+        delivery_complete_count: -2,
+        state_batches: vec![],
+    };
+    assert!(update.encode() == Err("negative delivery count"));
+}
+
 rstest_bdd_macros::scenarios!("tests/features/share_state_codec", fixtures = [share_codec: ShareCodecScenario]);
 
-fn write_items(buf: &mut BytesMut, items: &[i32]) {
-    buf.put_u8(u8::try_from(items.len() + 1).unwrap());
+fn write_items(buf: &mut BytesMut, items: &[i32]) -> Result<(), BrokerError> {
+    buf.put_u8(u8::try_from(items.len() + 1).map_err(|_| "too many items")?);
     for &value in items {
         buf.put_i32(value);
     }
+    Ok(())
 }
 
 fn read_items(buf: &mut &[u8]) -> Result<Vec<i32>, BrokerError> {
@@ -259,7 +277,7 @@ struct Assignment {
 )]
 fn array_derive_keeps_version_field_framing_and_record_errors(items: Vec<i32>, golden: Vec<u8>) {
     let value = Assignment { items };
-    assert2::assert!(value.encode() == golden);
+    assert2::assert!(value.encode().map(|bytes| bytes.to_vec()) == Ok(golden.clone()));
     assert2::assert!(Assignment::decode(&golden) == Ok(value));
     for end in 0..golden.len() {
         assert2::assert!(Assignment::decode(&golden[..end]).is_err());

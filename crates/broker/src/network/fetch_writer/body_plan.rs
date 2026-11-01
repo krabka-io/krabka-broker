@@ -61,7 +61,7 @@ pub(super) fn fetch_response_write_plan(
         put_i32(&mut buf, response.session_id);
     }
 
-    put_array_len(&mut buf, response.responses.len(), flex);
+    put_array_len(&mut buf, response.responses.len(), flex)?;
     for topic in &response.responses {
         encode_fetch_topic(&mut buf, &mut ops, topic, version, flex)?;
     }
@@ -77,16 +77,16 @@ pub(super) fn fetch_response_write_plan(
                         .map(|endpoint| endpoint.encoded_len(version))
                         .sum::<usize>(),
                 |bytes| {
-                    put_array_len(bytes, node_endpoints.len(), flex);
+                    put_array_len(bytes, node_endpoints.len(), flex)?;
                     for endpoint in node_endpoints {
                         endpoint.encode(bytes, version)?;
                     }
                     Ok(())
                 },
-            );
+            )?;
             tagged.add(0, payload);
         }
-        tagged.write(&mut buf, &response.unknown_tagged_fields);
+        tagged.write(&mut buf, &response.unknown_tagged_fields)?;
     }
 
     flush_fetch_inline(&mut buf, &mut ops);
@@ -102,7 +102,7 @@ fn encode_fetch_topic(
 ) -> Result<(), ProtocolError> {
     if (0..=12).contains(&version) {
         if flex {
-            put_compact_string(buf, &topic.topic);
+            put_compact_string(buf, &topic.topic)?;
         } else if topic.topic.len() > MAX_STRING_BYTES {
             // A v12 request carries its topic as a compact string of any length
             // and the fetch session keeps the name, so a later v7 to v11 request
@@ -112,19 +112,19 @@ fn encode_fetch_topic(
                 "STRING longer than 32767 bytes",
             ));
         } else {
-            put_string(buf, &topic.topic);
+            put_string(buf, &topic.topic)?;
         }
     }
     if version >= 13 {
         put_uuid(buf, topic.topic_id);
     }
 
-    put_array_len(buf, topic.partitions.len(), flex);
+    put_array_len(buf, topic.partitions.len(), flex)?;
     for partition in &topic.partitions {
         encode_fetch_partition(buf, ops, partition, version, flex)?;
     }
     if flex {
-        WriteTaggedFields::new().write(buf, &topic.unknown_tagged_fields);
+        WriteTaggedFields::new().write(buf, &topic.unknown_tagged_fields)?;
     }
     Ok(())
 }
@@ -150,7 +150,7 @@ fn encode_fetch_partition(
             buf,
             partition.aborted_transactions.as_ref().map(Vec::len),
             flex,
-        );
+        )?;
         if let Some(aborted_transactions) = &partition.aborted_transactions {
             for transaction in aborted_transactions {
                 transaction.encode(buf, version)?;
@@ -171,7 +171,7 @@ fn encode_fetch_partition(
                 encode_to_bytes(partition.diverging_epoch.encoded_len(version), |bytes| {
                     partition.diverging_epoch.encode(bytes, version)?;
                     Ok(())
-                }),
+                })?,
             );
         }
         if !codegen_helpers::is_default(&partition.current_leader) {
@@ -180,7 +180,7 @@ fn encode_fetch_partition(
                 encode_to_bytes(partition.current_leader.encoded_len(version), |bytes| {
                     partition.current_leader.encode(bytes, version)?;
                     Ok(())
-                }),
+                })?,
             );
         }
         if !codegen_helpers::is_default(&partition.snapshot_id) {
@@ -189,10 +189,10 @@ fn encode_fetch_partition(
                 encode_to_bytes(partition.snapshot_id.encoded_len(version), |bytes| {
                     partition.snapshot_id.encode(bytes, version)?;
                     Ok(())
-                }),
+                })?,
             );
         }
-        tagged.write(buf, &partition.unknown_tagged_fields);
+        tagged.write(buf, &partition.unknown_tagged_fields)?;
     }
 
     Ok(())

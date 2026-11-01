@@ -81,15 +81,16 @@ fn wrappers(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream, Parse
                         "expected buf: &mut BytesMut",
                     ));
                 };
+                let output = compact(&moxy::template! { {{ signature.output }} });
                 if compact(&moxy::template! { {{ buffer.ty }} }) != "&mutBytesMut"
-                    || !compact(&moxy::template! { {{ signature.output }} }).is_empty()
+                    || !(output.is_empty() || output == "->Result<(),BrokerError>")
                 {
                     return Err(ParseError::new(
                         signature.span(),
-                        "expected fn encode_fields(self or &self, buf: &mut BytesMut)",
+                        "expected fn encode_fields(self or &self, buf: &mut BytesMut), optionally -> Result<(), BrokerError>",
                     ));
                 }
-                receiver = Some(value.clone());
+                receiver = Some((value.clone(), !output.is_empty()));
             }
             "decode_fields" if !decode && inputs.len() == 1 => {
                 let Some(FnParam::Typed(buffer)) = inputs.first() else {
@@ -117,7 +118,7 @@ fn wrappers(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream, Parse
             }
         }
     }
-    let receiver = receiver.filter(|_| decode).ok_or_else(|| {
+    let (receiver, fallible) = receiver.filter(|_| decode).ok_or_else(|| {
         ParseError::new(
             item.span(),
             "expected one encode_fields and one decode_fields method",
@@ -128,10 +129,19 @@ fn wrappers(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream, Parse
         Self::decode_fields
     });
     Ok(moxy::template! {
-        #[must_use]
-        pub fn encode({{ receiver }}) -> ::bytes::Bytes {
+        /// # Errors
+        /// Returns the field writer's error, such as a length that its
+        /// wire-format prefix cannot hold.
+        pub fn encode({{ receiver }}) -> Result<::bytes::Bytes, crate::error::BrokerError> {
             crate::coordinator::unified::persistence::flex::encode_value(
-                |buf| self.encode_fields(buf),
+                @if fallible {
+                    |buf| self.encode_fields(buf)
+                } @else {
+                    |buf| {
+                        self.encode_fields(buf);
+                        Ok(())
+                    }
+                }
             )
         }
 
@@ -155,18 +165,21 @@ mod tests {
 
     #[yare::parameterized(
         empty_impl = { "" },
-        missing_decode = { "fn encode_fields(&self, buf: &mut BytesMut) {}" },
+        missing_decode = { "fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {}" },
         mutable_encode_receiver = {
-            "fn encode_fields(&mut self, buf: &mut BytesMut) {} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {}",
+            "fn encode_fields(&mut self, buf: &mut BytesMut) -> Result<(), BrokerError> {} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {}",
         },
         public_encode_method = {
-            "pub fn encode_fields(&self, buf: &mut BytesMut) {} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {}",
+            "pub fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {}",
         },
         borrowed_decode_buffer = {
-            "fn encode_fields(&self, buf: &mut BytesMut) {} fn decode_fields(buf: &[u8]) -> Result<Self, BrokerError> {}",
+            "fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {} fn decode_fields(buf: &[u8]) -> Result<Self, BrokerError> {}",
+        },
+        other_encode_return_type = {
+            "fn encode_fields(&self, buf: &mut BytesMut) -> Bytes {} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {}",
         },
         duplicate_encode_method = {
-            "fn encode_fields(&self, buf: &mut BytesMut) {} fn encode_fields(self, buf: &mut BytesMut) {} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {}",
+            "fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {} fn encode_fields(self, buf: &mut BytesMut) -> Result<(), BrokerError> {} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {}",
         },
     )]
     fn rejects_missing_duplicate_and_incompatible_field_codecs(methods: &str) {
@@ -175,11 +188,13 @@ mod tests {
     }
 
     #[yare::parameterized(
-        shared_receiver = { "&self" },
-        owned_receiver = { "self" },
+        shared_receiver = { "&self", "-> Result<(), BrokerError>" },
+        owned_receiver = { "self", "-> Result<(), BrokerError>" },
+        infallible_shared_receiver = { "&self", "" },
+        infallible_owned_receiver = { "self", "" },
     )]
-    fn infers_receivers_without_parsing_complex_bodies(receiver: &str) {
-        let item = format!("impl Value {{ fn encode_fields({receiver}, buf: &mut BytesMut) {{ module::write(buf, self.value); }} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {{ return Err(module::error()); }} }}").parse().unwrap();
+    fn infers_receivers_without_parsing_complex_bodies(receiver: &str, output: &str) {
+        let item = format!("impl Value {{ fn encode_fields({receiver}, buf: &mut BytesMut) {output} {{ module::write(buf, self.value) }} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {{ return Err(module::error()); }} }}").parse().unwrap();
         let output = wrappers(&"record = \"Record\"".parse().unwrap(), &item).unwrap();
         let output = compact(&output);
         assert2::assert!(output.contains(&format!("pubfnencode({receiver})").replace(' ', "")));
@@ -192,7 +207,7 @@ mod tests {
         unsupported_metadata_key = { "other = \"Record\"" },
     )]
     fn rejects_invalid_wrapper_metadata(meta: &str) {
-        let item = "impl Value { fn encode_fields(&self, buf: &mut BytesMut) { module::write(buf, self.value); } fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> { return Err(module::error()); } }".parse().unwrap();
+        let item = "impl Value { fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> { module::write(buf, self.value) } fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> { return Err(module::error()); } }".parse().unwrap();
         assert2::assert!(wrappers(&meta.parse().unwrap(), &item).is_err());
     }
 }

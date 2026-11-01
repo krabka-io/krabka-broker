@@ -776,6 +776,7 @@ mod tests {
             None
         })
         .await
+        .unwrap()
     }
 
     /// The identity a fetch request names its sender by.
@@ -958,9 +959,12 @@ mod tests {
             }
         };
         let (follower_seen, leader_seen) = (Seen::default(), Seen::default());
-        let follower =
-            krabka_client_core::MockBroker::start(serve(Arc::clone(&follower_seen))).await;
-        let leader = krabka_client_core::MockBroker::start(serve(Arc::clone(&leader_seen))).await;
+        let follower = krabka_client_core::MockBroker::start(serve(Arc::clone(&follower_seen)))
+            .await
+            .unwrap();
+        let leader = krabka_client_core::MockBroker::start(serve(Arc::clone(&leader_seen)))
+            .await
+            .unwrap();
         let dir = tempfile::tempdir().unwrap();
         let observer = MetadataObserver::start(ObserverConfig {
             voters: vec![

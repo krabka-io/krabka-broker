@@ -160,7 +160,7 @@ pub fn read_batch_epochs(log: &krabka_log::Log, end: Offset) -> Vec<i32> {
     let mut cursor: &[u8] = &read.bytes;
     let mut epochs = Vec::new();
     while !cursor.is_empty() {
-        let batch = RecordBatch::decode(&mut cursor).expect("decode a batch");
+        let batch = RecordBatch::decode_batch(&mut cursor).expect("decode a batch");
         epochs.push(batch.partition_leader_epoch);
     }
     epochs

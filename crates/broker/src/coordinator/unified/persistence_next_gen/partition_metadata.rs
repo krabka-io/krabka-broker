@@ -61,25 +61,28 @@ pub struct PartitionMetadataValue {
 impl PartitionMetadataValue {
     /// Encodes the value as Kafka's generated writer does. The broker never
     /// writes one; tests use it to build what an older Kafka wrote.
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
+    ///
+    /// # Errors
+    /// Returns [`BrokerError::Protocol`] when a field is too long for its
+    /// wire-format prefix.
+    pub fn encode(&self) -> Result<Bytes, BrokerError> {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
-        put_compact_array_len(&mut buf, self.topics.len());
+        put_compact_array_len(&mut buf, self.topics.len())?;
         for topic in &self.topics {
             put_uuid(&mut buf, *topic.topic_id.as_bytes());
-            put_compact_string(&mut buf, &topic.topic_name);
+            put_compact_string(&mut buf, &topic.topic_name)?;
             buf.put_i32(topic.num_partitions);
-            put_compact_array_len(&mut buf, topic.partition_metadata.len());
+            put_compact_array_len(&mut buf, topic.partition_metadata.len())?;
             for partition in &topic.partition_metadata {
                 buf.put_i32(partition.partition);
-                put_string_array(&mut buf, &partition.racks);
+                put_string_array(&mut buf, &partition.racks)?;
                 put_empty_tagged_fields(&mut buf);
             }
             put_empty_tagged_fields(&mut buf);
         }
         put_empty_tagged_fields(&mut buf);
-        buf.freeze()
+        Ok(buf.freeze())
     }
 
     /// # Errors
@@ -195,7 +198,8 @@ mod tests {
                 .value
                 .as_ref()
                 .expect("native metadata prepared")
-                .encode(),
+                .encode()
+                .unwrap(),
         );
         partition_metadata.decoded =
             Some(PartitionMetadataValue::decode(&partition_metadata.bytes));

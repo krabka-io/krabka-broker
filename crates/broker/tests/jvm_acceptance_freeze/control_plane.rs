@@ -16,7 +16,7 @@ use {
         vocabulary::{APPROVER_ONE, APPROVER_TWO, PROPOSER, WIRE_UNCLEAN_ELECT_LEADERS},
     },
     assert2::assert,
-    krabka_client_admin::{AdminClient, CreateTopicSpec},
+    krabka_client_admin::{AdminClient, AdminClientLike as _, CreateTopicSpec},
     krabka_client_core::{Client, security::ClientSecurity},
     krabka_protocol::krabka::freeze::SetTopicFreezeRequest,
     std::collections::BTreeMap,

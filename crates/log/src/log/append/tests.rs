@@ -119,8 +119,8 @@ fn shorter_append_after_partial_write_leaves_no_physical_tail() {
 
     let mut next = sample_batch(1);
     let mut failed = sample_batch(10);
-    let partial_len = next.encoded_len() + 1;
-    assert!(partial_len < failed.encoded_len());
+    let partial_len = next.encoded_batch_len() + 1;
+    assert!(partial_len < failed.encoded_batch_len());
     fail_after_bytes(&mut log, partial_len);
 
     let error = log.append(&mut failed).unwrap_err();
@@ -129,7 +129,7 @@ fn shorter_append_after_partial_write_leaves_no_physical_tail() {
     assert!(fs::metadata(&log_path).unwrap().len() == position);
 
     log.test_set_io(Arc::new(FileIo));
-    let next_len = next.encoded_len() as u64;
+    let next_len = next.encoded_batch_len() as u64;
     log.append(&mut next).unwrap();
 
     assert!(fs::metadata(log_path).unwrap().len() == position + next_len);
@@ -909,7 +909,7 @@ fn only_batch(log: &Log) -> RecordBatch {
     let end = log.log_end_offset();
     let raw = log.read_raw(Offset(0), end, mebibytes(10)).unwrap();
     let mut cursor: &[u8] = &raw.bytes;
-    RecordBatch::decode(&mut cursor).expect("the stored batch decodes, so its CRC is valid")
+    RecordBatch::decode_batch(&mut cursor).expect("the stored batch decodes, so its CRC is valid")
 }
 
 /// Kafka's `LogValidator` rewrites exactly three header fields on a

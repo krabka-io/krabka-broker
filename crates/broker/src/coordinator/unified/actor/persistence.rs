@@ -621,7 +621,8 @@ mod tests {
                         epoch,
                         metadata_hash: 0,
                     }
-                    .encode(),
+                    .encode()
+                    .unwrap(),
                 ),
             )
         };

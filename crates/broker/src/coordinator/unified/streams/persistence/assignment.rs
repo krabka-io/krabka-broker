@@ -102,10 +102,10 @@ pub struct StreamsGroupTargetAssignmentMemberValue {
 
 #[krabka_macros::flexible_value(record = "StreamsGroupTargetAssignmentMemberValue")]
 impl StreamsGroupTargetAssignmentMemberValue {
-    fn encode_fields(&self, buf: &mut BytesMut) {
-        encode_task_map(buf, &self.active);
-        encode_task_map(buf, &self.standby);
-        encode_task_map(buf, &self.warmup);
+    fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
+        encode_task_map(buf, &self.active)?;
+        encode_task_map(buf, &self.standby)?;
+        encode_task_map(buf, &self.warmup)
     }
 
     fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -146,20 +146,20 @@ pub struct StreamsGroupCurrentMemberAssignmentValue {
 
 #[krabka_macros::flexible_value(record = "StreamsGroupCurrentMemberAssignmentValue")]
 impl StreamsGroupCurrentMemberAssignmentValue {
-    fn encode_fields(&self, buf: &mut BytesMut) {
+    fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         buf.put_i32(self.member_epoch);
         buf.put_i32(self.previous_member_epoch);
         buf.put_i8(self.state as i8);
-        encode_task_map_with_epochs(buf, &self.active, &self.active_epochs);
-        encode_task_map(buf, &self.standby);
-        encode_task_map(buf, &self.warmup);
+        encode_task_map_with_epochs(buf, &self.active, &self.active_epochs)?;
+        encode_task_map(buf, &self.standby)?;
+        encode_task_map(buf, &self.warmup)?;
         encode_task_map_with_epochs(
             buf,
             &self.active_pending_revocation,
             &self.active_pending_revocation_epochs,
-        );
-        encode_task_map(buf, &self.standby_pending_revocation);
-        encode_task_map(buf, &self.warmup_pending_revocation);
+        )?;
+        encode_task_map(buf, &self.standby_pending_revocation)?;
+        encode_task_map(buf, &self.warmup_pending_revocation)
     }
 
     fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -233,7 +233,9 @@ mod tests {
             standby,
             warmup: BTreeMap::new(),
         };
-        assert!(StreamsGroupTargetAssignmentMemberValue::decode(&v.encode()).unwrap() == v);
+        assert!(
+            StreamsGroupTargetAssignmentMemberValue::decode(&v.encode().unwrap()).unwrap() == v
+        );
     }
 
     #[test]
@@ -265,7 +267,9 @@ mod tests {
             active_epochs: maplit::btreemap! {"0".to_owned() => vec![3, 5]},
             active_pending_revocation_epochs: maplit::btreemap! {"0".to_owned() => vec![2]},
         };
-        assert!(StreamsGroupCurrentMemberAssignmentValue::decode(&v.encode()).unwrap() == v);
+        assert!(
+            StreamsGroupCurrentMemberAssignmentValue::decode(&v.encode().unwrap()).unwrap() == v
+        );
     }
 
     /// The `TaskIds` of the current assignment carries `AssignmentEpochs` as
@@ -285,15 +289,20 @@ mod tests {
             standby: BTreeMap::new(),
             warmup: BTreeMap::new(),
         };
-        let decoded = StreamsGroupTargetAssignmentMemberValue::decode(&v.encode()).unwrap();
+        let decoded =
+            StreamsGroupTargetAssignmentMemberValue::decode(&v.encode().unwrap()).unwrap();
         assert!(decoded == v);
     }
 
     #[test]
     fn assignment_records_reject_a_missing_tagged_trailer() {
-        let t = StreamsGroupTargetAssignmentMemberValue::default().encode();
+        let t = StreamsGroupTargetAssignmentMemberValue::default()
+            .encode()
+            .unwrap();
         assert!(StreamsGroupTargetAssignmentMemberValue::decode(&t[..t.len() - 1]).is_err());
-        let c = StreamsGroupCurrentMemberAssignmentValue::default().encode();
+        let c = StreamsGroupCurrentMemberAssignmentValue::default()
+            .encode()
+            .unwrap();
         assert!(StreamsGroupCurrentMemberAssignmentValue::decode(&c[..c.len() - 1]).is_err());
     }
     mod bdd_target_assignment_member {
@@ -325,7 +334,8 @@ mod tests {
                     .value
                     .as_ref()
                     .expect("group record prepared")
-                    .encode(),
+                    .encode()
+                    .unwrap(),
             );
         }
         #[then(
@@ -377,7 +387,8 @@ mod tests {
                     .value
                     .as_ref()
                     .expect("group record prepared")
-                    .encode(),
+                    .encode()
+                    .unwrap(),
             );
         }
         #[then(
@@ -452,7 +463,14 @@ mod tests {
         }
         #[when("the coordinator persists and reads this current_member_assignment_epochs record")]
         fn record_codec(record: &mut RecordCompatibility) {
-            record.encoded = Some(record.value.as_ref().expect("record prepared").encode());
+            record.encoded = Some(
+                record
+                    .value
+                    .as_ref()
+                    .expect("record prepared")
+                    .encode()
+                    .unwrap(),
+            );
             record.decoded = Some(StreamsGroupCurrentMemberAssignmentValue::decode(
                 record.encoded.as_ref().expect("record encoded"),
             ));

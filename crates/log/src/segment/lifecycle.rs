@@ -332,7 +332,7 @@ impl Segment {
         let mut last_kept_ts_offset = last_kept_offset;
         while !cur.is_empty() {
             let before = cur.len();
-            let Ok(batch) = RecordBatch::decode(&mut cur) else {
+            let Ok(batch) = RecordBatch::decode_batch(&mut cur) else {
                 break;
             };
             let batch_last_offset = batch
@@ -546,7 +546,7 @@ mod tests {
                     .call()
             ]
         );
-        let expected_size: usize = read.iter().map(RecordBatch::encoded_len).sum();
+        let expected_size: usize = read.iter().map(RecordBatch::encoded_batch_len).sum();
         assert2::assert!(seg.size().bytes_usize() == expected_size);
     }
 

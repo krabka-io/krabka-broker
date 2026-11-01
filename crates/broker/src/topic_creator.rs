@@ -429,7 +429,7 @@ fn build_envelope(
         client_id: Some(identity.client_id.clone()),
         body: body.freeze(),
         body_flexible: create_topics_request::is_flexible(version),
-    });
+    })?;
     envelope::envelope_request(
         request_data,
         &ForwardedPrincipal {

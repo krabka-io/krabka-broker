@@ -64,7 +64,7 @@ impl PendingStampRecoveryStats {
         #[cfg(test)]
         {
             self.batches = self.batches.saturating_add(1);
-            self.bytes = self.bytes.saturating_add(batch.encoded_len());
+            self.bytes = self.bytes.saturating_add(batch.encoded_batch_len());
         }
         // Only a test build counts; the others take the arguments and drop
         // them.

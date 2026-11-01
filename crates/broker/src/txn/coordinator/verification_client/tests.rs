@@ -91,7 +91,8 @@ impl Listener {
             }
             MockReply::Respond(scripted_response_body(&answer, version, true))
         })
-        .await;
+        .await
+        .unwrap();
         Self {
             broker,
             handshakes,

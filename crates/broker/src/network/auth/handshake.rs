@@ -51,12 +51,23 @@ pub struct ReauthClock<'a> {
 /// another enabled mechanism answers `NONE` and moves to `ReauthBadMechanism`,
 /// which fails the connection on the next frame; an unsupported one answers
 /// 33 and closes.
+///
+/// A mechanism this build cannot run, which [`SaslMechanism::is_available`]
+/// reports, counts as one the listener has not enabled: the broker neither
+/// advertises nor accepts it, so a request for it answers 33. GSSAPI is the
+/// one such mechanism, without krabka-security's `gssapi` feature.
 pub fn handle_handshake(
     req: &SaslHandshakeRequest,
     auth: &mut ConnectionAuth,
     enabled: &[SaslMechanism],
     clock: &mut ReauthClock<'_>,
 ) -> HandshakeOutcome {
+    let enabled: Vec<SaslMechanism> = enabled
+        .iter()
+        .copied()
+        .filter(|m| m.is_available())
+        .collect();
+    let enabled = enabled.as_slice();
     let enabled_names: Vec<String> = enabled.iter().map(|m| m.wire_name().to_owned()).collect();
     let requested = SaslMechanism::from_wire(&req.mechanism).filter(|m| enabled.contains(m));
     let answer = |error_code, mechanisms, close_after| HandshakeOutcome {
@@ -174,6 +185,30 @@ mod tests {
         super::*, crate::network::auth::test_support::authenticated as test_authenticated,
         assert2::assert, rstest_bdd::datatable::Rows,
     };
+
+    #[test]
+    fn the_broker_build_negotiates_every_mechanism_gssapi_included() {
+        for mechanism in SaslMechanism::ALL {
+            let mut auth = ConnectionAuth::Anonymous;
+            let mut last_start = None;
+            let outcome = handle_handshake(
+                &SaslHandshakeRequest {
+                    mechanism: mechanism.wire_name().to_owned(),
+                    ..Default::default()
+                },
+                &mut auth,
+                &[mechanism],
+                &mut ReauthClock {
+                    now_ms: 0,
+                    last_start_ms: &mut last_start,
+                },
+            );
+            assert!(outcome.response.error_code == 0, "{mechanism:?}");
+            assert!(outcome.response.mechanisms == vec![mechanism.wire_name().to_owned()]);
+            assert!(!outcome.close_after);
+            assert!(after(&auth) == After::Negotiating(mechanism));
+        }
+    }
 
     fn authenticated(expires_at_ms: Option<i64>) -> ConnectionAuth {
         test_authenticated(

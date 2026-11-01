@@ -102,15 +102,15 @@ impl PendingStreamsRecords {
             if let Some(v) = v {
                 batch.push(
                     encode_member_metadata_key(group_id, &member_id)?,
-                    Some(v.encode()),
+                    Some(v.encode()?),
                 );
             }
         }
         if let Some(v) = self.topology {
-            batch.push(encode_topology_key(group_id)?, Some(v.encode()));
+            batch.push(encode_topology_key(group_id)?, Some(v.encode()?));
         }
         if let Some(v) = self.group_metadata {
-            batch.push(encode_group_metadata_key(group_id)?, Some(v.encode()));
+            batch.push(encode_group_metadata_key(group_id)?, Some(v.encode()?));
         }
         for (member_id, v) in self.target_per_member {
             if v.is_none() && removed.contains(&member_id) {
@@ -118,13 +118,13 @@ impl PendingStreamsRecords {
             }
             batch.push(
                 encode_target_assignment_member_key(group_id, &member_id)?,
-                v.map(|x| x.encode()),
+                v.map(|x| x.encode()).transpose()?,
             );
         }
         if let Some(v) = self.target_metadata {
             batch.push(
                 encode_target_assignment_metadata_key(group_id)?,
-                Some(v.encode()),
+                Some(v.encode()?),
             );
         }
         for (member_id, v) in self.current_per_member {
@@ -133,7 +133,7 @@ impl PendingStreamsRecords {
             }
             batch.push(
                 encode_current_member_assignment_key(group_id, &member_id)?,
-                v.map(|x| x.encode()),
+                v.map(|x| x.encode()).transpose()?,
             );
         }
 

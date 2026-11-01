@@ -54,7 +54,7 @@ pub(super) fn decode_all(bytes: &[u8]) -> Vec<RecordBatch> {
     let mut cursor = bytes;
     let mut out = Vec::new();
     while !cursor.is_empty() {
-        let Ok(b) = RecordBatch::decode(&mut cursor) else {
+        let Ok(b) = RecordBatch::decode_batch(&mut cursor) else {
             break;
         };
         out.push(b);
@@ -111,7 +111,7 @@ fn rewrite_keeps_tombstone_as_latest() {
     let out = rewrite_simple(dir.path(), &segment_refs);
     let bytes = fs::read(&out.log_swap).unwrap();
     let mut cursor = &bytes[..];
-    let batch = RecordBatch::decode(&mut cursor).unwrap();
+    let batch = RecordBatch::decode_batch(&mut cursor).unwrap();
     let mut record = make_record(1, Some(b"k1"), None);
     record.timestamp_delta = -1_000;
     assert2::assert!(out.new_base_offset == Offset(0));

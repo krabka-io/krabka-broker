@@ -27,7 +27,7 @@ use {
         topic_rlmm,
     },
     assert2::{assert, check},
-    krabka_client_admin::{AdminClient, DeleteRecordsOp},
+    krabka_client_admin::{AdminClient, AdminClientLike as _, DeleteRecordsOp},
     krabka_client_core::Client,
     krabka_protocol::{
         owned::fetch_response::PartitionData, primitives::uuid::Uuid as WireUuid,

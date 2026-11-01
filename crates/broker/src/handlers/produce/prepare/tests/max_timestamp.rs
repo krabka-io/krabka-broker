@@ -122,7 +122,7 @@ fn store(shape: Shape, timestamps: TimestampPolicy, produced: &RecordBatch) -> S
     .expect("a well-formed batch");
     let (batch, zero_copy) = match prepared.source {
         PreparedSource::Verbatim(bytes) => (
-            RecordBatch::decode(&mut &bytes[..]).expect("the stored bytes carry a valid CRC"),
+            RecordBatch::decode_batch(&mut &bytes[..]).expect("the stored bytes carry a valid CRC"),
             Some(bytes.as_ptr() == wire.as_ptr()),
         ),
         PreparedSource::Owned(batch) => (batch, None),

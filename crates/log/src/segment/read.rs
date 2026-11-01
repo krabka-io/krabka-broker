@@ -54,7 +54,7 @@ impl Segment {
         let mut cursor: &[u8] = &buf;
         while !cursor.is_empty() {
             let before = cursor.len();
-            let Ok(batch) = RecordBatch::decode(&mut cursor) else {
+            let Ok(batch) = RecordBatch::decode_batch(&mut cursor) else {
                 break; // partial trailing batch — stop.
             };
             let consumed = before - cursor.len();

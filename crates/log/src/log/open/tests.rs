@@ -481,7 +481,7 @@ fn pending_stamp_recovery_visits_only_the_surviving_transaction_suffix() {
             &barrier,
         ]
         .into_iter()
-        .map(RecordBatch::encoded_len)
+        .map(RecordBatch::encoded_batch_len)
         .sum::<usize>();
         assert!(log.pending_transaction_start(ProducerId(1000)) == Some(Offset(16)));
         assert!(log.pending_transaction_start(ProducerId(3000)) == Some(Offset(20)));

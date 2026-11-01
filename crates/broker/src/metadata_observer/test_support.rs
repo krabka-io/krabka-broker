@@ -166,7 +166,7 @@ pub fn negative_kraft_version_batch(base_offset: i64) -> RecordBatch {
 pub fn encode_batches(batches: &[RecordBatch]) -> bytes::Bytes {
     let mut out = Vec::new();
     for batch in batches {
-        batch.encode(&mut out).expect("encode batch");
+        batch.encode_batch(&mut out).expect("encode batch");
     }
     bytes::Bytes::from(out)
 }

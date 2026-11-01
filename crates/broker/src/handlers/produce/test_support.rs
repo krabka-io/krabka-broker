@@ -243,6 +243,6 @@ pub(super) fn image_with_overrides(topic: &str, overrides: &[ConfigOverride<'_>]
 
 pub(super) fn encode_batch(batch: &RecordBatch) -> Bytes {
     let mut buf = BytesMut::new();
-    batch.encode(&mut buf).expect("encode record batch");
+    batch.encode_batch(&mut buf).expect("encode record batch");
     buf.freeze()
 }

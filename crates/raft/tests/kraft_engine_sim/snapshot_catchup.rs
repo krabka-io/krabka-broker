@@ -410,7 +410,7 @@ async fn start_snapshot_transfer(snapshots: &mut SnapshotCluster) {
     );
     let bytes = fs::read(checkpoint).expect("read checkpoint");
     let mut cursor = &bytes[..];
-    RecordBatch::decode(&mut cursor).expect("decode header batch");
+    RecordBatch::decode_batch(&mut cursor).expect("decode header batch");
     let maximum = i32::try_from(bytes.len() - cursor.len()).expect("header batch wire size");
     let chunk = request_snapshot_chunk(snapshots, maximum).await;
     snapshots.assembled.extend_from_slice(&chunk);

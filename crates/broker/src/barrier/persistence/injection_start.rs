@@ -33,7 +33,7 @@ pub fn encode_injection_start(value: &InjectionStartValue) -> Result<Vec<u8>, co
     codec::put_i16(&mut out, codec::RECORD_VERSION);
     codec::put_i32(&mut out, value.coordinator_epoch);
     codec::put_i64(&mut out, value.triggered_at);
-    codec::put_array_len(&mut out, value.targets.len(), false);
+    codec::put_array_len(&mut out, value.targets.len(), false)?;
     for target in &value.targets {
         codec::put_string(&mut out, &target.topic)?;
         codec::put_i32(&mut out, target.partition_count);

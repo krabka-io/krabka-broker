@@ -366,7 +366,7 @@ async fn a_bad_record_loads_the_transactions_before_it_and_serves_them() {
     let key = |tid: &str| Some(encode_key(tid).unwrap());
     let value = |tid: &str, producer_id: i64| {
         let entry = TxnEntry::new_empty(tid.to_owned(), ProducerId(producer_id), 0, 60_000, 0);
-        Some(encode_value(&entry, TxnVersion::Verified, false))
+        Some(encode_value(&entry, TxnVersion::Verified, false).unwrap())
     };
     let tids = [first.as_str(), second.as_str(), misplaced.as_str()];
     let good = |tid: &str, producer_id: i64| record(key(tid), value(tid, producer_id));

@@ -557,7 +557,7 @@ mod tests {
         let mut cursor = &read.bytes[..];
         let mut bases = Vec::new();
         while !cursor.is_empty() {
-            bases.push(RecordBatch::decode(&mut cursor).unwrap().base_offset);
+            bases.push(RecordBatch::decode_batch(&mut cursor).unwrap().base_offset);
         }
         assert!(bases == [0, 3]);
     }

@@ -21,7 +21,7 @@ use {
     },
     assert2::assert,
     krabka_broker::BrokerHandle,
-    krabka_client_admin::AdminClient,
+    krabka_client_admin::{AdminClient, AdminClientLike as _},
     rstest_bdd::datatable::Rows,
     std::{
         io::Write,

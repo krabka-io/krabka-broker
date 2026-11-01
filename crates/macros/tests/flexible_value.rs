@@ -8,7 +8,7 @@ mod framing;
 
 use {
     assert2::assert,
-    bytes::{BufMut, BytesMut},
+    bytes::{BufMut, Bytes, BytesMut},
     error::{BrokerError, take},
     framing::coordinator,
 };
@@ -21,9 +21,13 @@ struct BorrowedValue {
 
 #[krabka_macros::flexible_value(record = "BorrowedRecord")]
 impl BorrowedValue {
-    fn encode_fields(&self, wire: &mut BytesMut) {
+    fn encode_fields(&self, wire: &mut BytesMut) -> Result<(), BrokerError> {
+        if self.state == 0xff {
+            return Err("invalid state");
+        }
         wire.put_u8(self.state);
         wire.put_i32(self.payload);
+        Ok(())
     }
 
     fn decode_fields(wire: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -53,14 +57,14 @@ impl OwnedValue {
 
 #[test]
 fn borrowed_encoding_keeps_api_ownership_and_explicit_field_order() {
-    let encode: fn(&BorrowedValue) -> bytes::Bytes = BorrowedValue::encode;
+    let encode: fn(&BorrowedValue) -> Result<Bytes, BrokerError> = BorrowedValue::encode;
     let value = BorrowedValue {
         payload: -2,
         state: 3,
     };
     let golden = b"\x00\x00\x03\xff\xff\xff\xfe\x00";
-    assert!(encode(&value) == golden[..]);
-    assert!(encode(&value) == golden[..]);
+    assert!(encode(&value) == Ok(Bytes::from_static(golden)));
+    assert!(encode(&value) == Ok(Bytes::from_static(golden)));
     assert!(BorrowedValue::decode(golden) == Ok(value));
     for end in 0..golden.len() {
         assert!(BorrowedValue::decode(&golden[..end]).is_err());
@@ -69,9 +73,18 @@ fn borrowed_encoding_keeps_api_ownership_and_explicit_field_order() {
 
 #[test]
 fn consuming_field_method_keeps_the_owned_public_receiver() {
-    let encode: fn(OwnedValue) -> bytes::Bytes = OwnedValue::encode;
-    assert!(encode(OwnedValue("a".into())) == b"\x00\x00a\x00"[..]);
+    let encode: fn(OwnedValue) -> Result<Bytes, BrokerError> = OwnedValue::encode;
+    assert!(encode(OwnedValue("a".into())) == Ok(Bytes::from_static(b"\x00\x00a\x00")));
     assert!(OwnedValue::decode(b"\x00\x00a\x00").unwrap().0 == "a");
+}
+
+#[test]
+fn field_writer_errors_reach_the_encoder_caller() {
+    let value = BorrowedValue {
+        payload: 1,
+        state: 0xff,
+    };
+    assert!(value.encode() == Err("invalid state"));
 }
 
 #[test]

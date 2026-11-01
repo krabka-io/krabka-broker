@@ -165,7 +165,8 @@ pub(super) fn consumer_group_records(
                 epoch,
                 metadata_hash: 0,
             }
-            .encode(),
+            .encode()
+            .unwrap(),
         ),
         LogRecord::put(
             ng::encode_key(&ng::NextGenKey::MemberMetadata {
@@ -184,7 +185,8 @@ pub(super) fn consumer_group_records(
                 rebalance_timeout_ms: 60_000,
                 classic,
             }
-            .encode(),
+            .encode()
+            .unwrap(),
         ),
     ]
 }

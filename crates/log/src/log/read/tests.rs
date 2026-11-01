@@ -123,7 +123,7 @@ fn log_read_raw_spans_and_is_byte_exact() {
     for off in 0..4i64 {
         let mut b = test_batch_at(off);
         log.append(&mut b).unwrap();
-        b.encode(&mut wire).unwrap();
+        b.encode_batch(&mut wire).unwrap();
     }
     let wire = wire.freeze();
     check_raw_bytes(&log, &wire);
@@ -148,7 +148,7 @@ fn log_read_raw_spans_multiple_segments() {
         let mut b = test_batch_at(off);
         let (base, _) = log.append(&mut b).unwrap();
         expected_bases.push(base);
-        b.encode(&mut wire).unwrap();
+        b.encode_batch(&mut wire).unwrap();
     }
     let wire = wire.freeze();
 
@@ -163,7 +163,7 @@ fn log_read_raw_spans_multiple_segments() {
     let mut cur: &[u8] = &r.bytes;
     let mut bases = Vec::new();
     while !cur.is_empty() {
-        let b = RecordBatch::decode(&mut cur).unwrap();
+        let b = RecordBatch::decode_batch(&mut cur).unwrap();
         bases.push(Offset(b.base_offset));
     }
     assert2::assert!(bases == expected_bases);
@@ -267,8 +267,8 @@ struct SeamLog {
 ///
 /// Returns the log with the encoded size of a one-record batch.
 fn seam_log() -> SeamLog {
-    let small = sample_batch(1).encoded_len();
-    let big = sample_batch(8).encoded_len();
+    let small = sample_batch(1).encoded_batch_len();
+    let big = sample_batch(8).encoded_batch_len();
     let dir = tempdir().unwrap();
     let config = LogConfig {
         // A segment rolls when the next batch would take it past this, so
@@ -358,7 +358,7 @@ fn seam_cases(small: usize) -> Vec<SeamCase> {
 fn batch_bases(mut wire: &[u8]) -> Vec<i64> {
     let mut bases = Vec::new();
     while !wire.is_empty() {
-        bases.push(RecordBatch::decode(&mut wire).unwrap().base_offset);
+        bases.push(RecordBatch::decode_batch(&mut wire).unwrap().base_offset);
     }
     bases
 }
@@ -493,7 +493,7 @@ fn read_raw_multi_segment_budget_and_limit() {
 #[test]
 fn a_small_budget_preserves_unindexed_records_before_a_segment_seam() {
     let dir = tempdir().unwrap();
-    let small = sample_batch(1).encoded_len();
+    let small = sample_batch(1).encoded_batch_len();
     let config = LogConfig {
         segment_size: size_from_len(4 * small),
         index_interval: kibibytes(4),

@@ -145,7 +145,7 @@ impl<'a> SegmentBatches<'a> {
         }
 
         let mut cursor: &[u8] = &self.frame;
-        let batch = RecordBatch::decode(&mut cursor).map_err(LogError::Records)?;
+        let batch = RecordBatch::decode_batch(&mut cursor).map_err(LogError::Records)?;
         let consumed = self.frame.len() - cursor.len();
         // The frame ends where the batch's `batch_length` says it does, so a
         // decoder that succeeds consumes all of it.
@@ -236,7 +236,7 @@ mod tests {
 
     fn encoded(batch: &RecordBatch) -> Vec<u8> {
         let mut bytes = BytesMut::new();
-        batch.encode(&mut bytes).unwrap();
+        batch.encode_batch(&mut bytes).unwrap();
         bytes.to_vec()
     }
 
@@ -246,7 +246,7 @@ mod tests {
         let mut cursor = bytes;
         let mut out = Vec::new();
         while !cursor.is_empty() {
-            out.push(RecordBatch::decode(&mut cursor).map_err(LogError::Records)?);
+            out.push(RecordBatch::decode_batch(&mut cursor).map_err(LogError::Records)?);
         }
         Ok(out)
     }
@@ -341,6 +341,6 @@ mod tests {
 
     /// `batch` as the decoder returns it after an encode round trip.
     fn decoded_form(batch: &RecordBatch) -> RecordBatch {
-        RecordBatch::decode(&mut encoded(batch).as_slice()).unwrap()
+        RecordBatch::decode_batch(&mut encoded(batch).as_slice()).unwrap()
     }
 }

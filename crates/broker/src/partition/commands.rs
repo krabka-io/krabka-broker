@@ -611,7 +611,7 @@ mod tests {
             .expect("the owned batch is taken");
         assert!(p.log.lock().expect("partition log lock").log_end_offset() == 1);
         let mut wire = bytes::BytesMut::new();
-        verbatim.encode(&mut wire).expect("encode the batch");
+        verbatim.encode_batch(&mut wire).expect("encode the batch");
         p.replicate_verbatim_batches(vec![ReplicatedBatch {
             batch: krabka_log::VerbatimBatch {
                 bytes: wire.freeze(),

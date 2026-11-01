@@ -119,7 +119,7 @@ pub fn verify_partition_dir(dir: &Path, trusted: &TrustedKeys) -> Result<VerifyR
             .map_err(|e| AuditError::Sink(format!("read segment {}: {e}", seg.display())))?;
         let mut cur: &[u8] = &bytes;
         while !cur.is_empty() {
-            let Ok(batch) = RecordBatch::decode(&mut cur) else {
+            let Ok(batch) = RecordBatch::decode_batch(&mut cur) else {
                 break; // undecodable tail: stop this segment (visible truncation)
             };
             for rec in &batch.records {

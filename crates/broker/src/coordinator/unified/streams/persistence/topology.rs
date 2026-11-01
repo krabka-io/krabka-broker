@@ -53,12 +53,13 @@ pub struct StoredTopicInfo {
 }
 
 impl StoredTopicInfo {
-    fn encode_into(&self, buf: &mut BytesMut) {
-        put_compact_string(buf, &self.name);
+    fn encode_into(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
+        put_compact_string(buf, &self.name)?;
         buf.put_i32(self.partitions);
         buf.put_i16(self.replication_factor);
-        encode_key_value_list(buf, &self.topic_configs);
+        encode_key_value_list(buf, &self.topic_configs)?;
         put_empty_tagged_fields(buf);
+        Ok(())
     }
 
     fn decode_from(buf: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -86,11 +87,12 @@ pub struct StoredCopartitionGroup {
 }
 
 impl StoredCopartitionGroup {
-    fn encode_into(&self, buf: &mut BytesMut) {
-        encode_i16_list(buf, &self.source_topics);
-        encode_i16_list(buf, &self.source_topic_regex);
-        encode_i16_list(buf, &self.repartition_source_topics);
+    fn encode_into(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
+        encode_i16_list(buf, &self.source_topics)?;
+        encode_i16_list(buf, &self.source_topic_regex)?;
+        encode_i16_list(buf, &self.repartition_source_topics)?;
         put_empty_tagged_fields(buf);
+        Ok(())
     }
 
     fn decode_from(buf: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -121,21 +123,22 @@ pub struct StoredSubtopology {
 }
 
 impl StoredSubtopology {
-    fn encode_into(&self, buf: &mut BytesMut) {
-        put_compact_string(buf, &self.subtopology_id);
-        put_string_array(buf, &self.source_topics);
-        put_string_array(buf, &self.source_topic_regex);
+    fn encode_into(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
+        put_compact_string(buf, &self.subtopology_id)?;
+        put_string_array(buf, &self.source_topics)?;
+        put_string_array(buf, &self.source_topic_regex)?;
         put_compact_array(buf, self.state_changelog_topics.iter(), |buf, t| {
-            t.encode_into(buf);
-        });
-        put_string_array(buf, &self.repartition_sink_topics);
+            t.encode_into(buf)
+        })?;
+        put_string_array(buf, &self.repartition_sink_topics)?;
         put_compact_array(buf, self.repartition_source_topics.iter(), |buf, t| {
-            t.encode_into(buf);
-        });
+            t.encode_into(buf)
+        })?;
         put_compact_array(buf, self.copartition_groups.iter(), |buf, cg| {
-            cg.encode_into(buf);
-        });
+            cg.encode_into(buf)
+        })?;
         put_empty_tagged_fields(buf);
+        Ok(())
     }
 
     fn decode_from(buf: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -169,11 +172,9 @@ pub struct StreamsGroupTopologyValue {
 
 #[krabka_macros::flexible_value(record = "StreamsGroupTopologyValue")]
 impl StreamsGroupTopologyValue {
-    fn encode_fields(&self, buf: &mut BytesMut) {
+    fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         buf.put_i32(self.epoch);
-        put_compact_array(buf, self.subtopologies.iter(), |buf, s| {
-            s.encode_into(buf);
-        });
+        put_compact_array(buf, self.subtopologies.iter(), |buf, s| s.encode_into(buf))
     }
 
     fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -218,19 +219,19 @@ mod tests {
             epoch: 2,
             subtopologies: vec![example_subtopology(), sub("1")],
         };
-        assert!(StreamsGroupTopologyValue::decode(&v.encode()).unwrap() == v);
+        assert!(StreamsGroupTopologyValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
 
     #[test]
     fn topology_rejects_a_missing_tagged_trailer() {
-        let full = StreamsGroupTopologyValue::default().encode();
+        let full = StreamsGroupTopologyValue::default().encode().unwrap();
         assert!(StreamsGroupTopologyValue::decode(&full[..full.len() - 1]).is_err());
     }
 
     #[test]
     fn topology_empty_round_trip() {
         let v = StreamsGroupTopologyValue::default();
-        assert!(StreamsGroupTopologyValue::decode(&v.encode()).unwrap() == v);
+        assert!(StreamsGroupTopologyValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
     mod bdd_topology {
         use {
@@ -276,7 +277,8 @@ mod tests {
                     .value
                     .as_ref()
                     .expect("group record prepared")
-                    .encode(),
+                    .encode()
+                    .unwrap(),
             );
         }
         #[then(

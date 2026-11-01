@@ -115,7 +115,7 @@ use {
     },
     assert2::assert,
     krabka_broker::BrokerHandle,
-    krabka_client_admin::AdminClient,
+    krabka_client_admin::{AdminClient, AdminClientLike as _},
     krabka_client_core::Client,
     krabka_protocol::owned::{
         describe_cluster_request::DescribeClusterRequest,

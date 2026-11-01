@@ -812,7 +812,7 @@ mod tests {
         let b = || partition_data(0, batch_of(1_000, 1_000, &[rec(0, "b0")]));
         let merged = request(1, vec![partition_data(0, together.clone())]);
         let split = vec![request(1, vec![a()]), request(1, vec![b()])];
-        let fit = i32::try_from(together.encoded_len()).unwrap();
+        let fit = i32::try_from(together.encoded_batch_len()).unwrap();
         let cases = [(fit, vec![merged]), (fit - 1, split.clone()), (1, split)];
 
         for (limit, expected) in cases {
@@ -931,7 +931,7 @@ mod tests {
     async fn a_round_counts_when_a_request_takes_it() {
         // A limit that one record of a batch fits under, and two do not.
         let two = batch_of(1_000, 1_000, &[rec(0, "b0"), rec(0, "c0")]);
-        let limit = i32::try_from(two.encoded_len()).unwrap() - 1;
+        let limit = i32::try_from(two.encoded_batch_len()).unwrap() - 1;
         let rounds =
             ["a0", "b0", "c0"].map(|value| counted(round().values(&[value]).limit(limit).call()));
         let counts: Vec<_> = rounds

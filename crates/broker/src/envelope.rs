@@ -274,18 +274,22 @@ pub fn serialize_client_host_address(ip: IpAddr) -> Bytes {
 /// The header is `api_key`, `api_version`, `correlation_id` and a nullable
 /// `client_id`. It is v2, with a trailing empty tagged-fields byte, exactly
 /// when the embedded body is flexible.
-pub fn wrap_request(forwarded: &ForwardedRequest) -> Bytes {
+///
+/// # Errors
+/// Returns [`ProtocolError::LengthOverflow`] when the client id is longer than
+/// its `INT16` length prefix can hold.
+pub fn wrap_request(forwarded: &ForwardedRequest) -> Result<Bytes, ProtocolError> {
     let client_id_len = forwarded.client_id.as_ref().map_or(0, String::len);
     let mut out = BytesMut::with_capacity(10 + client_id_len + 1 + forwarded.body.len());
     out.put_i16(forwarded.api_key);
     out.put_i16(forwarded.api_version);
     out.put_i32(forwarded.correlation_id);
-    put_nullable_string(&mut out, forwarded.client_id.as_deref());
+    put_nullable_string(&mut out, forwarded.client_id.as_deref())?;
     if forwarded.body_flexible {
         out.put_u8(0);
     }
     out.put_slice(&forwarded.body);
-    out.freeze()
+    Ok(out.freeze())
 }
 
 /// Build the `EnvelopeRequest` that carries `request_data` to the controller
@@ -925,7 +929,7 @@ mod tests {
         ];
 
         for (case, forwarded, frame) in cases {
-            let wrapped = wrap_request(&forwarded);
+            let wrapped = wrap_request(&forwarded).expect("wrap the forwarded request");
 
             check!(wrapped == frame, "case: {case}");
             check!(

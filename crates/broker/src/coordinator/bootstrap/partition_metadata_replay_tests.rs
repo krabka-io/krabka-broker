@@ -46,6 +46,7 @@ fn value() -> Bytes {
         }],
     }
     .encode()
+    .unwrap()
 }
 
 /// Replays one batch per record and returns what it left for group `g`.
@@ -88,7 +89,8 @@ fn persisted_partition_metadata(metadata_load: &mut PartitionMetadataLoad, recor
                     epoch: 4,
                     metadata_hash: 0,
                 }
-                .encode(),
+                .encode()
+                .unwrap(),
             ),
             "metadata" => LogRecord::put(key(partition_metadata), value()),
             "metadata-tombstone" => LogRecord::tombstone(key(partition_metadata)),

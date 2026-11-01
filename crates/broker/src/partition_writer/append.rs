@@ -506,7 +506,7 @@ mod tests {
         let mut bytes = bytes::BytesMut::new();
         let mut sample = sample_batch().call();
         sample.records[0].value = Some(bytes::Bytes::from(vec![7; payload]));
-        sample.encode(&mut bytes).unwrap();
+        sample.encode_batch(&mut bytes).unwrap();
         let bytes = bytes.freeze();
         let validated = records::validate_one_v2_batch(&bytes).unwrap();
         let batch = krabka_log::VerbatimBatch::from_header(validated.header, bytes.clone());

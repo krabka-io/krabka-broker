@@ -64,20 +64,21 @@ pub struct ClassicMemberMetadata {
 impl ClassicMemberMetadata {
     /// Encodes the payload of Kafka's `ClassicMemberMetadata` tagged field:
     /// the struct's own fields plus its own tagged-field trailer.
-    fn encode_tag_payload(&self) -> Bytes {
+    fn encode_tag_payload(&self) -> Result<Bytes, BrokerError> {
         let mut buf = BytesMut::new();
         buf.put_i32(self.session_timeout_ms);
         put_compact_array(
             &mut buf,
             self.supported_protocols.iter(),
             |buf, (name, meta)| {
-                put_compact_string(buf, name);
-                put_compact_bytes(buf, meta);
+                put_compact_string(buf, name)?;
+                put_compact_bytes(buf, meta)?;
                 put_empty_tagged_fields(buf);
+                Ok(())
             },
-        );
+        )?;
         put_empty_tagged_fields(&mut buf);
-        buf.freeze()
+        Ok(buf.freeze())
     }
 
     fn decode_tag_payload(buf: &mut &[u8]) -> Result<Self, BrokerError> {
@@ -115,27 +116,29 @@ pub struct MemberMetadataValue {
 }
 
 impl MemberMetadataValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
+    /// # Errors
+    /// Returns [`BrokerError::Protocol`] when a field is too long for its
+    /// wire-format prefix.
+    pub fn encode(&self) -> Result<Bytes, BrokerError> {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
-        put_compact_nullable_string(&mut buf, self.instance_id.as_deref());
+        put_compact_nullable_string(&mut buf, self.instance_id.as_deref())?;
         put_member_client(
             &mut buf,
             self.rack_id.as_deref(),
             &self.client_id,
             &self.client_host,
-        );
-        put_string_array(&mut buf, &self.subscribed_topic_names);
-        put_compact_nullable_string(&mut buf, self.subscribed_topic_regex.as_deref());
+        )?;
+        put_string_array(&mut buf, &self.subscribed_topic_names)?;
+        put_compact_nullable_string(&mut buf, self.subscribed_topic_regex.as_deref())?;
         buf.put_i32(self.rebalance_timeout_ms);
-        put_compact_nullable_string(&mut buf, self.server_assignor.as_deref());
+        put_compact_nullable_string(&mut buf, self.server_assignor.as_deref())?;
         let mut tags = Vec::new();
         if let Some(c) = &self.classic {
-            tags.push((TAG_CLASSIC_MEMBER_METADATA, c.encode_tag_payload()));
+            tags.push((TAG_CLASSIC_MEMBER_METADATA, c.encode_tag_payload()?));
         }
-        put_tagged_fields(&mut buf, tags);
-        buf.freeze()
+        put_tagged_fields(&mut buf, tags)?;
+        Ok(buf.freeze())
     }
 
     /// # Errors
@@ -207,7 +210,7 @@ mod tests {
     #[test]
     fn member_metadata_roundtrip() {
         let v = native();
-        assert!(MemberMetadataValue::decode(&v.encode()).unwrap() == v);
+        assert!(MemberMetadataValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
 
     #[test]
@@ -221,7 +224,7 @@ mod tests {
             subscribed_topic_regex: Some("^orders-.*".into()),
             ..native()
         };
-        assert!(MemberMetadataValue::decode(&v.encode()).unwrap() == v);
+        assert!(MemberMetadataValue::decode(&v.encode().unwrap()).unwrap() == v);
     }
 
     #[test]
@@ -235,17 +238,17 @@ mod tests {
             }),
             ..native()
         };
-        let decoded = MemberMetadataValue::decode(&v.encode()).unwrap();
+        let decoded = MemberMetadataValue::decode(&v.encode().unwrap()).unwrap();
         assert!(decoded == v);
 
         let mut plain = v;
         plain.classic = None;
-        assert!(MemberMetadataValue::decode(&plain.encode()).unwrap() == plain);
+        assert!(MemberMetadataValue::decode(&plain.encode().unwrap()).unwrap() == plain);
     }
 
     #[test]
     fn member_metadata_rejects_a_missing_tagged_trailer() {
-        let full = native().encode();
+        let full = native().encode().unwrap();
         assert!(MemberMetadataValue::decode(&full[..full.len() - 1]).is_err());
     }
     mod bdd_member_metadata {
@@ -325,7 +328,8 @@ mod tests {
                     .value
                     .as_ref()
                     .expect("group record prepared")
-                    .encode(),
+                    .encode()
+                    .unwrap(),
             );
         }
         #[then(

@@ -653,6 +653,7 @@ pub async fn mock_request_broker(
         None
     })
     .await
+    .unwrap()
 }
 
 /// Owned configuration pairs, preserving the input's duplicate-key policy.

@@ -67,7 +67,7 @@ fn latest_header_timestamp(checkpoint_dir: &Path) -> i64 {
 
 fn snapshot_header_timestamp(bytes: &[u8]) -> i64 {
     let mut cursor = bytes;
-    let header = RecordBatch::decode(&mut cursor).expect("decode the header batch");
+    let header = RecordBatch::decode_batch(&mut cursor).expect("decode the header batch");
     let record = header.records.first().expect("a header record");
     match decode_control_record(record).expect("decode the header control record") {
         ControlRecord::SnapshotHeader(header) => header.last_contained_log_timestamp,

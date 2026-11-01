@@ -159,14 +159,15 @@ fn check_version(buf: &mut &[u8]) -> Result<(), BrokerError> {
 
 /// Writes the message trailer: tag 0 when the delivery complete count is not
 /// the default, and no tag when it is.
-fn put_value_tags(buf: &mut BytesMut, delivery_complete_count: i32) {
+fn put_value_tags(buf: &mut BytesMut, delivery_complete_count: i32) -> Result<(), BrokerError> {
     if delivery_complete_count == UNKNOWN_DELIVERY_COMPLETE_COUNT {
         flex::put_empty_tagged_fields(buf);
+        Ok(())
     } else {
         flex::put_tagged_fields(buf, vec![(
             TAG_DELIVERY_COMPLETE_COUNT,
             Bytes::copy_from_slice(&delivery_complete_count.to_be_bytes()),
-        )]);
+        )])
     }
 }
 
@@ -189,8 +190,8 @@ fn get_value_tags(buf: &mut &[u8]) -> Result<i32, BrokerError> {
     Ok(delivery_complete_count)
 }
 
-fn put_batches(buf: &mut BytesMut, batches: &[StateBatch]) {
-    flex::put_compact_array_len(buf, batches.len());
+fn put_batches(buf: &mut BytesMut, batches: &[StateBatch]) -> Result<(), BrokerError> {
+    flex::put_compact_array_len(buf, batches.len())?;
     for b in batches {
         buf.put_i64(b.first_offset.0);
         buf.put_i64(b.last_offset.0);
@@ -198,6 +199,7 @@ fn put_batches(buf: &mut BytesMut, batches: &[StateBatch]) {
         buf.put_i16(b.delivery_count);
         flex::put_empty_tagged_fields(buf);
     }
+    Ok(())
 }
 
 fn get_batches(buf: &mut &[u8]) -> Result<Vec<StateBatch>, BrokerError> {
@@ -473,7 +475,7 @@ mod tests {
     #[rstest_bdd_macros::when("the share snapshot is encoded and decoded as a coordinator record")]
     fn encode_share_snapshot(share_value: &mut ShareValueScenario) {
         let snapshot = share_value.snapshot.as_ref().expect("a snapshot was given");
-        let encoded = snapshot.encode();
+        let encoded = snapshot.encode().unwrap();
         share_value.decoded_snapshot = Some(ShareSnapshotValue::decode(&encoded).unwrap());
         share_value.encoded = Some(encoded);
     }
@@ -481,7 +483,7 @@ mod tests {
     #[rstest_bdd_macros::when("the share update is encoded and decoded as a coordinator record")]
     fn encode_share_update(share_value: &mut ShareValueScenario) {
         let update = share_value.update.as_ref().expect("an update was given");
-        let encoded = update.encode();
+        let encoded = update.encode().unwrap();
         share_value.decoded_update = Some(ShareUpdateValue::decode(&encoded).unwrap());
         share_value.encoded = Some(encoded);
     }
