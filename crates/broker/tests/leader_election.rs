@@ -102,6 +102,64 @@ async fn produce_to_current_leader(
     .await
 }
 
+/// Retry one `acks=all` write of `value` to the current leader of `topic`-0
+/// until it is acknowledged, and return its offset. It panics once `deadline`
+/// passes.
+///
+/// A failed attempt may still have appended `value`: an `acks=all` write that
+/// times out waiting for its followers is not undone. A retry can therefore
+/// leave `value` in the log more than once; see [`holds_acked_then_retried`].
+async fn produce_until_acknowledged(
+    observer: &BrokerHandle,
+    addresses: &[(krabka_broker::NodeId, SocketAddr)],
+    topic: &str,
+    value: &str,
+    deadline: Instant,
+) -> i64 {
+    loop {
+        match produce_to_current_leader(observer, addresses, topic, value).await {
+            Ok(offset) => return offset,
+            Err(code) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "acks=all on {topic} still failing with {code} {RESTART_FAILOVER_DEADLINE:?} after the kill; partition {:?}",
+                    observer.partition_record_for_test(topic, 0)
+                );
+                time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+}
+
+/// The record values `broker`'s local log of `topic`-0 holds, in offset order.
+fn held_values(broker: &BrokerHandle, topic: &str) -> Vec<String> {
+    broker
+        .local_batches_for_test(topic, 0)
+        .expect("leader log")
+        .iter()
+        .flat_map(|batch| &batch.records)
+        .filter_map(|record| record.value.as_ref())
+        .map(|value| String::from_utf8_lossy(value).into_owned())
+        .collect()
+}
+
+/// Whether `held` is exactly the acknowledged records `acked`, followed only
+/// by copies of the retried `value`, one of them the acknowledged write at
+/// `value_offset`. Single-record batches put each record at its own index.
+fn holds_acked_then_retried(
+    held: &[String],
+    acked: &[String],
+    value: &str,
+    value_offset: i64,
+) -> bool {
+    held.strip_prefix(acked).is_some_and(|retried| {
+        !retried.is_empty()
+            && retried.iter().all(|held| held == value)
+            && usize::try_from(value_offset)
+                .is_ok_and(|offset| offset >= acked.len() && offset < held.len())
+    })
+}
+
 /// Whether `image` has partition 0 of `topic` led by a broker other than
 /// `victim`, at a leader epoch past the one `before` records.
 fn leadership_moved_off(
@@ -164,6 +222,27 @@ fn election_behavior() -> ElectionBehavior {
 }
 
 impl ElectionBehavior {
+    /// Start three brokers with nine-second heartbeat sessions and a
+    /// `min.insync.replicas` of two, record their addresses, and return the
+    /// cluster index of the active controller.
+    async fn start_session_cluster(&mut self) -> usize {
+        self.cluster = support::start_n_node_with(3, |_, config| {
+            config.heartbeat_timeout = RESTART_SESSION_TIMEOUT;
+            // With the default of one, an ISR shrunk to the new leader alone
+            // would let acks=all succeed without any follower at the new epoch.
+            config.default_min_insync_replicas = 2;
+        })
+        .await
+        .expect("start the cluster");
+        support::wait_for_all_brokers_registered(&self.cluster, 3).await;
+        self.addresses = self
+            .cluster
+            .iter()
+            .map(|(_, config, _)| (config.node_id, config.listen_addr))
+            .collect();
+        find_controller_leader(&self.cluster).await
+    }
+
     async fn create_session_partition(&self, controller: usize, replicas: &[i32]) {
         let client = connect_client(self.cluster[controller].1.listen_addr.to_string(), None).await;
         let created = client
@@ -713,22 +792,11 @@ async fn session_fenced_leader_with(
 ) {
     election_behavior.guard = Some(cluster_lock().lock().await);
     election_behavior.topic = topic.into();
-    election_behavior.cluster = support::start_n_node_with(3, |_, config| {
-        config.heartbeat_timeout = RESTART_SESSION_TIMEOUT;
-    })
-    .await
-    .expect("start the cluster");
-    support::wait_for_all_brokers_registered(&election_behavior.cluster, 3).await;
-    let controller = find_controller_leader(&election_behavior.cluster).await;
+    let controller = election_behavior.start_session_cluster().await;
     let victim_index = (controller + 1) % election_behavior.cluster.len();
     let victim = election_behavior.cluster[victim_index].1.node_id;
     election_behavior.victim = Some(victim);
     election_behavior.observer_index = controller;
-    election_behavior.addresses = election_behavior
-        .cluster
-        .iter()
-        .map(|(_, config, _)| (config.node_id, config.listen_addr))
-        .collect();
     let mut survivors: Vec<NodeId> = election_behavior
         .cluster
         .iter()
@@ -828,21 +896,10 @@ fn successor_topic(successor: NodeId) -> String { format!("controller-successor-
 )]
 async fn controller_leads_one_partition_per_successor(election_behavior: &mut ElectionBehavior) {
     election_behavior.guard = Some(cluster_lock().lock().await);
-    election_behavior.cluster = support::start_n_node_with(3, |_, config| {
-        config.heartbeat_timeout = RESTART_SESSION_TIMEOUT;
-    })
-    .await
-    .expect("start the cluster");
-    support::wait_for_all_brokers_registered(&election_behavior.cluster, 3).await;
-    let controller = find_controller_leader(&election_behavior.cluster).await;
+    let controller = election_behavior.start_session_cluster().await;
     let victim = election_behavior.cluster[controller].1.node_id;
     election_behavior.victim = Some(victim);
     election_behavior.observer_index = (controller + 1) % election_behavior.cluster.len();
-    election_behavior.addresses = election_behavior
-        .cluster
-        .iter()
-        .map(|(_, config, _)| (config.node_id, config.listen_addr))
-        .collect();
     let survivors: Vec<NodeId> = election_behavior
         .cluster
         .iter()
@@ -897,7 +954,7 @@ async fn survivor_takes_over_quorum(election_behavior: &mut ElectionBehavior) {
 }
 
 #[rstest_bdd_macros::then(
-    "within twenty-five seconds the new active controller leads the partition it succeeds to at a higher epoch, serves acks all on it, and holds exactly a,b,c,d,e,after"
+    "within twenty-five seconds the new active controller leads the partition it succeeds to at a higher epoch, serves acks all on it, and holds a,b,c,d,e then the acknowledged after"
 )]
 async fn new_controller_serves_its_partition(election_behavior: &ElectionBehavior) {
     let killed_at = election_behavior.killed_at.expect("crash instant");
@@ -936,32 +993,19 @@ async fn new_controller_serves_its_partition(election_behavior: &ElectionBehavio
     // The election the controller side wrote must reach its own broker side:
     // the acks=all write needs it to lead at the new epoch, and a follower to
     // fetch from it there.
-    let offset = loop {
-        match produce_to_current_leader(observer, &election_behavior.addresses, topic, "after")
-            .await
-        {
-            Ok(offset) => break offset,
-            Err(code) => {
-                assert!(
-                    Instant::now() < deadline,
-                    "acks=all on {topic} still failing with {code} {RESTART_FAILOVER_DEADLINE:?} after the kill; partition {:?}",
-                    controller.partition_record_for_test(topic, 0)
-                );
-                time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-    };
-    let held: Vec<String> = controller
-        .local_batches_for_test(topic, 0)
-        .expect("leader log")
-        .iter()
-        .flat_map(|batch| &batch.records)
-        .filter_map(|record| record.value.as_ref())
-        .map(|value| String::from_utf8_lossy(value).into_owned())
-        .collect();
-    let mut expected = election_behavior.acked.clone();
-    expected.push("after".to_owned());
-    assert!((held, offset) == (expected, 5));
+    let offset = produce_until_acknowledged(
+        observer,
+        &election_behavior.addresses,
+        topic,
+        "after",
+        deadline,
+    )
+    .await;
+    let held = held_values(controller, topic);
+    assert!(
+        holds_acked_then_retried(&held, &election_behavior.acked, "after", offset),
+        "the leader log {held:?} holds every acknowledged record, then the acknowledged after at {offset}"
+    );
 }
 
 #[rstest_bdd_macros::when(
@@ -1015,28 +1059,14 @@ async fn restart_and_write_session_fenced_leader(election_behavior: &mut Electio
         election_behavior.await_session_leader_replacement().await;
         let elected = killed_at.elapsed();
         let deadline = killed_at + RESTART_FAILOVER_DEADLINE;
-        let offset = loop {
-            match produce_to_current_leader(
-                &election_behavior.cluster[election_behavior.observer_index].0,
-                &election_behavior.addresses,
-                &election_behavior.topic,
-                "after",
-            )
-            .await
-            {
-                Ok(offset) => break offset,
-                Err(code) => {
-                    assert!(
-                        Instant::now() < deadline,
-                        "acks=all still failing with {code} {RESTART_FAILOVER_DEADLINE:?} after the kill; partition {:?}",
-                        election_behavior.cluster[election_behavior.observer_index]
-                            .0
-                            .partition_record_for_test(&election_behavior.topic, 0)
-                    );
-                    time::sleep(Duration::from_millis(100)).await;
-                }
-            }
-        };
+        let offset = produce_until_acknowledged(
+            &election_behavior.cluster[election_behavior.observer_index].0,
+            &election_behavior.addresses,
+            &election_behavior.topic,
+            "after",
+            deadline,
+        )
+        .await;
         (elected, offset)
     };
     let (reborn, (elected, after_offset)) = tokio::join!(
@@ -1051,7 +1081,6 @@ async fn restart_and_write_session_fenced_leader(election_behavior: &mut Electio
     );
     election_behavior.reborn = Some(reborn);
     election_behavior.after_offset = Some(after_offset);
-    election_behavior.acked.push("after".to_owned());
     tracing::info!(
         ?elected,
         after_offset,
@@ -1060,7 +1089,7 @@ async fn restart_and_write_session_fenced_leader(election_behavior: &mut Electio
 }
 
 #[rstest_bdd_macros::then(
-    "a surviving broker leads at a higher epoch and its local records are exactly a,b,c,d,e,after"
+    "a surviving broker leads at a higher epoch and its local records are a,b,c,d,e then the acknowledged after"
 )]
 fn durable_session_fencing_records(election_behavior: &ElectionBehavior) {
     let image = election_behavior.cluster[election_behavior.observer_index]
@@ -1075,20 +1104,15 @@ fn durable_session_fencing_records(election_behavior: &ElectionBehavior) {
             .as_ref()
             .expect("pre-crash partition")
     ));
-    let held: Vec<String> = election_behavior
-        .current_surviving_leader()
-        .local_batches_for_test(&election_behavior.topic, 0)
-        .expect("leader log")
-        .iter()
-        .flat_map(|batch| &batch.records)
-        .filter_map(|record| record.value.as_ref())
-        .map(|value| String::from_utf8_lossy(value).into_owned())
-        .collect();
-    assert!(
-        held == election_behavior.acked,
-        "every acknowledged record survives the failover"
+    let held = held_values(
+        election_behavior.current_surviving_leader(),
+        &election_behavior.topic,
     );
-    assert!(election_behavior.after_offset.is_some());
+    let after_offset = election_behavior.after_offset.expect("acknowledged after");
+    assert!(
+        holds_acked_then_retried(&held, &election_behavior.acked, "after", after_offset),
+        "every acknowledged record survives the failover: {held:?}"
+    );
 }
 
 #[rstest_bdd_macros::then(

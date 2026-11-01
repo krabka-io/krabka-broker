@@ -43,7 +43,7 @@ Feature: tests leader election
     When acks all commits a,b,c,d,e and the observer records the leader epoch before restart
     And the partition leader crashes inside its existing heartbeat session
     And the leader restarts concurrently with failover and an acks all after record must commit within twenty-five seconds of the crash
-    Then a surviving broker leads at a higher epoch and its local records are exactly a,b,c,d,e,after
+    Then a surviving broker leads at a higher epoch and its local records are a,b,c,d,e then the acknowledged after
     And the restarted broker rejoins the ISR unfenced as a follower
 
   Scenario: a leader restarted inside its session hands leadership to the active controller
@@ -51,7 +51,7 @@ Feature: tests leader election
     When acks all commits a,b,c,d,e and the observer records the leader epoch before restart
     And the partition leader crashes inside its existing heartbeat session
     And the leader restarts concurrently with failover and an acks all after record must commit within twenty-five seconds of the crash
-    Then a surviving broker leads at a higher epoch and its local records are exactly a,b,c,d,e,after
+    Then a surviving broker leads at a higher epoch and its local records are a,b,c,d,e then the acknowledged after
     And the active controller leads the partition locally at the new epoch while it remains controller leader
     And the restarted broker rejoins the ISR unfenced as a follower
 
@@ -60,7 +60,7 @@ Feature: tests leader election
     When the partition leader crashes inside its existing heartbeat session
     And a survivor takes over the metadata quorum
     And the stopped broker rejoins from its original log and addresses
-    Then within twenty-five seconds the new active controller leads the partition it succeeds to at a higher epoch, serves acks all on it, and holds exactly a,b,c,d,e,after
+    Then within twenty-five seconds the new active controller leads the partition it succeeds to at a higher epoch, serves acks all on it, and holds a,b,c,d,e then the acknowledged after
 
   Scenario: a controller leader restarted inside its session loses its partition leadership
     Given node 1 alone votes as controller and leads RF3 controller-restart-fencing with broker-only replicas 2 and 3 and nine-second heartbeat sessions
