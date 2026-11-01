@@ -11,6 +11,7 @@ use {
     super::{
         actor::{GroupActorHandle, MetadataProvider},
         config::NextGenConfig,
+        group::CoordinatorGroup,
         offsets_log::OffsetsLog,
         seeds::{GroupSeed, ShareGroupSeed, StreamsGroupSeed},
         share::{actor::ShareGroupActorHandle, config::ShareGroupConfig},
@@ -91,6 +92,11 @@ pub struct GroupCoordinator {
     /// Last-known-good streams-group state, the streams analogue of
     /// `seeds_cache`.
     pub streams_seeds_cache: Arc<DashMap<String, StreamsGroupSeed>>,
+    /// The classic group that an actor which stopped after a write that may
+    /// still commit leaves for the actor that replaces it, rebuilt from the
+    /// records it wrote as a reload of the log would rebuild it. The next
+    /// spawn of the group takes it.
+    pub(crate) classic_respawn_seeds: DashMap<String, Box<CoordinatorGroup>>,
     /// KIP-1071 metadata authority.
     ///
     /// `Broker::start` sets it once. Per-group streams actors read it through
@@ -169,6 +175,7 @@ impl GroupCoordinator {
             streams_groups: Arc::new(DashMap::new()),
             streams_seeds: Arc::new(DashMap::new()),
             streams_seeds_cache: Arc::new(DashMap::new()),
+            classic_respawn_seeds: DashMap::new(),
             metadata_source: OnceLock::new(),
             metrics: OnceLock::new(),
             recent_topic_deletions: Mutex::default(),

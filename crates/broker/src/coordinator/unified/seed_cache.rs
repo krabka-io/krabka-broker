@@ -6,6 +6,7 @@
 //! and drop shape, so they are defined together.
 
 use super::{
+    group::CoordinatorGroup,
     group_coordinator::GroupCoordinator,
     seeds::{GroupSeed, ShareGroupSeed, StreamsGroupSeed},
 };
@@ -29,6 +30,36 @@ impl GroupCoordinator {
     #[must_use]
     pub fn cached_seed(&self, group_id: &str) -> Option<GroupSeed> {
         self.seeds_cache.get(group_id).map(|e| e.value().clone())
+    }
+
+    /// Leave `group` for the actor that replaces a classic actor which stops
+    /// after a write that may still commit.
+    pub(crate) fn leave_classic_respawn_seed(&self, group: CoordinatorGroup) {
+        self.classic_respawn_seeds
+            .insert(group.group_id.clone(), Box::new(group));
+    }
+
+    /// `true` while a stopped actor's classic group waits for `group_id`'s
+    /// next actor.
+    #[must_use]
+    pub(crate) fn holds_classic_respawn_seed(&self, group_id: &str) -> bool {
+        self.classic_respawn_seeds.contains_key(group_id)
+    }
+
+    /// A copy of the classic group that a stopped actor left for `group_id`.
+    ///
+    /// The registry may read a seed more than once while it spawns one actor,
+    /// so the read leaves the seed in place. The actor that applies it
+    /// [drops](Self::drop_classic_respawn_seed) it.
+    #[must_use]
+    pub(crate) fn classic_respawn_seed(&self, group_id: &str) -> Option<CoordinatorGroup> {
+        self.classic_respawn_seeds.get(group_id)?.respawn_copy()
+    }
+
+    /// Drop the classic group that a stopped actor left for `group_id`, once
+    /// its next actor holds it.
+    pub(crate) fn drop_classic_respawn_seed(&self, group_id: &str) {
+        self.classic_respawn_seeds.remove(group_id);
     }
 
     /// Replace the cached share-group seed for `group_id`.

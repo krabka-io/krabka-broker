@@ -190,7 +190,12 @@ pub(super) async fn resolve_pending_offsets(
         // A commit with nothing left to publish must not create a group: a
         // tombstone removed every offset, and `DeleteGroups` may have
         // removed the group too.
-        let handle = if commit && !entries.is_empty() {
+        // An abort skips a stopped actor, whose marks went with it, unless the
+        // actor left a classic respawn seed that holds them: the respawned
+        // actor resolves them instead.
+        let handle = if (commit && !entries.is_empty())
+            || coordinator.holds_classic_respawn_seed(&group_id)
+        {
             Some(coordinator.get_or_create_group(&group_id, GroupKindTag::Classic))
         } else {
             coordinator.find(&group_id).filter(|h| !h.tx.is_closed())
@@ -230,16 +235,61 @@ pub(super) async fn resolve_pending_offsets(
 #[cfg(test)]
 mod tests {
     use {
-        super::{CommittedOffsets, checked_batch_advance, scan_pending_offset_entries},
+        super::{
+            CommittedOffsets, MarkerType, checked_batch_advance, resolve_pending_offsets,
+            scan_pending_offset_entries,
+        },
         crate::coordinator::{
             persistence::OffsetCommitValue,
             test_support::{offset_entry as entry, offset_record, replay_offset_batch},
+            unified::{
+                actor::GroupActorMessage,
+                classic_state::ClassicGroup,
+                group::{CoordinatorGroup, GroupKind, GroupOffsets},
+                test_support::make_coord,
+            },
         },
         assert2::assert,
         krabka_log::{Offset, ProducerId},
         krabka_protocol::records::{Record, RecordBatch},
         std::collections::HashMap,
+        tokio::sync::oneshot,
     };
+
+    /// An abort marker that lands while a classic actor that stopped after an
+    /// uncertain write waits to respawn resolves the marks that the actor
+    /// left in its respawn seed. The respawned actor no longer answers
+    /// `UNSTABLE_OFFSET_COMMIT` for the aborted transaction's partition.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_abort_resolves_the_marks_a_stopped_classic_actor_left() {
+        let coordinator = make_coord();
+        let mut group = CoordinatorGroup::seeded(
+            "g",
+            GroupKind::Classic(ClassicGroup::new("g")),
+            HashMap::new(),
+        );
+        group.add_pending_txn_offsets(7, 3, [("t".to_owned(), 0)]);
+        coordinator.leave_classic_respawn_seed(group);
+
+        resolve_pending_offsets(
+            &coordinator,
+            ProducerId(7),
+            MarkerType::Abort,
+            10,
+            HashMap::from([("g".to_owned(), vec![(("t".to_owned(), 0), entry(5))])]),
+        )
+        .await
+        .unwrap();
+
+        let (reply, offsets) = oneshot::channel();
+        coordinator
+            .get_or_create_classic("g")
+            .tx
+            .send(GroupActorMessage::FetchOffsets { reply })
+            .await
+            .unwrap();
+        assert!(offsets.await.unwrap() == GroupOffsets::default());
+    }
 
     fn commit(group: &str, topic: &str, partition: i32, offset: i64) -> Record {
         offset_record()

@@ -157,7 +157,7 @@ struct ProducerTxnOffsets {
 /// partition between them. Reading them in two actor turns would let a
 /// transaction marker land in between and produce a row that is neither the
 /// pre-transaction offset nor the post-transaction one.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct GroupOffsets {
     pub committed: HashMap<(String, i32), OffsetEntry>,
     pub pending_txn: HashSet<(String, i32)>,
@@ -210,6 +210,39 @@ impl CoordinatorGroup {
             pending_commits: VecDeque::new(),
             empty_since_ms: None,
         }
+    }
+
+    /// This group with `kind` in place of its own, and with the offsets and
+    /// the open transactions' keys it holds: what an actor that stops after
+    /// a write that may still commit leaves for the next one.
+    ///
+    /// The offsets are the [`latest`](Self::latest_offsets) ones. A commit
+    /// still in flight is in the log like the write that stopped the actor,
+    /// and a reload of the log would read it; its client hears its own
+    /// outcome from the stopped actor.
+    #[must_use]
+    pub(crate) fn respawn_seed(&self, kind: GroupKind) -> Self {
+        Self {
+            group_id: self.group_id.clone(),
+            kind,
+            committed_offsets: self
+                .latest_offsets()
+                .into_iter()
+                .map(|(key, entry)| (key.clone(), entry.clone()))
+                .collect(),
+            empty_since_ms: self.empty_since_ms,
+            pending_txn_offsets: self.pending_txn_offsets.clone(),
+            pending_txn_key_counts: self.pending_txn_key_counts.clone(),
+            pending_commits: VecDeque::new(),
+        }
+    }
+
+    /// A copy of this classic group, as [`respawn_seed`](Self::respawn_seed)
+    /// builds it, or `None` for a consumer group.
+    #[must_use]
+    pub(crate) fn respawn_copy(&self) -> Option<Self> {
+        self.as_classic()
+            .map(|state| self.respawn_seed(GroupKind::Classic(state.clone())))
     }
 
     /// `true` while the group has at least one member, whichever protocol

@@ -44,14 +44,24 @@ fn undelivered<T>(error: &TrySendError<T>) -> TrySendError<()> {
     }
 }
 
+/// What hydrates a respawned group actor: the cached state of a consumer
+/// group, or the whole classic group that the stopped actor left.
+enum GroupActorSeed {
+    Consumer(Box<GroupSeed>),
+    Classic(Box<CoordinatorGroup>),
+}
+
 impl RegisteredActor for GroupActorHandle {
-    type Seed = GroupSeed;
+    type Seed = GroupActorSeed;
 
     fn is_closed(&self) -> bool { self.tx.is_closed() }
 
-    fn try_seed(&self, seed: GroupSeed) -> Result<(), TrySendError<()>> {
+    fn try_seed(&self, seed: GroupActorSeed) -> Result<(), TrySendError<()>> {
         self.tx
-            .try_send(GroupActorMessage::Seed(seed))
+            .try_send(match seed {
+                GroupActorSeed::Consumer(seed) => GroupActorMessage::Seed(*seed),
+                GroupActorSeed::Classic(group) => GroupActorMessage::ClassicSeed(group),
+            })
             .map_err(|error| undelivered(&error))
     }
 }
@@ -155,7 +165,7 @@ impl GroupCoordinator {
     /// Both families route to one actor; the actor rejects the family it does
     /// not currently serve and can change kind in place, so a group is not
     /// pinned to its spawn kind. Keeps the dead-actor
-    /// (closed tx) respawn and the consumer re-hydrate-from-seed paths.
+    /// (closed tx) respawn and the re-hydrate-from-seed paths.
     #[must_use]
     pub fn get_or_create_group(
         self: &Arc<Self>,
@@ -175,14 +185,18 @@ impl GroupCoordinator {
                     Arc::clone(self),
                 )
             },
-            // Re-hydrate a respawned consumer actor from its last-known-good
-            // state.
+            // Re-hydrate a respawned actor: a classic group from what the
+            // stopped actor left, whatever kind the request asks for, and
+            // otherwise a consumer group from its last-known-good state.
             || {
-                if initial_kind == GroupKindTag::Consumer {
-                    self.cached_seed(group_id)
-                } else {
-                    None
-                }
+                self.classic_respawn_seed(group_id)
+                    .map(|group| GroupActorSeed::Classic(Box::new(group)))
+                    .or_else(|| {
+                        (initial_kind == GroupKindTag::Consumer)
+                            .then(|| self.cached_seed(group_id))
+                            .flatten()
+                            .map(|seed| GroupActorSeed::Consumer(Box::new(seed)))
+                    })
             },
         )
     }

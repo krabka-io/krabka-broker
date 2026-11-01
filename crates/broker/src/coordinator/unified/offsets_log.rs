@@ -546,6 +546,14 @@ pub mod fake {
             });
         }
 
+        /// Wait until the log ends at or past `end_offset`: the appends up to
+        /// it are in the log, and the gate knows their write timeouts.
+        pub async fn until_log_end(&self, end_offset: i64) {
+            self.commit_gate
+                .until(|state| state.log_end >= end_offset)
+                .await;
+        }
+
         /// Pass the write timeout of every write in the log, while the records
         /// stay in the log and may still commit.
         pub fn time_out_uncommitted(&self) {

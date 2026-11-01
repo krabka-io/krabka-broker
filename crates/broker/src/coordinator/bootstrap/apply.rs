@@ -326,7 +326,7 @@ pub(super) fn apply_streams_record(
 /// stored rebalance timeout of -1, the schema default of a version 0 value,
 /// becomes the session timeout of the member. An empty protocol type becomes
 /// no protocol type.
-pub(super) fn apply_group_metadata(
+pub fn apply_group_metadata(
     g: &mut ClassicState,
     v: GroupMetadataValue,
     replay_timestamp_ms: i64,
