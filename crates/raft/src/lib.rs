@@ -112,7 +112,9 @@ pub use {
     },
     kraft::{
         MetadataFetchSlice,
-        controller::{control_batch_image_records, decode_committed_value, is_kip835_noop},
+        controller::{
+            control_batch_image_records, decode_committed_value, encode_record, is_kip835_noop,
+        },
     },
     network::{OutboundDialer, PlaintextDialer},
     observed_stream::{ObservedStream, StreamObserver},

@@ -422,7 +422,7 @@ pub(super) fn prepare_records<'a>(
 /// # Errors
 /// Returns [`RaftError::ChangeRejected`] when the record has no encoding
 /// against `image`.
-fn encode_record(
+pub fn encode_record(
     record: &MetadataRecord,
     image: &MetadataImage,
 ) -> Result<Vec<bytes::Bytes>, RaftError> {
