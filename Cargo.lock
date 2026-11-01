@@ -6775,9 +6775,9 @@ checksum = "5a651516ddc9168ebd67b24afd085a718be02f8858fe406591b013d101ce2f40"
 
 [[package]]
 name = "qubit-clock"
-version = "0.13.3"
+version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "127b9c860cc779d2f85212928fa0be9101061f22dead534239c8d5b078348fc6"
+checksum = "db8c595aaaff328771103f3efa10a142ef78720a06567e7c6d3ed53f2cfbb4ca"
 dependencies = [
  "qubit-collections",
  "thiserror 2.0.21",
