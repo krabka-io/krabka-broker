@@ -8,7 +8,9 @@ looks at the whole history for lost writes, duplicates, out-of-order polls and
 transactional anomalies. This task runs that workload against krabka:
 
 1. It builds `krabka-broker` and `krabka-format` with Bazel into
-   `target/jepsen/bin/`, or it takes them from `--bin-dir`.
+   `target/jepsen/bin/`, or it takes them from `--bin-dir`. The build is
+   `-c opt`, and `--bazel-config` adds a `--config` to it, such as the
+   `release` config that every shipped image is built with.
 2. It builds the node image from `tools/jepsen/node.Dockerfile`, or it takes
    the image that `--image` names.
 3. It resolves the harness classpath with Maven from `tools/jepsen/pom.xml`.
@@ -22,12 +24,19 @@ transactional anomalies. This task runs that workload against krabka:
     aspect jepsen
     aspect jepsen --test assign-
     aspect jepsen --test subscribe-txn --keep-nodes
+    aspect jepsen --bazel-config release --no-skips
 
 The manifest is `tools/jepsen/suite.json`. Each entry names one test and the
 harness options that make it. An entry that krabka does not pass yet has a
 `known_failure` that tells how it fails. The task fails when an entry
 expected to pass is invalid, unknown, crashes, or does not run. A known
 failure that passes is reported as fixed, so that its `known_failure` can go.
+
+An entry can require something of the host, such as the `sch_netem` qdisc
+for packet faults. The harness skips an entry whose requirement the host does
+not meet, and the task reports it as skipped. `--no-skips` turns a skip into a
+regression, so that a gate that must run every entry fails on a host that
+cannot.
 
 The node containers have fixed names, `n1` to `n<nodes>`. So a run replaces
 any container with one of those names. The task removes the containers at the
@@ -50,8 +59,9 @@ BINARIES = {
 }
 
 # What an entry can need from the machine it runs on. The harness skips an
-# entry whose requirement the machine does not meet, and says why.
-REQUIREMENTS = ["netem", "isolated-clock"]
+# entry whose requirement the machine does not meet, and says why. Clock faults
+# need nothing: each broker reads its wall clock through libfaketime.
+REQUIREMENTS = ["netem"]
 
 # Every status the harness writes to `results.json`.
 STATUSES = ["valid", "invalid", "unknown", "crashed", "skipped"]
@@ -135,8 +145,8 @@ def node_run_argv(image, name):
     puts an init process at PID 1 that reaps a killed broker; without it the
     broker stays a zombie and Jepsen's `killall -w` waits for it forever.
     `NET_ADMIN` lets the nemesis change `iptables` and `tc` on the node. The
-    node gets no `SYS_TIME`: every container shares the host's clock, so the
-    harness refuses clock faults on Docker nodes.
+    node gets no `SYS_TIME`: every container shares the host's clock, so clock
+    faults move each broker's clock through libfaketime instead.
     """
     return [
         "docker",
@@ -153,6 +163,20 @@ def node_run_argv(image, name):
         "NET_ADMIN",
         image,
     ]
+
+def _bazel_flags(config):
+    flags = ["-c", "opt"]
+    if config:
+        flags.append("--config=" + config)
+    return flags
+
+def build_argv(config):
+    """The command that builds the binaries, with `--config=<config>` unless `config` is empty."""
+    return ["bazel", "build"] + _bazel_flags(config) + list(BINARIES.keys())
+
+def cquery_argv(config, target):
+    """The command that prints the output file of `target`, as `build_argv(config)` builds it."""
+    return ["bazel", "cquery"] + _bazel_flags(config) + ["--output=files", target]
 
 def classpath_argv(root):
     """The command that writes the harness classpath to `target/jepsen/classpath.txt`."""
@@ -213,10 +237,14 @@ def outcomes(entries, results):
         ))
     return out
 
-def verdict(outcome):
-    """`pass`, `regression`, `known failure`, `fixed` or `skipped`."""
+def verdict(outcome, no_skips):
+    """`pass`, `regression`, `known failure`, `fixed` or `skipped`.
+
+    With `no_skips`, a skipped entry is a regression: the run was meant to
+    cover it and did not.
+    """
     if outcome.status == "skipped":
-        return "skipped"
+        return "regression" if no_skips else "skipped"
     if outcome.status not in ["valid", "invalid", "unknown"]:
         return "regression"
     valid = outcome.status == "valid"
@@ -240,17 +268,19 @@ def detail(outcome, kind):
     """What the report says about one outcome with the verdict `kind`."""
     if kind == "known failure":
         return outcome.entry.get("known_failure", "")
+    if outcome.status == "skipped":
+        # Why the harness skipped it, whether `--no-skips` made that a
+        # regression or not.
+        return first_line(outcome.detail)
     if kind == "regression":
         if outcome.bad_error_types:
             return ", ".join(outcome.bad_error_types)
         return first_line(outcome.detail)
-    if kind == "skipped":
-        return first_line(outcome.detail)
     return ""
 
-def render_report(jepsen_version, results):
+def render_report(jepsen_version, results, no_skips):
     """The Markdown report of one run: totals, then one row per entry."""
-    verdicts = [verdict(outcome) for outcome in results]
+    verdicts = [verdict(outcome, no_skips) for outcome in results]
     lines = [
         "# Jepsen Kafka workload against krabka",
         "",
@@ -295,11 +325,11 @@ def _must(ctx, argv, cwd):
     if code != 0:
         fail("%s exited with %d" % (" ".join(argv), code))
 
-def _install_krabka(ctx, root, bin_dir):
-    _must(ctx, ["bazel", "build", "-c", "opt"] + list(BINARIES.keys()), root)
+def _install_krabka(ctx, root, bin_dir, config):
+    _must(ctx, build_argv(config), root)
     ctx.std.fs.create_dir_all(bin_dir)
     for target, name in BINARIES.items():
-        built = _output(ctx, ["bazel", "cquery", "-c", "opt", "--output=files", target], root)
+        built = _output(ctx, cquery_argv(config, target), root)
         _must(ctx, ["install", "-m", "0755", root + "/" + built, bin_dir + "/" + name], root)
 
 def _start_nodes(ctx, root, image, names):
@@ -342,7 +372,7 @@ def _impl(ctx: TaskContext) -> int:
             return 2
     else:
         bin_dir = work + "/bin"
-        _install_krabka(ctx, root, bin_dir)
+        _install_krabka(ctx, root, bin_dir, ctx.args.bazel_config)
 
     image = ctx.args.image
     if not image:
@@ -372,9 +402,9 @@ def _impl(ctx: TaskContext) -> int:
         fail("the harness wrote no %s, so no test has a result; see its output above" % results_path)
     report = json.decode(ctx.std.fs.read_to_string(results_path))
     results = outcomes(entries, report.get("results", []))
-    ctx.std.fs.write(work + "/report.md", render_report(report.get("jepsen_version", ""), results))
+    ctx.std.fs.write(work + "/report.md", render_report(report.get("jepsen_version", ""), results, ctx.args.no_skips))
 
-    verdicts = [verdict(outcome) for outcome in results]
+    verdicts = [verdict(outcome, ctx.args.no_skips) for outcome in results]
     for outcome, kind in zip(results, verdicts):
         if kind in ["regression", "fixed"]:
             # Jepsen names the store relative to the harness's working
@@ -402,5 +432,7 @@ jepsen = task(
         "nodes": args.int(default = 5, description = "How many node containers to start."),
         "heap": args.string(default = "8g", description = "The maximum heap of the Jepsen JVM, as -Xmx takes it."),
         "keep_nodes": args.boolean(default = False, description = "Leave the node containers up afterwards."),
+        "no_skips": args.boolean(default = False, description = "Report an entry the harness skips as a regression, so that the run fails."),
+        "bazel_config": args.string(default = "", description = "Build the binaries with this --config as well as -c opt, such as release. Ignored with --bin-dir."),
     },
 )

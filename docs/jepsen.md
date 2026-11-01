@@ -65,6 +65,8 @@ These options change the other steps:
 | `--nodes N` | 5 | Start `N` node containers, `n1` to `n<N>`. |
 | `--heap SIZE` | `8g` | The maximum heap of the Jepsen JVM, in the form that `-Xmx` takes. |
 | `--keep-nodes` | off | Leave the node containers up after the run. |
+| `--no-skips` | off | Count an entry the machine cannot run as a regression, not as skipped. CI sets it, so that a runner without `sch_netem` fails rather than quietly leaving out the packet faults. |
+| `--bazel-config NAME` | none | Build with `--config=NAME` as well as `-c opt`. CI passes `release`, the configuration of every shipped image. |
 
 The node containers have fixed names. A run removes each container named `n1`
 to `n<N>` before it starts the nodes, also a container that the run did not
@@ -92,18 +94,26 @@ writes a JSON summary.
   the store.
 - **Client.** The client is Apache Kafka's Java client, at the release that
   `pom.xml` pins.
-- **Nemesis.** The harness uses Jepsen's combined nemesis. `--nemesis` selects
-  the faults: `partition` with `iptables`, `packet` delay, loss, duplication
-  and reordering with `tc netem`, `kill` and `pause` of the broker process, and
-  `clock` skew.
+- **Nemesis.** The harness uses Jepsen's combined nemesis, built from the
+  selected faults only. `--nemesis` selects the faults: `partition` with
+  `iptables`, `packet` delay, loss, duplication and reordering with `tc netem`,
+  `kill` and `pause` of the broker process, and `clock` bumps, strobes and
+  resets.
+- **Clock.** Jepsen's own clock nemesis steps the system clock, and Docker
+  containers share the host's. With `--docker` the harness instead starts each
+  broker with libfaketime preloaded, reading its wall-clock offset from
+  `/opt/krabka/clock-offset` on its node, and the clock nemesis rewrites that
+  file. Only the wall clock moves; the monotonic clock does not, as when a
+  system clock is stepped. libfaketime reads the file at most once a second, so
+  a strobe faster than that shows the broker fewer flips. `--clock-mode system`
+  uses Jepsen's own nemesis, for nodes with their own clocks.
 - **Checker.** Jepsen's Kafka checker examines the history. The harness also
   fails a test whose broker log has a Rust panic.
 
 The node image holds only the tools that Jepsen needs on a node. Each
 container runs with `--init`, so that a killed broker is reaped and does not
 stay a zombie, and with the `NET_ADMIN` capability for `iptables` and `tc`.
-Containers share the host's clock, so the harness refuses `--nemesis clock`
-with `--docker`, and the nodes get no `SYS_TIME`.
+The nodes get no `SYS_TIME`: clock faults never touch the host's clock.
 
 ## The manifest
 
@@ -130,18 +140,17 @@ group protocol:
 - `name` identifies the entry. It holds lowercase letters, digits, and `-`
   only. Each name occurs one time.
 - `args` is the list of harness options for this test. It can be empty.
-- `requires` lists what the test needs from the machine: `netem` for packet
-  faults, and `isolated-clock` for clock faults.
+- `requires` lists what the test needs from the machine. The one requirement
+  is `netem`, for packet faults.
 - `known_failure` tells how krabka fails the test.
 
 The task checks the manifest before it starts. It stops with status 2 if the
 manifest has an unknown key, or a field of the wrong type.
 
 The harness skips an entry whose requirement the machine does not meet.
-`netem` needs the `sch_netem` module in the host kernel. `isolated-clock`
-needs a clock for each node, and Docker containers share the clock of the
-host. So under Docker, the harness always skips an entry that requires
-`isolated-clock`.
+`netem` needs the `sch_netem` module in the host kernel: `sudo modprobe
+sch_netem` loads it where the kernel ships it. With `--no-skips`, a skipped
+entry is a regression.
 
 The `--safe` option sets the client settings under which Kafka promises the
 most: `acks=all`, idempotent producers, `read_committed` consumers, and a
@@ -186,14 +195,59 @@ of five verdicts:
 | regression | `known_failure` | `crashed` or `NOT RUN` |
 | known failure | `known_failure` | `invalid` or `unknown` |
 | fixed | `known_failure` | `valid` |
-| skipped | either | `skipped` |
+| regression | either | `skipped`, with `--no-skips` |
+| skipped | either | `skipped`, without `--no-skips` |
 
 `target/jepsen/report.md` has the totals, then one row for each entry. For a
 regression, the row names the anomalies that made the history invalid, or the
 first line of the error. The exit status of the harness is not the verdict.
 
 The task exits with status 1 if one or more entries is a regression. When an
-entry is fixed, remove its `known_failure`.
+entry is fixed, remove its `known_failure`. With `--no-skips`, the row of a
+skipped entry still gives the reason the harness skipped it.
+
+## In CI
+
+The `jepsen` job of [`ci.yml`](../.github/workflows/ci.yml) runs the whole
+manifest every night and on every manual run of the workflow, on a hosted
+runner:
+
+```sh
+aspect jepsen --bazel-config release --no-skips
+```
+
+It loads `sch_netem` first, so the packet faults run. The release workflow
+promotes a tag only when a full run of its commit passed every lane, so this
+job gates releases. A known failure does not fail the job; a regression does.
+The job uploads `report.md` and `results.json` as the `jepsen-report`
+artifact, kept for 90 days, and the Jepsen store as `jepsen-store`, kept for
+14 days. It adds the report to the run's summary. A red nightly run names the
+lane in the `nightly-red` issue. The run takes about two and a half hours.
+
+## Known failures
+
+The manifest marks each entry that krabka failed with the bug it showed. The
+faults are random, so an entry that is not marked can still hit one of these
+until it is fixed.
+
+- **Duplicate records.** With `acks=all` and an idempotent producer, a
+  partitioned or paused follower makes the produce time out, and the client
+  retries the batch. The leader appends the retry again instead of answering
+  it with the original offset. The log then holds two or three copies of one
+  batch, with the same producer id, epoch and sequence under one leader epoch.
+  It happens with and without transactions, and for a retry that arrives after
+  other producers' batches.
+- **A partition stuck after re-election.** After an unclean restart the
+  controller re-elects a partition's leader at a new epoch. Either the new
+  leader goes on fetching as a follower at the old epoch, or its followers do,
+  each logging `holding the partition back until the metadata image settles`
+  until the test ends. The partition serves no reads and commits no writes.
+  When it is a `__transaction_state` partition, `InitProducerId` fails and no
+  transactional client can start.
+- **A hanging transaction.** A transaction that is open on a partition when
+  brokers are killed never gets its abort marker, although the producer's
+  `transaction.timeout.ms` is one second. Its partition's last stable offset
+  stays behind it, and a `read_committed` consumer reads nothing past it.
 
 ## Run one test by hand
 
@@ -209,9 +263,8 @@ java -Djava.awt.headless=true -cp "../../tools/jepsen/src:$(cat classpath.txt)" 
 ```
 
 Without `--docker`, the harness uses Jepsen's SSH remote and its Debian setup,
-as Jepsen's other tests do. On Debian virtual machines with their own clocks,
-`--nemesis clock` works too. `--bin-dir` is still a directory on the control
-machine.
+as Jepsen's other tests do, and clock faults step each machine's system clock.
+`--bin-dir` is still a directory on the control machine.
 
 ## Unit tests
 
@@ -232,10 +285,10 @@ compiles at load time out of the working tree. Its default is `./classes`.
 
 ## Known gaps
 
-- Docker nodes share the clock of the host, so the task cannot run clock
-  faults.
+- Clock faults move the broker's wall clock only through the C library. A
+  clock read that bypasses it would not see the skew.
 - A host kernel without `sch_netem` cannot run packet faults. The harness then
-  reports those entries as skipped.
+  reports those entries as skipped, or as regressions with `--no-skips`.
 - The nemesis does not change the cluster's membership. It does not add or
   remove brokers or controller voters.
 - All nodes are on one host. A partition stops traffic between containers, but

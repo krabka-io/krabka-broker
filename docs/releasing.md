@@ -104,7 +104,8 @@ Take the merge commit of that pull request. Before you tag it, make sure a
 full CI run passed on it: the nightly `schedule` run of `ci.yml`, or one you
 start with `gh workflow run ci.yml --ref main` while `main` is still at that
 commit. Pull requests skip the lanes that only this run covers, so `release`
-refuses a commit without one. The full run includes the four-hour soak.
+refuses a commit without one. The full run includes the four-hour soak and the
+Jepsen Kafka workload.
 
 Then tag the commit. Use an annotated tag, `git tag -a`. An annotated tag is an
 object of its own: it records who cut the release and when, and a person can
@@ -140,9 +141,9 @@ signed, and it refuses the release unless all four of these hold:
   in which every job passed or was skipped. Only `external links`, the
   criterion benches and the nightly report may be red. This run is what covers
   the lanes that pull requests skip or scope by path: the kind smoke test, the
-  Creusot proofs, the full container matrix, the upgrade smoke, GSSAPI, netem
-  and the soak. If the release stopped here, start a full run on that commit
-  and re-dispatch `release.yml` with the tag.
+  Creusot proofs, the full container matrix, the upgrade smoke, GSSAPI, netem,
+  the soak and the Jepsen Kafka workload. If the release stopped here, start a
+  full run on that commit and re-dispatch `release.yml` with the tag.
 
 A cosign signature says who built an image, never that the image was tested.
 Those four checks are what stands behind it.

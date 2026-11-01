@@ -154,7 +154,8 @@ survivor baseline.
 Changes to a Creusot kernel or contract also need the commands in the
 [verification ledger](docs/verification.md).
 
-The full set of container suites, the `gssapi` lane, and the external link check run at
+The full set of container suites, the `gssapi` lane, the `jepsen` lane (see
+[Jepsen Kafka workload](docs/jepsen.md)), and the external link check run at
 full width only on the nightly schedule, where they gate no merge, so `ci.yml`
 reports them instead: a scheduled run in which any of those lanes fails opens
 an issue labelled `nightly-red` -- naming the failed jobs and linking the run
