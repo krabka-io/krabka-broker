@@ -16,9 +16,10 @@
 //!   state where no other action is enabled. `docs/verification.md` describes
 //!   the pattern.
 
-use std::{collections::BTreeSet, fmt::Debug, hash::Hash};
-
-use stateright::{Checker as _, Expectation, HasDiscoveries, Model};
+use {
+    stateright::{Checker as _, Expectation, HasDiscoveries, Model},
+    std::{collections::BTreeSet, fmt::Debug, hash::Hash},
+};
 
 krabka_macros::bounded_bfs!(run_bfs);
 
@@ -88,8 +89,10 @@ pub fn check_model_with_known_failures<M>(
     let properties = model.properties();
     for failure in known {
         assert2::assert!(
-            properties.iter().any(|property| property.name == failure.property
-                && property.expectation != Expectation::Sometimes),
+            properties
+                .iter()
+                .any(|property| property.name == failure.property
+                    && property.expectation != Expectation::Sometimes),
             "[{label}] known failure {} names no always or eventually property",
             failure.property
         );
@@ -122,7 +125,10 @@ pub fn check_model_with_known_failures<M>(
     assert_pinned_count(checker.unique_state_count(), pinned, label);
     for property in &properties {
         let discovery = checker.discovery(property.name);
-        if let Some(failure) = known.iter().find(|failure| failure.property == property.name) {
+        if let Some(failure) = known
+            .iter()
+            .find(|failure| failure.property == property.name)
+        {
             let Some(path) = discovery else {
                 panic!(
                     "[{label}] {} no longer fails: if its fix merged, remove it from the known \
@@ -202,9 +208,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use stateright::{Model, Property};
-
-    use super::{KnownFailure, Quiescence, check_model_with_known_failures};
+    use {
+        super::{KnownFailure, Quiescence, check_model_with_known_failures},
+        stateright::{Model, Property},
+    };
 
     /// A counter that climbs to a target unless a fault jams it first. A step
     /// on a jammed counter changes nothing, so a jam is a livelock.
@@ -263,9 +270,7 @@ mod tests {
                 Property::always("reaches_target_when_quiescent", |model: &Self, s| {
                     !model.quiescent(s) || s.value == model.target
                 }),
-                Property::sometimes("reaches_target", |model: &Self, s| {
-                    s.value == model.target
-                }),
+                Property::sometimes("reaches_target", |model: &Self, s| s.value == model.target),
             ]
         }
     }
@@ -297,15 +302,11 @@ mod tests {
     #[test]
     fn a_jam_is_a_known_failure_one_step_deep() {
         // Unique states: three values, each free or jammed.
-        check_model_with_known_failures(
-            Climb { target: 2 },
-            "climb",
-            (10, 100, 100),
-            6,
-            &[KnownFailure {
+        check_model_with_known_failures(Climb { target: 2 }, "climb", (10, 100, 100), 6, &[
+            KnownFailure {
                 property: "reaches_target_when_quiescent",
                 depth: 1,
-            }],
-        );
+            },
+        ]);
     }
 }
