@@ -57,7 +57,7 @@ mod verification_client;
 #[cfg(test)]
 pub use self::{
     markers::{remove_marked_partitions, remove_marked_partitions_from},
-    reaper::{ReaperStep, apply_prepare_abort, complete_abort_decision, reaper_step},
+    reaper::{ReaperStep, apply_prepare_abort, reaper_step},
     registration::{registration_decision, stage_registration},
 };
 

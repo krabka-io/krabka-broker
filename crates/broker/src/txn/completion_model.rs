@@ -56,16 +56,16 @@
 //!   it, and `remove_marked_partitions` and `remove_marked_partitions_from`
 //!   drop the written partitions.
 //! - The reaper: `reaper_step` (with `should_abort_idle_txn`),
-//!   `apply_prepare_abort`, `prepare_server_abort_identities_with_fresh`,
-//!   `complete_abort_decision`, and `apply_completion` to `CompleteAbort`,
-//!   which is all `apply_complete_abort` does.
+//!   `apply_prepare_abort` and `prepare_server_abort_identities_with_fresh`.
+//!   The reaper only prepares: it queues a prepared or still outstanding
+//!   abort for the completion task, which writes the markers.
 //! - The completion task: `completion_for`, `fan_out_failure_attempt`,
 //!   `completion_decision`, `apply_completion`.
 //!
 //! Restated: the load's last-value fold (`RecoveredTransactions::apply_value`)
 //! and its queueing of a `Prepare*` entry (`install_recovered`); the reaction
 //! to each state-write result in `prepare_transaction`, `EndTxn`'s handler,
-//! `prepare_abort`, `complete_abort` and `complete_prepared_transaction`; and
+//! `prepare_abort` and `complete_prepared_transaction`; and
 //! a data partition's log, which holds one batch and the first marker after
 //! it.
 //!
@@ -113,15 +113,16 @@
 //! [`ONE_OUTCOME`] fails at depth 16:
 //!
 //! ```text
-//! Add(0), Commit, Produce(0), Add(1), Commit, End(true), Tick,
+//! Add(0), Commit, Produce(0), Add(1), Commit, Tick, ReaperTick,
 //! Failover(true), Load, CompletionRun, Marker(0, Written), Failover(false),
-//! Load, ReaperTick, Commit, Marker(1, Written)
+//! Load, End(true), Commit, Marker(1, Written)
 //! ```
 //!
-//! The load publishes an uncommitted `PrepareCommit` and queues it, and the
-//! completion task writes the COMMIT marker of partition 0. The second move
-//! truncates the record, the next load finds the transaction `Ongoing`, and
-//! the reaper aborts it: partition 1 gets an ABORT marker.
+//! The reaper appends a `PrepareAbort` that has not committed when the state
+//! partition moves. The load publishes it and queues it, and the completion
+//! task writes the ABORT marker of partition 0. The second move truncates the
+//! record, the next load finds the transaction `Ongoing`, and the producer
+//! commits it: partition 1 gets a COMMIT marker.
 //!
 //! With refusals, [`CONVERGED`] fails sooner, at depth 7:
 //!
@@ -135,16 +136,16 @@
 //! gives up the same way (`fan_out_failure_attempt`); and the reaper resumes
 //! only a `PrepareAbort` (`reaper_step`). Nothing writes the marker until the
 //! state partition moves again. A `PrepareAbort` in the same place recovers,
-//! because the reaper sends its markers again, and since #1941 a retriable
-//! partition in the same attempt keeps it queued. This path matches Kafka,
-//! which also stops on an unexpected code, and after #1941 only a leader in
-//! an illegal state answers one (see [`Res::Refused`]).
+//! because the reaper queues it for the completion task again, and since
+//! #1941 a retriable partition in the same attempt keeps it queued. This path
+//! matches Kafka, which also stops on an unexpected code, and after #1941 only
+//! a leader in an illegal state answers one (see [`Res::Refused`]).
 //!
 //! # Not covered
 //!
 //! One coordinator operation runs at a time, so the model does not interleave
-//! an `EndTxn` fan-out with the reaper's or the completion task's, and a
-//! fan-out of the old coordinator ends with the failover. A stale coordinator
+//! an `EndTxn` fan-out with the completion task's or with a reaper sweep, and
+//! a fan-out of the old coordinator ends with the failover. A stale coordinator
 //! fenced by a newer one is therefore never modeled, and a fenced marker
 //! answer stands in the same action as an unexpected one, since both stop the
 //! fan-out. A data partition's own replication is not modeled: a produce and
@@ -154,7 +155,7 @@
 use {
     super::{
         coordinator::{
-            ReaperStep, apply_prepare_abort, complete_abort_decision,
+            ReaperStep, apply_prepare_abort,
             completion::{
                 CompletionAttempt, PreparedCompletion, apply_completion, completion_decision,
                 completion_for, fan_out_failure_attempt,
@@ -207,8 +208,8 @@ const MAX_UNIQUE_STATES: usize = 500_000;
 
 // The exact unique-state count of each exhaustive search below. A changed
 // count is a changed model; see `model_check::assert_pinned_count`.
-const PINNED_UNIQUE_STATES_REFUSALS: usize = 104_970;
-const PINNED_UNIQUE_STATES_NO_REFUSALS: usize = 89_478;
+const PINNED_UNIQUE_STATES_REFUSALS: usize = 87_607;
+const PINNED_UNIQUE_STATES_NO_REFUSALS: usize = 76_353;
 
 /// The liveness property this model exists for. It fails on the current code.
 const CONVERGED: &str = "every_transaction_ends_when_quiescent";
@@ -372,8 +373,6 @@ enum Writer {
     EndComplete { epoch: i16 },
     /// The reaper's `prepare_abort`.
     ReaperPrepare,
-    /// The reaper's `complete_abort`.
-    ReaperComplete,
     /// `complete_prepared_transaction`.
     Completion,
 }
@@ -382,7 +381,6 @@ enum Writer {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Owner {
     EndTxn,
-    Reaper,
     Completion,
 }
 
@@ -576,15 +574,16 @@ impl St {
                 self.queued = true;
                 self.answer_end(Some(epoch));
             }
+            // The sweep queues the durable `PrepareAbort` for completion.
             (Writer::ReaperPrepare, true) => {
                 self.cache = Some(record);
                 self.seen |= SEEN_REAPER_ABORT;
-                self.start_fan_out(Owner::Reaper, record);
+                self.queued = true;
             }
-            (Writer::ReaperComplete | Writer::Completion, true) => self.cache = Some(record),
+            (Writer::Completion, true) => self.cache = Some(record),
             // `complete_prepared_transaction` answers `Retry`.
             (Writer::Completion, false) => self.queued = true,
-            (Writer::Add(_) | Writer::ReaperPrepare | Writer::ReaperComplete, false) => {}
+            (Writer::Add(_) | Writer::ReaperPrepare, false) => {}
         }
     }
 
@@ -624,9 +623,6 @@ impl St {
                     self.answer_end(Some(Self::complete_epoch(&prepared)));
                 }
             },
-            // `dispatch_abort_markers` queues a failed fan-out.
-            Owner::Reaper if class.is_some() => self.queued = true,
-            Owner::Reaper => self.reaper_complete(&prepared),
             Owner::Completion => match class.map(fan_out_failure_attempt) {
                 Some(CompletionAttempt::Retry) => self.queued = true,
                 Some(CompletionAttempt::NothingToComplete | CompletionAttempt::Completed) => {}
@@ -679,24 +675,6 @@ impl St {
                 self.answer_end(Some(response_epoch));
             }
             CompletionDecision::Reject(_) => self.answer_end(None),
-        }
-    }
-
-    /// The reaper's `complete_abort`. Its `apply_complete_abort` is
-    /// `apply_completion` to `CompleteAbort`, called here directly.
-    fn reaper_complete(&mut self, prepared: &TxnEntry) {
-        let entry = self.cache_entry();
-        match complete_abort_decision(&entry, prepared) {
-            TransactionReaperCompletionDecision::Proceed => {
-                let mut staged = entry;
-                let identity = completion_producer_identity(&staged);
-                apply_completion(&mut staged, TxnState::CompleteAbort, identity, self.now_ms);
-                self.append(Writer::ReaperComplete, &staged);
-            }
-            TransactionReaperCompletionDecision::AlreadyComplete
-            | TransactionReaperCompletionDecision::RejectMalformed
-            | TransactionReaperCompletionDecision::RejectStaleIdentity
-            | TransactionReaperCompletionDecision::RejectChangedPreparedState => {}
         }
     }
 
@@ -883,7 +861,9 @@ impl CompletionModel {
         let entry = s.cache_entry();
         match reaper_step(&entry, s.now_ms) {
             ReaperStep::Skip => return None,
-            ReaperStep::ResumeAbort => s.start_fan_out(Owner::Reaper, s.cache?),
+            // An abort still outstanding is queued for completion again.
+            ReaperStep::ResumeAbort if s.queued => return None,
+            ReaperStep::ResumeAbort => s.queued = true,
             ReaperStep::PrepareAbort => {
                 let mut staged = entry;
                 apply_prepare_abort(&mut staged, s.now_ms);

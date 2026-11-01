@@ -257,7 +257,7 @@ fn deletion_outcome(
                     tracing::error!(topic = %name, %error, "DeleteTopics guarded submission failed");
                     failure.code(codes::UNKNOWN_SERVER_ERROR)
                 }
-                GuardedFailure::TimedOut | GuardedFailure::NotController => {
+                GuardedFailure::TimedOut | GuardedFailure::NotController { .. } => {
                     failure.code(codes::UNKNOWN_SERVER_ERROR)
                 }
             };

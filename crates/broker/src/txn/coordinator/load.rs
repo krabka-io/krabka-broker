@@ -20,11 +20,12 @@ use {
     crate::{
         blocking::spawn_blocking,
         error::BrokerError,
-        txn::{bootstrap, partitioner::partition_for_tid},
+        txn::{bootstrap, partitioner::partition_for_tid, state::TxnEntry},
     },
     krabka_ids::PartitionIndex,
     krabka_metadata::MetadataImage,
     std::{
+        collections::BTreeMap,
         sync::{Arc, PoisonError, atomic::Ordering},
         time::Duration,
     },
@@ -347,6 +348,10 @@ impl TxnCoordinator {
             );
             return Vec::new();
         };
+        let states = replay
+            .as_ref()
+            .map(|recovered| state_counts(recovered.state.values()))
+            .unwrap_or_default();
         let published = replay.and_then(|recovered| self.install_recovered(recovered));
         match published {
             Ok(prepared) => {
@@ -354,6 +359,7 @@ impl TxnCoordinator {
                 info!(
                     partition = partition.get(),
                     prepared = prepared.len(),
+                    ?states,
                     "loaded __transaction_state partition"
                 );
                 prepared
@@ -423,6 +429,17 @@ impl TxnCoordinator {
         prepared.sort_unstable();
         Ok(prepared)
     }
+}
+
+/// How many of `entries` sit in each state, for the load's log line: a
+/// transaction that a load finds `Ongoing` is the reaper's to abort, and one
+/// it finds `Prepare*` is the completion task's to finish.
+fn state_counts<'a>(entries: impl Iterator<Item = &'a TxnEntry>) -> BTreeMap<&'static str, usize> {
+    let mut counts = BTreeMap::new();
+    for entry in entries {
+        *counts.entry(entry.state.as_str()).or_insert(0) += 1;
+    }
+    counts
 }
 
 #[cfg(test)]

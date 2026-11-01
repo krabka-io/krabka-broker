@@ -59,9 +59,10 @@
 //!   `PersistRetry` shortcut for a partition already in the transaction, and
 //!   the leader's append after it, which refuses a batch below the
 //!   partition's producer epoch (`StaleProducerEpoch`).
-//! - The reaper's sweep re-dispatches a `PrepareAbort` and queues the
-//!   transaction for completion when that fails; `EndTxn`'s inline fan-out is
-//!   the completion task's first attempt.
+//! - The reaper's sweep prepares the abort of a timed-out transaction and
+//!   queues it for completion, and queues an outstanding `PrepareAbort` again;
+//!   it never fans markers out itself. `EndTxn`'s inline fan-out is the
+//!   completion task's first attempt.
 //! - The client learns the entry's epoch once its transaction ended, which
 //!   stands for an `EndTxn` retry or an `InitProducerId`.
 //!
@@ -112,8 +113,8 @@ const MAX_UNIQUE: usize = 4_000_000;
 // turns any change to the reachable set into a failure instead of a silently
 // smaller search that still passes the upper bound. The *generated* count is
 // not pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES_BASIC: usize = 73_076;
-const PINNED_UNIQUE_STATES_WIDE: usize = 390_552;
+const PINNED_UNIQUE_STATES_BASIC: usize = 67_094;
+const PINNED_UNIQUE_STATES_WIDE: usize = 362_541;
 
 const PID: ProducerId = ProducerId(1000);
 /// The Jepsen workload's `transaction.timeout.ms`.
@@ -226,12 +227,6 @@ enum Answer {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Source {
-    Completion,
-    Reaper,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum MdAction {
     /// Client: a `Produce` v12 registers partition `i` with the coordinator.
     Register(usize, Persist),
@@ -241,10 +236,12 @@ enum MdAction {
     Resync,
     /// Background: the leader of partition `i` appends the registered batch.
     Append(usize),
-    /// Background: the reaper prepares the abort of a timed-out transaction.
+    /// Background: a reaper sweep prepares the abort of a timed-out
+    /// transaction, or queues an outstanding one again.
     Reap(Persist),
-    /// Background: one marker fan-out, then the `Complete*` write.
-    Dispatch(Source, [Answer; PARTITIONS], Persist),
+    /// Background: one completion attempt, a marker fan-out and then the
+    /// `Complete*` write.
+    Dispatch([Answer; PARTITIONS], Persist),
     /// Background: the uncommitted record commits.
     LateCommit,
     /// Background: a new coordinator loads the state partition.
@@ -440,9 +437,19 @@ impl MarkerDeliveryModel {
         Some(())
     }
 
+    /// One reaper sweep over the transactional id: `prepare_abort`, then the
+    /// hand-off to the completion task.
     fn reap(s: &mut MdState, how: Persist) -> Option<()> {
         let cache = s.cache?;
         let mut entry = rebuild(cache);
+        if entry.state == TxnState::PrepareAbort {
+            // An abort still outstanding is queued again.
+            if how != Persist::Committed {
+                return None;
+            }
+            s.queued = true;
+            return Some(());
+        }
         // The transaction started at 0 and the sweep runs past its timeout.
         let now_ms = i64::from(TIMEOUT_MS) + 1;
         if !should_abort_idle_txn(entry.state, entry.txn_timeout_ms, entry.start_ms, now_ms) {
@@ -451,7 +458,9 @@ impl MarkerDeliveryModel {
         entry.state = TxnState::PrepareAbort;
         prepare_server_abort_identities_with_fresh(&mut entry, TxnVersion::Verified, None)
             .expect("model epochs never reach the rotation boundary");
-        persist(s, project(&entry), how)?;
+        if persist(s, project(&entry), how)? {
+            s.queued = true;
+        }
         Some(())
     }
 
@@ -555,31 +564,20 @@ impl MarkerDeliveryModel {
         Some(())
     }
 
-    fn dispatch(
-        s: &mut MdState,
-        source: Source,
-        answers: [Answer; PARTITIONS],
-        how: Persist,
-    ) -> Option<()> {
+    fn dispatch(s: &mut MdState, answers: [Answer; PARTITIONS], how: Persist) -> Option<()> {
+        if !s.queued {
+            return None;
+        }
         let cache = s.cache?;
         let prepared = rebuild(cache);
         let Some(PreparedCompletion { marker, complete }) = completion_for(prepared.state) else {
             // The completion task finds nothing to complete and drops the id.
-            if source == Source::Completion
-                && s.queued
-                && answers == [Answer::Reach; PARTITIONS]
-                && how == Persist::Committed
-            {
+            if answers == [Answer::Reach; PARTITIONS] && how == Persist::Committed {
                 s.queued = false;
                 return Some(());
             }
             return None;
         };
-        match source {
-            Source::Completion if !s.queued => return None,
-            Source::Reaper if prepared.state != TxnState::PrepareAbort => return None,
-            Source::Completion | Source::Reaper => {}
-        }
         Self::admit_answers(s, cache.partitions, answers)?;
         let mut fan_out = MarkerFanOut::default();
         let mut retriable = false;
@@ -620,17 +618,10 @@ impl MarkerDeliveryModel {
             if how != Persist::Committed {
                 return None;
             }
-            let stops = classify_marker_failure(&error).stops_fan_out();
-            match source {
-                Source::Completion => {
-                    if stops {
-                        s.queued = false;
-                    } else if retriable && unexpected {
-                        s.witnesses.insert(Witness::RetriedPastUnexpected);
-                    }
-                }
-                // The reaper hands any failed abort to the completion task.
-                Source::Reaper => s.queued = true,
+            if classify_marker_failure(&error).stops_fan_out() {
+                s.queued = false;
+            } else if retriable && unexpected {
+                s.witnesses.insert(Witness::RetriedPastUnexpected);
             }
             return Some(());
         }
@@ -736,11 +727,9 @@ impl Model for MarkerDeliveryModel {
             actions.push(MdAction::EndTxn(true, how));
             actions.push(MdAction::EndTxn(false, how));
             actions.push(MdAction::Reap(how));
-            for source in [Source::Completion, Source::Reaper] {
-                for first in answers {
-                    for second in answers {
-                        actions.push(MdAction::Dispatch(source, [first, second], how));
-                    }
+            for first in answers {
+                for second in answers {
+                    actions.push(MdAction::Dispatch([first, second], how));
                 }
             }
         }
@@ -765,9 +754,7 @@ impl Model for MarkerDeliveryModel {
             MdAction::Resync => Self::resync(&mut s)?,
             MdAction::Append(index) => Self::append(&mut s, index)?,
             MdAction::Reap(how) => Self::reap(&mut s, how)?,
-            MdAction::Dispatch(source, answers, how) => {
-                Self::dispatch(&mut s, source, answers, how)?;
-            }
+            MdAction::Dispatch(answers, how) => Self::dispatch(&mut s, answers, how)?,
             MdAction::LateCommit => {
                 s.durable = s.tail.take()?;
             }

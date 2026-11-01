@@ -13,6 +13,7 @@ use {
         handlers::{
             ApiVersion, RequestContext,
             registration_listeners::{self, ListenerFields},
+            submit_failure::NOT_CONTROLLER_MESSAGE,
         },
     },
     krabka_metadata::{
@@ -34,9 +35,7 @@ pub async fn handle(
 ) -> Result<ControllerRegistrationResponse, BrokerError> {
     let image = broker.controller.current_image();
     if let Some(code) = super::registration_listeners::registration_refusal(broker, &image, ctx) {
-        let message =
-            (code == codes::CLUSTER_AUTHORIZATION_FAILED).then(|| "cluster action denied".into());
-        return Ok(response(code, message));
+        return Ok(refusal_response(code));
     }
     // Kafka's `MetadataVersion.isControllerRegistrationSupported`. Before the
     // bootstrap records commit there is no finalized level, and Kafka's
@@ -113,17 +112,33 @@ pub async fn handle(
     )
 }
 
+/// The answer to a registration that
+/// [`registration_refusal`](super::registration_listeners::registration_refusal)
+/// refused with `code`.
+///
+/// Kafka has no separate check for an inactive controller: its
+/// `ControllerWriteEvent` throws, and the answer carries
+/// [`NOT_CONTROLLER_MESSAGE`], as a failed write does.
+fn refusal_response(code: i16) -> ControllerRegistrationResponse {
+    let message = match code {
+        codes::CLUSTER_AUTHORIZATION_FAILED => Some("cluster action denied".into()),
+        codes::NOT_CONTROLLER => Some(NOT_CONTROLLER_MESSAGE.into()),
+        _ => None,
+    };
+    response(code, message)
+}
+
 /// The answer to a registration whose controller write failed with `error`.
 ///
-/// A controller that is not active answers `NOT_CONTROLLER` with no message,
-/// as Kafka's `ApiError` does for a `NotControllerException`. That includes a
-/// new leader that has not committed its own epoch, which refuses with
-/// [`RaftError::UncommittedTail`]: see
-/// [`submit_failure_code`](crate::handlers::submit_failure_code).
+/// A controller that is not active answers `NOT_CONTROLLER` with
+/// [`NOT_CONTROLLER_MESSAGE`], as `ControllerRegistrationRequest.getErrorResponse`
+/// does, whichever leader it knows. That includes a new leader that has not
+/// committed its own epoch, which refuses with [`RaftError::UncommittedTail`]:
+/// see [`submit_failure_code`](crate::handlers::submit_failure_code).
 fn submit_error_response(error: &RaftError) -> ControllerRegistrationResponse {
     match error {
         RaftError::NotLeader { .. } | RaftError::LeaderUnknown | RaftError::UncommittedTail => {
-            response(codes::NOT_CONTROLLER, None)
+            response(codes::NOT_CONTROLLER, Some(NOT_CONTROLLER_MESSAGE.into()))
         }
         RaftError::Metadata(error) => {
             response(codes::INVALID_REGISTRATION, Some(error.to_string()))
@@ -178,6 +193,30 @@ mod tests {
         krabka_security::ListenerProtocol,
         std::slice,
     };
+
+    /// `Errors.NOT_CONTROLLER`'s default message, spelled out so the test
+    /// does not only compare the constant with itself.
+    const NOT_CONTROLLER_DEFAULT: &str = "This is not the correct controller for this cluster.";
+
+    /// A refused registration answers trunk's text for its code: the
+    /// `NOT_CONTROLLER` of an inactive controller carries the default text
+    /// `ControllerRegistrationRequest.getErrorResponse` writes.
+    #[yare::parameterized(
+        cluster_action_denied = {
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+            response(codes::CLUSTER_AUTHORIZATION_FAILED, Some("cluster action denied".to_owned())),
+        },
+        not_controller = {
+            codes::NOT_CONTROLLER,
+            response(codes::NOT_CONTROLLER, Some(NOT_CONTROLLER_DEFAULT.to_owned())),
+        },
+    )]
+    fn a_refused_registration_answers_kafkas_text(
+        code: i16,
+        expected: ControllerRegistrationResponse,
+    ) {
+        assert2::assert!(refusal_response(code) == expected);
+    }
 
     krabka_macros::wire_codec_helpers! {
         test_context ["controller"];
@@ -260,18 +299,31 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
+    /// Kafka's `ControllerApis.handleControllerRegistration` lets a failed
+    /// write reach `RequestHandlerHelper.handleError`, and
+    /// `ControllerRegistrationRequest.getErrorResponse` writes
+    /// `Errors.forException(e).message()`: `NOT_CONTROLLER`'s default text,
+    /// whichever leader the controller knows.
     #[yare::parameterized(
         not_leader = {
+            RaftError::NotLeader { current_leader: Some(NodeId(2)) },
+            response(codes::NOT_CONTROLLER, Some(NOT_CONTROLLER_DEFAULT.to_owned())),
+        },
+        not_leader_without_hint = {
             RaftError::NotLeader { current_leader: None },
-            response(codes::NOT_CONTROLLER, None),
+            response(codes::NOT_CONTROLLER, Some(NOT_CONTROLLER_DEFAULT.to_owned())),
         },
         leader_unknown = {
             RaftError::LeaderUnknown,
-            response(codes::NOT_CONTROLLER, None),
+            response(codes::NOT_CONTROLLER, Some(NOT_CONTROLLER_DEFAULT.to_owned())),
         },
         uncommitted_tail = {
             RaftError::UncommittedTail,
-            response(codes::NOT_CONTROLLER, None),
+            response(codes::NOT_CONTROLLER, Some(NOT_CONTROLLER_DEFAULT.to_owned())),
+        },
+        uncommitted_tail_without_leader = {
+            RaftError::UncommittedTail,
+            response(codes::NOT_CONTROLLER, Some(NOT_CONTROLLER_DEFAULT.to_owned())),
         },
         metadata_refusal = {
             RaftError::Metadata(krabka_metadata::MetadataError::TopicExists("t".to_owned())),

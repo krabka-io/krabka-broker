@@ -30,7 +30,9 @@
 //! producer can be in flight together. A client whose request outlives its
 //! `request.timeout.ms`, or whose connection drops, sends the batch again with
 //! the same producer id, epoch and sequence over a new connection while the
-//! first copy still waits.
+//! first copy still waits. A request can also go away before it answers: once
+//! the gate passed it, its batch is in the writer's queue, so the writer still
+//! takes it, but nothing commits it.
 //!
 //! Kafka answers the same retry as a duplicate: `UnifiedLog.append` checks the
 //! batch and updates the producer state under the log lock at append time, so
@@ -50,7 +52,8 @@
 //!   way and updated when Kafka would append.
 //! - The requests the broker admitted and has not answered: each waits for
 //!   the writer, or holds the writer's answer and whether the tracker has
-//!   committed it.
+//!   committed it. A request that went away while it waited for the writer
+//!   is kept, marked dropped, until the writer takes it.
 //! - Each client's next sequence, the sends it made of that batch, and
 //!   whether the broker refused it.
 //!
@@ -74,6 +77,11 @@
 //! - `Complete`: the gate resolves, replicated or timed out, and the broker
 //!   answers. A replicated gate acknowledges the batch, and the client moves
 //!   to its next one.
+//! - `Drop`: a request goes away, its connection closed or its handler
+//!   cancelled. One that waits for the writer stays in the writer's queue:
+//!   `Append` still takes it, and then it is gone, with nothing committed or
+//!   answered. One the writer answered goes away before its commit or after
+//!   it, with no answer. The client may then retry.
 //!
 //! Two producers with distinct ids share the partition. The first sends two
 //! batches and the second one. Every batch is sent at most twice.
@@ -92,7 +100,8 @@
 //!   batch appended behind the original; a copy the gate passed that the
 //!   writer answered as a duplicate, once with the other producer's batch
 //!   appended behind the original, which is the shape of Jepsen's `t9-1`;
-//!   and every batch acknowledged.
+//!   a dropped request whose batch the writer still appends; and every batch
+//!   acknowledged.
 //!
 //! # RED regression
 //!
@@ -104,9 +113,9 @@
 //! orchestration back, or a model that stops reaching the failure, fails it:
 //!
 //! - `no_duplicate_append` at depth 4: `Send { producer: 0 }`, `Retry {
-//!   producer: 0 }`, `Append { producer: 0, sequence: 0 }`, `Append {
-//!   producer: 0, sequence: 0 }`. Both sends pass the gate before either
-//!   appends, and the writer appends both.
+//!   producer: 0 }`, then `Append { producer: 0, sequence: 0, dropped: false
+//!   }` twice. Both sends pass the gate before either appends, and the writer
+//!   appends both.
 //! - `decision_matches_kafka` at depth 4, on the same path: the writer
 //!   appends the second copy, and Kafka answers it as a duplicate of
 //!   offset 0.
@@ -132,9 +141,10 @@ const MAX_STATES: usize = 2_000_000;
 // The exact unique-state counts of the exhaustive single-threaded BFS, one per
 // orchestration. A changed count is a changed model: a dropped action, a
 // transition that starts returning `None`, or a field that the derived `Hash`
-// stops reading.
-const PINNED_UNIQUE_STATES: usize = 8_175;
-const PINNED_UNIQUE_STATES_GATE_ONLY: usize = 15_315;
+// stops reading. The counts grew from 8,175 and 15,315 when a request could
+// go away at any step.
+const PINNED_UNIQUE_STATES: usize = 28_998;
+const PINNED_UNIQUE_STATES_GATE_ONLY: usize = 110_892;
 
 /// The producer ids, one per producer index.
 const PRODUCER_IDS: [i64; 2] = [11, 22];
@@ -261,6 +271,10 @@ struct Request {
     /// [`Orchestration::GateOnly`] it commits as the request completes, so
     /// this stays `false`.
     committed: bool,
+    /// Whether the request went away while its batch waited in the writer's
+    /// queue. The writer still takes the batch, and the request then ends
+    /// with nothing committed or answered.
+    dropped: bool,
 }
 
 /// One producer client.
@@ -328,6 +342,8 @@ enum Witness {
     /// The writer answered a copy the gate passed as a duplicate of a batch
     /// that the other producer's batch was appended behind.
     WriterDeduplicatedAfterOtherProducer,
+    /// The writer appended the batch of a request that had gone away.
+    DroppedAppended,
 }
 
 /// The witnesses of one transition.
@@ -369,8 +385,13 @@ enum Action {
     /// classifies it.
     Retry { producer: usize },
     /// The writer takes a batch the gate passed: it appends the batch, or
-    /// answers it as a duplicate of a retained batch.
-    Append { producer: usize, sequence: i32 },
+    /// answers it as a duplicate of a retained batch. `dropped` names the
+    /// request whose batch it is.
+    Append {
+        producer: usize,
+        sequence: i32,
+        dropped: bool,
+    },
     /// The request commits the writer's answer into the tracker. Under
     /// [`Orchestration::GateOnly`], [`Action::Complete`] commits instead.
     Commit {
@@ -385,6 +406,8 @@ enum Action {
         offset: LogOffset,
         gate: Gate,
     },
+    /// The request goes away.
+    Drop(Request),
 }
 
 impl InflightState {
@@ -421,6 +444,7 @@ impl InflightState {
                 sequence,
                 answered: None,
                 committed: false,
+                dropped: false,
             });
             self.inflight.sort_unstable();
             return;
@@ -486,11 +510,10 @@ impl InflightState {
     }
 
     /// The writer takes the batch `sequence` of `producer` that the gate
-    /// passed.
+    /// passed, from the request that `dropped` names.
     fn write(
         &mut self,
-        producer: usize,
-        sequence: i32,
+        (producer, sequence, dropped): (usize, i32, bool),
         orchestration: Orchestration,
     ) -> Option<()> {
         let log_end = LogOffset::try_from(self.log.len()).ok()?;
@@ -498,13 +521,19 @@ impl InflightState {
             Orchestration::WriterLookup => self.logged(producer).duplicate_of(EPOCH, sequence),
             Orchestration::GateOnly => None,
         };
-        let request = self.inflight.iter_mut().find(|request| {
+        let index = self.inflight.iter().position(|request| {
             request.producer == producer
                 && request.sequence == sequence
                 && request.answered.is_none()
+                && request.dropped == dropped
         })?;
-        request.answered = Some(duplicate.unwrap_or(log_end));
-        self.inflight.sort_unstable();
+        if dropped {
+            // Nothing is left to commit or answer.
+            self.inflight.remove(index);
+        } else {
+            self.inflight[index].answered = Some(duplicate.unwrap_or(log_end));
+            self.inflight.sort_unstable();
+        }
         let host = duplicate.map_or(Answer::Append, |offset| Answer::Duplicate {
             sequence,
             offset,
@@ -530,7 +559,26 @@ impl InflightState {
                 epoch: EPOCH,
                 sequence,
             });
+            if dropped {
+                self.witnesses.mark(Witness::DroppedAppended);
+            }
         }
+        Some(())
+    }
+
+    /// `request` goes away. One that waits for the writer stays queued for it,
+    /// marked dropped; any other is gone.
+    fn drop_request(&mut self, request: Request) -> Option<()> {
+        let index = self
+            .inflight
+            .iter()
+            .position(|pending| *pending == request && !pending.dropped)?;
+        if request.answered.is_none() {
+            self.inflight[index].dropped = true;
+        } else {
+            self.inflight.remove(index);
+        }
+        self.inflight.sort_unstable();
         Some(())
     }
 
@@ -556,6 +604,7 @@ impl InflightState {
                     sequence,
                     answered: Some(offset),
                     committed: false,
+                    dropped: false,
                 }
         })?;
         request.committed = true;
@@ -578,6 +627,7 @@ impl InflightState {
             sequence,
             answered: Some(offset),
             committed: orchestration == Orchestration::WriterLookup,
+            dropped: false,
         };
         let index = self
             .inflight
@@ -635,9 +685,17 @@ impl Model for InflightModel {
                 sequence,
                 answered,
                 committed,
+                dropped,
             } = *request;
+            if !dropped {
+                actions.push(Action::Drop(*request));
+            }
             match answered {
-                None => actions.push(Action::Append { producer, sequence }),
+                None => actions.push(Action::Append {
+                    producer,
+                    sequence,
+                    dropped,
+                }),
                 Some(offset) if self.orchestration == Orchestration::WriterLookup && !committed => {
                     actions.push(Action::Commit {
                         producer,
@@ -668,9 +726,11 @@ impl Model for InflightModel {
         match action {
             Action::Send { producer } => s.admit(producer, false),
             Action::Retry { producer } => s.admit(producer, true),
-            Action::Append { producer, sequence } => {
-                s.write(producer, sequence, self.orchestration)?;
-            }
+            Action::Append {
+                producer,
+                sequence,
+                dropped,
+            } => s.write((producer, sequence, dropped), self.orchestration)?,
             Action::Commit {
                 producer,
                 sequence,
@@ -682,6 +742,7 @@ impl Model for InflightModel {
                 offset,
                 gate,
             } => s.complete(producer, sequence, (offset, gate), self.orchestration)?,
+            Action::Drop(request) => s.drop_request(request)?,
         }
         Some(s)
     }
@@ -707,6 +768,9 @@ impl Model for InflightModel {
                         .seen(Witness::GateDeduplicatedAfterOtherProducer)
                 },
             ),
+            Property::sometimes("dropped_request_appends", |_, s: &InflightState| {
+                s.witnesses.seen(Witness::DroppedAppended)
+            }),
             Property::sometimes(
                 "every_batch_acknowledged",
                 |model: &Self, s: &InflightState| {

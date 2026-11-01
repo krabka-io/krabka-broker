@@ -2246,8 +2246,11 @@ provide truthful same-PID rows and keep the entry installed between callbacks.
 Truncation, expiry, new-epoch data, marker publication and physical persistence
 are outside this trace. An initialization identity classification still does not
 prove complete API admission. The submit-only `producer_state_model` does not
-enumerate deferred callback schedules; existing host completion tests separately
-exercise reordered commits and real-marker restart agreement. Neither bounded
+enumerate deferred callback schedules. `producer_state::inflight_model` lets
+commits land after later appends of the same and other producers, and lets a
+request go away before its commit, but only for single-record batches at one
+epoch; existing host completion tests separately exercise reordered commits and
+real-marker restart agreement. Neither bounded
 model checking nor those native cases replaces the unbounded callback induction.
 
 A scoped weakening audit found that removing the explicit rejected-window

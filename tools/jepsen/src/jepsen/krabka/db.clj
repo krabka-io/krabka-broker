@@ -250,9 +250,12 @@
 
   (primaries [_ test]
     ; The controller leader is the one node whose loss makes the quorum elect.
+    ; Every node is asked at once: a paused or cut-off node answers only by
+    ; timing out, and the nemesis waits on this before its next fault.
     (->> (:nodes test)
          shuffle
-         (some (partial controller-leader test))
+         (util/real-pmap (partial controller-leader test))
+         (some identity)
          vector
          (remove nil?)))
 

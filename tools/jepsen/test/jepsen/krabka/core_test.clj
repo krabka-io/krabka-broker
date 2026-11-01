@@ -7,6 +7,10 @@
       -cp tools/jepsen/src:tools/jepsen/test:$(cat target/jepsen/classpath.txt) \\
       clojure.main -m jepsen.krabka.core-test"
   (:require [clojure.test :refer [deftest is are testing run-tests]]
+            [jepsen [db :as jdb]
+                    [generator :as gen]
+                    [random :as rand]]
+            [jepsen.generator.context :as context]
             [jepsen.krabka [client :as client]
                            [core :as core]
                            [db :as db]
@@ -194,6 +198,68 @@
         test (core/krabka-test opts)]
     (is (= #{:clock :kill} (:faults test)))
     (is (db/faketime? test))))
+
+;; Fault schedules
+
+(defn nemesis-ops
+  "The operations a nemesis generator invokes in `secs` simulated seconds, as
+  Jepsen's interpreter would with a nemesis that completes each at once."
+  [generator secs]
+  (let [test  {:concurrency 1 :nodes nodes}
+        limit (long (* secs 1e9))]
+    (loop [ctx (gen/context test), g (gen/nemesis generator), ops []]
+      (let [[op g'] (gen/op g test ctx)]
+        (cond (or (nil? op) (= :pending op) (< limit (:time op)))
+              ops
+
+              ; The interpreter waits for the op's time, then asks again.
+              (< (:time ctx) (:time op))
+              (recur (assoc ctx :time (:time op)) g ops)
+
+              :else
+              (let [time   (:time op)
+                    thread (gen/process->thread ctx (:process op))
+                    ctx    (context/busy-thread ctx time thread)
+                    g'     (gen/update g' test ctx op)
+                    ctx    (context/free-thread ctx time thread)
+                    g'     (gen/update g' test ctx (assoc op :type :info))]
+                (recur ctx g' (conj ops op))))))))
+
+(defn mean-fault-secs
+  "How long, on average, a fault started by `fault` lasts until `heal`."
+  [ops fault heal]
+  (let [spans (->> ops
+                   (reduce (fn [[since spans] {:keys [f time]}]
+                             (cond (and (= fault f) (nil? since)) [time spans]
+                                   (and (= heal f) since)
+                                   [nil (conj spans (- time since))]
+                                   :else [since spans]))
+                           [nil []])
+                   second)]
+    (/ (reduce + spans) (count spans) 1e9)))
+
+(deftest kills-and-pauses-heal-on-their-own-schedules
+  ; Jepsen's DB package picks the kill or the pause schedule at random at each
+  ; step, so a fault waits two steps on average for its heal, and sometimes a
+  ; whole test.
+  (let [interval 15
+        ops      (rand/with-seed 0
+                   (nemesis-ops (:generator
+                                  (core/db-package {:db       (db/db)
+                                                    :faults   #{:kill :pause}
+                                                    :interval interval}))
+                                3600))]
+    (is (<= (mean-fault-secs ops :kill :start) (* 1.25 interval)))
+    (is (<= (mean-fault-secs ops :pause :resume) (* 1.25 interval)))))
+
+(deftest primaries-asks-every-node-at-once
+  (with-redefs [db/controller-leader (fn [_ node]
+                                       (Thread/sleep 1000)
+                                       (when (= "n3" node) "n2"))]
+    (let [start   (System/nanoTime)
+          leaders (jdb/primaries (db/db) {:nodes nodes})]
+      (is (= ["n2"] leaders))
+      (is (< (- (System/nanoTime) start) 3e9)))))
 
 (defn -main
   [& _]

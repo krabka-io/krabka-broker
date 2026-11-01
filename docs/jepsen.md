@@ -99,7 +99,12 @@ writes a JSON summary.
   selected faults only. `--nemesis` selects the faults: `partition` with
   `iptables`, `packet` delay, loss, duplication and reordering with `tc netem`,
   `kill` and `pause` of the broker process, and `clock` bumps, strobes and
-  resets.
+  resets. Kills and pauses each start and heal on a schedule of their own.
+  Jepsen's DB package picks one of the two at random at each step, so a kill
+  of every node could wait out a two-minute test for its restart, leaving the
+  checker a history with no successful operation in it. The nemesis finds the
+  controller leader, for faults on `primaries`, by asking every node at once,
+  so a paused or cut-off node does not hold the next fault back.
 - **Clock.** Jepsen's own clock nemesis steps the system clock, and Docker
   containers share the host's. With `--docker` the harness instead starts each
   broker with libfaketime preloaded, reading its wall-clock offset from

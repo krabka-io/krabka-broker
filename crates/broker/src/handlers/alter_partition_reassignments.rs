@@ -28,10 +28,7 @@ use {
         broker::Broker,
         elr::ElrPublisher,
         error::BrokerError,
-        handlers::{
-            ApiVersion, RequestContext, audit_admin_success, cluster_alter_denied,
-            submit_failure_code,
-        },
+        handlers::{ApiVersion, RequestContext, audit_admin_success, cluster_alter_denied},
     },
     krabka_protocol::owned::{
         alter_partition_reassignments_request::AlterPartitionReassignmentsRequest,
@@ -57,10 +54,10 @@ pub use self::plan::process_one_partition;
 use {
     self::{
         cancel_approval::{ReassignBatch, ReassignEnv, alter_one},
-        response::whole_request_error,
+        response::{not_controller_response, submit_failure_error, whole_request_error},
     },
     crate::{
-        codes::{CLUSTER_AUTHORIZATION_FAILED, COORDINATOR_NOT_AVAILABLE, NONE, POLICY_VIOLATION},
+        codes::{CLUSTER_AUTHORIZATION_FAILED, NONE, POLICY_VIOLATION},
         freeze::resolve::resolve_freeze_mutation,
         handlers::{audit_resource, stamp_unset},
     },
@@ -112,6 +109,7 @@ pub async fn handle(
     ElrPublisher::new(&image).extend(&mut batch.records);
 
     let mut submit_failure = None;
+    let mut not_controller = None;
     if !batch.records.is_empty() {
         match batch.require_audit(broker, ctx).await {
             Ok(()) => {
@@ -120,14 +118,12 @@ pub async fn handle(
                     .submit_change(mem::take(&mut batch.records))
                     .await
                 {
-                    let message = format!("submit failed: {error}");
                     tracing::warn!(%error, "alter-reassignment submit failed");
-                    stamp_unset(
-                        by_topic.values_mut().flatten(),
-                        submit_failure_code(&error, COORDINATOR_NOT_AVAILABLE),
-                        &message,
-                    );
-                    submit_failure = Some(message);
+                    let known_leader = *broker.controller.watch_leader().borrow();
+                    let (code, row_message) = submit_failure_error(&error, known_leader);
+                    stamp_unset(by_topic.values_mut().flatten(), code, &row_message);
+                    not_controller = not_controller_response(&req, &error, known_leader);
+                    submit_failure = Some(format!("submit failed: {error}"));
                 }
             }
             Err(error) => {
@@ -150,6 +146,9 @@ pub async fn handle(
         "AlterPartitionReassignments",
         audited_partitions(&by_topic, &batch.altered),
     );
+    if let Some(response) = not_controller {
+        return Ok(response);
+    }
 
     let responses: Vec<ReassignableTopicResponse> = by_topic
         .into_iter()
