@@ -13,9 +13,12 @@ use {
     bytes::BufMut as _,
     krabka_ids::{Offset, ProducerId},
     krabka_protocol::records::crc32c,
-    krabka_verified::producer_snapshot::{self as kernel, ProducerReloadRange},
+    krabka_verified::{
+        decrement_sequence, increment_sequence,
+        producer_snapshot::{self as kernel, ProducerReloadRange},
+    },
     std::{
-        collections::HashMap,
+        collections::{HashMap, VecDeque},
         fs,
         io::{self, ErrorKind},
         path::{Path, PathBuf},
@@ -104,7 +107,69 @@ impl ProducerSnapshotEntry {
         })
     }
 
-    pub(crate) fn empty(producer_id: ProducerId, producer_epoch: i16) -> Self {
+    /// The retained batch that a client batch repeats, or `None` when it
+    /// repeats none. Kafka's `ProducerStateEntry.findDuplicateBatch`.
+    ///
+    /// `earlier` is what the log holds of the producer's batches before this
+    /// entry's last one, oldest first. A batch repeats a retained batch when
+    /// its epoch is this entry's and its sequence range, from `base_sequence`
+    /// to `base_sequence + last_offset_delta` as sequences wrap, is that
+    /// batch's range. [`Log::find_duplicate_batch`](crate::Log::find_duplicate_batch)
+    /// runs this over the log's own state.
+    #[must_use]
+    pub fn find_duplicate_batch(
+        &self,
+        earlier: impl IntoIterator<Item = ProducerBatchMetadata>,
+        producer_epoch: i16,
+        (base_sequence, last_offset_delta): (i32, i32),
+    ) -> Option<ProducerBatchMetadata> {
+        if base_sequence < 0 || last_offset_delta < 0 || self.producer_epoch != producer_epoch {
+            return None;
+        }
+        let last_sequence = increment_sequence(base_sequence, last_offset_delta);
+        earlier
+            .into_iter()
+            .chain(self.last_batch())
+            .find(|retained| {
+                retained.last_sequence == last_sequence
+                    && decrement_sequence(retained.last_sequence, retained.offset_delta)
+                        == base_sequence
+            })
+    }
+
+    /// Record one data batch that the log appended at `producer_epoch`.
+    /// Kafka's `ProducerStateEntry.addBatch`.
+    ///
+    /// A new epoch clears the earlier batches. Otherwise the batch that was
+    /// last joins them, and the oldest leaves at capacity, so the earlier
+    /// batches and the last one are at most [`NUM_BATCHES_TO_RETAIN`].
+    /// `earlier` is `None` when the log holds no earlier batches for the
+    /// producer, and this leaves it `None` unless a batch joins it.
+    pub fn add_data_batch(
+        &mut self,
+        earlier: &mut Option<VecDeque<ProducerBatchMetadata>>,
+        producer_epoch: i16,
+        batch: ProducerBatchMetadata,
+    ) {
+        if self.producer_epoch != producer_epoch {
+            *earlier = None;
+        } else if let Some(previous) = self.last_batch() {
+            let earlier = earlier.get_or_insert_default();
+            earlier.push_back(previous);
+            if earlier.len() >= NUM_BATCHES_TO_RETAIN {
+                earlier.pop_front();
+            }
+        }
+        self.producer_epoch = producer_epoch;
+        self.last_sequence = batch.last_sequence;
+        self.last_offset = batch.last_offset;
+        self.offset_delta = batch.offset_delta;
+        self.timestamp = batch.timestamp;
+    }
+
+    /// The entry of a producer that has appended nothing yet.
+    #[must_use]
+    pub const fn empty(producer_id: ProducerId, producer_epoch: i16) -> Self {
         Self {
             producer_id,
             producer_epoch,
