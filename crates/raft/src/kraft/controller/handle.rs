@@ -5,7 +5,7 @@
 use {
     super::KraftController,
     crate::{
-        DelegationTokenMutation, RegistrationAdmission, SubmitChangeResult,
+        AdmittedBatch, DelegationTokenMutation, RegistrationAdmission, SubmitChangeResult,
         error::RaftError,
         kraft::{
             event::Event,
@@ -16,9 +16,23 @@ use {
     },
     krabka_metadata::MetadataImage,
     krabka_units::prelude::ByteSize,
-    std::{sync::Arc, time::SystemTime},
-    tokio::sync::{oneshot, watch},
+    std::{
+        sync::Arc,
+        time::{Duration, SystemTime},
+    },
+    tokio::{
+        sync::{oneshot, watch},
+        time::{self, Instant},
+    },
 };
+
+/// How long the leader keeps deciding a broker registration again while the
+/// image moves under it. The broker retries a registration that fails.
+const REGISTRATION_ADMISSION_DEADLINE: Duration = Duration::from_secs(5);
+
+/// How long a refused registration attempt waits for the image to move before
+/// it tries again: an uncommitted tail that changes nothing publishes nothing.
+const REGISTRATION_ADMISSION_POLL: Duration = Duration::from_millis(10);
 
 impl KraftController {
     /// Send the command `make` builds around a fresh reply sender to the
@@ -113,13 +127,17 @@ impl KraftController {
         &self,
         records: Vec<krabka_metadata::MetadataRecord>,
     ) -> Result<SubmitChangeResult, RaftError> {
-        let records = self.admit_registrations(records).await?;
-        self.ask(|reply| Command::SubmitChange {
-            records,
-            expected_image: None,
-            reply,
-        })
-        .await?
+        match self.registration_admission_for(&records) {
+            Some(admission) => self.submit_admitted(admission.as_ref(), records).await,
+            None => {
+                self.ask(|reply| Command::SubmitChange {
+                    records,
+                    expected_image: None,
+                    reply,
+                })
+                .await?
+            }
+        }
     }
 
     /// Install the hook every batch that registers a broker anew passes through
@@ -136,22 +154,71 @@ impl KraftController {
             .map_err(|_| "registration admission already installed")
     }
 
-    /// `records` as the installed [`RegistrationAdmission`] admits them, when
-    /// this node leads and the batch registers a broker anew, and unchanged
-    /// otherwise. A follower forwards the batch as it was submitted, and the
-    /// leader that receives it admits it.
-    async fn admit_registrations(
+    /// The installed [`RegistrationAdmission`], when this node leads and
+    /// `records` register a broker anew. A follower forwards the batch as it
+    /// was submitted, and the leader that receives it admits it.
+    fn registration_admission_for(
         &self,
-        records: Vec<krabka_metadata::MetadataRecord>,
-    ) -> Result<Vec<krabka_metadata::MetadataRecord>, RaftError> {
+        records: &[krabka_metadata::MetadataRecord],
+    ) -> Option<Arc<dyn RegistrationAdmission>> {
         let registers_anew = records.iter().any(|record| {
             matches!(record, krabka_metadata::MetadataRecord::V1BrokerRegistration(registration)
                 if registration.broker_epoch < 0)
         });
         let leads = *self.leader_rx.borrow() == Some(self.me);
-        match self.registration_admission.get() {
-            Some(admission) if registers_anew && leads => admission.admit(records).await,
-            _ => Ok(records),
+        self.registration_admission
+            .get()
+            .filter(|_| registers_anew && leads)
+            .cloned()
+    }
+
+    /// Admit `records` against the published image, and append the answer
+    /// only while that image is still published and nothing appended is
+    /// uncommitted; see [`RegistrationAdmission`]. A refused attempt is decided
+    /// again against the next image until [`REGISTRATION_ADMISSION_DEADLINE`]
+    /// passes, and only the attempt that is not refused runs its
+    /// [`AdmittedBatch::on_accept`].
+    ///
+    /// # Errors
+    /// Returns the admission's error, the submission's, or the refusal of the
+    /// last attempt once the deadline has passed.
+    async fn submit_admitted(
+        &self,
+        admission: &dyn RegistrationAdmission,
+        records: Vec<krabka_metadata::MetadataRecord>,
+    ) -> Result<SubmitChangeResult, RaftError> {
+        let deadline = Instant::now() + REGISTRATION_ADMISSION_DEADLINE;
+        loop {
+            let mut images = self.watch_image();
+            let image = images.borrow_and_update().clone();
+            let AdmittedBatch {
+                records: admitted,
+                on_accept,
+            } = admission.admit(Arc::clone(&image), records.clone()).await?;
+            let result = self
+                .ask(|reply| Command::SubmitChange {
+                    records: admitted,
+                    expected_image: Some(image),
+                    reply,
+                })
+                .await?;
+            if matches!(
+                result,
+                Err(RaftError::StaleMetadataImage | RaftError::UncommittedTail)
+            ) && Instant::now() < deadline
+            {
+                tokio::select! {
+                    changed = images.changed() => {
+                        changed.map_err(|_| RaftError::Shutdown)?;
+                    }
+                    () = time::sleep(REGISTRATION_ADMISSION_POLL) => {}
+                }
+                continue;
+            }
+            if let Some(on_accept) = on_accept {
+                on_accept();
+            }
+            return result;
         }
     }
 

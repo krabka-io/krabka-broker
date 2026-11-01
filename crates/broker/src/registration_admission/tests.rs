@@ -168,7 +168,8 @@ async fn an_unbound_admission_retires_this_nodes_restart_and_refuses_another_bro
     for &node in fenced {
         fence(&mut image, node);
     }
-    let (_images, receiver) = watch::channel(Arc::new(image));
+    let image = Arc::new(image);
+    let (_images, receiver) = watch::channel(Arc::clone(&image));
     let admission = BrokerRegistrationAdmission::new(
         NodeId(this_node),
         receiver,
@@ -176,9 +177,10 @@ async fn an_unbound_admission_retires_this_nodes_restart_and_refuses_another_bro
         BrokerMetrics::new(),
     );
 
-    let answer = RegistrationAdmission::admit(&admission, vec![registration(RESTARTED)]).await;
+    let answer =
+        RegistrationAdmission::admit(&admission, image, vec![registration(RESTARTED)]).await;
 
-    check!(answer.ok() == expected);
+    check!(answer.ok().map(|admitted| admitted.records) == expected);
 }
 
 /// The brokers an admission before bind may elect are the ones a new
