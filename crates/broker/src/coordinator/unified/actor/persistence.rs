@@ -12,6 +12,7 @@ use {
         chrono_now_ms,
         pending_records::{PartitionMetadataWrite, PendingRecords},
         regex_resolution::{Resolutions, apply_regex_result},
+        seed::apply_seed,
     },
     crate::{
         coordinator::{
@@ -335,8 +336,8 @@ pub(super) fn written_classic_state(
         .then(|| replayed_classic_state(state))
 }
 
-/// Leave `written`, from [`written_classic_state`], as the classic respawn
-/// seed of `group`'s next actor. The caller's actor then stops, and the next
+/// Leave `written`, from [`written_classic_state`], as the respawn seed of
+/// `group`'s next actor. The caller's actor then stops, and the next
 /// one serves the group a reload of the log builds, with `group`'s offsets.
 pub(super) fn leave_written_classic_group(
     group: &mut CoordinatorGroup,
@@ -345,12 +346,39 @@ pub(super) fn leave_written_classic_group(
 ) {
     match written {
         Ok(replayed) => {
-            coordinator
-                .leave_classic_respawn_seed(group.respawn_seed(GroupKind::Classic(replayed)));
+            coordinator.leave_respawn_seed(group.respawn_seed(GroupKind::Classic(replayed)));
         }
         Err(error) => tracing::warn!(group_id = %group.group_id, %error,
             "classic actor could not rebuild the group it wrote"),
     }
+}
+
+/// Leave the consumer group that the log holds, with `group`'s offsets, as
+/// the respawn seed of `group`'s next actor, after a write of the group
+/// failed. The caller's actor then stops, and returns its keep-running flag,
+/// `false`.
+///
+/// The next actor takes the membership from the seed cache, which every write
+/// that succeeded updated, so it serves the group as of the last such write:
+/// the group that the log holds when the failed write does not commit. A
+/// failed write that commits after all is only repeated: the next actor
+/// fences an expired member again, or a member heartbeats again. A group that
+/// no write has persisted comes back empty, as a reload builds it.
+///
+/// The committed offsets and the KIP-447 pending marks come from `group`,
+/// because no cache holds them. Without them the next actor would answer an
+/// `OffsetFetch` with no offset, and a `require_stable` one with no
+/// `UNSTABLE_OFFSET_COMMIT`, until the partition loads again.
+pub(super) fn leave_written_consumer_group(
+    group: &mut CoordinatorGroup,
+    coordinator: &GroupCoordinator,
+) -> bool {
+    let mut state = GroupState::new(group.group_id.clone());
+    if let Some(seed) = coordinator.cached_seed(&group.group_id) {
+        apply_seed(&mut state, seed);
+    }
+    coordinator.leave_respawn_seed(group.respawn_seed(GroupKind::Consumer(state)));
+    false
 }
 
 #[krabka_macros::flush_group_records(group [&state.group_id]; encode [pending.to_batch(&state.group_id, now_ms)];)]

@@ -14,7 +14,8 @@ use {
         member_state::{MemberChange, after_member_update, update_subscription},
         pending_records::PendingRecords,
         persistence::{
-            Recorder, flush_classic_metadata, leave_written_classic_group, written_classic_state,
+            Recorder, flush_classic_metadata, leave_written_classic_group,
+            leave_written_consumer_group, written_classic_state,
         },
         regex_resolution::{RegexResolution, maybe_update_regular_expressions},
         waiters::{
@@ -198,15 +199,15 @@ pub(super) async fn handle_classic_join_message(
         }
         return true;
     }
-    classic_join_hosted(group, services, HostedJoin {
+    let hosted = classic_join_hosted(group, services, HostedJoin {
         request: &request,
         version,
         client,
         regex_resolver,
         reply,
     })
-    .await
-    .is_ok()
+    .await;
+    hosted.is_ok() || leave_written_consumer_group(group, services.coordinator)
 }
 
 /// A classic `JoinGroup` for a consumer group, with the request context that

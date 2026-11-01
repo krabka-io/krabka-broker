@@ -47,3 +47,8 @@ Feature: OffsetCommit fences requests against Kafka group rules
     When the consumer commits its offset through the group coordinator
     Then the complete commit response has partition error 0 and group existence is true
 
+  Scenario: Group kind membership generation and protocol version determine commit fencing: state=a consumer group whose actor stopped, version=9, member=empty (9)
+    Given a ready offset coordinator and a group that is a consumer group whose actor stopped
+    And an OffsetCommit version 9 request uses member empty and generation -1
+    When the consumer commits its offset through the group coordinator
+    Then the complete commit response has partition error 0 and group existence is true
