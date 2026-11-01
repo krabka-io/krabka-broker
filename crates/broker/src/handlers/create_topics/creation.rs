@@ -25,7 +25,7 @@ use {
         config_keys::{self, resolve_preferred_leader_site},
         handlers::{
             offline_replicas::unavailable_brokers,
-            partition_materialization::PartitionMaterialization,
+            partition_materialization::PartitionMaterialization, submit_failure_code,
         },
         quota::ControllerMutationQuota,
         site_placement::PlacementRng,
@@ -388,9 +388,16 @@ fn submit_failure_result(name: String, error: &RaftError) -> CreatableTopicResul
         RaftError::NotLeader { .. } | RaftError::LeaderUnknown => {
             topic_error_result(name, codes::NOT_CONTROLLER, None)
         }
+        // A new controller leader refuses the write with `UncommittedTail`
+        // until it commits its own epoch, and `submit_failure_code` answers
+        // that refusal `NOT_CONTROLLER`, as Kafka's inactive controller does.
         error => {
             tracing::error!(topic = %name, %error, "CreateTopics submit_change failed");
-            topic_error_result(name, codes::UNKNOWN_SERVER_ERROR, None)
+            topic_error_result(
+                name,
+                submit_failure_code(error, codes::UNKNOWN_SERVER_ERROR),
+                None,
+            )
         }
     }
 }
