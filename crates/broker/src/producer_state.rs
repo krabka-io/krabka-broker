@@ -71,17 +71,16 @@ impl ProducerState {
     /// same epoch, completions merge by physical offset into the latest five
     /// distinct batches; a repeated completion keeps the existing metadata.
     /// Earlier completions never replace the latest sequence, timestamp or
-    /// transaction state. `AppendCommit::record` defers this
-    /// call until the `acks=all` high-watermark gate for its own append
-    /// resolves, so it can run long after the append itself, on a task
+    /// transaction state. `AppendCommit::record` runs this call once the
+    /// writer answers the append, on the request's own task, which is
     /// unrelated to the writer's serial handling of later messages on the
     /// same partition. [`Self::mirror_log_entries`] mirrors a transaction
-    /// marker's epoch bump as soon as the marker is durable, with no such
-    /// wait. A commit for a batch from before that marker can therefore
-    /// resolve after the mirror already ran, and an unconditional overwrite
-    /// would put the pre-marker epoch back, undoing the fence. This is
-    /// Kafka's own invariant: `ProducerAppendInfo.checkProducerEpoch` never
-    /// lets a producer's tracked epoch move backward.
+    /// marker's epoch bump from the writer. A commit for a batch from before
+    /// that marker can therefore resolve after the mirror already ran, and an
+    /// unconditional overwrite would put the pre-marker epoch back, undoing
+    /// the fence. This is Kafka's own invariant:
+    /// `ProducerAppendInfo.checkProducerEpoch` never lets a producer's
+    /// tracked epoch move backward.
     ///
     /// `append` is the batch's base offset, its max timestamp and whether it
     /// is transactional. A transactional batch opens a transaction when none

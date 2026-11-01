@@ -1,6 +1,6 @@
 //! The append itself: the hand-off to the partition's writer actor, the
-//! `acks=-1` high-watermark gate, and the idempotent-producer commit that
-//! follows a successful append.
+//! idempotent-producer commit that follows a successful append, and the
+//! `acks=-1` high-watermark gate.
 //!
 //! The two halves are separate on purpose. Kafka's `ReplicaManager
 //! .appendRecords` appends every partition of a request to the local log and
@@ -75,9 +75,6 @@ pub(super) enum AppendOutcome {
         response: PartitionProduceResponse,
         /// The exclusive frontier the high watermark has to reach.
         target: Offset,
-        /// The idempotent-producer commit this append owes once the gate
-        /// resolves, or `None` for a non-idempotent producer.
-        commit: Option<AppendCommit>,
     },
 }
 
@@ -87,14 +84,16 @@ pub(super) enum AppendOutcome {
 /// all against a single deadline, which is what Kafka's one `DelayedProduce`
 /// per request does. Everything the finish needs is owned, because the wait
 /// outlives the per-partition pipeline that created it: the partition handle
-/// is an `Arc`, the commit carries the topic name as the `Arc<str>` the metric
-/// labels already share, and the metadata-transition barrier is an owned
-/// guard.
+/// is an `Arc`, and the metadata-transition barrier is an owned guard.
+///
+/// It owes no idempotent-producer commit. The append recorded its batch in the
+/// tracker before the wait began, as Kafka's `UnifiedLog.append` updates the
+/// producer state with the append, so a retry that arrives during the wait
+/// answers as a duplicate of it.
 pub(super) struct PendingAck {
     response: PartitionProduceResponse,
     partition: Arc<Partition>,
     target: Offset,
-    commit: Option<AppendCommit>,
     /// The transition barrier this produce took at the leadership gate. A
     /// diskless promotion takes the write side while it hydrates the canonical
     /// log and rebuilds producer state, so holding the read side here is what
@@ -111,20 +110,18 @@ impl PendingAck {
         response: PartitionProduceResponse,
         partition: Arc<Partition>,
         target: Offset,
-        commit: Option<AppendCommit>,
         transition: ProduceTransition,
     ) -> Self {
         Self {
             response,
             partition,
             target,
-            commit,
             transition,
         }
     }
 
     /// Observe committed leadership independently of the transition barrier,
-    /// which this acknowledgement keeps locked until its producer state commits.
+    /// which this acknowledgement keeps locked until its row is decided.
     pub(super) fn leadership_changed(
         &self,
         mut images: watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
@@ -167,10 +164,7 @@ impl PendingAck {
     /// completion, or the error code of a partition that is gone or was
     /// replaced by a recreated topic, as Kafka's `DelayedProduce` answers
     /// through `ReplicaManager.getPartitionOrError`. That error is the row's
-    /// code; otherwise the code is [`ack_completion_code`]'s. Every path
-    /// commits afterwards: the append is durable on the leader, so the
-    /// idempotent tracker must advance either way, and a retry is then
-    /// recognized as a duplicate rather than as out-of-order.
+    /// code; otherwise the code is [`ack_completion_code`]'s.
     pub(super) async fn finish(
         mut self,
         deadline: Instant,
@@ -198,9 +192,6 @@ impl PendingAck {
         // The row's log start offset is read after the gate on both paths, the
         // way it was when the gate ran inline.
         self.response.log_start_offset = stamp_log_start(&self.partition);
-        if let Some(commit) = &self.commit {
-            commit.record(&self.partition, self.target).await;
-        }
         self.response
     }
 }
@@ -267,8 +258,7 @@ pub(super) async fn dispatch_prepared(
         context.log_dir_status,
         context.producer_state,
     )
-    .await
-    .err();
+    .await;
     if let Some(job) = queued
         && context
             .partition
@@ -303,8 +293,7 @@ pub(super) async fn dispatch_prepared(
 }
 
 /// The idempotent-producer dedup identity and the fields a
-/// `producer_state.commit` record needs, owned so it can outlive the pipeline
-/// that built it and travel into a [`PendingAck`].
+/// `producer_state.commit` record needs.
 ///
 /// The struct groups the eight positional `commit` arguments into one value,
 /// so the commit call exists in exactly one place, [`AppendCommit::record`].
@@ -327,21 +316,23 @@ impl AppendCommit {
     /// Record the idempotent-producer commit for an append the log still
     /// holds.
     ///
+    /// It runs as soon as the writer answers, before any `acks=all` wait, so
+    /// a retry that arrives while the append waits for the high watermark
+    /// answers as a duplicate. A duplicate the writer found commits too: the
+    /// commit merges by offset and is idempotent, and it fills in a batch
+    /// whose first request ended before it committed.
+    ///
     /// Only record it if the appended batch is still on the leader's log. A
-    /// failover-rejoin divergence truncation can remove the batch while the
-    /// acks=all HW gate is waiting (the gate then times out); recording the
-    /// truncated batch would make a retry dedup against an offset the log no
-    /// longer holds, and the retry's HW gate would wait forever for a high
-    /// watermark that can never reach the vanished offset. Skipping the commit
-    /// lets the retry re-append fresh instead.
+    /// truncation that removed it would make a retry dedup against an offset
+    /// the log no longer holds, and the retry's HW gate would wait forever for
+    /// a high watermark that can never reach the vanished offset. Skipping the
+    /// commit lets the retry re-append fresh instead.
     ///
     /// This is a best-effort check: a truncation racing in between this read
     /// and the commit below could still record a stale entry. That is
     /// tolerated because the replicator calls `ProducerState::truncate` after
     /// *every* log truncation, so any entry stranded by such a race is dropped
-    /// by the next truncation/failover. Do not "harden" this by removing the
-    /// check — the check is what avoids recording the common
-    /// (already-truncated) case.
+    /// by the next truncation/failover.
     async fn record(&self, part: &Partition, target: Offset) {
         if self.pid < 0 {
             return;
@@ -418,14 +409,15 @@ fn failed_append_log_start(error_code: i16, part: &Partition) -> i64 {
 /// then either finishes the row outright or hands the caller the
 /// high-watermark wait that still stands between the append and its ack.
 ///
-/// The behavior per path:
-///   * `acks != -1`: NONE, then commit, all here;
-///   * `acks == -1`: [`AppendOutcome::AwaitDurability`], and
-///     [`PendingAck::finish`] decides the code and commits after the gate.
+/// It commits the batch to the idempotent-producer tracker first, on every
+/// path, then:
+///   * `acks != -1`: answers NONE here;
+///   * `acks == -1`: hands back [`AppendOutcome::AwaitDurability`], and
+///     [`PendingAck::finish`] decides the code after the gate.
 ///
-/// Note that the commit happens on *both* the success and the timeout
-/// `acks=-1` sub-paths. Whichever half runs it, it runs once the `error_code`
-/// and the `base_offset` are decided.
+/// The writer answers a batch that repeats a retained one with that batch's
+/// offset and timestamp, and this function answers it the same way as a
+/// fresh append, as Kafka answers a duplicate.
 ///
 /// The high-watermark gate is the remote phase of the request: the append is
 /// already durable on this broker, and everything the gate waits for is a
@@ -468,16 +460,15 @@ async fn finalize_ack(
     // batch, so what the response reports and what the records carry are one
     // number read once.
     out.log_append_time_ms = log_append_time_ms.unwrap_or(NO_LOG_APPEND_TIME);
+    commit.record(part, target).await;
     if context.acks == ACKS_ALL {
         return AppendOutcome::AwaitDurability {
             response: out,
             target,
-            commit: Some(commit),
         };
     }
     out.error_code = codes::NONE;
     out.log_start_offset = stamp_log_start(part);
-    commit.record(part, target).await;
     AppendOutcome::Answered(out)
 }
 
@@ -523,7 +514,7 @@ pub(super) fn build_produce_data(prepared: PreparedBatch, leader_epoch: i32) -> 
 #[cfg(test)]
 mod tests {
     use {
-        super::{AppendCommit, PendingAck},
+        super::PendingAck,
         crate::{
             codes,
             error::BrokerError,
@@ -612,7 +603,6 @@ mod tests {
                 },
                 Arc::clone(partition),
                 Offset(produce_ack.target),
-                None,
                 partition.lock_produce_transition().await,
             );
             produce_ack.admitted_topic = pending.transition.topic_id;
@@ -660,10 +650,7 @@ mod tests {
     #[tokio::test]
     async fn leadership_change_finishes_old_acks_before_publishing_the_new_target() {
         use {
-            crate::{
-                handlers::produce::test_support::image_with_topic,
-                producer_state::{Decision, SequenceContext},
-            },
+            crate::handlers::produce::test_support::image_with_topic,
             krabka_metadata::MetadataRecord,
             krabka_protocol::records::{Record, RecordBatch},
             std::sync::atomic::Ordering,
@@ -699,7 +686,6 @@ mod tests {
                     ..Default::default()
                 })
                 .unwrap();
-            let producer_state = Arc::new(ProducerState::new());
             let (images, receiver) = watch::channel(Arc::new(image.clone()));
             let waiting = {
                 let pending = PendingAck::new(
@@ -710,18 +696,6 @@ mod tests {
                     },
                     Arc::clone(&partition),
                     Offset(1),
-                    Some(AppendCommit {
-                        producer_state: Arc::clone(&producer_state),
-                        topic: "t".into(),
-                        partition: 0,
-                        pid: 42,
-                        epoch: 0,
-                        base_seq: 0,
-                        last_offset_delta: 0,
-                        max_timestamp: 0,
-                        is_transactional: false,
-                        base_offset: Offset(0),
-                    }),
                     partition.lock_produce_transition().await,
                 );
                 let changed = pending.leadership_changed(receiver);
@@ -773,19 +747,6 @@ mod tests {
             let row = timeout(Duration::from_secs(1), waiting).await.unwrap();
             assert!(row.error_code == codes::NOT_LEADER_OR_FOLLOWER);
             assert!(partition.high_watermark().await == Offset(i64::from(already_durable)));
-            assert!(
-                producer_state
-                    .check_batch(
-                        "t",
-                        krabka_ids::PartitionIndex(0),
-                        SequenceContext::RELEASED,
-                        (42, 0),
-                        (0, 0),
-                    )
-                    .await
-                    .decision
-                    == Decision::Duplicate { base_offset: 0 }
-            );
             timeout(Duration::from_secs(1), promotion).await.unwrap();
             assert!(partition.current_leader_epoch.load(Ordering::Acquire) == next_epoch);
             assert!(partition.lock_produce_transition().await.topic_id == Some(next_topic_id));

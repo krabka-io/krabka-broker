@@ -541,8 +541,8 @@ pub async fn replicate_inline(
 }
 
 /// Appends `job` on the calling task when `partition`'s writer is idle, as
-/// the writer itself would have, and hands it back when the writer is busy
-/// or has messages waiting, for the caller to queue.
+/// the writer itself would have, and hands it back, as `Some`, when the
+/// writer is busy or has messages waiting, for the caller to queue.
 ///
 /// The job's acknowledgement is usually answered before this returns, so the
 /// caller finds it ready instead of waiting on the writer task. What follows
@@ -551,14 +551,15 @@ pub async fn replicate_inline(
 /// the append goes away. So it is polled here once, which finishes it when
 /// nothing it locks is contended, and handed to a task of its own otherwise,
 /// never dropped half done.
+#[must_use = "a job handed back was not appended and must be queued"]
 pub async fn produce_inline(
     partition: &Partition,
     job: ProduceJob,
     log_dir_status: &LogDirRegistry,
     producer_state: &Arc<ProducerState>,
-) -> Result<(), ProduceJob> {
+) -> Option<ProduceJob> {
     let Some(busy) = partition.writer_gate.try_inline(partition) else {
-        return Err(job);
+        return Some(job);
     };
     let mut busy = Some(busy);
     let appended = append_jobs(
@@ -602,7 +603,7 @@ pub async fn produce_inline(
     }
     after_inline_mutation(partition);
     drop(busy);
-    Ok(())
+    None
 }
 
 /// What the writer does after every message, and what it would have computed

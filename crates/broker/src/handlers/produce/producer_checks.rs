@@ -9,7 +9,7 @@ use {
         broker::Broker,
         codes,
         error::BrokerError,
-        partition::{Partition, ProducerAppendCheck},
+        partition::{AppendOrigin, Partition, ProducerAppendCheck},
         producer_state::{
             Checked, Decision, ProducerState, SequenceContext, producer_id_expiration,
         },
@@ -191,9 +191,13 @@ pub(super) async fn verify_transactional_produce(
         is_transactional,
         is_control: batch.attributes.is_control_batch(),
     };
+    let origin = AppendOrigin::Client {
+        last_offset_delta: batch.last_offset_delta,
+    };
     let unverified = ProducerAppendCheck {
         batch: transactional_batch,
         guard: krabka_log::VerificationGuard::SENTINEL,
+        origin,
     };
     if !is_transactional {
         return Ok(Verification::Settled(Some(unverified)));
@@ -218,6 +222,7 @@ pub(super) async fn verify_transactional_produce(
     let check = ProducerAppendCheck {
         batch: transactional_batch,
         guard,
+        origin,
     };
     if skips_coordinator_verification(supports_epoch_bump, request.verification_enabled) {
         // `transaction.partition.verification.enable=false`: Kafka asks nobody,
@@ -900,7 +905,7 @@ mod tests {
         /// A non-idempotent batch holds offsets 0..=2.
         HasRecords,
         /// Producer `PRODUCER_ID` appended at sequence 0 and its entry then
-        /// expired.
+        /// expired, from the tracker and from the log.
         EntryExpired,
     }
 
@@ -998,6 +1003,14 @@ mod tests {
                             .await
                             == 1
                     );
+                    // The broker's expiry sweep removes the producer from the
+                    // partition log too, as Kafka's
+                    // `ProducerStateManager.removeExpiredProducers` does.
+                    part_handle
+                        .log
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .remove_expired_producers(i64::MAX, 0);
                 }
             }
 
