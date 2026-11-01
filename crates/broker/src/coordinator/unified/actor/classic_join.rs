@@ -989,12 +989,12 @@ mod tests {
     /// A static rejoin whose write times out with the record in the log
     /// answers the append error, and the actor stops: the record may still
     /// commit, and the reverted replacement in memory would then disagree
-    /// with the log. An `OffsetFetch` respawns the group: the next actor holds
-    /// the group that a reload of the log builds, the replacement under the
-    /// generation, the subscription and the assignment it was written with.
-    /// It serves only the committed offset, and takes over the commit still
-    /// in flight: it answers that commit's timeout, and publishes its offset
-    /// once the high watermark passes it.
+    /// with the log. The stopped actor is replaced at once, with no request to
+    /// prompt it: the next actor holds the group that a reload of the log
+    /// builds, the replacement under the generation, the subscription and the
+    /// assignment it was written with. It serves only the committed offset,
+    /// and takes over the commit still in flight: it answers that commit's
+    /// timeout, and publishes its offset once the high watermark passes it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_static_rejoin_whose_write_may_still_commit_respawns_the_persisted_group() {
         let rejoin = uncertain_static_rejoin().await;
@@ -1002,10 +1002,16 @@ mod tests {
         let replacement = persisted.members[0].member_id.clone();
         check!(replacement.starts_with("instance-1-"));
 
-        let respawned = rejoin
-            .coord
-            .live_or_respawned("g")
-            .expect("an offset fetch respawns the stopped group");
+        let respawned = time::timeout(PROMPT, async {
+            loop {
+                match rejoin.coord.find("g") {
+                    Some(handle) if !handle.tx.is_closed() => return handle,
+                    _ => task::yield_now().await,
+                }
+            }
+        })
+        .await
+        .expect("the stopped group is respawned at once");
 
         check!(
             rpc::classic_inspect(&respawned).await

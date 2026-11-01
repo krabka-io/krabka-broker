@@ -490,6 +490,13 @@ async fn run_actor(
     // A sender can enqueue using a permit reserved before closure. Drain those
     // sends too, dropping their replies, so callers cannot wait on a dead actor.
     rx.close();
+    // A classic actor that left a respawn seed is replaced at once, so every
+    // lookup of the group (a fetch, a transaction marker, a topic deletion, a
+    // type conversion) finds the hydrated group, and the commits it handed
+    // over keep being driven, without waiting for another request.
+    if coordinator.holds_classic_respawn_seed(&group.group_id) {
+        let _ = coordinator.get_or_create_classic(&group.group_id);
+    }
     while rx.recv().await.is_some() {}
     group
 }
