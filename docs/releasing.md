@@ -122,6 +122,14 @@ git push origin v0.5.2
 Never move or delete a tag that is pushed. The signed image digest and the
 attestations point at it. Release a new patch version instead.
 
+When the full run fails and the fix needs a new commit, do not tag the release
+commit. Prepare the next patch version instead, and in the same pull request
+fold the untagged version's `CHANGELOG.md` entry into the new one: delete its
+heading and its link definition, and say in the new entry that the version
+number was never tagged. Every heading in `CHANGELOG.md` names a pushed tag.
+The nightly `external links` lane checks every link definition, and fails on
+one whose tag does not exist.
+
 ## 4. Check the result
 
 Watch the `release` workflow. Its `verify` job runs before anything is built or
