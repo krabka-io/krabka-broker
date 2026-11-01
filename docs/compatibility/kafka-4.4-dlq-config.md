@@ -68,3 +68,15 @@ invalid booleans, both precedence layers and resets, metadata replay, and the
 existing DLQ prefix, automatic-creation and feature-gate paths. Metadata replay
 is not a full Kafka-to-Krabka migration or a full released-4.4 interoperability
 suite.
+
+Focused Krabka checks on this change:
+
+- Dynamic broker config unit suite: 44 passed.
+- DLQ-related unit suite: 58 passed, including prefix enforcement, missing-topic
+  creation policy, dynamic settings replay and reset.
+- Describe-config resource suite: 59 passed, including full DLQ source/synonym
+  chains and built-in fallback after reset.
+- New wire alter/describe/invalid-value/reset/restart test: 1 passed. The process
+  restart uses the same on-disk metadata directory and the `Rejoin` boot mode.
+- Share-consume dead-letter-queue integration scenarios: 9 passed, including
+  automatic topic creation and the below-`share.version=2` gate.

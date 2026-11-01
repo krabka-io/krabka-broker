@@ -21,7 +21,7 @@ use {
         wire::HeaderEncoding,
     },
     assert2::assert,
-    krabka_broker::codes,
+    krabka_broker::{api_catalog::UnstableApiVersions, codes},
     krabka_protocol::owned::{
         describe_configs_request::DescribeConfigsRequest,
         describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResponse},
@@ -647,8 +647,7 @@ async fn creation_rate_holds_the_acceptor_without_restart(dynamic: DynamicBroker
 #[tokio::test]
 async fn dlq_configs_alter_describe_reset_and_reject_invalid_values() {
     let (broker, directory, addr) = start_plaintext_configured(|config| {
-        config.features.unstable_api_versions =
-            krabka_broker::api_catalog::UnstableApiVersions::Enabled;
+        config.features.unstable_api_versions = UnstableApiVersions::Enabled;
     })
     .await;
     let local = broker.node_id().to_string();
@@ -710,7 +709,7 @@ async fn dlq_configs_alter_describe_reset_and_reject_invalid_values() {
         )])
         .call()
         .await;
-    assert!(scalar_append.error_code == codes::INVALID_REQUEST);
+    assert!(scalar_append.error_code == codes::INVALID_CONFIG);
     let persisted = alter_broker()
         .addr(addr)
         .resource_name(String::new())
@@ -732,8 +731,7 @@ async fn dlq_configs_alter_describe_reset_and_reject_invalid_values() {
     broker.shutdown().await;
     let mut config = support::heartbeat_config(directory.path());
     config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
-    config.features.unstable_api_versions =
-        krabka_broker::api_catalog::UnstableApiVersions::Enabled;
+    config.features.unstable_api_versions = UnstableApiVersions::Enabled;
     let restarted = krabka_broker::Broker::start(config)
         .await
         .expect("restart broker");
