@@ -21,7 +21,7 @@ use {
         codes,
         coordinator::bootstrap::OFFSETS_TOPIC,
         error::BrokerError,
-        partition::ProducerAppendCheck,
+        partition::{AppendOrigin, ProducerAppendCheck},
         producer_state::producer_id_expiration,
         time_util::now_ms,
         txn::{
@@ -110,7 +110,11 @@ pub(super) async fn verify_producer(
                 &BrokerError::TransactionAppend(refusal),
             ))
         })?;
-    let check = ProducerAppendCheck { batch, guard };
+    let check = ProducerAppendCheck {
+        batch,
+        guard,
+        origin: AppendOrigin::Coordinator,
+    };
     if guard == VerificationGuard::SENTINEL {
         return Ok(check);
     }

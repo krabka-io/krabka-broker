@@ -71,8 +71,8 @@ pub use self::{
     commit_wait::Uncommitted,
     leadership::ReplicationTarget,
     messages::{
-        AppendedBatch, EncodedBatch, ProduceData, ProduceJob, ProducerAppendCheck, ReplicatedBatch,
-        SwapOutcome, WriterMessage, verbatim_of,
+        AppendOrigin, AppendedBatch, EncodedBatch, ProduceData, ProduceJob, ProducerAppendCheck,
+        ReplicatedBatch, SwapOutcome, WriterMessage, verbatim_of,
     },
 };
 
