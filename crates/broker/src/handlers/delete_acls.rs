@@ -192,7 +192,8 @@ pub async fn handle(
         && let Err(e) = broker.controller.submit_change(to_submit).await
     {
         tracing::warn!(error = %e, "delete-acls submit failed");
-        apply_submit_error(&mut filter_results, &e);
+        let known_leader = *broker.controller.watch_leader().borrow();
+        apply_submit_error(&mut filter_results, &e, known_leader);
     }
 
     // Audit: emit one AdminOperation record for successfully-deleted ACLs.

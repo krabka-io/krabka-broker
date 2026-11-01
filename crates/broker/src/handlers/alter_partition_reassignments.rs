@@ -54,7 +54,7 @@ pub use self::plan::process_one_partition;
 use {
     self::{
         cancel_approval::{ReassignBatch, ReassignEnv, alter_one},
-        response::{submit_failure_error, whole_request_error},
+        response::{not_controller_response, submit_failure_error, whole_request_error},
     },
     crate::{
         codes::{CLUSTER_AUTHORIZATION_FAILED, NONE, POLICY_VIOLATION},
@@ -109,6 +109,7 @@ pub async fn handle(
     ElrPublisher::new(&image).extend(&mut batch.records);
 
     let mut submit_failure = None;
+    let mut not_controller = None;
     if !batch.records.is_empty() {
         match batch.require_audit(broker, ctx).await {
             Ok(()) => {
@@ -121,6 +122,7 @@ pub async fn handle(
                     let known_leader = *broker.controller.watch_leader().borrow();
                     let (code, row_message) = submit_failure_error(&error, known_leader);
                     stamp_unset(by_topic.values_mut().flatten(), code, &row_message);
+                    not_controller = not_controller_response(&req, &error, known_leader);
                     submit_failure = Some(format!("submit failed: {error}"));
                 }
             }
@@ -144,6 +146,9 @@ pub async fn handle(
         "AlterPartitionReassignments",
         audited_partitions(&by_topic, &batch.altered),
     );
+    if let Some(response) = not_controller {
+        return Ok(response);
+    }
 
     let responses: Vec<ReassignableTopicResponse> = by_topic
         .into_iter()
