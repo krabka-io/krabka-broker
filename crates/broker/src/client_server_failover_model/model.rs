@@ -10,7 +10,7 @@ use {
             BASE_OFFSET, BASE_SEQUENCE, INITIAL_LEADER, MAX_HWM, MAX_LOG_LEN,
             MAX_METADATA_REFRESHES, MAX_SEND_ATTEMPTS, NB,
         },
-        produce::SendKind,
+        produce::{Dedup, SendKind},
         state::{Action, BatchState, FailoverState, ProduceResult, RequestOutcome},
         witness::{WITNESS_FAILOVER, Witnesses},
     },
@@ -18,7 +18,9 @@ use {
 };
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct ClientServerFailoverModel;
+pub struct ClientServerFailoverModel {
+    pub dedup: Dedup,
+}
 
 impl Model for ClientServerFailoverModel {
     type Action = Action;
@@ -26,8 +28,10 @@ impl Model for ClientServerFailoverModel {
 
     krabka_macros::model_transition!(last, action, s; {
             match action {
-                Action::ClientSend(outcome) => last.apply_client_send(SendKind::Send, outcome),
-                Action::ClientRetry(outcome) => last.apply_client_send(SendKind::Retry, outcome),
+                Action::ClientSend(outcome) => last.apply_client_send(self.dedup, (SendKind::Send, outcome)),
+                Action::ClientRetry(outcome) => {
+                    last.apply_client_send(self.dedup, (SendKind::Retry, outcome))
+                }
                 Action::Replicate(follower) => {
                     if follower == s.leader || !s.live(s.leader) || !s.live(follower) {
                         return None;
@@ -128,7 +132,7 @@ impl Model for ClientServerFailoverModel {
             )
         {
             if routed {
-                if s.can_try_duplicate() {
+                if s.can_try_duplicate() && self.dedup == Dedup::Checked {
                     actions.push(Action::ClientRetry(RequestOutcome::Duplicate));
                 } else {
                     actions.push(Action::ClientRetry(RequestOutcome::AppendedUnacked));

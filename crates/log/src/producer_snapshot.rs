@@ -13,9 +13,12 @@ use {
     bytes::BufMut as _,
     krabka_ids::{Offset, ProducerId},
     krabka_protocol::records::crc32c,
-    krabka_verified::producer_snapshot::{self as kernel, ProducerReloadRange},
+    krabka_verified::{
+        decrement_sequence, increment_sequence,
+        producer_snapshot::{self as kernel, ProducerReloadRange},
+    },
     std::{
-        collections::HashMap,
+        collections::{HashMap, VecDeque},
         fs,
         io::{self, ErrorKind},
         path::{Path, PathBuf},
@@ -44,7 +47,7 @@ pub struct SnapshotFile {
 }
 
 /// Durable producer metadata stored in Kafka's `.snapshot` sidecar format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProducerSnapshotEntry {
     pub producer_id: ProducerId,
     pub producer_epoch: i16,
@@ -61,7 +64,7 @@ pub struct ProducerSnapshotEntry {
 pub const NUM_BATCHES_TO_RETAIN: usize = 5;
 
 /// One data batch a producer appended: Kafka's `BatchMetadata`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProducerBatchMetadata {
     pub last_sequence: i32,
     pub last_offset: Offset,
@@ -102,6 +105,70 @@ impl ProducerSnapshotEntry {
             offset_delta: self.offset_delta,
             timestamp: self.timestamp,
         })
+    }
+
+    /// The retained batch that a client batch repeats, or `None` when it
+    /// repeats none. Kafka's `ProducerStateEntry.findDuplicateBatch`.
+    ///
+    /// `earlier` holds the producer's batches before its last one, oldest
+    /// first. A batch repeats a retained batch when `producer_epoch` is the
+    /// entry's epoch and its sequence range, from `base_sequence` to
+    /// `base_sequence + last_offset_delta` as sequences wrap, is that batch's
+    /// range.
+    #[must_use]
+    pub fn find_duplicate_batch<'a>(
+        &self,
+        earlier: impl IntoIterator<Item = &'a ProducerBatchMetadata>,
+        producer_epoch: i16,
+        (base_sequence, last_offset_delta): (i32, i32),
+    ) -> Option<ProducerBatchMetadata> {
+        if self.producer_epoch != producer_epoch || base_sequence < 0 || last_offset_delta < 0 {
+            return None;
+        }
+        let last_sequence = increment_sequence(base_sequence, last_offset_delta);
+        earlier
+            .into_iter()
+            .copied()
+            .chain(self.last_batch())
+            .find(|retained| {
+                retained.last_sequence == last_sequence
+                    && decrement_sequence(retained.last_sequence, retained.offset_delta)
+                        == base_sequence
+            })
+    }
+
+    /// Record a data batch that the producer appended at `producer_epoch`.
+    /// Kafka's `ProducerStateEntry.addBatch` and
+    /// `ProducerAppendInfo.appendDataBatch`.
+    ///
+    /// A new epoch clears `earlier`. At the same epoch the batch that was last
+    /// joins `earlier`, and the oldest leaves once the entry and `earlier`
+    /// would retain more than [`NUM_BATCHES_TO_RETAIN`]. `batch` becomes the
+    /// last batch, and a transactional batch opens a transaction when none is
+    /// open.
+    pub fn add_data_batch(
+        &mut self,
+        earlier: &mut VecDeque<ProducerBatchMetadata>,
+        producer_epoch: i16,
+        batch: ProducerBatchMetadata,
+        is_transactional: bool,
+    ) {
+        if self.producer_epoch != producer_epoch {
+            earlier.clear();
+        } else if let Some(previous) = self.last_batch() {
+            earlier.push_back(previous);
+            if earlier.len() >= NUM_BATCHES_TO_RETAIN {
+                earlier.pop_front();
+            }
+        }
+        self.producer_epoch = producer_epoch;
+        self.last_sequence = batch.last_sequence;
+        self.last_offset = batch.last_offset;
+        self.offset_delta = batch.offset_delta;
+        self.timestamp = batch.timestamp;
+        if is_transactional && self.current_txn_first_offset.is_none() {
+            self.current_txn_first_offset = Some(batch.base_offset());
+        }
     }
 
     pub(crate) fn empty(producer_id: ProducerId, producer_epoch: i16) -> Self {

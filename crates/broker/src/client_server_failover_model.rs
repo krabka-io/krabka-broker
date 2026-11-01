@@ -29,7 +29,13 @@ mod state;
 #[path = "client_server_failover_model/witness.rs"]
 mod witness;
 
-use self::runner::run_model;
+use self::runner::{duplicate_without_dedup, run_model};
 
 #[test]
 fn client_server_failover_preserves_acked_batch() { run_model(); }
+
+#[test]
+fn without_the_dedup_check_a_retry_appends_twice() {
+    // Send, then retry on the same leader: the second attempt appends a copy.
+    assert2::assert!(duplicate_without_dedup() == Some(2));
+}

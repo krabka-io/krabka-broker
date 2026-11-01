@@ -24,6 +24,16 @@ use {
     crate::producer_state::{Decision, check_pure},
 };
 
+/// Whether a produce attempt runs the broker's dedup check.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Dedup {
+    /// The broker runs `check_pure`, as production does.
+    Checked,
+    /// The broker appends every attempt. Only the test that shows
+    /// `no_duplicate_append` can fail runs this.
+    Skipped,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SendKind {
     Send,
@@ -64,7 +74,11 @@ impl FailoverState {
         Some(base_sequence)
     }
 
-    pub fn apply_client_send(&self, kind: SendKind, outcome: RequestOutcome) -> Option<Self> {
+    pub fn apply_client_send(
+        &self,
+        dedup: Dedup,
+        (kind, outcome): (SendKind, RequestOutcome),
+    ) -> Option<Self> {
         if self.send_attempts >= MAX_SEND_ATTEMPTS {
             return None;
         }
@@ -90,7 +104,11 @@ impl FailoverState {
 
         s.refresh_leader_producer_entry();
         let entry = s.producer_entry();
-        match check_pure(entry.as_ref(), PRODUCER_EPOCH, base_sequence, 0) {
+        let decision = match dedup {
+            Dedup::Checked => check_pure(entry.as_ref(), PRODUCER_EPOCH, base_sequence, 0),
+            Dedup::Skipped => Decision::Append,
+        };
+        match decision {
             Decision::Append => {
                 if !matches!(
                     outcome,
@@ -98,21 +116,25 @@ impl FailoverState {
                 ) {
                     return None;
                 }
-                if s.log_len(s.leader) >= MAX_LOG_LEN || (s.hwm > 0 && s.accepted.is_some()) {
+                let slot = s.log_len(s.leader);
+                if slot >= MAX_LOG_LEN {
                     return None;
                 }
-                let batch = LogBatch::initial();
-                s.logs[s.leader][0] = Some(batch);
+                let offset = BASE_OFFSET + i64::try_from(slot).expect("a small log");
+                s.logs[s.leader][slot] = Some(LogBatch {
+                    offset,
+                    ..LogBatch::initial()
+                });
                 s.accepted = Some(AcceptedBatch {
                     producer_id: PRODUCER_ID,
                     producer_epoch: PRODUCER_EPOCH,
                     base_sequence,
-                    offset: BASE_OFFSET,
+                    offset,
                 });
                 s.producer_entry = Some(ProducerEntryProjection {
                     epoch: PRODUCER_EPOCH,
                     last_sequence: base_sequence,
-                    base_offset: BASE_OFFSET,
+                    base_offset: offset,
                 });
                 s.batch = BatchState::Appended;
                 s.next_sequence = base_sequence + 1;

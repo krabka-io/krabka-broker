@@ -22,7 +22,7 @@ use {
         io::FileIo,
         leader_epoch_checkpoint::LeaderEpochCheckpoint,
         log_start_offset_checkpoint, name,
-        producer_snapshot::{self, LoadedSnapshot, NUM_BATCHES_TO_RETAIN, ProducerSnapshotEntry},
+        producer_snapshot::{self, LoadedSnapshot, ProducerBatchMetadata, ProducerSnapshotEntry},
         recovery::{deleted_orphan_recover, swap_orphan_recover},
         segment::Segment,
         stamp_index::OffsetRange,
@@ -643,25 +643,20 @@ impl Log {
             .producer_state
             .entry(producer_id)
             .or_insert_with(|| ProducerSnapshotEntry::empty(producer_id, producer_epoch));
-        // Kafka's `ProducerStateEntry.addBatch`: a new epoch clears the
-        // retained batches, and the batch that was last joins the earlier
-        // ones, the oldest leaving at capacity.
-        if entry.producer_epoch != producer_epoch {
+        let earlier = self.earlier_batches.entry(producer_id).or_default();
+        entry.add_data_batch(
+            earlier,
+            producer_epoch,
+            ProducerBatchMetadata {
+                last_sequence,
+                last_offset,
+                offset_delta: last_offset_delta,
+                timestamp,
+            },
+            is_transactional,
+        );
+        if earlier.is_empty() {
             self.earlier_batches.remove(&producer_id);
-        } else if let Some(previous) = entry.last_batch() {
-            let earlier = self.earlier_batches.entry(producer_id).or_default();
-            earlier.push_back(previous);
-            if earlier.len() >= NUM_BATCHES_TO_RETAIN {
-                earlier.pop_front();
-            }
-        }
-        entry.producer_epoch = producer_epoch;
-        entry.last_sequence = last_sequence;
-        entry.last_offset = last_offset;
-        entry.offset_delta = last_offset_delta;
-        entry.timestamp = timestamp;
-        if is_transactional && entry.current_txn_first_offset.is_none() {
-            entry.current_txn_first_offset = Some(base_offset);
         }
         Ok(())
     }

@@ -35,3 +35,35 @@ where
     assert_pinned_count(checker.unique_state_count(), pinned, label);
     checker.assert_properties();
 }
+
+/// The actions of a shortest path to a state that breaks the `always` property
+/// `property`, or `None` when no path of at most `max_actions` actions does.
+///
+/// A checker records a property's discovery again at every breaking state it
+/// visits, so the path it reports after a full search is not the shortest.
+/// This searches to one more action each round instead, and the first round
+/// that breaks the property has a shortest path.
+pub fn shortest_counterexample<M>(
+    model: &M,
+    property: &'static str,
+    max_actions: usize,
+) -> Option<Vec<M::Action>>
+where
+    M: stateright::Model + Clone + Send + Sync + 'static,
+    M::State: Hash + Send + Sync + Clone + PartialEq + 'static,
+    M::Action: Clone + PartialEq,
+{
+    use stateright::{Checker as _, Path};
+    // A state reached by `n` actions sits at depth `n + 1`, and the checker
+    // skips every state at or past its target depth.
+    (0..=max_actions).find_map(|actions| {
+        model
+            .clone()
+            .checker()
+            .target_max_depth(actions + 2)
+            .spawn_bfs()
+            .join()
+            .discovery(property)
+            .map(Path::into_actions)
+    })
+}

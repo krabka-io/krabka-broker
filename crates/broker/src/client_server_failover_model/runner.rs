@@ -3,7 +3,11 @@
 //! The bounds sit next to the assertions that prove a run was exhaustive,
 //! because a truncated search proves nothing and the two must move together.
 
-use {super::model::ClientServerFailoverModel, crate::model_check::run_bfs, stateright::Checker};
+use {
+    super::{model::ClientServerFailoverModel, produce::Dedup},
+    crate::model_check::{run_bfs, shortest_counterexample},
+    stateright::Checker,
+};
 
 const MAX_DEPTH: usize = 36;
 const MAX_STATES: usize = 120_000;
@@ -19,7 +23,9 @@ const PINNED_UNIQUE_STATES: usize = 38_131;
 
 pub fn run_model() {
     let checker = run_bfs(
-        ClientServerFailoverModel,
+        ClientServerFailoverModel {
+            dedup: Dedup::Checked,
+        },
         "client_server_failover",
         MAX_DEPTH,
         MAX_STATES,
@@ -30,4 +36,15 @@ pub fn run_model() {
         "unique-state count moved: the reachable set of this model changed"
     );
     checker.assert_properties();
+}
+
+/// The length of the shortest path to a log that holds the batch twice when
+/// the broker skips its dedup check. A search that finds none would mean the
+/// bounds leave no room for a second copy, and `no_duplicate_append` would
+/// hold by construction.
+pub fn duplicate_without_dedup() -> Option<usize> {
+    let model = ClientServerFailoverModel {
+        dedup: Dedup::Skipped,
+    };
+    shortest_counterexample(&model, "no_duplicate_append", MAX_DEPTH).map(|actions| actions.len())
 }
