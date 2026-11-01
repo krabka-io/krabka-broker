@@ -43,8 +43,12 @@ pub(in crate::handlers::incremental_alter_configs) fn merge_list_op(
 ) -> String {
     let base = current.or(default).unwrap_or_default();
     let mut parts: Vec<&str> = base.split(',').filter(|part| !part.is_empty()).collect();
-    // Java's `String.split` drops trailing empty strings.
-    let items: Vec<&str> = value.trim_end_matches(',').split(',').collect();
+    // Java's `String.split` drops trailing empty strings: `"a,"` is `[a]` and
+    // `","` is no item at all, while `""` is one empty item.
+    let items: Vec<&str> = match value.trim_end_matches(',') {
+        "" if !value.is_empty() => Vec::new(),
+        trimmed => trimmed.split(',').collect(),
+    };
     for item in items {
         if operation == OP_APPEND {
             if !parts.contains(&item) {
@@ -151,9 +155,12 @@ mod tests {
         super::*,
         crate::{
             handlers::{
-                incremental_alter_configs::test_support::{
-                    AlterableConfig, StoredOverride, assert, check, image_with_topic_config,
-                    make_del_cfg, make_set_cfg, make_topic_resource, overrides_map,
+                incremental_alter_configs::{
+                    OP_SUBTRACT,
+                    test_support::{
+                        AlterableConfig, StoredOverride, assert, check, image_with_topic_config,
+                        make_del_cfg, make_set_cfg, make_topic_resource, overrides_map,
+                    },
                 },
                 test_support::{check_config_result, diskless_turned_on_refusal},
             },
@@ -173,6 +180,37 @@ mod tests {
         use crate::handlers::test_support::build_topic_config_record_with_default_policy;
 
         build_topic_config_record_with_default_policy(resource, image, super::topic_config_record)
+    }
+
+    /// `ConfigurationControlManager.incrementalAlterConfigResource`: the
+    /// operation's value goes through Java's `String.split(",")`, which drops
+    /// trailing empty strings (so `","` yields no items and `""` yields one
+    /// empty item), and SUBTRACT is `List.remove(Object)`, which removes the
+    /// first occurrence only.
+    #[rstest::rstest]
+    #[case::append_with_a_trailing_comma(OP_APPEND, Some("delete"), "compact,", "delete,compact")]
+    #[case::append_of_only_commas(OP_APPEND, Some("delete"), ",,", "delete")]
+    #[case::append_of_an_empty_value(OP_APPEND, Some("delete"), "", "delete,")]
+    #[case::append_from_the_default(OP_APPEND, None, "compact", "delete,compact")]
+    #[case::subtract_removes_one_occurrence(
+        OP_SUBTRACT,
+        Some("delete,compact,delete"),
+        "delete",
+        "compact,delete"
+    )]
+    #[case::subtract_with_a_trailing_comma(
+        OP_SUBTRACT,
+        Some("delete,compact"),
+        "delete,",
+        "compact"
+    )]
+    fn a_list_op_merges_as_kafkas_controller_does(
+        #[case] operation: i8,
+        #[case] current: Option<&str>,
+        #[case] value: &str,
+        #[case] expected: &str,
+    ) {
+        check!(merge_list_op(operation, current, Some("delete"), value) == expected);
     }
 
     #[test]

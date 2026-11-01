@@ -44,7 +44,9 @@ use {
                 guarded_operation_on_source, is_active_controller, to_active_controller,
             },
             offline_replicas::live_brokers,
-            stamp_unset, submit_failure_code,
+            stamp_unset,
+            submit_failure::{GuardedFailure, classify_guarded},
+            submit_failure_code,
         },
         leader_election::ElectionType,
         metadata_source::MetadataSource,
@@ -58,7 +60,7 @@ use {
     },
     krabka_raft::RaftError,
     std::{future::Future, mem, sync::Arc, time::Duration},
-    tokio::time::Instant,
+    tokio::time::{Instant, error::Elapsed},
 };
 
 mod batch;
@@ -69,6 +71,8 @@ mod response;
 mod targets;
 mod unclean_gate;
 
+#[cfg(test)]
+mod guarded_failure_tests;
 #[cfg(test)]
 mod tests;
 
@@ -131,18 +135,29 @@ pub async fn handle(
         |image| elect_leaders_once(broker, &req, ctx, image),
     )
     .await;
-    Ok(match result {
-        Ok(Ok(response)) => response,
-        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => {
-            request_refusal(&req, codes::NOT_CONTROLLER, None)
+    Ok(election_outcome(&req, result))
+}
+
+/// The response from the result of the guarded election: the election's own
+/// response, or a whole-request refusal with the error code of the failure.
+fn election_outcome(
+    req: &ElectLeadersRequest,
+    result: Result<Result<ElectLeadersResponse, RaftError>, Elapsed>,
+) -> ElectLeadersResponse {
+    match classify_guarded(result) {
+        Ok(response) => response,
+        Err(failure) => {
+            let message = match &failure {
+                GuardedFailure::Failed(error) => Some(error.to_string()),
+                GuardedFailure::TimedOut | GuardedFailure::NotController => None,
+            };
+            request_refusal(
+                req,
+                failure.code(codes::COORDINATOR_NOT_AVAILABLE),
+                message.as_deref(),
+            )
         }
-        Ok(Err(error)) => request_refusal(
-            &req,
-            submit_failure_code(&error, codes::COORDINATOR_NOT_AVAILABLE),
-            Some(&error.to_string()),
-        ),
-        Err(_) => request_refusal(&req, codes::REQUEST_TIMED_OUT, None),
-    })
+    }
 }
 
 /// Rebuild all targets, authorization, eligibility and proposals on every attempt.

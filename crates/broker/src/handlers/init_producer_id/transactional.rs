@@ -16,7 +16,7 @@ use {
         txn::{
             coordinator::{
                 TxnCoordinator,
-                completion::{apply_completion_from, completion_for},
+                completion::{apply_completion_from, completion_decision, completion_for},
             },
             handlers::end_txn::{
                 client_producer_identity, completion_producer_identity,
@@ -30,7 +30,13 @@ use {
     },
     krabka_log::ProducerId,
     krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse,
-    krabka_verified::{transaction, transaction::InitProducerIdIdentityDecision},
+    krabka_verified::{
+        transaction,
+        transaction::{
+            InitProducerIdIdentityDecision,
+            TransactionReaperCompletionDecision as CompletionDecision,
+        },
+    },
     std::sync::Arc,
     tokio::sync::Mutex,
 };
@@ -273,7 +279,7 @@ async fn fence_ongoing(
         coord.request_completion(tid);
         return Ok(Some(concurrent_transactions_response()));
     }
-    complete_fenced_abort(coord, init, &published, request_pid).await;
+    complete_fenced_abort(coord, init, &prepared, request_pid).await;
     // Kafka answers the fenced producer
     // `CONCURRENT_TRANSACTIONS`. The client retries, and that
     // retry takes the epoch bump below on the completed
@@ -306,14 +312,32 @@ async fn record_failed_fence(
 
 /// Re-acquire + transition to `CompleteAbort`, staged on a clone so a failed
 /// append leaves `PrepareAbort` for the completion task.
+///
+/// Every lock was released for the marker fan-out, so the completion task may
+/// have finished this abort and a later request may have written over it. As
+/// in `complete_prepared_transaction`, this takes the state-partition write
+/// lock, then the entry lock, and appends only while the live entry is still
+/// the exact `prepared` snapshot the markers were written for. Kafka's marker
+/// channel likewise appends the `Complete*` transition only for the metadata
+/// it prepared, and drops it otherwise. The fenced producer is answered
+/// `CONCURRENT_TRANSACTIONS` either way.
 async fn complete_fenced_abort(
     coord: &TxnCoordinator,
     init: &TransactionalInit<'_>,
-    published: &Mutex<TxnEntry>,
+    prepared: &TxnEntry,
     request_pid: ProducerId,
 ) {
     let tid = init.tid;
-    let mut completed = published.lock().await.clone();
+    let state_partition_write = coord.lock_state_partition_for(tid).await;
+    let Some(live) = coord.get(tid) else {
+        return;
+    };
+    let live = live.lock().await;
+    let prepared_states = (TxnState::PrepareAbort, TxnState::CompleteAbort);
+    if completion_decision(&live, prepared, prepared_states) != CompletionDecision::Proceed {
+        return;
+    }
+    let mut completed = live.clone();
     let identity = completion_producer_identity(&completed);
     // Kafka's `prepareComplete`, which also clears the failed epoch fence
     // whose abort has now been written.
@@ -324,7 +348,13 @@ async fn complete_fenced_abort(
         request_pid,
         now_millis(),
     );
-    if let Err(error) = coord.put(completed, init.txnv).await {
+    // The entry stays locked until the completion is written.
+    let written = coord
+        .put_under_state_partition_lock(completed, init.txnv)
+        .await;
+    drop(live);
+    drop(state_partition_write);
+    if let Err(error) = written {
         tracing::warn!(
             tid,
             %error,
@@ -563,7 +593,12 @@ mod tests {
             producer_id_manager::ProducerIdManager,
             test_support::{open_partition, spawn_standalone_partition},
             txn::{
-                bootstrap, coordinator::completion::CompletionAttempt, state::TopicPartition,
+                bootstrap,
+                coordinator::{
+                    completion::{CompletionAttempt, apply_completion},
+                    fanout_gate::MarkerFanoutMode,
+                },
+                state::TopicPartition,
                 version::TxnVersion,
             },
         },
@@ -1915,5 +1950,77 @@ mod tests {
             ..TxnEntry::new_empty(TID.to_owned(), ProducerId(0), 0, 60_000, 0)
         };
         check!(entry == expected);
+    }
+
+    /// The fence's `CompleteAbort` must not overwrite a write that landed
+    /// while its marker fan-out ran.
+    ///
+    /// The fence persists `PrepareAbort` and releases every lock for the
+    /// fan-out. Meanwhile the completion task can finish the same abort, and a
+    /// second `InitProducerId` can then bump the epoch and hand that identity
+    /// to its producer. Kafka's marker channel appends the `Complete*`
+    /// transition only while the coordinator still holds the metadata it was
+    /// prepared for (`TransactionMarkerChannelManager`'s `appendToLogCallback`
+    /// re-reads `getTransactionState`, and `TransactionMetadata.prepareComplete`
+    /// requires the pending `PrepareAbort`), so a late completion is dropped
+    /// and the bumped identity stays. The fence answers
+    /// `CONCURRENT_TRANSACTIONS`, as it does whenever it fences.
+    #[tokio::test]
+    async fn a_fenced_abort_keeps_a_write_made_during_its_marker_fan_out() {
+        const TID: &str = "tid-fence-race";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let SeededCoordinator { coordinator, .. } =
+            coordinator_with_ongoing_transaction(dir.path(), TID).await;
+
+        // Hold the fence at the start of its marker fan-out, with its
+        // `PrepareAbort` durable.
+        coordinator
+            .marker_fanout_gate
+            .set_mode(MarkerFanoutMode::Hold);
+        let fence = {
+            let coordinator = Arc::clone(&coordinator);
+            tokio::spawn(
+                async move { init_verified(&coordinator, TID, InitIdentity::default()).await },
+            )
+        };
+        coordinator.marker_fanout_gate.wait_for_arrivals(1).await;
+        let prepared = coordinator.get(TID).expect("entry").lock().await.clone();
+        check!(prepared.state == TxnState::PrepareAbort);
+
+        // The completion task finishes the abort: the record
+        // `complete_prepared_transaction` appends.
+        let mut completed = prepared;
+        let identity = completion_producer_identity(&completed);
+        apply_completion(
+            &mut completed,
+            TxnState::CompleteAbort,
+            identity,
+            now_millis(),
+        );
+        seed(&coordinator, completed).await;
+
+        // A producer that names no identity bumps the completed transaction.
+        let bumped = init_verified(&coordinator, TID, InitIdentity::Anonymous)
+            .await
+            .expect("init responds");
+        check!(bumped.error_code == codes::NONE);
+        let live = coordinator.get(TID).expect("entry").lock().await.clone();
+        check!(
+            (live.producer_id.get(), live.producer_epoch)
+                == (bumped.producer_id, bumped.producer_epoch)
+        );
+
+        coordinator
+            .marker_fanout_gate
+            .set_mode(MarkerFanoutMode::Open);
+        let fenced = fence.await.expect("fence task").expect("init responds");
+
+        check!(fenced == concurrent_transactions_response());
+        let after = coordinator.get(TID).expect("entry").lock().await.clone();
+        assert!(
+            after == live,
+            "the fence's CompleteAbort overwrote the bumped identity"
+        );
     }
 }

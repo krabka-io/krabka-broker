@@ -6,7 +6,7 @@
 
 use {
     super::{
-        test_support::{EntityPart, entry, op, part, request},
+        test_support::{EntityPart, QuotaOp, entry, op, part, request},
         *,
     },
     crate::{
@@ -15,11 +15,12 @@ use {
         codes::INVALID_REQUEST,
         handlers::RequestContext,
         test_support::{
-            grant_cluster_operation, peer, principal, start_broker_with_authorizer as start_broker,
+            FakeMetadataSource, grant_cluster_operation, peer, principal,
+            start_broker_with_authorizer as start_broker,
         },
     },
     assert2::assert,
-    krabka_metadata::AclOperation,
+    krabka_metadata::{AclOperation, MetadataRecord, NodeId},
     krabka_protocol::owned::alter_client_quotas_response::{
         EntityData as RespEntity, EntryData as RespEntry,
     },
@@ -316,4 +317,54 @@ async fn repeated_entity_answers_one_row_with_and_without_validate_only() {
         );
         broker_handle.shutdown().await;
     }
+}
+
+fn alice_quota(key: &str, value: Option<f64>) -> MetadataRecord {
+    MetadataRecord::V1ClientQuota(krabka_metadata::ClientQuotaRecord {
+        entity: vec![krabka_metadata::QuotaEntity {
+            entity_type: "user".into(),
+            entity_name: Some("alice".into()),
+        }],
+        config_key: key.into(),
+        config_value: value,
+    })
+}
+
+/// A quota committed between planning and the submit must not be missed. A
+/// removal planned against the older image, where the key was not set yet,
+/// would drop out of the batch, and the request would answer success while
+/// the key it removed stays set. Kafka's `QuorumController.alterClientQuotas`
+/// plans and appends on the controller event thread, so it has no such window.
+#[tokio::test]
+async fn submit_replans_after_an_intervening_quota_commit() {
+    let initial = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    let mut newer = initial.clone();
+    newer.apply(&alice_quota("consumer_byte_rate", Some(50.0)));
+    let source = FakeMetadataSource::builder()
+        .image(initial)
+        .leader(Some(NodeId(1)))
+        .before_guarded_submit(move |source| source.set_image(newer))
+        .build();
+    let req = request(
+        vec![entry(vec![part("user", Some("alice"))], vec![
+            op("producer_byte_rate", 200.0),
+            QuotaOp {
+                key: "consumer_byte_rate",
+                value: 0.0,
+                remove: true,
+            },
+        ])],
+        false,
+    );
+
+    let rows = alter_and_submit(&source, &req, &|_| false).await;
+
+    assert!(rows == vec![expected_entry(part("user", Some("alice")), NONE, None)]);
+    assert!(
+        source.submitted_records()
+            == vec![
+                alice_quota("producer_byte_rate", Some(200.0)),
+                alice_quota("consumer_byte_rate", None),
+            ]
+    );
 }

@@ -17,21 +17,14 @@
 //! Kafka 4.3.1 has neither KIP-1331 nor the tags.
 
 use {
-    super::{
-        ActorState, chrono_now_ms,
-        records::{flush_pending, group_metadata_value},
-    },
+    super::{ActorState, StreamsTurn, chrono_now_ms, records::group_metadata_value},
     crate::{
         codes,
-        coordinator::unified::{
-            GroupCoordinator,
-            offsets_log::OffsetsLog,
-            streams::{
-                config::StreamsGroupConfig,
-                description::{Jitter, StoredDescription, TopologyDescription},
-                persistence::PendingStreamsRecords,
-                topology::status,
-            },
+        coordinator::unified::streams::{
+            config::StreamsGroupConfig,
+            description::{Jitter, StoredDescription, TopologyDescription},
+            persistence::PendingStreamsRecords,
+            topology::status,
         },
         error::BrokerError,
     },
@@ -127,8 +120,7 @@ pub(super) fn maybe_request_description(
 /// stops, as it does when a heartbeat cannot write.
 pub(super) async fn handle_push(
     actor: &mut ActorState,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
+    turn: StreamsTurn<'_>,
     push: &DescriptionPush,
 ) -> Result<PushAnswer, BrokerError> {
     let group_id = actor.state.group_id.clone();
@@ -175,7 +167,7 @@ pub(super) async fn handle_push(
             group_metadata: Some(group_metadata_value(actor)),
             ..Default::default()
         };
-        flush_pending(actor, pending, offsets_log, coordinator, chrono_now_ms()).await?;
+        turn.flush(actor, pending, chrono_now_ms()).await?;
     }
     actor.description_backoff.clear(topology_epoch);
     Ok((codes::NONE, None))

@@ -81,6 +81,20 @@ where
     .await
 }
 
+/// Whether a `submit_change_if_image` failure ends the attempt rather than
+/// the operation's own answer: a conflicting image or pending tail, which
+/// [`guarded_operation_on_source`] retries, or a lost leadership, which the
+/// caller answers `NOT_CONTROLLER`.
+pub fn ends_guarded_attempt(error: &RaftError) -> bool {
+    matches!(
+        error,
+        RaftError::StaleMetadataImage
+            | RaftError::UncommittedTail
+            | RaftError::NotLeader { .. }
+            | RaftError::LeaderUnknown
+    )
+}
+
 /// Route a typed controller-listener request through its own response codec.
 /// Broker-listener requests continue to preprocessing and forwarding; a
 /// controller listener refuses mutations after this node loses leadership.

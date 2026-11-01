@@ -8,14 +8,17 @@ use {
     crate::{
         authorizer::AllowAllAuthorizer,
         broker::Broker,
-        features::{LATEST_PRODUCTION_METADATA_VERSION, METADATA_VERSION, METADATA_VERSION_MAX},
-        handlers::update_features::test_support::{
-            apply_request, call, call_with, metadata_update, named_update, start_broker,
-            validate_only, wait_for_finalized_feature,
+        features::{
+            ELR_VERSION, LATEST_PRODUCTION_METADATA_VERSION, METADATA_VERSION, METADATA_VERSION_MAX,
         },
-        test_support::{DenyAll, start_broker_no_audit_with},
+        handlers::update_features::test_support::{
+            apply_request, call, call_with, elr_update, metadata_update, min_isr_config_record,
+            named_update, start_broker, validate_only, wait_for_finalized_feature,
+        },
+        test_support::{DenyAll, FakeMetadataSource, start_broker_no_audit_with},
     },
     assert2::assert,
+    krabka_metadata::MetadataRecord,
     krabka_protocol::owned::update_features_response::UpdatableFeatureResult,
     std::{sync::Arc, time::Duration},
     tokio::time,
@@ -306,4 +309,58 @@ async fn handle_persists_a_lossless_metadata_downgrade() {
     assert!(down == accepted(&[METADATA_VERSION]));
     wait_for_finalized_feature(&broker, METADATA_VERSION, target + 1).await;
     broker_handle.shutdown().await;
+}
+
+/// A broker-level `min.insync.replicas` committed between planning and the
+/// submit must be removed when the request turns ELR on. A plan built from
+/// the older image leaves it in place. Kafka's `QuorumController.updateFeatures`
+/// validates and generates the records on the controller event thread, so it
+/// has no such window.
+#[tokio::test]
+async fn submit_replans_after_an_intervening_config_commit() {
+    let mut initial = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    initial.apply(&MetadataRecord::V1FeatureLevel(
+        krabka_metadata::FeatureLevelRecord {
+            name: METADATA_VERSION.into(),
+            level: 30,
+        },
+    ));
+    initial.apply(&min_isr_config_record(
+        krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+        Some("2"),
+    ));
+    let mut newer = initial.clone();
+    newer.apply(&min_isr_config_record(
+        krabka_metadata::NodeId(5),
+        Some("1"),
+    ));
+    let source = FakeMetadataSource::builder()
+        .image(initial)
+        .leader(Some(krabka_metadata::NodeId(1)))
+        .before_guarded_submit(move |source| source.set_image(newer))
+        .build();
+    let local_controller = preconditions::LocalController {
+        node_id: krabka_metadata::NodeId(1),
+        unstable_features: krabka_raft::UnstableFeatureVersions::Disabled,
+    };
+
+    let outcome = apply_updates(
+        &source,
+        &apply_request(vec![elr_update(1, 1)]),
+        local_controller,
+        2,
+    )
+    .await;
+
+    assert!(outcome == Ok(Some(vec![ELR_VERSION.to_owned()])));
+    assert!(
+        source.submitted_records()
+            == vec![
+                min_isr_config_record(krabka_metadata::NodeId(5), None),
+                MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
+                    name: ELR_VERSION.into(),
+                    level: 1,
+                }),
+            ]
+    );
 }

@@ -141,7 +141,7 @@ use {
         TimerUnavailableError,
     },
     rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
-    tokio::sync::watch,
+    tokio::{sync::watch, task::JoinHandle},
     tokio_rustls::TlsAcceptor,
     tracing_subscriber::{
         Layer,
@@ -1439,6 +1439,85 @@ pub fn plaintext_broker_endpoint(host: &str, port: u16) -> krabka_metadata::Brok
         port,
         protocol: krabka_security::ListenerProtocol::Plaintext,
     }
+}
+
+/// A loopback listener that reads the TLS `ClientHello` of the first dial to
+/// it and then drops the connection, with an inter-broker client that dials
+/// it over TLS. A test reads which server name a dial asked for.
+pub struct ServerNameCapture {
+    /// The loopback port the capture listens on.
+    pub port: u16,
+    /// An inter-broker client with a TLS connector that trusts no root.
+    pub client: InterBrokerClient,
+    /// The SNI server name of the first `ClientHello`.
+    pub server_name: JoinHandle<Option<String>>,
+}
+
+impl ServerNameCapture {
+    /// The registration of `node_id` with one SSL endpoint, `listener`, on
+    /// the capture port.
+    pub fn broker(
+        &self,
+        node_id: NodeId,
+        listener: &str,
+    ) -> krabka_metadata::BrokerRegistrationRecord {
+        krabka_metadata::BrokerRegistrationRecord {
+            port: self.port,
+            endpoints: vec![krabka_metadata::BrokerEndpoint {
+                name: listener.into(),
+                host: "127.0.0.1".into(),
+                port: self.port,
+                protocol: krabka_security::ListenerProtocol::Ssl,
+            }],
+            ..broker_registration(node_id)
+        }
+    }
+}
+
+/// Bind a [`ServerNameCapture`].
+pub async fn capture_server_name() -> ServerNameCapture {
+    use tokio_rustls::{
+        LazyConfigAcceptor, TlsConnector,
+        rustls::{
+            ClientConfig, RootCertStore, crypto::aws_lc_rs::default_provider, server::Acceptor,
+        },
+    };
+
+    drop(default_provider().install_default());
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind the ClientHello capture listener");
+    let port = listener
+        .local_addr()
+        .expect("capture listener address")
+        .port();
+    let server_name = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept the dial");
+        let handshake = LazyConfigAcceptor::new(Acceptor::default(), stream)
+            .await
+            .expect("parse the ClientHello");
+        handshake.client_hello().server_name().map(str::to_owned)
+    });
+    let tls = ClientConfig::builder()
+        .with_root_certificates(RootCertStore::empty())
+        .with_no_client_auth();
+    ServerNameCapture {
+        port,
+        client: InterBrokerClient::new(Some(TlsConnector::from(Arc::new(tls))), None),
+        server_name,
+    }
+}
+
+/// Assert that a dial to a [`ServerNameCapture`] failed, since the capture
+/// drops the connection after the `ClientHello`, and that it asked for
+/// `expected` as the server name.
+pub async fn assert_dialed_with<T, E>(
+    result: &Result<T, E>,
+    server_name: JoinHandle<Option<String>>,
+    expected: &str,
+) {
+    assert2::assert!(let Err(_) = result, "the capture stops after the ClientHello");
+    assert2::assert!(server_name.await.expect("join the capture").as_deref() == Some(expected));
 }
 
 /// Wait up to five seconds for `broker` to become the controller leader.

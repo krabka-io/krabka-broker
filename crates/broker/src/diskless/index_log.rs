@@ -537,22 +537,20 @@ impl IndexPump {
                     .release_object_reservation(key.object_id());
                 self.bump_applied();
             }
-            IndexEvent::ClearFloor(key) => self.cache.lock().await.clear_delete_floor(key),
-            IndexEvent::RemoveRange(key) => self.cache.lock().await.remove(key),
+            IndexEvent::ClearFloor(key) => {
+                self.cache.lock().await.clear_delete_floor(key);
+                self.bump_applied();
+            }
+            IndexEvent::RemoveRange(key) => {
+                self.cache.lock().await.remove(key);
+                self.bump_applied();
+            }
             IndexEvent::TombstoneNoop | IndexEvent::ReplayFence => {}
             IndexEvent::Reserve(key) => {
                 self.cache.lock().await.reserve_object(key.object_id());
                 self.bump_applied();
             }
-            IndexEvent::InvalidReservation => self.invalidate(),
-            IndexEvent::MismatchedReservation => {
-                self.invalidate();
-                // Deliberate: unlike every other record, this one is neither
-                // recorded as consumed nor counted toward the replay. Kept
-                // as the pump has always behaved; see the characterization
-                // test before changing it.
-                return;
-            }
+            IndexEvent::InvalidReservation | IndexEvent::MismatchedReservation => self.invalidate(),
             IndexEvent::RaiseFloor { key, floor } => {
                 self.cache
                     .lock()
@@ -888,7 +886,9 @@ fn object_reservation_key(object_key: &str) -> Result<(uuid::Uuid, bytes::Bytes)
 mod tests {
     use {
         super::{
-            test_support::{GroupAckLog, PacedReplayLog, RacingAppendLog, ReplayPace},
+            test_support::{
+                GroupAckLog, HeldPartitionLog, PacedReplayLog, RacingAppendLog, ReplayPace,
+            },
             *,
         },
         crate::{
@@ -1610,6 +1610,94 @@ mod tests {
         .await
         .unwrap();
     }
+    /// A reservation record whose value names another topic than its key
+    /// invalidates the projection. A fresh-view wait already in flight must
+    /// then give up at once, as it does for every other invalid record, not
+    /// sit out its timeout while another index partition lags.
+    #[tokio::test(start_paused = true)]
+    async fn a_mismatched_reservation_ends_a_fresh_view_wait_at_once() {
+        let transport = InProcessMetadataEventLog::new(2);
+        let index = DisklessIndexLog::start(HeldPartitionLog::new(
+            Arc::<InProcessMetadataEventLog>::clone(&transport),
+            1,
+        ))
+        .await
+        .unwrap();
+        let waiter = task::spawn({
+            let index = index.clone();
+            async move { index.wait_for_fresh_view(Duration::from_secs(300)).await }
+        });
+        let mut consumed = index.consumed_offsets.clone();
+        timeout(
+            Duration::from_secs(5),
+            consumed.wait_for(|offsets| offsets[0] >= 0),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        // Let the waiter see partition 0's fence and park again.
+        for _ in 0..10 {
+            task::yield_now().await;
+        }
+
+        let key = WalObjectReservationKey::new(Uuid::from_u128(5)).to_bytes();
+        let floor_key = WalDeleteFloorKey::from_bytes(&key).unwrap();
+        let mismatched = WalDeleteFloorRecord {
+            topic_id: Uuid::from_u128(99),
+            partition: floor_key.partition,
+            floor: 0,
+        }
+        .to_bytes()
+        .unwrap();
+        transport
+            .publish_keyed(0, key, Some(mismatched))
+            .await
+            .unwrap();
+
+        let fresh = timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("an invalid projection must end the fresh-view wait")
+            .unwrap();
+        assert!(!fresh);
+        assert!(!index.is_valid());
+    }
+    /// A removal that another broker publishes bumps the applied generation,
+    /// so a projection waiter wakes for it as it does for an addition.
+    #[tokio::test(start_paused = true)]
+    async fn a_consumed_removal_wakes_a_projection_waiter() {
+        type Removed = fn(&WalIndexCache) -> bool;
+
+        let topic_id = Uuid::from_u128(7);
+        let range = WalIndexKey::from(&flush_record().topic_id(topic_id).call().entries[0]);
+        let floor = WalDeleteFloorKey {
+            topic_id,
+            partition: 0,
+        };
+        let cases: [(&str, Bytes, Removed); 2] = [
+            ("range", range.to_bytes(), |cache| {
+                cache.lookup(Uuid::from_u128(7), 0, 0).is_none()
+            }),
+            ("floor", floor.to_bytes(), |cache| {
+                cache.delete_floor(Uuid::from_u128(7), 0) == 0
+            }),
+        ];
+        for (case, tombstone, removed) in cases {
+            let transport = InProcessMetadataEventLog::new(1);
+            let ProjectedObject { index, .. } =
+                projected_first_object(Arc::<InProcessMetadataEventLog>::clone(&transport)).await;
+            index
+                .publish_delete_floor(topic_id, 0, 5, Duration::from_secs(1))
+                .await
+                .unwrap();
+
+            let (woke, published) = tokio::join!(
+                index.wait_for_projection(Duration::from_secs(5), removed),
+                transport.publish_keyed(0, tombstone, None),
+            );
+            published.unwrap();
+            assert!(woke, "case {case}");
+        }
+    }
 }
 
 /// One event at a time through the pump, each case checked against the whole
@@ -1918,15 +2006,17 @@ mod pump_tests {
                     .call(),
             },
             Case {
-                // Quirk kept: the pump returns before it records the offset as
-                // consumed or counts it toward the replay.
                 name: "reservation whose record names another key",
                 events: vec![event(
                     0,
                     Some(reservation_key()),
                     Some(reservation_value(OTHER_TOPIC, 0)),
                 )],
-                expected: pump_state().decode_failures(1).call(),
+                expected: pump_state()
+                    .decode_failures(1)
+                    .consumed(0)
+                    .delivered(1)
+                    .call(),
             },
             Case {
                 name: "range tombstone",
@@ -1934,7 +2024,7 @@ mod pump_tests {
                     event(0, Some(range_key()), Some(range_value())),
                     event(1, Some(range_key()), None),
                 ],
-                expected: pump_state().applied(1).consumed(1).delivered(2).call(),
+                expected: pump_state().applied(2).consumed(1).delivered(2).call(),
             },
             Case {
                 name: "floor tombstone",
@@ -1942,7 +2032,7 @@ mod pump_tests {
                     event(0, Some(floor_key()), Some(floor_value(TOPIC, 0, 5))),
                     event(1, Some(floor_key()), None),
                 ],
-                expected: pump_state().applied(1).consumed(1).delivered(2).call(),
+                expected: pump_state().applied(2).consumed(1).delivered(2).call(),
             },
             Case {
                 name: "reservation tombstone",
