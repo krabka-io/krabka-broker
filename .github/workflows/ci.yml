@@ -1336,17 +1336,25 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      # Each test's history, logs and checker output. Jepsen's `latest` and
-      # `current` links point back into the same tree, so they are left out
-      # rather than uploaded twice.
+      # Each test's history, logs, data and checker output, as one tarball.
+      # Jepsen names each test's directory by its start time,
+      # `2026-11-01T02:33:04Z`, and upload-artifact refuses a path with a
+      # colon in it, so the store cannot be uploaded as files. Jepsen's
+      # `latest` and `current` links point back into the same tree, so they
+      # are left out rather than archived twice.
+      - name: archive the Jepsen store
+        if: always()
+        run: |
+          if [ -d target/jepsen/store ]; then
+            tar -czf target/jepsen/jepsen-store.tar.gz -C target/jepsen \
+              --exclude='store/current' --exclude='*/latest' store
+          fi
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: jepsen-store
-          path: |
-            target/jepsen/store/
-            !target/jepsen/store/current/**
-            !target/jepsen/store/**/latest/**
+          path: target/jepsen/jepsen-store.tar.gz
           if-no-files-found: warn
           retention-days: 14
 

@@ -221,9 +221,12 @@ It loads `sch_netem` first, so the packet faults run. The release workflow
 promotes a tag only when a full run of its commit passed every lane, so this
 job gates releases. A known failure does not fail the job; a regression does.
 The job uploads `report.md` and `results.json` as the `jepsen-report`
-artifact, kept for 90 days, and the Jepsen store as `jepsen-store`, kept for
-14 days. It adds the report to the run's summary. A red nightly run names the
-lane in the `nightly-red` issue. The run takes about two and a half hours.
+artifact, kept for 90 days, and the Jepsen store as a tarball in
+`jepsen-store`, kept for 14 days. The store goes up as one archive because
+Jepsen names each test's directory by its start time, and upload-artifact
+refuses a path with a colon in it. The job adds the report to the run's
+summary. A red nightly run names the lane in the `nightly-red` issue. The run
+takes about two and a half hours.
 
 ## Known failures
 
