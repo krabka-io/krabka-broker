@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "status": "collected-not-qualified",
+  "krabka_revision": "e201a1dfafd26f4ddae193a3cd1f0b340c819aa6",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "configs": {},
+  "sides": {
+    "oracle": {
+      "api-versions": {
+        "command": [
+          "docker",
+          "exec",
+          "krabka-kafka44-oracle-0b8597715db0",
+          "/opt/kafka/bin/kafka-broker-api-versions.sh",
+          "--bootstrap-server",
+          "localhost:9092"
+        ],
+        "returncode": 0,
+        "stdout": "localhost:9092 (id: 1 rack: null isFenced: false) -> (\n\tProduce(0): 0 to 13 [usable: 13],\n\tFetch(1): 4 to 18 [usable: 18],\n\tListOffsets(2): 1 to 11 [usable: 11],\n\tMetadata(3): 0 to 13 [usable: 13],\n\tOffsetCommit(8): 2 to 10 [usable: 10],\n\tOffsetFetch(9): 1 to 10 [usable: 10],\n\tFindCoordinator(10): 0 to 6 [usable: 6],\n\tJoinGroup(11): 0 to 9 [usable: 9],\n\tHeartbeat(12): 0 to 4 [usable: 4],\n\tLeaveGroup(13): 0 to 5 [usable: 5],\n\tSyncGroup(14): 0 to 5 [usable: 5],\n\tDescribeGroups(15): 0 to 6 [usable: 6],\n\tListGroups(16): 0 to 5 [usable: 5],\n\tSaslHandshake(17): 0 to 1 [usable: 1],\n\tApiVersions(18): 0 to 5 [usable: 5],\n\tCreateTopics(19): 2 to 7 [usable: 7],\n\tDeleteTopics(20): 1 to 6 [usable: 6],\n\tDeleteRecords(21): 0 to 2 [usable: 2],\n\tInitProducerId(22): 0 to 5 [usable: 5],\n\tOffsetForLeaderEpoch(23): 2 to 4 [usable: 4],\n\tAddPartitionsToTxn(24): 0 to 5 [usable: 5],\n\tAddOffsetsToTxn(25): 0 to 4 [usable: 4],\n\tEndTxn(26): 0 to 5 [usable: 5],\n\tWriteTxnMarkers(27): 1 to 2 [usable: 2],\n\tTxnOffsetCommit(28): 0 to 6 [usable: 6],\n\tDescribeAcls(29): 1 to 3 [usable: 3],\n\tCreateAcls(30): 1 to 3 [usable: 3],\n\tDeleteAcls(31): 1 to 3 [usable: 3],\n\tDescribeConfigs(32): 1 to 4 [usable: 4],\n\tAlterConfigs(33): 0 to 2 [usable: 2],\n\tAlterReplicaLogDirs(34): 1 to 2 [usable: 2],\n\tDescribeLogDirs(35): 1 to 5 [usable: 5],\n\tSaslAuthenticate(36): 0 to 2 [usable: 2],\n\tCreatePartitions(37): 0 to 3 [usable: 3],\n\tCreateDelegationToken(38): 1 to 3 [usable: 3],\n\tRenewDelegationToken(39): 1 to 2 [usable: 2],\n\tExpireDelegationToken(40): 1 to 2 [usable: 2],\n\tDescribeDelegationToken(41): 1 to 3 [usable: 3],\n\tDeleteGroups(42): 0 to 3 [usable: 3],\n\tElectLeaders(43): 0 to 2 [usable: 2],\n\tIncrementalAlterConfigs(44): 0 to 1 [usable: 1],\n\tAlterPartitionReassignments(45): 0 to 1 [usable: 1],\n\tListPartitionReassignments(46): 0 [usable: 0],\n\tOffsetDelete(47): 0 [usable: 0],\n\tDescribeClientQuotas(48): 0 to 1 [usable: 1],\n\tAlterClientQuotas(49): 0 to 1 [usable: 1],\n\tDescribeUserScramCredentials(50): 0 [usable: 0],\n\tAlterUserScramCredentials(51): 0 [usable: 0],\n\tDescribeQuorum(55): 0 to 2 [usable: 2],\n\tUpdateFeatures(57): 0 to 2 [usable: 2],\n\tDescribeCluster(60): 0 to 2 [usable: 2],\n\tDescribeProducers(61): 0 [usable: 0],\n\tUnregisterBroker(64): 0 [usable: 0],\n\tDescribeTransactions(65): 0 [usable: 0],\n\tListTransactions(66): 0 to 2 [usable: 2],\n\tConsumerGroupHeartbeat(68): 0 to 1 [usable: 1],\n\tConsumerGroupDescribe(69): 0 to 1 [usable: 1],\n\tGetTelemetrySubscriptions(71): UNSUPPORTED,\n\tPushTelemetry(72): UNSUPPORTED,\n\tListConfigResources(74): 0 to 1 [usable: 1],\n\tDescribeTopicPartitions(75): 0 [usable: 0],\n\tShareGroupHeartbeat(76): 1 [usable: 1],\n\tShareGroupDescribe(77): 1 [usable: 1],\n\tShareFetch(78): 1 to 2 [usable: 2],\n\tShareAcknowledge(79): 1 to 2 [usable: 2],\n\tAddRaftVoter(80): 0 to 1 [usable: 1],\n\tRemoveRaftVoter(81): 0 [usable: 0],\n\tInitializeShareGroupState(83): 0 [usable: 0],\n\tReadShareGroupState(84): 0 [usable: 0],\n\tWriteShareGroupState(85): 0 to 1 [usable: 1],\n\tDeleteShareGroupState(86): 0 [usable: 0],\n\tReadShareGroupStateSummary(87): 0 to 1 [usable: 1],\n\tStreamsGroupHeartbeat(88): 0 to 1 [usable: 1],\n\tStreamsGroupDescribe(89): 0 to 1 [usable: 1],\n\tDescribeShareGroupOffsets(90): 0 to 1 [usable: 1],\n\tAlterShareGroupOffsets(91): 0 [usable: 0],\n\tDeleteShareGroupOffsets(92): 0 [usable: 0],\n\tStreamsGroupTopologyDescriptionUpdate(93): 0 [usable: 0],\n\tUnregisterController(94): 0 [usable: 0]\n)\n",
+        "stderr": "WARNING: kafka-broker-api-versions.sh is deprecated and will be removed in the next major release. Use 'kafka-cluster.sh api-versions' instead.\n"
+      },
+      "features": {
+        "command": [
+          "docker",
+          "exec",
+          "krabka-kafka44-oracle-0b8597715db0",
+          "/opt/kafka/bin/kafka-features.sh",
+          "--bootstrap-server",
+          "localhost:9092",
+          "describe"
+        ],
+        "returncode": 0,
+        "stdout": "Feature: eligible.leader.replicas.version          SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 20\nFeature: group.version                             SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 20\nFeature: kraft.version                             SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 0                Epoch: 20\nFeature: metadata.version                          SupportedMinVersion: 3.3-IV3          SupportedMaxVersion: 4.4-IV2          FinalizedVersionLevel: 4.4-IV2          Epoch: 20\nFeature: share.version                             SupportedMinVersion: 0                SupportedMaxVersion: 2                FinalizedVersionLevel: 2                Epoch: 20\nFeature: streams.version                           SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 20\nFeature: transaction.version                       SupportedMinVersion: 0                SupportedMaxVersion: 2                FinalizedVersionLevel: 2                Epoch: 20\n",
+        "stderr": ""
+      },
+      "broker-configs": {
+        "command": [
+          "docker",
+          "exec",
+          "krabka-kafka44-oracle-0b8597715db0",
+          "/opt/kafka/bin/kafka-configs.sh",
+          "--bootstrap-server",
+          "localhost:9092",
+          "--describe",
+          "--entity-type",
+          "brokers",
+          "--entity-default",
+          "--all"
+        ],
+        "returncode": 0,
+        "stdout": "Default configs for brokers in the cluster are:\n  min.insync.replicas=1 sensitive=false synonyms={DYNAMIC_DEFAULT_BROKER_CONFIG:min.insync.replicas=1}\n",
+        "stderr": ""
+      }
+    }
+  },
+  "qualification_pass": false,
+  "unexecuted": [
+    "authorization",
+    "feature-level boundaries",
+    "share DLQ",
+    "delayed tiered uploads",
+    "misrouting",
+    "controller unregistration",
+    "topic-ID transactional commits",
+    "Streams topology APIs",
+    "restart/recovery",
+    "multi-broker"
+  ],
+  "oracle_configuration": {
+    "KAFKA_NODE_ID": "1",
+    "KAFKA_PROCESS_ROLES": "broker,controller",
+    "KAFKA_LISTENERS": "PLAINTEXT://:9092,CONTROLLER://:9093",
+    "KAFKA_ADVERTISED_LISTENERS": "PLAINTEXT://localhost:9092",
+    "KAFKA_CONTROLLER_LISTENER_NAMES": "CONTROLLER",
+    "KAFKA_INTER_BROKER_LISTENER_NAME": "PLAINTEXT",
+    "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+    "KAFKA_CONTROLLER_QUORUM_VOTERS": "1@localhost:9093",
+    "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR": "1",
+    "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR": "1",
+    "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR": "1",
+    "CLUSTER_ID": "MkU3OEVBNTcwNTJENDM2Qk"
+  },
+  "startup": {
+    "command": [
+      "docker",
+      "run",
+      "-d",
+      "--name",
+      "krabka-kafka44-oracle-0b8597715db0",
+      "-e",
+      "KAFKA_NODE_ID=1",
+      "-e",
+      "KAFKA_PROCESS_ROLES=broker,controller",
+      "-e",
+      "KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093",
+      "-e",
+      "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092",
+      "-e",
+      "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+      "-e",
+      "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+      "-e",
+      "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+      "-e",
+      "KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093",
+      "-e",
+      "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1",
+      "-e",
+      "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
+      "-e",
+      "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
+      "-e",
+      "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+      "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+    ],
+    "returncode": 0,
+    "stdout": "d9aab9be462c95824beed3ded004be8e35c11e27bc544b613de11f3f53240f97\n",
+    "stderr": ""
+  },
+  "client_version": {
+    "command": [
+      "docker",
+      "exec",
+      "krabka-kafka44-oracle-0b8597715db0",
+      "/opt/kafka/bin/kafka-topics.sh",
+      "--version"
+    ],
+    "returncode": 0,
+    "stdout": "4.4.0\n",
+    "stderr": ""
+  },
+  "cleanup": {
+    "command": [
+      "docker",
+      "rm",
+      "-f",
+      "krabka-kafka44-oracle-0b8597715db0"
+    ],
+    "returncode": 0,
+    "stdout": "krabka-kafka44-oracle-0b8597715db0\n",
+    "stderr": ""
+  }
+}

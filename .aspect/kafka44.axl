@@ -1,0 +1,139 @@
+"""Collect immutable released Kafka 4.4 evidence, never a parity pass.
+
+    aspect kafka44 --revision <full-sha> --output <new-directory>
+"""
+
+load("./verify_release.axl", "text_sha256")
+
+IMAGE = "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+BIN = "/opt/kafka/bin/"
+PROBES = {
+    "api-versions": ["kafka-broker-api-versions.sh"],
+    "features": ["kafka-features.sh", "describe"],
+    "broker-configs": ["kafka-configs.sh", "--describe", "--entity-type", "brokers", "--entity-default", "--all"],
+}
+UNEXECUTED = ["authorization", "config validation/errors", "feature-level boundaries", "share DLQ", "delayed tiered uploads", "misrouting", "controller unregistration", "topic-ID transactional commits", "Streams topology APIs", "restart/recovery", "multi-broker"]
+
+def input_problems(revision, inputs):
+    problems = []
+    if len(revision) != 40 or [c for c in revision.elems() if c not in "0123456789abcdef"]:
+        problems.append("revision must be a full lowercase 40-character commit SHA")
+    if any(inputs) and not all(inputs):
+        problems.append("supply both bootstrap addresses and both configuration inputs, or none")
+    return problems
+
+def api_ranges(output):
+    """Released JVM tool rows, excluding endpoint identity and usable annotation."""
+    rows = {}
+    for line in output.splitlines():
+        line = line.strip().rstrip(",")
+        if "): " in line:
+            key, versions = line.split("): ", 1)
+            if "(" in key:
+                rows[key + ")"] = versions.split(" [usable:", 1)[0]
+    return rows
+
+def api_differences(oracle, candidate):
+    """Never treat empty or failed parsing as parity."""
+    expected = api_ranges(oracle)
+    actual = api_ranges(candidate)
+    if not expected or not actual:
+        return [{"error": "missing parsed API rows"}]
+    differences = []
+    for key in sorted({k: True for k in list(expected) + list(actual)}):
+        if expected.get(key) != actual.get(key):
+            differences.append({"api": key, "oracle": expected.get(key), "candidate": actual.get(key)})
+    return differences
+
+def _command(ctx, argv, seconds = 90):
+    result = (ctx.std.process.command("timeout").args([str(seconds)] + argv)
+              .stdout("piped").stderr("piped").spawn().wait_with_output())
+    return {"command": ["timeout", str(seconds)] + argv, "returncode": result.status.code,
+            "stdout": result.stdout, "stderr": result.stderr}
+
+def _tool(ctx, probe, bootstrap, container = "", seconds = 90):
+    argv = ["docker", "exec", container] if container else ["docker", "run", "--rm", "--network", "host", IMAGE]
+    return _command(ctx, argv + [BIN + probe[0], "--bootstrap-server", bootstrap] + probe[1:], seconds)
+
+def _cleanup(ctx, name, path, evidence):
+    evidence["oracle_logs"] = _command(ctx, ["docker", "logs", name])
+    evidence["cleanup"] = _command(ctx, ["docker", "rm", "-f", name])
+    ctx.std.fs.write(path, json.encode(evidence) + "\n")
+
+def _impl(ctx: TaskContext) -> int:
+    a = ctx.args
+    problems = input_problems(a.revision, [a.default_bootstrap, a.enabled_bootstrap, a.default_config, a.enabled_config])
+    if not a.output:
+        problems.append("output directory is required")
+    if problems:
+        fail("; ".join(problems))
+    revision = _command(ctx, ["git", "cat-file", "-t", a.revision])
+    if revision["returncode"] or revision["stdout"].strip() != "commit":
+        fail("revision must identify a commit in the local repository")
+    # mkdir, not create_dir_all: overwriting old evidence must fail.
+    made = _command(ctx, ["mkdir", a.output])
+    if made["returncode"]:
+        fail(made["stderr"])
+    configs = {}
+    for side, path in [("default", a.default_config), ("enabled", a.enabled_config)]:
+        if path:
+            configs[side] = {"sha256": text_sha256(ctx.std.fs.read_to_string(path)).removeprefix("sha256:")}
+    name = "krabka-kafka44-" + a.output.replace("/", "-").replace(".", "-")[-40:]
+    evidence = {"schema_version": 1, "status": "incomplete", "krabka_revision": a.revision,
+                "oracle_image": IMAGE, "configs": configs, "sides": {},
+                "qualification_pass": False, "unexecuted": UNEXECUTED}
+    env = {
+        "KAFKA_NODE_ID": "1", "KAFKA_PROCESS_ROLES": "broker,controller",
+        "KAFKA_LISTENERS": "PLAINTEXT://:9092,CONTROLLER://:9093",
+        "KAFKA_ADVERTISED_LISTENERS": "PLAINTEXT://localhost:9092",
+        "KAFKA_CONTROLLER_LISTENER_NAMES": "CONTROLLER",
+        "KAFKA_INTER_BROKER_LISTENER_NAME": "PLAINTEXT",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS": "1@localhost:9093",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR": "1",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR": "1",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR": "1",
+        "CLUSTER_ID": "MkU3OEVBNTcwNTJENDM2Qk",
+    }
+    evidence["oracle_configuration"] = env
+    argv = ["docker", "run", "-d", "--name", name]
+    for key, value in env.items():
+        argv.extend(["-e", key + "=" + value])
+    evidence["startup"] = _command(ctx, argv + [IMAGE])
+    path = a.output + "/evidence.json"
+    ctx.std.fs.write(path, json.encode(evidence) + "\n")
+    if evidence["startup"]["returncode"]:
+        return 1
+    ctx.defer(_cleanup, ctx, name, path, evidence)
+    ready = False
+    for _ in range(30):
+        result = _tool(ctx, ["kafka-topics.sh", "--list"], "localhost:9092", name, 10)
+        if result["returncode"] == 0:
+            ready = True
+            break
+    evidence["readiness"] = result
+    if not ready:
+        return 1
+    evidence["client_version"] = _command(ctx, ["docker", "exec", name, BIN + "kafka-topics.sh", "--version"])
+    if evidence["client_version"]["returncode"] or not evidence["client_version"]["stdout"].startswith("4.4.0"):
+        return 1
+    for side, bootstrap, container in [("oracle", "localhost:9092", name), ("default", a.default_bootstrap, ""), ("enabled", a.enabled_bootstrap, "")]:
+        if bootstrap:
+            evidence["sides"][side] = {key: _tool(ctx, probe, bootstrap, container) for key, probe in PROBES.items()}
+    evidence["api_differences"] = {
+        side: api_differences(evidence["sides"]["oracle"]["api-versions"]["stdout"], probes["api-versions"]["stdout"])
+        for side, probes in evidence["sides"].items() if side != "oracle"
+    }
+    failed = any([r["returncode"] for probes in evidence["sides"].values() for r in probes.values()])
+    evidence["status"] = "probe-failure" if failed else "collected-not-qualified"
+    return 1 if failed else 0
+
+kafka44 = task(
+    summary = "Collect released Kafka 4.4 oracle/candidate evidence (not parity)",
+    implementation = _impl,
+    args = {name: args.string(default = "", description = description) for name, description in {
+        "revision": "Exact candidate commit SHA.", "output": "New evidence directory.",
+        "default_bootstrap": "Isolated default candidate address.", "enabled_bootstrap": "Isolated enabled candidate address.",
+        "default_config": "Private effective default TOML.", "enabled_config": "Private effective enabled TOML.",
+    }.items()},
+)

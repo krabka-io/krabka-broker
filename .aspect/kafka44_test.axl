@@ -1,0 +1,23 @@
+"""Input safety tests for the released Kafka evidence task."""
+load("./kafka44.axl", "api_differences", "input_problems")
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+def _test_revision(_ctx):
+    for value in ["", "a" * 39, "A" * 40, "g" * 40, "a" * 41]:
+        check_eq("invalid revision", len(input_problems(value, ["", "", "", ""])), 1)
+    check_eq("exact revision", input_problems("a" * 40, ["", "", "", ""]), [])
+
+def _test_candidate_pairs(_ctx):
+    for mask in range(1, 15):
+        inputs = ["present" if mask // power % 2 else "" for power in [1, 2, 4, 8]]
+        check_eq("partial candidate configuration", len(input_problems("a" * 40, inputs)), 1)
+    check_eq("paired candidates", input_problems("a" * 40, ["a", "b", "c", "d"]), [])
+
+def _test_api_differences(_ctx):
+    check_eq("missing output fails", api_differences("", ""), [{"error": "missing parsed API rows"}])
+    reference = "host (id: 1) -> (\n\tApiVersions(18): 0 to 5 [usable: 5],\n)"
+    check_eq("endpoint identity ignored", api_differences(reference, reference.replace("host", "elsewhere")), [])
+    check_eq("version regression", api_differences(reference, reference.replace("0 to 5", "0 to 4")), [{"api": "ApiVersions(18)", "oracle": "0 to 5", "candidate": "0 to 4"}])
+
+kafka44_tests = suite("kafka44", [_test_revision, _test_candidate_pairs, _test_api_differences])
+test_kafka44 = suite_task(kafka44_tests)
