@@ -18,11 +18,12 @@ use {
         producer_checks::TransactionRequest,
         test_support::{PipelineFixture, encode_batch, image_with_topic, pipeline_input},
     },
-    crate::codes,
+    crate::{codes, partition::Partition},
     assert2::check,
     bytes::Bytes,
     krabka_ids::{NodeId, PartitionIndex},
     krabka_log::Offset,
+    krabka_metadata::MetadataImage,
     krabka_protocol::{
         owned::produce_response::PartitionProduceResponse,
         records::{Attributes, Record, RecordBatch},
@@ -77,11 +78,11 @@ impl Retried {
     }
 }
 
-/// A single-record batch from the producer at `base_sequence`.
-fn batch(retried: Retried, base_sequence: i32) -> Bytes {
+/// A single-record batch from `producer_id` at `base_sequence`.
+fn batch(producer_id: i64, transactional: bool, base_sequence: i32) -> Bytes {
     encode_batch(&RecordBatch {
-        attributes: Attributes::default().with_transactional(retried.transactional()),
-        producer_id: PRODUCER_ID,
+        attributes: Attributes::default().with_transactional(transactional),
+        producer_id,
         producer_epoch: PRODUCER_EPOCH,
         base_sequence,
         base_timestamp: TIMESTAMP,
@@ -113,10 +114,30 @@ async fn produce(
     acks: i16,
     services: PartitionServices<'_>,
 ) -> PartitionOutcome {
+    produce_from(
+        (PRODUCER_ID, retried.transactional()),
+        base_sequence,
+        acks,
+        services,
+    )
+    .await
+}
+
+/// One batch from `producer_id`, transactional or not, at `base_sequence`.
+async fn produce_from(
+    (producer_id, transactional): (i64, bool),
+    base_sequence: i32,
+    acks: i16,
+    services: PartitionServices<'_>,
+) -> PartitionOutcome {
     process_partition(
         pipeline_input()
             .topic(TOPIC)
-            .payload(PartitionPayload::Slice(batch(retried, base_sequence)))
+            .payload(PartitionPayload::Slice(batch(
+                producer_id,
+                transactional,
+                base_sequence,
+            )))
             .transaction(transaction())
             .acks(acks)
             .call(),
@@ -124,6 +145,30 @@ async fn produce(
     )
     .await
     .expect("process partition")
+}
+
+/// A leader of partition 0 of `TOPIC` whose high watermark never moves: its
+/// ISR is this broker and a follower that never fetches.
+struct Leader {
+    dir: tempfile::TempDir,
+    image: Arc<MetadataImage>,
+    fixture: PipelineFixture,
+    partition: Arc<Partition>,
+}
+
+impl Leader {
+    async fn new() -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let image = Arc::new(image_with_topic(TOPIC, &[1, 2]));
+        let fixture = PipelineFixture::new(NodeId(1));
+        let partition = fixture.register_partition(dir.path(), TOPIC, &image).await;
+        Self {
+            dir,
+            image,
+            fixture,
+            partition,
+        }
+    }
 }
 
 /// The high-watermark wait of an `acks=all` produce that appended.
@@ -168,10 +213,12 @@ async fn a_retry_during_the_acks_all_wait_answers_the_first_offset() {
     for retried in retried_batches {
         for first_wait in first_waits {
             let label = format!("{retried:?}, first wait {first_wait:?}");
-            let dir = tempfile::tempdir().expect("tempdir");
-            let image = Arc::new(image_with_topic(TOPIC, &[1, 2]));
-            let fixture = PipelineFixture::new(NodeId(1));
-            let partition = fixture.register_partition(dir.path(), TOPIC, &image).await;
+            let Leader {
+                dir: _dir,
+                image,
+                fixture,
+                partition,
+            } = Leader::new().await;
             let services = fixture.services(&image);
 
             for sequence in 0..retried.sequence() {
@@ -231,6 +278,88 @@ async fn a_retry_during_the_acks_all_wait_answers_the_first_offset() {
                 partition.log_end_offset() == Offset(original + 1),
                 "{label}"
             );
+        }
+    }
+}
+
+/// What reached the partition between a batch and its retry.
+#[derive(Debug, Clone, Copy)]
+enum Between {
+    /// Batches of other producers.
+    OtherProducers,
+    /// Batches of other producers, and the producer's own next batch.
+    OtherProducersAndNextBatch,
+}
+
+/// A retry of a batch that is no longer the producer's last on the partition
+/// answers with its first copy's offset, while every batch still waits for
+/// `acks=all`: Kafka finds it among the producer's five retained batches.
+///
+/// This is Jepsen's `t9-1`, where producer 1010's batch at sequence 1 was
+/// appended at offset 6 and again at offset 10, after other producers'
+/// batches, under one leader epoch. With the tracker forgotten, only the
+/// retained batches of the log can find the retry.
+#[tokio::test]
+async fn a_retry_after_later_batches_answers_the_first_offset() {
+    const OTHER_PRODUCERS: [i64; 2] = [1009, 5000];
+    for between in [Between::OtherProducers, Between::OtherProducersAndNextBatch] {
+        for tracker_forgot in [false, true] {
+            let label = format!("{between:?}, tracker forgot: {tracker_forgot}");
+            let Leader {
+                dir: _dir,
+                image,
+                fixture,
+                partition,
+            } = Leader::new().await;
+            let services = fixture.services(&image);
+            let idempotent = |producer_id| (producer_id, false);
+
+            let first_row = produce_from(idempotent(PRODUCER_ID), 0, 1, services)
+                .await
+                .expect_done();
+            check!(
+                first_row.error_code == codes::NONE,
+                "{label}: {first_row:?}"
+            );
+            let mut waiting = vec![pending(
+                produce_from(idempotent(PRODUCER_ID), 1, -1, services).await,
+            )];
+            for producer_id in OTHER_PRODUCERS {
+                waiting.push(pending(
+                    produce_from(idempotent(producer_id), 0, -1, services).await,
+                ));
+            }
+            if matches!(between, Between::OtherProducersAndNextBatch) {
+                waiting.push(pending(
+                    produce_from(idempotent(PRODUCER_ID), 2, -1, services).await,
+                ));
+            }
+            let log_end = partition.log_end_offset();
+            if tracker_forgot {
+                fixture
+                    .producer_state
+                    .truncate(TOPIC, PartitionIndex(0), 0)
+                    .await;
+            }
+
+            let retry_row = timed_out_row(pending(
+                produce_from(idempotent(PRODUCER_ID), 1, -1, services).await,
+            ))
+            .await;
+            check!(
+                retry_row
+                    == PartitionProduceResponse {
+                        index: 0,
+                        error_code: codes::REQUEST_TIMED_OUT,
+                        base_offset: 1,
+                        log_append_time_ms: TIMESTAMP,
+                        log_start_offset: 0,
+                        ..Default::default()
+                    },
+                "{label}"
+            );
+            check!(partition.log_end_offset() == log_end, "{label}");
+            drop(waiting);
         }
     }
 }
