@@ -164,7 +164,13 @@ impl TxnCoordinator {
         match published {
             Ok(()) => NONE,
             Err(error) => {
-                tracing::error!(tid, %error, "failed to persist registered transaction partitions");
+                tracing::error!(
+                    tid,
+                    producer_id = producer_id.get(),
+                    producer_epoch,
+                    %error,
+                    "failed to persist registered transaction partitions"
+                );
                 self.append_error_code(tid, &error).await
             }
         }

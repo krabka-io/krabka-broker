@@ -14,6 +14,7 @@
 
 use {
     crate::{
+        codes,
         coordinator::{
             persistence::{Key, OffsetCommitValue, parse_key},
             unified::{
@@ -219,27 +220,68 @@ pub(super) async fn resolve_pending_offsets(
         }
     }
     if commit && !unresolved.is_empty() {
-        return Err(BrokerError::Txn(format!(
-            "could not resolve transactional offset commits for groups {}",
-            unresolved.join(", ")
-        )));
+        return Err(unresolved_offsets(&unresolved));
     }
     Ok(())
+}
+
+/// The failure of a commit marker whose offsets `groups` could not take.
+///
+/// Kafka's `KafkaApis.handleWriteTxnMarkersRequest` answers a
+/// `GroupCoordinator.completeTransaction` that fails with
+/// `COORDINATOR_NOT_AVAILABLE`, `COORDINATOR_LOAD_IN_PROGRESS` or
+/// `NOT_COORDINATOR` with `NOT_LEADER_OR_FOLLOWER`, "to signal to it that the
+/// coordinator is not ready yet". A group actor that is gone or does not
+/// answer is that state here. The transaction coordinator retries the code,
+/// and the retry drains the resolution the landed marker owes. Any code it
+/// does not retry would stop its marker fan-out for the whole transaction,
+/// and leave every other partition of a prepared commit without its marker.
+fn unresolved_offsets(groups: &[String]) -> BrokerError {
+    BrokerError::MarkerWriteRefused {
+        code: codes::NOT_LEADER_OR_FOLLOWER,
+        message: format!(
+            "could not resolve transactional offset commits for groups {}",
+            groups.join(", ")
+        ),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use {
-        super::{CommittedOffsets, checked_batch_advance, scan_pending_offset_entries},
-        crate::coordinator::{
-            persistence::OffsetCommitValue,
-            test_support::{offset_entry as entry, offset_record, replay_offset_batch},
+        super::{
+            super::marker_error_code, CommittedOffsets, checked_batch_advance,
+            scan_pending_offset_entries, unresolved_offsets,
+        },
+        crate::{
+            codes::NOT_LEADER_OR_FOLLOWER,
+            coordinator::{
+                bootstrap::OFFSETS_TOPIC,
+                persistence::OffsetCommitValue,
+                test_support::{offset_entry as entry, offset_record, replay_offset_batch},
+            },
+            txn::marker::{MarkerFailureClass, classify_marker_failure},
         },
         assert2::assert,
         krabka_log::{Offset, ProducerId},
         krabka_protocol::records::{Record, RecordBatch},
         std::collections::HashMap,
     };
+
+    /// A commit marker whose groups could not take its offsets answers
+    /// `NOT_LEADER_OR_FOLLOWER`, as Kafka's `handleWriteTxnMarkersRequest`
+    /// translates a group coordinator that is not ready, and the transaction
+    /// coordinator retries it, on this broker and on a remote one alike.
+    #[test]
+    fn unresolved_offsets_answer_a_code_the_coordinator_retries() {
+        let error = unresolved_offsets(&["group-a".to_owned(), "group-b".to_owned()]);
+        assert!(
+            (
+                marker_error_code(OFFSETS_TOPIC, 0, &error),
+                classify_marker_failure(&error)
+            ) == (NOT_LEADER_OR_FOLLOWER, MarkerFailureClass::Retriable)
+        );
+    }
 
     fn commit(group: &str, topic: &str, partition: i32, offset: i64) -> Record {
         offset_record()

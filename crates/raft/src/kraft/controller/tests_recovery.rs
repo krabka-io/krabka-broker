@@ -14,8 +14,9 @@ use {
             records::typed_control_batch,
             recovery::{control_state_at, replay_committed, replay_control_records},
             test_support::{
-                await_leader, open_test_controller, submit_change_with_timeout, test_kraft_config,
-                topic_record, voter_set,
+                await_leader, build_engine_only, elect_single_voter_engine, open_test_controller,
+                submit_change_with_timeout, submit_on_engine, test_kraft_config, topic_record,
+                voter_set,
             },
         },
     },
@@ -23,6 +24,7 @@ use {
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
     krabka_metadata::{metadata_version::METADATA_VERSION_FEATURE, voters},
     krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord,
+    krabka_units::prelude::millis,
     std::{fs, path::Path, time::Duration as StdDuration},
     tokio::time,
 };
@@ -345,9 +347,9 @@ async fn snapshot_then_restart_recovers_image() {
 }
 
 /// A restart loads the checkpoint, which is a features delta at its last
-/// contained offset, and then replays the log from its start. While the
-/// prefix below the checkpoint is not yet cleaned, the replay meets the
-/// feature record again. That older offset must not move the epoch back.
+/// contained offset. The log below the checkpoint, not yet cleaned, still
+/// holds the older feature record, and that offset must not move the epoch
+/// back.
 #[tokio::test]
 async fn restart_keeps_the_checkpoint_finalized_features_epoch() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -734,4 +736,74 @@ fn load_quorum_state_refuses_a_file_that_is_not_json(contents: &[u8]) {
             ..
         })
     ));
+}
+
+/// A restart rebuilds the image from its latest checkpoint and the log after
+/// it, never from the log below it.
+///
+/// The log keeps the prefix below a checkpoint until a cleaning lets it go,
+/// and a cleaning moves the log start to an older checkpoint, not past the
+/// newest. A `PartitionChangeRecord` in that prefix bumps the leader and
+/// partition epochs of the image it is applied to. Applied a second time, on
+/// top of the checkpoint that already holds it, it leaves the node one epoch
+/// ahead of every other replica, and every later change bumps from there.
+#[tokio::test]
+async fn a_restart_applies_no_record_below_the_latest_checkpoint_again() {
+    let (mut engine, dir) = build_engine_only()
+        .ids(&[NodeId(1)])
+        .metadata_log(MetadataLogConfig {
+            max_idle_interval: millis(0),
+            ..MetadataLogConfig::default()
+        })
+        .call();
+    elect_single_voter_engine(&mut engine);
+    let mut created = topic_record("moved");
+    if let MetadataRecord::V1Partition(partition) = &mut created[1] {
+        partition.replicas = vec![NodeId(1), NodeId(2)];
+        partition.isr = vec![NodeId(1), NodeId(2)];
+    }
+    let mut rx = submit_on_engine(&mut engine, &created);
+    assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+    engine.write_snapshot_and_clean().expect("first checkpoint");
+    // What a cleaning does once a limit lets the log go up to this checkpoint.
+    let older_checkpoint = engine.log.hwm();
+    engine.log.prune_to(older_checkpoint).expect("clean");
+
+    let mut moved = engine
+        .image
+        .partition("moved", 0)
+        .cloned()
+        .expect("partition");
+    moved.leader = NodeId(2);
+    moved.leader_epoch = krabka_metadata::LeaderEpoch(moved.leader_epoch.get() + 1);
+    moved.partition_epoch += 1;
+    let change = MetadataRecord::V1PartitionUpdate(krabka_metadata::PartitionUpdateRecord {
+        partition: moved,
+        eligible_leader_replicas: None,
+        last_known_elr: None,
+        recovery_state: Some(krabka_metadata::LeaderRecoveryState::Recovered),
+    });
+    let mut rx = submit_on_engine(&mut engine, &[change]);
+    assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+    engine
+        .write_snapshot_and_clean()
+        .expect("second checkpoint");
+    let newest_checkpoint = engine.log.hwm();
+    let before = engine.image.partition("moved", 0).cloned();
+    check!(
+        (
+            engine.log.log_start_offset(),
+            latest_checkpoint_id(dir.path()).map(|id| id.0)
+        ) == (older_checkpoint, Some(newest_checkpoint.0))
+    );
+    drop(engine);
+
+    let ctrl = open_test_controller(
+        dir.path().to_path_buf(),
+        uuid::Uuid::nil(),
+        voter_set(&[NodeId(1)]),
+    )
+    .expect("reopen");
+    check!(ctrl.current_image().partition("moved", 0).cloned() == before);
+    ctrl.shutdown().await;
 }

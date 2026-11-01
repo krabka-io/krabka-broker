@@ -42,7 +42,7 @@ pub use self::{
         MetadataLogConfig, metadata_partition_dir,
     },
     routing::{
-        ControllerAdminRequest, ControllerAdminResponse, ControllerAdminRouteFuture,
+        AdmittedBatch, ControllerAdminRequest, ControllerAdminResponse, ControllerAdminRouteFuture,
         ControllerAdminRouter, ControllerApiVersion, LATEST_PRODUCTION_METADATA_VERSION,
         RaftShardRouter, RegistrationAdmission, RegistrationAdmissionFuture, ShardRouteFuture,
         UnstableApiVersions, UnstableFeatureVersions, supported_feature_range,

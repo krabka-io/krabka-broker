@@ -266,16 +266,17 @@ pub struct RemoteRetentionOutcome {
 /// `DeleteSegmentFinished`. A failure logs at WARN and ends the
 /// partition's pass early.
 ///
-/// A segment left in `DeleteSegmentStarted` wholly below `deleted_below` is
-/// finished here too: the RSM delete, then `DeleteSegmentFinished`. The
-/// `DeleteRecords` handler marks the archive below a floor it raises that way,
-/// and a pass a failure ended leaves the same state behind. Either is
-/// invisible to the read path's finished-only filter, so without this its
-/// bytes would stay in the store for good. These run last, once every
+/// A segment left in `DeleteSegmentStarted` is finished here too: the RSM
+/// delete, then `DeleteSegmentFinished`. The `DeleteRecords` handler marks the
+/// archive below a floor it raises that way, a pass a failure ended leaves the
+/// same state behind, and so does a failed copy's rollback whose delete the
+/// store refused. Each is invisible to the read path's finished-only filter,
+/// so without this its bytes would stay in the store for good. Kafka's
+/// `RLMExpirationTask.cleanupExpiredRemoteLogSegments` retries every
+/// `DELETE_SEGMENT_STARTED` segment the same way. These run last, once every
 /// finished delete has gone, and count in [`RemoteRetentionOutcome::deleted`]
-/// without moving [`RemoteRetentionOutcome::log_start`]: they lie below a
-/// floor that is already established. A `DeleteSegmentStarted` segment above
-/// the floor is left alone; a rolled-back copy finishes its own deletion.
+/// without moving [`RemoteRetentionOutcome::log_start`], as Kafka moves no log
+/// start for them either: the read path already serves nothing from them.
 ///
 /// The pass runs even when neither retention setting is set, because the
 /// log-start breach is an axis of its own: a `DeleteRecords` that moved the
@@ -311,7 +312,7 @@ pub async fn remote_retention_pass(
     let retention_size = log_config.retention_size;
 
     let (finished, abandoned) = match rlmm.list_remote_log_segments(tp) {
-        Ok(list) => finished_and_abandoned(list, deleted_below),
+        Ok(list) => finished_and_abandoned(list),
         Err(e) => {
             warn!(topic = %tp.topic, partition = tp.partition, error = %e,
                   "remote-log-manager: failed to list remote segments for retention");
@@ -421,29 +422,24 @@ pub async fn remote_retention_pass(
     outcome
 }
 
-/// Splits a listing into its `CopySegmentFinished` segments and the
-/// `DeleteSegmentStarted` segments wholly below `deleted_below`, both sorted
-/// by `start_offset`.
+/// Splits a listing into its `CopySegmentFinished` segments and its
+/// `DeleteSegmentStarted` segments, both sorted by `start_offset`.
 ///
-/// The second list is the deletes somebody started under an established
-/// floor and nobody finished. A `DeleteSegmentStarted` segment at or above
-/// the floor is not in it: that is a failed copy's rollback in flight, and
-/// the rollback finishes it.
+/// The second list is the deletes somebody started and nobody finished. No
+/// rollback of this broker's is in flight while the list is read, because a
+/// partition's copy pass ends before its retention pass begins, so each of
+/// them is a delete to retry.
 fn finished_and_abandoned(
     listed: Vec<RemoteLogSegmentMetadata>,
-    deleted_below: Option<Offset>,
 ) -> (Vec<RemoteLogSegmentMetadata>, Vec<RemoteLogSegmentMetadata>) {
     let mut finished = Vec::new();
     let mut abandoned = Vec::new();
     for md in listed {
         match md.state() {
             RemoteLogSegmentState::CopySegmentFinished => finished.push(md),
-            RemoteLogSegmentState::DeleteSegmentStarted
-                if deleted_below.is_some_and(|floor| md.end_offset() < floor.0) =>
-            {
-                abandoned.push(md);
-            }
-            _ => {}
+            RemoteLogSegmentState::DeleteSegmentStarted => abandoned.push(md),
+            RemoteLogSegmentState::CopySegmentStarted
+            | RemoteLogSegmentState::DeleteSegmentFinished => {}
         }
     }
     finished.sort_by_key(RemoteLogSegmentMetadata::start_offset);

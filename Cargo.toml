@@ -325,9 +325,12 @@ krabka-units = "0.7.0"
 # against crates.io above and in the member manifests; the patch below is
 # the single place a sibling revision is bumped.
 [patch.crates-io]
-# `fs::sync_file_range`, which the write-back pacing uses, is in rustix only
-# through the open upstream PR bytecodealliance/rustix#1718, from this fork
-# at its head. Drop the patch when a rustix release carries it.
+# `fs::sync_file_range` is in rustix only through the open upstream PR
+# bytecodealliance/rustix#1718, from this fork at its head. The broker's
+# `log_write_back` uses it, and the broker is not published. A published crate
+# must not use it: `cargo publish` ignores this patch, so the crate builds
+# against crates.io rustix, which does not have it. Drop the patch when a rustix
+# release carries it.
 rustix = { git = "https://github.com/robot-head/rustix", rev = "8b5b932aba81d9d2869517fe63a1b9167daf5289" }
 # Release fixture guards after BDD steps and emit stable outline table metadata.
 # Source and upstream unit-test evidence live on deps/rstest-bdd-0.6-fixture-guards.

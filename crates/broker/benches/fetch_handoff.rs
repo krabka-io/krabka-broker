@@ -28,6 +28,7 @@
 
 use {
     criterion::Criterion,
+    krabka_broker::log_write_back,
     krabka_log::{Log, LogConfig, LogError, Offset},
     krabka_units::prelude::{ByteSize, mebibytes},
     std::{
@@ -212,6 +213,10 @@ fn timed_fetches(
     })
 }
 
+/// Installs the log write-back that the broker installs at startup, so the
+/// logs below pace their dirty data as the broker's logs do. It runs first.
+fn install_log_write_back(_c: &mut Criterion) { log_write_back::install(); }
+
 fn bench_fetch_handoff(c: &mut Criterion) -> Result<(), BenchError> {
     let runtime = runtime()?;
     let failure = FirstError::default();
@@ -312,4 +317,4 @@ fn fastest_micros(
     Ok(fastest)
 }
 
-krabka_macros::bench_main!(bench_fetch_handoff, bench_ratio);
+krabka_macros::bench_main!(install_log_write_back, bench_fetch_handoff, bench_ratio);

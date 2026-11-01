@@ -804,8 +804,18 @@ async fn close_refused_group(
 ) {
     rx.close();
     while let Some(msg) = rx.recv().await {
-        if let Step::RefusedJoin(other) = handle_message(actor, turn, msg).await {
-            other.send();
+        match handle_message(actor, turn, msg).await {
+            Step::Continue => {}
+            Step::RefusedJoin(other) => other.send(),
+            // A failed write, or a shutdown, ends the drain as it ends the
+            // loop. A failed write left changes in memory that never reached
+            // the log, and Kafka's `CoordinatorRuntime` reverts them to the
+            // last committed snapshot, so the group is judged by what its
+            // writes persisted.
+            Step::Stop => {
+                *actor = persisted_state(turn.coordinator, &actor.state.group_id);
+                break;
+            }
         }
     }
     if actor.holds_nothing() {
@@ -873,6 +883,16 @@ impl ActorState {
             && self.state.members.is_empty()
             && self.topology.is_none()
     }
+}
+
+/// The state of `group_id` as its last successful write left it: the seed
+/// that every flush caches, or an empty group when nothing was written.
+fn persisted_state(coordinator: &GroupCoordinator, group_id: &str) -> ActorState {
+    let mut actor = ActorState::new(group_id.to_owned());
+    if let Some(seed) = coordinator.cached_streams_seed(group_id) {
+        apply_seed(&mut actor, seed);
+    }
+    actor
 }
 
 /// Drops the registry entry and the `Streams` type lock of a group whose

@@ -41,7 +41,7 @@ use {
     bytes::{Bytes, BytesMut},
     criterion::{BatchSize, Criterion, Throughput},
     krabka_broker::{
-        Broker, BrokerConfig, BrokerHandle,
+        Broker, BrokerConfig, BrokerHandle, log_write_back,
         metrics::BrokerMetrics,
         produce_hot_path::{
             HotPathSettings, PathChoice, ProducePath, TimestampPolicy, append_one_batch,
@@ -254,6 +254,10 @@ fn paths(records: i32, payload: usize) -> Result<[MeasuredPath; 3], BenchError> 
         },
     ])
 }
+
+/// Installs the log write-back that the broker installs at startup, so the
+/// logs below pace their dirty data as the broker's logs do. It runs first.
+fn install_log_write_back(_c: &mut Criterion) { log_write_back::install(); }
 
 /// Time one append per iteration, with everything around it left untimed.
 ///
@@ -791,6 +795,7 @@ impl RotatingTopic {
 }
 
 krabka_macros::bench_main!(
+    install_log_write_back,
     bench_produce_hot_path,
     bench_produce_acks_all,
     bench_produce_conversion,
