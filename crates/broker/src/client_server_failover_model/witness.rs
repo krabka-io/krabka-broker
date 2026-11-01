@@ -16,6 +16,7 @@ pub const WITNESS_TIMED_OUT_UNKNOWN: u16 = 1 << 9;
 pub const WITNESS_APPENDED_UNACKED: u16 = 1 << 10;
 pub const WITNESS_DUPLICATE_AFTER_UNKNOWN: u16 = 1 << 11;
 pub const WITNESS_UNKNOWN_RETRY_AFTER_FAILOVER: u16 = 1 << 12;
+pub const WITNESS_RETRY_DURING_PENDING_COMMIT: u16 = 1 << 13;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Witnesses(pub u16);

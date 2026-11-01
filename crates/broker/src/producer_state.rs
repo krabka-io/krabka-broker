@@ -22,6 +22,8 @@ mod completed_commit;
 mod decision;
 mod entry;
 mod expiry;
+#[cfg(test)]
+mod inflight_model;
 mod recovery;
 #[cfg(test)]
 mod replication_mirror;
