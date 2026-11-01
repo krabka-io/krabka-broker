@@ -235,9 +235,9 @@ pub enum GroupActorMessage {
     Seed(GroupSeed),
     /// Replace this (classic) actor's whole `Group` with replayed state.
     ClassicSeed(Box<CoordinatorGroup>),
-    /// Take the classic group, and the commits still replicating, that the
-    /// actor this one replaces left before it stopped.
-    ClassicRespawn,
+    /// Take the group, and the commits still replicating, that the actor this
+    /// one replaces left before it stopped.
+    Respawn,
     Shutdown(oneshot::Sender<()>),
 
     /// Test-only: flip the live `Group` to a fresh empty consumer group in

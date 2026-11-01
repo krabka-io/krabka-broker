@@ -11,7 +11,7 @@ pub use super::{
     share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
 };
 use {
-    super::{persistence_next_gen, reconciler, share, streams},
+    super::{actor, persistence_next_gen, reconciler, share, streams},
     crate::{
         codes::{self, COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR},
         error::BrokerError,
@@ -681,6 +681,21 @@ pub async fn stop_streams_actor(coordinator: &GroupCoordinator, group_id: &str) 
     stopped
         .tx
         .send(streams::actor::StreamsGroupActorMessage::Shutdown(reply))
+        .await
+        .expect("send Shutdown");
+    stopping.await.expect("the actor stops");
+    stopped.tx.closed().await;
+}
+
+/// Stops the classic or consumer group actor of `group_id` and waits until
+/// its mailbox is closed, as an actor exits when it leaves no respawn seed.
+/// The registry keeps the closed handle.
+pub async fn stop_group_actor(coordinator: &GroupCoordinator, group_id: &str) {
+    let stopped = coordinator.find(group_id).expect("a group actor to stop");
+    let (reply, stopping) = oneshot::channel();
+    stopped
+        .tx
+        .send(actor::GroupActorMessage::Shutdown(reply))
         .await
         .expect("send Shutdown");
     stopping.await.expect("the actor stops");

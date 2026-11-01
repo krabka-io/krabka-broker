@@ -98,14 +98,19 @@ use {
 /// fields. The values live in [`crate::codes`].
 pub type ErrorCode = i16;
 
-/// What a classic actor that stops after a write that may still commit leaves
-/// for the actor that replaces it.
+/// What an actor that stops after a failed write leaves for the actor that
+/// replaces it.
 ///
-/// It holds the group a reload of the log builds, and the waits of the
-/// commits still replicating, which the next actor completes as the stopped
-/// one would have.
+/// A classic actor leaves one after a write that may still commit. A
+/// consumer-protocol actor leaves one after any failed write: its next actor
+/// would otherwise start without the group's committed offsets and KIP-447
+/// pending marks, which no seed cache holds.
+///
+/// It holds the group a reload of the log builds, with the stopped actor's
+/// offsets, and the waits of the commits still replicating, which the next
+/// actor completes as the stopped one would have.
 #[derive(derive_more::Debug)]
-pub struct ClassicRespawnSeed {
+pub struct RespawnSeed {
     group: Box<CoordinatorGroup>,
     #[debug(skip)]
     /// Behind a lock only because the coordinator is shared between threads
@@ -114,41 +119,56 @@ pub struct ClassicRespawnSeed {
 }
 
 impl GroupCoordinator {
-    /// Leave `group` for the actor that replaces a classic actor which stops
-    /// after a write that may still commit.
-    pub(crate) fn leave_classic_respawn_seed(&self, group: CoordinatorGroup) {
-        self.classic_respawn_seeds
-            .insert(group.group_id.clone(), ClassicRespawnSeed {
+    /// Leave `group` for the actor that replaces an actor which stops after a
+    /// failed write.
+    pub(crate) fn leave_respawn_seed(&self, group: CoordinatorGroup) {
+        self.respawn_seeds
+            .insert(group.group_id.clone(), RespawnSeed {
                 group: Box::new(group),
                 commits: None,
             });
     }
 
-    /// `true` while a stopped actor's classic group waits for `group_id`'s
-    /// next actor.
+    /// `true` while a stopped actor's group waits for `group_id`'s next
+    /// actor.
     #[must_use]
-    pub(crate) fn holds_classic_respawn_seed(&self, group_id: &str) -> bool {
-        self.classic_respawn_seeds.contains_key(group_id)
+    pub(crate) fn holds_respawn_seed(&self, group_id: &str) -> bool {
+        self.respawn_seeds.contains_key(group_id)
     }
 
     /// The live actor of `group_id`, respawned first when a stopped actor
-    /// left it a classic respawn seed, or `None` when no actor serves the
-    /// group.
+    /// left it a respawn seed, or `None` when no actor serves the group.
+    ///
+    /// Unlike [`find`](Self::find), it never returns the closed handle of an
+    /// actor that stopped: a request sent there would get no answer, which
+    /// the handlers could only report as `UNKNOWN_SERVER_ERROR`.
     #[must_use]
     pub(crate) fn live_or_respawned(
         self: &Arc<Self>,
         group_id: &str,
     ) -> Option<Arc<GroupActorHandle>> {
-        if self.holds_classic_respawn_seed(group_id) {
-            return Some(self.get_or_create_classic(group_id));
+        if let Some(kind) = self.respawn_kind(group_id) {
+            return Some(self.get_or_create_group(group_id, kind));
         }
         self.find(group_id).filter(|handle| !handle.tx.is_closed())
+    }
+
+    /// The protocol of the group a stopped actor left for `group_id`'s next
+    /// actor, or `None` when it left none.
+    fn respawn_kind(&self, group_id: &str) -> Option<GroupKindTag> {
+        self.respawn_seeds.get(group_id).map(|seed| {
+            if seed.group.is_consumer() {
+                GroupKindTag::Consumer
+            } else {
+                GroupKindTag::Classic
+            }
+        })
     }
 
     /// Give the stopping actor's commit waits to the seed it left, or hand
     /// them back when it left none.
     fn attach_respawn_commits(&self, group_id: &str, commits: CommitWaits) -> Option<CommitWaits> {
-        match self.classic_respawn_seeds.get_mut(group_id) {
+        match self.respawn_seeds.get_mut(group_id) {
             Some(mut seed) => {
                 seed.commits = Some(Mutex::new(commits));
                 None
@@ -157,10 +177,10 @@ impl GroupCoordinator {
         }
     }
 
-    /// Hand the classic respawn seed of `group`'s id, if any, to the actor
-    /// that replaces the stopped one: its group, and its commit waits.
-    fn apply_classic_respawn_seed(&self, group: &mut CoordinatorGroup, commits: &mut CommitWaits) {
-        let Some((_, seed)) = self.classic_respawn_seeds.remove(&group.group_id) else {
+    /// Hand the respawn seed of `group`'s id, if any, to the actor that
+    /// replaces the stopped one: its group, and its commit waits.
+    fn apply_respawn_seed(&self, group: &mut CoordinatorGroup, commits: &mut CommitWaits) {
+        let Some((_, seed)) = self.respawn_seeds.remove(&group.group_id) else {
             return;
         };
         *group = *seed.group;
@@ -479,7 +499,13 @@ async fn run_actor(
             break;
         }
     }
-    // A classic actor that left a respawn seed hands its commits still
+    // An unload takes the group out of the registry before it asks the actor
+    // to stop. An actor that stopped after a failed write meanwhile leaves no
+    // successor on a broker that no longer coordinates the group.
+    if !coordinator.groups.contains_key(&group.group_id) {
+        coordinator.respawn_seeds.remove(&group.group_id);
+    }
+    // An actor that left a respawn seed hands its commits still
     // replicating to the next actor, which publishes them as they commit.
     // Otherwise no turn is left to publish them: each client still hears how
     // its own write ended, and after an unload it has already heard
@@ -490,13 +516,11 @@ async fn run_actor(
     // A sender can enqueue using a permit reserved before closure. Drain those
     // sends too, dropping their replies, so callers cannot wait on a dead actor.
     rx.close();
-    // A classic actor that left a respawn seed is replaced at once, so every
-    // lookup of the group (a fetch, a transaction marker, a topic deletion, a
-    // type conversion) finds the hydrated group, and the commits it handed
-    // over keep being driven, without waiting for another request.
-    if coordinator.holds_classic_respawn_seed(&group.group_id) {
-        let _ = coordinator.get_or_create_classic(&group.group_id);
-    }
+    // An actor that left a respawn seed is replaced at once, so every lookup
+    // of the group (a fetch, an offset commit, a transaction marker, a topic
+    // deletion, a type conversion) finds the hydrated group, and the commits
+    // it handed over keep being driven, without waiting for another request.
+    let _ = coordinator.live_or_respawned(&group.group_id);
     while rx.recv().await.is_some() {}
     group
 }

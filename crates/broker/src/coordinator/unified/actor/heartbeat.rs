@@ -19,7 +19,10 @@ use {
             reported_owned, try_build_member, update_member_state,
         },
         pending_records::PendingRecords,
-        persistence::{Recorder, current_assignment_value, target_assignment_value},
+        persistence::{
+            Recorder, current_assignment_value, leave_written_consumer_group,
+            target_assignment_value,
+        },
         regex_resolution::{RegexResolution, Resolutions, delete_unsubscribed_regexes},
     },
     crate::{
@@ -112,7 +115,23 @@ pub(super) async fn handle_actor_heartbeat(
                 error_code: write_failure_code(&error),
                 ..Default::default()
             });
-            return false;
+            // The takeover records go in the heartbeat's first batch. A
+            // group that batch persisted is the consumer group the seed cache
+            // now holds, even when a later batch, such as the regex
+            // resolution's, failed.
+            let took_over = group.as_consumer().is_some_and(GroupState::is_persisted);
+            if let Some(kind) = classic_before
+                && !took_over
+            {
+                // The takeover batch failed, so the log holds the classic
+                // group unless that batch commits after all, and then the
+                // member's next heartbeat repeats it.
+                services
+                    .coordinator
+                    .leave_respawn_seed(group.respawn_seed(kind));
+                return false;
+            }
+            return leave_written_consumer_group(group, services.coordinator);
         }
     }
     true
@@ -175,7 +194,7 @@ async fn downgrade_on_leave(
             error_code: write_failure_code(&error),
             ..Default::default()
         });
-        return false;
+        return leave_written_consumer_group(group, services.coordinator);
     }
     let _ = reply.send(ConsumerGroupHeartbeatResponse {
         member_id: Some(request.member_id.clone()),

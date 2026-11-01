@@ -12,7 +12,10 @@ use {
     super::{
         ActorServices, ParkedWaiters,
         downgrade::{FenceFailure, FenceOutcome, fence_or_downgrade},
-        persistence::{flush_classic_metadata, leave_written_classic_group, written_classic_state},
+        persistence::{
+            flush_classic_metadata, leave_written_classic_group, leave_written_consumer_group,
+            written_classic_state,
+        },
         waiters::settle_removed_classic_waiters,
     },
     crate::{
@@ -35,7 +38,7 @@ pub(super) async fn handle_actor_tick(
         if let Err(error) = handle_session_tick(group, services).await {
             tracing::warn!(%group_id, %error,
                 "next-gen actor exiting after tick log-write failure");
-            return false;
+            return leave_written_consumer_group(group, services.coordinator);
         }
     } else if let Some(state) = group.as_classic_mut() {
         let previous = state.clone();
@@ -185,11 +188,12 @@ mod tests {
                 unified::{
                     ClientIdentity, GroupCoordinator,
                     actor::{
-                        ClassicView, GroupActorMessage, GroupKindTag, PendingRecords,
-                        RegexResolution, SyncResult,
+                        ClassicView, GroupActorHandle, GroupActorMessage, GroupKindTag,
+                        PendingRecords, RegexResolution, SyncResult,
                         test_support::{
                             actor_services_with, bidirectional_coordinator,
-                            classic_member_for_topic, completing_classic_group, empty_metadata,
+                            classic_member_for_topic, completing_classic_group,
+                            coordinator_with_log, empty_metadata, join_native_consumer,
                             last_classic_metadata, log_has_classic_group_metadata_write,
                             make_coordinator, parked_follower, rpc, subscribed_member,
                         },
@@ -280,7 +284,7 @@ mod tests {
 
         check!(handle_actor_tick(&mut group, &mut parked, services).await);
         check!(build_classic_view(group.as_classic().unwrap()) == before);
-        check!(!coord.holds_classic_respawn_seed("g"));
+        check!(!coord.holds_respawn_seed("g"));
         check!(log.batches().await.is_empty());
 
         check!(handle_actor_tick(&mut group, &mut parked, services).await);
@@ -915,14 +919,7 @@ mod tests {
         coord.seed_classic("g", Box::new(group));
         let stopping = coord.find("g").unwrap();
         if matches!(expiry, Expiry::Session) {
-            let waiting = Arc::clone(&clock);
-            let parked = spawn_blocking(move || waiting.wait_for_waiters(1, PROMPT))
-                .await
-                .unwrap();
-            assert!(parked, "the actor parks on the session tick");
-            clock
-                .advance(tick_interval)
-                .expect("manual time moves forward");
+            fire_session_tick(&clock, tick_interval).await;
         }
 
         timeout(PROMPT, log.until_log_end(1))
@@ -944,7 +941,31 @@ mod tests {
                     members: Vec::new(),
                 }
         );
-        let live = timeout(PROMPT, async {
+        let live = live_actor(&coord).await;
+        check!(stopped, "the actor stops after the uncertain write");
+        check!(rpc::classic_inspect(&live).await == reloaded);
+        check!(rpc::fetch_committed(&live).await == committed);
+    }
+
+    /// Waits until the actor parks on its session tick, then moves `clock`
+    /// on by `tick_interval`, so that the tick fires once.
+    async fn fire_session_tick(
+        clock: &Arc<qubit_clock::ManualMonotonicClock>,
+        tick_interval: Duration,
+    ) {
+        let waiting = Arc::clone(clock);
+        let parked = spawn_blocking(move || waiting.wait_for_waiters(1, PROMPT))
+            .await
+            .unwrap();
+        assert!(parked, "the actor parks on the session tick");
+        clock
+            .advance(tick_interval)
+            .expect("manual time moves forward");
+    }
+
+    /// The live actor that serves group `g`, once one does.
+    async fn live_actor(coord: &GroupCoordinator) -> Arc<GroupActorHandle> {
+        timeout(PROMPT, async {
             loop {
                 match coord.find("g") {
                     Some(handle) if !handle.tx.is_closed() => return handle,
@@ -953,9 +974,112 @@ mod tests {
             }
         })
         .await
-        .expect("a live actor serves the group");
-        check!(stopped, "the actor stops after the uncertain write");
-        check!(rpc::classic_inspect(&live).await == reloaded);
-        check!(rpc::fetch_committed(&live).await == committed);
+        .expect("a live actor serves the group")
+    }
+
+    /// The consumer-group write whose failure stops the actor.
+    #[derive(Clone, Copy, Debug)]
+    enum FailedWrite {
+        /// The session tick fences the member whose session expired.
+        SessionTick,
+        /// A second member joins.
+        Heartbeat,
+    }
+
+    /// A consumer group's write fails and its actor stops, as one did in the
+    /// Jepsen `subscribe-kip848-txn-mixed` run when a partitioned offsets
+    /// partition timed out the session tick's fence. The registry kept the
+    /// closed handle, so every later `TxnOffsetCommit` from an `assign`
+    /// consumer answered `UNKNOWN_SERVER_ERROR`, and a respawn would have
+    /// dropped the committed offsets, which no seed cache holds.
+    ///
+    /// The actor that replaces it at once serves the members as of the last
+    /// write that succeeded, keeps the committed offset and the open
+    /// transaction's KIP-447 mark, and accepts a transactional commit that
+    /// carries no group metadata.
+    #[rstest::rstest]
+    #[case::session_tick(FailedWrite::SessionTick)]
+    #[case::heartbeat(FailedWrite::Heartbeat)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_consumer_group_whose_write_failed_respawns_with_its_offsets(
+        #[case] failure: FailedWrite,
+    ) {
+        use {
+            crate::{
+                coordinator::{
+                    test_support::offset_entry,
+                    unified::{actor::CommitFence, group::GroupOffsets},
+                },
+                task_util::ask,
+            },
+            qubit_clock::{ManualMonotonicClock, MonotonicClock as _},
+            std::collections::HashSet,
+        };
+
+        let clock = ManualMonotonicClock::new_shared();
+        let tick_interval = Duration::from_hours(1);
+        let log = Arc::new(InMemoryOffsetsLog::default());
+        let coord = coordinator_with_log(
+            NextGenConfig {
+                timer: clock.new_timer(),
+                session_expiry_tick: tick_interval,
+                session_timeout: Duration::from_millis(1),
+                ..NextGenConfig::assigning_at_once()
+            },
+            empty_metadata(),
+            Arc::clone(&log),
+        );
+        let stopping = coord.get_or_create_consumer("g");
+        let joined = join_native_consumer(&stopping).await;
+        ask(&stopping.tx, |reply| GroupActorMessage::UpdateCommitted {
+            entries: vec![(("t".to_owned(), 0), offset_entry(42))],
+            reply,
+        })
+        .await
+        .expect("the actor takes the offset");
+        ask(&stopping.tx, |reply| {
+            GroupActorMessage::AddPendingTxnOffsets {
+                producer_id: 7,
+                written_at: 1,
+                keys: vec![("t".to_owned(), 1)],
+                reply,
+            }
+        })
+        .await
+        .expect("the actor takes the mark");
+        let offsets = GroupOffsets {
+            committed: HashMap::from([(("t".to_owned(), 0), offset_entry(42))]),
+            pending_txn: HashSet::from([("t".to_owned(), 1)]),
+        };
+        check!(rpc::fetch_offsets(&stopping).await == offsets);
+
+        log.fail_next_append(None);
+        match failure {
+            FailedWrite::SessionTick => {
+                // The member's 1 ms session runs out before the tick.
+                sleep(Duration::from_millis(5)).await;
+                fire_session_tick(&clock, tick_interval).await;
+            }
+            FailedWrite::Heartbeat => {
+                let refused = rpc::consumer_heartbeat(&stopping, "", 0, Some("t")).await;
+                check!(refused.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
+            }
+        }
+        let stopped = timeout(PROMPT, stopping.tx.closed()).await.is_ok();
+        check!(stopped, "the actor stops after the failed write");
+
+        let live = live_actor(&coord).await;
+        check!(!Arc::ptr_eq(&live, &stopping));
+        check!(rpc::fetch_offsets(&live).await == offsets);
+        let members: Vec<(String, i32)> = rpc::describe(&live)
+            .await
+            .members
+            .into_iter()
+            .map(|member| (member.member_id, member.member_epoch))
+            .collect();
+        check!(members == vec![(joined.member_id, joined.epoch.0)]);
+        check!(
+            rpc::validate_commit(&live, "", -1, CommitFence::Transactional, &[]).await == Ok(())
+        );
     }
 }
