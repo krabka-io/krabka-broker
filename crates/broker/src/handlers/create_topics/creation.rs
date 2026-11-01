@@ -25,9 +25,8 @@ use {
         codes,
         config_keys::{self, resolve_preferred_leader_site},
         handlers::{
-            forward_to_controller::wrong_controller_message,
             partition_materialization::PartitionMaterialization,
-            submit_failure::controller_write_code,
+            submit_failure::{controller_write_code, wrong_controller_write_message},
         },
         quota::ControllerMutationQuota,
         site_placement::PlacementRng,
@@ -378,13 +377,7 @@ fn submit_failure_result(
             if code == codes::UNKNOWN_SERVER_ERROR {
                 tracing::error!(topic = %name, %error, "CreateTopics submit_change failed");
             }
-            let message = (code == codes::NOT_CONTROLLER).then(|| {
-                wrong_controller_message(match error {
-                    RaftError::NotLeader { current_leader } => *current_leader,
-                    RaftError::LeaderUnknown => None,
-                    _ => leader,
-                })
-            });
+            let message = wrong_controller_write_message(error, leader);
             topic_error_result(name, code, message)
         }
     }

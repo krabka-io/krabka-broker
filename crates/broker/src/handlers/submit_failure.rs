@@ -1,6 +1,11 @@
 //! The error code that a handler answers when a controller write fails.
 
-use {crate::codes, krabka_raft::RaftError, tokio::time::error::Elapsed};
+use {
+    super::forward_to_controller::wrong_controller_message,
+    crate::codes,
+    krabka_raft::{NodeId, RaftError},
+    tokio::time::error::Elapsed,
+};
 
 /// The error code for a `submit_change` that failed with `error`.
 ///
@@ -42,6 +47,32 @@ pub fn controller_write_code(error: &RaftError, otherwise: i16) -> i16 {
     }
 }
 
+/// The message of Kafka's `ControllerExceptions.newWrongControllerException`
+/// for a controller write that failed with `error`, or `None` when `error` is
+/// not one that [`controller_write_code`] answers `NOT_CONTROLLER`.
+///
+/// `QuorumController` builds that exception from `latestController()`, the
+/// raft leader the refusing node knows of. A lost leadership
+/// ([`RaftError::NotLeader`]) names the leader it was redirected to, and an
+/// unknown leader names none. A new leader that has not committed its own
+/// epoch ([`RaftError::UncommittedTail`]) is that raft leader, so it names
+/// `known_leader`, the leader this node knows.
+///
+/// A response that writes `ApiError.fromThrowable(e).message()` carries this
+/// text, because it differs from `NOT_CONTROLLER`'s default message.
+pub fn wrong_controller_write_message(
+    error: &RaftError,
+    known_leader: Option<NodeId>,
+) -> Option<String> {
+    let leader = match error {
+        RaftError::NotLeader { current_leader } => *current_leader,
+        RaftError::LeaderUnknown => None,
+        RaftError::UncommittedTail => known_leader,
+        _ => return None,
+    };
+    Some(wrong_controller_message(leader))
+}
+
 /// How a guarded controller operation failed.
 ///
 /// [`classify_guarded`] builds it from the result of
@@ -51,7 +82,10 @@ pub enum GuardedFailure {
     /// The request deadline passed before the operation finished.
     TimedOut,
     /// This node is not the controller leader, or knows no leader.
-    NotController,
+    NotController {
+        /// The leader the refusal redirected to, if it named one.
+        leader: Option<NodeId>,
+    },
     /// The operation failed with any other error.
     Failed(RaftError),
 }
@@ -63,8 +97,18 @@ impl GuardedFailure {
     pub fn code(&self, otherwise: i16) -> i16 {
         match self {
             Self::TimedOut => codes::REQUEST_TIMED_OUT,
-            Self::NotController => codes::NOT_CONTROLLER,
+            Self::NotController { .. } => codes::NOT_CONTROLLER,
             Self::Failed(error) => submit_failure_code(error, otherwise),
+        }
+    }
+
+    /// The message of Kafka's `newWrongControllerException` for a
+    /// [`NotController`](Self::NotController) failure, which names the leader
+    /// it was redirected to, and `None` for every other failure.
+    pub fn not_controller_message(&self) -> Option<String> {
+        match self {
+            Self::NotController { leader } => Some(wrong_controller_message(*leader)),
+            Self::TimedOut | Self::Failed(_) => None,
         }
     }
 }
@@ -81,9 +125,10 @@ pub fn classify_guarded<T>(
 ) -> Result<T, GuardedFailure> {
     match result {
         Ok(Ok(value)) => Ok(value),
-        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => {
-            Err(GuardedFailure::NotController)
-        }
+        Ok(Err(RaftError::NotLeader { current_leader })) => Err(GuardedFailure::NotController {
+            leader: current_leader,
+        }),
+        Ok(Err(RaftError::LeaderUnknown)) => Err(GuardedFailure::NotController { leader: None }),
         Ok(Err(error)) => Err(GuardedFailure::Failed(error)),
         Err(_) => Err(GuardedFailure::TimedOut),
     }
@@ -222,12 +267,13 @@ pub mod test_support {
 mod tests {
     use {
         super::{
-            classify_guarded, controller_write_code, submit_failure_code,
+            GuardedFailure, classify_guarded, controller_write_code, submit_failure_code,
             test_support::{RETRIED, every_raft_error, guarded_failure},
+            wrong_controller_write_message,
         },
         crate::codes,
         assert2::check,
-        krabka_raft::RaftError,
+        krabka_raft::{NodeId, RaftError},
         std::{future::pending, time::Duration},
         tokio::time::{error::Elapsed, timeout},
     };
@@ -284,6 +330,66 @@ mod tests {
                 controller_write_code(&error, otherwise)
             ) == expected
         );
+    }
+
+    /// Each row: the failed write, the leader this node knows, then the
+    /// message of Kafka's `newWrongControllerException`, or `None` where the
+    /// write does not answer `NOT_CONTROLLER`.
+    #[yare::parameterized(
+        not_leader = {
+            RaftError::NotLeader { current_leader: Some(NodeId(2)) },
+            Some(NodeId(3)),
+            Some("The active controller appears to be node 2."),
+        },
+        not_leader_without_hint = {
+            RaftError::NotLeader { current_leader: None },
+            Some(NodeId(3)),
+            Some("No controller appears to be active."),
+        },
+        leader_unknown = {
+            RaftError::LeaderUnknown,
+            None,
+            Some("No controller appears to be active."),
+        },
+        uncommitted_tail = {
+            RaftError::UncommittedTail,
+            Some(NodeId(1)),
+            Some("The active controller appears to be node 1."),
+        },
+        uncommitted_tail_without_leader = {
+            RaftError::UncommittedTail,
+            None,
+            Some("No controller appears to be active."),
+        },
+        other_failure = { RaftError::Shutdown, Some(NodeId(1)), None },
+    )]
+    fn a_failed_write_names_the_leader_kafka_names(
+        error: RaftError,
+        known_leader: Option<NodeId>,
+        expected: Option<&str>,
+    ) {
+        check!(
+            wrong_controller_write_message(&error, known_leader).as_deref() == expected
+        );
+    }
+
+    #[yare::parameterized(
+        redirected = {
+            GuardedFailure::NotController { leader: Some(NodeId(2)) },
+            Some("The active controller appears to be node 2."),
+        },
+        no_leader = {
+            GuardedFailure::NotController { leader: None },
+            Some("No controller appears to be active."),
+        },
+        timed_out = { GuardedFailure::TimedOut, None },
+        failed = { GuardedFailure::Failed(RaftError::Shutdown), None },
+    )]
+    fn a_guarded_failure_carries_kafkas_not_controller_message(
+        failure: GuardedFailure,
+        expected: Option<&str>,
+    ) {
+        check!(failure.not_controller_message().as_deref() == expected);
     }
 
     /// A guarded result: `None` stands for a passed deadline.
