@@ -8,13 +8,12 @@
 //! stored description. Without one, Kafka never asks, refuses a push with
 //! `UNSUPPORTED_VERSION`, and describes every group as `NOT_STORED`.
 //!
-//! krabka cannot load a JVM class. It builds in the plugin Kafka ships,
-//! `org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin`, which
-//! holds the latest description of each group in memory, and it refuses any
-//! other class name at startup, as Kafka refuses a class it cannot load. The
-//! group's streams actor holds that description, so it is lost when the broker
-//! restarts or another broker takes over the group, which is the limit Kafka
-//! documents for the reference plugin.
+//! krabka does not load JVM bytecode. Kafka's reference class selects the
+//! built-in actor-local memory store. Embedding applications may instead
+//! install a native asynchronous [`TopologyDescriptionBackend`] in the Streams
+//! configuration; [`FileTopologyDescriptionBackend`] is a restart-persistent
+//! implementation. See `docs/streams-topology-description-storage.md` for the
+//! extension contract and coordinator-movement requirements.
 //!
 //! [`TopologyDescription`] is Kafka's `StreamsGroupTopologyDescription`, the
 //! form a plugin stores, with the conversions from the push and to the
@@ -22,7 +21,11 @@
 //! `StreamsGroupTopologyDescriptionBackoff`, which keeps the members of a
 //! group from all being asked for the same description.
 
+mod backend;
+mod file_backend;
+pub use file_backend::FileTopologyDescriptionBackend;
 mod backoff;
+pub use backend::{BackendFuture, NativeBackend, StorageFailure, TopologyDescriptionBackend};
 mod model;
 
 pub use self::{
@@ -115,7 +118,7 @@ impl TopologyDescriptionPlugin {
 
 /// The description that the in-memory plugin holds for one group, with the
 /// topology epoch it was pushed at.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StoredDescription {
     pub topology_epoch: i32,
     pub description: TopologyDescription,

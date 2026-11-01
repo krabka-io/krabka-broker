@@ -364,6 +364,7 @@ pub(super) fn build_describe(
         configured_topology: configured_topology.cloned(),
         members,
         topology_description: None,
+        topology_description_error: false,
     }
 }
 

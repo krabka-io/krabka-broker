@@ -249,6 +249,7 @@ mod tests {
             configured_topology: None,
             members: vec![describe_member()],
             topology_description: None,
+            topology_description_error: false,
         });
 
         let expected = krabka_macros::tagged_wire!(DescribedGroup {

@@ -193,6 +193,22 @@ impl GroupCoordinator {
             }
         }
 
+        if let Some(handle) = self.find_streams(group_id) {
+            let (tx, rx) = oneshot::channel();
+            if handle
+                .tx
+                .send(StreamsGroupActorMessage::PrepareConversion(tx))
+                .await
+                .is_err()
+            {
+                return Ok(DowngradeOutcome::RetryCleanup);
+            }
+            match rx.await {
+                Ok(Ok(true)) => {}
+                Ok(Err(error)) => return Err(error),
+                _ => return Ok(DowngradeOutcome::RetryCleanup),
+            }
+        }
         if !member_id.is_empty() {
             self.streams_seeds.remove(group_id);
             self.streams_seeds_cache.remove(group_id);

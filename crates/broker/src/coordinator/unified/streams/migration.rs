@@ -52,6 +52,8 @@ pub enum DowngradeOutcome {
     /// Streams group has live members. The join answers
     /// `INCONSISTENT_GROUP_PROTOCOL`.
     RejectLiveMembers,
+    /// Plugin cleanup failed or is throttled; classic joins retry.
+    RetryCleanup,
 }
 
 /// Build the single-record batch that tombstones the classic k2 `GroupMetadata`

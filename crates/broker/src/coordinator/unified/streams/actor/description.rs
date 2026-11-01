@@ -7,14 +7,10 @@
 //! plugin and the back-off. The actor keeps all three for its group, so each
 //! step below runs in the one turn of the actor that handles the message.
 //!
-//! Kafka trunk writes the group metadata record twice per push, with the
-//! epochs in KIP-1331's tags 2 and 3: the `UNCERTAIN` epoch before it calls
-//! the plugin, so that a broker that dies between the two writes asks again,
-//! and the pushed epoch after. The in-memory plugin stores in the same turn
-//! and loses everything with the broker, so the actor writes only the second
-//! record. A push reaches the group only while a plugin is configured, which
-//! is when the group writes the trunk tags at all (`ActorState::trunk_records`);
-//! Kafka 4.3.1 has neither KIP-1331 nor the tags.
+//! As in released Kafka 4.4, persist UNCERTAIN before backend mutation and
+//! the final epoch only after success. Session checks retry uncertain and
+//! stale-epoch cleanup; permanent store rejection suppresses solicitation for
+//! that epoch while transient failure retains exponential heartbeat backoff.
 
 use {
     super::{ActorState, StreamsTurn, chrono_now_ms, records::group_metadata_value},
@@ -22,7 +18,10 @@ use {
         codes,
         coordinator::unified::streams::{
             config::StreamsGroupConfig,
-            description::{Jitter, StoredDescription, TopologyDescription},
+            description::{
+                DescriptionEpochs, Jitter, SolicitationBackoff, StorageFailure, StoredDescription,
+                TopologyDescription,
+            },
             persistence::PendingStreamsRecords,
             topology::status,
         },
@@ -75,7 +74,7 @@ pub(super) fn maybe_request_description(
     now: Instant,
 ) {
     if version < 1
-        || !config.topology_description_plugin.is_configured()
+        || !config.description_plugin_configured()
         || request.member_epoch < 0
         || response.error_code != codes::NONE
     {
@@ -155,20 +154,42 @@ pub(super) async fn handle_push(
         Ok(description) => description,
         Err(message) => return Ok((codes::INVALID_REQUEST, Some(message))),
     };
-    // `InMemoryTopologyDescriptionPlugin.setTopology` replaces what the group
-    // held, and `setStoredDescriptionTopologyEpoch` records the epoch.
-    actor.description = Some(StoredDescription {
-        topology_epoch,
-        description,
-    });
-    actor.description_epochs.stored = topology_epoch;
-    if actor.trunk_records {
-        let pending = PendingStreamsRecords {
-            group_metadata: Some(group_metadata_value(actor)),
-            ..Default::default()
-        };
-        turn.flush(actor, pending, chrono_now_ms()).await?;
+    // Persist intent before an external side effect: replay must never mistake
+    // a possibly-written backend value for a reliably stored epoch.
+    actor.description_epochs.stored = DescriptionEpochs::UNCERTAIN;
+    persist_epochs(actor, turn).await?;
+    let result = if let Some(backend) = &turn.config.topology_description_backend {
+        backend.set(&group_id, topology_epoch, &description).await
+    } else {
+        actor.description = Some(StoredDescription {
+            topology_epoch,
+            description,
+        });
+        Ok(())
+    };
+    match result {
+        Ok(()) => actor.description_epochs.stored = topology_epoch,
+        Err(failure) => {
+            if failure == StorageFailure::Permanent {
+                actor.description_epochs.failed = topology_epoch;
+                persist_epochs(actor, turn).await?;
+            }
+            if failure == StorageFailure::Permanent {
+                actor.description_backoff.clear(topology_epoch);
+            } else {
+                actor.description_backoff.arm_or_extend(
+                    topology_epoch,
+                    Instant::now(),
+                    Jitter::draw(),
+                );
+            }
+            return Ok((
+                codes::STREAMS_TOPOLOGY_DESCRIPTION_UPDATE_FAILED,
+                Some("Topology description plugin failed.".to_owned()),
+            ));
+        }
     }
+    persist_epochs(actor, turn).await?;
     actor.description_backoff.clear(topology_epoch);
     Ok((codes::NONE, None))
 }
@@ -178,16 +199,101 @@ pub(super) async fn handle_push(
 /// epoch says the plugin holds the current topology epoch and the in-memory
 /// plugin still holds a description of that epoch, as its `getTopology`
 /// answers.
-pub(super) fn stored_description(actor: &ActorState) -> Option<TopologyDescription> {
-    let topology_epoch = actor.state.topology.as_ref()?.epoch;
-    if !actor.description_epochs.holds(topology_epoch) {
-        return None;
+pub(super) async fn stored_description(
+    actor: &ActorState,
+    config: &StreamsGroupConfig,
+) -> Result<Option<TopologyDescription>, StorageFailure> {
+    if !config.description_plugin_configured() {
+        return Ok(None);
     }
-    actor
+    let Some(topology) = actor.state.topology.as_ref() else {
+        return Ok(None);
+    };
+    let topology_epoch = topology.epoch;
+    if !actor.description_epochs.holds(topology_epoch) {
+        return Ok(None);
+    }
+    if let Some(backend) = &config.topology_description_backend {
+        return backend.get(&actor.state.group_id, topology_epoch).await;
+    }
+    Ok(actor
         .description
         .as_ref()
         .filter(|stored| stored.topology_epoch == topology_epoch)
-        .map(|stored| stored.description.clone())
+        .map(|stored| stored.description.clone()))
+}
+
+/// Persist a backend operation's epoch boundary.
+async fn persist_epochs(actor: &ActorState, turn: StreamsTurn<'_>) -> Result<(), BrokerError> {
+    if actor.trunk_records {
+        let pending = PendingStreamsRecords {
+            group_metadata: Some(group_metadata_value(actor)),
+            ..Default::default()
+        };
+        turn.flush(actor, pending, chrono_now_ms()).await?;
+    }
+    Ok(())
+}
+
+/// Retry cleanup of uncertain/stale storage. A failed delete keeps UNCERTAIN
+/// durable and is retried on a later session check, never in a tight loop.
+pub(super) async fn cleanup(
+    actor: &mut ActorState,
+    turn: StreamsTurn<'_>,
+    force: bool,
+) -> Result<bool, BrokerError> {
+    if !turn.config.description_plugin_configured() {
+        return Ok(true);
+    }
+    // Recheck membership in the actor after the caller's read: a joining
+    // member may have revived the group before this message arrived.
+    if force && !actor.state.members.is_empty() {
+        return Ok(false);
+    }
+    let stored = actor.description_epochs.stored;
+    if stored == DescriptionEpochs::NONE
+        || (!force && (stored == current_topology_epoch(actor) || !actor.state.members.is_empty()))
+    {
+        return Ok(true);
+    }
+    actor.description_epochs.stored = DescriptionEpochs::UNCERTAIN;
+    persist_epochs(actor, turn).await?;
+    if let Some(backend) = &turn.config.topology_description_backend
+        && backend.delete(&actor.state.group_id).await.is_err()
+    {
+        return Ok(false);
+    }
+    actor.description = None;
+    actor.description_epochs.stored = DescriptionEpochs::NONE;
+    actor.description_backoff = SolicitationBackoff::default();
+    persist_epochs(actor, turn).await?;
+    Ok(true)
+}
+
+/// A classic join must not convert over orphaned plugin state. Failed
+/// conversion deletes are throttled at the UNCERTAIN epoch as in Kafka 4.4.
+pub(super) async fn prepare_conversion(
+    actor: &mut ActorState,
+    turn: StreamsTurn<'_>,
+) -> Result<bool, BrokerError> {
+    if !actor.state.members.is_empty() {
+        return Ok(false);
+    }
+    if actor.description_epochs.stored == DescriptionEpochs::NONE {
+        return Ok(true);
+    }
+    if !actor.description_backoff.arm_if_not_active(
+        DescriptionEpochs::UNCERTAIN,
+        Instant::now(),
+        Jitter::draw(),
+    ) {
+        return Ok(false);
+    }
+    let result = cleanup(actor, turn, true).await?;
+    if result {
+        actor.description_backoff = SolicitationBackoff::default();
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

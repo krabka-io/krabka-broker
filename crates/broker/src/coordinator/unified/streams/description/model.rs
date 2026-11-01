@@ -21,13 +21,13 @@ const NODE_TYPE_PROCESSOR: i8 = 2;
 const NODE_TYPE_SINK: i8 = 3;
 
 /// A Streams topology as the plugin stores it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TopologyDescription {
     pub subtopologies: Vec<Subtopology>,
     pub global_stores: Vec<GlobalStore>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Subtopology {
     pub id: String,
     pub nodes: Vec<Node>,
@@ -35,7 +35,7 @@ pub struct Subtopology {
 
 /// One processing node. The wire carries only the successors; a reader
 /// rebuilds the predecessors from them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Node {
     pub name: String,
     pub kind: NodeKind,
@@ -44,7 +44,7 @@ pub struct Node {
 
 /// What a [`Node`] keeps of its type: Kafka's `Source`, `Processor` and
 /// `Sink` records.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NodeKind {
     Source { topics: Vec<String> },
     Processor { stores: Vec<String> },
@@ -52,7 +52,7 @@ pub enum NodeKind {
 }
 
 /// A global store: a source node that feeds a processor node.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GlobalStore {
     pub source: Node,
     pub processor: Node,

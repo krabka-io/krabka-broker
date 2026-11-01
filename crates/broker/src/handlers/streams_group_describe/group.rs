@@ -109,6 +109,7 @@ pub(super) async fn describe_group(
         }
     }
 
+    let description_error = view.topology_description_error;
     let description = view.topology_description.take();
     let mut row = render_group(view);
     // KIP-1331: Kafka's `StreamsGroupTopologyDescriptionManager.attachTopologyDescriptions`
@@ -116,7 +117,9 @@ pub(super) async fn describe_group(
     // group's topology epoch, or `NOT_STORED`. Without a plugin nothing is
     // ever stored. An error row returned above keeps `NOT_REQUESTED`.
     if included.topology_description {
-        row.topology_description_status = if description.is_some() {
+        row.topology_description_status = if description_error {
+            2 // Kafka TOPOLOGY_DESCRIPTION_STATUS_ERROR
+        } else if description.is_some() {
             TOPOLOGY_DESCRIPTION_STATUS_AVAILABLE
         } else {
             TOPOLOGY_DESCRIPTION_STATUS_NOT_STORED
