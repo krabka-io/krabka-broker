@@ -312,6 +312,15 @@ Those come from krabka-protocol. `cargo publish` ignores `[patch.crates-io]`,
 so each requirement must name a release that crates.io has, and krabka-protocol
 releases before this repository does.
 
+The same rule applies to each API that a published crate calls. A published
+crate may use only the APIs that a crates.io release of its dependency has. A
+git fork in `[patch.crates-io]` may serve unpublished crates only. The rustix
+fork that adds `fs::sync_file_range` is an example. `cargo publish` builds
+`krabka-log` against crates.io rustix, so a call into the fork does not compile
+there. `krabka-log` reaches `sync_file_range` only through the `WriteBack` that
+the broker installs at startup with `krabka_log::set_write_back`. The broker's
+`log_write_back` module holds that `WriteBack`.
+
 Each published crate sets `repository`, `description`, `readme` and an
 `include` list. The list ships the library source and the README, and leaves
 out tests, benches and fixtures. Cargo prints an "ignoring test" warning for
