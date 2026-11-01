@@ -12,8 +12,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
       - name: Collect immutable released oracle evidence (not candidate qualification)
-        run: python3 tools/kafka44/collect.py --revision "${GITHUB_SHA}" --output evidence/kafka44
+        run: aspect kafka44 --revision "${GITHUB_SHA}" --output evidence/kafka44
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

@@ -33,6 +33,7 @@ load("./generate_config_reference_test.axl", "generate_config_reference_tests")
 load("./generate_kip_matrix_test.axl", "generate_kip_matrix_tests")
 load("./jepsen_test.axl", "jepsen_tests")
 load("./kafka_system_tests_test.axl", "kafka_system_tests_tests")
+load("./kafka44_test.axl", "kafka44_tests")
 load("./kind_smoke_test.axl", "kind_smoke_tests")
 load("./mutants_shard_test.axl", "mutants_shard_tests")
 load("./pgo_test.axl", "pgo_tests")
@@ -65,6 +66,7 @@ SUITES = [
     generate_kip_matrix_tests,
     jepsen_tests,
     kafka_system_tests_tests,
+    kafka44_tests,
     kind_smoke_tests,
     mutants_shard_tests,
     pgo_tests,
