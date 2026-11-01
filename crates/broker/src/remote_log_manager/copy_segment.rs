@@ -58,7 +58,7 @@ pub(super) enum CopyOutcome {
 /// lifecycle. On any failure, this function deletes the partial remote data
 /// and drops the metadata (`DeleteSegmentStarted` → `DeleteSegmentFinished`),
 /// so the next tick retries the segment; see [`rollback`] for the part of
-/// that a write-once archive cannot do.
+/// that a write-once archive cannot do, and for a delete the store refuses.
 ///
 /// `chain` decides whether the copy is stamped for a WORM manifest. When it
 /// is, the stamp goes on before the copy, so the `CopySegmentStarted` record
@@ -427,14 +427,20 @@ fn fenced(tp: &TopicIdPartition, ex: &SegmentExport, when: &str) {
 /// # A failed delete on a mutable tier
 ///
 /// The RSM delete counts as one KIP-405 `RemoteDeleteRequestsPerSec`. When it
-/// fails, the rollback warns and counts a `RemoteDeleteErrorsPerSec`, but still
-/// drops the metadata: nothing retries the delete, and the failed copy's
-/// objects stay in the tier unreferenced, as Kafka's copy task leaves them when
-/// its own cleanup delete fails. A delete of objects the copy never wrote
-/// succeeds, since the RSM contract makes it idempotent.
+/// fails, the rollback warns, counts a `RemoteDeleteErrorsPerSec`, and stops at
+/// `DeleteSegmentStarted` rather than recording `DeleteSegmentFinished`. The
+/// next remote-retention pass retries the delete and finishes the lifecycle;
+/// see [`super::remote_retention::remote_retention_pass`]. This is Kafka's
+/// shape: `RemoteLogManager.deleteRemoteLogSegment` records
+/// `DELETE_SEGMENT_STARTED` before the RSM delete and `DELETE_SEGMENT_FINISHED`
+/// only after it, the copy task logs "Cleanup failed, will retry later" when
+/// that delete throws, and `RLMExpirationTask.cleanupExpiredRemoteLogSegments`
+/// retries every `DELETE_SEGMENT_STARTED` segment. A delete of objects the copy
+/// never wrote succeeds, since the RSM contract makes it idempotent.
 async fn rollback(tier: &RemoteTier<'_>, metadata: &RemoteLogSegmentMetadata, broker_id: i32) {
     let id = metadata.remote_log_segment_id().clone();
     let tp = &id.topic_id_partition;
+    let mut delete_refused = false;
     match tier.archive {
         ArchiveMode::Mutable => {
             tier.metrics
@@ -450,9 +456,11 @@ async fn rollback(tier: &RemoteTier<'_>, metadata: &RemoteLogSegmentMetadata, br
             if let Some(error) = failure {
                 warn!(topic = %tp.topic, partition = tp.partition, base = metadata.start_offset(),
                       error, "remote-log-manager: failed to delete a failed copy's objects; \
-                              they stay in the tier unreferenced");
+                              leaving the segment in DeleteSegmentStarted for remote retention \
+                              to retry");
                 tier.metrics
                     .record_remote_error(RemoteTierPath::Delete, &tp.topic);
+                delete_refused = true;
             }
         }
         ArchiveMode::WriteOnce => {
@@ -463,10 +471,17 @@ async fn rollback(tier: &RemoteTier<'_>, metadata: &RemoteLogSegmentMetadata, br
                     archive; the verifier reports them as orphans");
         }
     }
-    for state in [
-        RemoteLogSegmentState::DeleteSegmentStarted,
-        RemoteLogSegmentState::DeleteSegmentFinished,
-    ] {
+    // `DeleteSegmentFinished` would say the objects are gone. After a refused
+    // delete they are not, so the segment stays `DeleteSegmentStarted`.
+    let states: &[RemoteLogSegmentState] = if delete_refused {
+        &[RemoteLogSegmentState::DeleteSegmentStarted]
+    } else {
+        &[
+            RemoteLogSegmentState::DeleteSegmentStarted,
+            RemoteLogSegmentState::DeleteSegmentFinished,
+        ]
+    };
+    for &state in states {
         // A segment deleted under the copy is already `DeleteSegmentStarted`,
         // so that update fails as expected; hence DEBUG.
         if let Err(e) =
@@ -786,16 +801,17 @@ mod tests {
 
     /// A failed copy's rollback deletes its partial objects, and that delete
     /// counts as one delete request, and as one delete error when the backend
-    /// refuses it. The metadata is dropped either way, so a refused delete
-    /// leaves objects behind that only the error counter reports.
+    /// refuses it. A delete that goes drops the metadata; a refused one leaves
+    /// the segment in `DeleteSegmentStarted` for remote retention to retry.
     #[yare::parameterized(
-        the_delete_goes = { false, 0 },
-        the_backend_refuses_it = { true, 1 },
+        the_delete_goes = { false, 0, &[] },
+        the_backend_refuses_it = { true, 1, &[RemoteLogSegmentState::DeleteSegmentStarted] },
     )]
     #[test_macro(tokio::test)]
     async fn a_failed_copy_rollback_records_its_delete_request_and_error(
         refuse_delete: bool,
         errors: u64,
+        left: &[RemoteLogSegmentState],
     ) {
         let rsm: Arc<dyn RemoteStorageManager> = Arc::new(FailingCopyRsm { refuse_delete });
         let owned = fixtures::owned_tier_resources();
@@ -814,13 +830,14 @@ mod tests {
         .await;
 
         check!(outcome == CopyOutcome::Failed);
-        check!(
-            owned
-                .rlmm
-                .list_remote_log_segments(&tp())
-                .unwrap()
-                .is_empty()
-        );
+        let states: Vec<_> = owned
+            .rlmm
+            .list_remote_log_segments(&tp())
+            .unwrap()
+            .iter()
+            .map(RemoteLogSegmentMetadata::state)
+            .collect();
+        check!(states == left);
         check!(owned.delete_counts() == (1, errors));
     }
 
