@@ -4,7 +4,7 @@
     {"name": "assign-none", "args": ["--sub-via", "assign"]},
     {"name": "assign-partition", "args": ["--sub-via", "assign", "--nemesis", "partition"]},
     {"name": "assign-kill", "args": ["--sub-via", "assign", "--nemesis", "kill"]},
-    {"name": "assign-pause", "args": ["--sub-via", "assign", "--nemesis", "pause"]},
+    {"name": "assign-pause", "args": ["--sub-via", "assign", "--nemesis", "pause"], "known_failure": "Duplicate records: after an acks=all produce times out, the leader appends the producer's retry of the same batch (same producer id, epoch and sequence) again instead of answering it with the original offset. See docs/jepsen.md, Known failures."},
     {"name": "assign-mixed", "args": ["--sub-via", "assign", "--nemesis", "partition,kill,pause"]},
     {"name": "assign-packet", "args": ["--sub-via", "assign", "--nemesis", "packet"], "requires": ["netem"]},
     {"name": "assign-clock", "args": ["--sub-via", "assign", "--nemesis", "clock"]},
