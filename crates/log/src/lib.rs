@@ -97,6 +97,8 @@ mod txn_index;
 pub use compaction_pause::{CompactionPause, CompactionPauseControl, compaction_pause};
 #[cfg(any(test, feature = "test-helpers"))]
 pub use io::{DirectFile, IoTarget, LogIo};
+#[cfg(not(target_os = "wasi"))]
+pub use io::{WriteBack, set_write_back};
 #[krabka_macros::sendfile_cfg]
 pub use log::RawReadDesc;
 #[krabka_macros::sendfile_cfg]
