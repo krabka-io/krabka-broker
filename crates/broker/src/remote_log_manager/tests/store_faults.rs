@@ -259,7 +259,7 @@ async fn a_stalled_copy_is_abandoned_at_its_deadline() {
         index_cache,
     } = fixtures::owned_tier_resources();
 
-    let copies = CopiesInFlight::default();
+    let uploads = CopiesInFlight::default();
 
     let started = Instant::now();
     let copied = copy_exports(
@@ -267,7 +267,7 @@ async fn a_stalled_copy_is_abandoned_at_its_deadline() {
             .rsm(&rsm)
             .rlmm(&rlmm)
             .copy_timeout(SHORT_COPY_DEADLINE)
-            .copies_in_flight(&copies)
+            .copies_in_flight(&uploads)
             .metrics(&metrics)
             .index_cache(&index_cache)
             .call(),
@@ -297,7 +297,7 @@ async fn a_stalled_copy_is_abandoned_at_its_deadline() {
     let stalled = rlmm.list_remote_log_segments(&tp()).unwrap()[0]
         .remote_log_segment_id()
         .id;
-    check!(copies.contains(stalled));
+    check!(uploads.contains(stalled));
 }
 
 /// A partition whose copy stalls must not stop the sweep from reaching the
