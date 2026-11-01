@@ -267,10 +267,13 @@ mod tests {
 
         fn properties(&self) -> Vec<Property<Self>> {
             vec![
-                Property::always("reaches_target_when_quiescent", |model: &Self, s| {
-                    !model.quiescent(s) || s.value == model.target
+                Property::always(
+                    "reaches_target_when_quiescent",
+                    |model: &Self, s: &Counter| !model.quiescent(s) || s.value == model.target,
+                ),
+                Property::sometimes("reaches_target", |model: &Self, s: &Counter| {
+                    s.value == model.target
                 }),
-                Property::sometimes("reaches_target", |model: &Self, s| s.value == model.target),
             ]
         }
     }
