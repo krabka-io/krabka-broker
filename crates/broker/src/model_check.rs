@@ -22,6 +22,7 @@ use {
         collections::{BTreeMap, BTreeSet},
         fmt::Debug,
         hash::Hash,
+        mem,
         sync::{Arc, Mutex},
     },
 };
@@ -185,7 +186,7 @@ pub fn check_model_with_known_failures<M>(
         "[{label}] unique-state bound exceeded"
     );
     assert_pinned_count(checker.unique_state_count(), pinned, label);
-    let found = found.lock().expect("the search has ended");
+    let found = mem::take(&mut *found.lock().expect("the search has ended"));
     for property in &properties {
         if let Some(failure) = known
             .iter()
