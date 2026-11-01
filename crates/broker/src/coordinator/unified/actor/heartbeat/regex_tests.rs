@@ -433,3 +433,61 @@ fn check_assigned_topics(state: &GroupState, member: &str, topics: &HashSet<Uuid
     check!(&target_topics(state, member) == topics);
     assert!(&held_topics(state, member) == topics);
 }
+
+/// A heartbeat that takes over an empty classic group with a regex writes two
+/// batches: the takeover with the join, then the resolution. When only the
+/// resolution's batch fails, the log holds the consumer group with the
+/// member, and that is the group the stopped actor leaves for its next one,
+/// not the classic group the takeover replaced.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_takeover_whose_regex_batch_failed_leaves_the_consumer_group() {
+    use {
+        crate::coordinator::unified::{
+            actor::test_support::{actor_services, coordinator_with_log, rpc},
+            group::CoordinatorGroup,
+            offsets_log::fake::InMemoryOffsetsLog,
+        },
+        std::sync::Arc,
+        tokio::sync::oneshot,
+    };
+
+    let log = Arc::new(InMemoryOffsetsLog::default());
+    let coord = coordinator_with_log(
+        NextGenConfig::assigning_at_once(),
+        Arc::new(metadata(false)),
+        Arc::clone(&log),
+    );
+    let mut group = CoordinatorGroup::new_classic("g");
+    log.fail_append_after(1);
+
+    let (reply, response) = oneshot::channel();
+    let keep_running = handle_actor_heartbeat(
+        &mut group,
+        actor_services(&coord, &log),
+        request("m1", 0, Some("a.*")),
+        ClientIdentity {
+            id: "client",
+            host: "host",
+        },
+        &a_regex_resolver(&["a1"]),
+        reply,
+    )
+    .await;
+
+    check!(!keep_running, "the actor stops after the failed write");
+    check!(response.await.unwrap().error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
+    check!(
+        log.batches().await.len() == 1,
+        "the takeover batch is in the log"
+    );
+    let next = coord
+        .live_or_respawned("g")
+        .expect("the stopped actor leaves its group");
+    let members: Vec<String> = rpc::describe(&next)
+        .await
+        .members
+        .into_iter()
+        .map(|member| member.member_id)
+        .collect();
+    check!(members == vec!["m1".to_owned()]);
+}
