@@ -13,10 +13,12 @@
 //! This is Kafka's `VerificationStateEntry`, `VerificationGuard`,
 //! `UnifiedLog.maybeStartTransactionVerification` and the
 //! `batchMissingRequiredVerification` check in
-//! `UnifiedLog.analyzeAndValidateProducerState`.
+//! `UnifiedLog.analyzeAndValidateProducerState`, and the duplicate lookup that
+//! check runs first.
 
 use {
     super::Log,
+    crate::producer_snapshot::ProducerBatchMetadata,
     krabka_ids::ProducerId,
     std::sync::atomic::{AtomicU64, Ordering},
 };
@@ -201,6 +203,38 @@ impl Log {
             return Err(TransactionAppendRefusal::OutOfOrderSequence);
         }
         Ok(())
+    }
+
+    /// The retained batch of `producer_id` that a client batch repeats, or
+    /// `None` when it repeats none. Kafka's
+    /// `ProducerStateEntry.findDuplicateBatch`.
+    ///
+    /// A batch repeats a retained batch when its epoch is the producer's
+    /// epoch on this partition and its sequence range, from `base_sequence`
+    /// to `base_sequence + last_offset_delta` as sequences wrap, is that
+    /// batch's range. The retained batches are the producer's last five at
+    /// its epoch. They change only under the append's own lock, so a caller
+    /// that looks here under that lock finds every batch already appended,
+    /// whether or not anything has acknowledged it yet.
+    #[must_use]
+    pub fn find_duplicate_batch(
+        &self,
+        producer_id: ProducerId,
+        producer_epoch: i16,
+        (base_sequence, last_offset_delta): (i32, i32),
+    ) -> Option<ProducerBatchMetadata> {
+        if producer_id.get() < 0 {
+            return None;
+        }
+        self.producer_state.get(&producer_id)?.find_duplicate_batch(
+            self.earlier_batches
+                .get(&producer_id)
+                .into_iter()
+                .flatten()
+                .copied(),
+            producer_epoch,
+            (base_sequence, last_offset_delta),
+        )
     }
 
     /// Drop the verification state after a transactional append, as Kafka's

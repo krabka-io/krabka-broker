@@ -13,7 +13,7 @@ use {
         heartbeat::{MemberUpdateRecords, member_update_records, replace_static_member},
         member_state::{MemberChange, after_member_update, update_subscription},
         pending_records::PendingRecords,
-        persistence::{Recorder, flush_classic_metadata},
+        persistence::{Recorder, flush_classic_metadata, replayed_classic_state},
         regex_resolution::{RegexResolution, maybe_update_regular_expressions},
         waiters::{
             complete_classic_rebalance, drain_followers_with, fence_replaced_classic_member,
@@ -158,7 +158,12 @@ pub(super) async fn handle_classic_join_message(
                 if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
                     // Kafka reverts the replacement and answers with the
                     // append error, under the unknown member id and the
-                    // leader from before the join.
+                    // leader from before the join. A write that is in the
+                    // log may still commit the replacement, so the actor then
+                    // stops and leaves the next one the group that a reload
+                    // of the log builds, the replacement included.
+                    let written = matches!(error, BrokerError::CoordinatorWriteUncommitted { .. })
+                        .then(|| replayed_classic_state(state));
                     let leader = previous.leader_id.clone().unwrap_or_default();
                     *state = previous;
                     tracing::warn!(group_id = %state.group_id, %error,
@@ -171,7 +176,17 @@ pub(super) async fn handle_classic_join_message(
                         leader,
                         ..JoinResult::default()
                     });
-                    return true;
+                    let Some(written) = written else {
+                        return true;
+                    };
+                    match written {
+                        Ok(replayed) => services.coordinator.leave_classic_respawn_seed(
+                            group.respawn_seed(GroupKind::Classic(replayed)),
+                        ),
+                        Err(error) => tracing::warn!(group_id = %group.group_id, %error,
+                            "classic static rejoin could not rebuild the written group"),
+                    }
+                    return false;
                 }
                 let _ = reply.send(result);
             }
@@ -642,21 +657,25 @@ async fn downgrade_joining(
 mod tests {
     use {
         super::*,
-        crate::coordinator::unified::{
-            actor::{
-                GroupActorHandle, GroupActorMessage, GroupKindTag, SyncResult,
-                test_support::{
-                    completing_classic_group, decode_assignment, last_classic_metadata,
-                    make_coordinator, make_coordinator_with_config,
-                    make_coordinator_with_topic_config, make_coordinator_with_topic_policy,
-                    marked_classic_handle, rpc, seed_and_upgrade, subscription_blob,
+        crate::coordinator::{
+            test_support::offset_entry,
+            unified::{
+                actor::{
+                    ClassicMemberView, ClassicView, GroupActorHandle, GroupActorMessage,
+                    GroupKindTag, SyncResult,
+                    test_support::{
+                        completing_classic_group, decode_assignment, last_classic_metadata,
+                        make_coordinator, make_coordinator_with_config,
+                        make_coordinator_with_topic_config, make_coordinator_with_topic_policy,
+                        marked_classic_handle, rpc, seed_and_upgrade, subscription_blob,
+                    },
                 },
+                classic_state::{GroupState as ClassicGroupState, OffsetEntry},
+                config::{ConsumerGroupMigrationPolicy as Policy, NextGenConfig},
+                offsets_log::{OFFSETS_TOPIC, fake::InMemoryOffsetsLog},
+                persistence_next_gen::NextGenKey,
+                regex_resolver::{FixedRegexResolver, no_topic_regex_resolver},
             },
-            classic_state::GroupState as ClassicGroupState,
-            config::{ConsumerGroupMigrationPolicy as Policy, NextGenConfig},
-            offsets_log::{OFFSETS_TOPIC, fake::InMemoryOffsetsLog},
-            persistence_next_gen::NextGenKey,
-            regex_resolver::{FixedRegexResolver, no_topic_regex_resolver},
         },
         assert2::{assert, check},
         bytes::Bytes,
@@ -668,7 +687,7 @@ mod tests {
             collections::HashSet,
             sync::{Arc, atomic::Ordering},
         },
-        tokio::{sync::oneshot, time},
+        tokio::{sync::oneshot, task, time},
     };
 
     /// Kafka's `group.initial.rebalance.delay.ms = 0`: the first member of a
@@ -879,6 +898,190 @@ mod tests {
         check!(view.members[0].protocol_metadata == Bytes::from_static(b"subscription"));
         check!(view.members[0].assignment.as_deref() == Some(&b"assignment"[..]));
         check!(log.batches().await.is_empty());
+    }
+
+    /// How long a step that should happen at once may take before the test
+    /// fails instead of hanging.
+    const PROMPT: Duration = Duration::from_secs(5);
+
+    /// A static rejoin of `stable_static_group_and_rejoin`, whose group also
+    /// holds a committed offset and an offset commit still in flight, after
+    /// both writes timed out with their records in the log. The high
+    /// watermark still holds them back.
+    struct UncertainStaticRejoin {
+        coord: Arc<GroupCoordinator>,
+        log: Arc<InMemoryOffsetsLog>,
+        generation: i32,
+        /// The client of the commit still in flight.
+        in_flight: oneshot::Receiver<Result<(), i16>>,
+    }
+
+    /// The offset committed before the rejoin.
+    fn committed_before() -> HashMap<(String, i32), OffsetEntry> {
+        HashMap::from([(("t".to_owned(), 0), offset_entry(42))])
+    }
+
+    /// The offsets once the commit in flight commits too.
+    fn committed_after() -> HashMap<(String, i32), OffsetEntry> {
+        HashMap::from([
+            (("t".to_owned(), 0), offset_entry(42)),
+            (("t".to_owned(), 1), offset_entry(9)),
+        ])
+    }
+
+    /// Runs the rejoin of [`UncertainStaticRejoin`]: the reply is Kafka's
+    /// append error, and the actor stops once it has answered.
+    async fn uncertain_static_rejoin() -> UncertainStaticRejoin {
+        let (coord, log) = make_coordinator();
+        let mut rejoin = stable_static_group_and_rejoin();
+        rejoin.group.committed_offsets = committed_before();
+        let seeded = super::super::test_support::seed_classic_group(&coord, rejoin.group);
+        log.hold_commits();
+        let in_flight = rpc::begin(&seeded.handle, |reply| GroupActorMessage::CommitOffsets {
+            batch: RecordBatch::default(),
+            entries: vec![(("t".to_owned(), 1), offset_entry(9))],
+            reply,
+        })
+        .await;
+        time::timeout(PROMPT, log.until_log_end(1))
+            .await
+            .expect("the commit is appended");
+
+        let response = rpc::begin(&seeded.handle, |reply| GroupActorMessage::ClassicJoin {
+            req: rejoin.request,
+            version: 4,
+            client_id: "new-client".into(),
+            client_host: "new-host".into(),
+            regex_resolver: no_topic_regex_resolver(),
+            reply,
+        })
+        .await;
+        time::timeout(PROMPT, log.until_log_end(2))
+            .await
+            .expect("the replacement is appended");
+        log.time_out_uncommitted();
+        let response = time::timeout(PROMPT, response)
+            .await
+            .expect("the timed-out rejoin is answered")
+            .unwrap();
+
+        check!(
+            response
+                == JoinResult {
+                    error_code: codes::COORDINATOR_NOT_AVAILABLE,
+                    generation_id: seeded.generation,
+                    protocol_type: Some("consumer".into()),
+                    protocol_name: Some("range".into()),
+                    leader: "m1".into(),
+                    ..JoinResult::default()
+                }
+        );
+        let stopped = time::timeout(PROMPT, seeded.handle.tx.closed()).await;
+        assert!(stopped.is_ok(), "the actor stops");
+        UncertainStaticRejoin {
+            coord,
+            log,
+            generation: seeded.generation,
+            in_flight,
+        }
+    }
+
+    /// A static rejoin whose write times out with the record in the log
+    /// answers the append error, and the actor stops: the record may still
+    /// commit, and the reverted replacement in memory would then disagree
+    /// with the log. The stopped actor is replaced at once, with no request to
+    /// prompt it: the next actor holds the group that a reload of the log
+    /// builds, the replacement under the generation, the subscription and the
+    /// assignment it was written with. It serves only the committed offset,
+    /// and takes over the commit still in flight: it answers that commit's
+    /// timeout, and publishes its offset once the high watermark passes it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_static_rejoin_whose_write_may_still_commit_respawns_the_persisted_group() {
+        let rejoin = uncertain_static_rejoin().await;
+        let persisted = last_classic_metadata(&rejoin.log).await;
+        let replacement = persisted.members[0].member_id.clone();
+        check!(replacement.starts_with("instance-1-"));
+
+        let respawned = time::timeout(PROMPT, async {
+            loop {
+                match rejoin.coord.find("g") {
+                    Some(handle) if !handle.tx.is_closed() => return handle,
+                    _ => task::yield_now().await,
+                }
+            }
+        })
+        .await
+        .expect("the stopped group is respawned at once");
+
+        check!(
+            rpc::classic_inspect(&respawned).await
+                == ClassicView {
+                    group_id: "g".into(),
+                    state: ClassicGroupState::Stable,
+                    protocol_type: Some("consumer".into()),
+                    protocol_name: Some("range".into()),
+                    generation_id: rejoin.generation,
+                    members: vec![ClassicMemberView {
+                        member_id: replacement,
+                        client_id: "client".into(),
+                        host: "host".into(),
+                        group_instance_id: Some("instance-1".into()),
+                        protocol_metadata: Bytes::from_static(b"new-subscription"),
+                        assignment: Some(Bytes::from_static(b"assignment")),
+                    }],
+                }
+        );
+        check!(rpc::fetch_committed(&respawned).await == committed_before());
+        check!(
+            time::timeout(PROMPT, rejoin.in_flight)
+                .await
+                .expect("the in-flight commit is answered")
+                .unwrap()
+                == Err(codes::COORDINATOR_NOT_AVAILABLE)
+        );
+
+        rejoin.log.release_commits();
+        time::timeout(PROMPT, async {
+            while rpc::fetch_committed(&respawned).await != committed_after() {
+                task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the commit that was in flight is published once it commits");
+    }
+
+    /// The client retries the rejoin after the actor stopped: the retry
+    /// reaches the persisted group, so it replaces the persisted member under
+    /// the group's generation instead of founding an empty group.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_static_rejoin_retried_after_the_stop_reaches_the_persisted_group() {
+        let rejoin = uncertain_static_rejoin().await;
+        rejoin.log.release_commits();
+        let persisted = last_classic_metadata(&rejoin.log).await.members[0]
+            .member_id
+            .clone();
+
+        let retried = send_join(
+            &rejoin.coord.get_or_create_classic("g"),
+            stable_static_group_and_rejoin().request,
+        )
+        .await;
+
+        check!(retried.member_id.starts_with("instance-1-"));
+        check!(retried.member_id != persisted);
+        check!(
+            retried
+                == JoinResult {
+                    error_code: codes::NONE,
+                    generation_id: rejoin.generation,
+                    protocol_type: Some("consumer".into()),
+                    protocol_name: Some("range".into()),
+                    leader: persisted,
+                    skip_assignment: false,
+                    member_id: retried.member_id.clone(),
+                    members: Vec::new(),
+                }
+        );
     }
 
     /// A classic join to an empty consumer group whose tombstone write fails

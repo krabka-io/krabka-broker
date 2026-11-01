@@ -1,33 +1,58 @@
-//! The checker bounds and the one entry point that the model test calls.
+//! The checker bounds and the entry points that the model tests call.
 //!
 //! The bounds sit next to the assertions that prove a run was exhaustive,
 //! because a truncated search proves nothing and the two must move together.
+//!
+//! # RED regression
+//!
+//! [`Orchestration::GateOnly`] is the leader before #1947, whose writer
+//! appended every batch the dedup check passed. `no_duplicate_append` fails
+//! there at depth 2: `ClientSend(AppendedUnacked)`,
+//! `ClientRetry(AppendedUnacked)`. The leader appends the first send, whose
+//! commit into the tracker is still owed. The client's request times out on
+//! its side and it sends the batch again. The dedup check finds no tracked
+//! entry, and the writer appends the batch a second time. This is Jepsen's
+//! "Duplicate records" failure (krabka-io/krabka-broker#1932). The test pins
+//! that counterexample, so a leader that loses the writer's lookup, or a model
+//! that stops reaching the failure, fails it.
 
-use {super::model::ClientServerFailoverModel, crate::model_check::run_bfs, stateright::Checker};
+use {
+    super::model::{ClientServerFailoverModel, Orchestration},
+    crate::model_check::{KnownFailure, check_model, check_model_with_known_failures},
+};
 
-const MAX_DEPTH: usize = 36;
-const MAX_STATES: usize = 120_000;
+const MAX_DEPTH: usize = 48;
+const MAX_STATES: usize = 4_000_000;
 
-// The exact unique-state count of the exhaustive BFS over this model.
-// `unique_state_count()` is deterministic for a fixed model, so pinning it
-// turns any change to the reachable set -- a dropped action, a `next_state` arm
-// that starts returning `None`, a derived `Hash`/`PartialEq` that stops
-// considering a field -- into a failure instead of a silently smaller search
-// that still passes the upper bound. The *generated* count is deliberately not
-// pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES: usize = 38_131;
+// The exact unique-state counts of the exhaustive single-threaded BFS over this
+// model, one per orchestration. A changed count is a changed model, not a
+// retuning knob: a dropped action, a `next_state` arm that starts returning
+// `None`, or a field that the derived `Hash` stops reading.
+const PINNED_UNIQUE_STATES: usize = 85_084;
+const PINNED_UNIQUE_STATES_GATE_ONLY: usize = 187_373;
 
 pub fn run_model() {
-    let checker = run_bfs(
-        ClientServerFailoverModel,
+    check_model(
+        ClientServerFailoverModel {
+            orchestration: Orchestration::WriterLookup,
+        },
         "client_server_failover",
-        MAX_DEPTH,
-        MAX_STATES,
+        (MAX_DEPTH, MAX_STATES, MAX_STATES),
+        PINNED_UNIQUE_STATES,
     );
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == PINNED_UNIQUE_STATES,
-        "unique-state count moved: the reachable set of this model changed"
+}
+
+pub fn run_gate_only() {
+    check_model_with_known_failures(
+        ClientServerFailoverModel {
+            orchestration: Orchestration::GateOnly,
+        },
+        "client_server_failover_gate_only",
+        (MAX_DEPTH, MAX_STATES, MAX_STATES),
+        PINNED_UNIQUE_STATES_GATE_ONLY,
+        &[KnownFailure {
+            property: "no_duplicate_append",
+            depth: 2,
+        }],
     );
-    checker.assert_properties();
 }

@@ -348,7 +348,13 @@ async fn commit_unsupported_live(recovery: &mut FeatureRecovery) {
             &format!("probe-{probe}"),
             Uuid::new_v4(),
         ));
-        if let Err(error) = controller.submit_change(vec![topic]).await {
+        let submitted = time::timeout_at(
+            time::Instant::from_std(deadline),
+            controller.submit_change(vec![topic]),
+        )
+        .await
+        .expect("a submission went unanswered while the controller stopped");
+        if let Err(error) = submitted {
             recovery.rejected_change = Some(error);
             break;
         }

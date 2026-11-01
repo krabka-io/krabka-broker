@@ -3,10 +3,13 @@
 //! `handlers::produce`.
 //!
 //! This tracker is a second copy of the producer state that the partition log
-//! keeps (`krabka_log::Log::recovered_producers`). The produce path reads only
-//! this copy. A follower copies the transaction markers that it replicates
-//! into it, but not the data batches, so the copy is complete only on a
-//! leader. `Partition::install_local_leadership` replaces it with the state of
+//! keeps (`krabka_log::Log::recovered_producers`). The produce path's early
+//! dedup gate reads this copy. The partition writer then looks a client batch
+//! up in the log's copy, under the append lock
+//! (`krabka_log::Log::find_duplicate_batch`), and answers a repeat that the
+//! gate passed because this copy had not committed it yet. A follower copies
+//! the transaction markers that it replicates into it, but not the data
+//! batches, so the copy is complete only on a leader. `Partition::install_local_leadership` replaces it with the state of
 //! the log on each promotion. A reader that must also answer on a follower
 //! reads the log instead: `DescribeProducers`, and the log cleaner, which
 //! keeps the last record of each producer.
@@ -22,6 +25,10 @@ mod completed_commit;
 mod decision;
 mod entry;
 mod expiry;
+#[cfg(test)]
+mod inflight_model;
+#[cfg(test)]
+mod logged_producer;
 mod recovery;
 #[cfg(test)]
 mod replication_mirror;
@@ -36,9 +43,9 @@ mod tests;
 #[cfg(test)]
 mod truncation_replay;
 
-#[cfg(test)]
-pub use self::decision::check_pure;
 use self::entry::Completion;
+#[cfg(test)]
+pub use self::{decision::check_pure, logged_producer::LoggedProducer};
 pub use self::{
     decision::{Checked, Decision, SequenceContext},
     entry::{NO_EARLIER_BATCHES, PartitionProducerState, ProducerEntry, RetainedBatch},
@@ -71,17 +78,16 @@ impl ProducerState {
     /// same epoch, completions merge by physical offset into the latest five
     /// distinct batches; a repeated completion keeps the existing metadata.
     /// Earlier completions never replace the latest sequence, timestamp or
-    /// transaction state. `AppendCommit::record` defers this
-    /// call until the `acks=all` high-watermark gate for its own append
-    /// resolves, so it can run long after the append itself, on a task
+    /// transaction state. `AppendCommit::record` runs this call once the
+    /// writer answers the append, on the request's own task, which is
     /// unrelated to the writer's serial handling of later messages on the
     /// same partition. [`Self::mirror_log_entries`] mirrors a transaction
-    /// marker's epoch bump as soon as the marker is durable, with no such
-    /// wait. A commit for a batch from before that marker can therefore
-    /// resolve after the mirror already ran, and an unconditional overwrite
-    /// would put the pre-marker epoch back, undoing the fence. This is
-    /// Kafka's own invariant: `ProducerAppendInfo.checkProducerEpoch` never
-    /// lets a producer's tracked epoch move backward.
+    /// marker's epoch bump from the writer. A commit for a batch from before
+    /// that marker can therefore resolve after the mirror already ran, and an
+    /// unconditional overwrite would put the pre-marker epoch back, undoing
+    /// the fence. This is Kafka's own invariant:
+    /// `ProducerAppendInfo.checkProducerEpoch` never lets a producer's
+    /// tracked epoch move backward.
     ///
     /// `append` is the batch's base offset, its max timestamp and whether it
     /// is transactional. A transactional batch opens a transaction when none
@@ -97,49 +103,13 @@ impl ProducerState {
         sequence: (i32, i32),
         append: (LogOffset, i64, bool),
     ) {
-        let (producer_id, producer_epoch) = producer;
-        let (base_sequence, last_offset_delta) = sequence;
-        let (base_offset, last_timestamp, is_transactional) = append;
+        let (producer_id, _) = producer;
         let handle = self.handle(topic, partition);
         let mut s = handle.lock().await;
         let existing = s.entries.get(&ProducerId(producer_id)).copied();
-        let last_sequence = increment_sequence(base_sequence, last_offset_delta);
-        let last_offset = base_offset + i64::from(last_offset_delta);
-        let incoming = RetainedBatch {
-            base_sequence: krabka_verified::decrement_sequence(last_sequence, last_offset_delta),
-            last_sequence,
-            base_offset,
-            last_offset,
-            timestamp: last_timestamp,
-        };
-        let Completion { accepted, earlier } =
-            entry::earlier_after_completion(existing, producer_epoch, incoming);
-        if !accepted {
-            return;
+        if let Some(entry) = committed_entry(existing, producer, sequence, append) {
+            s.entries.insert(ProducerId(producer_id), entry);
         }
-        if let Some(mut tracked) = existing
-            && tracked.epoch == producer_epoch
-            && tracked.last_offset >= last_offset
-        {
-            // Deferred completions can fill an earlier slot, but never undo
-            // newer sequence, timestamp or transaction-marker state.
-            tracked.earlier = earlier;
-            s.entries.insert(ProducerId(producer_id), tracked);
-            return;
-        }
-        let current_txn_first_offset = existing
-            .and_then(|entry| entry.current_txn_first_offset)
-            .or_else(|| is_transactional.then_some(base_offset));
-        s.entries.insert(ProducerId(producer_id), ProducerEntry {
-            epoch: producer_epoch,
-            last_sequence,
-            last_offset,
-            base_offset,
-            last_timestamp,
-            entry_timestamp: last_timestamp,
-            current_txn_first_offset,
-            earlier,
-        });
     }
 
     /// Drop idempotent-producer entries whose last accepted batch was
@@ -252,6 +222,58 @@ impl ProducerState {
             .map(|(pid, e)| (pid.get(), *e))
             .collect()
     }
+}
+
+/// The tracked entry after [`ProducerState::commit`] records one completed
+/// append, or `None` when the completion leaves the entry as it is.
+///
+/// `existing` is the producer's tracked entry. The other arguments are
+/// [`ProducerState::commit`]'s. This is the whole of the commit apart from the
+/// lock, so the models that interleave a commit with later produces drive the
+/// production rule rather than a copy of it.
+#[must_use]
+pub fn committed_entry(
+    existing: Option<ProducerEntry>,
+    (_, producer_epoch): (i64, i16),
+    (base_sequence, last_offset_delta): (i32, i32),
+    (base_offset, last_timestamp, is_transactional): (LogOffset, i64, bool),
+) -> Option<ProducerEntry> {
+    let last_sequence = increment_sequence(base_sequence, last_offset_delta);
+    let last_offset = base_offset + i64::from(last_offset_delta);
+    let incoming = RetainedBatch {
+        base_sequence: krabka_verified::decrement_sequence(last_sequence, last_offset_delta),
+        last_sequence,
+        base_offset,
+        last_offset,
+        timestamp: last_timestamp,
+    };
+    let Completion { accepted, earlier } =
+        entry::earlier_after_completion(existing, producer_epoch, incoming);
+    if !accepted {
+        return None;
+    }
+    if let Some(mut tracked) = existing
+        && tracked.epoch == producer_epoch
+        && tracked.last_offset >= last_offset
+    {
+        // Deferred completions can fill an earlier slot, but never undo
+        // newer sequence, timestamp or transaction-marker state.
+        tracked.earlier = earlier;
+        return Some(tracked);
+    }
+    let current_txn_first_offset = existing
+        .and_then(|entry| entry.current_txn_first_offset)
+        .or_else(|| is_transactional.then_some(base_offset));
+    Some(ProducerEntry {
+        epoch: producer_epoch,
+        last_sequence,
+        last_offset,
+        base_offset,
+        last_timestamp,
+        entry_timestamp: last_timestamp,
+        current_txn_first_offset,
+        earlier,
+    })
 }
 
 #[cfg(test)]

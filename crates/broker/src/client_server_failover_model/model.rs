@@ -11,85 +11,115 @@ use {
             MAX_METADATA_REFRESHES, MAX_SEND_ATTEMPTS, NB,
         },
         produce::SendKind,
-        state::{Action, BatchState, FailoverState, ProduceResult, RequestOutcome},
+        state::{Action, BatchState, FailoverState, ProduceResult, RequestOutcome, commit_into},
         witness::{WITNESS_FAILOVER, Witnesses},
     },
     stateright::{Model, Property},
 };
 
+/// How the leader takes a batch its dedup check passes.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Orchestration {
+    /// The code since #1947: the writer looks the batch up among its
+    /// producer's retained batches in the log and answers a repeat with the
+    /// retained batch's offset.
+    WriterLookup,
+    /// The code before #1947: the writer appends every batch the check
+    /// passes. The RED regression.
+    GateOnly,
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct ClientServerFailoverModel;
+pub struct ClientServerFailoverModel {
+    pub orchestration: Orchestration,
+}
 
 impl Model for ClientServerFailoverModel {
     type Action = Action;
     type State = FailoverState;
 
-    krabka_macros::model_transition!(last, action, s; {
-            match action {
-                Action::ClientSend(outcome) => last.apply_client_send(SendKind::Send, outcome),
-                Action::ClientRetry(outcome) => last.apply_client_send(SendKind::Retry, outcome),
-                Action::Replicate(follower) => {
-                    if follower == s.leader || !s.live(s.leader) || !s.live(follower) {
-                        return None;
-                    }
-                    let leader_log = s.logs[s.leader];
-                    if s.log_len(s.leader) == 0 || s.logs[follower] == leader_log {
-                        return None;
-                    }
-                    s.logs[follower] = leader_log;
-                    Some(s)
-                }
-                Action::AdvanceHwm => {
-                    if !s.live(s.leader) || s.hwm != 0 || !s.hwm_prefix_replicated() {
-                        return None;
-                    }
-                    s.hwm = 1;
-                    Some(s)
-                }
-                Action::AckCommitted => {
-                    if !s.can_ack_committed() {
-                        return None;
-                    }
-                    s.acked_offset = Some(BASE_OFFSET);
-                    s.batch = BatchState::Acked;
-                    s.last_result = Some(ProduceResult::Acked);
-                    Some(s)
-                }
-                Action::KillLeader => {
-                    if !s.live(s.leader) || s.live_count() <= 1 {
-                        return None;
-                    }
-                    s.live &= !(1 << s.leader);
-                    s.refresh_needed = true;
-                    s.mark_failover();
-                    Some(s)
-                }
-                Action::ElectClean(follower) => {
-                    if follower == s.leader || !s.live(follower) || !s.contains_hwm_prefix(follower) {
-                        return None;
-                    }
-                    s.leader = follower;
-                    s.refresh_needed = s.cached_leader != s.leader || !s.live(s.cached_leader);
-                    s.refresh_leader_producer_entry();
-                    s.mark_failover();
-                    Some(s)
-                }
-                Action::RefreshMetadata => {
-                    if !s.live(s.leader) {
-                        return None;
-                    }
-                    if s.metadata_refreshes >= MAX_METADATA_REFRESHES {
-                        return None;
-                    }
-                    s.metadata_refreshes = s.metadata_refreshes.saturating_add(1);
-                    s.cached_leader = s.leader;
-                    s.refresh_needed = false;
-                    s.refresh_leader_producer_entry();
-                    Some(s)
-                }
+    fn next_state(&self, last: &FailoverState, action: Action) -> Option<FailoverState> {
+        let mut s = last.clone();
+        match action {
+            Action::ClientSend(outcome) => {
+                last.apply_client_send(SendKind::Send, outcome, self.orchestration)
             }
-
-    });
+            Action::ClientRetry(outcome) => {
+                last.apply_client_send(SendKind::Retry, outcome, self.orchestration)
+            }
+            Action::Replicate(follower) => {
+                if follower == s.leader || !s.live(s.leader) || !s.live(follower) {
+                    return None;
+                }
+                let leader_log = s.logs[s.leader];
+                if s.log_len(s.leader) == 0 || s.logs[follower] == leader_log {
+                    return None;
+                }
+                s.logs[follower] = leader_log;
+                Some(s)
+            }
+            Action::AdvanceHwm => {
+                if !s.live(s.leader) || s.hwm != 0 || !s.hwm_prefix_replicated() {
+                    return None;
+                }
+                s.hwm = 1;
+                Some(s)
+            }
+            Action::AckCommitted => {
+                if !s.can_ack_committed() {
+                    return None;
+                }
+                s.acked_offset = Some(BASE_OFFSET);
+                s.batch = BatchState::Acked;
+                s.last_result = Some(ProduceResult::Acked);
+                Some(s)
+            }
+            Action::KillLeader => {
+                if !s.live(s.leader) || s.live_count() <= 1 {
+                    return None;
+                }
+                s.live &= !(1 << s.leader);
+                s.pending_commit = [false; MAX_LOG_LEN];
+                s.refresh_needed = true;
+                s.mark_failover();
+                Some(s)
+            }
+            Action::ElectClean(follower) => {
+                if follower == s.leader || !s.live(follower) || !s.contains_hwm_prefix(follower) {
+                    return None;
+                }
+                s.leader = follower;
+                s.refresh_needed = s.cached_leader != s.leader || !s.live(s.cached_leader);
+                s.install_leader_tracker();
+                s.mark_failover();
+                Some(s)
+            }
+            Action::RefreshMetadata => {
+                if !s.live(s.leader) {
+                    return None;
+                }
+                if s.metadata_refreshes >= MAX_METADATA_REFRESHES {
+                    return None;
+                }
+                s.metadata_refreshes = s.metadata_refreshes.saturating_add(1);
+                s.cached_leader = s.leader;
+                s.refresh_needed = false;
+                Some(s)
+            }
+            Action::Commit(offset) => {
+                if !s.live(s.leader) || !s.pending_commit[offset] {
+                    return None;
+                }
+                s.pending_commit[offset] = false;
+                // `AppendCommit::record` skips an append the log no longer
+                // holds.
+                if let Some(batch) = s.logs[s.leader][offset] {
+                    s.tracker = commit_into(s.tracker, batch);
+                }
+                Some(s)
+            }
+        }
+    }
 
     fn init_states(&self) -> Vec<Self::State> {
         vec![FailoverState {
@@ -102,7 +132,8 @@ impl Model for ClientServerFailoverModel {
             batch: BatchState::Empty,
             next_sequence: BASE_SEQUENCE,
             accepted: None,
-            producer_entry: None,
+            tracker: None,
+            pending_commit: [false; MAX_LOG_LEN],
             acked_offset: None,
             last_result: None,
             send_attempts: 0,
@@ -128,12 +159,10 @@ impl Model for ClientServerFailoverModel {
             )
         {
             if routed {
-                if s.can_try_duplicate() {
-                    actions.push(Action::ClientRetry(RequestOutcome::Duplicate));
-                } else {
-                    actions.push(Action::ClientRetry(RequestOutcome::AppendedUnacked));
-                    actions.push(Action::ClientRetry(RequestOutcome::TimedOutUnknown));
-                }
+                // The leader's dedup check decides which outcome is possible.
+                actions.push(Action::ClientRetry(RequestOutcome::Duplicate));
+                actions.push(Action::ClientRetry(RequestOutcome::AppendedUnacked));
+                actions.push(Action::ClientRetry(RequestOutcome::TimedOutUnknown));
             } else {
                 actions.push(Action::ClientRetry(RequestOutcome::NotLeader));
             }
@@ -154,6 +183,13 @@ impl Model for ClientServerFailoverModel {
         }
         if s.can_ack_committed() {
             actions.push(Action::AckCommitted);
+        }
+        if s.live(s.leader) {
+            for offset in 0..MAX_LOG_LEN {
+                if s.pending_commit[offset] {
+                    actions.push(Action::Commit(offset));
+                }
+            }
         }
         if s.live(s.leader) && s.live_count() > 1 {
             actions.push(Action::KillLeader);
@@ -176,7 +212,7 @@ impl Model for ClientServerFailoverModel {
 
     fn properties(&self) -> Vec<Property<Self>> {
         let mut properties = Self::safety_properties();
-        properties.extend(Self::witness_properties());
+        properties.extend(self.witness_properties());
         properties
     }
 

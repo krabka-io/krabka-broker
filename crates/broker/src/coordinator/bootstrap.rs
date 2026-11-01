@@ -23,6 +23,7 @@ use {
 };
 
 mod apply;
+pub use apply::apply_group_metadata;
 mod audit;
 mod replay;
 

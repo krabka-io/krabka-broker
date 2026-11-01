@@ -5,6 +5,7 @@ use {
     },
     assert2::assert,
     krabka_ids::Offset,
+    krabka_protocol::records::RecordBatch,
 };
 
 const PID: i64 = 1000;
@@ -362,4 +363,95 @@ fn clear_verification_after_append_preserves_guard_only_for_epoch_bump_control()
     // Non-control batch at matching epoch clears guard
     log.clear_verification_after_append(ProducerId(PID), 0, false);
     assert!(log.verification_states.is_empty());
+}
+
+/// An idempotent batch of `records` records from producer `PID` at `epoch`,
+/// from `base_sequence`, with max timestamp `timestamp`.
+fn idempotent_batch(epoch: i16, base_sequence: i32, records: i32, timestamp: i64) -> RecordBatch {
+    RecordBatch {
+        producer_id: PID,
+        producer_epoch: epoch,
+        base_sequence,
+        max_timestamp: timestamp,
+        ..sample_batch(records)
+    }
+}
+
+/// The retained batch a lookup finds: Kafka's `BatchMetadata` for a batch
+/// that starts at `base_offset` and holds `records` records.
+fn retained(
+    last_sequence: i32,
+    base_offset: i64,
+    records: i32,
+    timestamp: i64,
+) -> ProducerBatchMetadata {
+    ProducerBatchMetadata {
+        last_sequence,
+        last_offset: Offset(base_offset + i64::from(records) - 1),
+        offset_delta: records - 1,
+        timestamp,
+    }
+}
+
+/// Kafka's `ProducerStateEntry.findDuplicateBatch`: a retry repeats a
+/// retained batch only at the producer's epoch and with the batch's whole
+/// sequence range, and only the last five batches are retained.
+///
+/// Producer `PID` appends six batches at epoch 3: two records at sequences
+/// 0-1, then one record each at sequences 2 to 6, so the first batch has
+/// left the five.
+#[yare::parameterized(
+    evicted_first_batch = { (3, 0, 1), None },
+    second_batch = { (3, 2, 0), Some(retained(2, 2, 1, 102)) },
+    last_batch = { (3, 6, 0), Some(retained(6, 6, 1, 106)) },
+    same_base_longer_range = { (3, 2, 1), None },
+    next_sequence = { (3, 7, 0), None },
+    older_epoch = { (2, 6, 0), None },
+    newer_epoch = { (4, 6, 0), None },
+)]
+fn a_retry_repeats_a_retained_batch_at_the_producer_epoch(
+    lookup: (i16, i32, i32),
+    want: Option<ProducerBatchMetadata>,
+) {
+    let (epoch, base_sequence, last_offset_delta) = lookup;
+    let TempLog { dir: _dir, mut log } = test_log();
+    log.append(&mut idempotent_batch(3, 0, 2, 100)).unwrap();
+    for sequence in 2..=6 {
+        log.append(&mut idempotent_batch(
+            3,
+            sequence,
+            1,
+            100 + i64::from(sequence),
+        ))
+        .unwrap();
+    }
+    let found =
+        log.find_duplicate_batch(ProducerId(PID), epoch, (base_sequence, last_offset_delta));
+    assert2::assert!(found == want);
+    if let Some(found) = found {
+        assert2::assert!(found.base_offset() == Offset(i64::from(base_sequence)));
+    }
+}
+
+/// A transaction version 2 marker bumps the producer epoch and clears the
+/// retained batches, as Kafka's `ProducerStateEntry.update` does, so a retry
+/// of the transaction's batch at the old epoch repeats nothing. Before the
+/// marker, the first batch of the transaction is a duplicate.
+#[test]
+fn a_bumped_epoch_marker_clears_the_retained_batches() {
+    let TempLog { dir: _dir, mut log } = test_log();
+    let mut data = transactional_batch(PID, 38, &["30"]);
+    data.base_sequence = 0;
+    data.max_timestamp = 7;
+    let guard = log
+        .maybe_start_transaction_verification(batch(38, 0, true), true, CLOCK)
+        .unwrap();
+    log.check_transactional_append(batch(38, 0, true), guard)
+        .unwrap();
+    log.append(&mut data).unwrap();
+    assert!(log.find_duplicate_batch(ProducerId(PID), 38, (0, 0)) == Some(retained(0, 0, 1, 7)));
+
+    log.append(&mut commit_marker(PID, 39)).unwrap();
+    assert!(log.find_duplicate_batch(ProducerId(PID), 38, (0, 0)) == None);
+    assert!(log.find_duplicate_batch(ProducerId(PID), 39, (0, 0)) == None);
 }

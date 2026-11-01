@@ -16,7 +16,7 @@ pub const NUM_BATCHES_TO_RETAIN: usize = 5;
 
 /// One earlier accepted batch of a producer, kept so that a retry of it
 /// answers as a duplicate. Kafka's `BatchMetadata`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RetainedBatch {
     pub base_sequence: i32,
     pub last_sequence: i32,
@@ -33,7 +33,7 @@ pub type EarlierBatches = [Option<RetainedBatch>; NUM_BATCHES_TO_RETAIN - 1];
 /// No earlier batch: a new producer, a new epoch, or recovered state.
 pub const NO_EARLIER_BATCHES: EarlierBatches = [None; NUM_BATCHES_TO_RETAIN - 1];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProducerEntry {
     pub epoch: i16,
     pub last_sequence: i32,

@@ -8,10 +8,10 @@
 
 use {
     super::{
-        bounds::{BASE_OFFSET, BASE_SEQUENCE, MAX_LOG_LEN, NB, PRODUCER_EPOCH, PRODUCER_ID},
+        bounds::{BASE_SEQUENCE, MAX_LOG_LEN, NB, PRODUCER_EPOCH, PRODUCER_ID},
         witness::{WITNESS_ACKED_BEFORE_FAILOVER, WITNESS_FAILOVER, Witnesses},
     },
-    crate::producer_state::{NO_EARLIER_BATCHES, ProducerEntry},
+    crate::producer_state::{LoggedProducer, ProducerEntry, committed_entry},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -28,13 +28,6 @@ pub struct AcceptedBatch {
     pub producer_epoch: i16,
     pub base_sequence: i32,
     pub offset: i64,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct ProducerEntryProjection {
-    pub epoch: i16,
-    pub last_sequence: i32,
-    pub base_offset: i64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -73,7 +66,11 @@ pub struct FailoverState {
     pub batch: BatchState,
     pub next_sequence: i32,
     pub accepted: Option<AcceptedBatch>,
-    pub producer_entry: Option<ProducerEntryProjection>,
+    /// The leader's idempotent-producer tracker: what the dedup check reads.
+    pub tracker: Option<ProducerEntry>,
+    /// The leader's answers, by offset, whose requests have not committed
+    /// them into the tracker yet.
+    pub pending_commit: [bool; MAX_LOG_LEN],
     pub acked_offset: Option<i64>,
     pub last_result: Option<ProduceResult>,
     pub send_attempts: u8,
@@ -91,32 +88,35 @@ pub enum Action {
     KillLeader,
     ElectClean(usize),
     RefreshMetadata,
+    /// The request that the leader's writer answered with this offset
+    /// commits the answer into the leader's tracker. Since #1947 it commits
+    /// as soon as the writer answers, before the `acks=all` wait. Before, it
+    /// committed once the gate resolved, replicated or timed out. Either way
+    /// it can run at any point after the answer, and the client's
+    /// acknowledgement waits for it.
+    Commit(usize),
 }
 
 impl LogBatch {
-    pub fn initial() -> Self {
+    pub fn at(offset: i64) -> Self {
         Self {
             producer_id: PRODUCER_ID,
             producer_epoch: PRODUCER_EPOCH,
             base_sequence: BASE_SEQUENCE,
-            offset: BASE_OFFSET,
+            offset,
         }
     }
 }
 
-impl ProducerEntryProjection {
-    pub fn as_entry(self) -> ProducerEntry {
-        ProducerEntry {
-            epoch: self.epoch,
-            last_sequence: self.last_sequence,
-            last_offset: self.base_offset,
-            base_offset: self.base_offset,
-            last_timestamp: 0,
-            entry_timestamp: 0,
-            current_txn_first_offset: None,
-            earlier: NO_EARLIER_BATCHES,
-        }
-    }
+/// The tracker after the commit of `batch`: `ProducerState::commit`'s rule.
+pub fn commit_into(tracker: Option<ProducerEntry>, batch: LogBatch) -> Option<ProducerEntry> {
+    committed_entry(
+        tracker,
+        (batch.producer_id, batch.producer_epoch),
+        (batch.base_sequence, 0),
+        (batch.offset, 0, false),
+    )
+    .or(tracker)
 }
 
 impl FailoverState {
@@ -146,24 +146,32 @@ impl FailoverState {
                 >= 2
     }
 
-    pub fn producer_entry(&self) -> Option<ProducerEntry> {
-        self.producer_entry.map(ProducerEntryProjection::as_entry)
+    /// The producer state `broker`'s log holds, which the log updates as it
+    /// appends each batch, whether the leader wrote it or a follower
+    /// replicated it.
+    pub fn logged_producer(&self, broker: usize) -> LoggedProducer {
+        LoggedProducer::replay(
+            PRODUCER_ID,
+            PRODUCER_EPOCH,
+            self.logs[broker]
+                .iter()
+                .flatten()
+                .filter(|batch| batch.producer_id == PRODUCER_ID)
+                .map(|batch| (batch.base_sequence, batch.offset)),
+        )
     }
 
-    pub fn producer_entry_for_broker(&self, broker: usize) -> Option<ProducerEntryProjection> {
-        let batch = self.logs[broker].iter().flatten().next()?;
-        if batch.producer_id != PRODUCER_ID {
-            return None;
-        }
-        Some(ProducerEntryProjection {
-            epoch: batch.producer_epoch,
-            last_sequence: batch.base_sequence,
-            base_offset: batch.offset,
-        })
+    /// The new leader's tracker, which `Partition::install_local_leadership`
+    /// replaces with the state of its log on promotion. The commits the
+    /// previous leader's requests owed run on that leader, not on this one.
+    pub fn install_leader_tracker(&mut self) {
+        self.tracker = self.logged_producer(self.leader).tracked_entry();
+        self.pending_commit = [false; MAX_LOG_LEN];
     }
 
-    pub fn refresh_leader_producer_entry(&mut self) {
-        self.producer_entry = self.producer_entry_for_broker(self.leader);
+    /// Whether the tracker has yet to commit the leader's append at `offset`.
+    pub fn commit_pending(&self, offset: i64) -> bool {
+        usize::try_from(offset).is_ok_and(|index| self.pending_commit.get(index) == Some(&true))
     }
 
     pub fn leader_contains_accepted(&self) -> bool {
@@ -178,20 +186,21 @@ impl FailoverState {
         })
     }
 
+    /// Whether the client can take the acknowledgement of its append. The
+    /// leader answers only after the commit runs and the gate resolves.
     pub fn can_ack_committed(&self) -> bool {
         self.batch == BatchState::Appended
             && self.acked_offset.is_none()
             && self.hwm == 1
             && self.live(self.leader)
             && self.leader_contains_accepted()
+            && self
+                .accepted
+                .is_some_and(|accepted| !self.commit_pending(accepted.offset))
     }
 
     pub fn cached_leader_current(&self) -> bool {
         self.cached_leader == self.leader && self.live(self.cached_leader)
-    }
-
-    pub fn can_try_duplicate(&self) -> bool {
-        self.accepted.is_some() && self.cached_leader_current() && self.leader_contains_accepted()
     }
 
     pub fn mark_failover(&mut self) {

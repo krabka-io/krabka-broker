@@ -55,24 +55,31 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-// Only the #[cfg(test)] stateright models in txn/ reach these variants.
+use self::{
+    markers::dispatch_transaction_markers,
+    prepare::prepare_transaction,
+    response::{err_response, ok_response},
+    validation::{EndTxnValidation, validate_end_txn},
+};
+// Only the #[cfg(test)] stateright models in txn/ reach these.
 #[cfg(test)]
-pub use self::producer_identity::{
-    prepare_completion_identities_with_fresh, prepare_server_abort_identities_with_fresh,
+pub use self::{
+    markers::fan_out_outcome,
+    producer_identity::{
+        prepare_completion_identities_with_fresh, prepare_server_abort_identities_with_fresh,
+    },
+    state_table::{EndTxnDecision, TableRules, end_txn_decision},
 };
 pub use self::{
-    markers::{MarkerDispatchContext, MarkerFanOut, dispatch_markers, write_local_markers},
+    markers::{
+        MarkerDispatchContext, MarkerFanOut, MarkerFanOutOutcome, dispatch_markers,
+        write_local_markers,
+    },
     producer_identity::{
         client_producer_identity, completion_producer_identity, next_producer_identity,
         next_recovery_producer_identity, prepare_server_abort_identities,
     },
     reacquire::{ReacquireDecision, validate_complete_reacquire},
-};
-use self::{
-    markers::{MarkerFanOutOutcome, dispatch_transaction_markers},
-    prepare::prepare_transaction,
-    response::{err_response, ok_response},
-    validation::{EndTxnValidation, validate_end_txn},
 };
 
 pub async fn handle(

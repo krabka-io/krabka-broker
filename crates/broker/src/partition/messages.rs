@@ -227,14 +227,19 @@ impl ProduceData {
 /// response takes from the append itself: where the batch landed and, on a
 /// `message.timestamp.type=LogAppendTime` partition, the broker clock the log
 /// stamped into it.
+///
+/// A client batch that repeats one of its producer's retained batches is not
+/// appended again. The writer answers it as Kafka's `UnifiedLog.append`
+/// answers a duplicate: with the retained batch's first offset, and its max
+/// timestamp as the log-append time, whatever the partition's timestamp type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppendedBatch {
     /// The offset the log assigned to the batch's first record.
     pub base_offset: Offset,
     /// Kafka's `LogAppendInfo.logAppendTime`, which the produce response
-    /// carries as `logAppendTimeMs`. `Some(ms)` only on a `LogAppendTime`
-    /// partition; `None` under `CreateTime`, which the response reports as
-    /// the `-1` Kafka reports.
+    /// carries as `logAppendTimeMs`. `Some(ms)` on a `LogAppendTime`
+    /// partition and for a duplicate; `None` for a fresh append under
+    /// `CreateTime`, which the response reports as the `-1` Kafka reports.
     pub log_append_time_ms: Option<i64>,
 }
 
@@ -254,13 +259,31 @@ pub struct ProduceJob {
     pub producer_check: Option<ProducerAppendCheck>,
 }
 
-/// A client batch as the log's transaction check sees it, and the KIP-890
-/// verification guard the produce path obtained for it. See
-/// [`krabka_log::Log::check_transactional_append`].
+/// A batch as the log's producer checks see it, the KIP-890 verification
+/// guard the caller obtained for it, and who wrote it. See
+/// [`krabka_log::Log::check_transactional_append`] and
+/// [`krabka_log::Log::find_duplicate_batch`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProducerAppendCheck {
     pub batch: krabka_log::TransactionalBatch,
     pub guard: krabka_log::VerificationGuard,
+    pub origin: AppendOrigin,
+}
+
+/// Who wrote a batch with a producer id. Kafka's `AppendOrigin`, which decides
+/// whether `UnifiedLog.analyzeAndValidateProducerState` looks the batch up
+/// among the producer's retained batches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppendOrigin {
+    /// A client's `Produce`. The log answers a retry of a retained batch with
+    /// that batch's offset and appends nothing. `last_offset_delta` is the
+    /// batch's, which with its base sequence gives the sequence range a retry
+    /// repeats.
+    Client { last_offset_delta: i32 },
+    /// A batch a coordinator built, such as a `TxnOffsetCommit` batch. Kafka
+    /// never looks one up: every such batch of a transaction carries sequence
+    /// 0.
+    Coordinator,
 }
 
 /// All message kinds the partition's writer task accepts.
