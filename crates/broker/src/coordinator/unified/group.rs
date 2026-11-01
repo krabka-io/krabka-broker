@@ -21,7 +21,10 @@ pub use crate::coordinator::unified::{
 };
 use {
     crate::codes::{ILLEGAL_GENERATION, STALE_MEMBER_EPOCH, UNKNOWN_MEMBER_ID},
-    std::collections::{HashMap, HashSet, VecDeque},
+    std::{
+        collections::{HashMap, HashSet, VecDeque},
+        mem,
+    },
 };
 
 /// Which protocol the members of a [`Group`] speak. The variant carries that
@@ -157,7 +160,7 @@ struct ProducerTxnOffsets {
 /// partition between them. Reading them in two actor turns would let a
 /// transaction marker land in between and produce a row that is neither the
 /// pre-transaction offset nor the post-transaction one.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct GroupOffsets {
     pub committed: HashMap<(String, i32), OffsetEntry>,
     pub pending_txn: HashSet<(String, i32)>,
@@ -209,6 +212,25 @@ impl CoordinatorGroup {
             pending_txn_key_counts: HashMap::new(),
             pending_commits: VecDeque::new(),
             empty_since_ms: None,
+        }
+    }
+
+    /// This group with `kind` in place of its own: what an actor that stops
+    /// after a write that may still commit leaves for the next one.
+    ///
+    /// The copy keeps the committed offsets and the open transactions' keys,
+    /// and takes the commits still staged, which the next actor publishes once
+    /// their writes commit or drops if their term ends.
+    #[must_use]
+    pub(crate) fn respawn_seed(&mut self, kind: GroupKind) -> Self {
+        Self {
+            group_id: self.group_id.clone(),
+            kind,
+            committed_offsets: self.committed_offsets.clone(),
+            empty_since_ms: self.empty_since_ms,
+            pending_txn_offsets: self.pending_txn_offsets.clone(),
+            pending_txn_key_counts: self.pending_txn_key_counts.clone(),
+            pending_commits: mem::take(&mut self.pending_commits),
         }
     }
 

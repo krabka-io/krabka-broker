@@ -9,7 +9,9 @@ use {
         error::BrokerError,
         handlers::{
             ApiVersion, RequestContext,
+            forward_to_controller::guarded_operation_on_source,
             registration_listeners::{self, ListenerFields},
+            submit_failure::{GuardedFailure, classify_guarded},
             submit_failure_code,
         },
         leader_election::{compute_failover_changes, compute_unclean_restart_changes},
@@ -22,9 +24,14 @@ use {
         broker_registration_response::BrokerRegistrationResponse,
     },
     krabka_raft::RaftError,
-    std::collections::HashSet,
-    tokio::sync::MutexGuard,
+    std::{collections::HashSet, time::Duration},
+    tokio::{sync::MutexGuard, time::Instant},
 };
+
+/// How long a registration keeps computing its restart changes again while
+/// the controller's image moves under it. The broker retries a registration
+/// that fails.
+const REGISTRATION_DEADLINE: Duration = Duration::from_secs(5);
 
 pub async fn handle(
     broker: &Broker,
@@ -111,23 +118,52 @@ async fn register_new_incarnation(
     // leadership it still holds, and may stay eligible, which is what the
     // fencing failover computes. A broker that stopped through controlled
     // shutdown holds neither, so that branch writes nothing for it.
-    let restart = if clean_restart {
-        compute_failover_changes(image, node_id, &broker.liveness, &broker.metrics).await
-    } else {
-        compute_unclean_restart_changes(image, node_id, &broker.liveness, &broker.metrics).await
+    //
+    // The changes are whole partition records, right only against the image
+    // they were computed from, and Kafka computes them on its event thread
+    // against every record before them. So they are computed again against
+    // each image the guarded submission tries, and appended only while that
+    // image is current and nothing appended is uncommitted. Otherwise a
+    // concurrent re-registration of another broker, committed after this
+    // image was read, would be undone: its election replaced by this batch's
+    // copy of the older leader and leader epoch.
+    let submitted = guarded_operation_on_source(
+        broker.controller.as_ref(),
+        Instant::now() + REGISTRATION_DEADLINE,
+        |image| {
+            let record = record.clone();
+            async move {
+                let restart = if clean_restart {
+                    compute_failover_changes(&image, node_id, &broker.liveness, &broker.metrics)
+                        .await
+                } else {
+                    compute_unclean_restart_changes(
+                        &image,
+                        node_id,
+                        &broker.liveness,
+                        &broker.metrics,
+                    )
+                    .await
+                };
+                broker
+                    .controller
+                    .submit_change_if_image(registration_records(restart.changes, record), image)
+                    .await?;
+                Ok((restart.unavailable, restart.recoveries))
+            }
+        },
+    )
+    .await;
+    let (unavailable, recoveries) = match classify_guarded(submitted) {
+        Ok(restart) => restart,
+        Err(GuardedFailure::Failed(error)) => return response(raft_error_code(&error), -1),
+        Err(failure) => return response(failure.code(codes::UNKNOWN_SERVER_ERROR), -1),
     };
-    for (topic, partition) in &restart.unavailable {
+    for (topic, partition) in &unavailable {
         tracing::warn!(
             %topic, partition, node_id = node_id.0,
             "returning broker led this partition and no live ISR replica can take it; partition unavailable"
         );
-    }
-    if let Err(error) = broker
-        .controller
-        .submit_change(registration_records(restart.changes, record))
-        .await
-    {
-        return response(raft_error_code(&error), -1);
     }
     // The session of the previous incarnation, if there was one, belongs to
     // a process that is gone. `ClusterControlManager.registerBroker` removes
@@ -140,10 +176,7 @@ async fn register_new_incarnation(
     // KIP-966: a partition whose topic opted into an offset-aware recovery
     // strategy is handed to the Unclean Recovery Manager, the same way the
     // dead-broker failover hands one over. Fire and forget.
-    broker
-        .unclean_recovery
-        .enqueue_background(restart.recoveries)
-        .await;
+    broker.unclean_recovery.enqueue_background(recoveries).await;
 
     answer
 }

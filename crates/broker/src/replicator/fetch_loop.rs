@@ -168,7 +168,7 @@ impl FetcherState {
                 .map(|(key, _)| key.clone()),
         );
         self.delayed
-            .retain(|key, until| self.followed.contains_key(key) && *until > Instant::now());
+            .retain(|key, until| self.followed.contains_key(key) && *until > now);
         plan_changed(&self.followed, &self.delayed, &self.dirty)
     }
 
@@ -929,6 +929,28 @@ mod tests {
 
         check!(state.dirty.is_empty());
         check!(state.delayed == DelayedUntil::from([(key, until)]));
+    }
+
+    /// A round reads the clock once, early, and a hold-back can expire before
+    /// the round gets to it. Such a hold is kept for the next round, which
+    /// replans it, rather than dropped with its partition left unplanned
+    /// until the next audit.
+    #[tokio::test(start_paused = true)]
+    async fn a_hold_back_that_expires_during_the_round_is_replanned() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let key = followed_key(&cfg);
+        let mut state = incremental_state(followed_partition(cfg));
+        let round_start = Instant::now();
+        state
+            .delayed
+            .insert(key.clone(), round_start + Duration::from_millis(1));
+        time::advance(Duration::from_millis(1)).await;
+
+        state.collect_due(round_start);
+        state.collect_due(Instant::now());
+
+        check!(state.dirty == BTreeSet::from([key]));
+        check!(state.delayed.is_empty());
     }
 
     fn keyed(key: &FollowedKey, action: RowAction) -> KeyedAction {

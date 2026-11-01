@@ -8,9 +8,11 @@ use {
         controller::{
             engine_loop::sleep_until_opt,
             queries::initial_state_voters,
+            startup::Assembled,
             test_support::{
                 ControllerSetup, EngineSetup, TEST_ELECTION_TIMEOUT, await_leader, build,
                 build_engine_only, elect_leader_with_helper, elect_single_voter_engine,
+                open_test_engine, voter_set,
             },
         },
         transport::NullPeerSender,
@@ -208,4 +210,60 @@ async fn controller_handle_reports_node_id_probe_and_shuts_down() {
         ctrl.inject_event(Event::ElectionTimeout).await,
         Err(RaftError::Shutdown)
     ));
+}
+
+/// What became of the reply sender of a command the engine was sent, when the
+/// engine's end of the queue is gone.
+#[derive(Clone, Copy, Debug)]
+enum ReplyFate {
+    /// The engine answered before it stopped.
+    Answered,
+    /// The engine dropped the sender, as it does for a command it reads and
+    /// never answers.
+    Dropped,
+    /// The command was left unread in the queue, so its sender stays alive
+    /// for as long as the handle's sender does: the send completed while the
+    /// engine dropped its receiver.
+    Stranded,
+}
+
+/// A caller waiting on a reply gets the reply the engine sent, and otherwise
+/// `Shutdown` once the engine has dropped its queue. Before this, a command
+/// stranded in the queue left its caller waiting forever.
+#[yare::parameterized(
+    answered = { ReplyFate::Answered, Some(7) },
+    dropped = { ReplyFate::Dropped, None },
+    stranded = { ReplyFate::Stranded, None },
+)]
+#[test_macro(tokio::test)]
+async fn a_reply_wait_ends_once_the_engine_queue_is_gone(fate: ReplyFate, expected: Option<u8>) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Assembled {
+        controller,
+        engine,
+        cmd_rx,
+    } = open_test_engine(dir.path().to_path_buf(), voter_set(&[NodeId(1)])).expect("open engine");
+    let (reply, answer) = oneshot::channel::<u8>();
+    let _held = match fate {
+        ReplyFate::Answered => {
+            reply.send(7).expect("the caller still waits");
+            None
+        }
+        ReplyFate::Dropped => {
+            drop(reply);
+            None
+        }
+        ReplyFate::Stranded => Some(reply),
+    };
+    drop(cmd_rx);
+    drop(engine);
+    let outcome = time::timeout(StdDuration::from_secs(5), controller.await_reply(answer))
+        .await
+        .expect("the reply wait ended");
+    let answered = match outcome {
+        Ok(value) => Some(value),
+        Err(RaftError::Shutdown) => None,
+        Err(other) => panic!("the reply wait failed with {other}"),
+    };
+    check!(answered == expected);
 }

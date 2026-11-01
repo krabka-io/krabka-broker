@@ -44,7 +44,7 @@ struct ProposedReplica {
 /// `new_isr_with_epochs` field. A v3 request leaves `new_isr` empty and fills
 /// `new_isr_with_epochs`. When `new_isr` is empty, this function therefore
 /// takes the broker IDs from `new_isr_with_epochs`.
-pub(super) fn handle_partition_with_recovery(
+pub fn handle_partition_with_recovery(
     image: &krabka_metadata::MetadataImage,
     active: &HashSet<u64>,
     requester: i32,

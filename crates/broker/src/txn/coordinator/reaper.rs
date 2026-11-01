@@ -90,10 +90,44 @@ pub trait ReaperBackend: Send + Sync {
     ) -> Option<TxnEntry>;
 }
 
+/// What one sweep does with one entry, as [`ReaperBackend::prepare_abort`]
+/// decides it under the entry lock and before it persists anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReaperStep {
+    /// The entry is a `PrepareAbort` with a timeout: send its abort markers
+    /// again.
+    ResumeAbort,
+    /// The entry is an `Ongoing` transaction past its timeout: prepare its
+    /// abort.
+    PrepareAbort,
+    /// Leave the entry alone. Every other state is here, `PrepareCommit`
+    /// among them, and a prepared 2PC transaction.
+    Skip,
+}
+
+/// The sweep's decision for `entry` at `now_ms`. Only a `PrepareAbort` is
+/// resumed; [`should_abort_idle_txn`] decides the rest.
+pub fn reaper_step(entry: &TxnEntry, now_ms: i64) -> ReaperStep {
+    if entry.state == TxnState::PrepareAbort {
+        // A prepared 2PC transaction remains under its external
+        // coordinator's control, including after recovery.
+        return if entry.txn_timeout_ms == NO_TIMEOUT_MS {
+            ReaperStep::Skip
+        } else {
+            ReaperStep::ResumeAbort
+        };
+    }
+    if should_abort_idle_txn(entry.state, entry.txn_timeout_ms, entry.start_ms, now_ms) {
+        ReaperStep::PrepareAbort
+    } else {
+        ReaperStep::Skip
+    }
+}
+
 /// Applies the `Ongoing → PrepareAbort` mutation for an idle-reaped entry. It
 /// changes the state and stamps `last_update_ms`. The function is pure, so a
 /// unit test can kill the transition without any persistence.
-fn apply_prepare_abort(entry: &mut TxnEntry, now_ms: i64) {
+pub fn apply_prepare_abort(entry: &mut TxnEntry, now_ms: i64) {
     entry.state = TxnState::PrepareAbort;
     entry.last_update_ms = now_ms;
 }
@@ -110,7 +144,7 @@ fn apply_complete_abort(entry: &mut TxnEntry, new_pid: ProducerId, new_epoch: i1
 /// Recheck the complete prepared snapshot after marker dispatch. Comparing
 /// every persisted field prevents a concurrent registration, recovery-identity
 /// change, timeout change, or generation change from being overwritten.
-fn complete_abort_decision(entry: &TxnEntry, prepared: &TxnEntry) -> CompletionDecision {
+pub fn complete_abort_decision(entry: &TxnEntry, prepared: &TxnEntry) -> CompletionDecision {
     completion_decision(
         entry,
         prepared,
@@ -167,7 +201,12 @@ async fn sweep_with_backend<B: ReaperBackend + ?Sized>(
             .await
             .is_some()
         {
-            info!(tid, "txn reaper: aborted timed-out transaction");
+            info!(
+                tid,
+                producer_id = prepared.producer_id.get(),
+                producer_epoch = prepared.producer_epoch,
+                "txn reaper: aborted timed-out transaction"
+            );
             aborted.push(tid);
         }
     }
@@ -233,13 +272,10 @@ impl ReaperBackend for TxnCoordinator {
     async fn prepare_abort(&self, tid: &str, now_ms: i64, txnv: TxnVersion) -> Option<TxnEntry> {
         let _partition_lock = self.lock_state_partition_for(tid).await;
         let entry = self.current_entry_guard(tid).await?;
-        if entry.state == TxnState::PrepareAbort {
-            // A prepared 2PC transaction remains under its external
-            // coordinator's control, including after recovery.
-            return (entry.txn_timeout_ms != NO_TIMEOUT_MS).then(|| entry.clone());
-        }
-        if !should_abort_idle_txn(entry.state, entry.txn_timeout_ms, entry.start_ms, now_ms) {
-            return None;
+        match reaper_step(&entry, now_ms) {
+            ReaperStep::ResumeAbort => return Some(entry.clone()),
+            ReaperStep::Skip => return None,
+            ReaperStep::PrepareAbort => {}
         }
         // Stage on a clone. Allocation or persistence failure must leave the
         // live entry exactly as it was before this sweep.
@@ -252,17 +288,30 @@ impl ReaperBackend for TxnCoordinator {
         if let Err(error) =
             prepare_server_abort_identities(&mut prepared, txnv, &self.producer_ids).await
         {
-            warn!(tid, %error, "txn reaper: failed to allocate completion identity");
+            warn!(
+                tid,
+                producer_id = entry.producer_id.get(),
+                producer_epoch = entry.producer_epoch,
+                %error,
+                "txn reaper: failed to allocate completion identity"
+            );
             return None;
         }
         // `complete_abort` compares the snapshot this returns against the live
         // entry by full equality, so it has to be the entry publication holds.
         let persisted = self.put_under_state_partition_lock(prepared, txnv).await;
+        let (producer_id, producer_epoch) = (entry.producer_id.get(), entry.producer_epoch);
         drop(entry);
         match persisted {
             Ok(persisted) => Some(persisted),
             Err(e) => {
-                warn!(tid, error = %e, "txn reaper: failed to persist PrepareAbort; skipping");
+                warn!(
+                    tid,
+                    producer_id,
+                    producer_epoch,
+                    error = %e,
+                    "txn reaper: failed to persist PrepareAbort; skipping"
+                );
                 None
             }
         }
@@ -279,6 +328,9 @@ impl ReaperBackend for TxnCoordinator {
             Err(error) => {
                 warn!(
                     tid = %entry.transactional_id,
+                    producer_id = entry.producer_id.get(),
+                    producer_epoch = entry.producer_epoch,
+                    outstanding = ?entry.partitions,
                     %error,
                     "txn reaper: abort marker fan-out failed; queued for completion"
                 );
@@ -318,7 +370,13 @@ impl ReaperBackend for TxnCoordinator {
         match persisted {
             Ok(persisted) => Some(persisted),
             Err(e) => {
-                warn!(tid, error = %e, "txn reaper: failed to persist CompleteAbort; skipping");
+                warn!(
+                    tid,
+                    producer_id = prepared.producer_id.get(),
+                    producer_epoch = prepared.producer_epoch,
+                    error = %e,
+                    "txn reaper: failed to persist CompleteAbort; skipping"
+                );
                 None
             }
         }

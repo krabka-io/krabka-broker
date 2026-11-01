@@ -13,7 +13,11 @@ use {
     },
     assert2::{assert, check},
     krabka_protocol::records::metadata,
-    std::{collections::BTreeMap, time::Duration},
+    std::{
+        collections::BTreeMap,
+        sync::{Arc, Mutex},
+        time::Duration,
+    },
     tokio::time,
 };
 
@@ -548,4 +552,92 @@ fn replay_recovers_fencing_and_controlled_shutdown() {
         .collect();
     check!(flags == vec![(7, false, false), (8, false, true), (9, true, false)]);
     check!(registrations(&recovered) == registrations(&engine.image));
+}
+
+/// A registration admission that records the image it is asked to decide
+/// against each time, and admits the batch as it was submitted.
+#[derive(Default)]
+struct RecordingAdmission {
+    decided_against: Mutex<Vec<Arc<krabka_metadata::MetadataImage>>>,
+}
+
+impl RecordingAdmission {
+    /// Whether each image this admission decided against holds `topic`.
+    fn holds_topic(&self, topic: &str) -> Vec<bool> {
+        self.decided_against
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|image| image.topic(topic).is_some())
+            .collect()
+    }
+}
+
+impl crate::RegistrationAdmission for RecordingAdmission {
+    fn admit(
+        &self,
+        image: Arc<krabka_metadata::MetadataImage>,
+        records: Vec<krabka_metadata::MetadataRecord>,
+    ) -> crate::RegistrationAdmissionFuture<'_> {
+        self.decided_against.lock().unwrap().push(image);
+        Box::pin(async move { Ok(crate::AdmittedBatch::records(records)) })
+    }
+}
+
+/// The retirement records an admission writes are whole partition records, so
+/// a registration is decided against the image that holds every batch the
+/// leader appended before it. While an earlier batch is uncommitted, the
+/// leader refuses the batch the admission decided against the older image,
+/// and asks again once the earlier batch is published.
+#[tokio::test]
+async fn a_registration_is_decided_against_every_batch_appended_before_it() {
+    use krabka_metadata::MetadataRecord;
+
+    let (ctrl, _dir) = build().call();
+    elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+    let admission = Arc::new(RecordingAdmission::default());
+    ctrl.install_registration_admission(
+        Arc::clone(&admission) as Arc<dyn crate::RegistrationAdmission>
+    )
+    .unwrap();
+
+    let earlier = {
+        let ctrl = ctrl.clone();
+        tokio::spawn(async move { ctrl.submit_change(topic_record("orders")).await })
+    };
+    time::sleep(Duration::from_millis(20)).await;
+    let registration = {
+        let ctrl = ctrl.clone();
+        tokio::spawn(async move {
+            ctrl.submit_change(vec![MetadataRecord::V1BrokerRegistration(
+                new_registration(),
+            )])
+            .await
+        })
+    };
+    time::sleep(Duration::from_millis(50)).await;
+    let before_commit = admission.holds_topic("orders");
+
+    super::test_support::commit_pending(&ctrl, NodeId(2)).await;
+    earlier.await.unwrap().unwrap();
+    // The registration is appended once it is decided against the published
+    // topic; commit it too.
+    let committed = time::timeout(Duration::from_secs(5), async {
+        loop {
+            super::test_support::commit_pending(&ctrl, NodeId(2)).await;
+            if registration.is_finished() {
+                break registration.await;
+            }
+            time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the registration commits once the earlier batch has");
+
+    let decided = admission.holds_topic("orders");
+    check!(committed.unwrap().is_ok());
+    check!(!before_commit.is_empty() && before_commit.iter().all(|holds| !holds));
+    check!(decided.last() == Some(&true));
+    check!(ctrl.current_image().broker(NodeId(7)).is_some());
+    ctrl.shutdown().await;
 }

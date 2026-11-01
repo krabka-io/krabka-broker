@@ -28,6 +28,8 @@ mod txn_isolation;
 mod txn_offset_commit_topic_ids;
 #[path = "transactions/txn_sasl.rs"]
 mod txn_sasl;
+#[path = "transactions/txn_timeout_abort_kill.rs"]
+mod txn_timeout_abort_kill;
 #[path = "transactions/txn_uncommitted_writes.rs"]
 mod txn_uncommitted_writes;
 

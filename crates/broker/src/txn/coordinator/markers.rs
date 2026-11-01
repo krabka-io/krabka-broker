@@ -141,7 +141,11 @@ impl TxnCoordinator {
 /// Kafka's `TransactionMetadata.removePartition`: only a transaction that is
 /// preparing to commit or abort loses a partition to its marker. `live` loses
 /// `written` only while it is the same prepared transaction as `prepared`.
-fn remove_marked_partitions(live: &mut TxnEntry, prepared: &TxnEntry, written: &[TopicPartition]) {
+pub fn remove_marked_partitions(
+    live: &mut TxnEntry,
+    prepared: &TxnEntry,
+    written: &[TopicPartition],
+) {
     let same_prepared = matches!(live.state, TxnState::PrepareCommit | TxnState::PrepareAbort)
         && live.state == prepared.state
         && live.producer_id == prepared.producer_id
@@ -151,7 +155,7 @@ fn remove_marked_partitions(live: &mut TxnEntry, prepared: &TxnEntry, written: &
     }
 }
 
-fn remove_marked_partitions_from(entry: &mut TxnEntry, written: &[TopicPartition]) {
+pub fn remove_marked_partitions_from(entry: &mut TxnEntry, written: &[TopicPartition]) {
     if matches!(
         entry.state,
         TxnState::PrepareCommit | TxnState::PrepareAbort

@@ -4,11 +4,14 @@
 //! # Module layout
 //!
 //! This file is the module root. It declares the children and holds the one
-//! test that runs the checker. Each child holds one concern: [`bounds`] the
+//! tests that run the checker. Each child holds one concern: [`bounds`] the
 //! bounded cluster and client shape, [`witness`] the bitset that keeps the
 //! `sometimes` properties honest, [`state`] the search space and the pure
 //! queries over it, [`produce`] one client produce attempt against the real
-//! `check_pure`, [`properties`] what the checker proves, [`model`] the
+//! `check_pure`, which reads a leader tracker that takes each append through
+//! a later commit, the real `committed_entry`, and the writer's lookup of the
+//! batch in the leader's log,
+//! [`properties`] what the checker proves, [`model`] the
 //! stateright [`Model`](stateright::Model) implementation, and [`runner`] the
 //! checker bounds.
 
@@ -29,13 +32,10 @@ mod state;
 #[path = "client_server_failover_model/witness.rs"]
 mod witness;
 
-use self::runner::{duplicate_without_dedup, run_model};
+use self::runner::{run_model, run_model_without_lookup};
 
 #[test]
 fn client_server_failover_preserves_acked_batch() { run_model(); }
 
 #[test]
-fn without_the_dedup_check_a_retry_appends_twice() {
-    // Send, then retry on the same leader: the second attempt appends a copy.
-    assert2::assert!(duplicate_without_dedup() == Some(2));
-}
+fn without_the_writer_lookup_a_retry_appends_again() { run_model_without_lookup(); }

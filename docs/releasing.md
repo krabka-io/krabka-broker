@@ -104,7 +104,8 @@ Take the merge commit of that pull request. Before you tag it, make sure a
 full CI run passed on it: the nightly `schedule` run of `ci.yml`, or one you
 start with `gh workflow run ci.yml --ref main` while `main` is still at that
 commit. Pull requests skip the lanes that only this run covers, so `release`
-refuses a commit without one. The full run includes the four-hour soak.
+refuses a commit without one. The full run includes the four-hour soak and the
+Jepsen Kafka workload.
 
 Then tag the commit. Use an annotated tag, `git tag -a`. An annotated tag is an
 object of its own: it records who cut the release and when, and a person can
@@ -121,6 +122,14 @@ git push origin v0.5.2
 
 Never move or delete a tag that is pushed. The signed image digest and the
 attestations point at it. Release a new patch version instead.
+
+When the full run fails and the fix needs a new commit, do not tag the release
+commit. Prepare the next patch version instead, and in the same pull request
+fold the untagged version's `CHANGELOG.md` entry into the new one: delete its
+heading and its link definition, and say in the new entry that the version
+number was never tagged. Every heading in `CHANGELOG.md` names a pushed tag.
+The nightly `external links` lane checks every link definition, and fails on
+one whose tag does not exist.
 
 ## 4. Check the result
 
@@ -140,9 +149,9 @@ signed, and it refuses the release unless all four of these hold:
   in which every job passed or was skipped. Only `external links`, the
   criterion benches and the nightly report may be red. This run is what covers
   the lanes that pull requests skip or scope by path: the kind smoke test, the
-  Creusot proofs, the full container matrix, the upgrade smoke, GSSAPI, netem
-  and the soak. If the release stopped here, start a full run on that commit
-  and re-dispatch `release.yml` with the tag.
+  Creusot proofs, the full container matrix, the upgrade smoke, GSSAPI, netem,
+  the soak and the Jepsen Kafka workload. If the release stopped here, start a
+  full run on that commit and re-dispatch `release.yml` with the tag.
 
 A cosign signature says who built an image, never that the image was tested.
 Those four checks are what stands behind it.
@@ -303,6 +312,15 @@ is not a library for other repositories sets it.
 Those come from krabka-protocol. `cargo publish` ignores `[patch.crates-io]`,
 so each requirement must name a release that crates.io has, and krabka-protocol
 releases before this repository does.
+
+The same rule applies to each API that a published crate calls. A published
+crate may use only the APIs that a crates.io release of its dependency has. A
+git fork in `[patch.crates-io]` may serve unpublished crates only. The rustix
+fork that adds `fs::sync_file_range` is an example. `cargo publish` builds
+`krabka-log` against crates.io rustix, so a call into the fork does not compile
+there. `krabka-log` reaches `sync_file_range` only through the `WriteBack` that
+the broker installs at startup with `krabka_log::set_write_back`. The broker's
+`log_write_back` module holds that `WriteBack`.
 
 Each published crate sets `repository`, `description`, `readme` and an
 `include` list. The list ships the library source and the README, and leaves

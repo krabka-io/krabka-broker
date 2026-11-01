@@ -2,49 +2,58 @@
 //!
 //! The bounds sit next to the assertions that prove a run was exhaustive,
 //! because a truncated search proves nothing and the two must move together.
+//!
+//! # Without the writer's lookup
+//!
+//! [`WriterLookup::Off`] restates the broker before #1947, whose writer
+//! appended every batch the dedup check let through. `no_duplicate_append`
+//! then fails at depth 2: `ClientSend(AppendedUnacked)`,
+//! `ClientRetry(AppendedUnacked)`. The leader appends the first send, whose
+//! commit into the tracker has not run yet. The client's request times out on
+//! its side and it sends the batch again. The leader's dedup check finds no
+//! tracked entry and appends the batch a second time. This is Jepsen's
+//! "Duplicate records" failure (krabka-io/krabka-broker#1932), the same defect
+//! `producer_state::inflight_model` reproduces with two producers. It stays
+//! pinned as a [`KnownFailure`] so the model keeps reaching it.
 
 use {
-    super::{model::ClientServerFailoverModel, produce::Dedup},
-    crate::model_check::{run_bfs, shortest_counterexample},
-    stateright::Checker,
+    super::{model::ClientServerFailoverModel, produce::WriterLookup},
+    crate::model_check::{KnownFailure, check_model_with_known_failures},
 };
 
-const MAX_DEPTH: usize = 36;
-const MAX_STATES: usize = 120_000;
+const MAX_DEPTH: usize = 48;
+const MAX_STATES: usize = 4_000_000;
 
-// The exact unique-state count of the exhaustive BFS over this model.
-// `unique_state_count()` is deterministic for a fixed model, so pinning it
-// turns any change to the reachable set -- a dropped action, a `next_state` arm
-// that starts returning `None`, a derived `Hash`/`PartialEq` that stops
-// considering a field -- into a failure instead of a silently smaller search
-// that still passes the upper bound. The *generated* count is deliberately not
-// pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES: usize = 38_131;
+// The exact unique-state count of each exhaustive single-threaded BFS over
+// this model. A changed count is a changed model, not a retuning knob: a
+// dropped action, a `next_state` arm that starts returning `None`, or a field
+// that the derived `Hash` stops reading.
+const PINNED_UNIQUE_STATES: usize = 66_587;
+const PINNED_UNIQUE_STATES_WITHOUT_LOOKUP: usize = 187_373;
 
 pub fn run_model() {
-    let checker = run_bfs(
+    check_model_with_known_failures(
         ClientServerFailoverModel {
-            dedup: Dedup::Checked,
+            lookup: WriterLookup::UnderLock,
         },
         "client_server_failover",
-        MAX_DEPTH,
-        MAX_STATES,
+        (MAX_DEPTH, MAX_STATES, MAX_STATES),
+        PINNED_UNIQUE_STATES,
+        &[],
     );
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == PINNED_UNIQUE_STATES,
-        "unique-state count moved: the reachable set of this model changed"
-    );
-    checker.assert_properties();
 }
 
-/// The length of the shortest path to a log that holds the batch twice when
-/// the broker skips its dedup check. A search that finds none would mean the
-/// bounds leave no room for a second copy, and `no_duplicate_append` would
-/// hold by construction.
-pub fn duplicate_without_dedup() -> Option<usize> {
-    let model = ClientServerFailoverModel {
-        dedup: Dedup::Skipped,
-    };
-    shortest_counterexample(&model, "no_duplicate_append", MAX_DEPTH).map(|actions| actions.len())
+pub fn run_model_without_lookup() {
+    check_model_with_known_failures(
+        ClientServerFailoverModel {
+            lookup: WriterLookup::Off,
+        },
+        "client_server_failover_without_lookup",
+        (MAX_DEPTH, MAX_STATES, MAX_STATES),
+        PINNED_UNIQUE_STATES_WITHOUT_LOOKUP,
+        &[KnownFailure {
+            property: "no_duplicate_append",
+            depth: 2,
+        }],
+    );
 }

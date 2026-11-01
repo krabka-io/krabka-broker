@@ -10,8 +10,8 @@ use {
             BASE_OFFSET, BASE_SEQUENCE, INITIAL_LEADER, MAX_HWM, MAX_LOG_LEN,
             MAX_METADATA_REFRESHES, MAX_SEND_ATTEMPTS, NB,
         },
-        produce::{Dedup, SendKind},
-        state::{Action, BatchState, FailoverState, ProduceResult, RequestOutcome},
+        produce::{SendKind, WriterLookup},
+        state::{Action, BatchState, FailoverState, ProduceResult, RequestOutcome, commit_into},
         witness::{WITNESS_FAILOVER, Witnesses},
     },
     stateright::{Model, Property},
@@ -19,7 +19,7 @@ use {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ClientServerFailoverModel {
-    pub dedup: Dedup,
+    pub lookup: WriterLookup,
 }
 
 impl Model for ClientServerFailoverModel {
@@ -28,9 +28,11 @@ impl Model for ClientServerFailoverModel {
 
     krabka_macros::model_transition!(last, action, s; {
             match action {
-                Action::ClientSend(outcome) => last.apply_client_send(self.dedup, (SendKind::Send, outcome)),
+                Action::ClientSend(outcome) => {
+                    last.apply_client_send(self.lookup, (SendKind::Send, outcome))
+                }
                 Action::ClientRetry(outcome) => {
-                    last.apply_client_send(self.dedup, (SendKind::Retry, outcome))
+                    last.apply_client_send(self.lookup, (SendKind::Retry, outcome))
                 }
                 Action::Replicate(follower) => {
                     if follower == s.leader || !s.live(s.leader) || !s.live(follower) {
@@ -64,6 +66,7 @@ impl Model for ClientServerFailoverModel {
                         return None;
                     }
                     s.live &= !(1 << s.leader);
+                    s.pending_commit = [false; MAX_LOG_LEN];
                     s.refresh_needed = true;
                     s.mark_failover();
                     Some(s)
@@ -74,7 +77,7 @@ impl Model for ClientServerFailoverModel {
                     }
                     s.leader = follower;
                     s.refresh_needed = s.cached_leader != s.leader || !s.live(s.cached_leader);
-                    s.refresh_leader_producer_entry();
+                    s.install_leader_tracker();
                     s.mark_failover();
                     Some(s)
                 }
@@ -88,7 +91,18 @@ impl Model for ClientServerFailoverModel {
                     s.metadata_refreshes = s.metadata_refreshes.saturating_add(1);
                     s.cached_leader = s.leader;
                     s.refresh_needed = false;
-                    s.refresh_leader_producer_entry();
+                    Some(s)
+                }
+                Action::Commit(offset) => {
+                    if !s.live(s.leader) || !s.pending_commit[offset] {
+                        return None;
+                    }
+                    s.pending_commit[offset] = false;
+                    // `AppendCommit::record` skips an append the log no longer
+                    // holds.
+                    if let Some(batch) = s.logs[s.leader][offset] {
+                        s.tracker = commit_into(s.tracker, batch);
+                    }
                     Some(s)
                 }
             }
@@ -106,7 +120,8 @@ impl Model for ClientServerFailoverModel {
             batch: BatchState::Empty,
             next_sequence: BASE_SEQUENCE,
             accepted: None,
-            producer_entry: None,
+            tracker: None,
+            pending_commit: [false; MAX_LOG_LEN],
             acked_offset: None,
             last_result: None,
             send_attempts: 0,
@@ -132,12 +147,10 @@ impl Model for ClientServerFailoverModel {
             )
         {
             if routed {
-                if s.can_try_duplicate() && self.dedup == Dedup::Checked {
-                    actions.push(Action::ClientRetry(RequestOutcome::Duplicate));
-                } else {
-                    actions.push(Action::ClientRetry(RequestOutcome::AppendedUnacked));
-                    actions.push(Action::ClientRetry(RequestOutcome::TimedOutUnknown));
-                }
+                // The leader's dedup check decides which outcome is possible.
+                actions.push(Action::ClientRetry(RequestOutcome::Duplicate));
+                actions.push(Action::ClientRetry(RequestOutcome::AppendedUnacked));
+                actions.push(Action::ClientRetry(RequestOutcome::TimedOutUnknown));
             } else {
                 actions.push(Action::ClientRetry(RequestOutcome::NotLeader));
             }
@@ -158,6 +171,13 @@ impl Model for ClientServerFailoverModel {
         }
         if s.can_ack_committed() {
             actions.push(Action::AckCommitted);
+        }
+        if s.live(s.leader) {
+            for offset in 0..MAX_LOG_LEN {
+                if s.pending_commit[offset] {
+                    actions.push(Action::Commit(offset));
+                }
+            }
         }
         if s.live(s.leader) && s.live_count() > 1 {
             actions.push(Action::KillLeader);
@@ -181,6 +201,9 @@ impl Model for ClientServerFailoverModel {
     fn properties(&self) -> Vec<Property<Self>> {
         let mut properties = Self::safety_properties();
         properties.extend(Self::witness_properties());
+        if self.lookup == WriterLookup::UnderLock {
+            properties.extend(Self::writer_witness_properties());
+        }
         properties
     }
 

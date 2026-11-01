@@ -60,6 +60,10 @@ pub async fn start_tiered_partition() -> TieredPartition {
     config.remote_log_manager_interval = krabka_units::millis(200);
     let broker = Box::pin(Broker::start(config)).await.expect("broker start");
     let client = connect(&broker.listen_addr().to_string(), "tiered-read-committed").await;
+    // `CreateTopics` places no replica on a broker that its registration
+    // fences or that the controller's heartbeat registry calls unavailable,
+    // and both hold a new broker back until its first caught-up heartbeat.
+    broker.wait_until_broker_electable(broker.node_id()).await;
     create_configured_topic(
         &client,
         TOPIC,

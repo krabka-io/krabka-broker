@@ -338,8 +338,9 @@ impl Partition {
     /// and replication appends.
     ///
     /// # Errors
-    /// Returns an error if the writer task is unavailable or the log rejects
-    /// the marker/stamp pair.
+    /// Returns [`BrokerError::PartitionWriterDied`] if the writer task is dead
+    /// or the ack channel closes before the writer replies, and the log's
+    /// error if it rejects the marker/stamp pair.
     pub(crate) async fn produce_commit_marker(
         &self,
         batch: RecordBatch,
@@ -355,10 +356,7 @@ impl Partition {
                 producer_check: None,
             })
         };
-        Ok(self
-            .ask_writer_or(job, BrokerError::Txn, "ack dropped")
-            .await??
-            .base_offset)
+        Ok(self.ask_marker_writer(job).await??.base_offset)
     }
 
     /// Append an internally built control batch, such as a transaction ABORT
@@ -373,26 +371,40 @@ impl Partition {
     /// default of zero carries a false leader epoch in its header.
     ///
     /// # Errors
-    /// Returns [`BrokerError::Txn`] if the writer task is dead or the ack
-    /// channel closes before the writer replies, or the log rejects the batch.
+    /// Returns [`BrokerError::PartitionWriterDied`] if the writer task is dead
+    /// or the ack channel closes before the writer replies, and the log's
+    /// error if it rejects the batch.
     pub(crate) async fn produce_control_batch(
         &self,
         batch: RecordBatch,
     ) -> Result<Offset, BrokerError> {
-        Ok(self
-            .ask_writer_or(
-                |ack| {
-                    WriterMessage::Produce(ProduceJob {
-                        data: ProduceData::OwnedControl(batch),
-                        ack,
-                        producer_check: None,
-                    })
-                },
-                BrokerError::Txn,
-                "ack dropped",
-            )
-            .await??
-            .base_offset)
+        let job = |ack| {
+            WriterMessage::Produce(ProduceJob {
+                data: ProduceData::OwnedControl(batch),
+                ack,
+                producer_check: None,
+            })
+        };
+        Ok(self.ask_marker_writer(job).await??.base_offset)
+    }
+
+    /// [`ask`] the writer task for a marker append, and report a dead writer
+    /// or a dropped acknowledgement as [`BrokerError::PartitionWriterDied`].
+    ///
+    /// Either one is what a partition that stops on this broker looks like,
+    /// and a dropped acknowledgement may follow an append that landed. Kafka
+    /// answers such a partition `NOT_LEADER_OR_FOLLOWER`, which the
+    /// transaction coordinator retries, and the retry finds the landed marker.
+    async fn ask_marker_writer<T>(
+        &self,
+        make: impl FnOnce(oneshot::Sender<T>) -> WriterMessage,
+    ) -> Result<T, BrokerError> {
+        ask(&self.writer_tx, make)
+            .await
+            .map_err(|_| BrokerError::PartitionWriterDied {
+                topic: self.topic.clone(),
+                partition: self.index.get(),
+            })
     }
 
     /// Test-only: shift the partition's in-memory `log_start_offset` to

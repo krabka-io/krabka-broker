@@ -55,24 +55,31 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-// Only the #[cfg(test)] stateright models in txn/ reach these variants.
+use self::{
+    markers::dispatch_transaction_markers,
+    prepare::prepare_transaction,
+    response::{err_response, ok_response},
+    validation::{EndTxnValidation, validate_end_txn},
+};
+// Only the #[cfg(test)] stateright models in txn/ reach these.
 #[cfg(test)]
-pub use self::producer_identity::{
-    prepare_completion_identities_with_fresh, prepare_server_abort_identities_with_fresh,
+pub use self::{
+    markers::fan_out_outcome,
+    producer_identity::{
+        prepare_completion_identities_with_fresh, prepare_server_abort_identities_with_fresh,
+    },
+    state_table::{EndTxnDecision, TableRules, end_txn_decision},
 };
 pub use self::{
-    markers::{MarkerDispatchContext, MarkerFanOut, dispatch_markers, write_local_markers},
+    markers::{
+        MarkerDispatchContext, MarkerFanOut, MarkerFanOutOutcome, dispatch_markers,
+        write_local_markers,
+    },
     producer_identity::{
         client_producer_identity, completion_producer_identity, next_producer_identity,
         next_recovery_producer_identity, prepare_server_abort_identities,
     },
     reacquire::{ReacquireDecision, validate_complete_reacquire},
-};
-use self::{
-    markers::{MarkerFanOutOutcome, dispatch_transaction_markers},
-    prepare::prepare_transaction,
-    response::{err_response, ok_response},
-    validation::{EndTxnValidation, validate_end_txn},
 };
 
 pub async fn handle(
@@ -156,10 +163,12 @@ pub async fn handle(
                 prepared_completion_epoch,
             ));
         }
-        // A fenced generation has already superseded this fan-out attempt
-        // (#882): retrying cannot succeed, so the transaction is left in
-        // Prepare* for whatever superseded it to resolve, rather than queued
-        // for a completion retry that would never converge.
+        // A fenced generation has already superseded this fan-out attempt, or
+        // every partition that failed answered a code Kafka's completion
+        // handler throws on (#882): retrying cannot succeed, so the
+        // transaction is left in Prepare* for whatever superseded it, or the
+        // coordinator's next load, to resolve, rather than queued for a
+        // completion retry that would never converge.
         MarkerFanOutOutcome::GivenUp => {
             return Ok(ok_response(
                 prepared_completion_pid.get(),
@@ -262,6 +271,8 @@ pub async fn handle(
     {
         tracing::error!(
             tid,
+            producer_id = prepare_snap.producer_id.get(),
+            producer_epoch = prepare_snap.producer_epoch,
             state = ?complete,
             error = %e,
             "EndTxn: failed to persist CompleteCommit/CompleteAbort; queued for completion"

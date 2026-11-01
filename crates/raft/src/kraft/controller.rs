@@ -128,6 +128,7 @@ mod vote_response;
 pub use self::{
     activation::Activation,
     control_state::control_batch_image_records,
+    mutation_policy::encode_record,
     records::{decode_committed_value, is_kip835_noop},
 };
 
@@ -173,6 +174,8 @@ mod tests_submit;
 mod tests_timing;
 #[cfg(test)]
 mod tests_truncation;
+#[cfg(test)]
+mod tests_uncommitted_tail;
 
 /// Filename of the node-local durable quorum-state file.
 const QUORUM_STATE_FILE: &str = "quorum-state";

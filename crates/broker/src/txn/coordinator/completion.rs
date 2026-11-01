@@ -17,7 +17,7 @@ use {
     super::TxnCoordinator,
     crate::txn::{
         handlers::end_txn::completion_producer_identity,
-        marker::{MarkerType, classify_marker_failure},
+        marker::{MarkerFailureClass, MarkerType, classify_marker_failure},
         state::{TxnEntry, TxnState},
         util::now_millis,
         version::TxnVersion,
@@ -107,6 +107,19 @@ pub fn apply_completion_from(
     entry.has_failed_epoch_fence = false;
     entry.partitions.clear();
     entry.last_update_ms = now_ms;
+}
+
+/// What one completion attempt reports after its marker fan-out failed with
+/// `class`, the failure `MarkerFanOut::fail` kept. A fenced generation, or an
+/// unexpected code when no partition failed retriably, ends the attempt for
+/// good, so the completion task drops the transactional id; a retriable one
+/// keeps it queued.
+pub fn fan_out_failure_attempt(class: MarkerFailureClass) -> CompletionAttempt {
+    if class.stops_fan_out() {
+        CompletionAttempt::NothingToComplete
+    } else {
+        CompletionAttempt::Retry
+    }
 }
 
 /// Recheck the complete prepared snapshot after the marker fan-out. Comparing
@@ -210,28 +223,39 @@ impl TxnCoordinator {
             .await
         {
             let class = classify_marker_failure(&error);
-            if class.stops_fan_out() {
+            let attempt = fan_out_failure_attempt(class);
+            if attempt == CompletionAttempt::NothingToComplete {
                 // A fenced producer or coordinator generation has already
-                // superseded this fan-out, or a leader answered a code
-                // Kafka's completion handler throws on (#882): retrying here
-                // can never succeed, and would otherwise loop forever at
-                // `RETRY_BACKOFF`. Whatever superseded this generation, or
-                // the coordinator's next load of the partition, completes the
-                // transaction now.
+                // superseded this fan-out, or every partition that failed
+                // answered a code Kafka's completion handler throws on
+                // (#882): retrying here can never succeed, and would
+                // otherwise loop forever at `RETRY_BACKOFF`. Whatever
+                // superseded this generation, or the coordinator's next load
+                // of the partition, completes the transaction now. A
+                // partition that failed retriably in the same attempt keeps
+                // the transaction queued instead (see `MarkerFanOut::fail`).
                 warn!(
                     tid = transactional_id,
+                    producer_id = prepared.producer_id.get(),
+                    producer_epoch = prepared.producer_epoch,
+                    state = ?prepared.state,
+                    outstanding = ?prepared.partitions,
                     %error,
                     ?class,
                     "transaction completion: marker fan-out cannot succeed; giving up"
                 );
-                return CompletionAttempt::NothingToComplete;
+            } else {
+                warn!(
+                    tid = transactional_id,
+                    producer_id = prepared.producer_id.get(),
+                    producer_epoch = prepared.producer_epoch,
+                    state = ?prepared.state,
+                    outstanding = ?prepared.partitions,
+                    %error,
+                    "transaction completion: marker fan-out failed; will retry"
+                );
             }
-            warn!(
-                tid = transactional_id,
-                %error,
-                "transaction completion: marker fan-out failed; will retry"
-            );
-            return CompletionAttempt::Retry;
+            return attempt;
         }
 
         let _state_partition_write = self.lock_state_partition_for(transactional_id).await;
@@ -261,6 +285,8 @@ impl TxnCoordinator {
             Ok(_) => {
                 info!(
                     tid = transactional_id,
+                    producer_id = prepared.producer_id.get(),
+                    producer_epoch = prepared.producer_epoch,
                     state = ?complete,
                     "transaction completion: completed a prepared transaction"
                 );
@@ -269,6 +295,8 @@ impl TxnCoordinator {
             Err(error) => {
                 warn!(
                     tid = transactional_id,
+                    producer_id = prepared.producer_id.get(),
+                    producer_epoch = prepared.producer_epoch,
                     %error,
                     "transaction completion: Complete append failed; will retry"
                 );

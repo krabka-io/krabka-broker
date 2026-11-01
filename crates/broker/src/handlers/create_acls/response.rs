@@ -8,7 +8,7 @@
 
 use {
     super::ValidCreation,
-    crate::{codes, handlers::submit_failure_code},
+    crate::{codes, handlers::submit_failure::controller_write_code},
     krabka_protocol::owned::create_acls_response::{AclCreationResult, CreateAclsResponse},
     krabka_raft::RaftError,
 };
@@ -56,10 +56,7 @@ pub(super) fn apply_submit_error(
     to_submit: &[ValidCreation],
     err: &RaftError,
 ) {
-    let code = match err {
-        RaftError::NotLeader { .. } | RaftError::LeaderUnknown => codes::NOT_CONTROLLER,
-        other => submit_failure_code(other, codes::UNKNOWN_SERVER_ERROR),
-    };
+    let code = controller_write_code(err, codes::UNKNOWN_SERVER_ERROR);
     for creation in to_submit {
         if let Some(result) = results.get_mut(creation.result_index) {
             *result = AclCreationResult {

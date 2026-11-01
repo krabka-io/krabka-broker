@@ -4,6 +4,12 @@ pub mod bootstrap;
 /// The background task that completes transactions whose `Prepare*` record is
 /// durable.
 pub mod completion;
+/// Exhaustive model of transaction completion across indeterminate
+/// `__transaction_state` writes, coordinator failover, marker refusals and
+/// data-leader changes: every transaction must end once the faults stop.
+#[cfg(test)]
+#[path = "completion_model.rs"]
+mod completion_model;
 pub mod coordinator;
 pub mod decision;
 #[cfg(test)]
@@ -24,6 +30,11 @@ pub mod handlers;
 pub mod id_expiration;
 pub mod log_record;
 pub mod marker;
+/// Exhaustive stateright model of transaction-marker delivery under write
+/// timeouts, coordinator crashes and partition failures.
+#[cfg(test)]
+#[path = "marker_delivery_model.rs"]
+mod marker_delivery_model;
 pub mod partitioner;
 pub mod state;
 /// KIP-939 two-phase-commit decision cores: timeout resolution and the

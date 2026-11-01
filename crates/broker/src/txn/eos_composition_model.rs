@@ -18,6 +18,12 @@
 //!   independently of the abort filter in `visible()`.
 //! - `hw_within_log` and `no_transition_violation`: the HWM stays within the
 //!   log, the HWM and the LSO never regress, and every `End` Proceeds.
+//! - `held_back_lso_is_transient`: in a quiescent state (see
+//!   [`Quiescence`]) no transaction is open, so the LSO is the log end and
+//!   the HWM has reached it. An LSO held back by an open transaction, which
+//!   `interleaved_held_back` witnesses, is a window the model passes through,
+//!   never a state it rests in. The log bound keeps one offset free for the
+//!   marker of each open transaction, so the bound cannot strand one.
 //!
 //! Concurrent producers' batches interleave at the offset level. So a
 //! committed txn can sit partly above the LSO, behind an older open txn, or
@@ -60,7 +66,7 @@ use {
     },
     crate::{
         handlers::fetch::{FetchWatermarks, compute_visibility_window},
-        model_check::{assert_pinned_count, run_bfs},
+        model_check::{Quiescence, assert_pinned_count, run_bfs},
         txn::handlers::end_txn::{
             completion_producer_identity, prepare_completion_identities_with_fresh,
         },
@@ -81,8 +87,8 @@ const MAX_DEPTH: usize = 50;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES_BASIC: usize = 1_228;
-const PINNED_UNIQUE_STATES_WIDE: usize = 58_524;
+const PINNED_UNIQUE_STATES_BASIC: usize = 958;
+const PINNED_UNIQUE_STATES_WIDE: usize = 38_300;
 
 const PID0: i64 = 1000; // base producer id; per-producer pid = PID0 + producer index
 
@@ -294,6 +300,22 @@ fn aborted_by_markers(log: &[Batch]) -> Vec<i64> {
     aborted
 }
 
+/// The transactions that hold data and no marker yet: each one still owes
+/// the log one marker.
+fn open_transactions(s: &EosState) -> usize {
+    s.prod
+        .iter()
+        .enumerate()
+        .filter(|(p, pr)| {
+            let producer = u8::try_from(*p).expect("model producer index fits in u8");
+            pr.state == TxnState::Ongoing.to_kafka_status()
+                && s.log.iter().any(|b| {
+                    b.producer == producer && b.generation == pr.generation && b.kind == Kind::Data
+                })
+        })
+        .count()
+}
+
 // ----- model -----
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -409,9 +431,10 @@ impl Model for EosModel {
         if s.hw < model_offset(s.log.len()) {
             acts.push(Act::Ack);
         }
-        if s.log.len() >= self.max_log {
-            return;
-        }
+        // Every open transaction keeps one offset of the log bound for the
+        // marker that ends it, so the bound never strands a transaction: a
+        // held-back LSO stays transient.
+        let reserved = open_transactions(s);
         for p in 0..self.producers {
             let pr = s.prod[usize::from(p)];
             // `AddPartitionsToTxn` opens a NEW transaction only from a state
@@ -431,7 +454,10 @@ impl Model for EosModel {
                         b.producer == p && b.generation == pr.generation && b.kind == Kind::Data
                     })
                     .count();
-                if n < self.max_data_per_txn {
+                // The first batch opens the transaction and reserves its
+                // marker's offset too.
+                let needed = if n == 0 { 2 } else { 1 };
+                if n < self.max_data_per_txn && s.log.len() + reserved + needed <= self.max_log {
                     acts.push(Act::Append(p));
                 }
                 if n >= 1 {
@@ -507,8 +533,20 @@ impl Model for EosModel {
                         && txn_outcome(&s.log, b.producer, b.generation) == Some(Kind::Abort)
                 })
             }),
+            // A held-back LSO is transient, never a resting state: once no
+            // step is enabled, no transaction is open, so the LSO is the log
+            // end, and the HWM has caught up with it.
+            Property::always(
+                "held_back_lso_is_transient",
+                |model: &Self, s: &EosState| {
+                    let log_end = Offset(model_offset(s.log.len()));
+                    !model.quiescent(s) || (lso(&s.log) == log_end && s.hw == log_end)
+                },
+            ),
             // The key EOS subtlety: a COMMITTED batch sits ABOVE the LSO, held
             // back by an older still-open transaction (out-of-order commit).
+            // It is a transient witness: `held_back_lso_is_transient` requires
+            // the open transaction to end.
             Property::sometimes("interleaved_held_back", |_, s: &EosState| {
                 let l = lso(&s.log);
                 s.log.iter().enumerate().any(|(off, b)| {
@@ -528,6 +566,12 @@ impl Model for EosModel {
     }
 
     fn within_boundary(&self, s: &Self::State) -> bool { s.log.len() <= self.max_log }
+}
+
+/// The model injects no faults: every action is a step, so a quiescent state
+/// is one where nothing can move.
+impl Quiescence for EosModel {
+    fn is_fault(&self, _action: &Act) -> bool { false }
 }
 
 krabka_macros::model_runner! {

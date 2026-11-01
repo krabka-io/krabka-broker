@@ -11,8 +11,6 @@ pub const PRODUCER_ID: i64 = 1;
 pub const PRODUCER_EPOCH: i16 = 0;
 pub const BASE_SEQUENCE: i32 = 0;
 pub const BASE_OFFSET: i64 = 0;
-/// Room for the batch and a second copy of it, so a failed dedup check can
-/// append twice and `no_duplicate_append` can fail.
 pub const MAX_LOG_LEN: usize = 2;
 pub const MAX_HWM: u8 = 1;
 pub const MAX_SEND_ATTEMPTS: u8 = 4;

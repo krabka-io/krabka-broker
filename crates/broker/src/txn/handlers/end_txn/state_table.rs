@@ -31,16 +31,16 @@ use {
 /// Which table `EndTxn` consults: the transaction version of the client, and
 /// the Kafka rules that apply to its one changed answer.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct TableRules {
+pub struct TableRules {
     /// Transaction version 2 and above for the client.
-    pub(super) verified: bool,
+    pub verified: bool,
     /// The one answer that Kafka trunk changed after 4.3.1.
-    pub(super) trunk_rules: bool,
+    pub trunk_rules: bool,
 }
 
 /// What `EndTxn` does with the entry it found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EndTxnDecision {
+pub enum EndTxnDecision {
     /// Prepare the transition to `state`. `no_partition_added` marks Kafka's
     /// `prepareAbortOrCommit(..., noPartitionAdded = true)`: an abort of a
     /// transaction that added no partition, which starts from the update time
@@ -62,7 +62,7 @@ pub(super) enum EndTxnDecision {
 /// `EndTxn` v5 (Kafka's `TransactionVersion.transactionVersionForEndTxn`),
 /// where completion bumps the producer epoch. `trunk_rules` selects the one
 /// answer that Kafka trunk changed after 4.3.1, see [`verified_state_decision`].
-pub(super) fn end_txn_decision(
+pub fn end_txn_decision(
     entry: &TxnEntry,
     request: ProducerIdentity,
     committed: bool,

@@ -9,23 +9,25 @@
 
 use {
     super::{
-        THROTTLING_QUOTA_EXCEEDED_MESSAGE, automatic_leaderships, diskless_wal_placement_error,
-        inactive_brokers, invalid_topic_shape, manual_leaderships,
+        THROTTLING_QUOTA_EXCEEDED_MESSAGE, diskless_wal_placement_error, invalid_topic_shape,
         name::topic_name_error,
-        placement::{automatic_placement_exclusions, resolve_assignments},
+        placement::{
+            PlacementCandidates, choose_leaderships, placement_candidates, resolve_assignments,
+        },
         placement_failure_message,
         records::{null_config_error, topic_config_overrides, topic_records},
         resolve_default,
         response::topic_error_result,
-        site_broker_views, topic_exists_result,
+        topic_exists_result,
     },
     crate::{
         broker::Broker,
         codes,
         config_keys::{self, resolve_preferred_leader_site},
         handlers::{
-            offline_replicas::unavailable_brokers,
+            forward_to_controller::wrong_controller_message,
             partition_materialization::PartitionMaterialization,
+            submit_failure::controller_write_code,
         },
         quota::ControllerMutationQuota,
         site_placement::PlacementRng,
@@ -35,7 +37,7 @@ use {
         create_topics_request::CreatableTopic, create_topics_response::CreatableTopicResult,
     },
     krabka_raft::RaftError,
-    std::collections::{BTreeMap, HashSet},
+    std::collections::BTreeMap,
     uuid::Uuid,
 };
 
@@ -95,7 +97,6 @@ impl<'a> TopicCreation<'a> {
         let mut topic_req = topic_req;
         let broker = self.broker;
         let image = self.image;
-        let node_id = broker.config.node_id;
         let name = topic_req.name.clone();
 
         // Kafka checks the name before anything else. The name becomes part
@@ -196,29 +197,9 @@ impl<'a> TopicCreation<'a> {
             );
         }
 
-        // Read the current broker set from the controller's image, with the
-        // site and the witness role of each broker. `site_broker_views` sorts
-        // by node id for determinism, and it covers the race in which the
-        // self-registration record has not reached the local image yet.
-        // The automatic placement leaves out a broker that is in controlled
-        // shutdown and not fenced, and one whose log directories are all
-        // cordoned (KIP-1066). It takes a fenced broker only as a last resort,
-        // as Kafka's placer does. A broker that a controlled shutdown stopped
-        // is fenced, so it is such a last resort. The ISR below leaves that
-        // broker out. A manual assignment may name any registered broker,
-        // because Kafka 4.3.1 checks only that the broker is registered, and
-        // the ISR again leaves out the inactive ones.
-        let unavailable = unavailable_brokers(broker, image).await;
-        let inactive = inactive_brokers(image, &unavailable);
         let manual = !topic_req.assignments.is_empty();
-        let no_exclusion = HashSet::new();
-        let unusable = automatic_placement_exclusions(image, &unavailable);
-        let brokers = site_broker_views(
-            image,
-            broker.config.is_broker().then_some(node_id),
-            if manual { &no_exclusion } else { &unusable },
-            &unavailable,
-        );
+        let PlacementCandidates { brokers, inactive } =
+            placement_candidates(broker, image, manual).await;
 
         let assignments = match resolve_assignments(
             &topic_req,
@@ -247,24 +228,15 @@ impl<'a> TopicCreation<'a> {
             )));
         }
 
-        let leaderships = if manual {
-            match manual_leaderships(
-                &assignments,
-                &inactive,
-                &config_keys::witness_node_ids(image),
-                0,
-            ) {
-                Ok(leaderships) => leaderships,
-                Err(message) => {
-                    return Err(Box::new(topic_error_result(
-                        name,
-                        codes::INVALID_REPLICA_ASSIGNMENT,
-                        Some(message),
-                    )));
-                }
+        let leaderships = match choose_leaderships(&assignments, &inactive, image, manual, 0) {
+            Ok(leaderships) => leaderships,
+            Err(message) => {
+                return Err(Box::new(topic_error_result(
+                    name,
+                    codes::INVALID_REPLICA_ASSIGNMENT,
+                    Some(message),
+                )));
             }
-        } else {
-            automatic_leaderships(&assignments, &inactive)
         };
 
         if diskless
@@ -366,25 +338,55 @@ impl<'a> TopicCreation<'a> {
                 .await;
                 return Ok(());
             }
-            // Another request created the name after this one read the
-            // image. The quorum decides that race, and the row is the one
-            // Kafka's existence check answers.
-            Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {
-                topic_exists_result(name.clone())
-            }
-            Err(RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord(_))) => {
-                // E.g., `partitions <= 0` rejected by image::validate.
-                topic_error_result(name.clone(), codes::INVALID_PARTITIONS, None)
-            }
-            Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-                topic_error_result(name.clone(), codes::NOT_CONTROLLER, None)
-            }
-            Err(e) => {
-                tracing::error!(topic = %name, error = %e, "CreateTopics submit_change failed");
-                topic_error_result(name.clone(), codes::UNKNOWN_SERVER_ERROR, None)
+            Err(error) => {
+                let leader = *broker.controller.watch_leader().borrow();
+                submit_failure_result(name.clone(), &error, leader)
             }
         };
         Err(Box::new(failure))
+    }
+}
+
+/// The row a topic answers when its metadata commit fails with `error`.
+/// `leader` is the controller leader this node knows of when the commit
+/// failed.
+fn submit_failure_result(
+    name: String,
+    error: &RaftError,
+    leader: Option<krabka_raft::NodeId>,
+) -> CreatableTopicResult {
+    match error {
+        // Another request created the name after this one read the image. The
+        // quorum decides that race, and the row is the one Kafka's existence
+        // check answers.
+        RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_)) => {
+            topic_exists_result(name)
+        }
+        RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord(_)) => {
+            // E.g., `partitions <= 0` rejected by image::validate.
+            topic_error_result(name, codes::INVALID_PARTITIONS, None)
+        }
+        // A lost or unknown leader, and a new leader that refuses the write
+        // with `UncommittedTail` until it commits its own epoch, answer
+        // `NOT_CONTROLLER`, as Kafka's inactive controller does. Kafka's
+        // `ApiError.fromThrowable` keeps the message of the controller's
+        // `newWrongControllerException`, which names the raft leader the
+        // controller knows of: the redirect of a lost leadership, and the
+        // leader this node knows for a tail that is not committed yet.
+        error => {
+            let code = controller_write_code(error, codes::UNKNOWN_SERVER_ERROR);
+            if code == codes::UNKNOWN_SERVER_ERROR {
+                tracing::error!(topic = %name, %error, "CreateTopics submit_change failed");
+            }
+            let message = (code == codes::NOT_CONTROLLER).then(|| {
+                wrong_controller_message(match error {
+                    RaftError::NotLeader { current_leader } => *current_leader,
+                    RaftError::LeaderUnknown => None,
+                    _ => leader,
+                })
+            });
+            topic_error_result(name, code, message)
+        }
     }
 }
 
@@ -395,4 +397,90 @@ struct Placement<'a> {
     leaderships: &'a [super::InitialLeadership],
     overrides: &'a BTreeMap<String, String>,
     diskless: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::submit_failure_result,
+        crate::codes,
+        krabka_metadata::MetadataError,
+        krabka_protocol::owned::create_topics_response::CreatableTopicResult,
+        krabka_raft::{NodeId, RaftError},
+    };
+
+    /// The row Kafka's `CreateTopicsRequest.getErrorResponse` builds for a
+    /// refused topic, with the empty `Configs` Kafka sends.
+    fn row(error_code: i16, error_message: Option<&str>) -> CreatableTopicResult {
+        CreatableTopicResult {
+            name: "orders".to_owned(),
+            error_code,
+            error_message: error_message.map(str::to_owned),
+            configs: Some(Vec::new()),
+            ..Default::default()
+        }
+    }
+
+    /// A newly elected controller leader refuses a write with
+    /// `UncommittedTail` until it commits its own epoch. Kafka's controller is
+    /// not active in that window and answers `NOT_CONTROLLER`, which the admin
+    /// client retries, as it answers a lost leadership.
+    ///
+    /// The row carries the message of Kafka's
+    /// `ControllerExceptions.newWrongControllerException`, which names
+    /// `QuorumController.latestController()`, the raft leader the refusing
+    /// node knows of. A lost leadership names the leader it was redirected to.
+    /// A new leader that has not committed its epoch is that raft leader, so
+    /// the row names the leader this node knows. Every other row keeps its
+    /// own message.
+    #[yare::parameterized(
+        not_leader = {
+            RaftError::NotLeader { current_leader: Some(NodeId(2)) },
+            Some(NodeId(3)),
+            row(codes::NOT_CONTROLLER, Some("The active controller appears to be node 2.")),
+        },
+        not_leader_without_hint = {
+            RaftError::NotLeader { current_leader: None },
+            Some(NodeId(3)),
+            row(codes::NOT_CONTROLLER, Some("No controller appears to be active.")),
+        },
+        leader_unknown = {
+            RaftError::LeaderUnknown,
+            None,
+            row(codes::NOT_CONTROLLER, Some("No controller appears to be active.")),
+        },
+        uncommitted_tail = {
+            RaftError::UncommittedTail,
+            Some(NodeId(1)),
+            row(codes::NOT_CONTROLLER, Some("The active controller appears to be node 1.")),
+        },
+        uncommitted_tail_without_leader = {
+            RaftError::UncommittedTail,
+            None,
+            row(codes::NOT_CONTROLLER, Some("No controller appears to be active.")),
+        },
+        topic_exists = {
+            RaftError::Metadata(MetadataError::TopicExists("orders".to_owned())),
+            Some(NodeId(1)),
+            row(codes::TOPIC_ALREADY_EXISTS, Some("Topic 'orders' already exists.")),
+        },
+        invalid_record = {
+            RaftError::Metadata(MetadataError::InvalidRecord("partitions")),
+            Some(NodeId(1)),
+            row(codes::INVALID_PARTITIONS, None),
+        },
+        shutdown = { RaftError::Shutdown, Some(NodeId(1)), row(codes::UNKNOWN_SERVER_ERROR, None) },
+        change_rejected = {
+            RaftError::ChangeRejected("stale".to_owned()),
+            Some(NodeId(1)),
+            row(codes::UNKNOWN_SERVER_ERROR, None),
+        },
+    )]
+    fn a_failed_commit_answers_kafkas_row(
+        error: RaftError,
+        leader: Option<NodeId>,
+        expected: CreatableTopicResult,
+    ) {
+        assert2::assert!(submit_failure_result("orders".to_owned(), &error, leader) == expected);
+    }
 }

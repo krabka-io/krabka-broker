@@ -180,6 +180,13 @@ impl CommandSender {
             .map_err(|mpsc::error::SendError(queued)| mpsc::error::SendError(queued.command))
     }
 
+    /// Resolves once the engine has dropped its end of the queue.
+    ///
+    /// A command whose send completes while the engine drops that end can be
+    /// left in the queue unread, and its reply sender with it, for as long as
+    /// any sender lives. A caller waiting on that reply waits on this as well.
+    pub async fn closed(&self) { self.0.closed().await; }
+
     /// The room left in the queue.
     #[must_use]
     pub fn capacity(&self) -> usize { self.0.capacity() }

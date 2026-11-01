@@ -8,7 +8,7 @@
 //! live in [`crate::config_keys::broker_dynamic`].
 
 use {
-    super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT},
+    super::{OP_APPEND, OP_DELETE, OP_SET, is_known_operation, topic_scope::merge_list_op},
     crate::{
         api_catalog::UnstableApiVersions,
         codes,
@@ -76,25 +76,33 @@ fn apply_operations(
                     }
                     BrokerKeyKind::List => {}
                 }
-                let old = props
-                    .get(name)
-                    .map_or_else(|| list_default(name).to_owned(), Clone::clone);
-                let mut parts: Vec<&str> = old.split(',').filter(|part| !part.is_empty()).collect();
-                let items: Vec<&str> = value.split(',').collect();
-                if operation == OP_APPEND {
-                    for item in items {
-                        if !parts.contains(&item) {
-                            parts.push(item);
-                        }
-                    }
-                } else {
-                    parts.retain(|part| !items.contains(part));
-                }
-                props.insert(name.to_owned(), parts.join(","));
+                let next = merge_list_op(
+                    operation,
+                    props.get(name).map(String::as_str),
+                    Some(list_default(name)),
+                    value,
+                );
+                props.insert(name.to_owned(), next);
             }
         }
     }
     Ok(())
+}
+
+/// Kafka's `ConfigAdminManager.validateBrokerConfigChange` maps every
+/// operation through `AlterConfigOp.OpType.forId` before it looks at any key,
+/// so an unknown operation code answers ahead of every key check.
+fn unknown_operation_error(resource: &AlterConfigsResource) -> Result<(), (i16, String)> {
+    resource
+        .configs
+        .iter()
+        .find(|cfg| !is_known_operation(cfg.config_operation))
+        .map_or(Ok(()), |cfg| {
+            Err((
+                codes::INVALID_REQUEST,
+                format!("Unknown operations type {}", cfg.config_operation),
+            ))
+        })
 }
 
 /// The records one `BROKER` resource stages, or the error it answers with.
@@ -106,17 +114,7 @@ pub(super) fn broker_records(
     context: BrokerConfigContext<'_>,
 ) -> Result<Vec<MetadataRecord>, (i16, String)> {
     let node_id = context.resource_node(&resource.resource_name)?;
-    if let Some(cfg) = resource.configs.iter().find(|cfg| {
-        !matches!(
-            cfg.config_operation,
-            OP_SET | OP_DELETE | OP_APPEND | OP_SUBTRACT
-        )
-    }) {
-        return Err((
-            codes::INVALID_REQUEST,
-            format!("Unknown operations type {}", cfg.config_operation),
-        ));
-    }
+    unknown_operation_error(resource)?;
     for cfg in &resource.configs {
         // krabka's controller-published keys stand outside the alter paths.
         if config_keys::is_controller_managed_broker_config(&cfg.name) {
@@ -186,7 +184,9 @@ pub(super) fn preprocess_broker_resource(
     context: BrokerConfigContext<'_>,
     checks: OwnBrokerChecks<'_>,
 ) -> Result<(), (i16, String)> {
-    if context.is_cluster_default_resource(&resource.resource_name)? {
+    let cluster_default = context.is_cluster_default_resource(&resource.resource_name)?;
+    unknown_operation_error(resource)?;
+    if cluster_default {
         return Ok(());
     }
     // Check only newly introduced directories. Existing stored values may be
@@ -215,8 +215,11 @@ mod tests {
         crate::{
             features::{ELR_VERSION, METADATA_VERSION},
             handlers::{
-                incremental_alter_configs::test_support::{
-                    make_del_cfg, make_image_with_broker, make_resource, make_set_cfg,
+                incremental_alter_configs::{
+                    OP_SUBTRACT,
+                    test_support::{
+                        make_del_cfg, make_image_with_broker, make_resource, make_set_cfg,
+                    },
                 },
                 test_support::broker_config_context,
             },
@@ -443,6 +446,50 @@ mod tests {
                     .map(|(key, value)| record(cluster, key, Some(value)))
                     .collect())
         );
+    }
+
+    /// Kafka's controller merges a broker `LIST` key as
+    /// `ConfigurationControlManager.incrementalAlterConfigResource` does:
+    /// the operation's value is split with Java's `String.split`, which drops
+    /// trailing empty items, and SUBTRACT removes one occurrence of each item
+    /// (`List.remove(Object)`). The broker's `ConfigAdminManager`
+    /// (`split` and Scala's `diff`) agrees on both.
+    #[rstest::rstest]
+    #[case::append_with_a_trailing_comma(OP_APPEND, "delete", "compact,", "delete,compact")]
+    #[case::append_of_only_commas(OP_APPEND, "delete", ",", "delete")]
+    #[case::subtract_removes_one_occurrence(
+        OP_SUBTRACT,
+        "delete,compact,delete",
+        "delete",
+        "compact,delete"
+    )]
+    #[case::subtract_with_a_trailing_comma(OP_SUBTRACT, "delete,compact", "delete,", "compact")]
+    fn a_broker_list_key_merges_as_kafkas_controller_does(
+        #[case] operation: i8,
+        #[case] stored: &str,
+        #[case] value: &str,
+        #[case] expected: &str,
+    ) {
+        let cluster = krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
+        let key = "log.cleanup.policy";
+        let image = image_with(
+            &[StoredConfig {
+                node: cluster,
+                key,
+                value: stored,
+            }],
+            false,
+        );
+        let resource = make_resource("", vec![AlterableConfig {
+            name: key.into(),
+            config_operation: operation,
+            value: Some(value.into()),
+            ..Default::default()
+        }]);
+
+        let records = broker_records(&resource, broker_config_context().image(&image).call());
+
+        check!(records == Ok(vec![record(cluster, key, Some(expected))]));
     }
 
     #[test]

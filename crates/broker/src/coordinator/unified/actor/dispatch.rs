@@ -242,6 +242,12 @@ pub(super) async fn handle_actor_message(
             *group = *seeded;
             true
         }
+        GroupActorMessage::ClassicRespawn => {
+            services
+                .coordinator
+                .apply_classic_respawn_seed(group, commits);
+            true
+        }
         GroupActorMessage::Shutdown(reply) => {
             // Kafka's `GroupMetadataManager.onUnloaded`: a parked `JoinGroup`
             // or `SyncGroup` learns that this broker no longer coordinates the

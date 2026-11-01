@@ -154,6 +154,7 @@ pub use self::copy::copy_eligible;
 pub use self::{
     archive::ArchiveMode,
     copy::{CopyBound, CopyDelay, CopyFence, CopyIdentity, copy_eligible_delayed},
+    copy_segment::CopiesInFlight,
     delete::{cascade_remote_partition_delete, mark_segments_below},
     local_retention::{LocalRetentionBounds, local_retention_pass},
     remote_retention::{LocalLogFootprint, RemoteRetentionBounds, remote_retention_pass},
@@ -243,6 +244,8 @@ pub struct RemoteLogManagerContext {
     /// `remote.log.manager.copy.max.bytes.per.second`. See
     /// [`RemoteTier::copy_quota`].
     pub copy_quota: Arc<quota::RlmQuotaManager>,
+    /// See [`RemoteTier::copies_in_flight`].
+    pub copies_in_flight: CopiesInFlight,
     pub metrics: BrokerMetrics,
     pub node_id: NodeId,
     pub broker_id: i32,
@@ -272,8 +275,13 @@ pub struct RemoteTier<'a> {
     /// whole copier bound on partitions that are moving no bytes. Past the
     /// deadline the copy is left in `CopySegmentStarted` -- which local
     /// retention refuses to delete against -- and the next tick retries the
-    /// segment under a fresh id.
+    /// segment under a fresh id. Remote retention leaves the abandoned copy
+    /// alone until its upload returns; see [`Self::copies_in_flight`].
     pub copy_timeout: Time,
+    /// The uploads still running on this broker, a copy abandoned at
+    /// [`Self::copy_timeout`] among them. Remote retention deletes no
+    /// `CopySegmentStarted` segment whose upload is here.
+    pub copies_in_flight: &'a CopiesInFlight,
     /// Whether the broker runs Kafka trunk's tiered-storage behavior where it
     /// differs from the released 4.3.1: today, how local retention ages a
     /// segment whose newest record claims a timestamp in the future. See
@@ -303,6 +311,7 @@ impl RemoteLogManagerContext {
             index_cache: &self.index_cache,
             copy_quota: &self.copy_quota,
             copy_timeout: cfg.copy_timeout,
+            copies_in_flight: &self.copies_in_flight,
             unstable_api_versions: cfg.unstable_api_versions,
         }
     }
@@ -1104,6 +1113,7 @@ mod tests {
                 rlmm: Arc::clone(&rlmm),
                 index_cache: Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
                 copy_quota: Arc::new(quota::RlmQuotaManager::unlimited()),
+                copies_in_flight: CopiesInFlight::default(),
                 metrics: BrokerMetrics::new(),
                 node_id: NodeId(1),
                 broker_id: 1,

@@ -23,6 +23,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+### Added
+
+- `aspect jepsen` runs Jepsen's Kafka workload, `jepsen.tests.kafka`, against a five-node krabka cluster in Docker containers. The harness in `tools/jepsen/` supplies the Kafka Java client, the database setup and Jepsen's combined nemesis; the workload, its generator and its checker are Jepsen's. The manifest `tools/jepsen/suite.json` crosses `assign` and `subscribe` consumers, with and without transactions, with network partitions, process kills, process pauses, packet faults and clock faults, and adds crashed clients and KIP-848's `consumer` group protocol. Containers share the host's clock, so each broker takes its wall clock from libfaketime and the clock nemesis moves that instead. An entry the machine cannot run, such as packet faults on a kernel without `netem`, is reported as skipped, or as a regression with `--no-skips`. The task writes `target/jepsen/report.md` and gives each entry one of the verdicts that `aspect kafka-system-tests` uses, plus skipped. The nightly `jepsen` lane of `ci.yml` runs the whole manifest on the release build, so it gates releases. Ten entries are known failures, from three broker bugs the suite found: a retried idempotent batch appended twice, a partition that stays unavailable after an unclean-restart re-election, and a transaction left open after broker kills. [Jepsen Kafka workload](docs/jepsen.md) describes the task and the bugs.
+
+### Fixed
+
+- `krabka-log` no longer needs the rustix git fork, one of the two reasons that no 1.1.x release of it is on crates.io. Its write-back called `rustix::fs::sync_file_range`, which only the fork in the workspace's `[patch.crates-io]` has, and `cargo publish` ignores that patch. `krabka-log` now builds against crates.io rustix. The other reason is `krabka_protocol::records::crc32c`, which no krabka-protocol release before 0.8.0 has; `krabka-log` publishes again once this repository moves to krabka-protocol 0.8. Its default write-back is `fdatasync`, and its default page drop is `posix_fadvise(POSIX_FADV_DONTNEED)` with no wait. A process installs another with the new `krabka_log::set_write_back` and `WriteBack`. The broker installs `sync_file_range` at startup, before any log opens, so its write-back and page drops do not change.
+
 ## [1.1.5] - 2026-10-31
 
 ### Fixed
@@ -38,23 +46,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [1.1.3] - 2026-10-29
 
-### Fixed
-
-- The upgrade smoke (`packaging/upgrade-smoke.sh`) takes as the previous release the newest tag whose image the registry serves, not the nearest tag. v1.1.0's release workflow failed after the tag was pushed, so no `ghcr.io/krabka-io/krabka-broker:v1.1.0` exists, and every full CI run since has failed the `upgrade · previous release` lane on that pull (#1839).
-- No 1.1.2 image or GitHub release exists either. Its release commit's full CI run failed that upgrade lane, which reads the tree under test, and its CI runs failed `cargo clippy · nextest` on a remote runner whose restored VM read CLOCK_MONOTONIC 225 ms apart between CPUs; the remote-runner prelude now switches every remote run's guest to kvm-clock before anything measures time, and logs the per-CPU offsets before and after (#1840, #1842). 1.1.3 is the same broker as 1.1.2.
-
-## [1.1.2] - 2026-10-28
+1.1.3 is the first 1.1 release with an image and a GitHub release. The `v1.1.0` tag has neither, for the reason under Fixed. The workspace version was raised to 1.1.1 (#1835) and then to 1.1.2 (#1838) on `main`, but neither was tagged, because the full CI run on each release commit failed. 1.1.1's run lost its coverage lane to a startup race, and GitHub refused to retry it. 1.1.2's run failed for the two reasons under Fixed. No image, GitHub release or crate exists for 1.1.1 or 1.1.2. A broker built from `main` between 1.1.0 and 1.1.3 can report either number, and its changes are the ones below.
 
 ### Fixed
 
 - The container image sets `GLIBC_TUNABLES=glibc.malloc.trim_threshold=134217728:glibc.malloc.mmap_threshold=67108864`, so freeing a fetch response's 10 MiB records buffers makes no syscall. With glibc's defaults a consumer draining a backlog at 500 K msg/s made the broker return about 54 MiB to the kernel a dozen times a second, and every page fault in the process waited behind each call: the producers' publish p99 rose from 1.3 to 3.5 ms for the length of the drain (16 partitions, RF1; 2.5 to 6.1 ms on GCE against Redpanda's 4.3) and is 2.1 ms with the tunables. The arenas keep about 300 MiB more resident at that rate. A deployment that runs the binary outside the image sets the variable itself; see [Deploy](docs/operations/deploy.md#start) (#1836).
-- No 1.1.1 image or GitHub release exists either: the release commit's CI run lost its coverage lane to a startup race, the rerun was cancelled, and GitHub refuses to retry it, so the image was never delivered. 1.1.2 is the same broker with the allocator setting above.
-
-## [1.1.1] - 2026-10-28
-
-### Fixed
-
-- The release job vets dependencies and validates the SBOM over the graph rules_rs resolves for the image, every feature, platform and dev-dependency unified, instead of the x86_64 non-dev graph of a `cargo build`. The 1.1.0 release run refused its SBOM over two crates only that union reaches, compio-buf's `arrayvec` and miniz_oxide's `simd-adler32`, so no 1.1.0 image or GitHub release exists; 1.1.1 is the same code. `ci.yml`'s `delivery` job now runs the same check on every push to `main` (#1834).
+- The release job vets dependencies and validates the SBOM over the graph rules_rs resolves for the image, every feature, platform and dev-dependency unified, instead of the x86_64 non-dev graph of a `cargo build`. The 1.1.0 release run refused its SBOM over two crates only that union reaches, compio-buf's `arrayvec` and miniz_oxide's `simd-adler32`, so no 1.1.0 image or GitHub release exists. `ci.yml`'s `delivery` job now runs the same check on every push to `main` (#1834).
+- The upgrade smoke (`packaging/upgrade-smoke.sh`) takes as the previous release the newest tag whose image the registry serves, not the nearest tag. Because no `ghcr.io/krabka-io/krabka-broker:v1.1.0` exists, every full CI run after 1.1.0 failed the `upgrade · previous release` lane on that pull, the 1.1.2 release commit's run among them (#1839).
+- The remote-runner prelude switches every remote run's guest to kvm-clock before anything measures time, and logs the per-CPU offsets before and after. The 1.1.2 release commit's CI runs failed `cargo clippy · nextest` on a remote runner whose restored VM read CLOCK_MONOTONIC 225 ms apart between CPUs (#1840, #1842).
 
 ## [1.1.0] - 2026-10-28
 
@@ -2650,8 +2649,6 @@ robot-head/crabka.
 [1.1.5]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.5
 [1.1.4]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.4
 [1.1.3]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.3
-[1.1.2]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.2
-[1.1.1]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.1
 [1.1.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.0
 [1.0.8]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.8
 [1.0.7]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.7

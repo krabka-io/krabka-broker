@@ -14,7 +14,7 @@ use {
         bootstrap::initialize_log_dirs,
         config::{DEFAULT_LOG_FILTER, DEFAULT_READINESS_MAX_METADATA_LAG, page_cache_budget},
         file_config::{FileConfig, config_schema},
-        health, security_clients,
+        health, log_write_back, security_clients,
         telemetry::{self, OtlpConfig, OtlpProtocol, TelemetryGuard},
     },
     krabka_log::TailArena,
@@ -262,6 +262,10 @@ async fn run(
         mut config,
         controlled_shutdown_drain_timeout,
     } = broker_config(&mut args, file_config, client_metrics_otlp)?;
+    // Like the tail caches' budget, the log write-back is the process's, so it
+    // goes in before any log opens: `sync_file_range` on Linux, in place of the
+    // `fdatasync` default of krabka-log.
+    log_write_back::install();
     security_clients::assemble(&mut config)?;
     // The handle behind the `BROKER_LOGGER` config resource. It drives the
     // stdout layer that the telemetry setup installed, so `kafka-configs
