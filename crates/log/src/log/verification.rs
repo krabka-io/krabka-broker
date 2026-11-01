@@ -20,7 +20,6 @@ use {
     super::Log,
     crate::producer_snapshot::ProducerBatchMetadata,
     krabka_ids::ProducerId,
-    krabka_verified::{decrement_sequence, increment_sequence},
     std::sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -224,25 +223,18 @@ impl Log {
         producer_epoch: i16,
         (base_sequence, last_offset_delta): (i32, i32),
     ) -> Option<ProducerBatchMetadata> {
-        if producer_id.get() < 0 || base_sequence < 0 || last_offset_delta < 0 {
+        if producer_id.get() < 0 {
             return None;
         }
-        let entry = self
-            .producer_state
-            .get(&producer_id)
-            .filter(|entry| entry.producer_epoch == producer_epoch)?;
-        let last_sequence = increment_sequence(base_sequence, last_offset_delta);
-        self.earlier_batches
-            .get(&producer_id)
-            .into_iter()
-            .flatten()
-            .copied()
-            .chain(entry.last_batch())
-            .find(|retained| {
-                retained.last_sequence == last_sequence
-                    && decrement_sequence(retained.last_sequence, retained.offset_delta)
-                        == base_sequence
-            })
+        self.producer_state.get(&producer_id)?.find_duplicate_batch(
+            self.earlier_batches
+                .get(&producer_id)
+                .into_iter()
+                .flatten()
+                .copied(),
+            producer_epoch,
+            (base_sequence, last_offset_delta),
+        )
     }
 
     /// Drop the verification state after a transactional append, as Kafka's

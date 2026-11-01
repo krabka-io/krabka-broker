@@ -3,10 +3,13 @@
 //! `handlers::produce`.
 //!
 //! This tracker is a second copy of the producer state that the partition log
-//! keeps (`krabka_log::Log::recovered_producers`). The produce path reads only
-//! this copy. A follower copies the transaction markers that it replicates
-//! into it, but not the data batches, so the copy is complete only on a
-//! leader. `Partition::install_local_leadership` replaces it with the state of
+//! keeps (`krabka_log::Log::recovered_producers`). The produce path's early
+//! dedup gate reads this copy. The partition writer then looks a client batch
+//! up in the log's copy, under the append lock
+//! (`krabka_log::Log::find_duplicate_batch`), and answers a repeat that the
+//! gate passed because this copy had not committed it yet. A follower copies
+//! the transaction markers that it replicates into it, but not the data
+//! batches, so the copy is complete only on a leader. `Partition::install_local_leadership` replaces it with the state of
 //! the log on each promotion. A reader that must also answer on a follower
 //! reads the log instead: `DescribeProducers`, and the log cleaner, which
 //! keeps the last record of each producer.
@@ -24,6 +27,8 @@ mod entry;
 mod expiry;
 #[cfg(test)]
 mod inflight_model;
+#[cfg(test)]
+mod logged_producer;
 mod recovery;
 #[cfg(test)]
 mod replication_mirror;
@@ -38,9 +43,9 @@ mod tests;
 #[cfg(test)]
 mod truncation_replay;
 
-#[cfg(test)]
-pub use self::decision::check_pure;
 use self::entry::Completion;
+#[cfg(test)]
+pub use self::{decision::check_pure, logged_producer::LoggedProducer};
 pub use self::{
     decision::{Checked, Decision, SequenceContext},
     entry::{NO_EARLIER_BATCHES, PartitionProducerState, ProducerEntry, RetainedBatch},
