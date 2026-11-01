@@ -402,15 +402,9 @@ pub(super) fn prepare_records<'a>(
                 leader_epoch: u64::from(leader_epoch),
             });
         }
-        match to_kraft_values(r, &scratch) {
-            Ok(mut blobs) => {
-                replay_value_blobs(&blobs, &mut replica_view, more_records)?;
-                value_blobs.append(&mut blobs);
-            }
-            Err(e) => {
-                return Err(RaftError::ChangeRejected(format!("encode: {e}")));
-            }
-        }
+        let mut blobs = encode_record(r, &scratch)?;
+        replay_value_blobs(&blobs, &mut replica_view, more_records)?;
+        value_blobs.append(&mut blobs);
         if more_records {
             scratch.apply(r);
         }
@@ -421,6 +415,78 @@ pub(super) fn prepare_records<'a>(
         result,
         registration_nodes,
     })
+}
+
+/// The KIP-631 value blobs that carry `record`, encoded against `image`.
+///
+/// # Errors
+/// Returns [`RaftError::ChangeRejected`] when the record has no encoding
+/// against `image`.
+fn encode_record(
+    record: &MetadataRecord,
+    image: &MetadataImage,
+) -> Result<Vec<bytes::Bytes>, RaftError> {
+    let encode = |record: &MetadataRecord, image: &MetadataImage| {
+        to_kraft_values(record, image)
+            .map_err(|e| RaftError::ChangeRejected(format!("encode: {e}")))
+    };
+    let Some(parts) = split_same_leader_epoch_bump(image, record) else {
+        return encode(record, image);
+    };
+    // Each part encodes against the image the parts before it produce. This
+    // copies the image, but only for an election of the leader the partition
+    // already has.
+    let mut view = image.clone();
+    let mut blobs = Vec::new();
+    for part in &parts {
+        blobs.extend(encode(part, &view)?);
+        view.apply(part);
+    }
+    Ok(blobs)
+}
+
+/// `record` as records whose replay reaches the leader epoch it names, when
+/// its usual encoding would lose it. Returns `None` otherwise.
+///
+/// A `V1PartitionUpdate` reaches the log as a `PartitionChangeRecord`. Replay
+/// raises the leader epoch only when that record names a leader, and the
+/// encoding names one only when the leader changes. An update that keeps the
+/// leader and raises the epoch, such as an unclean election of the leader the
+/// image still names, would otherwise replay at the old epoch on every
+/// replica, and every follower would fetch at an epoch its leader has fenced.
+/// Kafka's `PartitionChangeBuilder` sets the leader field to the current
+/// leader whenever the epoch must rise, for the same reason.
+///
+/// The update becomes a whole `V1Partition`, which carries the epoch as it is,
+/// followed by the update itself when it also sets ELR or recovery state. The
+/// update's epoch is then current, so its encoding carries only those fields
+/// and raises the partition epoch by one. The whole record therefore names one
+/// partition epoch less, and replay ends at the update's partition epoch.
+fn split_same_leader_epoch_bump(
+    image: &MetadataImage,
+    record: &MetadataRecord,
+) -> Option<Vec<MetadataRecord>> {
+    let MetadataRecord::V1PartitionUpdate(update) = record else {
+        return None;
+    };
+    let next = &update.partition;
+    let current = image.partition(&next.topic, next.partition)?;
+    if current.leader != next.leader || current.leader_epoch == next.leader_epoch {
+        return None;
+    }
+    let carries_state = update.eligible_leader_replicas.is_some()
+        || update.last_known_elr.is_some()
+        || update.recovery_state.is_some();
+    if !carries_state {
+        return Some(vec![MetadataRecord::V1Partition(next.clone())]);
+    }
+    Some(vec![
+        MetadataRecord::V1Partition(PartitionRecord {
+            partition_epoch: next.partition_epoch.saturating_sub(1),
+            ..next.clone()
+        }),
+        record.clone(),
+    ])
 }
 
 /// KIP-858: while a partition keeps its replica list, only
