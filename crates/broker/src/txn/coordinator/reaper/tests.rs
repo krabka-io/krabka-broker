@@ -1,20 +1,25 @@
-//! Unit tests for the idle-transaction reaper: the pure transition and
-//! guard helpers, the live `PrepareAbort` retry path, and the three-phase
-//! orchestration loop driven against a mock `ReaperBackend`.
+//! Unit tests for the idle-transaction reaper: the pure transition helper,
+//! the live `PrepareAbort` retry path, the sweep driven against a mock
+//! `ReaperBackend`, and the sweep against real logs.
 
 use {
     super::*,
     crate::{
         codes,
         txn::{
-            coordinator::test_support::{DATA_TOPIC, entry, live_coordinator, test_coordinator},
+            coordinator::{
+                completion::CompletionAttempt,
+                fanout_gate::MarkerFanoutMode,
+                test_support::{DATA_TOPIC, entry, live_coordinator, test_coordinator},
+            },
             state::TopicPartition,
         },
     },
     assert2::{assert, check},
     krabka_ids::PartitionIndex,
-    std::sync::Arc,
-    tokio::sync::Mutex,
+    krabka_log::ProducerId,
+    std::{sync::Arc, time::Duration},
+    tokio::{sync::Mutex, time},
 };
 
 #[tokio::test]
@@ -82,107 +87,6 @@ fn apply_prepare_abort_flips_state_and_stamps_time() {
     check!(e.last_update_ms == 999);
 }
 
-#[test]
-fn apply_complete_abort_records_prev_only_on_a_pid_roll() {
-    // No roll: same pid, epoch bumped → prev untouched.
-    let mut e = entry().call();
-    e.state = TxnState::PrepareAbort;
-    e.producer_epoch = 4;
-    e.partitions.insert(TopicPartition {
-        topic: "orders".into(),
-        partition: PartitionIndex(2),
-    });
-    apply_complete_abort(&mut e, ProducerId(1000), 5, 42);
-    check!(e.state == TxnState::CompleteAbort);
-    check!(e.producer_id == 1000);
-    check!(e.producer_epoch == 5);
-    check!(e.prev_producer_id == -1, "no roll must not set prev");
-    check!(e.partitions.is_empty());
-    check!(e.last_update_ms == 42);
-
-    // Roll: fresh pid at epoch 0 → prior pid recorded as prev.
-    let mut rolled = entry().call();
-    rolled.state = TxnState::PrepareAbort;
-    apply_complete_abort(&mut rolled, ProducerId(2000), 0, 43);
-    check!(rolled.producer_id == 2000);
-    check!(rolled.producer_epoch == 0);
-    check!(
-        rolled.prev_producer_id == 1000,
-        "roll must record prior pid"
-    );
-}
-
-#[derive(Clone, Copy)]
-enum PreparedSnapshotCase {
-    Exact,
-    ProducerIdChanged,
-    ProducerEpochChanged,
-    StateChanged,
-    LatePartitionRegistered,
-    StagedIdentityChanged,
-    AlreadyComplete,
-    MalformedEpoch,
-}
-
-#[yare::parameterized(
-    exact = { PreparedSnapshotCase::Exact },
-    producer_id_changed = { PreparedSnapshotCase::ProducerIdChanged },
-    producer_epoch_changed = { PreparedSnapshotCase::ProducerEpochChanged },
-    state_changed = { PreparedSnapshotCase::StateChanged },
-    late_partition_registered = { PreparedSnapshotCase::LatePartitionRegistered },
-    staged_identity_changed = { PreparedSnapshotCase::StagedIdentityChanged },
-    already_complete = { PreparedSnapshotCase::AlreadyComplete },
-    malformed_epoch = { PreparedSnapshotCase::MalformedEpoch },
-)]
-fn complete_abort_decision_checks_the_prepared_snapshot(case: PreparedSnapshotCase) {
-    let mut prepared = entry().call();
-    prepared.producer_epoch = 7;
-    prepared.state = TxnState::PrepareAbort;
-
-    let mut current = prepared.clone();
-    let expected = match case {
-        PreparedSnapshotCase::Exact => CompletionDecision::Proceed,
-        PreparedSnapshotCase::ProducerIdChanged => {
-            current.producer_id = ProducerId(9999);
-            CompletionDecision::RejectStaleIdentity
-        }
-        PreparedSnapshotCase::ProducerEpochChanged => {
-            current.producer_epoch = 8;
-            CompletionDecision::RejectStaleIdentity
-        }
-        PreparedSnapshotCase::StateChanged => {
-            current.state = TxnState::Ongoing;
-            CompletionDecision::RejectChangedPreparedState
-        }
-        // A partition registered after preparation must not be cleared by
-        // completion, even when identity and state are unchanged.
-        PreparedSnapshotCase::LatePartitionRegistered => {
-            current.partitions.insert(TopicPartition {
-                topic: "late-registration".into(),
-                partition: PartitionIndex(4),
-            });
-            CompletionDecision::RejectChangedPreparedState
-        }
-        // A staged recovery identity changed while markers were in flight.
-        PreparedSnapshotCase::StagedIdentityChanged => {
-            current.next_producer_id = ProducerId(2000);
-            current.next_producer_epoch = 0;
-            CompletionDecision::RejectChangedPreparedState
-        }
-        // Completed is an idempotent success, not a second completion write.
-        PreparedSnapshotCase::AlreadyComplete => {
-            current.state = TxnState::CompleteAbort;
-            CompletionDecision::AlreadyComplete
-        }
-        PreparedSnapshotCase::MalformedEpoch => {
-            current.producer_epoch = -1;
-            CompletionDecision::RejectMalformed
-        }
-    };
-
-    assert2::assert!(complete_abort_decision(&current, &prepared) == expected);
-}
-
 #[tokio::test]
 async fn failed_prepare_persistence_leaves_the_live_entry_ongoing() {
     let coordinator = test_coordinator();
@@ -204,43 +108,6 @@ async fn failed_prepare_persistence_leaves_the_live_entry_ongoing() {
 }
 
 #[tokio::test]
-async fn failed_completion_persistence_leaves_the_live_entry_prepared() {
-    let coordinator = test_coordinator();
-    let mut prepared = entry().call();
-    prepared.state = TxnState::PrepareAbort;
-    let tid = prepared.transactional_id.clone();
-    coordinator
-        .state
-        .insert(tid.clone(), Arc::new(Mutex::new(prepared.clone())));
-
-    assert!(
-        ReaperBackend::complete_abort(&coordinator, &prepared, 2, TxnVersion::Classic)
-            .await
-            .is_none()
-    );
-    check!(*coordinator.get(&tid).expect("prepared entry").lock().await == prepared);
-}
-
-#[tokio::test]
-async fn completed_retry_is_at_most_once_without_persistence() {
-    let coordinator = test_coordinator();
-    let mut prepared = entry().call();
-    prepared.state = TxnState::PrepareAbort;
-    let mut completed = prepared.clone();
-    completed.state = TxnState::CompleteAbort;
-    let tid = prepared.transactional_id.clone();
-    coordinator
-        .state
-        .insert(tid.clone(), Arc::new(Mutex::new(completed.clone())));
-
-    let result = ReaperBackend::complete_abort(&coordinator, &prepared, 2, TxnVersion::Classic)
-        .await
-        .expect("completed retry");
-    check!(result == completed);
-    check!(*coordinator.get(&tid).expect("completed entry").lock().await == completed);
-}
-
-#[tokio::test]
 async fn replaced_entry_handle_is_rejected_as_stale() {
     let coordinator = test_coordinator();
     let current = entry().call();
@@ -257,7 +124,7 @@ async fn replaced_entry_handle_is_rejected_as_stale() {
     assert!(handle_is_current(&coordinator, &tid, &replacement));
 }
 
-// ── Orchestration loop, driven against a mock backend ─────────────────
+// ── The sweep, driven against a mock backend ──────────────────────────
 
 fn prepared_entry(tid: &str, pid: i64, epoch: i16) -> TxnEntry {
     prepared_entry_with_timeout(tid, pid, epoch, 60_000)
@@ -279,52 +146,12 @@ async fn sweep_candidates(backend: &MockReaperBackend, candidates: &[&str]) -> V
     .await
 }
 
-/// A sweep that stops before markers must not dispatch them or complete a transaction.
-fn forbid_abort_completion(backend: &mut MockReaperBackend) {
-    backend.expect_dispatch_abort_markers().never();
-    backend.expect_complete_abort().never();
-}
-
-/// The prepared abort fixture returned when the preparation phase admits an idle tid.
-fn prepare_expired_abort(backend: &mut MockReaperBackend) {
-    backend.expect_is_coordinator_for().returning(|_| true);
-    backend
-        .expect_prepare_abort()
-        .returning(|t, _, _| Some(prepared_entry(t, 1000, 3)));
-}
-
-#[tokio::test]
-async fn sweep_runs_full_three_phase_abort_for_an_expired_tid() {
-    let mut backend = MockReaperBackend::new();
-    backend
-        .expect_is_coordinator_for()
-        .withf(|t| t == "tid-a")
-        .returning(|_| true);
-    backend
-        .expect_prepare_abort()
-        .times(1)
-        .returning(|t, _, _| Some(prepared_entry(t, 1000, 3)));
-    backend
-        .expect_dispatch_abort_markers()
-        .times(1)
-        .withf(|e| e.transactional_id == "tid-a" && e.state == TxnState::PrepareAbort)
-        .returning(|_| true);
-    backend
-        .expect_complete_abort()
-        .times(1)
-        .withf(|e, _, _| e.transactional_id == "tid-a")
-        .returning(|e, _, _| Some(e.clone()));
-
-    let out = sweep_candidates(&backend, &["tid-a"]).await;
-    check!(out == vec!["tid-a".to_owned()]);
-}
-
 #[yare::parameterized(
     not_coordinator = { false },
     prepare_declines = { true },
 )]
 #[test_macro(tokio::test)]
-async fn sweep_skips_before_dispatch(is_coordinator: bool) {
+async fn sweep_queues_nothing_it_did_not_prepare(is_coordinator: bool) {
     let mut backend = MockReaperBackend::new();
     backend
         .expect_is_coordinator_for()
@@ -339,61 +166,37 @@ async fn sweep_skips_before_dispatch(is_coordinator: bool) {
         // A non-coordinator must not start the abort protocol.
         backend.expect_prepare_abort().never();
     }
-    forbid_abort_completion(&mut backend);
+    backend.expect_queue_completion().never();
 
     let out = sweep_candidates(&backend, &["tid-a"]).await;
     assert2::assert!(out.is_empty());
 }
 
-#[tokio::test]
-async fn sweep_does_not_report_tid_when_complete_loses_the_race() {
+/// The sweep prepares and queues the abort of each coordinated, expired tid,
+/// once, and skips the others. Only `tid-a` is coordinated and expired.
+#[yare::parameterized(
+    alone = { &["tid-a"] },
+    beside_one_it_does_not_coordinate = { &["tid-a", "tid-b"] },
+)]
+#[test_macro(tokio::test)]
+async fn sweep_hands_each_prepared_abort_to_the_completion_task(candidates: &[&str]) {
     let mut backend = MockReaperBackend::new();
-    prepare_expired_abort(&mut backend);
-    // Markers still fan out (Phase 2 ran)...
-    backend
-        .expect_dispatch_abort_markers()
-        .times(1)
-        .returning(|_| true);
-    // ...but Phase 3 lost the race → not finalized, not reported.
-    backend
-        .expect_complete_abort()
-        .times(1)
-        .returning(|_, _, _| None);
-
-    let out = sweep_candidates(&backend, &["tid-a"]).await;
-    assert!(out.is_empty());
-}
-
-#[tokio::test]
-async fn sweep_aborts_each_expired_tid_independently() {
-    let mut backend = MockReaperBackend::new();
-    // tid-a coordinated + expired; tid-b not coordinated.
     backend
         .expect_is_coordinator_for()
         .returning(|t| t == "tid-a");
     backend
         .expect_prepare_abort()
+        .times(1)
         .withf(|t, _, _| t == "tid-a")
         .returning(|t, _, _| Some(prepared_entry(t, 1000, 3)));
-    backend.expect_dispatch_abort_markers().returning(|_| true);
     backend
-        .expect_complete_abort()
-        .returning(|e, _, _| Some(e.clone()));
+        .expect_queue_completion()
+        .times(1)
+        .withf(|t| t == "tid-a")
+        .return_const(());
 
-    let out = sweep_candidates(&backend, &["tid-a", "tid-b"]).await;
+    let out = sweep_candidates(&backend, candidates).await;
     check!(out == vec!["tid-a".to_owned()]);
-}
-
-#[tokio::test]
-async fn sweep_does_not_complete_when_marker_fanout_fails() {
-    let mut backend = MockReaperBackend::new();
-    prepare_expired_abort(&mut backend);
-    backend.expect_dispatch_abort_markers().returning(|_| false);
-    backend.expect_complete_abort().never();
-
-    let out = sweep_candidates(&backend, &["tid-a"]).await;
-
-    assert!(out.is_empty());
 }
 
 // ── The abort of a timed-out transaction, against real logs ───────────
@@ -438,6 +241,17 @@ async fn a_timed_out_transaction_aborts_at_the_fenced_epoch_at_every_transaction
             coordinator.sweep_expired(10_000, txnv).await == vec![TID.to_owned()],
             "{txnv:?}: the transaction times out"
         );
+        // The sweep queues the durable PrepareAbort; the completion task
+        // writes the markers and the CompleteAbort.
+        check!(
+            coordinator.take_completion_requests() == vec![TID.to_owned()],
+            "{txnv:?}: the abort is queued for completion"
+        );
+        check!(
+            coordinator.complete_prepared_transaction(TID, txnv).await
+                == CompletionAttempt::Completed,
+            "{txnv:?}: the completion task finishes the abort"
+        );
 
         let aborted = coordinator
             .get(TID)
@@ -476,6 +290,62 @@ async fn a_timed_out_transaction_aborts_at_the_fenced_epoch_at_every_transaction
             "{txnv:?}: the timed-out producer is fenced"
         );
     }
+}
+
+/// A sweep never waits for a marker. Kafka's `abortTimedOutTransactions`
+/// appends `PrepareAbort` and hands the markers to its marker channel, so a
+/// partition that cannot commit a marker delays no other transaction's
+/// timeout. Here one transaction's abort is already prepared and every
+/// marker fan-out is held, as one is while its partition cannot commit, and
+/// the sweep still prepares the abort of a second timed-out transaction and
+/// queues both for completion.
+#[tokio::test]
+async fn a_held_marker_fan_out_does_not_stop_the_sweep() {
+    let txnv = TxnVersion::Verified;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (coordinator, _data) = live_coordinator(dir.path()).await;
+    let orders = TopicPartition {
+        topic: DATA_TOPIC.to_owned(),
+        partition: PartitionIndex(0),
+    };
+    let mut stuck = prepared_entry_with_timeout("tid-stuck", 1000, 4, 1);
+    stuck.partitions.insert(orders.clone());
+    let mut timed_out = TxnEntry::new_empty("tid-timed-out".to_owned(), ProducerId(2000), 3, 1, 0);
+    timed_out.state = TxnState::Ongoing;
+    timed_out.start_ms = 0;
+    timed_out.partitions.insert(orders);
+    for seeded in [stuck, timed_out] {
+        coordinator
+            .put(seeded, txnv)
+            .await
+            .expect("seed a transaction");
+    }
+    coordinator
+        .marker_fanout_gate
+        .set_mode(MarkerFanoutMode::Hold);
+
+    let swept = time::timeout(
+        Duration::from_secs(10),
+        coordinator.sweep_expired(10_000, txnv),
+    )
+    .await
+    .expect("the sweep does not wait for a held marker fan-out");
+
+    let mut swept = swept;
+    swept.sort_unstable();
+    let mut queued = coordinator.take_completion_requests();
+    queued.sort_unstable();
+    let state = coordinator
+        .get("tid-timed-out")
+        .expect("the timed-out transaction is tracked")
+        .lock()
+        .await
+        .state;
+    let both = vec!["tid-stuck".to_owned(), "tid-timed-out".to_owned()];
+    check!((swept, queued, state) == (both.clone(), both, TxnState::PrepareAbort));
+    coordinator
+        .marker_fanout_gate
+        .set_mode(MarkerFanoutMode::Open);
 }
 
 /// The sweep resumes only a `PrepareAbort` that has a timeout, prepares the
