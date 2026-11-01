@@ -471,13 +471,15 @@ fn native_coordinator(
     backend: Arc<NativeStore>,
     log: Arc<InMemoryOffsetsLog>,
 ) -> Arc<GroupCoordinator> {
-    coordinator_with_log(
+    let coordinator = coordinator_with_log(
         StreamsGroupConfig {
             topology_description_backend: Some(backend),
             ..undelayed()
         },
         log,
-    )
+    );
+    coordinator.mark_streams("app");
+    coordinator
 }
 
 #[tokio::test]
@@ -590,13 +592,13 @@ async fn shared_native_backend_survives_coordinator_movement_and_epoch_change() 
     let moved = second.get_or_create_streams("app");
     moved
         .tx
-        .send(StreamsGroupActorMessage::Seed(seed))
+        .send(StreamsGroupActorMessage::Seed(seed.clone()))
         .await
         .expect("seed moved actor");
     assert!(describe(&moved).await.topology_description == expected);
     // Live topology mutation is rejected by Kafka too. Replay a later
     // topology epoch to exercise storage fencing without changing that rule.
-    let mut advanced = second.cached_streams_seed("app").expect("advanced seed");
+    let mut advanced = seed;
     advanced.topology.as_mut().expect("stored topology").epoch = 1;
     moved
         .tx
