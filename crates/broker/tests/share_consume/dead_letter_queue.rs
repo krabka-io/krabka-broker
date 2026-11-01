@@ -995,32 +995,6 @@ fn created_dlq_record(dead_letter_case: &DeadLetterScenario) {
     );
 }
 
-#[then(
-    "the oversized DLQ copy contains only its offset and rejection headers without key or value"
-)]
-fn header_only_dlq_record(dead_letter_case: &DeadLetterScenario) {
-    check!(
-        dead_letter_case
-            .records
-            .as_ref()
-            .expect("DLQ records read")
-            .iter()
-            .map(|record| (
-                record.key.clone(),
-                record.value.clone(),
-                header(record, "__dlq.errors.offset"),
-                header(record, "__dlq.errors.message"),
-            ))
-            .collect::<Vec<_>>()
-            == vec![(
-                None,
-                None,
-                Some("0".to_owned()),
-                Some("Offset rejected by client.".to_owned())
-            )]
-    );
-}
-
 #[then("the remote-tier acquisition contains all three original v0,v1,v2 values")]
 fn remote_dlq_acquisition(dead_letter_case: &DeadLetterScenario) {
     let response = dead_letter_case
@@ -1144,10 +1118,10 @@ async fn a_missing_topic_is_created_when_the_cluster_allows_it(
 
 #[scenario(
     path = "tests/features/migrated/tests/share_consume/dead_letter_queue.feature",
-    name = "a copied record too big for the topic is written with headers alone"
+    name = "a copied record too big for the topic fails and still archives"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_copied_record_too_big_for_the_topic_is_written_with_headers_alone(
+async fn a_copied_record_too_big_for_the_topic_fails_and_still_archives(
     dead_letter_case: DeadLetterScenario,
 ) {
     dead_letter_case.shutdown().await;

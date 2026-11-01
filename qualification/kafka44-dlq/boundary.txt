@@ -1,0 +1,12 @@
+copy=true limit=343 batch_bytes=344 value_bytes=100 oversize=true
+copy=true limit=344 batch_bytes=344 value_bytes=100 oversize=false
+copy=true limit=345 batch_bytes=344 value_bytes=100 oversize=false
+copy=false limit=241 batch_bytes=242 value_bytes=-1 oversize=true
+copy=false limit=242 batch_bytes=242 value_bytes=-1 oversize=false
+copy=false limit=243 batch_bytes=242 value_bytes=-1 oversize=false
+injected_error=NONE complete=true exceptional=false failed_meter=0 written_meter=1 scheduled_retries=0
+2026-11-01T23:27:26.619950147Z main ERROR Unable to produce ProduceRequestHandler(param: ShareGroupDLQRecordParameter[groupId=g1, topicIdPartition=AAAAAAAAAAAAAAAAAAAAAA:orders-3, firstOffset=4, lastOffset=4, deliveryCount=Optional[5], cause=Optional[org.apache.kafka.server.share.dlq.ShareGroupDLQManager$ShareGroupDLQThrowable: Offset rejected by client.]]
+dlqTopicData: TopicPartitionData[topicName=dlq.orders, numPartitions=Optional[1], topicId=Optional[AAAAAAAAAAAAAAAAAAAAAA], partitionLeaderNodes=[]]
+) to DLQ topic node null - null.
+injected_error=MESSAGE_TOO_LARGE complete=true exceptional=true failed_meter=1 written_meter=0 scheduled_retries=0
+injected_error=NOT_LEADER_OR_FOLLOWER complete=false exceptional=false failed_meter=0 written_meter=0 scheduled_retries=1
