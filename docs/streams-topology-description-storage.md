@@ -8,8 +8,11 @@ configured by default: heartbeats never request a description, updates return
 
 The Kafka configuration value
 `org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin` selects
-Krabka's actor-local memory implementation. It loses descriptions on process
-restart or coordinator movement, just like Kafka's reference plugin.
+Krabka's actor-local memory implementation. It loses descriptions on actor
+reload as well as process restart. Kafka's reference implementation is scoped
+to its broker-wide manager; equivalence of the native default store's lifetime
+and solicitation backoff across actor reload remains unqualified. Use an
+explicit shared native backend when coordinator movement must retain data.
 
 An application embedding the Rust broker can install
 `StreamsGroupConfig.topology_description_backend = Some(Arc::new(backend))`.
@@ -71,8 +74,10 @@ Released baseline:
 Regression evidence lives in `streams/actor/description/tests.rs`,
 `streams/description/file_backend.rs`, and the existing no-plugin wire tests.
 This is not a claim that a released Kafka 4.4 interoperability suite has run.
-Cleanup uses the existing offset-retention cadence rather than Kafka's separate
-broker-wide cleanup timer. Native plugin metrics remain unqualified.
+Cleanup uses the existing offset-retention sweep. Kafka's broker-wide cleanup
+worker uses the same offsets-retention-check interval; equivalent scheduling
+under coordinator movement remains unqualified. Native plugin metrics remain
+unqualified.
 Classic-protocol conversion deletes storage first; failures retain the Streams
 group, throttle repeated cleanup calls, and answer `REBALANCE_IN_PROGRESS`.
 
@@ -109,3 +114,17 @@ contracts (wrong failed-store sentinel and off-by-one replica limit) are rejecte
 The directed transaction-reservation regression verifies that unresolved offsets
 block topology cleanup and release permits later progress. It does not claim
 transaction-marker replication or LSO recovery has been qualified.
+
+
+## Remaining lifecycle audit
+
+The natural-cleanup path holds the Streams actor turn until metadata tombstones
+are appended. Explicit DeleteGroups and classic conversion still perform part
+of their transition outside that actor turn. Their empty check, backend cleanup,
+metadata append and handle retirement require a common ownership barrier before
+concurrent join/delete/recreate parity can be claimed. Explicit Streams deletion
+also needs committed and pending offset tombstones in the same durable transition;
+removing the offset-home registry alone is not replay-safe deletion. These are
+source-audit findings, not an executed distributed counterexample or a passed
+acceptance criterion. The present bounded cleanup model does not cover those
+operations. No completion claim is made for #1972.
