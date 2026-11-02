@@ -78,7 +78,7 @@ use {
         codes,
         coordinator::unified::{
             GroupCoordinator,
-            actor::{CommitFence, SubscribedTopics},
+            actor::{CommitFence, ReapOutcome, SubscribedTopics},
             offsets_log::{OffsetsLog, write_failure_code},
         },
         error::BrokerError,
@@ -140,6 +140,12 @@ pub enum StreamsGroupActorMessage {
         reply: oneshot::Sender<PushAnswer>,
     },
     Seed(super::super::StreamsGroupSeed),
+    /// Retention runs under the Streams membership actor, never its offset home.
+    ReapExpiredOffsets {
+        now_ms: i64,
+        retention_ms: i64,
+        reply: oneshot::Sender<ReapOutcome>,
+    },
     DeleteDescription(oneshot::Sender<Result<bool, BrokerError>>),
     PrepareConversion(oneshot::Sender<Result<bool, BrokerError>>),
     Shutdown(oneshot::Sender<()>),
@@ -763,9 +769,6 @@ async fn actor_loop(
                 break;
             }
             Wake::SessionCheck => {
-                if description::cleanup(&mut actor, turn, false).await.is_err() {
-                    break;
-                }
                 if handle_session_tick(&mut actor, turn).await.is_err() {
                     break;
                 }
@@ -1047,6 +1050,24 @@ async fn handle_message(
                 return Step::Stop;
             }
         }
+        StreamsGroupActorMessage::ReapExpiredOffsets {
+            now_ms,
+            retention_ms,
+            reply,
+        } => match description::reap(actor, turn, now_ms, retention_ms).await {
+            Ok(outcome) => {
+                let stop = outcome.group_deleted;
+                let _ = reply.send(outcome);
+                if stop {
+                    return Step::Stop;
+                }
+            }
+            Err(error) => {
+                exit_on_write_failure(&actor.state.group_id, &error);
+                let _ = reply.send(ReapOutcome::default());
+                return Step::Stop;
+            }
+        },
         StreamsGroupActorMessage::DeleteDescription(reply) => {
             let result = description::cleanup(actor, turn, true).await;
             let failed = result.is_err();

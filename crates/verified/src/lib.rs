@@ -76,6 +76,7 @@ pub mod share;
 pub mod snapshot;
 pub mod stamp;
 pub mod storage;
+pub mod streams_cleanup;
 pub mod stretch;
 pub mod throttle;
 pub mod timestamp;

@@ -17,8 +17,8 @@ use {
                     },
                 },
                 description::{
-                    BackendFuture, DescriptionEpochs, Node, NodeKind, Subtopology,
-                    TopologyDescriptionBackend, TopologyDescriptionPlugin,
+                    BackendFuture, DescriptionEpochs, FileTopologyDescriptionBackend, Node,
+                    NodeKind, Subtopology, TopologyDescriptionBackend, TopologyDescriptionPlugin,
                 },
                 persistence::{StreamsGroupKey, StreamsGroupMetadataValue},
                 topology::to_stored_topology,
@@ -430,7 +430,8 @@ impl TopologyDescriptionBackend for NativeStore {
                         == DescriptionEpochs::UNCERTAIN
                 );
             }
-            if let Some(failure) = *self.set_failure.lock().expect("lock") {
+            let failure = *self.set_failure.lock().expect("lock");
+            if let Some(failure) = failure {
                 return Err(failure);
             }
             *self.value.lock().expect("lock") = Some(StoredDescription {
@@ -498,6 +499,20 @@ async fn store_native_topology(
     heartbeat(&handle, join("a"), 1).await;
     assert!(push(&handle, description_push("a", 0, 1)).await.0 == codes::NONE);
     handle
+}
+
+async fn store_shutdown_and_snapshot(
+    coordinator: &Arc<GroupCoordinator>,
+) -> (Option<TopologyDescription>, StreamsGroupSeed) {
+    let handle = store_native_topology(coordinator).await;
+    let snapshot = (
+        describe(&handle).await.topology_description,
+        coordinator
+            .cached_streams_seed("app")
+            .expect("durable seed"),
+    );
+    coordinator.shutdown_all().await;
+    snapshot
 }
 
 async fn leave_native_member(handle: &StreamsGroupActorHandle) {
@@ -593,12 +608,7 @@ async fn shared_native_backend_survives_coordinator_movement_and_epoch_change() 
         Arc::clone(&backend),
         Arc::new(InMemoryOffsetsLog::default()),
     );
-    let handle = first.get_or_create_streams("app");
-    heartbeat(&handle, join("a"), 1).await;
-    assert!(push(&handle, description_push("a", 0, 1)).await.0 == codes::NONE);
-    let expected = describe(&handle).await.topology_description;
-    let seed = first.cached_streams_seed("app").expect("seed");
-    first.shutdown_all().await;
+    let (expected, seed) = store_shutdown_and_snapshot(&first).await;
     let second = native_coordinator(
         Arc::clone(&backend),
         Arc::new(InMemoryOffsetsLog::default()),
@@ -702,3 +712,121 @@ async fn plugin_sees_durable_uncertain_before_external_side_effect() {
     let _handle = store_native_topology(&coordinator).await;
     assert!(last_group_metadata(&log).await.description.stored == 0);
 }
+
+/// Reopen the persistent implementation, not a retained Arc, on a new actor.
+#[tokio::test]
+async fn filesystem_description_survives_coordinator_restart() {
+    let directory = tempfile::tempdir().expect("directory");
+    let backend = FileTopologyDescriptionBackend::new(directory.path())
+        .await
+        .expect("backend");
+    let first = coordinator_with_log(
+        StreamsGroupConfig {
+            topology_description_backend: Some(Arc::new(backend)),
+            ..undelayed()
+        },
+        Arc::new(InMemoryOffsetsLog::default()),
+    );
+    let (expected, seed) = store_shutdown_and_snapshot(&first).await;
+    drop(first);
+
+    let reopened = FileTopologyDescriptionBackend::new(directory.path())
+        .await
+        .expect("reopen backend");
+    let second = coordinator_with_log(
+        StreamsGroupConfig {
+            topology_description_backend: Some(Arc::new(reopened)),
+            ..undelayed()
+        },
+        Arc::new(InMemoryOffsetsLog::default()),
+    );
+    let restarted = second.get_or_create_streams("app");
+    restarted
+        .tx
+        .send(StreamsGroupActorMessage::Seed(seed))
+        .await
+        .expect("replay");
+    assert!(describe(&restarted).await.topology_description == expected);
+    second.shutdown_all().await;
+}
+
+async fn commit_retention_offset(coordinator: &Arc<GroupCoordinator>) {
+    use crate::coordinator::unified::{actor::GroupActorMessage, classic_state::OffsetEntry};
+    let home = coordinator.get_or_create_classic("app");
+    ask(&home.tx, |reply| GroupActorMessage::UpdateCommitted {
+        entries: vec![(("input".into(), 0), OffsetEntry {
+            offset: 42.into(),
+            leader_epoch: -1,
+            metadata: String::new(),
+            commit_timestamp_ms: 0,
+            expire_timestamp_ms: None,
+            topic_id: None,
+        })],
+        reply,
+    })
+    .await
+    .expect("commit");
+}
+
+#[tokio::test]
+async fn natural_cleanup_waits_for_offsets_and_retries_current_epoch_delete() {
+    use crate::coordinator::retention::sweep;
+    let (backend, coordinator) = native_setup();
+    let handle = store_native_topology(&coordinator).await;
+    commit_retention_offset(&coordinator).await;
+    // An expired offset must not authorize cleanup underneath a live member.
+    assert!(sweep(&coordinator, |_| true, 101, 100, 0).await.is_empty());
+    leave_native_member(&handle).await;
+    // The current stored epoch must survive until the committed offset expires.
+    assert!(sweep(&coordinator, |_| true, 99, 100, 0).await.is_empty());
+    assert!(backend.value.lock().expect("lock").is_some());
+    backend.fail_delete.store(true, Ordering::Relaxed);
+    let failed = sweep(&coordinator, |_| true, 101, 100, 0).await;
+    assert!(failed.len() == 1);
+    assert!(!failed[0].outcome.group_deleted);
+    assert!(failed[0].outcome.reaped == vec![("input".to_owned(), 0)]);
+    assert!(backend.value.lock().expect("lock").is_some());
+    assert!(coordinator.find_streams("app").is_some());
+    backend.fail_delete.store(false, Ordering::Relaxed);
+    let retried = sweep(&coordinator, |_| true, 102, 100, 0).await;
+    assert!(retried.len() == 1 && retried[0].outcome.group_deleted);
+    assert!(backend.value.lock().expect("lock").is_none());
+    assert!(coordinator.find_streams("app").is_none());
+    assert!(coordinator.find("app").is_none());
+}
+
+#[tokio::test]
+async fn unresolved_transaction_protects_topology_until_its_reservation_is_released() {
+    use crate::coordinator::{
+        retention::sweep,
+        unified::actor::{GroupActorMessage, TxnOffsetReservation},
+    };
+    let (backend, coordinator) = native_setup();
+    let handle = store_native_topology(&coordinator).await;
+    commit_retention_offset(&coordinator).await;
+    leave_native_member(&handle).await;
+    let home = coordinator.find("app").expect("offset home");
+    for reserve in [true, false] {
+        ask(&home.tx, |reply| {
+            GroupActorMessage::TxnOffsetReservation(TxnOffsetReservation {
+                producer_id: 7,
+                keys: vec![("input".into(), 0)],
+                reserve,
+                reply,
+            })
+        })
+        .await
+        .expect("reservation");
+        let rows = sweep(&coordinator, |_| true, 101, 100, 0).await;
+        if reserve {
+            assert!(rows.is_empty());
+            assert!(backend.value.lock().expect("lock").is_some());
+            assert!(coordinator.find_streams("app").is_some());
+        } else {
+            assert!(rows.len() == 1 && rows[0].outcome.group_deleted);
+            assert!(backend.value.lock().expect("lock").is_none());
+        }
+    }
+}
+
+mod model;

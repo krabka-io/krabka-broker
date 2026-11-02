@@ -36,8 +36,11 @@ or hot-reload facility; existing unrecognized JVM class names still fail startup
 ## Filesystem implementation
 
 `FileTopologyDescriptionBackend::new(directory).await` provides a native backend
-beyond the reference memory store. It stores JSON descriptions with their epoch,
-uses an injective hex encoding of group IDs (no path traversal), and writes via a
+beyond the reference memory store. It stores version-1 JSON envelopes containing
+a description and its epoch; golden-byte fixtures cover the initial reader/writer
+and unknown versions are rejected. The directory is an explicitly selected
+plugin-private namespace, not an alteration of existing internal-topic or log
+formats. It uses an injective hex encoding of group IDs (no path traversal), and writes via a
 synced staging file and rename. Reopening the same directory retains data.
 Operators own directory access permissions, disk capacity, and backups. Filename
 length is bounded by the filesystem; long group IDs can fail storage. The format
@@ -53,8 +56,10 @@ backend. Do not point unrelated Kafka clusters at the same directory.
 The actor persists stored epoch `UNCERTAIN` (-2) **before** mutation and the
 successful epoch **after** it. Permanent store failure records the failed epoch;
 transient failure retains solicitation backoff. Heartbeat backoff starts at 30
-seconds, doubles to one hour and has 20% jitter. Periodic actor session checks
-retry uncertain or stale-epoch deletes. Failed deletes retain uncertainty; an
+seconds, doubles to one hour and has 20% jitter. The offset-retention sweep
+routes through the Streams membership actor: live members and unexpired or
+pending transactional offsets prevent cleanup. After all offsets expire, cleanup
+retries every sweep, including when the stored epoch equals the current epoch. Failed deletes retain uncertainty; an
 explicit DeleteGroups failure preserves the group and reports
 `GROUP_DELETION_FAILED` with a generic per-group message. Backend error details
 are not disclosed to clients.
@@ -66,7 +71,41 @@ Released baseline:
 Regression evidence lives in `streams/actor/description/tests.rs`,
 `streams/description/file_backend.rs`, and the existing no-plugin wire tests.
 This is not a claim that a released Kafka 4.4 interoperability suite has run.
-Cleanup uses actor session checks rather than Kafka's broker-wide cleanup worker;
-native plugin metrics and natural offset-expiry cleanup remain unqualified.
+Cleanup uses the existing offset-retention cadence rather than Kafka's separate
+broker-wide cleanup timer. Native plugin metrics remain unqualified.
 Classic-protocol conversion deletes storage first; failures retain the Streams
 group, throttle repeated cleanup calls, and answer `REBALANCE_IN_PROGRESS`.
+
+
+## Verification boundary
+
+`natural_cleanup_waits_for_offsets_and_retries_current_epoch_delete` drives the
+production sweep with a live member, a retained offset, offset expiry, a failing
+delete, and a successful retry. `filesystem_description_survives_coordinator_restart`
+reopens a real backend and restores the durable Streams seed into a new coordinator.
+The Stateright model under `actor/description/tests/model.rs` replays 2,801
+schedules of up to four operations through real actors: member departure,
+retained/expired offsets, failed delete and repair, coordinator reconstruction,
+and delayed stale pushes. It checks safe retention and progress on every healthy
+eligible sweep. Bounds are exhaustive within that operation window, not an
+unbounded liveness or distributed-network proof. Offset persistence is seeded
+from a known committed fixture; replication and transaction-marker recovery are
+outside this model and require their own integration/Jepsen evidence.
+
+Production cleanup admission and store-result epoch selection call
+`krabka_verified::streams_cleanup`. Its Creusot contracts have no preconditions:
+cleanup requires empty membership, expired offsets and initialized state; failed
+stores remain UNCERTAIN and permanent failures record the rejected epoch.
+Storage calls, ownership fencing, atomicity of writes and scheduling fairness are
+host obligations, not consequences of these pure contracts. Proof discharge status
+must be checked separately from the presence of annotations.
+
+
+Actual matching-toolchain discharge completed: both `vc_may_reclaim` and
+`vc_finish_store` prove with Creusot0.14/Alt-Ergo. Receipts are under
+`verif/krabka_verified_rlib/streams_cleanup/`; the qualification artifact records
+the pinned image and exact invocation. Copied-source mutations with unchanged
+contracts (wrong failed-store sentinel and off-by-one replica limit) are rejected.
+The directed transaction-reservation regression verifies that unresolved offsets
+block topology cleanup and release permits later progress. It does not claim
+transaction-marker replication or LSO recovery has been qualified.

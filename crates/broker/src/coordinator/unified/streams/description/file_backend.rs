@@ -15,6 +15,14 @@ use {
     tokio::{fs, io::AsyncWriteExt as _},
 };
 
+/// Versioned plugin-private format. Adding a writer version must retain the
+/// reader for version 1; this is not the broker's internal-topic serialization.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FileDescription {
+    format_version: u8,
+    stored: StoredDescription,
+}
+
 #[derive(Debug)]
 pub struct FileTopologyDescriptionBackend {
     root: PathBuf,
@@ -51,9 +59,12 @@ impl TopologyDescriptionBackend for FileTopologyDescriptionBackend {
         description: &'a TopologyDescription,
     ) -> BackendFuture<'a, ()> {
         Box::pin(async move {
-            let value = StoredDescription {
-                topology_epoch: epoch,
-                description: description.clone(),
+            let value = FileDescription {
+                format_version: 1,
+                stored: StoredDescription {
+                    topology_epoch: epoch,
+                    description: description.clone(),
+                },
             };
             let bytes = serde_json::to_vec(&value).map_err(|_| StorageFailure::Permanent)?;
             let path = self.path(group_id);
@@ -85,9 +96,12 @@ impl TopologyDescriptionBackend for FileTopologyDescriptionBackend {
                 Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
                 Err(_) => return Err(StorageFailure::Transient),
             };
-            let stored: StoredDescription =
+            let value: FileDescription =
                 serde_json::from_slice(&bytes).map_err(|_| StorageFailure::Permanent)?;
-            Ok((stored.topology_epoch == epoch).then_some(stored.description))
+            if value.format_version != 1 {
+                return Err(StorageFailure::Permanent);
+            }
+            Ok((value.stored.topology_epoch == epoch).then_some(value.stored.description))
         })
     }
 
@@ -139,5 +153,32 @@ mod tests {
             .await
             .expect("idempotent delete");
         assert!(reopened.get("../../app", 7).await == Ok(None));
+    }
+
+    #[tokio::test]
+    async fn version_one_golden_bytes_remain_readable_and_writers_are_versioned() {
+        let directory = tempfile::tempdir().expect("directory");
+        let backend = FileTopologyDescriptionBackend::new(directory.path())
+            .await
+            .expect("backend");
+        let golden = br#"{"format_version":1,"stored":{"topology_epoch":7,"description":{"subtopologies":[],"global_stores":[]}}}"#;
+        fs::write(backend.path("app"), golden)
+            .await
+            .expect("fixture");
+        let expected = TopologyDescription {
+            subtopologies: vec![],
+            global_stores: vec![],
+        };
+        assert!(backend.get("app", 7).await == Ok(Some(expected.clone())));
+        backend
+            .set("app", 7, &expected)
+            .await
+            .expect("write version one");
+        assert!(fs::read(backend.path("app")).await.expect("bytes") == golden);
+        let unknown = br#"{"format_version":2,"stored":{"topology_epoch":7,"description":{"subtopologies":[],"global_stores":[]}}}"#;
+        fs::write(backend.path("app"), unknown)
+            .await
+            .expect("future fixture");
+        assert!(backend.get("app", 7).await == Err(StorageFailure::Permanent));
     }
 }

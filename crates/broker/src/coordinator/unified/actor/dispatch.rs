@@ -18,7 +18,7 @@ use {
         offset_delete::{delete_held_offsets, offset_delete_guard},
         pending_commits::CommitWaits,
         persistence::leave_written_consumer_group,
-        retention::handle_reap_message,
+        retention::{handle_reap_message, reap_streams_offsets},
         seed::apply_seed,
         topic_deletion::reply_delete_topic_offsets,
         views::{build_classic_view, build_describe, inspect_any},
@@ -217,22 +217,23 @@ pub(super) async fn handle_actor_message(
             let _ = reply.send(());
             true
         }
+        GroupActorMessage::ReapStreamsOffsets {
+            now_ms,
+            retention_ms,
+            reply,
+        } => {
+            let outcome =
+                reap_streams_offsets(group, services.offsets_log, now_ms, retention_ms).await;
+            let _ = reply.send(outcome);
+            true
+        }
         GroupActorMessage::ReapExpiredOffsets {
             now_ms,
             retention_ms,
             empty_grace_ms,
             reply,
         } => {
-            handle_reap_message(
-                group,
-                services.offsets_log,
-                services.coordinator,
-                now_ms,
-                retention_ms,
-                empty_grace_ms,
-                reply,
-            )
-            .await
+            handle_reap_message(group, services, now_ms, retention_ms, empty_grace_ms, reply).await
         }
         GroupActorMessage::Seed(seed) => {
             if let Some(state) = group.as_consumer_mut() {

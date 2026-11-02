@@ -168,6 +168,14 @@ pub enum GroupActorMessage {
     /// retention, and the group with them when it keeps none. The sweep in
     /// `coordinator::retention` sends it to each group whose
     /// `__consumer_offsets` partition this broker leads.
+    /// Expire only offsets while the Streams actor serializes empty membership.
+    /// `group_deleted` in the response means no offsets or transactions remain;
+    /// this operation never tombstones membership or stops the offsets actor.
+    ReapStreamsOffsets {
+        now_ms: i64,
+        retention_ms: i64,
+        reply: oneshot::Sender<ReapOutcome>,
+    },
     ReapExpiredOffsets {
         /// The sweep's clock reading, shared by every group in one pass.
         now_ms: i64,

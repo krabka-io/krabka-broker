@@ -8,30 +8,38 @@
 //! step below runs in the one turn of the actor that handles the message.
 //!
 //! As in released Kafka 4.4, persist UNCERTAIN before backend mutation and
-//! the final epoch only after success. Session checks retry uncertain and
-//! stale-epoch cleanup; permanent store rejection suppresses solicitation for
+//! the final epoch only after success. Retention sweeps retry empty groups
+//! only after all offsets expire; permanent store rejection suppresses solicitation for
 //! that epoch while transient failure retains exponential heartbeat backoff.
 
 use {
-    super::{ActorState, StreamsTurn, chrono_now_ms, records::group_metadata_value},
+    super::{
+        super::migration::streams_records_tombstone_batch, ActorState, StreamsTurn, chrono_now_ms,
+        records::group_metadata_value,
+    },
     crate::{
         codes,
-        coordinator::unified::streams::{
-            config::StreamsGroupConfig,
-            description::{
-                DescriptionEpochs, Jitter, SolicitationBackoff, StorageFailure, StoredDescription,
-                TopologyDescription,
+        coordinator::unified::{
+            actor::{GroupActorMessage, ReapOutcome},
+            streams::{
+                config::StreamsGroupConfig,
+                description::{
+                    DescriptionEpochs, Jitter, SolicitationBackoff, StorageFailure,
+                    StoredDescription, TopologyDescription,
+                },
+                persistence::PendingStreamsRecords,
+                topology::status,
             },
-            persistence::PendingStreamsRecords,
-            topology::status,
         },
         error::BrokerError,
+        task_util::ask,
     },
     krabka_protocol::owned::{
         common::streams_group_topology_description_update_request::topology_description::TopologyDescription as WireDescription,
         streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     },
+    krabka_verified::streams_cleanup::{finish_store, may_reclaim},
     std::time::Instant,
 };
 
@@ -167,11 +175,18 @@ pub(super) async fn handle_push(
         });
         Ok(())
     };
+    let (stored, failed) = finish_store(
+        topology_epoch,
+        actor.description_epochs.failed,
+        result.is_ok(),
+        result == Err(StorageFailure::Permanent),
+    );
+    actor.description_epochs.stored = stored;
+    actor.description_epochs.failed = failed;
     match result {
-        Ok(()) => actor.description_epochs.stored = topology_epoch,
+        Ok(()) => {}
         Err(failure) => {
             if failure == StorageFailure::Permanent {
-                actor.description_epochs.failed = topology_epoch;
                 persist_epochs(actor, turn).await?;
             }
             if failure == StorageFailure::Permanent {
@@ -294,6 +309,55 @@ pub(super) async fn prepare_conversion(
         actor.description_backoff = SolicitationBackoff::default();
     }
     Ok(result)
+}
+
+/// Reclaim empty Streams groups only after every offset has expired. Holding
+/// this actor turn prevents a joining member from racing plugin deletion.
+pub(super) async fn reap(
+    actor: &mut ActorState,
+    turn: StreamsTurn<'_>,
+    now_ms: i64,
+    retention_ms: i64,
+) -> Result<ReapOutcome, BrokerError> {
+    let has_members = !actor.state.members.is_empty();
+    let initialized = !actor.holds_nothing();
+    if !may_reclaim(has_members, true, initialized) {
+        return Ok(ReapOutcome::default());
+    }
+    let group_id = &actor.state.group_id;
+    let mut outcome = if let Some(home) = turn.coordinator.find(group_id) {
+        let Ok(outcome) = ask(&home.tx, |reply| GroupActorMessage::ReapStreamsOffsets {
+            now_ms,
+            retention_ms,
+            reply,
+        })
+        .await
+        else {
+            return Ok(ReapOutcome::default());
+        };
+        outcome
+    } else {
+        ReapOutcome {
+            group_deleted: true,
+            ..Default::default()
+        }
+    };
+    if !may_reclaim(has_members, outcome.group_deleted, initialized) {
+        return Ok(outcome);
+    }
+    outcome.group_deleted = false;
+    if !cleanup(actor, turn, true).await? {
+        return Ok(outcome);
+    }
+    let Ok(batch) = streams_records_tombstone_batch(&actor.state.group_id, &[], now_ms) else {
+        return Ok(outcome);
+    };
+    turn.coordinator
+        .offsets_log
+        .append(&actor.state.group_id, batch)
+        .await?;
+    outcome.group_deleted = true;
+    Ok(outcome)
 }
 
 #[cfg(test)]
