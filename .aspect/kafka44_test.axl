@@ -1,6 +1,6 @@
 """Input safety tests for the released Kafka evidence task."""
 
-load("./kafka44.axl", "api_differences", "authorization_input_problems", "input_problems", "scenario_differences")
+load("./kafka44.axl", "api_differences", "authorization_input_problems", "input_problems", "scenario_differences", "transaction_recovery_args")
 load("./testing.axl", "check_eq", "suite", "suite_task")
 
 def _test_revision(_ctx):
@@ -45,5 +45,14 @@ def _test_authorization_differences(_ctx):
     check_eq("ten auth cases", scenario_differences(rows, rows, 10), [])
     check_eq("truncated authorization is not parity", scenario_differences(rows, rows.splitlines()[0], 10), [{"error": "missing protocol scenario rows"}])
 
-kafka44_tests = suite("kafka44", [_test_revision, _test_candidate_pairs, _test_api_differences, _test_protocol_differences, _test_authorization_inputs, _test_authorization_differences])
+def _test_transaction_recovery(_ctx):
+    check_eq("missing recovery identity fails", transaction_recovery_args(""), [])
+    check_eq("malformed recovery identity fails", transaction_recovery_args("RECOVERY\ta\tb"), [])
+    check_eq("one exact identity", transaction_recovery_args("noise\nRECOVERY\ttopic\tgroup\tuuid"), ["topic", "group", "uuid"])
+    check_eq("ambiguous identities fail", transaction_recovery_args("RECOVERY\ta\tb\tc\nRECOVERY\tx\ty\tz"), [])
+    rows = "\n".join(["SCENARIO\ttxn-" + str(i) + "\tPASS" for i in range(16)])
+    check_eq("sixteen modern state cases", scenario_differences(rows, rows, 16), [])
+    check_eq("truncated commit-abort is not parity", len(scenario_differences(rows, rows.splitlines()[0], 16)), 1)
+
+kafka44_tests = suite("kafka44", [_test_revision, _test_candidate_pairs, _test_api_differences, _test_protocol_differences, _test_authorization_inputs, _test_authorization_differences, _test_transaction_recovery])
 test_kafka44 = suite_task(kafka44_tests)
