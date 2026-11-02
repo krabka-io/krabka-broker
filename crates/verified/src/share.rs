@@ -128,8 +128,9 @@ pub enum DlqBatchAdmission {
     AppendStop,
 }
 
-/// The first record always progresses, even oversized. Later records never
-/// cross the destination limit. The caller appends the original record without
+/// Admit the first record even when oversized, and bound subsequent records.
+///
+/// The caller appends the original record without
 /// payload rewriting; this decision neither strips nor substitutes its bytes.
 #[must_use]
 #[ensures((result == DlqBatchAdmission::Flush) == (has_records && projected_bytes@ > limit@))]

@@ -1,5 +1,6 @@
-//! Bounded DLQ orchestration over the real acquisition machine. One rejected
-//! offset, two produce attempts and one crash/leader reload. Persistence and
+//! Bounded DLQ orchestration over the real acquisition machine.
+//!
+//! One rejected offset, two produce attempts and one crash/leader reload. Persistence and
 //! transport scheduling are modeled; acquisition, rejection, persistence
 //! encoding/reload and final archival execute production code. This does not
 //! model a multi-node persister, network protocol, metrics or byte encoding.
@@ -8,7 +9,7 @@ use {
         AckType, AcquisitionState, RecordState,
         test_support::{DeadLetterQueue, acquire_window},
     },
-    crate::model_check::run_bfs,
+    crate::model_check::{assert_pinned_count, run_bfs},
     assert2::assert,
     krabka_log::Offset,
     stateright::{Checker as _, Model, Property},
@@ -205,7 +206,7 @@ fn dlq_archiving_fault_schedules() {
         32,
         10_000,
     );
-    eprintln!("DLQ unique states: {}", checker.unique_state_count());
+    assert_pinned_count(checker.unique_state_count(), 42, "dlq_archiving");
     checker.assert_properties();
 }
 #[test]
@@ -218,5 +219,7 @@ fn dlq_model_detects_lost_recovery_mutant() {
         32,
         10_000,
     );
-    assert!(checker.discovery("recovered_archiving_has_work").is_some());
+    assert_pinned_count(checker.unique_state_count(), 20, "dlq_archiving_mutant");
+    let path = checker.discovery("recovered_archiving_has_work").unwrap();
+    assert!(path.into_actions().len() == 2);
 }

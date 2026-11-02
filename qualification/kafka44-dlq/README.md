@@ -224,3 +224,15 @@ parity. It explains the administrative startOffset difference recorded earlier;
 the current evidence does not justify hiding it or claiming identical persisted
 archival representation. Both finish with zero deliverable lag. Crash-window
 and multi-broker semantics remain unqualified.
+
+### Observed model checks
+
+The bounded normal model exhausted **42 unique / 55 generated states**, maximum
+observed depth10; the lost-recovery mutant exhausted **20 unique / 31 generated
+states**, maximum depth7, and was detected. Both tests passed (2/2). The normal
+and mutant unique counts are pinned in source; the recovery counterexample is
+pinned at two actions (Persist, Crash). The hard caps remain depth32/generated
+10,000, not the observed completion counts. This is small by design: it proves
+the isolated one-offset transition graph, not arbitrary multi-record schedules.
+Verified-share runtime regression filter:16 passed. The full Creusot discharge
+remains pending the matching0.14 runtime; runtime tests are not formal proofs.
