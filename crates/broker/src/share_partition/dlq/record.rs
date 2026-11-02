@@ -106,7 +106,7 @@ pub(super) fn destination_partition(source_partition: i32, dlq_partitions: i32) 
 /// least one record, the first of the round, even when that one record alone
 /// is over the limit: the broker then reports the limit, and the range does not
 /// stall. The first record keeps its copied key and value even when adding the
-/// headers puts it over the limit: the destination reports MESSAGE_TOO_LARGE.
+/// headers puts it over the limit: the destination reports `MESSAGE_TOO_LARGE`.
 /// A record with no entry in `sources` gets its headers and no key and no value.
 ///
 /// Every record has `now_ms` as its timestamp. It has to be the wall clock, as

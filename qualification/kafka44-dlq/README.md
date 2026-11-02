@@ -9,10 +9,10 @@ Image: `apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f69444
 Extract `/opt/kafka/libs/` from that image to `$KAFKA_LIBS`, then run with JDK 25:
 
 ```sh
-javac -cp "$KAFKA_LIBS/*" -d /tmp/dlq-classes qualification/kafka44-dlq/Boundary.java
-java -cp "/tmp/dlq-classes:$KAFKA_LIBS/*" org.apache.kafka.server.share.dlq.Boundary
+javac -cp "$KAFKA_LIBS/*" -d $DLQ_CLASSES qualification/kafka44-dlq/Boundary.java
+java -cp "$DLQ_CLASSES:$KAFKA_LIBS/*" org.apache.kafka.server.share.dlq.Boundary
 # Optional: send the handler-built records to a fresh released broker:
-java -cp "/tmp/dlq-classes:$KAFKA_LIBS/*" org.apache.kafka.server.share.dlq.Boundary 127.0.0.1:39744
+java -cp "$DLQ_CLASSES:$KAFKA_LIBS/*" org.apache.kafka.server.share.dlq.Boundary 127.0.0.1:39744
 ```
 
 `boundary.txt` is observed output from these released jars, not a reimplementation.
@@ -83,3 +83,22 @@ released-reference share-consumer run.
 `cargo test -p krabka-broker --lib share_partition::manager::dead_letter:: -- --test-threads=2`:
 6 passed, 0 failed, including durability-before-write and failed-write/recovered-
 cause component cases. These are not process-restart or multi-broker tests.
+
+## Local release broker command
+
+Run in an isolated qualification environment; choose a fresh container name and port.
+The container is local test infrastructure, not production.
+
+```sh
+docker run -d --name kafka1974-boundary -p 127.0.0.1:39744:9092 \
+  -e KAFKA_NODE_ID=1 -e KAFKA_PROCESS_ROLES=broker,controller \
+  -e KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093 \
+  -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:39744 \
+  -e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER \
+  -e KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093 \
+  -e KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT \
+  -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
+  -e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1 \
+  -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1 \
+  apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f
+```
