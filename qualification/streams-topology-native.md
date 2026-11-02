@@ -112,8 +112,10 @@ batch, old-handle retirement, a join deliberately queued while the native backen
 is blocked (both delete and conversion), stale post-conversion lookup, and a
 bootstrap log replay consuming the production deletion append after a committed
 fixture. These do not establish replicated transaction-marker recovery or Jepsen
-qualification. Broker-wide lifetime of the reference in-memory store and
-solicitation backoff remains a separate limitation.
+qualification. The coordinator now owns reference-plugin data and solicitation
+windows independently of actor lifetimes; replacement and rollback actors share
+the same per-group runtime. Process/coordinator reconstruction still starts with
+empty runtime state, while explicit native backends retain their own lifetime.
 
 Executed follow-up verification:
 
@@ -127,3 +129,27 @@ The debug-profile environment settings are local execution settings only. An
 initial all-target build exhausted local disk; the successful checks above ran
 after clearing this worktree's generated build cache, without changing product
 configuration or repository gates.
+
+## Coordinator-owned reference-plugin runtime
+
+The reference memory store and solicitation backoff now live in shared,
+coordinator-owned per-group runtime rather than ActorState. Spawned and
+write-rollback actors reuse it; a stale lookup of an already-converted group
+cannot repopulate shared Streams runtime. Successful natural reclaim, explicit
+delete and conversion remove only the retiring actor's runtime (Arc identity
+checked), after durable append and before publishing recreation availability.
+A failed backend delete retains runtime for retry. A new coordinator/process
+still starts empty; this is memory storage, not a durable backend.
+
+Executed on the follow-up source:
+
+- `CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo test -p krabka-broker --lib streams`: **397 passed**, 0 failed (4.20s).
+- Actual-actor Stateright cleanup model: **7,381 exhaustive schedules** through
+  four operations over nine actions, now including explicit delete and conversion.
+- Same-broker actor reload retains a stored description and an active solicitation
+  window. Deleting an unstored group clears its outstanding window for recreation.
+- Successful deletion/conversion cache retirement, failed deletion retention,
+  stale post-conversion lookup, and Arc-identity replacement guard are exercised.
+- Changed-file nightly rustfmt, `git diff --check`, and `aspect check-cpd`: passed,
+  zero clones. Proof kernels and persisted formats are unchanged by this follow-up.
+- Frozen-source `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings`: **passed** (5m38s).

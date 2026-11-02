@@ -18,7 +18,8 @@ use {
                 },
                 description::{
                     BackendFuture, DescriptionEpochs, FileTopologyDescriptionBackend, Node,
-                    NodeKind, Subtopology, TopologyDescriptionBackend, TopologyDescriptionPlugin,
+                    NodeKind, StoredDescription, Subtopology, TopologyDescriptionBackend,
+                    TopologyDescriptionPlugin,
                 },
                 persistence::{StreamsGroupKey, StreamsGroupMetadataValue},
                 topology::to_stored_topology,
@@ -674,6 +675,7 @@ async fn native_delete_failure_preserves_group_and_success_allows_clean_recreati
     heartbeat(&handle, leave, 1).await;
     backend.fail_delete.store(true, Ordering::SeqCst);
     assert!(coordinator.delete_group("app").await == Err(DeleteGroupError::TopologyDescription));
+    assert!(coordinator.streams_description_runtime.contains_key("app"));
     assert!(coordinator.find_streams("app").is_some());
     backend.fail_delete.store(false, Ordering::SeqCst);
     assert!(coordinator.delete_group("app").await == Ok(()));
@@ -914,6 +916,7 @@ async fn explicit_conversion_retires_old_actor_before_classic_join_can_reuse_it(
             == DowngradeOutcome::Converted
     );
     assert!(coordinator.group_type("app") == Some(GroupType::Classic));
+    assert!(!coordinator.streams_description_runtime.contains_key("app"));
     assert!(
         ask(&handle.tx, |reply| StreamsGroupActorMessage::Describe {
             reply
@@ -939,6 +942,7 @@ async fn explicit_conversion_retires_old_actor_before_classic_join_can_reuse_it(
             == codes::GROUP_ID_NOT_FOUND
     );
     assert!(coordinator.group_type("app") == Some(GroupType::Classic));
+    assert!(!coordinator.streams_description_runtime.contains_key("app"));
 }
 
 #[tokio::test]
@@ -985,4 +989,75 @@ async fn join_queued_during_backend_cleanup_cannot_revive_retired_streams_actor(
         assert!(coordinator.find_streams("app").is_none());
         assert!(backend.value.lock().expect("lock").is_none());
     }
+}
+
+#[tokio::test]
+async fn reference_plugin_description_survives_same_broker_actor_reload() {
+    let coordinator = coordinator(TopologyDescriptionPlugin::InMemory);
+    let handle = store_native_topology(&coordinator).await;
+    let before = describe(&handle).await.topology_description;
+    assert!(before.is_some());
+    ask(&handle.tx, StreamsGroupActorMessage::Shutdown)
+        .await
+        .expect("shutdown");
+    handle.tx.closed().await;
+    let replacement = coordinator.find_live_streams("app").expect("replacement");
+    assert!(!Arc::ptr_eq(&handle, &replacement));
+    assert!(describe(&replacement).await.topology_description == before);
+}
+
+#[tokio::test]
+async fn solicitation_window_survives_same_broker_actor_reload() {
+    let coordinator = coordinator(TopologyDescriptionPlugin::InMemory);
+    let handle = coordinator.get_or_create_streams("app");
+    let joined = heartbeat(&handle, join("a"), 1).await;
+    assert!(joined.topology_description_required);
+    ask(&handle.tx, StreamsGroupActorMessage::Shutdown)
+        .await
+        .expect("shutdown");
+    handle.tx.closed().await;
+    let replacement = coordinator.find_live_streams("app").expect("replacement");
+    let response = heartbeat(&replacement, steady("a", joined.member_epoch), 1).await;
+    assert!(response.error_code == codes::NONE);
+    assert!(!response.topology_description_required);
+}
+
+#[tokio::test]
+async fn deleting_unstored_group_clears_shared_solicitation_window() {
+    let coordinator = coordinator(TopologyDescriptionPlugin::InMemory);
+    coordinator.mark_streams("app");
+    let handle = coordinator.get_or_create_streams("app");
+    assert!(
+        heartbeat(&handle, join("a"), 1)
+            .await
+            .topology_description_required
+    );
+    leave_native_member(&handle).await;
+    coordinator.delete_group("app").await.expect("delete");
+    assert!(!coordinator.streams_description_runtime.contains_key("app"));
+    let replacement = coordinator.get_or_create_streams("app");
+    assert!(
+        heartbeat(&replacement, join("b"), 1)
+            .await
+            .topology_description_required
+    );
+}
+
+#[test]
+fn old_actor_retirement_preserves_replacement_runtime() {
+    let coordinator = coordinator(TopologyDescriptionPlugin::InMemory);
+    let actor = ActorState::new("app".into());
+    let replacement = Arc::default();
+    coordinator
+        .streams_description_runtime
+        .insert("app".into(), Arc::clone(&replacement));
+    retire_runtime(&actor, &coordinator);
+    assert!(Arc::ptr_eq(
+        coordinator
+            .streams_description_runtime
+            .get("app")
+            .expect("replacement retained")
+            .value(),
+        &replacement
+    ));
 }

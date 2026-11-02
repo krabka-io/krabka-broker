@@ -68,9 +68,7 @@ use {
     },
     super::{
         config::StreamsGroupConfig,
-        description::{
-            DescriptionEpochs, SolicitationBackoff, StoredDescription, TopologyDescription,
-        },
+        description::{DescriptionEpochs, DescriptionRuntime, TopologyDescription},
         persistence::StreamsGroupTopologyValue,
         state::{self, StreamsGroupState, StreamsGroupStatePhase},
     },
@@ -625,11 +623,8 @@ struct ActorState {
     /// only through its plugin paths; without a plugin the group writes the
     /// record as Kafka 4.3.1 does, whatever epochs a replayed record held.
     trunk_records: bool,
-    /// The description that the in-memory plugin holds for the group. It is
-    /// not persisted: the plugin loses it with the broker.
-    description: Option<StoredDescription>,
-    /// The window in which no other member is asked for the description.
-    description_backoff: SolicitationBackoff,
+    /// Shared with replacement actors, but not persisted across broker restarts.
+    description_runtime: Arc<DescriptionRuntime>,
 }
 
 impl ActorState {
@@ -665,8 +660,7 @@ impl ActorState {
             assignment_timestamp_ms: 0,
             description_epochs: DescriptionEpochs::default(),
             trunk_records: false,
-            description: None,
-            description_backoff: SolicitationBackoff::default(),
+            description_runtime: Arc::default(),
         }
     }
 }
@@ -735,6 +729,19 @@ async fn actor_loop(
         |image| resolve_broker_and_group_config(&default_config, &image, node, &group_id),
     );
     let mut actor = ActorState::new(group_id);
+    // A stale Streams lookup after conversion must not recreate plugin state.
+    if coordinator
+        .group_type(&actor.state.group_id)
+        .is_none_or(|kind| kind == super::super::GroupType::Streams)
+    {
+        actor.description_runtime = Arc::clone(
+            coordinator
+                .streams_description_runtime
+                .entry(actor.state.group_id.clone())
+                .or_default()
+                .value(),
+        );
+    }
     actor.trunk_records = config.description_plugin_configured();
     let mut tick = session_tick(&config);
     loop {
@@ -908,6 +915,13 @@ impl ActorState {
 /// that every flush caches, or an empty group when nothing was written.
 fn persisted_state(coordinator: &GroupCoordinator, group_id: &str) -> ActorState {
     let mut actor = ActorState::new(group_id.to_owned());
+    actor.description_runtime = Arc::clone(
+        coordinator
+            .streams_description_runtime
+            .entry(group_id.to_owned())
+            .or_default()
+            .value(),
+    );
     if let Some(seed) = coordinator.cached_streams_seed(group_id) {
         apply_seed(&mut actor, seed);
     }

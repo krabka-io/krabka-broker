@@ -9,7 +9,7 @@
 //! `UNSUPPORTED_VERSION`, and describes every group as `NOT_STORED`.
 //!
 //! krabka does not load JVM bytecode. Kafka's reference class selects the
-//! built-in actor-local memory store. Embedding applications may instead
+//! built-in broker-local memory store. Embedding applications may instead
 //! install a native asynchronous [`TopologyDescriptionBackend`] in the Streams
 //! configuration; [`FileTopologyDescriptionBackend`] is a restart-persistent
 //! implementation. See `docs/streams-topology-description-storage.md` for the
@@ -22,6 +22,8 @@
 //! group from all being asked for the same description.
 
 mod backend;
+mod runtime;
+pub(crate) use runtime::DescriptionRuntime;
 mod file_backend;
 pub use file_backend::FileTopologyDescriptionBackend;
 mod backoff;

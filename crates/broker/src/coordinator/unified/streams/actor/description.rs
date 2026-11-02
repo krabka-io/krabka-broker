@@ -4,7 +4,7 @@
 //! Kafka splits this between the shard, which keeps the group's
 //! `StoredDescriptionTopologyEpoch` and `FailedDescriptionTopologyEpoch`, and
 //! the broker-wide `StreamsGroupTopologyDescriptionManager`, which owns the
-//! plugin and the back-off. The actor keeps all three for its group, so each
+//! plugin and the back-off. The coordinator owns shared runtime state, so each
 //! step below runs in the one turn of the actor that handles the message.
 //!
 //! As in released Kafka 4.4, persist UNCERTAIN before backend mutation and
@@ -26,10 +26,7 @@ use {
                 actor::{GroupActorMessage, ReapOutcome},
                 streams::{
                     config::StreamsGroupConfig,
-                    description::{
-                        DescriptionEpochs, Jitter, SolicitationBackoff, StorageFailure,
-                        StoredDescription, TopologyDescription,
-                    },
+                    description::{DescriptionEpochs, Jitter, StorageFailure, TopologyDescription},
                     persistence::PendingStreamsRecords,
                     topology::status,
                 },
@@ -45,7 +42,7 @@ use {
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     },
     krabka_verified::streams_cleanup::{finish_store, may_reclaim},
-    std::time::Instant,
+    std::{sync::Arc, time::Instant},
 };
 
 /// A `StreamsGroupTopologyDescriptionUpdate` that the handler passed to the
@@ -79,7 +76,7 @@ fn current_topology_epoch(actor: &ActorState) -> i32 {
 /// member its topology is stale, and no other member of the group was asked
 /// for the same epoch within the back-off window.
 pub(super) fn maybe_request_description(
-    actor: &mut ActorState,
+    actor: &ActorState,
     config: &StreamsGroupConfig,
     request: &StreamsGroupHeartbeatRequest,
     version: i16,
@@ -107,7 +104,7 @@ pub(super) fn maybe_request_description(
         return;
     }
     if actor
-        .description_backoff
+        .description_runtime
         .arm_if_not_active(topology_epoch, now, Jitter::draw())
     {
         response.topology_description_required = true;
@@ -174,10 +171,7 @@ pub(super) async fn handle_push(
     let result = if let Some(backend) = &turn.config.topology_description_backend {
         backend.set(&group_id, topology_epoch, &description).await
     } else {
-        actor.description = Some(StoredDescription {
-            topology_epoch,
-            description,
-        });
+        actor.description_runtime.store(topology_epoch, description);
         Ok(())
     };
     let (stored, failed) = finish_store(
@@ -195,9 +189,9 @@ pub(super) async fn handle_push(
                 persist_epochs(actor, turn).await?;
             }
             if failure == StorageFailure::Permanent {
-                actor.description_backoff.clear(topology_epoch);
+                actor.description_runtime.clear(topology_epoch);
             } else {
-                actor.description_backoff.arm_or_extend(
+                actor.description_runtime.arm_or_extend(
                     topology_epoch,
                     Instant::now(),
                     Jitter::draw(),
@@ -210,7 +204,7 @@ pub(super) async fn handle_push(
         }
     }
     persist_epochs(actor, turn).await?;
-    actor.description_backoff.clear(topology_epoch);
+    actor.description_runtime.clear(topology_epoch);
     Ok((codes::NONE, None))
 }
 
@@ -236,11 +230,7 @@ pub(super) async fn stored_description(
     if let Some(backend) = &config.topology_description_backend {
         return backend.get(&actor.state.group_id, topology_epoch).await;
     }
-    Ok(actor
-        .description
-        .as_ref()
-        .filter(|stored| stored.topology_epoch == topology_epoch)
-        .map(|stored| stored.description.clone()))
+    Ok(actor.description_runtime.get(topology_epoch))
 }
 
 /// Persist a backend operation's epoch boundary.
@@ -271,9 +261,14 @@ pub(super) async fn cleanup(
         return Ok(false);
     }
     let stored = actor.description_epochs.stored;
-    if stored == DescriptionEpochs::NONE
-        || (!force && (stored == current_topology_epoch(actor) || !actor.state.members.is_empty()))
-    {
+    if stored == DescriptionEpochs::NONE {
+        if force {
+            actor.description_runtime.delete();
+            actor.description_runtime.reset_backoff();
+        }
+        return Ok(true);
+    }
+    if !force && (stored == current_topology_epoch(actor) || !actor.state.members.is_empty()) {
         return Ok(true);
     }
     actor.description_epochs.stored = DescriptionEpochs::UNCERTAIN;
@@ -283,9 +278,9 @@ pub(super) async fn cleanup(
     {
         return Ok(false);
     }
-    actor.description = None;
+    actor.description_runtime.delete();
     actor.description_epochs.stored = DescriptionEpochs::NONE;
-    actor.description_backoff = SolicitationBackoff::default();
+    actor.description_runtime.reset_backoff();
     persist_epochs(actor, turn).await?;
     Ok(true)
 }
@@ -300,9 +295,11 @@ pub(super) async fn prepare_conversion(
         return Ok(false);
     }
     if actor.description_epochs.stored == DescriptionEpochs::NONE {
+        actor.description_runtime.delete();
+        actor.description_runtime.reset_backoff();
         return Ok(true);
     }
-    if !actor.description_backoff.arm_if_not_active(
+    if !actor.description_runtime.arm_if_not_active(
         DescriptionEpochs::UNCERTAIN,
         Instant::now(),
         Jitter::draw(),
@@ -311,7 +308,7 @@ pub(super) async fn prepare_conversion(
     }
     let result = cleanup(actor, turn, true).await?;
     if result {
-        actor.description_backoff = SolicitationBackoff::default();
+        actor.description_runtime.reset_backoff();
     }
     Ok(result)
 }
@@ -361,6 +358,7 @@ pub(super) async fn reap(
         .offsets_log
         .append(&actor.state.group_id, batch)
         .await?;
+    retire_runtime(actor, turn.coordinator);
     outcome.group_deleted = true;
     Ok(outcome)
 }
@@ -404,6 +402,7 @@ pub(super) async fn delete(
             .await
             .map_err(|_| DeleteGroupError::Internal)?;
     }
+    retire_runtime(actor, turn.coordinator);
     turn.coordinator.groups.remove(id);
     turn.coordinator.seeds.remove(id);
     turn.coordinator.remove_cached_seed(id);
@@ -435,6 +434,7 @@ pub(super) async fn convert(
     if !member_id.is_empty() {
         turn.coordinator.streams_seeds.remove(id);
         turn.coordinator.streams_seeds_cache.remove(id);
+        retire_runtime(actor, turn.coordinator);
         retire_registry_owner(turn.coordinator, id);
         return Ok(DowngradeOutcome::Removed);
     }
@@ -442,6 +442,7 @@ pub(super) async fn convert(
         .offsets_log
         .append(id, streams_to_classic_batch(id, now_ms)?)
         .await?;
+    retire_runtime(actor, turn.coordinator);
     turn.coordinator.mark_classic_after_streams_downgrade(id);
     turn.coordinator.streams_groups.remove(id);
     Ok(DowngradeOutcome::Converted)
@@ -453,4 +454,13 @@ fn retire_registry_owner(coordinator: &GroupCoordinator, id: &str) {
         coordinator.group_types.remove(id);
         entry.remove();
     }
+}
+
+/// Retire only the runtime held by this actor, never a replacement's entry.
+fn retire_runtime(actor: &ActorState, coordinator: &GroupCoordinator) {
+    coordinator
+        .streams_description_runtime
+        .remove_if(&actor.state.group_id, |_, runtime| {
+            Arc::ptr_eq(runtime, &actor.description_runtime)
+        });
 }

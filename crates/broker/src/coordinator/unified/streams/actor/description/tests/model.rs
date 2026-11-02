@@ -20,6 +20,8 @@ enum Action {
     SweepExpired,
     Restart,
     StalePush,
+    ExplicitDelete,
+    Convert,
 }
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct State {
@@ -50,6 +52,8 @@ impl Model for CleanupModel {
                 Action::SweepExpired,
                 Action::Restart,
                 Action::StalePush,
+                Action::ExplicitDelete,
+                Action::Convert,
             ]);
         }
     }
@@ -122,6 +126,46 @@ async fn replay(trace: &[Action]) -> bool {
                 }
                 deleted = removed;
             }
+            Action::ExplicitDelete => {
+                use crate::coordinator::DeleteGroupError;
+                let result = coordinator.delete_group("app").await;
+                if member {
+                    safe &= result == Err(DeleteGroupError::NonEmpty);
+                } else if backend.fail_delete.load(Ordering::Relaxed) {
+                    safe &= result == Err(DeleteGroupError::TopologyDescription);
+                } else {
+                    safe &= result.is_ok();
+                    safe &= coordinator.group_type("app").is_none();
+                    safe &= coordinator.find("app").is_none();
+                    safe &= backend.value.lock().expect("lock").is_none();
+                    safe &= ask(&handle.tx, StreamsGroupActorMessage::Delete)
+                        .await
+                        .is_err();
+                    deleted = true;
+                }
+            }
+            Action::Convert => {
+                use crate::coordinator::unified::{
+                    GroupType, streams::migration::DowngradeOutcome,
+                };
+                let result = coordinator
+                    .try_convert_streams_to_classic("app", "", 1)
+                    .await
+                    .expect("conversion");
+                if member {
+                    safe &= result == DowngradeOutcome::RejectLiveMembers;
+                } else if result == DowngradeOutcome::Converted {
+                    safe &= !backend.fail_delete.load(Ordering::Relaxed);
+                    safe &= coordinator.group_type("app") == Some(GroupType::Classic);
+                    safe &= backend.value.lock().expect("lock").is_none();
+                    safe &= ask(&handle.tx, StreamsGroupActorMessage::Delete)
+                        .await
+                        .is_err();
+                    deleted = true;
+                } else {
+                    safe &= result == DowngradeOutcome::RetryCleanup;
+                }
+            }
             Action::Restart => {
                 let seed = coordinator
                     .cached_streams_seed("app")
@@ -171,12 +215,12 @@ fn streams_cleanup_stateright_actor_schedules() {
         .enable_all()
         .build()
         .expect("runtime");
-    // All 1 + 7 + 49 + 343 + 2401 schedules through four operations. The
+    // All 1 + 9 + 81 + 729 + 6561 schedules through four operations. The
     // cap is above the exhaustive reachable set, never a truncated success.
     check_model(
         CleanupModel { runtime },
         "streams cleanup actors",
         (6, 10_000, 10_000),
-        2801,
+        7381,
     );
 }

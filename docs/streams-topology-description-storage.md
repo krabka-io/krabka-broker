@@ -8,11 +8,11 @@ configured by default: heartbeats never request a description, updates return
 
 The Kafka configuration value
 `org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin` selects
-Krabka's actor-local memory implementation. It loses descriptions on actor
-reload as well as process restart. Kafka's reference implementation is scoped
-to its broker-wide manager; equivalence of the native default store's lifetime
-and solicitation backoff across actor reload remains unqualified. Use an
-explicit shared native backend when coordinator movement must retain data.
+Krabka's broker-local memory implementation. Descriptions and solicitation
+backoff are owned by the coordinator and shared across replacement group actors,
+so actor reload does not lose them. A new coordinator/process starts with empty
+runtime state. Use an explicit shared native backend when movement to another
+broker must retain data.
 
 An application embedding the Rust broker can install
 `StreamsGroupConfig.topology_description_backend = Some(Arc::new(backend))`.

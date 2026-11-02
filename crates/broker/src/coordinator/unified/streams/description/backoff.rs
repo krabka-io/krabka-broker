@@ -10,8 +10,8 @@
 //! Kafka's 20% jitter.
 //!
 //! Kafka keeps the windows in one broker-wide map keyed by group id. The
-//! group's streams actor keeps its own here, which forgets it when the group
-//! is deleted, as Kafka's `DeleteGroups` does.
+//! coordinator owns shared windows independently of actor reloads and clears
+//! them when the group is deleted, as Kafka's `DeleteGroups` does.
 
 use std::{
     collections::hash_map::RandomState,
