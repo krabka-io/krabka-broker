@@ -31,5 +31,20 @@
   "limits": [
     "Native tests/model do not establish released external interoperability or integrated sibling PRs",
     "External retained runtime is separately pinned in each receipt and is not this fresh test binary"
-  ]
+  ],
+  "native_multibroker": {
+    "command": "TMPDIR=<private>/qualification-native-temp CARGO_INCREMENTAL=0 cargo test -p krabka-broker --test unregister_controller_forward --test tiered_storage_multi_broker -- --nocapture",
+    "tiered_storage_multi_broker": {
+      "passed": 7,
+      "duration_s": 45.79
+    },
+    "unregister_controller_forward": {
+      "passed": 1,
+      "duration_s": 4.64
+    },
+    "log": "../qualification-multibroker-native.log",
+    "log_sha256": "20f32cf2a43dfdd981ac0b93287ae1a4d9fa8658761b1d812eca62ed3fc278a4",
+    "source_parent": "71b6a32a69da9c26989b9cfd7b4c875e353e4adb",
+    "boundary": "actual native in-process brokers and storage, not released differential"
+  }
 }

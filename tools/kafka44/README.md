@@ -105,9 +105,11 @@ aspect kafka44-remote --revision <exact-runtime-sha> \
   --oracle-container <owned-pinned-oracle> --oracle-bootstrap <oracle-endpoint> \
   --oracle-archive <mounted-archive-host-path> \
   --enabled-bootstrap <owned-candidate-endpoint> --enabled-archive <local-archive> \
-  --enabled-config <effective-candidate-toml> --output <new-evidence-directory>
+  --enabled-config <effective-candidate-toml> --mode all --output <new-evidence-directory>
 ```
 
 The first actual task pass is retained in `qualification/kafka44-delayed-copy-runtime.json`. The probe creates a fresh topic, snapshots archive filenames, produces24 acknowledged64KiB records with1MiB segment roll, observes no new archive files for3seconds under60s/100MB thresholds, then changes lag.ms to0 and requires new files. This is a short copy/dynamic-update smoke, not proof of threshold timing or uploaded data integrity, remote reads, crash recovery, leadership fencing or multibroker parity. No clean CI result may broaden that claim.
 
 The `--transaction-scenarios` oracle restart also runs `ControllerRecovery.java`: register a synthetic nonvoter, successfully remove it, require the repeat error, and require CONTROLLER_ID_NOT_REGISTERED after the owned clean restart. Exact error codes are checked, not merely error-map equality (some successful released responses have empty `errorCounts()`). Caller-owned candidates are restarted only by their owner; external evidence is retained in `qualification/kafka44-controller-removal-restart.json`.
+
+`--mode all` additionally executes natural6s age,1MiB newer-byte crossing and -1 derived6s local-retention age, on both endpoints; individual modes are `dynamic-zero` (default), `age`, `bytes` and `derived-age`. Each requires its own exact scenario identity; an age pass cannot count as a byte-trigger pass. Actual8-case receipt: `qualification/kafka44-delayed-copy-threshold-smokes.json`. These remain bounded positive/negative smokes, not a full remote-storage qualification.

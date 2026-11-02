@@ -7,15 +7,17 @@ def _run(ctx, argv, timeout = 120):
     result = ctx.std.process.command("timeout").args([str(timeout)] + argv).stdout("piped").stderr("piped").spawn().wait_with_output()
     return {"command": argv, "returncode": result.status.code, "stdout": result.stdout, "stderr": result.stderr}
 
-def copy_probe_success(result):
+def copy_probe_success(result, mode = "dynamic-zero"):
     rows = [line for line in result["stdout"].splitlines() if line.startswith("SCENARIO\t")]
-    return result["returncode"] == 0 and rows == ["SCENARIO\tdelay-then-dynamic-zero-copies\tPASS"]
+    return result["returncode"] == 0 and rows == ["SCENARIO\tdelay-then-" + mode + "-copies\tPASS"]
 
 def _impl(ctx: TaskContext) -> int:
     a = ctx.args
     problems = input_problems(a.revision, [])
     if not all([a.oracle_container, a.oracle_bootstrap, a.oracle_archive, a.enabled_bootstrap, a.enabled_archive, a.enabled_config, a.output]):
         problems.append("all prepared isolated broker, archive, configuration and output arguments required")
+    if a.mode not in ["dynamic-zero", "age", "bytes", "derived-age", "all"]:
+        problems.append("unknown copy scenario mode")
     if problems:
         fail("; ".join(problems))
     if ctx.std.fs.exists(a.output):
@@ -35,14 +37,19 @@ def _impl(ctx: TaskContext) -> int:
         ctx.std.fs.write(a.output + "/evidence.json", json.encode(evidence) + "\n")
         return 1
     results = {}
-    for side, endpoint, archive in [("oracle", a.oracle_bootstrap, a.oracle_archive), ("enabled", a.enabled_bootstrap, a.enabled_archive)]:
-        results[side] = _run(ctx, ["java", "-cp", a.output + "/classes:" + a.output + "/libs/*", "CopyProbe", endpoint, archive])
-    failed = any([not copy_probe_success(r) for r in results.values()])
+    failed = False
+    for mode in (["dynamic-zero", "age", "bytes", "derived-age"] if a.mode == "all" else [a.mode]):
+        for side, endpoint, archive in [("oracle", a.oracle_bootstrap, a.oracle_archive), ("enabled", a.enabled_bootstrap, a.enabled_archive)]:
+            result = _run(ctx, ["java", "-cp", a.output + "/classes:" + a.output + "/libs/*", "CopyProbe", endpoint, archive, mode])
+            results[mode + "-" + side] = result
+            failed = failed or not copy_probe_success(result, mode)
+
     evidence.update({"status": "failed" if failed else "copy-smoke-pass-not-qualified", "results": results})
     ctx.std.fs.write(a.output + "/evidence.json", json.encode(evidence) + "\n")
     return 1 if failed else 0
 
-kafka44_remote = task(summary = "Run copy-delay smoke on prepared isolated released/enabled brokers", implementation = _impl, args = {name: args.string(default = "", description = description) for name, description in {
+kafka44_remote = task(summary = "Run copy-delay smoke on prepared isolated released/enabled brokers", implementation = _impl, args = {name: args.string(default = "dynamic-zero" if name == "mode" else "", description = description) for name, description in {
+    "mode": "dynamic-zero, age, bytes, derived-age, or all.",
     "revision": "Exact enabled candidate source SHA.",
     "oracle_container": "Prepared pinned released container with RecordingStorage backend.",
     "oracle_bootstrap": "Isolated released broker endpoint.",

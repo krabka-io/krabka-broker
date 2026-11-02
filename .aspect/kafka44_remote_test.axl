@@ -8,5 +8,10 @@ def _test_result_admission(_ctx):
     for output, code, expected in [(good, 0, True), (good, 1, False), ("", 0, False), (good.replace("PASS", "FAIL"), 0, False), (good + "\n" + good, 0, False), ("SCENARIO\tunrelated\tPASS", 0, False)]:
         check_eq("exact successful copy observation required", copy_probe_success({"stdout": output, "returncode": code}), expected)
 
-kafka44_remote_tests = suite("kafka44-remote", [_test_result_admission])
+def _test_mode_is_not_interchangeable(_ctx):
+    row = {"stdout": "SCENARIO\tdelay-then-age-copies\tPASS", "returncode": 0}
+    check_eq("natural age is explicit", copy_probe_success(row, "age"), True)
+    check_eq("age is not byte-threshold coverage", copy_probe_success(row, "bytes"), False)
+
+kafka44_remote_tests = suite("kafka44-remote", [_test_result_admission, _test_mode_is_not_interchangeable])
 test_kafka44_remote = suite_task(kafka44_remote_tests)

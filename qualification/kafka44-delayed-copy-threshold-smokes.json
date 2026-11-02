@@ -1,0 +1,185 @@
+{
+  "qualification_pass": false,
+  "candidate_revision": "b734bbab95deb758c12f3895678c6c421abf04ee",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "image_check": {
+    "command": [
+      "docker",
+      "inspect",
+      "qualification-tiered-restarted",
+      "--format",
+      "{{.Config.Image}}"
+    ],
+    "returncode": 0,
+    "stdout": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b\n",
+    "stderr": ""
+  },
+  "setup": [
+    {
+      "command": [
+        "docker",
+        "cp",
+        "qualification-tiered-restarted:/opt/kafka/libs/.",
+        "../qualification-tiered-runtime/task-all/libs/"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "javac",
+        "--release",
+        "17",
+        "-cp",
+        "../qualification-tiered-runtime/task-all/libs/*",
+        "-d",
+        "../qualification-tiered-runtime/task-all/classes",
+        "tools/kafka44/CopyProbe.java",
+        "tools/kafka44/RecordingStorage.java"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "config_sha256": "sha256:0d35038e4b03729006708db18d724dfd8a42234a4d91e56666c594ded02a0904",
+  "source_sha256": {
+    "tools/kafka44/CopyProbe.java": "sha256:c2281d0e6541dce518692f5b09e55a9c3a5ac8726b129ab53803feb61febfe83",
+    "tools/kafka44/RecordingStorage.java": "sha256:d5619828be3a1e90e644dfb2201e32e7857cf6b6835e12c514b67aa7d5f31269"
+  },
+  "limits": "retained b734bbab9 runtime; not final combined heads; copy files observed, no remote-data integrity/durability/failure/retry/leadership/crash parity",
+  "status": "copy-smoke-pass-not-qualified",
+  "results": {
+    "dynamic-zero-oracle": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-all/classes:../qualification-tiered-runtime/task-all/libs/*",
+        "CopyProbe",
+        "127.0.0.1:60992",
+        "../qualification-tiered-runtime/archive",
+        "dynamic-zero"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-01c6cb7a-2ee2-4b80-9476-e28b0c61a33f\nDETAIL\tcopy-probe-01c6cb7a-2ee2-4b80-9476-e28b0c61a33f\tfiles=5\nSCENARIO\tdelay-then-dynamic-zero-copies\tPASS\n",
+      "stderr": ""
+    },
+    "dynamic-zero-enabled": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-all/classes:../qualification-tiered-runtime/task-all/libs/*",
+        "CopyProbe",
+        "127.0.0.1:49092",
+        "../qualification-tiered-runtime/candidate-archive2",
+        "dynamic-zero"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-8468b7db-b89b-4b30-94c8-07d7a822c960\nDETAIL\tcopy-probe-8468b7db-b89b-4b30-94c8-07d7a822c960\tfiles=5\nSCENARIO\tdelay-then-dynamic-zero-copies\tPASS\n",
+      "stderr": ""
+    },
+    "age-oracle": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-all/classes:../qualification-tiered-runtime/task-all/libs/*",
+        "CopyProbe",
+        "127.0.0.1:60992",
+        "../qualification-tiered-runtime/archive",
+        "age"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-6ccb5338-3649-4ad4-afd3-69ef1c90317d\nDETAIL\tcopy-probe-6ccb5338-3649-4ad4-afd3-69ef1c90317d\tfiles=5\nSCENARIO\tdelay-then-age-copies\tPASS\n",
+      "stderr": ""
+    },
+    "age-enabled": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-all/classes:../qualification-tiered-runtime/task-all/libs/*",
+        "CopyProbe",
+        "127.0.0.1:49092",
+        "../qualification-tiered-runtime/candidate-archive2",
+        "age"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-105a5e06-a4ba-44e0-9c02-c9a260bf7713\nDETAIL\tcopy-probe-105a5e06-a4ba-44e0-9c02-c9a260bf7713\tfiles=5\nSCENARIO\tdelay-then-age-copies\tPASS\n",
+      "stderr": ""
+    },
+    "bytes-oracle": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-all/classes:../qualification-tiered-runtime/task-all/libs/*",
+        "CopyProbe",
+        "127.0.0.1:60992",
+        "../qualification-tiered-runtime/archive",
+        "bytes"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-ed01aadf-2163-4de5-ac07-5486cf741c2f\nDETAIL\tcopy-probe-ed01aadf-2163-4de5-ac07-5486cf741c2f\tfiles=5\nSCENARIO\tdelay-then-bytes-copies\tPASS\n",
+      "stderr": ""
+    },
+    "bytes-enabled": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-all/classes:../qualification-tiered-runtime/task-all/libs/*",
+        "CopyProbe",
+        "127.0.0.1:49092",
+        "../qualification-tiered-runtime/candidate-archive2",
+        "bytes"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-9c2fec88-d06d-4a0f-96de-41ff69b12144\nDETAIL\tcopy-probe-9c2fec88-d06d-4a0f-96de-41ff69b12144\tfiles=5\nSCENARIO\tdelay-then-bytes-copies\tPASS\n",
+      "stderr": ""
+    },
+    "derived-age-oracle": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-all/classes:../qualification-tiered-runtime/task-all/libs/*",
+        "CopyProbe",
+        "127.0.0.1:60992",
+        "../qualification-tiered-runtime/archive",
+        "derived-age"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-95b7d77a-7e54-40d0-98a1-e828862cebc1\nDETAIL\tcopy-probe-95b7d77a-7e54-40d0-98a1-e828862cebc1\tfiles=5\nSCENARIO\tdelay-then-derived-age-copies\tPASS\n",
+      "stderr": ""
+    },
+    "derived-age-enabled": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-all/classes:../qualification-tiered-runtime/task-all/libs/*",
+        "CopyProbe",
+        "127.0.0.1:49092",
+        "../qualification-tiered-runtime/candidate-archive2",
+        "derived-age"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-ce4cefd7-fcba-437e-8ca8-a8f7bde9fe64\nDETAIL\tcopy-probe-ce4cefd7-fcba-437e-8ca8-a8f7bde9fe64\tfiles=5\nSCENARIO\tdelay-then-derived-age-copies\tPASS\n",
+      "stderr": ""
+    }
+  },
+  "date": "2026-11-02",
+  "binary_sha256": "f30a67a9e1fc886ece9a5ef3919a19f6cf7a86d26cac260e6655966c9d006b41",
+  "mode": "all",
+  "executed_cases": [
+    "dynamic lag.ms=0 after3s no-copy observation",
+    "natural6000ms age after3s no-copy observation",
+    "1048576 newer-byte crossing after3s no-copy observation",
+    "lag.ms=-1 derives6000ms local.retention.ms after3s no-copy observation"
+  ],
+  "runtime_flags": [
+    "--remote-log-manager-interval",
+    "500ms"
+  ],
+  "raw_evidence": {
+    "path": "../qualification-tiered-runtime/task-all/evidence.json",
+    "sha256": "2de6b149f136bc25971ccb326448e72f05f085e299cbf121ef043cbb7237f0f1",
+    "task_log": "../qualification-tiered-runtime/task-all.log"
+  }
+}
