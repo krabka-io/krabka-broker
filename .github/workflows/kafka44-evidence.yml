@@ -2,6 +2,12 @@ name: released Kafka 4.4 evidence
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - ".aspect/kafka44*.axl"
+      - "tools/kafka44/**"
+      - "qualification/**"
+      - ".github/workflows/kafka44-evidence.yml"
 
 permissions:
   contents: read

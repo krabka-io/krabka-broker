@@ -68,7 +68,7 @@ For an oracle-only smoke check:
 aspect kafka44 --revision FULL_KRABKA_COMMIT_SHA --protocol-scenarios --output evidence/kafka44-protocol-oracle
 ```
 
-The dispatch-only evidence workflow executes these scenarios alongside discovery. `qualification_pass` is still always false.
+The path-filtered pull-request and manual evidence workflow executes these scenarios alongside discovery. `qualification_pass` is still always false.
 
 The [coverage ledger](COVERAGE.md) maps each surface to invariants, models, runtime regressions, released-oracle results, fault coverage and CI receipts. Known counterexamples and missing executions remain explicit.
 
