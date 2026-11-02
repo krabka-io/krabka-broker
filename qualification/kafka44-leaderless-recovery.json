@@ -1,0 +1,93 @@
+{
+  "date": "2026-11-02",
+  "source_revision": "b734bbab95deb758c12f3895678c6c421abf04ee",
+  "qualification_pass": false,
+  "binary_sha256": "fea75051c3f895c6b954af9bfe4685042077586255fa8291cc37775285059d4e",
+  "source_sha256": {
+    "crates/broker/src/leader_election/driver.rs": "73bb414bf364bed4e957a0df71507c9f3cb1144118cfa4163b4ba8e263335fc9",
+    "crates/broker/src/leader_election/scan.rs": "4c7976e931bbce2f5300d9955e5d842a40859605642bf47b9138a2714db7ecbd",
+    "crates/broker/src/leader_election/driver/tick_tests.rs": "9bf6ac1ec35532c7a0ec8580d94537fc876f28bf4921d9d7afe8b5fd531da7c3"
+  },
+  "binary_build": {
+    "command": "cargo build -p krabka-broker -p krabka-format",
+    "log": "../recovery-jepsen-binary-build.log",
+    "note": "Built before commits from same runtime sources; no released baseline substitution"
+  },
+  "jepsen": {
+    "version": "0.3.15",
+    "kafka_client": "4.4.0",
+    "nodes": [
+      "kr44r1",
+      "kr44r2",
+      "kr44r3",
+      "kr44r4",
+      "kr44r5"
+    ],
+    "manifest": {
+      "defaults": [
+        "--safe",
+        "--time-limit",
+        "120",
+        "--concurrency",
+        "2n",
+        "--rate",
+        "100",
+        "--nemesis-interval",
+        "15"
+      ],
+      "tests": [
+        {
+          "name": "assign-mixed",
+          "args": [
+            "--sub-via",
+            "assign",
+            "--nemesis",
+            "partition,kill,pause"
+          ]
+        }
+      ]
+    },
+    "summary": {
+      "jepsen_version": "0.3.15",
+      "results": [
+        {
+          "name": "assign-mixed",
+          "status": "valid",
+          "detail": "",
+          "bad_error_types": [],
+          "error_types": [],
+          "store": "store/krabka assign acks=all idem=true iso=read_committed kill,partition,pause/2026-11-02T09:05:42.765396151Z"
+        }
+      ]
+    },
+    "checker_valid": true,
+    "operations": 4648,
+    "ok": 4529,
+    "fail": 0,
+    "info": 119,
+    "log": "../recovery-jepsen-fresh.log",
+    "store": "store/krabka assign acks=all idem=true iso=read_committed kill,partition,pause/2026-11-02T09:05:42.765396151Z",
+    "artifact_sha256": {
+      "store/krabka assign acks=all idem=true iso=read_committed kill,partition,pause/2026-11-02T09:05:42.765396151Z/results.edn": "f1e069e3c844ece71aa47eed5f70608d17deccefcd6b10aabdf3a476b6e1eff7",
+      "store/krabka assign acks=all idem=true iso=read_committed kill,partition,pause/2026-11-02T09:05:42.765396151Z/history.edn": "cf49ade82b0b10cd615b87b675e0ce5bfa8f56924f9e8c492e7e616be10ccb2b",
+      "store/krabka assign acks=all idem=true iso=read_committed kill,partition,pause/2026-11-02T09:05:42.765396151Z/jepsen.log": "9619073f61e6a2283115345c60ba85720140e50ba04d30e81f9db4a62e7da4e8"
+    },
+    "execution": "java -Xmx8g -Djava.awt.headless=true -Djava.io.tmpdir=$PWD/target/jepsen/recovery-tmp -cp \"$(cat target/jepsen/classpath.txt):tools/jepsen/src\" clojure.main -m jepsen.krabka.core suite --manifest target/jepsen/recovery-selected.json --results target/jepsen/recovery-fresh-results.json --bin-dir \"$PWD/target/debug\" --docker --nodes kr44r1,kr44r2,kr44r3,kr44r4,kr44r5"
+  },
+  "focused_tests": {
+    "retained_binary": "target/debug/deps/krabka_broker-f2cd018ede5f926c",
+    "sha256": "7b4895025ba6540780a2034486414ed9ea9f00b9b462afc59aefdf5143221de6",
+    "leaderless_tests_passed": 13,
+    "tick_tests_passed": 7,
+    "logs": [
+      "../recovery-leaderless-retained-tests.log",
+      "../recovery-tick-retained-tests.log"
+    ],
+    "fresh_cargo_retry": "Stopped before completion when disk space fell below 3 GB; no new Cargo-build pass claimed. Retained binary was built after changed source timestamps."
+  },
+  "limits": [
+    "One stochastic nontransactional assign-mixed run is not a full Jepsen suite or deterministic replay of nightly history",
+    "Previous nightly failure remains historical evidence; this run does not prove all recovery paths fixed",
+    "Full six-surface released-client, feature-boundary, authorization and multi-broker qualification remains incomplete; defaults unchanged"
+  ]
+}
