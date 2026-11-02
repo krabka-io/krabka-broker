@@ -55,3 +55,19 @@ Observed API-range differences:
 These retained mismatches block a blanket released-4.4 parity/default-graduation claim. Config discovery output is retained raw; it has not been semantically compared or used as config validation proof. No authorization, six-surface behavioral, restart or multi-broker assertion has been run. The locally retained effective configurations are identified by SHA-256; CLI controller addresses and formatting levels are recorded in the snapshot provisioning notes.
 
 Both candidates were then stopped with SIGTERM (both exited 0) and restarted from the same persisted directories and effective configurations. All nine discovery probes again returned zero with identical API-range differences. The snapshot retains post-restart outputs. This is discovery continuity only: no six-feature state, records, failure injection or multi-broker recovery was exercised.
+
+## Released-codec negative wire scenarios
+
+Add `--protocol-scenarios` to compile `ProtocolScenarios.java` with a local JDK (17 or newer) against jars copied from the pinned reference image, then execute it with the image's JVM and jars. No moving Maven dependencies or candidate protocol implementation is used. The fixture hash, compile commands, raw responses and named error-map results are retained. With candidates, also pass `--default-controller HOST:PORT --enabled-controller HOST:PORT`.
+
+The five scenarios exercise unknown controller unregistration through controller and broker listeners (the broker may forward), topology update without a configured plugin, an invalid Streams v1 group, and TxnOffsetCommit v6 with an unknown topic UUID. They deliberately do **not** claim positive transaction, registration-deletion, plugin lifecycle, authorization, tiered storage, misrouting, recovery or multi-broker qualification. These are negative probes, not substitutes for those obligations. Transport errors and missing result rows cannot become parity passes. Candidate error-map differences make the task fail while retaining evidence; complete raw responses remain available for message/field review. Error-map equality alone is not full response equality.
+
+For an oracle-only smoke check:
+
+```sh
+aspect kafka44 --revision FULL_KRABKA_COMMIT_SHA --protocol-scenarios --output evidence/kafka44-protocol-oracle
+```
+
+The dispatch-only evidence workflow executes these scenarios alongside discovery. `qualification_pass` is still always false.
+
+The [coverage ledger](COVERAGE.md) maps each surface to invariants, models, runtime regressions, released-oracle results, fault coverage and CI receipts. Known counterexamples and missing executions remain explicit.

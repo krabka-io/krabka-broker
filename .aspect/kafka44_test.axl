@@ -1,6 +1,6 @@
 """Input safety tests for the released Kafka evidence task."""
 
-load("./kafka44.axl", "api_differences", "input_problems")
+load("./kafka44.axl", "api_differences", "input_problems", "scenario_differences")
 load("./testing.axl", "check_eq", "suite", "suite_task")
 
 def _test_revision(_ctx):
@@ -20,5 +20,14 @@ def _test_api_differences(_ctx):
     check_eq("endpoint identity ignored", api_differences(reference, reference.replace("host", "elsewhere")), [])
     check_eq("version regression", api_differences(reference, reference.replace("0 to 5", "0 to 4")), [{"api": "ApiVersions(18)", "oracle": "0 to 5", "candidate": "0 to 4"}])
 
-kafka44_tests = suite("kafka44", [_test_revision, _test_candidate_pairs, _test_api_differences])
+def _test_protocol_differences(_ctx):
+    check_eq("empty fixture output fails", scenario_differences("", ""), [{"error": "missing protocol scenario rows"}])
+    rows = "\n".join(["SCENARIO\tcase-" + str(i) + "\t{NONE=1}" for i in range(5)])
+    check_eq("equal errors", scenario_differences(rows, rows), [])
+    changed = rows.replace("case-0\t{NONE=1}", "case-0\t{INVALID_REQUEST=1}")
+    check_eq("error mismatch retained", scenario_differences(rows, changed), [{"scenario": "case-0", "oracle": "{NONE=1}", "candidate": "{INVALID_REQUEST=1}"}])
+    transport = rows.replace("case-0\t{NONE=1}", "case-0\tTRANSPORT:EOFException")
+    check_eq("equal disconnect is not parity", len(scenario_differences(transport, transport)), 1)
+
+kafka44_tests = suite("kafka44", [_test_revision, _test_candidate_pairs, _test_api_differences, _test_protocol_differences])
 test_kafka44 = suite_task(kafka44_tests)
