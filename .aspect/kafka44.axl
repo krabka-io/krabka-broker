@@ -47,9 +47,13 @@ def api_differences(oracle, candidate):
 
 def _command(ctx, argv, seconds = 90):
     result = (ctx.std.process.command("timeout").args([str(seconds)] + argv)
-              .stdout("piped").stderr("piped").spawn().wait_with_output())
-    return {"command": ["timeout", str(seconds)] + argv, "returncode": result.status.code,
-            "stdout": result.stdout, "stderr": result.stderr}
+        .stdout("piped").stderr("piped").spawn().wait_with_output())
+    return {
+        "command": ["timeout", str(seconds)] + argv,
+        "returncode": result.status.code,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
 
 def _tool(ctx, probe, bootstrap, container = "", seconds = 90):
     argv = ["docker", "exec", container] if container else ["docker", "run", "--rm", "--network", "host", IMAGE]
@@ -70,6 +74,7 @@ def _impl(ctx: TaskContext) -> int:
     revision = _command(ctx, ["git", "cat-file", "-t", a.revision])
     if revision["returncode"] or revision["stdout"].strip() != "commit":
         fail("revision must identify a commit in the local repository")
+
     # mkdir, not create_dir_all: overwriting old evidence must fail.
     made = _command(ctx, ["mkdir", a.output])
     if made["returncode"]:
@@ -79,11 +84,19 @@ def _impl(ctx: TaskContext) -> int:
         if path:
             configs[side] = {"sha256": text_sha256(ctx.std.fs.read_to_string(path)).removeprefix("sha256:")}
     name = "krabka-kafka44-" + a.output.replace("/", "-").replace(".", "-")[-40:]
-    evidence = {"schema_version": 1, "status": "incomplete", "krabka_revision": a.revision,
-                "oracle_image": IMAGE, "configs": configs, "sides": {},
-                "qualification_pass": False, "unexecuted": UNEXECUTED}
+    evidence = {
+        "schema_version": 1,
+        "status": "incomplete",
+        "krabka_revision": a.revision,
+        "oracle_image": IMAGE,
+        "configs": configs,
+        "sides": {},
+        "qualification_pass": False,
+        "unexecuted": UNEXECUTED,
+    }
     env = {
-        "KAFKA_NODE_ID": "1", "KAFKA_PROCESS_ROLES": "broker,controller",
+        "KAFKA_NODE_ID": "1",
+        "KAFKA_PROCESS_ROLES": "broker,controller",
         "KAFKA_LISTENERS": "PLAINTEXT://:9092,CONTROLLER://:9093",
         "KAFKA_ADVERTISED_LISTENERS": "PLAINTEXT://localhost:9092",
         "KAFKA_CONTROLLER_LISTENER_NAMES": "CONTROLLER",
@@ -122,7 +135,8 @@ def _impl(ctx: TaskContext) -> int:
             evidence["sides"][side] = {key: _tool(ctx, probe, bootstrap, container) for key, probe in PROBES.items()}
     evidence["api_differences"] = {
         side: api_differences(evidence["sides"]["oracle"]["api-versions"]["stdout"], probes["api-versions"]["stdout"])
-        for side, probes in evidence["sides"].items() if side != "oracle"
+        for side, probes in evidence["sides"].items()
+        if side != "oracle"
     }
     failed = any([r["returncode"] for probes in evidence["sides"].values() for r in probes.values()])
     evidence["status"] = "probe-failure" if failed else "collected-not-qualified"
@@ -132,8 +146,11 @@ kafka44 = task(
     summary = "Collect released Kafka 4.4 oracle/candidate evidence (not parity)",
     implementation = _impl,
     args = {name: args.string(default = "", description = description) for name, description in {
-        "revision": "Exact candidate commit SHA.", "output": "New evidence directory.",
-        "default_bootstrap": "Isolated default candidate address.", "enabled_bootstrap": "Isolated enabled candidate address.",
-        "default_config": "Private effective default TOML.", "enabled_config": "Private effective enabled TOML.",
+        "revision": "Exact candidate commit SHA.",
+        "output": "New evidence directory.",
+        "default_bootstrap": "Isolated default candidate address.",
+        "enabled_bootstrap": "Isolated enabled candidate address.",
+        "default_config": "Private effective default TOML.",
+        "enabled_config": "Private effective enabled TOML.",
     }.items()},
 )

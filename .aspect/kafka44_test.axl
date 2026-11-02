@@ -1,4 +1,5 @@
 """Input safety tests for the released Kafka evidence task."""
+
 load("./kafka44.axl", "api_differences", "input_problems")
 load("./testing.axl", "check_eq", "suite", "suite_task")
 
