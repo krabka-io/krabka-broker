@@ -1,0 +1,8 @@
+group=grpr03t0 source_start_offset=0 lag=0
+group=grpr03t1 source_start_offset=0 lag=0
+group=grpr03t2 source_start_offset=0 lag=0
+group=grpr03t3 source_start_offset=0 lag=0
+group=grpr03f0 source_start_offset=0 lag=0
+group=grpr03f1 source_start_offset=0 lag=0
+group=grpr03f2 source_start_offset=0 lag=0
+group=grpr03f3 source_start_offset=0 lag=0

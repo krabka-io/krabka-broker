@@ -1,7 +1,8 @@
 # Released Kafka 4.4 DLQ component qualification (#1974)
 
-This is **partial qualification**: released handler components plus live destination
-Produce boundaries, not end-to-end share-DLQ interoperability proof.
+This is **partial qualification**: released handler components, live destination Produce boundaries,
+and a real released share-consumer rejection/copy boundary run. Candidate
+wire-level differential and mid-ARCHIVING crash qualification remain incomplete.
 
 ## Reproduction
 
@@ -102,3 +103,45 @@ docker run -d --name kafka1974-boundary -p 127.0.0.1:39744:9092 \
   -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1 \
   apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f
 ```
+
+## Real released share-consumer boundary run (2026-11-02)
+
+`ShareBoundary.java` uses the released 4.4.0 `KafkaShareConsumer` in explicit
+acknowledgement mode to reject a real produced source record. It configures
+`errors.deadletterqueue.copy.record.enable` on each actual share group and
+reads the resulting DLQ topic with a normal Kafka consumer. No source fetch,
+manager transport or acknowledgement is mocked. Each case uses a fresh source,
+DLQ and group, with names of identical length; those names affect header size.
+
+Observed output is retained in `share-boundary-release.txt`: copied batches are
+352 bytes; headers-only batches are 250 bytes. Both have the expected payload
+at the exact limit and one byte above it; one byte below it produces no DLQ
+record. Released broker logs show `RecordTooLargeException` and
+`Failed to write to DLQ, proceeding to ARCHIVED regardless` for the two rejected
+DLQ produces. All eight groups report lag=0 before and after a clean whole-broker
+restart (`share-boundary-release-before.txt` and `share-boundary-release-after.txt`).
+Their reported start offsets remain zero, so startOffset alone is not archival
+proof. This is not a controlled crash during ARCHIVING and does not demonstrate
+the duplicate/loss window or multi-broker failover.
+
+The isolated release broker uses the digest above and **host networking** with
+PLAINTEXT and controller listeners on 39745/39746. Its share coordinator state
+topic has one partition, replication factor one and min ISR one; offsets and
+transaction state topics also have replication factor one (transaction min ISR
+one). The earlier published mapped-port command is suitable only for simple
+external Produce: the broker's own DLQ/persister clients must be able to reach
+its advertised address as well. Do not use a container-loopback advertised host
+port that has no listener inside that container for this share probe.
+
+```sh
+mkdir -p "$DLQ_CLASSES"
+javac -cp "$KAFKA_LIBS/*" -d "$DLQ_CLASSES" qualification/kafka44-dlq/ShareBoundary.java
+java -cp "$DLQ_CLASSES:$KAFKA_LIBS/*" ShareBoundary 127.0.0.1:39745 fresh01
+java -cp "$DLQ_CLASSES:$KAFKA_LIBS/*" ShareBoundary 127.0.0.1:39745 fresh01 verify
+# Restart the owned isolated release broker, then repeat verify.
+```
+
+The verify mode asserts zero share-group lag; it does not decode persisted
+ARCHIVED state. Actual manager request meters and controlled retry/error
+injection remain covered only by the earlier released component probe, not
+this end-to-end run. Keep those distinctions when evaluating closure.
