@@ -1,7 +1,10 @@
 //! Shared native-extension implementations and registration fixtures.
 use {
     super::{super::config::StreamsGroupConfig, *},
-    std::sync::Arc,
+    std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 #[derive(Debug)]
 pub struct Pin(pub &'static str, pub &'static str);
@@ -39,4 +42,23 @@ pub fn registered_config() -> StreamsGroupConfig {
         .register(Arc::new(Pin("second", "b")))
         .unwrap();
     config
+}
+
+/// An actual assignor with a controllable failure, for rollback/recovery tests.
+#[derive(Debug)]
+pub struct Recoverable(pub Arc<AtomicBool>);
+impl TaskAssignor for Recoverable {
+    fn name(&self) -> &'static str { "recoverable" }
+
+    fn assign(
+        &self,
+        members: &[AssignorMember],
+        input: &AssignorInput,
+    ) -> Result<StreamsAssignment, String> {
+        if self.0.load(Ordering::SeqCst) {
+            Err("injected assignor failure".into())
+        } else {
+            Ok(assign(members, input))
+        }
+    }
 }

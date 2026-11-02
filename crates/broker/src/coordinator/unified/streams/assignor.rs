@@ -136,14 +136,10 @@ impl Eq for TaskAssignorRegistry {}
 impl TaskAssignorRegistry {
     /// Register a native extension.
     /// # Errors
-    /// Rejects blank, padded, duplicate or reserved names.
+    /// Rejects duplicate names and the actual reserved built-in name.
     pub fn register(&mut self, assignor: Arc<dyn TaskAssignor>) -> Result<(), String> {
         let name = assignor.name();
-        if name.is_empty()
-            || name.trim() != name
-            || ["auto", "sticky", "highly_available", "highly-available"].contains(&name)
-            || self.get(name).is_some()
-        {
+        if name == "sticky" || self.get(name).is_some() {
             return Err(format!(
                 "invalid or duplicate Streams task assignor name: {name}"
             ));

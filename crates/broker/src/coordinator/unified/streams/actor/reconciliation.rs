@@ -23,6 +23,7 @@ use {
             },
             wall_clock_ms,
         },
+        error::BrokerError,
         metadata_source::MetadataSource,
     },
     std::{
@@ -59,13 +60,29 @@ pub(super) fn reconcile(
     actor: &mut ActorState,
     config: &StreamsGroupConfig,
     metadata_source: Option<&Arc<dyn MetadataSource>>,
-) {
+) -> Result<(), BrokerError> {
+    let before = (config.selected_task_assignor_name() != "sticky").then(|| actor.clone());
+    let result = reconcile_inner(actor, config, metadata_source);
+    if result.is_err()
+        && let Some(before) = before
+    {
+        *actor = before;
+    }
+    result
+}
+
+fn reconcile_inner(
+    actor: &mut ActorState,
+    config: &StreamsGroupConfig,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+) -> Result<(), BrokerError> {
     if actor.state.dirty {
         update_group_epoch(actor, config, metadata_source);
     }
     if actor.assignment_pending() && assignment_delay(actor, config, Instant::now()).is_none() {
-        update_target_assignment(actor, config);
+        update_target_assignment(actor, config)?;
     }
+    Ok(())
 }
 
 /// The status detail of Kafka's `ASSIGNMENT_DELAYED` when a delay holds the
@@ -207,13 +224,16 @@ fn update_group_epoch(
 
 /// Installs the target assignment of the group epoch: the assignor's output
 /// for a ready topology, and an empty target otherwise.
-fn update_target_assignment(actor: &mut ActorState, config: &StreamsGroupConfig) {
+fn update_target_assignment(
+    actor: &mut ActorState,
+    config: &StreamsGroupConfig,
+) -> Result<(), BrokerError> {
     let ready = actor
         .ready_topology()
         .map(topology::ConfiguredTopology::number_of_tasks)
         .zip(actor.topology.clone());
     if let Some((number_of_tasks, topology)) = ready {
-        install_computed_target(actor, config, &topology, &number_of_tasks);
+        install_computed_target(actor, config, &topology, &number_of_tasks)?;
     } else {
         actor.target_changed = Some(
             actor
@@ -230,6 +250,7 @@ fn update_target_assignment(actor: &mut ActorState, config: &StreamsGroupConfig)
     // at which the calculation finished, whether the topology was ready or
     // not.
     actor.assignment_timestamp_ms = wall_clock_ms();
+    Ok(())
 }
 
 /// Bumps the group epoch and installs the assignor's target at once, with no
@@ -240,12 +261,20 @@ pub(super) fn compute_and_install_target(
     config: &StreamsGroupConfig,
     topology: &StreamsGroupTopologyValue,
     num_tasks: &BTreeMap<String, i32>,
-) {
+) -> Result<(), BrokerError> {
+    let before = (config.selected_task_assignor_name() != "sticky").then(|| actor.clone());
     if !actor.state.bump_epoch() {
-        return;
+        return Ok(());
     }
     actor.state.dirty = false;
-    install_computed_target(actor, config, topology, num_tasks);
+    let result = install_computed_target(actor, config, topology, num_tasks);
+    if result.is_err()
+        && let Some(before) = before
+    {
+        *actor = before;
+        actor.state.dirty = true;
+    }
+    result
 }
 
 /// Runs the assignor over the resolved topology and installs its output as the
@@ -259,7 +288,7 @@ fn install_computed_target(
     config: &StreamsGroupConfig,
     topology: &StreamsGroupTopologyValue,
     num_tasks: &BTreeMap<String, i32>,
-) {
+) -> Result<(), BrokerError> {
     let members: Vec<AssignorMember> = actor
         .state
         .members
@@ -290,14 +319,12 @@ fn install_computed_target(
         stateful,
         num_standby_replicas: config.num_standby_replicas,
     };
-    let assignment = match config.assign_tasks(&members, &input) {
-        Ok(assignment) => assignment,
-        Err(error) => {
-            tracing::warn!(%error, "Streams task assignor failed; retaining previous target");
-            actor.state.dirty = true;
-            return;
+    let assignment = config.assign_tasks(&members, &input).map_err(|detail| {
+        BrokerError::StreamsTaskAssignment {
+            epoch: actor.state.group_epoch,
+            detail,
         }
-    };
+    })?;
 
     // Kafka's default assignment refiner hands out no warmup tasks.
     let target = StreamsTargetAssignment {
@@ -310,6 +337,7 @@ fn install_computed_target(
     // A computed target ends `NotReady`; the members then reconcile toward it.
     actor.state.phase = StreamsGroupStatePhase::Reconciling;
     actor.state.refresh_phase();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -341,13 +369,13 @@ mod custom_assignor_tests {
         };
         let tasks = [("s".into(), 1)].into();
         let mut config = registered_config();
-        compute_and_install_target(&mut actor, &config, &topology, &tasks);
+        compute_and_install_target(&mut actor, &config, &topology, &tasks).expect("assignment");
         actor
             .state
             .reconcile_member("a", Some(&RoleTasks::default()));
         assert!(actor.state.members["a"].active["s"] == vec![0]);
         config.task_assignor_name = Some("second".into());
-        compute_and_install_target(&mut actor, &config, &topology, &tasks);
+        compute_and_install_target(&mut actor, &config, &topology, &tasks).expect("assignment");
         assert!(actor.state.target.active["b"]["s"] == vec![0]);
         actor
             .state
@@ -364,7 +392,8 @@ mod custom_assignor_tests {
         assert!(actor.state.members["b"].active["s"] == vec![0]);
         let old_target = actor.state.target.active.clone();
         config.task_assignor_name = Some("missing".into());
-        compute_and_install_target(&mut actor, &config, &topology, &tasks);
+        compute_and_install_target(&mut actor, &config, &topology, &tasks)
+            .expect_err("assignment failure");
         assert!(actor.state.target.active == old_target);
         assert!(actor.state.dirty);
     }

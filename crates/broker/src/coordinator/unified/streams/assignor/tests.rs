@@ -263,12 +263,6 @@ fn task_assignor_registry_executes_selected_logic_and_rejects_ambiguous_names() 
             .register(Arc::new(Pin("sticky", "b")))
             .is_err()
     );
-    assert!(
-        config
-            .task_assignors
-            .register(Arc::new(Pin("", "b")))
-            .is_err()
-    );
     let members = [
         AssignorMember {
             member_id: "a".into(),
@@ -364,6 +358,59 @@ fn task_assignor_registry_validates_extension_output() {
         .unwrap()
         .push(1);
     assert!(validate_assignment(&unknown_task, &members, &input).is_err());
+}
+
+/// Released Kafka reserves the actual built-in name, not Krabka's legacy aliases.
+#[test]
+fn task_assignor_registry_custom_names_take_precedence_over_legacy_aliases() {
+    use {
+        super::test_support::Pin,
+        crate::coordinator::unified::streams::config::{KEY_ASSIGNOR_NAME, StreamsGroupConfig},
+        std::sync::Arc,
+    };
+    for (name, group_override) in [
+        ("", Some("")),
+        (" padded ", None),
+        ("\u{a0}custom\u{a0}", Some("\u{a0}custom\u{a0}")),
+        ("auto", Some(" \tauto\t ")),
+        ("highly_available", Some("highly_available")),
+        ("highly-available", Some("highly-available")),
+    ] {
+        let mut config = StreamsGroupConfig::default();
+        config
+            .task_assignors
+            .register(Arc::new(Pin(name, "b")))
+            .expect("custom name");
+        let overrides = group_override
+            .map(|value| [(KEY_ASSIGNOR_NAME.into(), value.into())].into())
+            .unwrap_or_default();
+        let selected = config
+            .with_group_overrides(&overrides)
+            .expect("registered selection");
+        let members = [
+            AssignorMember {
+                member_id: "a".into(),
+                ..Default::default()
+            },
+            AssignorMember {
+                member_id: "b".into(),
+                ..Default::default()
+            },
+        ];
+        let tasks = [("sub".into(), vec![0, 1])].into();
+        let input = AssignorInput {
+            tasks,
+            ..Default::default()
+        };
+        assert!(selected.selected_task_assignor_name() == name);
+        assert!(
+            selected.assign_tasks(&members, &input).expect("extension")
+                == StreamsAssignment {
+                    active: [("b".into(), input.tasks)].into(),
+                    ..Default::default()
+                }
+        );
+    }
 }
 
 mod task_assignor_registry_scenarios {

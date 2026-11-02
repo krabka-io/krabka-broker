@@ -76,6 +76,7 @@ use {
     },
     crate::{
         codes,
+        config_keys::parse::java_trim,
         coordinator::unified::{
             GroupCoordinator,
             actor::{CommitFence, SubscribedTopics},
@@ -770,8 +771,12 @@ async fn actor_loop(
                 if actor.state.members.is_empty() || !actor.assignment_pending() {
                     continue;
                 }
-                if reconcile_and_flush(&mut actor, turn).await.is_err() {
-                    break;
+                if let Err(error) = reconcile_and_flush(&mut actor, turn).await {
+                    if matches!(error, BrokerError::StreamsTaskAssignment { .. }) {
+                        tracing::warn!(%error, "Streams delayed assignment failed; retaining prior state");
+                    } else {
+                        break;
+                    }
                 }
             }
             Wake::Image(image) => {
@@ -1082,8 +1087,8 @@ pub(crate) fn resolve_group_config_from_image(
     // unavailable on this node. Preserve all unrelated group overrides.
     let mut applicable = overrides.clone();
     if let Some(name) = applicable.get(super::config::KEY_ASSIGNOR_NAME)
-        && defaults.task_assignors.get(name.trim()).is_none()
-        && super::config::StreamsAssignorKind::from_config_name(name.trim()).is_none()
+        && defaults.task_assignors.get(java_trim(name)).is_none()
+        && super::config::StreamsAssignorKind::from_config_name(java_trim(name)).is_none()
     {
         applicable.remove(super::config::KEY_ASSIGNOR_NAME);
     }

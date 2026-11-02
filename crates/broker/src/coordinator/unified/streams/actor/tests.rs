@@ -2837,3 +2837,71 @@ fn task_assignor_registry_unavailable_persisted_name_preserves_other_overrides()
     assert!(config.num_standby_replicas == 1);
     assert!(config.selected_task_assignor_name() == "sticky");
 }
+
+#[test]
+fn task_assignor_registry_persisted_unicode_name_uses_java_string_trimming() {
+    use super::super::assignor::test_support::{Pin, registered_config};
+    let name = "\u{a0}custom\u{a0}";
+    let mut defaults = registered_config();
+    defaults
+        .task_assignors
+        .register(Arc::new(Pin(name, "b")))
+        .expect("register");
+    let image = persisted_streams_configs(maplit::btreemap! {
+        KEY_NUM_STANDBY_REPLICAS.into() => "1".into(),
+        "streams.assignor.name".into() => name.into(),
+    });
+    let selected = resolve_group_config_from_image(&defaults, &image, "streams-app");
+    assert!(selected.num_standby_replicas == 1);
+    assert!(selected.selected_task_assignor_name() == name);
+}
+
+#[tokio::test]
+async fn task_assignor_registry_failure_returns_unknown_server_and_rolls_back_before_retry() {
+    use {
+        super::super::assignor::test_support::Recoverable,
+        std::sync::atomic::{AtomicBool, Ordering},
+    };
+    let fail = Arc::new(AtomicBool::new(false));
+    let mut config = undelayed();
+    config
+        .task_assignors
+        .register(Arc::new(Recoverable(Arc::clone(&fail))))
+        .expect("register");
+    let log = Arc::new(InMemoryOffsetsLog::default());
+    let coordinator = coordinator_with_log(config, Arc::clone(&log));
+    coordinator.set_metadata_source(input_topic_source(1));
+    let handle = coordinator.get_or_create_streams("g");
+    let request = |member: &str| {
+        streams_join_request()
+            .topology(one_subtopology().call())
+            .member_id(member)
+            .call()
+    };
+    let first = heartbeat_result_at(&handle, request("m1"), 1)
+        .await
+        .response;
+    assert!(first.error_code == codes::NONE);
+    let before = coordinator
+        .cached_streams_seed("g")
+        .expect("committed seed");
+    let batches_before = log.batches().await.len();
+    fail.store(true, Ordering::SeqCst);
+    let failure = heartbeat_result_at(&handle, request("m2"), 1)
+        .await
+        .response;
+    assert!(failure.error_code == codes::UNKNOWN_SERVER_ERROR);
+    assert!(coordinator.cached_streams_seed("g") == Some(before));
+    assert!(log.batches().await.len() == batches_before);
+    assert!(describe_member_ids(&handle).await == vec!["m1".to_owned()]);
+    assert!(!handle.tx.is_closed());
+    fail.store(false, Ordering::SeqCst);
+    let retried = heartbeat_result_at(&handle, request("m2"), 1)
+        .await
+        .response;
+    assert!(retried.error_code == codes::NONE);
+    assert!(describe_member_ids(&handle).await == vec!["m1".to_owned(), "m2".to_owned()]);
+    coordinator.shutdown_all().await;
+}
+
+mod assignment_failure_model;

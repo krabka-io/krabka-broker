@@ -86,6 +86,28 @@ pub(super) async fn handle_heartbeat(
     req: &StreamsGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
 ) -> Result<StreamsGroupHeartbeatResponse, BrokerError> {
+    let before = (turn.config.selected_task_assignor_name() != "sticky").then(|| actor.clone());
+    match handle_heartbeat_inner(actor, turn, req, client).await {
+        Err(error @ BrokerError::StreamsTaskAssignment { .. }) => {
+            let Some(before) = before else {
+                return Err(error);
+            };
+            *actor = before;
+            Ok(error_resp(
+                codes::UNKNOWN_SERVER_ERROR,
+                Some(error.to_string()),
+            ))
+        }
+        result => result,
+    }
+}
+
+async fn handle_heartbeat_inner(
+    actor: &mut ActorState,
+    turn: StreamsTurn<'_>,
+    req: &StreamsGroupHeartbeatRequest,
+    client: ClientIdentity<'_>,
+) -> Result<StreamsGroupHeartbeatResponse, BrokerError> {
     let StreamsTurn {
         config,
         metadata_source,
@@ -176,7 +198,7 @@ pub(super) async fn handle_heartbeat(
         {
             accept_topology(actor, topo);
         }
-        reconcile(actor, config, metadata_source);
+        reconcile(actor, config, metadata_source)?;
         if req.shutdown_application {
             actor.state.request_shutdown(&new_member_id);
         }
@@ -249,7 +271,7 @@ pub(super) async fn handle_heartbeat(
     refresh_topic_metadata(actor, config, metadata_source);
 
     if actor.state.dirty || actor.assignment_pending() {
-        reconcile(actor, config, metadata_source);
+        reconcile(actor, config, metadata_source)?;
     }
     // Kafka's `maybeReconcile`: move the member toward the target, and arm
     // or cancel its rebalance timeout when its assignment changed.

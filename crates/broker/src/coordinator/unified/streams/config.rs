@@ -6,6 +6,7 @@ use {
     },
     crate::{
         api_catalog::UnstableApiVersions,
+        config_keys::parse::java_trim,
         coordinator::unified::config::{
             MAX_ASSIGNMENT_INTERVAL, MIN_ASSIGNMENT_INTERVAL, broker_assignment_interval,
             clamp_to_range,
@@ -501,10 +502,10 @@ impl StreamsGroupConfig {
                     out.task_offset_interval = parse_positive_millis(key, value)?;
                 }
                 KEY_ASSIGNOR_NAME => {
-                    if self.task_assignors.get(value.trim()).is_some() {
-                        out.task_assignor_name = Some(value.trim().into());
+                    if self.task_assignors.get(java_trim(value)).is_some() {
+                        out.task_assignor_name = Some(java_trim(value).into());
                     } else {
-                        out.assignor = StreamsAssignorKind::parse(value)?;
+                        out.assignor = StreamsAssignorKind::parse(java_trim(value))?;
                         out.task_assignor_name = Some("sticky".into());
                     }
                 }
