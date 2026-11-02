@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "source_revision": "2ee48444c2dee6d7128ebba8a4462b56961a49a2",
+  "qualification_pass": false,
+  "scope": "Delayed-copy pure eligibility only; not six-surface released-Kafka qualification.",
+  "source_sha256": {
+    "crates/verified/src/remote_copy.rs": "205e7c4567c6adc7443b805661404d1cbf2cc6438ad1ce1e38083a5b4f8268a2",
+    "crates/broker/src/remote_log_manager/copy.rs": "7468441d46049d1146d00c747794e022bc56f144016a211c1f880d543b921b00",
+    "crates/broker/src/remote_log_manager/copy_delay_model.rs": "694a4f36899a3cd66217e102967831fc6e04eea753f63a8a5fe5e1e8e21d115c"
+  },
+  "creusot": {
+    "version": "0.14.0",
+    "image": "ghcr.io/krabka-io/creusot@sha256:992bd1a7a51c58e188dc2b31a6eef36be106217dcf24450f9a4a52cfdeee561b",
+    "command": "cargo creusot --package krabka-verified --why3find-arg=-j --why3find-arg=2 -- --ignore-rust-version",
+    "exit_code": 0,
+    "result": "Proved (616 files)",
+    "new_obligations": {
+      "vc_abs_diff'0": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      },
+      "vc_remote_copy_allowed": {
+        "prover": "alt-ergo",
+        "time": 0.032
+      },
+      "vc_saturating_add": {
+        "prover": "alt-ergo",
+        "time": 0.007
+      }
+    },
+    "preconditions": [],
+    "host_boundary": [
+      "effective configuration derivation",
+      "clock and timestamp selection",
+      "byte counting",
+      "segment ordering",
+      "leadership",
+      "remote IO and metadata durability",
+      "retention and recovery"
+    ]
+  },
+  "negative_control": {
+    "mutation": "replace remote_copy_allowed implementation with unconditional true while preserving exact unconditional contract in an isolated crate",
+    "source_sha256": "aafe31137d0a125b89ca5b91965439e0e7a2881179cc624ce861cb26ff343444",
+    "command": "cargo creusot --why3find-arg=-j --why3find-arg=2",
+    "expected_exit_code": 1,
+    "actual_exit_code": 1,
+    "result": "Goal Coma.vc_remote_copy_allowed: failed; 1 unproved file"
+  },
+  "stateright": {
+    "command": "cargo test -p krabka-broker --lib delayed_copy_interleaves_limits_clock_and_byte_growth -- --nocapture",
+    "exit_code": 0,
+    "unique_states": 540,
+    "generated_states": 3358,
+    "max_depth": 12,
+    "guards": {
+      "depth": 16,
+      "generated_target": 20000,
+      "unique_bound": 1000
+    },
+    "always": [
+      "no_early_upload",
+      "eligible_when_triggered"
+    ],
+    "sometimes": [
+      "delayed_despite_positive_limits",
+      "age_threshold_is_inclusive",
+      "future_timestamp_bypasses_delay",
+      "bytes_release_before_age",
+      "unlimited_both_remains_delayed"
+    ],
+    "excludes": [
+      "remote IO",
+      "leadership",
+      "metadata persistence",
+      "restart"
+    ]
+  },
+  "runtime": {
+    "kernel_boundaries": {
+      "command": "cargo test -p krabka-verified remote_copy --lib",
+      "passed": 10,
+      "failed": 0
+    },
+    "copy_path": {
+      "command": "target/debug/deps/krabka_broker-f2cd018ede5f926c remote_log_manager::copy:: --nocapture",
+      "passed": 46,
+      "failed": 0,
+      "includes_model_test": true
+    }
+  },
+  "checks": {
+    "workspace_all_targets_clippy": {
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "exit_code": 0
+    },
+    "cpd": {
+      "command": "aspect check-cpd",
+      "clones": 0
+    },
+    "check_scripts": 0,
+    "check_creusot_packages": 0,
+    "check_creusot_skip": 0,
+    "rustfmt_check": 0,
+    "diff_check": 0
+  },
+  "remaining": "Positive delayed remote-upload execution with released remote-storage fixture, fault/recovery/multibroker paths, and every other coverage-ledger gap remain open."
+}

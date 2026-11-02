@@ -9,6 +9,10 @@ on:
       - "qualification/**"
       - ".github/workflows/kafka44-evidence.yml"
 
+concurrency:
+  group: kafka44-evidence-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
