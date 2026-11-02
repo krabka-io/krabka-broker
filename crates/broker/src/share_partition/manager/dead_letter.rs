@@ -6,7 +6,8 @@
 //! hands over the runs that the machine has noted only once the coordinator has
 //! stored them as `Archiving`. A leader that stops before the second phase
 //! ends leaves those runs in the coordinator, and the next leader that loads
-//! the partition resumes them, so a record is written at least once.
+//! the partition resumes them. This can duplicate a previously appended copy;
+//! a terminal destination failure can archive a range without any DLQ copy.
 //!
 //! The second phase is Kafka's `SharePartition.initiateDLQAndArchive`: it
 //! archives the run whether or not the write worked, because a record that
