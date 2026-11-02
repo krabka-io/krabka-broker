@@ -7,7 +7,7 @@ import org.apache.kafka.server.log.remote.storage.*;
 public class RecordingStorage implements RemoteStorageManager {
     private Path root;
     public void configure(Map<String, ?> config) { root = Path.of(config.get("dir").toString()); }
-    private Path dir(RemoteLogSegmentMetadata m) { return root.resolve(m.remoteLogSegmentId().id().toString()); }
+    private Path dir(RemoteLogSegmentMetadata m) { return root.resolve(m.topicIdPartition().topicPartition().topic()).resolve(m.remoteLogSegmentId().id().toString()); }
     public Optional<RemoteLogSegmentMetadata.CustomMetadata> copyLogSegmentData(RemoteLogSegmentMetadata m, LogSegmentData d) throws RemoteStorageException {
         try {
             Path target=dir(m); Files.createDirectories(target);

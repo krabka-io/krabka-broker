@@ -314,5 +314,10 @@
     "__remote_log_metadata": {
       "min.insync.replicas": "1"
     }
+  },
+  "scope_review": {
+    "accepted_as_final": false,
+    "reason": "Early fixture counted global archive deltas; unrelated older-topic copy activity could confuse it. Superseded by exact-topic scoping, physical decoy regression, repeated10cases with actual CRC/key/value prefix decoding and failure witnesses.",
+    "replacement": "qualification/kafka44-delayed-copy-scoped-fault-data.json"
   }
 }

@@ -1,0 +1,459 @@
+{
+  "qualification_pass": false,
+  "candidate_revision": "b734bbab95deb758c12f3895678c6c421abf04ee",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "image_check": {
+    "command": [
+      "docker",
+      "inspect",
+      "qualification-tiered-restarted",
+      "--format",
+      "{{.Config.Image}}"
+    ],
+    "returncode": 0,
+    "stdout": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b\n",
+    "stderr": ""
+  },
+  "setup": [
+    {
+      "command": [
+        "docker",
+        "cp",
+        "qualification-tiered-restarted:/opt/kafka/libs/.",
+        "../qualification-tiered-runtime/task-data-final/libs/"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "javac",
+        "--release",
+        "17",
+        "-cp",
+        "../qualification-tiered-runtime/task-data-final/libs/*",
+        "-d",
+        "../qualification-tiered-runtime/task-data-final/classes",
+        "tools/kafka44/CopyProbe.java",
+        "tools/kafka44/RecordingStorage.java",
+        "tools/kafka44/CopyArchiveScopeTest.java",
+        "tools/kafka44/FaultCopyProbe.java",
+        "tools/kafka44/CopyArchiveRecords.java"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+        "CopyArchiveScopeTest",
+        "../qualification-tiered-runtime/task-data-final/scope-test"
+      ],
+      "returncode": 0,
+      "stdout": "archive-scope regression PASS\n",
+      "stderr": ""
+    }
+  ],
+  "config_sha256": "sha256:0d35038e4b03729006708db18d724dfd8a42234a4d91e56666c594ded02a0904",
+  "source_sha256": {
+    "tools/kafka44/CopyProbe.java": "sha256:12591b5285b344b3cd669fb6a487dcc29a9c756d7762dd793d41116305ea29de",
+    "tools/kafka44/RecordingStorage.java": "sha256:1ea29859117a7c2e75fb265191cb9adac51b19f29dba7835b4724f374b032261",
+    "tools/kafka44/CopyArchiveScopeTest.java": "sha256:671058781cf0e50183e40e3f44e7151d9933a38d1711ca4d7faaddb31eccafdf",
+    "tools/kafka44/FaultCopyProbe.java": "sha256:79097d8cb145bbc4b4919a0c9bddaf29810f706f52ade1fd5c3619f21a8de4f3",
+    "tools/kafka44/CopyArchiveRecords.java": "sha256:68691bd41194c9f38b8e053ce460ca314d32dbd043d92bd2a8bd4ac051e3eb04"
+  },
+  "limits": [
+    "Retained runtime not final combined Streams/DLQ heads",
+    "actual CRC/key/value/prefix checks establish uploaded prefix content, not fsync durability or remote consumer read path",
+    "permission failure/retry only; not mid-write crash, metadata-write failure, leadership fencing or full distributed fault parity",
+    "short threshold smokes, not exhaustive clock-skew/timing proof"
+  ],
+  "status": "copy-smoke-pass-not-qualified",
+  "results": {
+    "dynamic-zero-oracle": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+        "CopyProbe",
+        "127.0.0.1:60992",
+        "../qualification-tiered-runtime/archive",
+        "dynamic-zero"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-1df101aa-fa57-49d6-80a6-7543e4ba4cea\nDETAIL\tcopy-probe-1df101aa-fa57-49d6-80a6-7543e4ba4cea\tfiles=5\nSCENARIO\tdelay-then-dynamic-zero-copies\tPASS\n",
+      "stderr": "",
+      "archive_records": {
+        "command": [
+          "java",
+          "-cp",
+          "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+          "CopyArchiveRecords",
+          "../qualification-tiered-runtime/archive",
+          "copy-probe-1df101aa-fa57-49d6-80a6-7543e4ba4cea",
+          "24"
+        ],
+        "returncode": 0,
+        "stdout": "RECORDS\tcopy-probe-1df101aa-fa57-49d6-80a6-7543e4ba4cea\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+        "stderr": ""
+      }
+    },
+    "dynamic-zero-enabled": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+        "CopyProbe",
+        "127.0.0.1:49092",
+        "../qualification-tiered-runtime/candidate-archive2",
+        "dynamic-zero"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-f60ec4c6-1131-466e-a9b7-60642608c20f\nDETAIL\tcopy-probe-f60ec4c6-1131-466e-a9b7-60642608c20f\tfiles=5\nSCENARIO\tdelay-then-dynamic-zero-copies\tPASS\n",
+      "stderr": "",
+      "archive_records": {
+        "command": [
+          "java",
+          "-cp",
+          "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+          "CopyArchiveRecords",
+          "../qualification-tiered-runtime/candidate-archive2",
+          "copy-probe-f60ec4c6-1131-466e-a9b7-60642608c20f",
+          "24"
+        ],
+        "returncode": 0,
+        "stdout": "RECORDS\tcopy-probe-f60ec4c6-1131-466e-a9b7-60642608c20f\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+        "stderr": ""
+      }
+    },
+    "age-oracle": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+        "CopyProbe",
+        "127.0.0.1:60992",
+        "../qualification-tiered-runtime/archive",
+        "age"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-e49c042b-260f-41fb-bfd2-ac5d7eadee21\nDETAIL\tcopy-probe-e49c042b-260f-41fb-bfd2-ac5d7eadee21\tfiles=5\nSCENARIO\tdelay-then-age-copies\tPASS\n",
+      "stderr": "",
+      "archive_records": {
+        "command": [
+          "java",
+          "-cp",
+          "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+          "CopyArchiveRecords",
+          "../qualification-tiered-runtime/archive",
+          "copy-probe-e49c042b-260f-41fb-bfd2-ac5d7eadee21",
+          "24"
+        ],
+        "returncode": 0,
+        "stdout": "RECORDS\tcopy-probe-e49c042b-260f-41fb-bfd2-ac5d7eadee21\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+        "stderr": ""
+      }
+    },
+    "age-enabled": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+        "CopyProbe",
+        "127.0.0.1:49092",
+        "../qualification-tiered-runtime/candidate-archive2",
+        "age"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-16d673ad-8eb4-45b7-9f7e-61a4a69be503\nDETAIL\tcopy-probe-16d673ad-8eb4-45b7-9f7e-61a4a69be503\tfiles=5\nSCENARIO\tdelay-then-age-copies\tPASS\n",
+      "stderr": "",
+      "archive_records": {
+        "command": [
+          "java",
+          "-cp",
+          "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+          "CopyArchiveRecords",
+          "../qualification-tiered-runtime/candidate-archive2",
+          "copy-probe-16d673ad-8eb4-45b7-9f7e-61a4a69be503",
+          "24"
+        ],
+        "returncode": 0,
+        "stdout": "RECORDS\tcopy-probe-16d673ad-8eb4-45b7-9f7e-61a4a69be503\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+        "stderr": ""
+      }
+    },
+    "bytes-oracle": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+        "CopyProbe",
+        "127.0.0.1:60992",
+        "../qualification-tiered-runtime/archive",
+        "bytes"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-664e006b-da13-4912-b37b-55d2e96503fe\nDETAIL\tcopy-probe-664e006b-da13-4912-b37b-55d2e96503fe\tfiles=5\nSCENARIO\tdelay-then-bytes-copies\tPASS\n",
+      "stderr": "",
+      "archive_records": {
+        "command": [
+          "java",
+          "-cp",
+          "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+          "CopyArchiveRecords",
+          "../qualification-tiered-runtime/archive",
+          "copy-probe-664e006b-da13-4912-b37b-55d2e96503fe",
+          "48"
+        ],
+        "returncode": 0,
+        "stdout": "RECORDS\tcopy-probe-664e006b-da13-4912-b37b-55d2e96503fe\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+        "stderr": ""
+      }
+    },
+    "bytes-enabled": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+        "CopyProbe",
+        "127.0.0.1:49092",
+        "../qualification-tiered-runtime/candidate-archive2",
+        "bytes"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-cd6774e4-2a06-49a1-9576-926970bb4b28\nDETAIL\tcopy-probe-cd6774e4-2a06-49a1-9576-926970bb4b28\tfiles=5\nSCENARIO\tdelay-then-bytes-copies\tPASS\n",
+      "stderr": "",
+      "archive_records": {
+        "command": [
+          "java",
+          "-cp",
+          "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+          "CopyArchiveRecords",
+          "../qualification-tiered-runtime/candidate-archive2",
+          "copy-probe-cd6774e4-2a06-49a1-9576-926970bb4b28",
+          "48"
+        ],
+        "returncode": 0,
+        "stdout": "RECORDS\tcopy-probe-cd6774e4-2a06-49a1-9576-926970bb4b28\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+        "stderr": ""
+      }
+    },
+    "derived-age-oracle": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+        "CopyProbe",
+        "127.0.0.1:60992",
+        "../qualification-tiered-runtime/archive",
+        "derived-age"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-48c014a3-dd7c-40f4-b5c9-dd493e9f1c99\nDETAIL\tcopy-probe-48c014a3-dd7c-40f4-b5c9-dd493e9f1c99\tfiles=5\nSCENARIO\tdelay-then-derived-age-copies\tPASS\n",
+      "stderr": "",
+      "archive_records": {
+        "command": [
+          "java",
+          "-cp",
+          "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+          "CopyArchiveRecords",
+          "../qualification-tiered-runtime/archive",
+          "copy-probe-48c014a3-dd7c-40f4-b5c9-dd493e9f1c99",
+          "24"
+        ],
+        "returncode": 0,
+        "stdout": "RECORDS\tcopy-probe-48c014a3-dd7c-40f4-b5c9-dd493e9f1c99\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+        "stderr": ""
+      }
+    },
+    "derived-age-enabled": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+        "CopyProbe",
+        "127.0.0.1:49092",
+        "../qualification-tiered-runtime/candidate-archive2",
+        "derived-age"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-2ce5b2bb-123e-4c72-92cd-172aa96c3b6e\nDETAIL\tcopy-probe-2ce5b2bb-123e-4c72-92cd-172aa96c3b6e\tfiles=5\nSCENARIO\tdelay-then-derived-age-copies\tPASS\n",
+      "stderr": "",
+      "archive_records": {
+        "command": [
+          "java",
+          "-cp",
+          "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+          "CopyArchiveRecords",
+          "../qualification-tiered-runtime/candidate-archive2",
+          "copy-probe-2ce5b2bb-123e-4c72-92cd-172aa96c3b6e",
+          "24"
+        ],
+        "returncode": 0,
+        "stdout": "RECORDS\tcopy-probe-2ce5b2bb-123e-4c72-92cd-172aa96c3b6e\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+        "stderr": ""
+      }
+    },
+    "failed-upload-oracle": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+        "FaultCopyProbe",
+        "127.0.0.1:60992",
+        "../qualification-tiered-runtime/archive",
+        "failed-upload"
+      ],
+      "returncode": 0,
+      "stdout": "FAULT\tcopy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9\tarchive-writes-denied-for-3s\nDETAIL\tcopy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9\tarchive-present-after-permission-recovery\nSCENARIO\tdelay-then-failed-upload-copies\tPASS\n",
+      "stderr": "",
+      "original_permissions": {
+        "command": [
+          "stat",
+          "-c",
+          "%a",
+          "../qualification-tiered-runtime/archive"
+        ],
+        "returncode": 0,
+        "stdout": "777\n",
+        "stderr": ""
+      },
+      "permission_restore": {
+        "command": [
+          "chmod",
+          "777",
+          "../qualification-tiered-runtime/archive"
+        ],
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "archive_records": {
+        "command": [
+          "java",
+          "-cp",
+          "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+          "CopyArchiveRecords",
+          "../qualification-tiered-runtime/archive",
+          "copy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9",
+          "24"
+        ],
+        "returncode": 0,
+        "stdout": "RECORDS\tcopy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+        "stderr": ""
+      },
+      "failure_witness": {
+        "log": "../qualification-tiered-runtime/oracle-data-final.log",
+        "sha256": "78e733bd22cb6dc55f86c7713a18113c2ec930a8df6e62c556070a20b4def1b6",
+        "matching_lines": [
+          "org.apache.kafka.server.log.remote.storage.RemoteStorageException: java.nio.file.AccessDeniedException: /evidence/archive/copy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9",
+          "Caused by: java.nio.file.AccessDeniedException: /evidence/archive/copy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9",
+          "org.apache.kafka.server.log.remote.storage.RemoteStorageException: java.nio.file.AccessDeniedException: /evidence/archive/copy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9",
+          "Caused by: java.nio.file.AccessDeniedException: /evidence/archive/copy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9",
+          "org.apache.kafka.server.log.remote.storage.RemoteStorageException: java.nio.file.AccessDeniedException: /evidence/archive/copy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9",
+          "Caused by: java.nio.file.AccessDeniedException: /evidence/archive/copy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9",
+          "org.apache.kafka.server.log.remote.storage.RemoteStorageException: java.nio.file.AccessDeniedException: /evidence/archive/copy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9",
+          "Caused by: java.nio.file.AccessDeniedException: /evidence/archive/copy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9",
+          "org.apache.kafka.server.log.remote.storage.RemoteStorageException: java.nio.file.AccessDeniedException: /evidence/archive/copy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9",
+          "Caused by: java.nio.file.AccessDeniedException: /evidence/archive/copy-fault-24b6b57a-08d6-4e26-98ab-772047beb8c9"
+        ],
+        "count": 10
+      }
+    },
+    "failed-upload-enabled": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+        "FaultCopyProbe",
+        "127.0.0.1:49092",
+        "../qualification-tiered-runtime/candidate-archive2",
+        "failed-upload"
+      ],
+      "returncode": 0,
+      "stdout": "FAULT\tcopy-fault-b8880d2e-0699-4caf-a4d4-8ff6d6003d2a\tarchive-writes-denied-for-3s\nDETAIL\tcopy-fault-b8880d2e-0699-4caf-a4d4-8ff6d6003d2a\tarchive-present-after-permission-recovery\nSCENARIO\tdelay-then-failed-upload-copies\tPASS\n",
+      "stderr": "",
+      "original_permissions": {
+        "command": [
+          "stat",
+          "-c",
+          "%a",
+          "../qualification-tiered-runtime/candidate-archive2"
+        ],
+        "returncode": 0,
+        "stdout": "775\n",
+        "stderr": ""
+      },
+      "permission_restore": {
+        "command": [
+          "chmod",
+          "775",
+          "../qualification-tiered-runtime/candidate-archive2"
+        ],
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "archive_records": {
+        "command": [
+          "java",
+          "-cp",
+          "../qualification-tiered-runtime/task-data-final/classes:../qualification-tiered-runtime/task-data-final/libs/*",
+          "CopyArchiveRecords",
+          "../qualification-tiered-runtime/candidate-archive2",
+          "copy-fault-b8880d2e-0699-4caf-a4d4-8ff6d6003d2a",
+          "24"
+        ],
+        "returncode": 0,
+        "stdout": "RECORDS\tcopy-fault-b8880d2e-0699-4caf-a4d4-8ff6d6003d2a\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+        "stderr": ""
+      },
+      "failure_witness": {
+        "log": "../qualification-tiered-runtime/candidate-controller-restarted.log",
+        "sha256": "f842200bb8b8c685906cb8650879d268afd3c113fb1cbc18dbaa39a52cc19b44",
+        "matching_lines": [
+          "{\"base\":0,\"error\":\"remote storage I/O error: Permission denied (os error 13)\",\"message\":\"remote-log-manager: segment copy failed\",\"partition\":0,\"severity\":\"WARNING\",\"target\":\"krabka_broker::remote_log_manager::copy_segment\",\"timestamp\":\"2026-11-02T22:06:15.471298Z\",\"topic\":\"copy-fault-b8880d2e-0699-4caf-a4d4-8ff6d6003d2a\"}",
+          "{\"base\":0,\"error\":\"remote storage I/O error: Permission denied (os error 13)\",\"message\":\"remote-log-manager: segment copy failed\",\"partition\":0,\"severity\":\"WARNING\",\"target\":\"krabka_broker::remote_log_manager::copy_segment\",\"timestamp\":\"2026-11-02T22:06:15.972848Z\",\"topic\":\"copy-fault-b8880d2e-0699-4caf-a4d4-8ff6d6003d2a\"}",
+          "{\"base\":0,\"error\":\"remote storage I/O error: Permission denied (os error 13)\",\"message\":\"remote-log-manager: segment copy failed\",\"partition\":0,\"severity\":\"WARNING\",\"target\":\"krabka_broker::remote_log_manager::copy_segment\",\"timestamp\":\"2026-11-02T22:06:16.472451Z\",\"topic\":\"copy-fault-b8880d2e-0699-4caf-a4d4-8ff6d6003d2a\"}",
+          "{\"base\":0,\"error\":\"remote storage I/O error: Permission denied (os error 13)\",\"message\":\"remote-log-manager: segment copy failed\",\"partition\":0,\"severity\":\"WARNING\",\"target\":\"krabka_broker::remote_log_manager::copy_segment\",\"timestamp\":\"2026-11-02T22:06:16.972714Z\",\"topic\":\"copy-fault-b8880d2e-0699-4caf-a4d4-8ff6d6003d2a\"}",
+          "{\"base\":0,\"error\":\"remote storage I/O error: Permission denied (os error 13)\",\"message\":\"remote-log-manager: segment copy failed\",\"partition\":0,\"severity\":\"WARNING\",\"target\":\"krabka_broker::remote_log_manager::copy_segment\",\"timestamp\":\"2026-11-02T22:06:17.472383Z\",\"topic\":\"copy-fault-b8880d2e-0699-4caf-a4d4-8ff6d6003d2a\"}",
+          "{\"base\":0,\"error\":\"remote storage I/O error: Permission denied (os error 13)\",\"message\":\"remote-log-manager: segment copy failed\",\"partition\":0,\"severity\":\"WARNING\",\"target\":\"krabka_broker::remote_log_manager::copy_segment\",\"timestamp\":\"2026-11-02T22:06:17.973308Z\",\"topic\":\"copy-fault-b8880d2e-0699-4caf-a4d4-8ff6d6003d2a\"}",
+          "{\"base\":0,\"error\":\"remote storage I/O error: Permission denied (os error 13)\",\"message\":\"remote-log-manager: segment copy failed\",\"partition\":0,\"severity\":\"WARNING\",\"target\":\"krabka_broker::remote_log_manager::copy_segment\",\"timestamp\":\"2026-11-02T22:06:18.473196Z\",\"topic\":\"copy-fault-b8880d2e-0699-4caf-a4d4-8ff6d6003d2a\"}"
+        ],
+        "count": 7
+      }
+    }
+  },
+  "date": "2026-11-02",
+  "runtime_source_revision": "b734bbab95deb758c12f3895678c6c421abf04ee",
+  "binary_sha256": "f30a67a9e1fc886ece9a5ef3919a19f6cf7a86d26cac260e6655966c9d006b41",
+  "oracle_backend_jar_sha256": "272f2fc1cb4c292fa2162d57427f31d9de8373c59c67e6d3a8a539d1a73984b2",
+  "oracle_backend_source_sha256": "1ea29859117a7c2e75fb265191cb9adac51b19f29dba7835b4724f374b032261",
+  "oracle_effective_properties": "node.id=1\nprocess.roles=broker,controller\nlisteners=PLAINTEXT://127.0.0.1:60992,CONTROLLER://127.0.0.1:60993\nadvertised.listeners=PLAINTEXT://127.0.0.1:60992\ncontroller.listener.names=CONTROLLER\nlistener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT\ninter.broker.listener.name=PLAINTEXT\ncontroller.quorum.voters=1@127.0.0.1:60993\nlog.dirs=/evidence/oracle-data\nremote.log.storage.system.enable=true\nremote.log.storage.manager.class.name=RecordingStorage\nremote.log.storage.manager.class.path=/evidence/storage-v2.jar\nremote.log.storage.manager.impl.prefix=rsm.config.\nrsm.config.dir=/evidence/archive\nremote.log.metadata.manager.class.name=org.apache.kafka.server.log.remote.metadata.storage.TopicBasedRemoteLogMetadataManager\nremote.log.metadata.manager.listener.name=PLAINTEXT\nremote.log.metadata.manager.impl.prefix=rlmm.config.\nrlmm.config.remote.log.metadata.topic.replication.factor=1\nremote.log.manager.task.interval.ms=500\noffsets.topic.replication.factor=1\ntransaction.state.log.replication.factor=1\ntransaction.state.log.min.isr=1\n",
+  "oracle_dynamic_topic_config": {
+    "__remote_log_metadata": {
+      "min.insync.replicas": "1"
+    }
+  },
+  "runtime_flags": [
+    "--remote-log-manager-interval",
+    "500ms"
+  ],
+  "archive_scoping": "only exact fresh topic directory (oracle) or topic-0-ID directory (candidate); physical decoy regression executed in setup",
+  "raw_evidence": {
+    "path": "../qualification-tiered-runtime/task-data-final/evidence.json",
+    "sha256": "13bb93f2106aba10751394844512dc93aa89021ae92f2cc7a3cc67863ad8217e",
+    "task_duration_s": 56.0
+  },
+  "negative_control": {
+    "description": "Copied only an owned native uploaded segment to private crc-negative-control, original preserved. Same released checker passes unmodifiedcopy; flipping byte100 rejects with CorruptRecordException.",
+    "valid_exit": 0,
+    "corrupt_exit": 1,
+    "valid_output": "RECORDS\tscope-check\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+    "corrupt_output": "Exception in thread \"main\" org.apache.kafka.common.errors.CorruptRecordException: Record is corrupt (stored crc = 1821540001, computed crc = 2067965568)\n"
+  }
+}

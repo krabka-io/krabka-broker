@@ -181,5 +181,10 @@
     "path": "../qualification-tiered-runtime/task-all/evidence.json",
     "sha256": "2de6b149f136bc25971ccb326448e72f05f085e299cbf121ef043cbb7237f0f1",
     "task_log": "../qualification-tiered-runtime/task-all.log"
+  },
+  "scope_review": {
+    "accepted_as_final": false,
+    "reason": "Early fixture counted global archive deltas; unrelated older-topic copy activity could confuse it. Superseded by exact-topic scoping, physical decoy regression, repeated10cases with actual CRC/key/value prefix decoding and failure witnesses.",
+    "replacement": "qualification/kafka44-delayed-copy-scoped-fault-data.json"
   }
 }

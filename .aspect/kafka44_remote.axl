@@ -16,7 +16,7 @@ def _impl(ctx: TaskContext) -> int:
     problems = input_problems(a.revision, [])
     if not all([a.oracle_container, a.oracle_bootstrap, a.oracle_archive, a.enabled_bootstrap, a.enabled_archive, a.enabled_config, a.output]):
         problems.append("all prepared isolated broker, archive, configuration and output arguments required")
-    if a.mode not in ["dynamic-zero", "age", "bytes", "derived-age", "all"]:
+    if a.mode not in ["dynamic-zero", "age", "bytes", "derived-age", "failed-upload", "all"]:
         problems.append("unknown copy scenario mode")
     if problems:
         fail("; ".join(problems))
@@ -30,17 +30,34 @@ def _impl(ctx: TaskContext) -> int:
         fail("candidate revision must exist locally")
     _run(ctx, ["mkdir", "-p", a.output + "/libs", a.output + "/classes"])
     setup = [_run(ctx, ["docker", "cp", a.oracle_container + ":/opt/kafka/libs/.", a.output + "/libs/"])]
-    setup.append(_run(ctx, ["javac", "--release", "17", "-cp", a.output + "/libs/*", "-d", a.output + "/classes", "tools/kafka44/CopyProbe.java", "tools/kafka44/RecordingStorage.java"]))
-    evidence = {"qualification_pass": False, "candidate_revision": a.revision, "oracle_image": IMAGE, "image_check": image, "setup": setup, "config_sha256": text_sha256(ctx.std.fs.read_to_string(a.enabled_config)), "source_sha256": {path: text_sha256(ctx.std.fs.read_to_string(path)) for path in ["tools/kafka44/CopyProbe.java", "tools/kafka44/RecordingStorage.java"]}, "limits": "Prepared copy-only fixture, not remote reads/durability/crash/failover or full qualification"}
+    setup.append(_run(ctx, ["javac", "--release", "17", "-cp", a.output + "/libs/*", "-d", a.output + "/classes", "tools/kafka44/CopyProbe.java", "tools/kafka44/RecordingStorage.java", "tools/kafka44/CopyArchiveScopeTest.java", "tools/kafka44/FaultCopyProbe.java", "tools/kafka44/CopyArchiveRecords.java"]))
+    setup.append(_run(ctx, ["java", "-cp", a.output + "/classes:" + a.output + "/libs/*", "CopyArchiveScopeTest", a.output + "/scope-test"]))
+    evidence = {"qualification_pass": False, "candidate_revision": a.revision, "oracle_image": IMAGE, "image_check": image, "setup": setup, "config_sha256": text_sha256(ctx.std.fs.read_to_string(a.enabled_config)), "source_sha256": {path: text_sha256(ctx.std.fs.read_to_string(path)) for path in ["tools/kafka44/CopyProbe.java", "tools/kafka44/RecordingStorage.java", "tools/kafka44/CopyArchiveScopeTest.java", "tools/kafka44/FaultCopyProbe.java", "tools/kafka44/CopyArchiveRecords.java"]}, "limits": "Prepared copy-only fixture, not remote reads/durability/crash/failover or full qualification"}
     if any([r["returncode"] for r in setup]):
         evidence["status"] = "setup-failure"
         ctx.std.fs.write(a.output + "/evidence.json", json.encode(evidence) + "\n")
         return 1
     results = {}
     failed = False
-    for mode in (["dynamic-zero", "age", "bytes", "derived-age"] if a.mode == "all" else [a.mode]):
+    for mode in (["dynamic-zero", "age", "bytes", "derived-age", "failed-upload"] if a.mode == "all" else [a.mode]):
         for side, endpoint, archive in [("oracle", a.oracle_bootstrap, a.oracle_archive), ("enabled", a.enabled_bootstrap, a.enabled_archive)]:
-            result = _run(ctx, ["java", "-cp", a.output + "/classes:" + a.output + "/libs/*", "CopyProbe", endpoint, archive, mode])
+            permissions = _run(ctx, ["stat", "-c", "%a", archive]) if mode == "failed-upload" else None
+            if permissions and permissions["returncode"]:
+                results[mode + "-" + side] = permissions
+                failed = True
+                continue
+            result = _run(ctx, ["java", "-cp", a.output + "/classes:" + a.output + "/libs/*", "FaultCopyProbe" if mode == "failed-upload" else "CopyProbe", endpoint, archive, mode])
+            if permissions:
+                result["original_permissions"] = permissions
+                result["permission_restore"] = _run(ctx, ["chmod", permissions["stdout"].strip(), archive])
+                failed = failed or result["permission_restore"]["returncode"] != 0
+            if copy_probe_success(result, mode):
+                topics = [line.split("\t")[1] for line in result["stdout"].splitlines() if line.startswith("DETAIL\t")]
+                if len(topics) != 1:
+                    failed = True
+                else:
+                    result["archive_records"] = _run(ctx, ["java", "-cp", a.output + "/classes:" + a.output + "/libs/*", "CopyArchiveRecords", archive, topics[0], "48" if mode == "bytes" else "24"])
+                    failed = failed or result["archive_records"]["returncode"] != 0
             results[mode + "-" + side] = result
             failed = failed or not copy_probe_success(result, mode)
 
@@ -49,7 +66,7 @@ def _impl(ctx: TaskContext) -> int:
     return 1 if failed else 0
 
 kafka44_remote = task(summary = "Run copy-delay smoke on prepared isolated released/enabled brokers", implementation = _impl, args = {name: args.string(default = "dynamic-zero" if name == "mode" else "", description = description) for name, description in {
-    "mode": "dynamic-zero, age, bytes, derived-age, or all.",
+    "mode": "dynamic-zero, age, bytes, derived-age, failed-upload, or all.",
     "revision": "Exact enabled candidate source SHA.",
     "oracle_container": "Prepared pinned released container with RecordingStorage backend.",
     "oracle_bootstrap": "Isolated released broker endpoint.",
