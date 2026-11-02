@@ -7,7 +7,7 @@ import org.apache.kafka.clients.producer.*;
 import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.serialization.*;
 
-/** Three-node source restart while a destination leader is paused. */
+/** Three-node source restart before append or after append confirmation is gated. */
 public class ShareFault {
   static final String RUN=System.getProperty("dlq.run","fault02");
   static final String SOURCE="source-"+RUN, DEST="dlq."+RUN, GROUP="group-"+RUN;
@@ -57,13 +57,19 @@ public class ShareFault {
     try(KafkaConsumer<byte[],byte[]> consumer=new KafkaConsumer<>(p)) {
       consumer.assign(List.of(new org.apache.kafka.common.TopicPartition(DEST,0)));consumer.seekToBeginning(consumer.assignment());
       long end=System.nanoTime()+Duration.ofSeconds(15).toNanos();
-      while(System.nanoTime()<end)for(var r:consumer.poll(Duration.ofMillis(250))) {count++;if(r.value()==null||r.value().length!=100)throw new AssertionError("lost payload");}
+      while(System.nanoTime()<end) {
+        for(var r:consumer.poll(Duration.ofMillis(250))) {count++;if(!Arrays.equals(r.key(),new byte[]{1})||!Arrays.equals(r.value(),new byte[100]))throw new AssertionError("lost payload");}
+        if(args[1].equals("count") && count>0)break;
+      }
     }
+    if(args[1].equals("count")) {System.out.println("COUNT dlq_records="+count);return;}
     try(Admin admin=Admin.create(ShareBoundary.props(args[0]))) {
       var tp=new org.apache.kafka.common.TopicPartition(SOURCE,0);
       var info=admin.listShareGroupOffsets(Map.of(GROUP,new ListShareGroupOffsetsSpec().topicPartitions(List.of(tp)))).partitionsToOffsetInfo(GROUP).get().get(tp);
       if(!info.lag().equals(Optional.of(0L)))throw new AssertionError("not terminal: "+info);
       if(count<1)throw new AssertionError("lost DLQ record");
+      int expected=Integer.getInteger("dlq.expected.count",-1);
+      if(expected>=0 && count!=expected)throw new AssertionError("expected "+expected+" DLQ copies, got "+count);
       System.out.printf("FINAL dlq_records=%d start=%d lag=%d%n",count,info.startOffset(),info.lag().get());
     }
   }

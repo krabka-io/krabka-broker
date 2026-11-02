@@ -1,8 +1,9 @@
 # Released Kafka 4.4 DLQ component qualification (#1974)
 
-This is **partial qualification**: released handler components, live destination Produce boundaries,
-and a real released share-consumer rejection/copy boundary run. Exact-boundary candidate differential is measured below; broader
-mid-ARCHIVING crash and multi-broker qualification remain incomplete.
+This records released/candidate handler, real share-consumer exact-boundary,
+JMX-counter, restart and three-node crash comparisons. Both pre-append failure
+and append-before-confirmation schedules are measured. It is not exhaustive
+network-fault qualification; the terminal-prefix deviation remains explicit.
 
 ## Reproduction
 
@@ -50,7 +51,7 @@ Pinned release sources:
 - [State manager](https://github.com/apache/kafka/blob/4.4.0/server/src/main/java/org/apache/kafka/server/share/dlq/ShareGroupDLQStateManager.java): first record is sent intact even oversized; terminal errors count failure, leader errors retry.
 - [Manager interface](https://github.com/apache/kafka/blob/4.4.0/server/src/main/java/org/apache/kafka/server/share/dlq/ShareGroupDLQManager.java): `enqueue(ShareGroupDLQRecordParameter)` returns `CompletableFuture<Void>` and `stop()` handles cleanup. Parameters include group, topic-id/partition, inclusive offsets, optional delivery count and cause. This is a JVM extension, not a wire API.
 - [Default implementation](https://github.com/apache/kafka/blob/4.4.0/server/src/main/java/org/apache/kafka/server/share/dlq/DefaultShareGroupDLQManager.java): validation and delegation to the state manager.
-- [SharePartition](https://github.com/apache/kafka/blob/4.4.0/core/src/main/java/kafka/server/share/SharePartition.java): `initiateDLQAndArchive` archives even when enqueue fails; `maybeResumeDlqArchiving` re-enqueues recovered ARCHIVING ranges. This establishes a source-level duplicate window after DLQ append but before durable ARCHIVED. Failure can leave no DLQ record although the source is archived. **These are source-derived expectations, not measured crash guarantees.**
+- [SharePartition](https://github.com/apache/kafka/blob/4.4.0/core/src/main/java/kafka/server/share/SharePartition.java): `initiateDLQAndArchive` archives even when enqueue fails; `maybeResumeDlqArchiving` re-enqueues recovered ARCHIVING ranges. This establishes a source-level duplicate window after DLQ append but before durable ARCHIVED. Failure can leave no DLQ record although the source is archived. The two measured crash schedules below confirm restart re-enqueue and its duplicate window; these are not universal crash guarantees.
 
 The separately tracked [native manager follow-up](https://github.com/krabka-io/krabka-broker/issues/1982)
 adds public per-broker factory registration and enqueue/stop lifecycle; see
@@ -58,20 +59,14 @@ adds public per-broker factory registration and enqueue/stop lifecycle; see
 This is a native Rust embedding API, not JVM class/JAR loading or a class-name
 loader in the stock executable. Keep that deployment boundary explicit.
 
-## Still required before closing #1974
+## Remaining qualification boundary
 
-- Full released-broker request/failure/written JMX meters; actual candidate
-  counters and released component counters are measured, not equivalent evidence.
-- Resolve/accept the terminal-prefix persistence difference measured below:
-  released retains ARCHIVED rows/start=0/count=1; candidate prunes/start=1/count=0.
-- The append-before-ARCHIVED crash point with measured duplicate/loss outcomes;
-  actual pre-append ARCHIVING crash plus destination failover is measured below.
-- Complete validation of the separately scoped native extension follow-up #1982;
-  implementation and behavioral tests are included in this branch.
-
-Existing Krabka tests cover failed writes still archiving, recovered cause
-inference, and per-attempt leader lookup. They do not replace multi-broker crash
-qualification. #1969's qualification lane must retain this limitation.
+Terminal-prefix persistence remains different: released retains ARCHIVED
+rows/start=0/count=1; candidate prunes/start=1/count=0. Both measured restart
+schedules have zero source redelivery and lag0, but exact state parity must not
+be claimed. Native manager registration/lifecycle is implemented and tested
+in this branch (#1982). Arbitrary partitions, uncooperative plugin IO and
+exhaustive Jepsen schedules remain outside these bounds; #1969 must retain them.
 
 ## Candidate verification
 
@@ -275,9 +270,8 @@ acquisition; it is not a claim of identical fault-run delivery counters.
 
 Both destinations failed over while their old leader remained paused. These
 runs demonstrate the measured **pre-append** crash schedule, not exactly-once
-archival. The append-before-durable-ARCHIVED crash window is still modeled but
-not live-injected, so duplicate/loss guarantees beyond these schedules remain
-unqualified. The rejected commit can return UNKNOWN_SERVER_ERROR during source
+archival. The append-before-confirmation window is measured below. Duplicate/loss
+guarantees beyond these schedules remain unqualified. The rejected commit can return UNKNOWN_SERVER_ERROR during source
 death; recovery is verified through the persisted state and later consumer run.
 
 ## Formal proof execution
@@ -316,3 +310,42 @@ node is used, with a512MiB heap. Run `JmxCounts` with
 `service:jmx:rmi:///jndi/rmi://127.0.0.1:39904/jmxrmi j01` after `ShareBoundary`.
 This closes the earlier released-JMX counter gap for the size scenarios; it is
 not a rate/timer calibration or post-crash counter continuity guarantee.
+
+## Actual append-before-ARCHIVED source crash
+
+`WireResponseGate.java` is a loopback framed TCP proxy, not a production hook.
+Advertise destination leader2 through it; it forwards requests unchanged and
+holds the first actual DLQ Produce response (API0/v13), after backend response.
+The one-shot gate does not block a new recovered producer connection. Run with
+`listen-port backend-port gate-dir`. Use a fresh `-Ddlq.run=dup03` namespace
+for `ShareFault setup/reject/count/resume/verify`; pass `-Ddlq.expected.count=2`
+to final verification. Every original key/value byte is compared, not just size.
+After `held.txt`, count must read one DLQ copy, decode state3 from actual state
+log and immediately kill source1/restart same disk. Recovery polling must return
+no source record. Both clusters use source1, destination2 and state3 leaders.
+
+Released response62bytes held1793588692002ms; readable append observed
+1793588693611130259ns, kill completed1793588693754167475ns. Candidate response
+62bytes held1793589159276ms; readable append observed1793589160914798322ns,
+SIGKILL1793589160915003055ns. Both latest durable rows were ARCHIVING at kill.
+`append-{release,candidate}-timeline.txt` retains response SHA256 and timelines;
+count-before/state-before/resume/state-final/verify retain actual observations.
+Released final ARCHIVED timestamp1793588960989ms and candidate terminal-prefix
+timestamp1793589469759ms strictly follow the kills. Both deliveryCount1.
+
+**Both finish with two intact DLQ copies, no source redelivery and lag0.**
+Released retains start0/state4/count1; candidate prunes start1/count0. This is a
+real duplicate witness, not exactly-once archival. Readable append plus state3
+observation excludes the earlier missed-window failure. Lost responses may
+duplicate; terminal errors may archive without a copy, as boundary runs show.
+
+## Native regression execution
+
+After registration/lifecycle changes,154 share_partition library tests and28
+share_consume wire integration tests passed. This includes three public-facade
+registration/delegation/refusal/start-error examples, three lifecycle cases,
+and coalescer cancellation with blocked transport and queued work. Strict
+library+share-consumer Clippy passed; CPD0clones and script accounting passed.
+Wider all-integration-target Clippy found one test-doc backtick omission (fixed);
+its rerun exhausted host disk writing compiler caches. Do not report that
+infrastructure failure as a passing wider check.

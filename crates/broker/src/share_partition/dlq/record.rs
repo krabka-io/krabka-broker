@@ -427,7 +427,7 @@ mod tests {
 
     /// A source record that fit the fetch budget can still be over
     /// `max.message.bytes` once the six headers and the batch header are added.
-    /// The record keeps its payload: MESSAGE_TOO_LARGE is a terminal write
+    /// The record keeps its payload: `MESSAGE_TOO_LARGE` is a terminal write
     /// failure, not permission to silently replace the source contents.
     #[test]
     fn a_copied_record_keeps_its_payload_at_and_over_the_exact_size_boundary() {
