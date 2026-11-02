@@ -1,0 +1,16 @@
+release group=grpr03f0 archiving_persisted=true final_start=0 final_states=[4] completion_count=1
+release group=grpr03f1 archiving_persisted=true final_start=0 final_states=[4] completion_count=1
+release group=grpr03f2 archiving_persisted=true final_start=0 final_states=[4] completion_count=1
+release group=grpr03f3 archiving_persisted=true final_start=0 final_states=[4] completion_count=1
+release group=grpr03t0 archiving_persisted=true final_start=0 final_states=[4] completion_count=1
+release group=grpr03t1 archiving_persisted=true final_start=0 final_states=[4] completion_count=1
+release group=grpr03t2 archiving_persisted=true final_start=0 final_states=[4] completion_count=1
+release group=grpr03t3 archiving_persisted=true final_start=0 final_states=[4] completion_count=1
+candidate group=grpc02f0 archiving_persisted=true final_start=1 final_states=[] completion_count=0
+candidate group=grpc02f1 archiving_persisted=true final_start=1 final_states=[] completion_count=0
+candidate group=grpc02f2 archiving_persisted=true final_start=1 final_states=[] completion_count=0
+candidate group=grpc02f3 archiving_persisted=true final_start=1 final_states=[] completion_count=0
+candidate group=grpc02t0 archiving_persisted=true final_start=1 final_states=[] completion_count=0
+candidate group=grpc02t1 archiving_persisted=true final_start=1 final_states=[] completion_count=0
+candidate group=grpc02t2 archiving_persisted=true final_start=1 final_states=[] completion_count=0
+candidate group=grpc02t3 archiving_persisted=true final_start=1 final_states=[] completion_count=0

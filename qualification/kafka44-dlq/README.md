@@ -61,8 +61,8 @@ a separately scoped follow-up; do not advertise this capability as parity.
 
 - Full released-broker request/failure/written JMX meters; actual candidate
   counters and released component counters are measured, not equivalent evidence.
-- Decode durable final ARCHIVED state after both success and failure on both
-  brokers; end-to-end outcomes, clean restart and group lag are measured below.
+- Resolve/accept the terminal-prefix persistence difference measured below:
+  released retains ARCHIVED rows/start=0/count=1; candidate prunes/start=1/count=0.
 - Controlled leader changes and process restarts while ARCHIVING, including
   append-before-ARCHIVED crash point, with measured duplicate/loss outcomes.
 - Agree a separately scoped extension implementation if native plugins are wanted.
@@ -205,3 +205,22 @@ original key/value cloning and destination errors are adapter obligations
 exercised by the real exact-boundary differential above. The proof runtime must
 match repository pin v0.14.0; installed local0.13.0 refuses std0.14.0, so contracts
 are not discharged merely by adding them.
+
+## Durable state decoded using released Kafka tooling
+
+The released 4.4 `kafka-dump-log.sh --share-group-state-decoder` reads both
+brokers' actual `__share_group_state` log segments. Filtered raw records are
+retained as `release-persisted-state.txt` and `candidate-persisted-state.txt`;
+`persisted-state-summary.txt` records assertions across all eight groups each.
+Every group first persists deliveryState=3 (ARCHIVING), including both oversized
+failure cases. Released Kafka then persists deliveryState=4 (ARCHIVED), retains
+startOffset=0 and deliveryCompleteCount=1, including after clean restart.
+Krabka instead persists startOffset=1 with no remaining state batches and
+completionCount=0, and recovers that pruned state on restart. Thus final terminal
+outcomes are durably measured, not inferred merely from lag or source code.
+
+This terminal-prefix pruning is a **measured retained deviation**, not byte/state
+parity. It explains the administrative startOffset difference recorded earlier;
+the current evidence does not justify hiding it or claiming identical persisted
+archival representation. Both finish with zero deliverable lag. Crash-window
+and multi-broker semantics remain unqualified.
