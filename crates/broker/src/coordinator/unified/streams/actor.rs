@@ -221,6 +221,7 @@ pub struct StreamsDescribeMember {
 #[derive(Debug)]
 pub struct StreamsGroupActorHandle {
     pub tx: mpsc::Sender<StreamsGroupActorMessage>,
+    owner: Arc<()>,
     _task: JoinHandle<()>,
 }
 
@@ -230,10 +231,16 @@ impl StreamsGroupActorHandle {
         config: Arc<StreamsGroupConfig>,
         coordinator: Arc<super::super::GroupCoordinator>,
     ) -> Self {
+        let owner = Arc::new(());
+        let actor_owner = Arc::clone(&owner);
         let (tx, task) = spawn_mailbox(config.actor_mailbox_capacity, |rx| {
-            actor_loop(group_id, config, coordinator, rx)
+            actor_loop(group_id, config, coordinator, actor_owner, rx)
         });
-        Self { tx, _task: task }
+        Self {
+            tx,
+            owner,
+            _task: task,
+        }
     }
 }
 
@@ -720,6 +727,7 @@ async fn actor_loop(
     group_id: String,
     default_config: Arc<StreamsGroupConfig>,
     coordinator: Arc<super::super::GroupCoordinator>,
+    owner: Arc<()>,
     mut rx: mpsc::Receiver<StreamsGroupActorMessage>,
 ) {
     let node = coordinator.node_id();
@@ -781,7 +789,7 @@ async fn actor_loop(
                     refused.send();
                     continue;
                 }
-                close_refused_group(&mut actor, turn, &mut rx, *refused).await;
+                close_refused_group(&mut actor, turn, &owner, &mut rx, *refused).await;
                 break;
             }
             Wake::SessionCheck => {
@@ -825,6 +833,7 @@ async fn actor_loop(
 async fn close_refused_group(
     actor: &mut ActorState,
     turn: StreamsTurn<'_>,
+    owner: &Arc<()>,
     rx: &mut mpsc::Receiver<StreamsGroupActorMessage>,
     refused: DeferredReply,
 ) {
@@ -845,7 +854,7 @@ async fn close_refused_group(
         }
     }
     if actor.holds_nothing() {
-        forget_abandoned_group(turn.coordinator, &actor.state.group_id);
+        forget_abandoned_group(turn.coordinator, actor, owner);
     }
     refused.send();
 }
@@ -931,16 +940,22 @@ fn persisted_state(coordinator: &GroupCoordinator, group_id: &str) -> ActorState
 /// Drops the registry entry and the `Streams` type lock of a group whose
 /// actor closed without writing a record. A newer actor for the same id, whose
 /// mailbox is open, keeps both.
-fn forget_abandoned_group(coordinator: &super::super::GroupCoordinator, group_id: &str) {
-    coordinator
-        .streams_groups
-        .remove_if(group_id, |_, handle| handle.tx.is_closed());
-    coordinator
-        .group_types
-        .remove_if(group_id, |_, group_type| {
-            *group_type == super::super::GroupType::Streams
-                && !coordinator.streams_groups.contains_key(group_id)
-        });
+fn forget_abandoned_group(coordinator: &GroupCoordinator, actor: &ActorState, owner: &Arc<()>) {
+    use dashmap::mapref::entry::Entry;
+    let group_id = &actor.state.group_id;
+    if let Entry::Occupied(entry) = coordinator.streams_groups.entry(group_id.clone())
+        && entry.get().tx.is_closed()
+        && Arc::ptr_eq(&entry.get().owner, owner)
+    {
+        // Keep replacement spawning blocked while retiring the old runtime.
+        description::retire_runtime(actor, coordinator);
+        coordinator
+            .group_types
+            .remove_if(group_id, |_, group_type| {
+                *group_type == super::super::GroupType::Streams
+            });
+        entry.remove();
+    }
 }
 
 /// Handles one mailbox message.

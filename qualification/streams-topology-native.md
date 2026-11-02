@@ -153,3 +153,15 @@ Executed on the follow-up source:
 - Changed-file nightly rustfmt, `git diff --check`, and `aspect check-cpd`: passed,
   zero clones. Proof kernels and persisted formats are unchanged by this follow-up.
 - Frozen-source `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings`: **passed** (5m38s).
+
+### Abandoned first-heartbeat retirement
+
+Refused first heartbeats now retire their empty shared runtime while holding the
+registry entry. A per-mailbox Arc identity prevents an old empty actor from
+removing even a newer *closed* mailbox or its type/runtime. These are runtime-only
+ownership tokens, not persisted group identities.
+
+- Frozen-source Streams suite: **399 passed**, 0 failed (4.09s), including the
+  refused-first-heartbeat runtime cleanup and old-owner/newer-closed-mailbox cases.
+- Frozen-source full-workspace all-target strict Clippy: **passed** (7m28s).
+- Changed-file nightly rustfmt, `git diff --check`, and CPD: passed; zero clones.

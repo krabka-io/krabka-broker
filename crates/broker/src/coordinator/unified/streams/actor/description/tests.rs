@@ -1061,3 +1061,42 @@ fn old_actor_retirement_preserves_replacement_runtime() {
         &replacement
     ));
 }
+
+#[tokio::test]
+async fn refused_first_heartbeat_retires_empty_shared_runtime() {
+    let coordinator = coordinator(TopologyDescriptionPlugin::InMemory);
+    let handle = coordinator.get_or_create_streams("app");
+    let response = heartbeat_result_at(&handle, steady("unknown", -1), 1)
+        .await
+        .response;
+    assert!(response.error_code == codes::UNKNOWN_MEMBER_ID);
+    handle.tx.closed().await;
+    assert!(coordinator.find_streams("app").is_none());
+    assert!(!coordinator.streams_description_runtime.contains_key("app"));
+}
+
+#[tokio::test]
+async fn abandoned_actor_cannot_retire_a_newer_closed_mailbox() {
+    let coordinator = coordinator(TopologyDescriptionPlugin::InMemory);
+    coordinator.mark_streams("app");
+    let old = coordinator.get_or_create_streams("app");
+    heartbeat(&old, join("a"), 1).await;
+    ask(&old.tx, StreamsGroupActorMessage::Shutdown)
+        .await
+        .expect("shutdown");
+    old.tx.closed().await;
+    let replacement = coordinator.find_live_streams("app").expect("replacement");
+    ask(&replacement.tx, StreamsGroupActorMessage::Shutdown)
+        .await
+        .expect("shutdown");
+    replacement.tx.closed().await;
+    super::super::forget_abandoned_group(&coordinator, &ActorState::new("app".into()), &old.owner);
+    assert!(Arc::ptr_eq(
+        &coordinator
+            .find_streams("app")
+            .expect("registered replacement"),
+        &replacement
+    ));
+    assert!(coordinator.streams_description_runtime.contains_key("app"));
+    assert!(coordinator.group_type("app") == Some(GroupType::Streams));
+}

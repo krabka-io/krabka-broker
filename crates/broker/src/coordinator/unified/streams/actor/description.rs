@@ -457,7 +457,7 @@ fn retire_registry_owner(coordinator: &GroupCoordinator, id: &str) {
 }
 
 /// Retire only the runtime held by this actor, never a replacement's entry.
-fn retire_runtime(actor: &ActorState, coordinator: &GroupCoordinator) {
+pub(super) fn retire_runtime(actor: &ActorState, coordinator: &GroupCoordinator) {
     coordinator
         .streams_description_runtime
         .remove_if(&actor.state.group_id, |_, runtime| {
