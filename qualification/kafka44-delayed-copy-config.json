@@ -1,0 +1,48 @@
+{
+  "date": "2026-11-02",
+  "qualification_pass": false,
+  "status": "released-enabled-config-boundary-pass",
+  "runtime_source_revision": "b734bbab95deb758c12f3895678c6c421abf04ee",
+  "binary_sha256": "fea75051c3f895c6b954af9bfe4685042077586255fa8291cc37775285059d4e",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "fixture_source_sha256": "268f0414880f139a7f39b59180939c44b7feb73ecf0e8f0c3da343a4b7f326cf",
+  "results": {
+    "oracle": {
+      "stdout": "SCENARIO\tdiscover-remote.copy.lag.ms\t0\nDETAIL\tremote.copy.lag.ms=-2\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value -2 for configuration remote.copy.lag.ms: Value must be at least -1\nSCENARIO\tvalidate-remote.copy.lag.ms=-2\tINVALID_CONFIG\nSCENARIO\tvalidate-remote.copy.lag.ms=-1\tNONE\nSCENARIO\tvalidate-remote.copy.lag.ms=0\tNONE\nSCENARIO\tvalidate-remote.copy.lag.ms=1000\tNONE\nDETAIL\tremote.copy.lag.ms=not-a-number\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value not-a-number for configuration remote.copy.lag.ms: Not a number of type LONG\nSCENARIO\tvalidate-remote.copy.lag.ms=not-a-number\tINVALID_CONFIG\nSCENARIO\tdiscover-remote.copy.lag.bytes\t-1\nDETAIL\tremote.copy.lag.bytes=-2\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value -2 for configuration remote.copy.lag.bytes: Value must be at least -1\nSCENARIO\tvalidate-remote.copy.lag.bytes=-2\tINVALID_CONFIG\nSCENARIO\tvalidate-remote.copy.lag.bytes=-1\tNONE\nSCENARIO\tvalidate-remote.copy.lag.bytes=0\tNONE\nSCENARIO\tvalidate-remote.copy.lag.bytes=1000\tNONE\nDETAIL\tremote.copy.lag.bytes=not-a-number\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value not-a-number for configuration remote.copy.lag.bytes: Not a number of type LONG\nSCENARIO\tvalidate-remote.copy.lag.bytes=not-a-number\tINVALID_CONFIG\nSCENARIO\tvalidate-only-preserves-config\tPASS\n",
+      "sha256": "44dea033ebbcfe8824dc0c3a1ecde0665bcc31f02bb74d3c3c33cd22381dfaa7",
+      "returncode": 0
+    },
+    "enabled": {
+      "stdout": "SCENARIO\tdiscover-remote.copy.lag.ms\t0\nDETAIL\tremote.copy.lag.ms=-2\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value -2 for configuration remote.copy.lag.ms: Value must be at least -1\nSCENARIO\tvalidate-remote.copy.lag.ms=-2\tINVALID_CONFIG\nSCENARIO\tvalidate-remote.copy.lag.ms=-1\tNONE\nSCENARIO\tvalidate-remote.copy.lag.ms=0\tNONE\nSCENARIO\tvalidate-remote.copy.lag.ms=1000\tNONE\nDETAIL\tremote.copy.lag.ms=not-a-number\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value not-a-number for configuration remote.copy.lag.ms: Not a number of type LONG\nSCENARIO\tvalidate-remote.copy.lag.ms=not-a-number\tINVALID_CONFIG\nSCENARIO\tdiscover-remote.copy.lag.bytes\t-1\nDETAIL\tremote.copy.lag.bytes=-2\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value -2 for configuration remote.copy.lag.bytes: Value must be at least -1\nSCENARIO\tvalidate-remote.copy.lag.bytes=-2\tINVALID_CONFIG\nSCENARIO\tvalidate-remote.copy.lag.bytes=-1\tNONE\nSCENARIO\tvalidate-remote.copy.lag.bytes=0\tNONE\nSCENARIO\tvalidate-remote.copy.lag.bytes=1000\tNONE\nDETAIL\tremote.copy.lag.bytes=not-a-number\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value not-a-number for configuration remote.copy.lag.bytes: Not a number of type LONG\nSCENARIO\tvalidate-remote.copy.lag.bytes=not-a-number\tINVALID_CONFIG\nSCENARIO\tvalidate-only-preserves-config\tPASS\n",
+      "sha256": "44dea033ebbcfe8824dc0c3a1ecde0665bcc31f02bb74d3c3c33cd22381dfaa7",
+      "returncode": 0
+    }
+  },
+  "oracle_collector": {
+    "path": "../qualification-config-oracle-current/evidence.json",
+    "sha256": "3453f2295abf01f0f35ec4ccea3d7f740d559bbe5bfb431550daf74e8869710d",
+    "status": "collected-not-qualified",
+    "config_result": {
+      "command": [
+        "timeout",
+        "180",
+        "docker",
+        "exec",
+        "krabka-kafka44----qualification-config-oracle-current",
+        "java",
+        "-cp",
+        "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+        "ConfigScenarios",
+        "localhost:9092"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tdiscover-remote.copy.lag.ms\t0\nDETAIL\tremote.copy.lag.ms=-2\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value -2 for configuration remote.copy.lag.ms: Value must be at least -1\nSCENARIO\tvalidate-remote.copy.lag.ms=-2\tINVALID_CONFIG\nSCENARIO\tvalidate-remote.copy.lag.ms=-1\tNONE\nSCENARIO\tvalidate-remote.copy.lag.ms=0\tNONE\nSCENARIO\tvalidate-remote.copy.lag.ms=1000\tNONE\nDETAIL\tremote.copy.lag.ms=not-a-number\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value not-a-number for configuration remote.copy.lag.ms: Not a number of type LONG\nSCENARIO\tvalidate-remote.copy.lag.ms=not-a-number\tINVALID_CONFIG\nSCENARIO\tdiscover-remote.copy.lag.bytes\t-1\nDETAIL\tremote.copy.lag.bytes=-2\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value -2 for configuration remote.copy.lag.bytes: Value must be at least -1\nSCENARIO\tvalidate-remote.copy.lag.bytes=-2\tINVALID_CONFIG\nSCENARIO\tvalidate-remote.copy.lag.bytes=-1\tNONE\nSCENARIO\tvalidate-remote.copy.lag.bytes=0\tNONE\nSCENARIO\tvalidate-remote.copy.lag.bytes=1000\tNONE\nDETAIL\tremote.copy.lag.bytes=not-a-number\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value not-a-number for configuration remote.copy.lag.bytes: Not a number of type LONG\nSCENARIO\tvalidate-remote.copy.lag.bytes=not-a-number\tINVALID_CONFIG\nSCENARIO\tvalidate-only-preserves-config\tPASS\n",
+      "stderr": ""
+    }
+  },
+  "limits": [
+    "validate-only configuration checks, not remote IO or eligibility scheduling",
+    "isolated enabled candidate only; default gate comparison remains separate",
+    "oracle collector runs on merged source parent ff09ae16e; retained candidate runtime is b734bbab9"
+  ]
+}

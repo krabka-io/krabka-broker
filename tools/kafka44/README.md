@@ -89,3 +89,7 @@ Ten cases cover pre-authentication identity bypass, authenticated misrouting det
 The oracle variant restarts only its own container, then verifies unchanged topic UUIDs and committed-not-aborted offsets for both groups. The task never restarts arbitrary candidate endpoints. To verify a caller-owned candidate after restarting its exact binary/config/data, use the retained `RECOVERY` identity with `TransactionScenarios ENDPOINT recover TOPIC GROUP TOPIC_UUID`; a missing/ambiguous identity fails collection. This is clean-restart coverage, not crash, pending-marker, multi-broker or deletion/recreation qualification.
 
 The CI matrix runs plain, authorization and transaction variants independently. Actual snapshot results and remaining coverage holes are recorded in [COVERAGE.md](COVERAGE.md); no variant sets `qualification_pass` true.
+
+### Delayed-copy configuration fixture
+
+`--protocol-scenarios` also executes `ConfigScenarios.java` using only the pinned released jars: thirteen topic discovery/validate-only cases for `remote.copy.lag.ms` and `remote.copy.lag.bytes`, including -2/-1/0/1000/nonnumeric values and unchanged configuration. Candidate differences or missing cases fail collection. `qualification/kafka44-delayed-copy-config.json` records the first actual released/enabled comparison and a successful full oracle collector invocation. No remote-storage IO or upload scheduling is inferred from config acceptance.
