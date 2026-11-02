@@ -72,11 +72,29 @@ public class ProtocolScenarios {
         }
     }
 
+    private static void controllerLifecycle(String broker, String controller) {
+        ControllerRegistrationRequestData.FeatureCollection features = new ControllerRegistrationRequestData.FeatureCollection();
+        features.add(new ControllerRegistrationRequestData.Feature().setName("metadata.version").setMinSupportedVersion((short) 1).setMaxSupportedVersion((short) 33));
+        features.add(new ControllerRegistrationRequestData.Feature().setName("kraft.version").setMinSupportedVersion((short) 0).setMaxSupportedVersion((short) 1));
+        ControllerRegistrationRequestData.ListenerCollection listeners = new ControllerRegistrationRequestData.ListenerCollection();
+        listeners.add(new ControllerRegistrationRequestData.Listener().setName("CONTROLLER").setHost("localhost").setPort(65530).setSecurityProtocol((short) 0));
+        ControllerRegistrationRequest register = new ControllerRegistrationRequest(new ControllerRegistrationRequestData()
+            .setControllerId(424242).setIncarnationId(new Uuid(4, 424242)).setFeatures(features).setListeners(listeners), (short) 0);
+        UnregisterControllerRequest remove = new UnregisterControllerRequest(new UnregisterControllerRequestData().setControllerId(424242), (short) 0);
+        probe("controller-register-nonvoter", controller, register);
+        probe("controller-remove-registered", controller, remove);
+        probe("controller-repeat-remove", controller, remove);
+        probe("controller-reregister", controller, register);
+        probe("controller-forwarded-remove", broker, remove);
+        probe("controller-refuse-voter", controller, new UnregisterControllerRequest(new UnregisterControllerRequestData().setControllerId(1), (short) 0));
+    }
+
     public static void main(String[] args) throws Exception {
         if (args.length != 2) throw new IllegalArgumentException("broker and controller endpoints required");
         String broker = args[0];
         String controller = args[1];
         routingProbes(broker, controller);
+        controllerLifecycle(broker, controller);
         probe("controller-unknown-id", controller, new UnregisterControllerRequest(
             new UnregisterControllerRequestData().setControllerId(2147483646), (short) 0));
         probe("controller-api-on-broker", broker, new UnregisterControllerRequest(

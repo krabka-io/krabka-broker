@@ -22,7 +22,7 @@ def _test_api_differences(_ctx):
 
 def _test_protocol_differences(_ctx):
     check_eq("empty fixture output fails", scenario_differences("", ""), [{"error": "missing protocol scenario rows"}])
-    rows = "\n".join(["SCENARIO\tcase-" + str(i) + "\t{NONE=1}" for i in range(11)])
+    rows = "\n".join(["SCENARIO\tcase-" + str(i) + "\t{NONE=1}" for i in range(17)])
     check_eq("equal errors", scenario_differences(rows, rows), [])
     changed = rows.replace("case-0\t{NONE=1}", "case-0\t{INVALID_REQUEST=1}")
     check_eq("error mismatch retained", scenario_differences(rows, changed), [{"scenario": "case-0", "oracle": "{NONE=1}", "candidate": "{INVALID_REQUEST=1}"}])

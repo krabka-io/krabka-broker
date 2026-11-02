@@ -71,7 +71,7 @@ def scenario_results(output):
 def scenario_differences(oracle, candidate):
     expected = scenario_results(oracle)
     actual = scenario_results(candidate)
-    if len(expected) != 11 or len(actual) != 11:
+    if len(expected) != 17 or len(actual) != 17:
         return [{"error": "missing protocol scenario rows"}]
     return [
         {"scenario": key, "oracle": expected[key], "candidate": actual.get(key)}
@@ -193,14 +193,14 @@ def _impl(ctx: TaskContext) -> int:
     failed = any([r["returncode"] for probes in evidence["sides"].values() for r in probes.values()])
     evidence["status"] = "probe-failure" if failed else "collected-not-qualified"
     if a.protocol_scenarios:
-        failed = failed or any([r["returncode"] for r in evidence["protocol_scenarios"].values()]) or any(evidence["protocol_differences"].values()) or len(scenario_results(evidence["protocol_scenarios"]["oracle"]["stdout"])) != 11 or "TRANSPORT:" in evidence["protocol_scenarios"]["oracle"]["stdout"]
+        failed = failed or any([r["returncode"] for r in evidence["protocol_scenarios"].values()]) or any(evidence["protocol_differences"].values()) or len(scenario_results(evidence["protocol_scenarios"]["oracle"]["stdout"])) != 17 or "TRANSPORT:" in evidence["protocol_scenarios"]["oracle"]["stdout"]
     evidence["status"] = "probe-failure" if failed else "collected-not-qualified"
     return 1 if failed else 0
 
 kafka44 = task(
     summary = "Collect released Kafka 4.4 oracle/candidate evidence (not parity)",
     implementation = _impl,
-    args = {"protocol_scenarios": args.boolean(default = False, description = "Execute eleven released-codec negative protocol scenarios (not qualification)."), "default_controller": args.string(default = "", description = "Isolated default controller address."), "enabled_controller": args.string(default = "", description = "Isolated enabled controller address.")} | {name: args.string(default = "", description = description) for name, description in {
+    args = {"protocol_scenarios": args.boolean(default = False, description = "Execute seventeen released-codec negative protocol scenarios (not qualification)."), "default_controller": args.string(default = "", description = "Isolated default controller address."), "enabled_controller": args.string(default = "", description = "Isolated enabled controller address.")} | {name: args.string(default = "", description = description) for name, description in {
         "revision": "Exact candidate commit SHA.",
         "output": "New evidence directory.",
         "default_bootstrap": "Isolated default candidate address.",
