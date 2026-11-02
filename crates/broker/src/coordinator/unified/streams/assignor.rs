@@ -29,6 +29,7 @@ use {
         standby::assign_standby,
         types::{Task, to_role_maps},
     },
+    krabka_verified::streams_assignment::next_standby_count,
     std::{
         collections::{BTreeMap, BTreeSet},
         convert::AsRef,
@@ -190,12 +191,10 @@ pub fn validate_assignment(
                     }
                     if !is_active {
                         let count = standby_counts.entry(task.clone()).or_default();
-                        *count += 1;
-                        if *count > input.num_standby_replicas.max(0) {
-                            return Err(format!(
-                                "assignor exceeded standby replica count: {task:?}"
-                            ));
-                        }
+                        *count = next_standby_count(*count, input.num_standby_replicas)
+                            .ok_or_else(|| {
+                                format!("assignor exceeded standby replica count: {task:?}")
+                            })?;
                     }
                     if is_active && !active.insert(task.clone()) {
                         return Err(format!("assignor duplicated active task {task:?}"));
@@ -212,3 +211,6 @@ pub fn validate_assignment(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod registry_model;

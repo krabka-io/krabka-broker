@@ -7,3 +7,15 @@ Krabka embedders can implement `coordinator::unified::streams::assignor::TaskAss
 The extension receives resolved tasks, stateful subtopologies, standby count and current member/task state. It returns active and standby target maps. Implementations must be deterministic, non-blocking, non-panicking and return valid assignments. Unknown members/tasks, missing or duplicated active tasks, and process-collocated copies are rejected before installing a target. An assignment error retains the old target and leaves the group dirty for retry; it never silently switches algorithms. Selection changes take effect during the next assignment, through the existing revocation/reconciliation path. Describe v1 reports the selected implementation name.
 
 This API is a native Rust embedding interface, not a stable dynamic-library ABI. The stock executable does not load arbitrary JVM classes, native shared libraries or external processes. Kafka's Java `Configurable`/`AutoCloseable` lifecycle and arbitrary JVM plugins are not compatible with this mechanism. Native extension lifetime is owned by `Arc`; startup configuration belongs to the embedding application. Assignment offloading and panic isolation are not provided. Cross-broker deployments must register identical names and behavior on every broker before storing a group override. Released-JVM custom-plugin interoperability has not been executed for this API.
+
+
+Verification: the registry Stateright test exhausts all 36 combinations of three
+selections (including a failing implementation), four member sets and three task
+universes. Every transition executes the real registry and assignment validator,
+and checks exact selected placement or rejection. Existing actor tests cover
+cooperative reassignment and retaining the previous target on failure. The native
+validator calls `krabka_verified::streams_assignment::next_standby_count`, whose
+precondition-free Creusot contract specifies exact admission up to the configured
+replica count and rejects negative counters without overflow. Proof discharge is
+separate from annotations; host member/task identity and distributed coordinator
+ownership are not proved by that arithmetic kernel or this bounded model.
