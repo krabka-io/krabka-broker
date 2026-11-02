@@ -145,3 +145,62 @@ The verify mode asserts zero share-group lag; it does not decode persisted
 ARCHIVED state. Actual manager request meters and controlled retry/error
 injection remain covered only by the earlier released component probe, not
 this end-to-end run. Keep those distinctions when evaluating closure.
+
+## Candidate end-to-end differential (2026-11-02)
+
+The identical released-client `ShareBoundary` program ran successfully against
+Krabka's isolated standalone broker, source branch `fix/kafka44-dlq-payload-1974`
+(before the pure batch-admission helper extraction). The executable SHA-256 is
+recorded in `candidate-binary.sha256`. Its directory was formatted at
+`4.4-IV2`, `share.version=2`, with both unstable switches enabled. Runtime
+settings set offsets/transaction/share-state replication factors and min ISR
+to one, and share-state partitions to one. Client/controller/metrics/health
+ports are 39747/39748/39749/39750. There are no production changes.
+
+`share-boundary-candidate.txt` exactly matches the eight released behavioral
+outcomes after substituting fresh equal-length names: copy=true 352 bytes,
+copy=false 250 bytes, rejection below the boundary and intact output at/above.
+`share-boundary-candidate-metrics.txt` records one actual DLQ produce attempt
+per group, one failure for each of the two undersized destinations, and one
+written record for each of the other six groups. Released component counters
+agree; full released broker JMX counters were not collected.
+
+Candidate group offsets have startOffset=1 and lag=0 for all eight groups both
+before and after clean process restart, unlike released startOffset=0/lag=0.
+Do not hide that administrative reporting difference or equate it to a DLQ
+payload/archival difference without deeper persister analysis. This restart is
+**after** completion, not a crash during ARCHIVING. Persisted raw state codes,
+controlled mid-flight crashes and multi-broker leader change remain required
+for the stronger acceptance criteria.
+
+## Bounded Stateright model and proof boundary
+
+`crates/broker/src/share_partition/dlq_model.rs` executes the real acquisition
+machine for one rejected offset. It separates ARCHIVING persistence, sink send,
+retry, successful append or terminal oversized response, terminal archival and
+ARCHIVED confirmation. One crash/leader reload may occur at every persisted
+phase, including append-before-ARCHIVED confirmation. Up to two attempts per
+leadership generation and at most two appends are reachable. The graph has a
+32-depth / 10,000-generated-state hard backstop and must exhaust before either
+cap. A negative-control model drops recovered pending work and must discover
+the missing-recovery invariant, rather than silently reducing explored actions.
+
+The model drives real reject/take-pending/persist/load/finish transitions;
+network response scheduling and durable-write confirmation are modeled. Its
+coverage is not an end-to-end crash or Jepsen result. In particular it does not
+cover two rejected offsets sharing a batch, concurrent adjacent ranges,
+multi-node state-coordinator durability, topic deletion/recreation, timed retry
+backoff, concurrent leadership fencing, broker JMX metrics, truncation/corrupted
+storage, or authentication/authorization failures. These require separate
+production-path regressions and fault-injection qualification; no finite model
+establishes absence of all coverage gaps.
+
+The production `build_round` now calls `krabka_verified::share::dlq_batch_admission`.
+Its unconditional Creusot contracts state precisely: nonfirst oversized records
+flush before append, first oversized records append and stop, and records at or
+below the limit append and continue. This proves the admission decision, not
+that an IO write succeeds. Saturated projected byte size, record encoding,
+original key/value cloning and destination errors are adapter obligations
+exercised by the real exact-boundary differential above. The proof runtime must
+match repository pin v0.14.0; installed local0.13.0 refuses std0.14.0, so contracts
+are not discharged merely by adding them.

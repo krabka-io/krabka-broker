@@ -133,12 +133,15 @@ pub(super) fn build_round(
             ..Default::default()
         };
         let record_size = i64::try_from(record.encoded_len()).unwrap_or(i64::MAX);
-        if size.saturating_add(record_size) > limit && !records.is_empty() {
+        use krabka_verified::share::{DlqBatchAdmission, dlq_batch_admission};
+        let projected = size.saturating_add(record_size);
+        let admission = dlq_batch_admission(projected, limit, !records.is_empty());
+        if admission == DlqBatchAdmission::Flush {
             break;
         }
         records.push(record);
-        size = size.saturating_add(record_size);
-        if size > limit {
+        size = projected;
+        if admission == DlqBatchAdmission::AppendStop {
             break;
         }
     }

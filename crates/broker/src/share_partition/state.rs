@@ -203,3 +203,7 @@ impl AcquisitionState {
 #[cfg(test)]
 #[path = "state_model.rs"]
 mod state_model;
+
+#[cfg(test)]
+#[path = "dlq_model.rs"]
+mod dlq_model;
