@@ -76,10 +76,13 @@ use {
     },
     crate::{
         codes,
-        coordinator::unified::{
-            GroupCoordinator,
-            actor::{CommitFence, ReapOutcome, SubscribedTopics},
-            offsets_log::{OffsetsLog, write_failure_code},
+        coordinator::{
+            DeleteGroupError,
+            unified::{
+                GroupCoordinator,
+                actor::{CommitFence, ReapOutcome, SubscribedTopics},
+                offsets_log::{OffsetsLog, write_failure_code},
+            },
         },
         error::BrokerError,
         metadata_source::MetadataSource,
@@ -145,6 +148,12 @@ pub enum StreamsGroupActorMessage {
         now_ms: i64,
         retention_ms: i64,
         reply: oneshot::Sender<ReapOutcome>,
+    },
+    Delete(oneshot::Sender<Result<(), DeleteGroupError>>),
+    Convert {
+        member_id: String,
+        now_ms: i64,
+        reply: oneshot::Sender<Result<super::migration::DowngradeOutcome, BrokerError>>,
     },
     DeleteDescription(oneshot::Sender<Result<bool, BrokerError>>),
     PrepareConversion(oneshot::Sender<Result<bool, BrokerError>>),
@@ -934,6 +943,18 @@ async fn handle_message(
             client_host,
             reply,
         } => {
+            // A conversion can finish between wire lookup and handle acquisition.
+            // Do not let a stale Streams lookup overwrite classic ownership.
+            if turn
+                .coordinator
+                .group_type(&actor.state.group_id)
+                .is_some_and(|kind| kind != super::super::GroupType::Streams)
+            {
+                return Step::RefusedJoin(Box::new(DeferredReply {
+                    reply,
+                    response: response::error_resp(codes::GROUP_ID_NOT_FOUND, None),
+                }));
+            }
             match handle_heartbeat(actor, turn, &request, super::super::ClientIdentity {
                 id: &client_id,
                 host: &client_host,
@@ -1041,6 +1062,30 @@ async fn handle_message(
         }
         StreamsGroupActorMessage::Seed(seed) => {
             apply_seed(actor, seed);
+        }
+        StreamsGroupActorMessage::Delete(reply) => {
+            let result = description::delete(actor, turn).await;
+            let stop = result.is_ok() || matches!(result, Err(DeleteGroupError::Internal));
+            let _ = reply.send(result);
+            if stop {
+                return Step::Stop;
+            }
+        }
+        StreamsGroupActorMessage::Convert {
+            member_id,
+            now_ms,
+            reply,
+        } => {
+            let result = description::convert(actor, turn, &member_id, now_ms).await;
+            let stop = matches!(
+                &result,
+                Ok(super::migration::DowngradeOutcome::Converted
+                    | super::migration::DowngradeOutcome::Removed)
+            ) || result.is_err();
+            let _ = reply.send(result);
+            if stop {
+                return Step::Stop;
+            }
         }
         StreamsGroupActorMessage::PrepareConversion(reply) => {
             let result = description::prepare_conversion(actor, turn).await;

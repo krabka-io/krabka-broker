@@ -16,6 +16,7 @@ use {
                 regex_resolver::TopicRegexResolver,
             },
         },
+        error::BrokerError,
     },
     bytes::Bytes,
     krabka_protocol::{
@@ -85,9 +86,15 @@ pub enum GroupActorMessage {
         version: i16,
         reply: oneshot::Sender<LeaveResult>,
     },
-    /// Atomically verify that a classic group is empty and append the
-    /// tombstones of its offsets and its k2 record. A successful delete stops
-    /// the actor.
+    /// The Streams membership actor holds its lifecycle turn. Append all
+    /// offset tombstones and the supplied Streams metadata in one batch;
+    /// successful deletion stops this offset home.
+    StreamsDelete {
+        batch: RecordBatch,
+        reply: oneshot::Sender<Result<(), BrokerError>>,
+    },
+    /// Atomically verify empty classic/consumer membership and append its
+    /// offset and group tombstones. Success stops the actor.
     ClassicDelete {
         reply: oneshot::Sender<Result<(), DeleteGroupError>>,
     },

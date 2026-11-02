@@ -15,7 +15,7 @@ use {
     },
     assert2::{assert, check},
     krabka_protocol::records::RecordBatch,
-    std::sync::Arc,
+    std::{collections::HashMap, sync::Arc},
 };
 
 fn apply_member_tombstones<K: AsRef<[u8]>>(coordinator: &Arc<GroupCoordinator>, keys: [K; 2]) {
@@ -279,4 +279,50 @@ fn a_malformed_record_publishes_nothing_and_a_child_record_creates_its_group() {
             .cached_streams_seed("orphan-streams")
             .is_some_and(|seed| seed.members.contains_key("m"))
     );
+}
+
+#[tokio::test]
+async fn explicit_streams_delete_durable_offsets_do_not_reappear_on_replay() {
+    use crate::{
+        coordinator::unified::{
+            actor::GroupActorMessage, persistence::OffsetCommitValue,
+            test_support::make_coord_with_log,
+        },
+        task_util::ask,
+    };
+    let (coordinator, log) = make_coord_with_log();
+    coordinator.mark_streams("g");
+    let _membership = coordinator.get_or_create_streams("g");
+    let home = coordinator.get_or_create_classic("g");
+    let original = super::test_support::commit_record(0, 42);
+    let entry = OffsetCommitValue::decode_value(original.value.as_ref().expect("value"))
+        .expect("offset value")
+        .into();
+    ask(&home.tx, |reply| GroupActorMessage::UpdateCommitted {
+        entries: vec![(("t".into(), 0), entry)],
+        reply,
+    })
+    .await
+    .expect("seed committed offset");
+    coordinator
+        .delete_group("g")
+        .await
+        .expect("delete Streams group");
+    // Bootstrap consumes original durable commits followed by the actual
+    // production deletion append, not a hand-authored tombstone fixture.
+    let mut records = vec![LogRecord {
+        key: original.key.expect("key"),
+        value: original.value,
+    }];
+    for batch in log.batches().await {
+        records.extend(batch.records.into_iter().map(|r| LogRecord {
+            key: r.key.expect("key"),
+            value: r.value,
+        }));
+    }
+    let recovered = super::test_support::replay_log(records);
+    let replayed = recovered.replayed.expect("bootstrap replay");
+    assert!(replayed.committed.get("g").is_none_or(HashMap::is_empty));
+    assert!(recovered.coordinator.cached_streams_seed("g").is_none());
+    assert!(recovered.coordinator.group_type("g").is_none());
 }

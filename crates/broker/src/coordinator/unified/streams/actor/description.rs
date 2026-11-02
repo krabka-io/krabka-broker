@@ -19,21 +19,26 @@ use {
     },
     crate::{
         codes,
-        coordinator::unified::{
-            actor::{GroupActorMessage, ReapOutcome},
-            streams::{
-                config::StreamsGroupConfig,
-                description::{
-                    DescriptionEpochs, Jitter, SolicitationBackoff, StorageFailure,
-                    StoredDescription, TopologyDescription,
+        coordinator::{
+            DeleteGroupError,
+            unified::{
+                GroupCoordinator, GroupType,
+                actor::{GroupActorMessage, ReapOutcome},
+                streams::{
+                    config::StreamsGroupConfig,
+                    description::{
+                        DescriptionEpochs, Jitter, SolicitationBackoff, StorageFailure,
+                        StoredDescription, TopologyDescription,
+                    },
+                    persistence::PendingStreamsRecords,
+                    topology::status,
                 },
-                persistence::PendingStreamsRecords,
-                topology::status,
             },
         },
         error::BrokerError,
         task_util::ask,
     },
+    dashmap::mapref::entry::Entry,
     krabka_protocol::owned::{
         common::streams_group_topology_description_update_request::topology_description::TopologyDescription as WireDescription,
         streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
@@ -362,3 +367,90 @@ pub(super) async fn reap(
 
 #[cfg(test)]
 mod tests;
+
+/// Explicit lifecycle operations stay inside the membership turn through the
+/// durable append and registry retirement. Queued joins cannot write afterward.
+pub(super) async fn delete(
+    actor: &mut ActorState,
+    turn: StreamsTurn<'_>,
+) -> Result<(), DeleteGroupError> {
+    if turn.coordinator.group_type(&actor.state.group_id) != Some(GroupType::Streams) {
+        return Err(DeleteGroupError::NotFound);
+    }
+    if !actor.state.members.is_empty() {
+        return Err(DeleteGroupError::NonEmpty);
+    }
+    if !cleanup(actor, turn, true)
+        .await
+        .map_err(|_| DeleteGroupError::Internal)?
+    {
+        return Err(DeleteGroupError::TopologyDescription);
+    }
+    let id = &actor.state.group_id;
+    let batch = streams_records_tombstone_batch(id, &[], chrono_now_ms())
+        .map_err(|_| DeleteGroupError::Internal)?;
+    if let Some(home) = turn.coordinator.find(id) {
+        ask(&home.tx, |reply| GroupActorMessage::StreamsDelete {
+            batch,
+            reply,
+        })
+        .await
+        .map_err(|_| DeleteGroupError::Internal)?
+        .map_err(|_| DeleteGroupError::Internal)?;
+    } else {
+        turn.coordinator
+            .offsets_log
+            .append(id, batch)
+            .await
+            .map_err(|_| DeleteGroupError::Internal)?;
+    }
+    turn.coordinator.groups.remove(id);
+    turn.coordinator.seeds.remove(id);
+    turn.coordinator.remove_cached_seed(id);
+    turn.coordinator.streams_seeds.remove(id);
+    turn.coordinator.streams_seeds_cache.remove(id);
+    turn.coordinator.forget_group_metrics(id);
+    retire_registry_owner(turn.coordinator, id);
+
+    Ok(())
+}
+
+pub(super) async fn convert(
+    actor: &mut ActorState,
+    turn: StreamsTurn<'_>,
+    member_id: &str,
+    now_ms: i64,
+) -> Result<super::super::migration::DowngradeOutcome, BrokerError> {
+    use super::super::migration::{DowngradeOutcome, streams_to_classic_batch};
+    if turn.coordinator.group_type(&actor.state.group_id) != Some(GroupType::Streams) {
+        return Ok(DowngradeOutcome::NotStreams);
+    }
+    if !actor.state.members.is_empty() {
+        return Ok(DowngradeOutcome::RejectLiveMembers);
+    }
+    if !prepare_conversion(actor, turn).await? {
+        return Ok(DowngradeOutcome::RetryCleanup);
+    }
+    let id = &actor.state.group_id;
+    if !member_id.is_empty() {
+        turn.coordinator.streams_seeds.remove(id);
+        turn.coordinator.streams_seeds_cache.remove(id);
+        retire_registry_owner(turn.coordinator, id);
+        return Ok(DowngradeOutcome::Removed);
+    }
+    turn.coordinator
+        .offsets_log
+        .append(id, streams_to_classic_batch(id, now_ms)?)
+        .await?;
+    turn.coordinator.mark_classic_after_streams_downgrade(id);
+    turn.coordinator.streams_groups.remove(id);
+    Ok(DowngradeOutcome::Converted)
+}
+
+/// Keep creation blocked until the old actor's type lock is gone.
+fn retire_registry_owner(coordinator: &GroupCoordinator, id: &str) {
+    if let Entry::Occupied(entry) = coordinator.streams_groups.entry(id.to_owned()) {
+        coordinator.group_types.remove(id);
+        entry.remove();
+    }
+}

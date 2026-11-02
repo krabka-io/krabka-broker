@@ -38,6 +38,7 @@ use {
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
+    tokio::sync::{Notify, oneshot},
 };
 
 fn coordinator(plugin: TopologyDescriptionPlugin) -> Arc<GroupCoordinator> {
@@ -410,6 +411,7 @@ async fn the_description_epochs_are_written_with_the_plugin_only() {
 #[derive(Debug, Default)]
 struct NativeStore {
     intent_log: Option<Arc<InMemoryOffsetsLog>>,
+    delete_barrier: Option<(Notify, Notify)>,
     value: Mutex<Option<StoredDescription>>,
     set_failure: Mutex<Option<StorageFailure>>,
     fail_get: AtomicBool,
@@ -459,6 +461,10 @@ impl TopologyDescriptionBackend for NativeStore {
 
     fn delete<'a>(&'a self, _: &'a str) -> BackendFuture<'a, ()> {
         Box::pin(async move {
+            if let Some((entered, release)) = &self.delete_barrier {
+                entered.notify_one();
+                release.notified().await;
+            }
             if self.fail_delete.load(Ordering::SeqCst) {
                 return Err(StorageFailure::Transient);
             }
@@ -481,6 +487,13 @@ fn native_coordinator(
     );
     coordinator.mark_streams("app");
     coordinator
+}
+
+fn native_logging_setup(
+    backend: Arc<NativeStore>,
+) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
+    let log = Arc::new(InMemoryOffsetsLog::default());
+    (native_coordinator(backend, Arc::clone(&log)), log)
 }
 
 fn native_setup() -> (Arc<NativeStore>, Arc<GroupCoordinator>) {
@@ -830,3 +843,146 @@ async fn unresolved_transaction_protects_topology_until_its_reservation_is_relea
 }
 
 mod model;
+
+#[tokio::test]
+async fn explicit_delete_tombstones_committed_and_pending_keys_and_retires_handle() {
+    use crate::coordinator::unified::{
+        actor::{GroupActorMessage, TxnOffsetReservation},
+        persistence::OffsetCommitValue,
+    };
+    let backend = Arc::new(NativeStore::default());
+    let (coordinator, log) = native_logging_setup(backend);
+    let handle = store_native_topology(&coordinator).await;
+    commit_retention_offset(&coordinator).await;
+    leave_native_member(&handle).await;
+    let home = coordinator.find("app").expect("offset home");
+    ask(&home.tx, |reply| {
+        GroupActorMessage::TxnOffsetReservation(TxnOffsetReservation {
+            producer_id: 7,
+            keys: vec![("pending".into(), 1)],
+            reserve: true,
+            reply,
+        })
+    })
+    .await
+    .expect("reserve");
+    coordinator.delete_group("app").await.expect("delete");
+    let batches = log.batches().await;
+    let deletion = batches.last().expect("durable delete");
+    for (topic, partition) in [("input", 0), ("pending", 1)] {
+        let key = OffsetCommitValue::encode_key("app", topic, partition).expect("key");
+        assert!(
+            deletion
+                .records
+                .iter()
+                .any(|r| r.key.as_ref() == Some(&key) && r.value.is_none())
+        );
+    }
+    assert!(deletion.records.iter().any(|r| {
+        r.key
+            .as_deref()
+            .is_some_and(|key| matches!(parse_key(key), Ok(Key::Streams(_))))
+            && r.value.is_none()
+    }));
+    // A request already holding the retired mailbox cannot mutate storage.
+    let count = batches.len();
+    assert!(
+        ask(&handle.tx, |reply| StreamsGroupActorMessage::Describe {
+            reply
+        })
+        .await
+        .is_err()
+    );
+    assert!(log.batches().await.len() == count);
+    assert!(coordinator.group_type("app").is_none());
+}
+
+#[tokio::test]
+async fn explicit_conversion_retires_old_actor_before_classic_join_can_reuse_it() {
+    use crate::coordinator::{
+        DeleteGroupError,
+        unified::{GroupType, streams::migration::DowngradeOutcome},
+    };
+    let (_, coordinator) = native_setup();
+    let handle = store_native_topology(&coordinator).await;
+    leave_native_member(&handle).await;
+    assert!(
+        coordinator
+            .try_convert_streams_to_classic("app", "", 1)
+            .await
+            .expect("convert")
+            == DowngradeOutcome::Converted
+    );
+    assert!(coordinator.group_type("app") == Some(GroupType::Classic));
+    assert!(
+        ask(&handle.tx, |reply| StreamsGroupActorMessage::Describe {
+            reply
+        })
+        .await
+        .is_err()
+    );
+    assert!(coordinator.find_streams("app").is_none());
+    // Simulate a wire lookup that observed Streams just before conversion,
+    // but acquires its handle after conversion. It must not steal ownership.
+    let stale_lookup = coordinator.get_or_create_streams("app");
+    assert!(
+        ask(&stale_lookup.tx, StreamsGroupActorMessage::Delete)
+            .await
+            .expect("stale delete")
+            == Err(DeleteGroupError::NotFound)
+    );
+    assert!(
+        heartbeat_result_at(&stale_lookup, join("late"), 1)
+            .await
+            .response
+            .error_code
+            == codes::GROUP_ID_NOT_FOUND
+    );
+    assert!(coordinator.group_type("app") == Some(GroupType::Classic));
+}
+
+#[tokio::test]
+async fn join_queued_during_backend_cleanup_cannot_revive_retired_streams_actor() {
+    for conversion in [false, true] {
+        let backend = Arc::new(NativeStore {
+            delete_barrier: Some((Notify::new(), Notify::new())),
+            ..Default::default()
+        });
+        let (coordinator, _log) = native_logging_setup(Arc::clone(&backend));
+        let handle = store_native_topology(&coordinator).await;
+        leave_native_member(&handle).await;
+        let owner = Arc::clone(&coordinator);
+        let transition = tokio::spawn(async move {
+            if conversion {
+                owner
+                    .try_convert_streams_to_classic("app", "", 1)
+                    .await
+                    .expect("convert");
+            } else {
+                owner.delete_group("app").await.expect("delete");
+            }
+        });
+        let (entered, release) = backend.delete_barrier.as_ref().expect("barrier");
+        entered.notified().await;
+        let stale = Arc::clone(&handle);
+        // The mailbox is definitely populated while deletion is inside its
+        // external backend call; the actor must retire without consuming it.
+        let (reply, answer) = oneshot::channel();
+        stale
+            .tx
+            .send(StreamsGroupActorMessage::Heartbeat {
+                request: Box::new(join("racer")),
+                version: 1,
+                client_id: String::new(),
+                client_host: String::new(),
+                reply,
+            })
+            .await
+            .expect("queued heartbeat");
+        release.notify_one();
+        transition.await.expect("task");
+        assert!(answer.await.is_err());
+        assert!(coordinator.find_streams("app").is_none());
+        assert!(backend.value.lock().expect("lock").is_none());
+    }
+}

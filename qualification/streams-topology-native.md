@@ -91,3 +91,39 @@ The unchanged contract requires UNCERTAIN on failure. Why3find reports
 reports `Goal Coma.vc_next_standby_count: ✘ (2/4)`, followed by
 `Error: 2 unproved files`. The control project is isolated from production
 worktrees, and no mutated body is committed.
+
+## Explicit deletion and conversion ownership follow-up
+
+Explicit DeleteGroups and cold Streams-to-classic conversion now execute the
+membership check, backend cleanup, durable metadata append and registry retirement
+inside a single Streams actor turn. A successful transition stops the old actor;
+queued requests holding its mailbox cannot perform subsequent writes. A heartbeat
+whose wire lookup raced a completed classic conversion also rechecks ownership
+inside its actor before mutating Streams state.
+
+For explicit deletion, the offset-home actor appends committed/unacknowledged and
+reserved transactional offset-key tombstones in the same batch as the Streams
+metadata tombstones, then stops. Registry and cached replay seeds are removed only
+after the durable append succeeds. Conversion preserves offsets; its existing
+nonempty-member-id no-record removal semantics remain unchanged.
+
+Implementation regressions cover committed and reserved keys in the deletion
+batch, old-handle retirement, a join deliberately queued while the native backend
+is blocked (both delete and conversion), stale post-conversion lookup, and a
+bootstrap log replay consuming the production deletion append after a committed
+fixture. These do not establish replicated transaction-marker recovery or Jepsen
+qualification. Broker-wide lifetime of the reference in-memory store and
+solicitation backoff remains a separate limitation.
+
+Executed follow-up verification:
+
+- `CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo test -p krabka-broker --lib streams`: **393 passed**, 0 failed, including the new blocked-backend race and bootstrap replay regressions.
+- `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings`: **passed**.
+- `aspect check-cpd`: **passed**, zero clones.
+- `aspect generate-kip-matrix`: **passed**, no status graduation.
+- Nightly Rustfmt checks of changed Rust files and `git diff --check`: **passed**.
+
+The debug-profile environment settings are local execution settings only. An
+initial all-target build exhausted local disk; the successful checks above ran
+after clearing this worktree's generated build cache, without changing product
+configuration or repository gates.

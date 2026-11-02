@@ -28,8 +28,9 @@ use {
         error::BrokerError,
         metadata_epoch::next_i32,
     },
-    krabka_protocol::owned::{
-        leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse,
+    krabka_protocol::{
+        owned::{leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse},
+        records::RecordBatch,
     },
     std::collections::{BTreeSet, HashSet},
     tokio::sync::oneshot,
@@ -247,4 +248,46 @@ async fn append_group_delete(
         now_ms,
     )
     .await
+}
+
+/// Delete both committed (including unacknowledged) and reserved transaction
+/// offsets in the same log append as Streams metadata.
+pub(super) async fn append_streams_delete(
+    group: &CoordinatorGroup,
+    log: &dyn OffsetsLog,
+    metadata: RecordBatch,
+) -> Result<(), BrokerError> {
+    use crate::coordinator::unified::{OffsetRecordBatchBuilder, persistence::OffsetCommitValue};
+    let keys = group
+        .latest_offsets()
+        .into_keys()
+        .cloned()
+        .chain(group.unresolved_txn_keys())
+        .collect::<BTreeSet<_>>();
+    let mut builder = OffsetRecordBatchBuilder::default();
+    for (topic, partition) in keys {
+        builder.push(
+            OffsetCommitValue::encode_key(&group.group_id, &topic, partition)?,
+            None,
+        );
+    }
+    for record in metadata.records {
+        if let Some(key) = record.key {
+            builder.push(key, record.value);
+        }
+    }
+    log.append(&group.group_id, builder.finish(chrono_now_ms()))
+        .await
+}
+
+pub(super) async fn reply_streams_delete(
+    group: &CoordinatorGroup,
+    log: &dyn OffsetsLog,
+    batch: RecordBatch,
+    reply: oneshot::Sender<Result<(), BrokerError>>,
+) -> bool {
+    let result = append_streams_delete(group, log, batch).await;
+    let keep = result.is_err();
+    let _ = reply.send(result);
+    keep
 }
