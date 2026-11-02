@@ -81,6 +81,7 @@ pub mod storage;
 pub mod stretch;
 pub mod throttle;
 pub mod timestamp;
+pub mod topic_offset;
 pub mod transaction;
 pub mod uniform_assignor;
 pub mod vote;

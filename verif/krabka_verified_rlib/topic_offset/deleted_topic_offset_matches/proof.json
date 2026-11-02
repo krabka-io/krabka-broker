@@ -1,0 +1,12 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_deleted_topic_offset_matches": {
+        "prover": "alt-ergo",
+        "time": 0.018
+      },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.01 }
+    }
+  }
+}

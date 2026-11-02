@@ -11,10 +11,13 @@ use {
         topic_deletion::DeletedTopic,
         unified::{group::CoordinatorGroup, offsets_log::OffsetsLog},
     },
+    krabka_verified::topic_offset::deleted_topic_offset_matches,
     std::collections::BTreeSet,
     tokio::sync::oneshot,
 };
 
+#[cfg(test)]
+mod model;
 #[cfg(test)]
 mod tests;
 
@@ -60,7 +63,9 @@ async fn delete_topic_offsets(
         .latest_offsets()
         .into_iter()
         .filter(|((topic, _), entry)| {
-            deleted_id(topic).is_some_and(|id| entry.topic_id.is_none_or(|own| own == id))
+            deleted_id(topic).is_some_and(|id| {
+                deleted_topic_offset_matches(entry.topic_id.map(|own| own.as_u128()), id.as_u128())
+            })
         })
         .map(|(key, _)| key.clone());
     let pending = group

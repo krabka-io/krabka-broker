@@ -1,0 +1,40 @@
+(* #"/workspace/crates/verified/src/topic_offset.rs" 13 0 13 86 *)
+
+let%span stopic_offset = "/workspace/crates/verified/src/topic_offset.rs" 15 16 15 20
+let%span stopic_offset'0 = "/workspace/crates/verified/src/topic_offset.rs" 8 10 11 1
+
+use creusot.int.UInt128
+use creusot.prelude.Any
+
+type t_Option_u128 = None | Some UInt128.t
+
+let elim_Some (_x: t_Option_u128) (return (f0: UInt128.t)) = any
+  [ _k (f0: UInt128.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let deleted_topic_offset_matches [#"/workspace/crates/verified/src/topic_offset.rs" 13 0 13 86]
+  (stored_id: t_Option_u128) (deleted_id: UInt128.t) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {stored_id = None} (! bb4) | br1 (x0: UInt128.t) -> {stored_id = Some x0} (! bb3) ]
+  | bb3 = s0
+    [ s0 = elim_Some {stored_id} (fun (r0: UInt128.t) -> [ &own <- r0 ] s1)
+    | s1 = [ &_ret <- own = deleted_id ] s2
+    | s2 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- [%#stopic_offset] true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & stored_id: t_Option_u128 = stored_id
+  | & deleted_id: UInt128.t = deleted_id
+  | & own: UInt128.t = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:deleted_topic_offset_matches ensures] [%#stopic_offset'0] result
+    = match stored_id with
+      | None -> true
+      | Some own -> UInt128.t'int own = UInt128.t'int deleted_id
+      end}
+    (! return {result}) ]

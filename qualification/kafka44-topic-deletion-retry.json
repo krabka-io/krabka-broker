@@ -1,0 +1,55 @@
+{
+  "date": "2026-11-02",
+  "base_revision": "e148803fdf926dc1f7ac115980d6a8aa36db551f",
+  "qualification_pass": false,
+  "model": {
+    "command": "cargo test -p krabka-broker --lib topic_deletion_interleaves_incarnations_pending_offsets_and_append_failures -- --nocapture",
+    "exit_code": 0,
+    "unique_states": 210,
+    "generated": 1681,
+    "max_depth": 6,
+    "log": "../qualification-topic-model-final.log",
+    "duration": "6m06s build; 0.04s test"
+  },
+  "clippy": {
+    "command": "CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings",
+    "exit_code": 0,
+    "log": "../qualification-clippy-retry.log"
+  },
+  "limits": [
+    "Model uses fake offsets log; does not establish raft/disk/restart recovery",
+    "Jepsen availability/re-election blocker unresolved"
+  ],
+  "source_sha256": {
+    "crates/broker/src/coordinator/unified/actor/topic_deletion/model.rs": "0172f6ccae34baacc274dc8318668540bb5c12880c14e61442c76905eaa7234b",
+    "crates/verified/src/topic_offset.rs": "e4af69adb5995c15a2600aa458ff160ded1363b35d52b1c52b0fd568df1c7806"
+  },
+  "proof": {
+    "image": "ghcr.io/krabka-io/creusot@sha256:992bd1a7a51c58e188dc2b31a6eef36be106217dcf24450f9a4a52cfdeee561b",
+    "version": "0.14.0",
+    "exit_code": 0,
+    "files_proved": 619,
+    "topic_offset_obligations": 2,
+    "log": "../qualification-creusot-final.log",
+    "isolation": "Separate target, generated verification tree and TMPDIR; only topic_offset proof artifact retained"
+  },
+  "clippy_previous": {
+    "command": "cargo clippy --workspace --all-targets -- -D warnings",
+    "exit_code": 0,
+    "duration": "2m14s",
+    "log": "../kafka44-1969-clippy-final.log"
+  },
+  "clippy_failed_attempt": {
+    "command": "cargo clippy --workspace --all-targets -- -D warnings",
+    "exit_code": 101,
+    "log": "../qualification-clippy-final.log",
+    "failure": "ENOSPC in integration-test incremental caches, not a lint finding"
+  },
+  "validation": {
+    "axl_kafka44_tests": 7,
+    "check_scripts": "27 scripts accounted for",
+    "check_creusot_packages": "1 of 25 workspace packages need Creusot, all proved",
+    "format": "cargo +nightly fmt --check passed",
+    "diff_check": "git diff --check passed"
+  }
+}
