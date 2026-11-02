@@ -17,23 +17,39 @@ import org.apache.kafka.common.requests.*;
 public class ProtocolScenarios {
     private static int correlation = 0;
 
-    private static AbstractResponse exchange(String endpoint, AbstractRequest request) throws Exception {
-        String[] address = endpoint.split(":");
+    static AbstractResponse wire(Socket socket, AbstractRequest request) throws Exception {
         RequestHeader header = new RequestHeader(request.apiKey(), request.version(), "kafka44-qualification", ++correlation);
         ByteBuffer payload = request.serializeWithHeader(header);
+        DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+        output.writeInt(payload.remaining());
+        output.write(payload.array(), payload.position(), payload.remaining());
+        output.flush();
+        DataInputStream input = new DataInputStream(socket.getInputStream());
+        int size = input.readInt();
+        if (size < 4 || size > 1048576) throw new IllegalStateException("invalid response size " + size);
+        byte[] bytes = input.readNBytes(size);
+        if (bytes.length != size) throw new IllegalStateException("truncated response");
+        return AbstractResponse.parseResponse(ByteBuffer.wrap(bytes), header);
+    }
+
+    static AbstractResponse exchange(String endpoint, AbstractRequest request) throws Exception {
+        return exchange(endpoint, request, null, null);
+    }
+
+    static AbstractResponse exchange(String endpoint, AbstractRequest request, String user, String password) throws Exception {
+        String[] address = endpoint.split(":");
         try (Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress(address[0], Integer.parseInt(address[1])), 10000);
             socket.setSoTimeout(15000);
-            DataOutputStream output = new DataOutputStream(socket.getOutputStream());
-            output.writeInt(payload.remaining());
-            output.write(payload.array(), payload.position(), payload.remaining());
-            output.flush();
-            DataInputStream input = new DataInputStream(socket.getInputStream());
-            int size = input.readInt();
-            if (size < 4 || size > 1048576) throw new IllegalStateException("invalid response size " + size);
-            byte[] bytes = input.readNBytes(size);
-            if (bytes.length != size) throw new IllegalStateException("truncated response");
-            return AbstractResponse.parseResponse(ByteBuffer.wrap(bytes), header);
+            if (user != null) {
+                SaslHandshakeResponse handshake = (SaslHandshakeResponse) wire(socket, new SaslHandshakeRequest(
+                    new SaslHandshakeRequestData().setMechanism("PLAIN"), (short) 1));
+                if (handshake.error().code() != 0) throw new IllegalStateException("SASL handshake failed");
+                SaslAuthenticateResponse auth = (SaslAuthenticateResponse) wire(socket, new SaslAuthenticateRequest(
+                    new SaslAuthenticateRequestData().setAuthBytes(("\0" + user + "\0" + password).getBytes(java.nio.charset.StandardCharsets.UTF_8)), (short) 2));
+                if (auth.error().code() != 0) throw new IllegalStateException("SASL authentication failed");
+            }
+            return wire(socket, request);
         }
     }
 

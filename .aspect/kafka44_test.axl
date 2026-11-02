@@ -1,6 +1,6 @@
 """Input safety tests for the released Kafka evidence task."""
 
-load("./kafka44.axl", "api_differences", "input_problems", "scenario_differences")
+load("./kafka44.axl", "api_differences", "authorization_input_problems", "input_problems", "scenario_differences")
 load("./testing.axl", "check_eq", "suite", "suite_task")
 
 def _test_revision(_ctx):
@@ -29,5 +29,21 @@ def _test_protocol_differences(_ctx):
     transport = rows.replace("case-0\t{NONE=1}", "case-0\tTRANSPORT:EOFException")
     check_eq("equal disconnect is not parity", len(scenario_differences(transport, transport)), 1)
 
-kafka44_tests = suite("kafka44", [_test_revision, _test_candidate_pairs, _test_api_differences, _test_protocol_differences])
+def _test_authorization_inputs(_ctx):
+    for enabled, protocol, candidate, endpoints, expected in [
+        (False, False, False, ["", ""], 0),
+        (True, True, False, ["", ""], 0),
+        (True, False, False, ["", ""], 1),
+        (True, True, True, ["a", ""], 1),
+        (True, True, True, ["a", "b"], 0),
+        (False, True, False, ["a", ""], 1),
+    ]:
+        check_eq("authorization input completeness", len(authorization_input_problems(enabled, protocol, candidate, endpoints)), expected)
+
+def _test_authorization_differences(_ctx):
+    rows = "\n".join(["SCENARIO\tauth-" + str(i) + "\t{NONE=1}" for i in range(10)])
+    check_eq("ten auth cases", scenario_differences(rows, rows, 10), [])
+    check_eq("truncated authorization is not parity", scenario_differences(rows, rows.splitlines()[0], 10), [{"error": "missing protocol scenario rows"}])
+
+kafka44_tests = suite("kafka44", [_test_revision, _test_candidate_pairs, _test_api_differences, _test_protocol_differences, _test_authorization_inputs, _test_authorization_differences])
 test_kafka44 = suite_task(kafka44_tests)
