@@ -242,7 +242,11 @@ scenarios!("tests/features/migrated/src/coordinator/unified/streams/assignor/tes
 fn task_assignor_registry_executes_selected_logic_and_rejects_ambiguous_names() {
     use {
         super::test_support::{Fail, Pin, registered_config},
-        crate::coordinator::unified::streams::config::KEY_ASSIGNOR_NAME,
+        crate::{
+            api_catalog::UnstableApiVersions,
+            config_keys::group::{GroupBounds, validate_group_configs},
+            coordinator::unified::streams::config::KEY_ASSIGNOR_NAME,
+        },
         std::sync::Arc,
     };
     let mut config = registered_config();
@@ -279,15 +283,15 @@ fn task_assignor_registry_executes_selected_logic_and_rejects_ambiguous_names() 
         tasks: [("sub".into(), vec![0, 1])].into(),
         ..Default::default()
     };
-    let bounds = crate::config_keys::group::GroupBounds {
+    let bounds = GroupBounds {
         streams: config.clone(),
         ..Default::default()
     };
     assert!(
-        crate::config_keys::group::validate_group_configs(
+        validate_group_configs(
             &[(KEY_ASSIGNOR_NAME.into(), "second".into())].into(),
             &bounds,
-            crate::api_catalog::UnstableApiVersions::Enabled,
+            UnstableApiVersions::Enabled,
         )
         .is_ok()
     );

@@ -4,9 +4,9 @@ use {
     std::sync::Arc,
 };
 #[derive(Debug)]
-pub(crate) struct Pin(pub(crate) &'static str, pub(crate) &'static str);
+pub struct Pin(pub &'static str, pub &'static str);
 impl TaskAssignor for Pin {
-    fn name(&self) -> &str { self.0 }
+    fn name(&self) -> &'static str { self.0 }
 
     fn assign(
         &self,
@@ -20,15 +20,15 @@ impl TaskAssignor for Pin {
     }
 }
 #[derive(Debug)]
-pub(crate) struct Fail;
+pub struct Fail;
 impl TaskAssignor for Fail {
-    fn name(&self) -> &str { "fail" }
+    fn name(&self) -> &'static str { "fail" }
 
     fn assign(&self, _: &[AssignorMember], _: &AssignorInput) -> Result<StreamsAssignment, String> {
         Err("extension failed".into())
     }
 }
-pub(crate) fn registered_config() -> StreamsGroupConfig {
+pub fn registered_config() -> StreamsGroupConfig {
     let mut config = StreamsGroupConfig::default();
     config
         .task_assignors
