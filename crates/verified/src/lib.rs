@@ -62,6 +62,7 @@ pub mod reassignment;
 pub mod reconfiguration;
 pub mod recovery;
 pub mod registration;
+pub mod remote_copy;
 pub mod remote_metadata;
 pub mod remote_read;
 pub mod remote_txn;

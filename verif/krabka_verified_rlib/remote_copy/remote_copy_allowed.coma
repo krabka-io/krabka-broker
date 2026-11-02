@@ -1,0 +1,123 @@
+(* #"/workspace/crates/verified/src/remote_copy.rs" 19 0 26 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/logic/ord.rs" 34 8 34 21
+let%span suint_macros = "/rustc/11177f2235f0c842b00f82c558ad9480c0c3a895/library/core/src/num/uint_macros.rs" 40 8 40 27
+let%span suint_macros'0 = "/rustc/11177f2235f0c842b00f82c558ad9480c0c3a895/library/core/src/num/uint_macros.rs" 51 8 51 27
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/std/num.rs" 666 26 666 59
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/std/num.rs" 412 20 413 51
+let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/std/num.rs" 416 26 416 83
+let%span snum'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/std/num.rs" 417 26 417 83
+let%span sremote_copy = "/workspace/crates/verified/src/remote_copy.rs" 27 14 27 15
+let%span sremote_copy'0 = "/workspace/crates/verified/src/remote_copy.rs" 28 24 28 25
+let%span sremote_copy'1 = "/workspace/crates/verified/src/remote_copy.rs" 29 21 29 22
+let%span sremote_copy'2 = "/workspace/crates/verified/src/remote_copy.rs" 30 41 30 70
+let%span sremote_copy'3 = "/workspace/crates/verified/src/remote_copy.rs" 30 90 30 91
+let%span sremote_copy'4 = "/workspace/crates/verified/src/remote_copy.rs" 30 74 30 92
+let%span sremote_copy'5 = "/workspace/crates/verified/src/remote_copy.rs" 27 4 31 96
+let%span sremote_copy'6 = "/workspace/crates/verified/src/remote_copy.rs" 31 24 31 25
+let%span sremote_copy'7 = "/workspace/crates/verified/src/remote_copy.rs" 31 29 31 70
+let%span sremote_copy'8 = "/workspace/crates/verified/src/remote_copy.rs" 31 93 31 94
+let%span sremote_copy'9 = "/workspace/crates/verified/src/remote_copy.rs" 31 74 31 95
+let%span sremote_copy'10 = "/workspace/crates/verified/src/remote_copy.rs" 31 11 31 96
+let%span sremote_copy'11 = "/workspace/crates/verified/src/remote_copy.rs" 13 10 17 1
+let%span sint = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/logic/int.rs" 155 8 155 62
+
+use creusot.int.Int64
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+function abs_diff (self: int) (other: int) : int = [%#sint] if self < other then other - self else self - other
+
+let abs_diff'0 (self: Int64.t) (other: Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:abs_diff ensures] [%#snum] UInt64.t'int result
+    = abs_diff (Int64.to_int self) (Int64.to_int other)}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+constant const_MIN: UInt64.t = [%#suint_macros] (0: UInt64.t)
+
+constant const_MAX: UInt64.t = [%#suint_macros'0] (18446744073709551615: UInt64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let saturating_add (self: UInt64.t) (rhs: UInt64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:saturating_add ensures] ([@stop_split] [@expl:saturating_add ensures #0] [%#snum'0] ge_log_Int (UInt64.t'int self
+          + UInt64.t'int rhs) (UInt64.t'int const_MIN)
+        /\ UInt64.t'int self + UInt64.t'int rhs <= UInt64.t'int const_MAX
+      -> UInt64.t'int result = UInt64.t'int self + UInt64.t'int rhs)
+    /\ ([@stop_split] [@expl:saturating_add ensures #1] [%#snum'1] UInt64.t'int self + UInt64.t'int rhs
+        < UInt64.t'int const_MIN -> UInt64.t'int result = UInt64.t'int const_MIN)
+    /\ ([@stop_split] [@expl:saturating_add ensures #2] [%#snum'2] gt_log_Int (UInt64.t'int self
+      + UInt64.t'int rhs) (UInt64.t'int const_MAX) -> UInt64.t'int result = UInt64.t'int const_MAX)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let remote_copy_allowed [#"/workspace/crates/verified/src/remote_copy.rs" 19 0 26 9] (lag_ms: Int64.t)
+  (lag_bytes: Int64.t) (now_ms: Int64.t) (timestamp_ms: Int64.t) (active_bytes: UInt64.t) (sealed_after: UInt64.t)
+  (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_14 <- lag_ms = ([%#sremote_copy] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb2) | br1 -> {_14} (! bb11) ] ]
+  | bb2 = s0
+    [ s0 = [ &_16 <- lag_bytes = ([%#sremote_copy'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_16 = false} (! bb4) | br1 -> {_16} (! bb11) ] ]
+  | bb4 = s0
+    [ s0 = [ &_18 <- Int64.gt lag_ms ([%#sremote_copy'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_18 = false} (! bb14) | br1 -> {_18} (! bb5) ] ]
+  | bb5 = s0
+    [ s0 = [ &_20 <- Int64.lt now_ms timestamp_ms ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb7) | br1 -> {_20} (! bb11) ] ]
+  | bb7 = s0
+    [ s0 = abs_diff'0 [%#sremote_copy'2] {now_ms} {timestamp_ms} (fun (_x: UInt64.t) -> [ &_24 <- _x ] s1)
+    | s1 = abs_diff'0 [%#sremote_copy'4] {lag_ms} {[%#sremote_copy'3] (0: Int64.t)}
+        (fun (_x: UInt64.t) -> [ &_27 <- _x ] s2)
+    | s2 = [ &_23 <- UInt64.ge _24 _27 ] s3
+    | s3 = any [ br0 -> {_23 = false} (! bb14) | br1 -> {_23} (! bb11) ] ]
+  | bb11 = s0 [ s0 = [ &_ret <- [%#sremote_copy'5] true ] s1 | s1 = return {_ret} ]
+  | bb14 = s0
+    [ s0 = [ &_29 <- Int64.gt lag_bytes ([%#sremote_copy'6] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_29 = false} (! bb16) | br1 -> {_29} (! bb15) ] ]
+  | bb15 = s0
+    [ s0 = saturating_add [%#sremote_copy'7] {active_bytes} {sealed_after} (fun (_x: UInt64.t) -> [ &_31 <- _x ] s1)
+    | s1 = abs_diff'0 [%#sremote_copy'9] {lag_bytes} {[%#sremote_copy'8] (0: Int64.t)}
+        (fun (_x: UInt64.t) -> [ &_34 <- _x ] s2)
+    | s2 = [ &_ret <- UInt64.ge _31 _34 ] s3
+    | s3 = return {_ret} ]
+  | bb16 = s0 [ s0 = [ &_ret <- [%#sremote_copy'10] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & lag_ms: Int64.t = lag_ms
+  | & lag_bytes: Int64.t = lag_bytes
+  | & now_ms: Int64.t = now_ms
+  | & timestamp_ms: Int64.t = timestamp_ms
+  | & active_bytes: UInt64.t = active_bytes
+  | & sealed_after: UInt64.t = sealed_after
+  | & _14: bool = Any.any_l ()
+  | & _16: bool = Any.any_l ()
+  | & _18: bool = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & _23: bool = Any.any_l ()
+  | & _24: UInt64.t = Any.any_l ()
+  | & _27: UInt64.t = Any.any_l ()
+  | & _29: bool = Any.any_l ()
+  | & _31: UInt64.t = Any.any_l ()
+  | & _34: UInt64.t = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:remote_copy_allowed ensures] [%#sremote_copy'11] result
+    = (Int64.to_int lag_ms = 0
+    \/ Int64.to_int lag_bytes = 0
+    \/ gt_log_Int (Int64.to_int lag_ms) 0
+      /\ (Int64.to_int now_ms < Int64.to_int timestamp_ms
+      \/ ge_log_Int (Int64.to_int now_ms - Int64.to_int timestamp_ms) (Int64.to_int lag_ms))
+    \/ gt_log_Int (Int64.to_int lag_bytes) 0
+    /\ ge_log_Int (UInt64.t'int active_bytes + UInt64.t'int sealed_after) (Int64.to_int lag_bytes))}
+    (! return {result}) ]

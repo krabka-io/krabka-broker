@@ -13,10 +13,15 @@ use {
     krabka_log::{Offset, SegmentExport},
     krabka_remote_storage::{RemoteLogSegmentState, TopicIdPartition},
     krabka_units::convert::{ByteSizeExt, TimeExt},
+    krabka_verified::remote_copy::remote_copy_allowed,
     std::time::Duration,
     tokio::time,
     tracing::{debug, warn},
 };
+
+#[cfg(test)]
+#[path = "copy_delay_model.rs"]
+mod copy_delay_model;
 
 /// KIP-1241's delayed copy: how long a sealed segment may wait before this
 /// pass copies it.
@@ -94,19 +99,14 @@ impl CopyDelay {
     /// `max_timestamp_ms`, with `sealed_after` bytes of sealed segments after
     /// it, may be copied.
     fn allows(self, max_timestamp_ms: i64, sealed_after: u64) -> bool {
-        if self.lag_ms == 0 || self.lag_bytes == 0 {
-            return true;
-        }
-        // A segment stamped in the future has a negative age, which Kafka
-        // reads as eligible.
-        if self.lag_ms > 0 {
-            let age_ms = self.now_ms.saturating_sub(max_timestamp_ms);
-            if age_ms < 0 || age_ms >= self.lag_ms {
-                return true;
-            }
-        }
-        u64::try_from(self.lag_bytes)
-            .is_ok_and(|lag| lag > 0 && self.active_bytes.saturating_add(sealed_after) >= lag)
+        remote_copy_allowed(
+            self.lag_ms,
+            self.lag_bytes,
+            self.now_ms,
+            max_timestamp_ms,
+            self.active_bytes,
+            sealed_after,
+        )
     }
 }
 
