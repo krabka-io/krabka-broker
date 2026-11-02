@@ -638,6 +638,25 @@ pub async fn compute_unfence_changes(
     let mut alive = liveness.alive_node_ids().await;
     // The registry still holds the unfencing broker fenced.
     alive.insert(unfenced);
+    compute_leaderless_changes_with_alive(image, &alive, metrics)
+}
+
+/// Reconcile leaderless partitions from the current registry level. Unlike an
+/// unfence edge, this must never make a fenced or unknown broker eligible.
+pub async fn compute_leaderless_changes(
+    image: &MetadataImage,
+    liveness: &ControllerLivenessState,
+    metrics: &BrokerMetrics,
+) -> Vec<MetadataRecord> {
+    let alive = liveness.alive_node_ids().await;
+    compute_leaderless_changes_with_alive(image, &alive, metrics)
+}
+
+fn compute_leaderless_changes_with_alive(
+    image: &MetadataImage,
+    alive: &HashSet<NodeId>,
+    metrics: &BrokerMetrics,
+) -> Vec<MetadataRecord> {
     let witnesses = witness_node_ids(image);
     let mut elr = ScanElr::default();
     let mut changes: Vec<MetadataRecord> = Vec::new();
@@ -655,7 +674,7 @@ pub async fn compute_unfence_changes(
         } = elect_leaderless_one(
             pr,
             &Ladder::builder()
-                .alive(&alive)
+                .alive(alive)
                 .witnesses(&witnesses)
                 .elr(&elr_state)
                 .strategy(strategy)
@@ -682,12 +701,11 @@ pub async fn compute_unfence_changes(
         tracing::info!(
             topic = %pr.topic,
             partition = pr.partition,
-            unfenced = unfenced.0,
             new_leader = leader.0,
             new_isr = ?isr,
             new_leader_epoch = leader_epoch.0,
             unclean,
-            "unfence: electing a leader for a partition with none"
+            "electing a leader for a partition with none"
         );
         push_partition_change(
             &mut changes,

@@ -7,6 +7,7 @@
 use {
     super::*,
     crate::{
+        elr::state::test_records,
         heartbeat::{
             controller_state::TestClock,
             fencing::{RegistrationChange, registration_change},
@@ -212,4 +213,75 @@ async fn tick_leaves_the_unfence_of_a_returning_broker_to_its_heartbeat() {
     let batches = fixture.source.submitted();
     assert!(partition_batches(&batches).is_empty());
     assert!(fencing_updates(&batches) == vec![]);
+}
+
+/// A completed unfence (or a new controller term) must not require another
+/// heartbeat transition to repair already-leaderless metadata.
+#[tokio::test]
+async fn tick_elects_leaderless_partition_without_a_dead_broker() {
+    let mut fixture = leaderless_fixture();
+    fixture.tick().await;
+    assert!(fixture.liveness.dead_snapshot().await.is_empty());
+    let batches = partition_batches(&fixture.source.submitted());
+    assert!(batches.len() == 1, "healthy replicas must restore a leader");
+    let change = one_partition_change(&batches[0]);
+    assert!(change.leader == NodeId(2));
+    assert!(change.leader_epoch == krabka_metadata::LeaderEpoch(6));
+    let mut applied = (*fixture.source.current_image()).clone();
+    for record in &batches[0] {
+        applied.apply(record);
+    }
+    fixture.source.set_image(applied);
+    fixture.tick().await;
+    assert!(partition_batches(&fixture.source.submitted()).len() == 1);
+}
+
+fn leaderless_fixture() -> TickFixture {
+    let mut image = img_with_partition().call();
+    for record in test_records("t", "0:1,2,3:1") {
+        image.apply(&record);
+    }
+    register_brokers(&mut image, &[1, 2, 3]);
+    TickFixture::new(image, 2, false)
+}
+
+#[tokio::test]
+async fn leaderless_retry_does_not_elect_fenced_replicas_or_run_on_followers() {
+    let mut fixture = leaderless_fixture();
+    let mut image = (*fixture.source.current_image()).clone();
+    for broker in [1, 2, 3] {
+        let fence = registration_change(&image, NodeId(broker), RegistrationChange::FENCE)
+            .expect("registered broker");
+        image.apply(&fence);
+    }
+    fixture.source.set_image(image);
+    fixture.tick().await;
+    assert!(fixture.source.submitted().is_empty());
+
+    let mut fixture = leaderless_fixture();
+    fixture.source.set_leader(Some(NodeId(9)));
+    fixture.tick().await;
+    assert!(fixture.source.submitted().is_empty());
+}
+
+#[tokio::test]
+async fn leaderless_retry_rejects_an_intervening_metadata_change() {
+    let mut fixture = leaderless_fixture();
+    let old = (*fixture.source.current_image()).clone();
+    let mut newer = old.clone();
+    for record in test_records("t", "0::") {
+        newer.apply(&record);
+    }
+    fixture.source = Arc::new(
+        FakeMetadataSource::builder()
+            .image(old)
+            .leader(Some(NodeId(2)))
+            .controller_node_id(NodeId(2))
+            .before_guarded_submit(move |source| source.set_image(newer))
+            .build(),
+    );
+    fixture.tick().await;
+    assert!(fixture.source.submitted().is_empty());
+    fixture.tick().await;
+    assert!(fixture.source.submitted().is_empty());
 }

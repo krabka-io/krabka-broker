@@ -4,7 +4,7 @@
 //! runs [`on_broker_dead`] on every fresh death edge.
 
 use {
-    super::scan::compute_failover_changes,
+    super::scan::{compute_failover_changes, compute_leaderless_changes},
     crate::{
         error::BrokerError,
         heartbeat::{
@@ -75,7 +75,7 @@ struct CleanSweep {
 
 /// One tick of the controller-side failover driver. The liveness ticker in
 /// `broker.rs` calls it at every `liveness_tick_interval` and hands it the
-/// same [`LivenessTickState`] each time. Four steps run in order:
+/// same [`LivenessTickState`] each time. Five steps run in order:
 ///
 /// 1. New term. On the first tick that sees this node as controller leader,
 ///    every registered broker is seeded alive with a full timeout window.
@@ -88,7 +88,8 @@ struct CleanSweep {
 ///    change seeded. A broker that registers and dies before its first
 ///    heartbeat reaches this controller would never expire, and the
 ///    partitions it leads would never fail over.
-/// 3. Level. [`sweep_dead_leaders`] re-drives the failover for every broker
+/// 3. Level. Retry leaderless partitions using only active replicas, even
+///    when no broker is dead. [`sweep_dead_leaders`] then re-drives every broker
 ///    that was already dead before this tick and still leads a partition or
 ///    still sits in an ISR. That guarantees convergence when an earlier edge
 ///    was lost. It runs before the edge step so a death handled by this
@@ -128,6 +129,7 @@ pub async fn run_liveness_tick(
         state.clean_sweep = None;
     }
     state.was_leader = leader_now;
+    retry_leaderless_partitions(controller, node_id, liveness, metrics).await;
     sweep_dead_leaders(controller, node_id, liveness, metrics, recovery, state).await;
     for transition in liveness.tick().await {
         use crate::heartbeat::controller_state::LivenessTransition::{AliveToDead, DeadToAlive};
@@ -158,6 +160,31 @@ pub async fn run_liveness_tick(
         // awaits its own commit, and that is the whole difference between a
         // published decision and one still in flight.
         metrics.controller_fencing_publications_total.inc();
+    }
+}
+
+/// Retry the level rather than relying on another unfence edge. In particular,
+/// a newly elected controller can inherit leaderless metadata even though all
+/// eligible brokers already have healthy, unfenced sessions.
+async fn retry_leaderless_partitions(
+    controller: &Arc<dyn MetadataSource>,
+    node_id: NodeId,
+    liveness: &ControllerLivenessState,
+    metrics: &BrokerMetrics,
+) {
+    if !is_controller_leader(controller, node_id) {
+        return;
+    }
+    let image = controller.current_image();
+    let changes = compute_leaderless_changes(&image, liveness, metrics).await;
+    if changes.is_empty() {
+        return;
+    }
+    let submit = controller.submit_change_if_image(changes, image);
+    match time::timeout(FAILOVER_SUBMIT_TIMEOUT, submit).await {
+        Ok(Ok(_committed)) => {}
+        Ok(Err(error)) => warn!(%error, "leaderless election failed; retrying next tick"),
+        Err(_elapsed) => warn!("leaderless election commit timed out; retrying next tick"),
     }
 }
 
