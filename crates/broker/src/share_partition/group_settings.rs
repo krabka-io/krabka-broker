@@ -11,6 +11,7 @@
 
 use {
     crate::{
+        config_keys::parse::java_trim,
         coordinator::unified::{config::clamp_to_range, share::config::ShareGroupConfig},
         features::share_dlq_supported,
     },
@@ -117,7 +118,7 @@ impl GroupShareSettings {
             renew_acknowledge_enabled: value(KEY_RENEW_ACKNOWLEDGE_ENABLE)
                 .is_none_or(|enabled| !enabled.trim().eq_ignore_ascii_case("false")),
             dlq_enabled: share_dlq_supported(image)
-                && value(KEY_DLQ_TOPIC_NAME).is_some_and(|topic| !topic.trim().is_empty()),
+                && value(KEY_DLQ_TOPIC_NAME).is_some_and(|topic| !java_trim(topic).is_empty()),
         }
     }
 
@@ -300,6 +301,8 @@ mod tests {
             (2, Some(" dlq.g "), true),
             (2, Some(""), false),
             (2, Some("  "), false),
+            (2, Some("\u{a0}"), true),
+            (2, Some("\u{0}\u{1f}"), false),
             (2, None, false),
             (1, Some("dlq.g"), false),
             (0, Some("dlq.g"), false),

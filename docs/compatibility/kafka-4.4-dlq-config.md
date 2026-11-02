@@ -80,3 +80,32 @@ Focused Krabka checks on this change:
   restart uses the same on-disk metadata directory and the `Rejoin` boot mode.
 - Share-consume dead-letter-queue integration scenarios: 9 passed, including
   automatic topic creation and the below-`share.version=2` gate.
+
+## String whitespace resolution
+
+Kafka's [released `ConfigDef.parseType`](https://github.com/apache/kafka/blob/4.4.0/clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java#L702)
+uses Java `String.trim()` for STRING values: only code points at or below U+0020
+are removed at the edges. NBSP (U+00A0) and EM SPACE (U+2003) remain significant.
+The broker parser and DLQ runtime now use the same rule for prefixes and group
+topic names, including the acquisition-time DLQ-enabled check. A prefix beginning
+with NBSP must not silently authorize an ordinary `dlq.` topic.
+
+[The released parser probe](../../qualification/kafka44-dlq-config/TrimSemantics.java)
+and [observed output](../../qualification/kafka44-dlq-config/trim-semantics.txt)
+execute the pinned 4.4.0 JARs directly for both keys, with ASCII/control-space,
+NBSP and EM SPACE cases. This is parser evidence, not a new live broker test.
+Reproduce with the JARs extracted from the image above:
+
+```sh
+javac -cp "$KAFKA_LIBS/*" -d "$DLQ_CLASSES" qualification/kafka44-dlq-config/TrimSemantics.java
+java -cp "$DLQ_CLASSES:$KAFKA_LIBS/*" TrimSemantics
+```
+
+Behavioral regressions cover exact resolved names/prefixes, a real metadata
+validation refusal for the NBSP-prefixed rule, and acquisition-time handling of
+NBSP-only versus ASCII/control-only topic configuration.
+
+Follow-up verification: all 149 `share_partition` library tests passed,
+`cargo clippy --workspace --all-targets -- -D warnings` passed, nightly rustfmt
+checks passed, and `aspect check-cpd` reported zero clones. These are local
+checks of this follow-up, not a substitute for its own merged-head CI gate.
