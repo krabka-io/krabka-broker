@@ -1,0 +1,35 @@
+{
+  "date": "2026-11-02",
+  "source_parent": "38001d3f51b9c16635bea880a39d715197b92d46",
+  "merged_main": "d6b952c80",
+  "checks": {
+    "leader_election": {
+      "command": "CARGO_INCREMENTAL=0 cargo test -p krabka-broker --lib leader_election -- --nocapture",
+      "passed": 113,
+      "failed": 0,
+      "log": "../qualification-leader-election-main-fresh.log",
+      "log_sha256": "5bb7ba9a790cc6bc76a9eaceae4ebb73297bd9e8382f21c5e671b339b922176b"
+    },
+    "committed_load_model": {
+      "command": "CARGO_INCREMENTAL=0 cargo test -p krabka-broker --lib a_load_publishes_only_committed_records -- --nocapture",
+      "passed": 1,
+      "unique_states": 50631,
+      "generated_states": 121432,
+      "max_depth": 22,
+      "log": "../qualification-committed-load-model.log",
+      "log_sha256": "f419a3d682a8cb5ae3532dfa3e07f7fab8842749b0792531f2b8ecc46e5aded2"
+    },
+    "workspace_clippy": {
+      "command": "CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings",
+      "status": "passed",
+      "duration": "4m29s",
+      "log": "../qualification-current-clippy.log",
+      "log_sha256": "eaf2744ff2e746ca2cbf045ffdd1790895f38412eb72d3dc19ce52f898efc3c7"
+    }
+  },
+  "qualification_pass": false,
+  "limits": [
+    "Native tests/model do not establish released external interoperability or integrated sibling PRs",
+    "External retained runtime is separately pinned in each receipt and is not this fresh test binary"
+  ]
+}

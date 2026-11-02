@@ -109,3 +109,5 @@ aspect kafka44-remote --revision <exact-runtime-sha> \
 ```
 
 The first actual task pass is retained in `qualification/kafka44-delayed-copy-runtime.json`. The probe creates a fresh topic, snapshots archive filenames, produces24 acknowledged64KiB records with1MiB segment roll, observes no new archive files for3seconds under60s/100MB thresholds, then changes lag.ms to0 and requires new files. This is a short copy/dynamic-update smoke, not proof of threshold timing or uploaded data integrity, remote reads, crash recovery, leadership fencing or multibroker parity. No clean CI result may broaden that claim.
+
+The `--transaction-scenarios` oracle restart also runs `ControllerRecovery.java`: register a synthetic nonvoter, successfully remove it, require the repeat error, and require CONTROLLER_ID_NOT_REGISTERED after the owned clean restart. Exact error codes are checked, not merely error-map equality (some successful released responses have empty `errorCounts()`). Caller-owned candidates are restarted only by their owner; external evidence is retained in `qualification/kafka44-controller-removal-restart.json`.

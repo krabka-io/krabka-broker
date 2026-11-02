@@ -93,7 +93,7 @@ def _protocol_setup(ctx, name, output):
     # javac is local; the only linked client codecs come from the pinned oracle.
     results = [_command(ctx, ["mkdir", output + "/libs", output + "/classes"])]
     results.append(_command(ctx, ["docker", "cp", name + ":/opt/kafka/libs/.", output + "/libs/"]))
-    results.append(_command(ctx, ["javac", "--release", "17", "-cp", output + "/libs/*", "-d", output + "/classes", "tools/kafka44/ProtocolScenarios.java", "tools/kafka44/AuthorizationScenarios.java", "tools/kafka44/TransactionScenarios.java", "tools/kafka44/ConfigScenarios.java"]))
+    results.append(_command(ctx, ["javac", "--release", "17", "-cp", output + "/libs/*", "-d", output + "/classes", "tools/kafka44/ProtocolScenarios.java", "tools/kafka44/AuthorizationScenarios.java", "tools/kafka44/TransactionScenarios.java", "tools/kafka44/ConfigScenarios.java", "tools/kafka44/ControllerRecovery.java"]))
     results.append(_command(ctx, ["docker", "cp", output + "/classes", name + ":/opt/kafka/kafka44classes"]))
     return results
 
@@ -110,6 +110,9 @@ def _config_scenarios(ctx, name, bootstrap, classes):
 def _authorization(ctx, name, bootstrap, classes, admin_bootstrap):
     argv = ["docker", "exec", name, "java"] if name else ["docker", "run", "--rm", "--network", "host", "-v", classes + ":/opt/kafka/kafka44classes:ro", "--entrypoint", "java", IMAGE]
     return _command(ctx, argv + ["-cp", "/opt/kafka/libs/*:/opt/kafka/kafka44classes", "AuthorizationScenarios", bootstrap, admin_bootstrap], 120)
+
+def _controller_recovery(ctx, name, mode):
+    return _command(ctx, ["docker", "exec", name, "java", "-cp", "/opt/kafka/libs/*:/opt/kafka/kafka44classes", "ControllerRecovery", "localhost:9093", mode], 90)
 
 def _transactions(ctx, name, bootstrap, classes, legacy = False):
     argv = ["docker", "exec", name, "java"] if name else ["docker", "run", "--rm", "--network", "host", "-v", classes + ":/opt/kafka/kafka44classes:ro", "--entrypoint", "java", IMAGE]
@@ -280,6 +283,9 @@ def _impl(ctx: TaskContext) -> int:
             if side != "oracle"
         }
     if a.transaction_scenarios:
+        evidence["controller_recovery_fixture_sha256"] = text_sha256(ctx.std.fs.read_to_string("tools/kafka44/ControllerRecovery.java"))
+        evidence["controller_before_restart"] = _controller_recovery(ctx, name, "prepare")
+
         # Only restart the isolated oracle owned by this invocation. Candidate
         # lifecycle belongs to its caller and is never inferred from endpoints.
         evidence["transaction_oracle_restart"] = _command(ctx, ["docker", "restart", "--time", "30", name], 60)
@@ -288,6 +294,7 @@ def _impl(ctx: TaskContext) -> int:
             if result["returncode"] == 0:
                 break
         evidence["transaction_restart_readiness"] = result
+        evidence["controller_after_restart"] = _controller_recovery(ctx, name, "recover")
         evidence["transaction_recovery"] = {
             "modern": _transaction_recovery(ctx, name, evidence["transaction_scenarios"]["oracle"]),
             "legacy": _transaction_recovery(ctx, name, evidence["legacy_transaction_scenarios"]["oracle"]),
@@ -301,6 +308,7 @@ def _impl(ctx: TaskContext) -> int:
     if a.authorization_scenarios:
         failed = failed or any([r["returncode"] for r in evidence["authorization_scenarios"].values()]) or any(evidence["authorization_differences"].values()) or len(scenario_results(evidence["authorization_scenarios"]["oracle"]["stdout"])) != 10 or "TRANSPORT:" in evidence["authorization_scenarios"]["oracle"]["stdout"]
     if a.transaction_scenarios:
+        failed = failed or evidence["controller_before_restart"]["returncode"] or len(scenario_results(evidence["controller_before_restart"]["stdout"])) != 3 or evidence["controller_after_restart"]["returncode"] or len(scenario_results(evidence["controller_after_restart"]["stdout"])) != 1
         failed = failed or evidence["transaction_oracle_restart"]["returncode"] or evidence["transaction_restart_readiness"]["returncode"] or any([r["returncode"] or len(scenario_results(r["stdout"])) != 2 for r in evidence["transaction_recovery"].values()])
         failed = failed or any([r["returncode"] for r in evidence["transaction_scenarios"].values()]) or any(evidence["transaction_differences"].values()) or len(scenario_results(evidence["transaction_scenarios"]["oracle"]["stdout"])) != 16
     if a.transaction_scenarios:

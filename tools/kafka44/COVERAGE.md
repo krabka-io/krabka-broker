@@ -39,7 +39,7 @@ Local harness verification on 2026-11-02: `aspect axl-tests` reports **560 passe
 
 ## Transaction-completion counterexamples are not passes
 
-Baseline `crates/broker/src/txn/completion_model.rs` documents and executes `check_model_with_known_failures`. The test succeeds when the declared safety/liveness counterexamples are found at their pinned depths. It must not count as successful qualification of those properties:
+Historical baseline `crates/broker/src/txn/completion_model.rs` documented and executed `check_model_with_known_failures`. The test succeeds when the declared safety/liveness counterexamples are found at their pinned depths. It must not count as successful qualification of those properties:
 
 | Counterexample | Production linkage / declared trace | Required resolution |
 | --- | --- | --- |
@@ -47,7 +47,7 @@ Baseline `crates/broker/src/txn/completion_model.rs` documents and executes `che
 | Uncommitted PrepareAbort is replayed; abort marker written on one data partition; second move truncates prepare; surviving Ongoing transaction commits elsewhere | Same model, ONE_OUTCOME depth 16 | No split transaction outcome under state-partition movement; runtime read_committed/offset recovery |
 | Unexpected/fenced marker response causes durable PrepareCommit to be abandoned, leaving LSO stuck | `a_refused_marker_strands_a_prepared_commit`; CONVERGED depth 7 with refusals | Resolve legal-reachability and retry/recovery contract against release; retain a negative control rather than removing the fault to obtain green results |
 
-These three model counterexamples are distinct from the legacy Jepsen manifest's categories (duplicate idempotent retry, leader epoch stuck after reelection, hanging transaction/LSO). Do not conflate old expected-failure labels with current reproduction.
+After merging main d6b952c80, the first two historical counterexamples are addressed by waiting for committed replay before publication. The current production-linked `a_load_publishes_only_committed_records` invariant exploration passes locally; the refused-marker test remains an explicit known-failure/illegal-leader-state boundary, not a broad transaction liveness pass. These three historical model counterexamples are distinct from the legacy Jepsen manifest's categories (duplicate idempotent retry, leader epoch stuck after reelection, hanging transaction/LSO). Do not conflate old expected-failure labels with current reproduction.
 
 ## Current distributed-test release blocker
 
@@ -114,3 +114,7 @@ A fresh five-node Jepsen 0.3.15 `assign-mixed` run using released Kafka client 4
 This is a copy-only smoke: a short no-early-copy observation and a dynamic-zero positive control. It does not establish full threshold timing, byte-trigger crossing, remote reads, failed uploads, retention safety, leadership fencing, crash/pending-copy recovery, multibroker parity or current combined Streams/DLQ heads. The recording backend is never a production storage implementation. Full qualification remains false.
 
 After merging current main, an actual fresh Cargo rebuild/test of `leader_election` passed113 tests (8842filtered), including ticker and leaderless regressions; private log `../qualification-leader-election-main-fresh.log`. This supersedes the old stopped-rebuild caveat for source parent `ff09ae16e`, not the retained runtime binary used by external fixtures.
+
+## Successful controller removal survives clean restart
+
+`qualification/kafka44-controller-removal-restart.json` records matching released/enabled register/remove/repeat cases and CONTROLLER_ID_NOT_REGISTERED after clean restart of the identical data. The existing `aspect kafka44 --protocol-scenarios --transaction-scenarios` oracle variant now compiles this strict-error-code fixture, prepares successful removal before its owned restart, and verifies the removal after readiness; a full local collector run passes (16.9s). This closes successful-deletion clean-restart evidence only. Separate-controller forwarding, failed metadata commits, further authorization races and final integrated binary qualification remain open.

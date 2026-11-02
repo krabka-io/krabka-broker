@@ -1,0 +1,112 @@
+{
+  "date": "2026-11-02",
+  "qualification_pass": false,
+  "status": "released-enabled-controller-removal-clean-restart-pass",
+  "runtime_source_revision": "b734bbab95deb758c12f3895678c6c421abf04ee",
+  "binary_sha256": "fea75051c3f895c6b954af9bfe4685042077586255fa8291cc37775285059d4e",
+  "fixture_sha256": "6072dbdea5a557e8ba66e74ad0e3ed2bd85ae3daf83f7ccb05a966c94ab1b9fb",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "oracle_collector": {
+    "command": "aspect kafka44 --protocol-scenarios --transaction-scenarios --revision <38001d3f5 full SHA> --output ../qualification-controller-restart-oracle-current",
+    "evidence_path": "../qualification-controller-restart-oracle-current/evidence.json",
+    "sha256": "e7e43e0f89092aa413cc001c2c1f62af3eec5ec58b44726bae441fa9de3e7943",
+    "before": {
+      "command": [
+        "timeout",
+        "90",
+        "docker",
+        "exec",
+        "krabka-kafka44-cation-controller-restart-oracle-current",
+        "java",
+        "-cp",
+        "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+        "ControllerRecovery",
+        "localhost:9093",
+        "prepare"
+      ],
+      "returncode": 0,
+      "stdout": "RESPONSE\tregister-before-restart\tControllerRegistrationResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tregister-before-restart\tNONE\nRESPONSE\tremove-before-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tremove-before-restart\tNONE\nRESPONSE\tremoved-before-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 424243 is not currently registered.')\nSCENARIO\tremoved-before-restart\tCONTROLLER_ID_NOT_REGISTERED\n",
+      "stderr": ""
+    },
+    "after": {
+      "command": [
+        "timeout",
+        "90",
+        "docker",
+        "exec",
+        "krabka-kafka44-cation-controller-restart-oracle-current",
+        "java",
+        "-cp",
+        "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+        "ControllerRecovery",
+        "localhost:9093",
+        "recover"
+      ],
+      "returncode": 0,
+      "stdout": "RESPONSE\tremoved-after-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 424243 is not currently registered.')\nSCENARIO\tremoved-after-restart\tCONTROLLER_ID_NOT_REGISTERED\n",
+      "stderr": ""
+    },
+    "restart": {
+      "command": [
+        "timeout",
+        "60",
+        "docker",
+        "restart",
+        "--time",
+        "30",
+        "krabka-kafka44-cation-controller-restart-oracle-current"
+      ],
+      "returncode": 0,
+      "stdout": "Flag --time has been deprecated, use --timeout instead\nkrabka-kafka44-cation-controller-restart-oracle-current\n",
+      "stderr": ""
+    },
+    "readiness": {
+      "command": [
+        "timeout",
+        "10",
+        "docker",
+        "exec",
+        "krabka-kafka44-cation-controller-restart-oracle-current",
+        "/opt/kafka/bin/kafka-topics.sh",
+        "--bootstrap-server",
+        "localhost:9092",
+        "--list"
+      ],
+      "returncode": 0,
+      "stdout": "__consumer_offsets\n__transaction_state\nkafka44-config-51814c6e-3e16-434f-9bab-c7ed7c509725\nkafka44-txn-52e9ad22-7115-4674-a95b-d4358f32e044\nkafka44-txn-6727f3ad-c33a-40d2-9fcc-20881eab1f32\n",
+      "stderr": "[2026-11-02 21:52:19,308] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n[2026-11-02 21:52:19,404] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n[2026-11-02 21:52:19,505] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n[2026-11-02 21:52:19,807] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n[2026-11-02 21:52:20,309] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n"
+    }
+  },
+  "external_results": {
+    "oracle_prepare": {
+      "returncode": 0,
+      "sha256": "da5628316916b3be8c40afb44f623b0128a793dd991441567adb34df54206c68",
+      "stdout": "RESPONSE\tregister-before-restart\tControllerRegistrationResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tregister-before-restart\tNONE\nRESPONSE\tremove-before-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tremove-before-restart\tNONE\nRESPONSE\tremoved-before-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 424243 is not currently registered.')\nSCENARIO\tremoved-before-restart\tCONTROLLER_ID_NOT_REGISTERED\n"
+    },
+    "enabled_prepare": {
+      "returncode": 0,
+      "sha256": "da5628316916b3be8c40afb44f623b0128a793dd991441567adb34df54206c68",
+      "stdout": "RESPONSE\tregister-before-restart\tControllerRegistrationResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tregister-before-restart\tNONE\nRESPONSE\tremove-before-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tremove-before-restart\tNONE\nRESPONSE\tremoved-before-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 424243 is not currently registered.')\nSCENARIO\tremoved-before-restart\tCONTROLLER_ID_NOT_REGISTERED\n"
+    },
+    "oracle_recover": {
+      "returncode": 0,
+      "sha256": "9fae8751c12b9736fdd848574e9219f7e87062eadede4be3af21c93db16d343f",
+      "stdout": "RESPONSE\tremoved-after-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 424243 is not currently registered.')\nSCENARIO\tremoved-after-restart\tCONTROLLER_ID_NOT_REGISTERED\n"
+    },
+    "enabled_recover": {
+      "returncode": 0,
+      "sha256": "9fae8751c12b9736fdd848574e9219f7e87062eadede4be3af21c93db16d343f",
+      "stdout": "RESPONSE\tremoved-after-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 424243 is not currently registered.')\nSCENARIO\tremoved-after-restart\tCONTROLLER_ID_NOT_REGISTERED\n"
+    }
+  },
+  "lifecycle_notes": [
+    "Owned candidate PID2283885 stopped SIGTERM/session43464 exit0 then identical binary/data/config/flags reopened.",
+    "Prototype oracle container initial command reformatted on every start and exited on existing data. Preserved logs; started exact pinned image in owned qualification-tiered-restarted container against same oracle-data/config without reformatting. Premature connection refusals are not counted as passes.",
+    "Independent full collector now prepares controller removal and verifies it after its own successful clean oracle restart, with readiness check."
+  ],
+  "limits": [
+    "Successful nonvoter removal, repeat error, clean-restart persistence only",
+    "not separate controller forwarding, authorization or metadata append failure",
+    "retained candidate binary predates final integrated Streams/DLQ heads"
+  ]
+}
