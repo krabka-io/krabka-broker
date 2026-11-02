@@ -4,6 +4,8 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.Properties;
+import org.apache.kafka.clients.admin.Admin;
 import java.util.TreeMap;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.message.*;
@@ -47,10 +49,34 @@ public class ProtocolScenarios {
         }
     }
 
-    public static void main(String[] args) {
+    private static ApiVersionsRequest routing(String cluster, int node) {
+        return new ApiVersionsRequest(new ApiVersionsRequestData()
+            .setClientSoftwareName("kafka44-qualification").setClientSoftwareVersion("1")
+            .setClusterId(cluster).setNodeId(node), (short) 5);
+    }
+
+    private static void routingProbes(String broker, String controller) throws Exception {
+        Properties config = new Properties();
+        config.put("bootstrap.servers", broker);
+        config.put("default.api.timeout.ms", "15000");
+        config.put("request.timeout.ms", "10000");
+        try (Admin admin = Admin.create(config)) {
+            String cluster = admin.describeCluster().clusterId().get();
+            int node = admin.describeCluster().nodes().get().iterator().next().id();
+            probe("routing-no-identity", broker, routing(null, -1));
+            probe("routing-cluster-only", broker, routing(cluster, -1));
+            probe("routing-node-only", broker, routing(null, node));
+            probe("routing-correct-identity", broker, routing(cluster, node));
+            probe("routing-wrong-cluster", broker, routing("wrong-cluster", node));
+            probe("routing-controller-wrong-cluster", controller, routing("wrong-cluster", node));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
         if (args.length != 2) throw new IllegalArgumentException("broker and controller endpoints required");
         String broker = args[0];
         String controller = args[1];
+        routingProbes(broker, controller);
         probe("controller-unknown-id", controller, new UnregisterControllerRequest(
             new UnregisterControllerRequestData().setControllerId(2147483646), (short) 0));
         probe("controller-api-on-broker", broker, new UnregisterControllerRequest(

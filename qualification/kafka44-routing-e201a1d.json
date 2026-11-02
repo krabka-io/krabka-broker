@@ -1,0 +1,536 @@
+{
+  "schema_version": 1,
+  "status": "probe-failure",
+  "krabka_revision": "e201a1dfafd26f4ddae193a3cd1f0b340c819aa6",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "configs": {
+    "default": {
+      "sha256": "753560bb1573475d93410b90a06921840fb800810ebbb8bc6e07ea817e61f5f9"
+    },
+    "enabled": {
+      "sha256": "ab55f9b8fc32d9467c075cdc679aab2a4c15180d463637c2851825c5cb051769"
+    }
+  },
+  "sides": {
+    "oracle": {
+      "api-versions": {
+        "command": [
+          "timeout",
+          "90",
+          "docker",
+          "exec",
+          "krabka-kafka44---kafka44-routing-comparison-20261102-v2",
+          "/opt/kafka/bin/kafka-broker-api-versions.sh",
+          "--bootstrap-server",
+          "localhost:9092"
+        ],
+        "returncode": 0,
+        "stdout": "localhost:9092 (id: 1 rack: null isFenced: false) -> (\n\tProduce(0): 0 to 13 [usable: 13],\n\tFetch(1): 4 to 18 [usable: 18],\n\tListOffsets(2): 1 to 11 [usable: 11],\n\tMetadata(3): 0 to 13 [usable: 13],\n\tOffsetCommit(8): 2 to 10 [usable: 10],\n\tOffsetFetch(9): 1 to 10 [usable: 10],\n\tFindCoordinator(10): 0 to 6 [usable: 6],\n\tJoinGroup(11): 0 to 9 [usable: 9],\n\tHeartbeat(12): 0 to 4 [usable: 4],\n\tLeaveGroup(13): 0 to 5 [usable: 5],\n\tSyncGroup(14): 0 to 5 [usable: 5],\n\tDescribeGroups(15): 0 to 6 [usable: 6],\n\tListGroups(16): 0 to 5 [usable: 5],\n\tSaslHandshake(17): 0 to 1 [usable: 1],\n\tApiVersions(18): 0 to 5 [usable: 5],\n\tCreateTopics(19): 2 to 7 [usable: 7],\n\tDeleteTopics(20): 1 to 6 [usable: 6],\n\tDeleteRecords(21): 0 to 2 [usable: 2],\n\tInitProducerId(22): 0 to 5 [usable: 5],\n\tOffsetForLeaderEpoch(23): 2 to 4 [usable: 4],\n\tAddPartitionsToTxn(24): 0 to 5 [usable: 5],\n\tAddOffsetsToTxn(25): 0 to 4 [usable: 4],\n\tEndTxn(26): 0 to 5 [usable: 5],\n\tWriteTxnMarkers(27): 1 to 2 [usable: 2],\n\tTxnOffsetCommit(28): 0 to 6 [usable: 6],\n\tDescribeAcls(29): 1 to 3 [usable: 3],\n\tCreateAcls(30): 1 to 3 [usable: 3],\n\tDeleteAcls(31): 1 to 3 [usable: 3],\n\tDescribeConfigs(32): 1 to 4 [usable: 4],\n\tAlterConfigs(33): 0 to 2 [usable: 2],\n\tAlterReplicaLogDirs(34): 1 to 2 [usable: 2],\n\tDescribeLogDirs(35): 1 to 5 [usable: 5],\n\tSaslAuthenticate(36): 0 to 2 [usable: 2],\n\tCreatePartitions(37): 0 to 3 [usable: 3],\n\tCreateDelegationToken(38): 1 to 3 [usable: 3],\n\tRenewDelegationToken(39): 1 to 2 [usable: 2],\n\tExpireDelegationToken(40): 1 to 2 [usable: 2],\n\tDescribeDelegationToken(41): 1 to 3 [usable: 3],\n\tDeleteGroups(42): 0 to 3 [usable: 3],\n\tElectLeaders(43): 0 to 2 [usable: 2],\n\tIncrementalAlterConfigs(44): 0 to 1 [usable: 1],\n\tAlterPartitionReassignments(45): 0 to 1 [usable: 1],\n\tListPartitionReassignments(46): 0 [usable: 0],\n\tOffsetDelete(47): 0 [usable: 0],\n\tDescribeClientQuotas(48): 0 to 1 [usable: 1],\n\tAlterClientQuotas(49): 0 to 1 [usable: 1],\n\tDescribeUserScramCredentials(50): 0 [usable: 0],\n\tAlterUserScramCredentials(51): 0 [usable: 0],\n\tDescribeQuorum(55): 0 to 2 [usable: 2],\n\tUpdateFeatures(57): 0 to 2 [usable: 2],\n\tDescribeCluster(60): 0 to 2 [usable: 2],\n\tDescribeProducers(61): 0 [usable: 0],\n\tUnregisterBroker(64): 0 [usable: 0],\n\tDescribeTransactions(65): 0 [usable: 0],\n\tListTransactions(66): 0 to 2 [usable: 2],\n\tConsumerGroupHeartbeat(68): 0 to 1 [usable: 1],\n\tConsumerGroupDescribe(69): 0 to 1 [usable: 1],\n\tGetTelemetrySubscriptions(71): UNSUPPORTED,\n\tPushTelemetry(72): UNSUPPORTED,\n\tListConfigResources(74): 0 to 1 [usable: 1],\n\tDescribeTopicPartitions(75): 0 [usable: 0],\n\tShareGroupHeartbeat(76): 1 [usable: 1],\n\tShareGroupDescribe(77): 1 [usable: 1],\n\tShareFetch(78): 1 to 2 [usable: 2],\n\tShareAcknowledge(79): 1 to 2 [usable: 2],\n\tAddRaftVoter(80): 0 to 1 [usable: 1],\n\tRemoveRaftVoter(81): 0 [usable: 0],\n\tInitializeShareGroupState(83): 0 [usable: 0],\n\tReadShareGroupState(84): 0 [usable: 0],\n\tWriteShareGroupState(85): 0 to 1 [usable: 1],\n\tDeleteShareGroupState(86): 0 [usable: 0],\n\tReadShareGroupStateSummary(87): 0 to 1 [usable: 1],\n\tStreamsGroupHeartbeat(88): 0 to 1 [usable: 1],\n\tStreamsGroupDescribe(89): 0 to 1 [usable: 1],\n\tDescribeShareGroupOffsets(90): 0 to 1 [usable: 1],\n\tAlterShareGroupOffsets(91): 0 [usable: 0],\n\tDeleteShareGroupOffsets(92): 0 [usable: 0],\n\tStreamsGroupTopologyDescriptionUpdate(93): 0 [usable: 0],\n\tUnregisterController(94): 0 [usable: 0]\n)\n",
+        "stderr": "WARNING: kafka-broker-api-versions.sh is deprecated and will be removed in the next major release. Use 'kafka-cluster.sh api-versions' instead.\n"
+      },
+      "features": {
+        "command": [
+          "timeout",
+          "90",
+          "docker",
+          "exec",
+          "krabka-kafka44---kafka44-routing-comparison-20261102-v2",
+          "/opt/kafka/bin/kafka-features.sh",
+          "--bootstrap-server",
+          "localhost:9092",
+          "describe"
+        ],
+        "returncode": 0,
+        "stdout": "Feature: eligible.leader.replicas.version          SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 20\nFeature: group.version                             SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 20\nFeature: kraft.version                             SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 0                Epoch: 20\nFeature: metadata.version                          SupportedMinVersion: 3.3-IV3          SupportedMaxVersion: 4.4-IV2          FinalizedVersionLevel: 4.4-IV2          Epoch: 20\nFeature: share.version                             SupportedMinVersion: 0                SupportedMaxVersion: 2                FinalizedVersionLevel: 2                Epoch: 20\nFeature: streams.version                           SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 20\nFeature: transaction.version                       SupportedMinVersion: 0                SupportedMaxVersion: 2                FinalizedVersionLevel: 2                Epoch: 20\n",
+        "stderr": ""
+      },
+      "broker-configs": {
+        "command": [
+          "timeout",
+          "90",
+          "docker",
+          "exec",
+          "krabka-kafka44---kafka44-routing-comparison-20261102-v2",
+          "/opt/kafka/bin/kafka-configs.sh",
+          "--bootstrap-server",
+          "localhost:9092",
+          "--describe",
+          "--entity-type",
+          "brokers",
+          "--entity-default",
+          "--all"
+        ],
+        "returncode": 0,
+        "stdout": "Default configs for brokers in the cluster are:\n  min.insync.replicas=1 sensitive=false synonyms={DYNAMIC_DEFAULT_BROKER_CONFIG:min.insync.replicas=1}\n",
+        "stderr": ""
+      }
+    },
+    "default": {
+      "api-versions": {
+        "command": [
+          "timeout",
+          "90",
+          "docker",
+          "run",
+          "--rm",
+          "--network",
+          "host",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "/opt/kafka/bin/kafka-broker-api-versions.sh",
+          "--bootstrap-server",
+          "127.0.0.1:39092"
+        ],
+        "returncode": 0,
+        "stdout": "127.0.0.1:39092 (id: 1 rack: null isFenced: false) -> (\n\tProduce(0): 0 to 13 [usable: 13],\n\tFetch(1): 4 to 18 [usable: 18],\n\tListOffsets(2): 1 to 11 [usable: 11],\n\tMetadata(3): 0 to 13 [usable: 13],\n\tOffsetCommit(8): 2 to 10 [usable: 10],\n\tOffsetFetch(9): 1 to 10 [usable: 10],\n\tFindCoordinator(10): 0 to 6 [usable: 6],\n\tJoinGroup(11): 0 to 9 [usable: 9],\n\tHeartbeat(12): 0 to 4 [usable: 4],\n\tLeaveGroup(13): 0 to 5 [usable: 5],\n\tSyncGroup(14): 0 to 5 [usable: 5],\n\tDescribeGroups(15): 0 to 6 [usable: 6],\n\tListGroups(16): 0 to 5 [usable: 5],\n\tSaslHandshake(17): 0 to 1 [usable: 1],\n\tApiVersions(18): 0 to 4 [usable: 4],\n\tCreateTopics(19): 2 to 7 [usable: 7],\n\tDeleteTopics(20): 1 to 6 [usable: 6],\n\tDeleteRecords(21): 0 to 2 [usable: 2],\n\tInitProducerId(22): 0 to 5 [usable: 5],\n\tOffsetForLeaderEpoch(23): 2 to 4 [usable: 4],\n\tAddPartitionsToTxn(24): 0 to 5 [usable: 5],\n\tAddOffsetsToTxn(25): 0 to 4 [usable: 4],\n\tEndTxn(26): 0 to 5 [usable: 5],\n\tWriteTxnMarkers(27): 1 to 2 [usable: 2],\n\tTxnOffsetCommit(28): 0 to 5 [usable: 5],\n\tDescribeAcls(29): 1 to 3 [usable: 3],\n\tCreateAcls(30): 1 to 3 [usable: 3],\n\tDeleteAcls(31): 1 to 3 [usable: 3],\n\tDescribeConfigs(32): 1 to 4 [usable: 4],\n\tAlterConfigs(33): 0 to 2 [usable: 2],\n\tAlterReplicaLogDirs(34): 1 to 2 [usable: 2],\n\tDescribeLogDirs(35): 1 to 5 [usable: 5],\n\tSaslAuthenticate(36): 0 to 2 [usable: 2],\n\tCreatePartitions(37): 0 to 3 [usable: 3],\n\tCreateDelegationToken(38): 1 to 3 [usable: 3],\n\tRenewDelegationToken(39): 1 to 2 [usable: 2],\n\tExpireDelegationToken(40): 1 to 2 [usable: 2],\n\tDescribeDelegationToken(41): 1 to 3 [usable: 3],\n\tDeleteGroups(42): 0 to 2 [usable: 2],\n\tElectLeaders(43): 0 to 2 [usable: 2],\n\tIncrementalAlterConfigs(44): 0 to 1 [usable: 1],\n\tAlterPartitionReassignments(45): 0 to 1 [usable: 1],\n\tListPartitionReassignments(46): 0 [usable: 0],\n\tOffsetDelete(47): 0 [usable: 0],\n\tDescribeClientQuotas(48): 0 to 1 [usable: 1],\n\tAlterClientQuotas(49): 0 to 1 [usable: 1],\n\tDescribeUserScramCredentials(50): 0 [usable: 0],\n\tAlterUserScramCredentials(51): 0 [usable: 0],\n\tDescribeQuorum(55): 0 to 2 [usable: 2],\n\tUpdateFeatures(57): 0 to 2 [usable: 2],\n\tDescribeCluster(60): 0 to 2 [usable: 2],\n\tDescribeProducers(61): 0 [usable: 0],\n\tUnregisterBroker(64): 0 [usable: 0],\n\tDescribeTransactions(65): 0 [usable: 0],\n\tListTransactions(66): 0 to 2 [usable: 2],\n\tConsumerGroupHeartbeat(68): 0 to 1 [usable: 1],\n\tConsumerGroupDescribe(69): 0 to 1 [usable: 1],\n\tGetTelemetrySubscriptions(71): UNSUPPORTED,\n\tPushTelemetry(72): UNSUPPORTED,\n\tListConfigResources(74): 0 to 1 [usable: 1],\n\tDescribeTopicPartitions(75): 0 [usable: 0],\n\tShareGroupHeartbeat(76): 1 [usable: 1],\n\tShareGroupDescribe(77): 1 [usable: 1],\n\tShareFetch(78): 1 to 2 [usable: 2],\n\tShareAcknowledge(79): 1 to 2 [usable: 2],\n\tAddRaftVoter(80): 0 to 1 [usable: 1],\n\tRemoveRaftVoter(81): 0 [usable: 0],\n\tInitializeShareGroupState(83): 0 [usable: 0],\n\tReadShareGroupState(84): 0 [usable: 0],\n\tWriteShareGroupState(85): 0 to 1 [usable: 1],\n\tDeleteShareGroupState(86): 0 [usable: 0],\n\tReadShareGroupStateSummary(87): 0 to 1 [usable: 1],\n\tStreamsGroupHeartbeat(88): 0 [usable: 0],\n\tStreamsGroupDescribe(89): 0 [usable: 0],\n\tDescribeShareGroupOffsets(90): 0 to 1 [usable: 1],\n\tAlterShareGroupOffsets(91): 0 [usable: 0],\n\tDeleteShareGroupOffsets(92): 0 [usable: 0],\n\tStreamsGroupTopologyDescriptionUpdate(93): UNSUPPORTED,\n\tUnregisterController(94): UNSUPPORTED\n)\n",
+        "stderr": "WARNING: kafka-broker-api-versions.sh is deprecated and will be removed in the next major release. Use 'kafka-cluster.sh api-versions' instead.\n"
+      },
+      "features": {
+        "command": [
+          "timeout",
+          "90",
+          "docker",
+          "run",
+          "--rm",
+          "--network",
+          "host",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "/opt/kafka/bin/kafka-features.sh",
+          "--bootstrap-server",
+          "127.0.0.1:39092",
+          "describe"
+        ],
+        "returncode": 0,
+        "stdout": "Feature: eligible.leader.replicas.version          SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 1005\nFeature: group.version                             SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 1005\nFeature: krabka.version                            SupportedMinVersion: 0                SupportedMaxVersion: 2                FinalizedVersionLevel: 0                Epoch: 1005\nFeature: kraft.version                             SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 1005\nFeature: metadata.version                          SupportedMinVersion: 3.3-IV3          SupportedMaxVersion: 4.3-IV0          FinalizedVersionLevel: 4.3-IV0          Epoch: 1005\nFeature: share.version                             SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 1005\nFeature: streams.version                           SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 1005\nFeature: transaction.version                       SupportedMinVersion: 0                SupportedMaxVersion: 2                FinalizedVersionLevel: 2                Epoch: 1005\n",
+        "stderr": ""
+      },
+      "broker-configs": {
+        "command": [
+          "timeout",
+          "90",
+          "docker",
+          "run",
+          "--rm",
+          "--network",
+          "host",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "/opt/kafka/bin/kafka-configs.sh",
+          "--bootstrap-server",
+          "127.0.0.1:39092",
+          "--describe",
+          "--entity-type",
+          "brokers",
+          "--entity-default",
+          "--all"
+        ],
+        "returncode": 0,
+        "stdout": "Default configs for brokers in the cluster are:\n  min.insync.replicas=1 sensitive=false synonyms={DYNAMIC_DEFAULT_BROKER_CONFIG:min.insync.replicas=1}\n",
+        "stderr": ""
+      }
+    },
+    "enabled": {
+      "api-versions": {
+        "command": [
+          "timeout",
+          "90",
+          "docker",
+          "run",
+          "--rm",
+          "--network",
+          "host",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "/opt/kafka/bin/kafka-broker-api-versions.sh",
+          "--bootstrap-server",
+          "127.0.0.1:49092"
+        ],
+        "returncode": 0,
+        "stdout": "127.0.0.1:49092 (id: 1 rack: null isFenced: false) -> (\n\tProduce(0): 0 to 13 [usable: 13],\n\tFetch(1): 4 to 18 [usable: 18],\n\tListOffsets(2): 1 to 11 [usable: 11],\n\tMetadata(3): 0 to 13 [usable: 13],\n\tOffsetCommit(8): 2 to 10 [usable: 10],\n\tOffsetFetch(9): 1 to 10 [usable: 10],\n\tFindCoordinator(10): 0 to 6 [usable: 6],\n\tJoinGroup(11): 0 to 9 [usable: 9],\n\tHeartbeat(12): 0 to 4 [usable: 4],\n\tLeaveGroup(13): 0 to 5 [usable: 5],\n\tSyncGroup(14): 0 to 5 [usable: 5],\n\tDescribeGroups(15): 0 to 6 [usable: 6],\n\tListGroups(16): 0 to 5 [usable: 5],\n\tSaslHandshake(17): 0 to 1 [usable: 1],\n\tApiVersions(18): 0 to 5 [usable: 5],\n\tCreateTopics(19): 2 to 7 [usable: 7],\n\tDeleteTopics(20): 1 to 6 [usable: 6],\n\tDeleteRecords(21): 0 to 2 [usable: 2],\n\tInitProducerId(22): 0 to 6 [usable: 6],\n\tOffsetForLeaderEpoch(23): 2 to 4 [usable: 4],\n\tAddPartitionsToTxn(24): 0 to 5 [usable: 5],\n\tAddOffsetsToTxn(25): 0 to 4 [usable: 4],\n\tEndTxn(26): 0 to 5 [usable: 5],\n\tWriteTxnMarkers(27): 1 to 2 [usable: 2],\n\tTxnOffsetCommit(28): 0 to 6 [usable: 6],\n\tDescribeAcls(29): 1 to 3 [usable: 3],\n\tCreateAcls(30): 1 to 3 [usable: 3],\n\tDeleteAcls(31): 1 to 3 [usable: 3],\n\tDescribeConfigs(32): 1 to 4 [usable: 4],\n\tAlterConfigs(33): 0 to 2 [usable: 2],\n\tAlterReplicaLogDirs(34): 1 to 2 [usable: 2],\n\tDescribeLogDirs(35): 1 to 5 [usable: 5],\n\tSaslAuthenticate(36): 0 to 2 [usable: 2],\n\tCreatePartitions(37): 0 to 3 [usable: 3],\n\tCreateDelegationToken(38): 1 to 3 [usable: 3],\n\tRenewDelegationToken(39): 1 to 2 [usable: 2],\n\tExpireDelegationToken(40): 1 to 2 [usable: 2],\n\tDescribeDelegationToken(41): 1 to 3 [usable: 3],\n\tDeleteGroups(42): 0 to 3 [usable: 3],\n\tElectLeaders(43): 0 to 2 [usable: 2],\n\tIncrementalAlterConfigs(44): 0 to 1 [usable: 1],\n\tAlterPartitionReassignments(45): 0 to 1 [usable: 1],\n\tListPartitionReassignments(46): 0 [usable: 0],\n\tOffsetDelete(47): 0 [usable: 0],\n\tDescribeClientQuotas(48): 0 to 1 [usable: 1],\n\tAlterClientQuotas(49): 0 to 1 [usable: 1],\n\tDescribeUserScramCredentials(50): 0 [usable: 0],\n\tAlterUserScramCredentials(51): 0 [usable: 0],\n\tDescribeQuorum(55): 0 to 2 [usable: 2],\n\tUpdateFeatures(57): 0 to 2 [usable: 2],\n\tDescribeCluster(60): 0 to 2 [usable: 2],\n\tDescribeProducers(61): 0 [usable: 0],\n\tUnregisterBroker(64): 0 [usable: 0],\n\tDescribeTransactions(65): 0 [usable: 0],\n\tListTransactions(66): 0 to 2 [usable: 2],\n\tConsumerGroupHeartbeat(68): 0 to 1 [usable: 1],\n\tConsumerGroupDescribe(69): 0 to 1 [usable: 1],\n\tGetTelemetrySubscriptions(71): UNSUPPORTED,\n\tPushTelemetry(72): UNSUPPORTED,\n\tListConfigResources(74): 0 to 1 [usable: 1],\n\tDescribeTopicPartitions(75): 0 [usable: 0],\n\tShareGroupHeartbeat(76): 1 [usable: 1],\n\tShareGroupDescribe(77): 1 [usable: 1],\n\tShareFetch(78): 1 to 2 [usable: 2],\n\tShareAcknowledge(79): 1 to 2 [usable: 2],\n\tAddRaftVoter(80): 0 to 1 [usable: 1],\n\tRemoveRaftVoter(81): 0 [usable: 0],\n\tInitializeShareGroupState(83): 0 [usable: 0],\n\tReadShareGroupState(84): 0 [usable: 0],\n\tWriteShareGroupState(85): 0 to 1 [usable: 1],\n\tDeleteShareGroupState(86): 0 [usable: 0],\n\tReadShareGroupStateSummary(87): 0 to 1 [usable: 1],\n\tStreamsGroupHeartbeat(88): 0 to 1 [usable: 1],\n\tStreamsGroupDescribe(89): 0 to 1 [usable: 1],\n\tDescribeShareGroupOffsets(90): 0 to 1 [usable: 1],\n\tAlterShareGroupOffsets(91): 0 [usable: 0],\n\tDeleteShareGroupOffsets(92): 0 [usable: 0],\n\tStreamsGroupTopologyDescriptionUpdate(93): 0 [usable: 0],\n\tUnregisterController(94): 0 [usable: 0]\n)\n",
+        "stderr": "WARNING: kafka-broker-api-versions.sh is deprecated and will be removed in the next major release. Use 'kafka-cluster.sh api-versions' instead.\n"
+      },
+      "features": {
+        "command": [
+          "timeout",
+          "90",
+          "docker",
+          "run",
+          "--rm",
+          "--network",
+          "host",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "/opt/kafka/bin/kafka-features.sh",
+          "--bootstrap-server",
+          "127.0.0.1:49092",
+          "describe"
+        ],
+        "returncode": 0,
+        "stdout": "Feature: eligible.leader.replicas.version          SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 1012\nFeature: group.version                             SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 1012\nFeature: krabka.version                            SupportedMinVersion: 0                SupportedMaxVersion: 2                FinalizedVersionLevel: 0                Epoch: 1012\nFeature: kraft.version                             SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 1012\nFeature: metadata.version                          SupportedMinVersion: 3.3-IV3          SupportedMaxVersion: 4.5-IV0          FinalizedVersionLevel: 4.4-IV2          Epoch: 1012\nFeature: share.version                             SupportedMinVersion: 0                SupportedMaxVersion: 2                FinalizedVersionLevel: 2                Epoch: 1012\nFeature: streams.version                           SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 1012\nFeature: transaction.version                       SupportedMinVersion: 0                SupportedMaxVersion: 2                FinalizedVersionLevel: 2                Epoch: 1012\n",
+        "stderr": ""
+      },
+      "broker-configs": {
+        "command": [
+          "timeout",
+          "90",
+          "docker",
+          "run",
+          "--rm",
+          "--network",
+          "host",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "/opt/kafka/bin/kafka-configs.sh",
+          "--bootstrap-server",
+          "127.0.0.1:49092",
+          "--describe",
+          "--entity-type",
+          "brokers",
+          "--entity-default",
+          "--all"
+        ],
+        "returncode": 0,
+        "stdout": "Default configs for brokers in the cluster are:\n  min.insync.replicas=1 sensitive=false synonyms={DYNAMIC_DEFAULT_BROKER_CONFIG:min.insync.replicas=1}\n",
+        "stderr": ""
+      }
+    }
+  },
+  "qualification_pass": false,
+  "unexecuted": [
+    "authorization",
+    "config validation/errors",
+    "feature-level boundaries",
+    "share DLQ",
+    "delayed tiered uploads",
+    "misrouting",
+    "controller unregistration",
+    "topic-ID transactional commits",
+    "Streams topology APIs",
+    "restart/recovery",
+    "multi-broker"
+  ],
+  "oracle_configuration": {
+    "KAFKA_NODE_ID": "1",
+    "KAFKA_PROCESS_ROLES": "broker,controller",
+    "KAFKA_LISTENERS": "PLAINTEXT://:9092,CONTROLLER://:9093",
+    "KAFKA_ADVERTISED_LISTENERS": "PLAINTEXT://localhost:9092",
+    "KAFKA_CONTROLLER_LISTENER_NAMES": "CONTROLLER",
+    "KAFKA_INTER_BROKER_LISTENER_NAME": "PLAINTEXT",
+    "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+    "KAFKA_CONTROLLER_QUORUM_VOTERS": "1@localhost:9093",
+    "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR": "1",
+    "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR": "1",
+    "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR": "1",
+    "CLUSTER_ID": "MkU3OEVBNTcwNTJENDM2Qk"
+  },
+  "startup": {
+    "command": [
+      "timeout",
+      "90",
+      "docker",
+      "run",
+      "-d",
+      "--name",
+      "krabka-kafka44---kafka44-routing-comparison-20261102-v2",
+      "-e",
+      "KAFKA_NODE_ID=1",
+      "-e",
+      "KAFKA_PROCESS_ROLES=broker,controller",
+      "-e",
+      "KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093",
+      "-e",
+      "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092",
+      "-e",
+      "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+      "-e",
+      "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+      "-e",
+      "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+      "-e",
+      "KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093",
+      "-e",
+      "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1",
+      "-e",
+      "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
+      "-e",
+      "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
+      "-e",
+      "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+      "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+    ],
+    "returncode": 0,
+    "stdout": "bd94ca64ffac1df4e00343a6ea6d1d9badf911aa526c4dca49483e6e5e5ace94\n",
+    "stderr": ""
+  },
+  "readiness": {
+    "command": [
+      "timeout",
+      "10",
+      "docker",
+      "exec",
+      "krabka-kafka44---kafka44-routing-comparison-20261102-v2",
+      "/opt/kafka/bin/kafka-topics.sh",
+      "--bootstrap-server",
+      "localhost:9092",
+      "--list"
+    ],
+    "returncode": 0,
+    "stdout": "\n",
+    "stderr": "[2026-11-02 01:48:33,883] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n[2026-11-02 01:48:33,977] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n[2026-11-02 01:48:34,078] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n[2026-11-02 01:48:34,278] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n[2026-11-02 01:48:34,680] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n"
+  },
+  "client_version": {
+    "command": [
+      "timeout",
+      "90",
+      "docker",
+      "exec",
+      "krabka-kafka44---kafka44-routing-comparison-20261102-v2",
+      "/opt/kafka/bin/kafka-topics.sh",
+      "--version"
+    ],
+    "returncode": 0,
+    "stdout": "4.4.0\n",
+    "stderr": ""
+  },
+  "api_differences": {
+    "default": [
+      {
+        "api": "ApiVersions(18)",
+        "oracle": "0 to 5",
+        "candidate": "0 to 4"
+      },
+      {
+        "api": "DeleteGroups(42)",
+        "oracle": "0 to 3",
+        "candidate": "0 to 2"
+      },
+      {
+        "api": "StreamsGroupDescribe(89)",
+        "oracle": "0 to 1",
+        "candidate": "0"
+      },
+      {
+        "api": "StreamsGroupHeartbeat(88)",
+        "oracle": "0 to 1",
+        "candidate": "0"
+      },
+      {
+        "api": "StreamsGroupTopologyDescriptionUpdate(93)",
+        "oracle": "0",
+        "candidate": "UNSUPPORTED"
+      },
+      {
+        "api": "TxnOffsetCommit(28)",
+        "oracle": "0 to 6",
+        "candidate": "0 to 5"
+      },
+      {
+        "api": "UnregisterController(94)",
+        "oracle": "0",
+        "candidate": "UNSUPPORTED"
+      }
+    ],
+    "enabled": [
+      {
+        "api": "InitProducerId(22)",
+        "oracle": "0 to 5",
+        "candidate": "0 to 6"
+      }
+    ]
+  },
+  "protocol_fixture_sha256": "sha256:8f348af1cc43e40182f69df2c9170522b5da2766ec7279582b8354503ca7c705",
+  "protocol_setup": [
+    {
+      "command": [
+        "timeout",
+        "90",
+        "mkdir",
+        "../kafka44-routing-comparison-20261102-v2/libs",
+        "../kafka44-routing-comparison-20261102-v2/classes"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "timeout",
+        "90",
+        "docker",
+        "cp",
+        "krabka-kafka44---kafka44-routing-comparison-20261102-v2:/opt/kafka/libs/.",
+        "../kafka44-routing-comparison-20261102-v2/libs/"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "timeout",
+        "90",
+        "javac",
+        "--release",
+        "17",
+        "-cp",
+        "../kafka44-routing-comparison-20261102-v2/libs/*",
+        "-d",
+        "../kafka44-routing-comparison-20261102-v2/classes",
+        "tools/kafka44/ProtocolScenarios.java"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "timeout",
+        "90",
+        "docker",
+        "cp",
+        "../kafka44-routing-comparison-20261102-v2/classes",
+        "krabka-kafka44---kafka44-routing-comparison-20261102-v2:/opt/kafka/kafka44classes"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "protocol_scenarios": {
+    "oracle": {
+      "command": [
+        "timeout",
+        "120",
+        "docker",
+        "exec",
+        "krabka-kafka44---kafka44-routing-comparison-20261102-v2",
+        "java",
+        "-cp",
+        "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+        "ProtocolScenarios",
+        "localhost:9092",
+        "localhost:9093"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\trouting-no-identity\t{NONE=1}\nRESPONSE\trouting-no-identity\tApiVersionsResponseData(errorCode=0, apiKeys=[ApiVersion(apiKey=0, minVersion=0, maxVersion=13), ApiVersion(apiKey=1, minVersion=4, maxVersion=18), ApiVersion(apiKey=2, minVersion=1, maxVersion=11), ApiVersion(apiKey=3, minVersion=0, maxVersion=13), ApiVersion(apiKey=8, minVersion=2, maxVersion=10), ApiVersion(apiKey=9, minVersion=1, maxVersion=10), ApiVersion(apiKey=10, minVersion=0, maxVersion=6), ApiVersion(apiKey=11, minVersion=0, maxVersion=9), ApiVersion(apiKey=12, minVersion=0, maxVersion=4), ApiVersion(apiKey=13, minVersion=0, maxVersion=5), ApiVersion(apiKey=14, minVersion=0, maxVersion=5), ApiVersion(apiKey=15, minVersion=0, maxVersion=6), ApiVersion(apiKey=16, minVersion=0, maxVersion=5), ApiVersion(apiKey=17, minVersion=0, maxVersion=1), ApiVersion(apiKey=18, minVersion=0, maxVersion=5), ApiVersion(apiKey=19, minVersion=2, maxVersion=7), ApiVersion(apiKey=20, minVersion=1, maxVersion=6), ApiVersion(apiKey=21, minVersion=0, maxVersion=2), ApiVersion(apiKey=22, minVersion=0, maxVersion=5), ApiVersion(apiKey=23, minVersion=2, maxVersion=4), ApiVersion(apiKey=24, minVersion=0, maxVersion=5), ApiVersion(apiKey=25, minVersion=0, maxVersion=4), ApiVersion(apiKey=26, minVersion=0, maxVersion=5), ApiVersion(apiKey=27, minVersion=1, maxVersion=2), ApiVersion(apiKey=28, minVersion=0, maxVersion=6), ApiVersion(apiKey=29, minVersion=1, maxVersion=3), ApiVersion(apiKey=30, minVersion=1, maxVersion=3), ApiVersion(apiKey=31, minVersion=1, maxVersion=3), ApiVersion(apiKey=32, minVersion=1, maxVersion=4), ApiVersion(apiKey=33, minVersion=0, maxVersion=2), ApiVersion(apiKey=34, minVersion=1, maxVersion=2), ApiVersion(apiKey=35, minVersion=1, maxVersion=5), ApiVersion(apiKey=36, minVersion=0, maxVersion=2), ApiVersion(apiKey=37, minVersion=0, maxVersion=3), ApiVersion(apiKey=38, minVersion=1, maxVersion=3), ApiVersion(apiKey=39, minVersion=1, maxVersion=2), ApiVersion(apiKey=40, minVersion=1, maxVersion=2), ApiVersion(apiKey=41, minVersion=1, maxVersion=3), ApiVersion(apiKey=42, minVersion=0, maxVersion=3), ApiVersion(apiKey=43, minVersion=0, maxVersion=2), ApiVersion(apiKey=44, minVersion=0, maxVersion=1), ApiVersion(apiKey=45, minVersion=0, maxVersion=1), ApiVersion(apiKey=46, minVersion=0, maxVersion=0), ApiVersion(apiKey=47, minVersion=0, maxVersion=0), ApiVersion(apiKey=48, minVersion=0, maxVersion=1), ApiVersion(apiKey=49, minVersion=0, maxVersion=1), ApiVersion(apiKey=50, minVersion=0, maxVersion=0), ApiVersion(apiKey=51, minVersion=0, maxVersion=0), ApiVersion(apiKey=55, minVersion=0, maxVersion=2), ApiVersion(apiKey=57, minVersion=0, maxVersion=2), ApiVersion(apiKey=60, minVersion=0, maxVersion=2), ApiVersion(apiKey=61, minVersion=0, maxVersion=0), ApiVersion(apiKey=64, minVersion=0, maxVersion=0), ApiVersion(apiKey=65, minVersion=0, maxVersion=0), ApiVersion(apiKey=66, minVersion=0, maxVersion=2), ApiVersion(apiKey=68, minVersion=0, maxVersion=1), ApiVersion(apiKey=69, minVersion=0, maxVersion=1), ApiVersion(apiKey=74, minVersion=0, maxVersion=1), ApiVersion(apiKey=75, minVersion=0, maxVersion=0), ApiVersion(apiKey=76, minVersion=1, maxVersion=1), ApiVersion(apiKey=77, minVersion=1, maxVersion=1), ApiVersion(apiKey=78, minVersion=1, maxVersion=2), ApiVersion(apiKey=79, minVersion=1, maxVersion=2), ApiVersion(apiKey=80, minVersion=0, maxVersion=1), ApiVersion(apiKey=81, minVersion=0, maxVersion=0), ApiVersion(apiKey=83, minVersion=0, maxVersion=0), ApiVersion(apiKey=84, minVersion=0, maxVersion=0), ApiVersion(apiKey=85, minVersion=0, maxVersion=1), ApiVersion(apiKey=86, minVersion=0, maxVersion=0), ApiVersion(apiKey=87, minVersion=0, maxVersion=1), ApiVersion(apiKey=88, minVersion=0, maxVersion=1), ApiVersion(apiKey=89, minVersion=0, maxVersion=1), ApiVersion(apiKey=90, minVersion=0, maxVersion=1), ApiVersion(apiKey=91, minVersion=0, maxVersion=0), ApiVersion(apiKey=92, minVersion=0, maxVersion=0), ApiVersion(apiKey=93, minVersion=0, maxVersion=0), ApiVersion(apiKey=94, minVersion=0, maxVersion=0)], throttleTimeMs=0, supportedFeatures=[SupportedFeatureKey(name='group.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='kraft.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='metadata.version', minVersion=7, maxVersion=33), SupportedFeatureKey(name='share.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='streams.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='transaction.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='eligible.leader.replicas.version', minVersion=0, maxVersion=1)], finalizedFeaturesEpoch=47, finalizedFeatures=[FinalizedFeatureKey(name='group.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='streams.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='transaction.version', maxVersionLevel=2, minVersionLevel=2), FinalizedFeatureKey(name='eligible.leader.replicas.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='share.version', maxVersionLevel=2, minVersionLevel=2), FinalizedFeatureKey(name='metadata.version', maxVersionLevel=33, minVersionLevel=33)], zkMigrationReady=false)\nSCENARIO\trouting-cluster-only\t{INVALID_REQUEST=1}\nRESPONSE\trouting-cluster-only\tApiVersionsResponseData(errorCode=42, apiKeys=[], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-node-only\t{INVALID_REQUEST=1}\nRESPONSE\trouting-node-only\tApiVersionsResponseData(errorCode=42, apiKeys=[], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-correct-identity\t{NONE=1}\nRESPONSE\trouting-correct-identity\tApiVersionsResponseData(errorCode=0, apiKeys=[ApiVersion(apiKey=0, minVersion=0, maxVersion=13), ApiVersion(apiKey=1, minVersion=4, maxVersion=18), ApiVersion(apiKey=2, minVersion=1, maxVersion=11), ApiVersion(apiKey=3, minVersion=0, maxVersion=13), ApiVersion(apiKey=8, minVersion=2, maxVersion=10), ApiVersion(apiKey=9, minVersion=1, maxVersion=10), ApiVersion(apiKey=10, minVersion=0, maxVersion=6), ApiVersion(apiKey=11, minVersion=0, maxVersion=9), ApiVersion(apiKey=12, minVersion=0, maxVersion=4), ApiVersion(apiKey=13, minVersion=0, maxVersion=5), ApiVersion(apiKey=14, minVersion=0, maxVersion=5), ApiVersion(apiKey=15, minVersion=0, maxVersion=6), ApiVersion(apiKey=16, minVersion=0, maxVersion=5), ApiVersion(apiKey=17, minVersion=0, maxVersion=1), ApiVersion(apiKey=18, minVersion=0, maxVersion=5), ApiVersion(apiKey=19, minVersion=2, maxVersion=7), ApiVersion(apiKey=20, minVersion=1, maxVersion=6), ApiVersion(apiKey=21, minVersion=0, maxVersion=2), ApiVersion(apiKey=22, minVersion=0, maxVersion=5), ApiVersion(apiKey=23, minVersion=2, maxVersion=4), ApiVersion(apiKey=24, minVersion=0, maxVersion=5), ApiVersion(apiKey=25, minVersion=0, maxVersion=4), ApiVersion(apiKey=26, minVersion=0, maxVersion=5), ApiVersion(apiKey=27, minVersion=1, maxVersion=2), ApiVersion(apiKey=28, minVersion=0, maxVersion=6), ApiVersion(apiKey=29, minVersion=1, maxVersion=3), ApiVersion(apiKey=30, minVersion=1, maxVersion=3), ApiVersion(apiKey=31, minVersion=1, maxVersion=3), ApiVersion(apiKey=32, minVersion=1, maxVersion=4), ApiVersion(apiKey=33, minVersion=0, maxVersion=2), ApiVersion(apiKey=34, minVersion=1, maxVersion=2), ApiVersion(apiKey=35, minVersion=1, maxVersion=5), ApiVersion(apiKey=36, minVersion=0, maxVersion=2), ApiVersion(apiKey=37, minVersion=0, maxVersion=3), ApiVersion(apiKey=38, minVersion=1, maxVersion=3), ApiVersion(apiKey=39, minVersion=1, maxVersion=2), ApiVersion(apiKey=40, minVersion=1, maxVersion=2), ApiVersion(apiKey=41, minVersion=1, maxVersion=3), ApiVersion(apiKey=42, minVersion=0, maxVersion=3), ApiVersion(apiKey=43, minVersion=0, maxVersion=2), ApiVersion(apiKey=44, minVersion=0, maxVersion=1), ApiVersion(apiKey=45, minVersion=0, maxVersion=1), ApiVersion(apiKey=46, minVersion=0, maxVersion=0), ApiVersion(apiKey=47, minVersion=0, maxVersion=0), ApiVersion(apiKey=48, minVersion=0, maxVersion=1), ApiVersion(apiKey=49, minVersion=0, maxVersion=1), ApiVersion(apiKey=50, minVersion=0, maxVersion=0), ApiVersion(apiKey=51, minVersion=0, maxVersion=0), ApiVersion(apiKey=55, minVersion=0, maxVersion=2), ApiVersion(apiKey=57, minVersion=0, maxVersion=2), ApiVersion(apiKey=60, minVersion=0, maxVersion=2), ApiVersion(apiKey=61, minVersion=0, maxVersion=0), ApiVersion(apiKey=64, minVersion=0, maxVersion=0), ApiVersion(apiKey=65, minVersion=0, maxVersion=0), ApiVersion(apiKey=66, minVersion=0, maxVersion=2), ApiVersion(apiKey=68, minVersion=0, maxVersion=1), ApiVersion(apiKey=69, minVersion=0, maxVersion=1), ApiVersion(apiKey=74, minVersion=0, maxVersion=1), ApiVersion(apiKey=75, minVersion=0, maxVersion=0), ApiVersion(apiKey=76, minVersion=1, maxVersion=1), ApiVersion(apiKey=77, minVersion=1, maxVersion=1), ApiVersion(apiKey=78, minVersion=1, maxVersion=2), ApiVersion(apiKey=79, minVersion=1, maxVersion=2), ApiVersion(apiKey=80, minVersion=0, maxVersion=1), ApiVersion(apiKey=81, minVersion=0, maxVersion=0), ApiVersion(apiKey=83, minVersion=0, maxVersion=0), ApiVersion(apiKey=84, minVersion=0, maxVersion=0), ApiVersion(apiKey=85, minVersion=0, maxVersion=1), ApiVersion(apiKey=86, minVersion=0, maxVersion=0), ApiVersion(apiKey=87, minVersion=0, maxVersion=1), ApiVersion(apiKey=88, minVersion=0, maxVersion=1), ApiVersion(apiKey=89, minVersion=0, maxVersion=1), ApiVersion(apiKey=90, minVersion=0, maxVersion=1), ApiVersion(apiKey=91, minVersion=0, maxVersion=0), ApiVersion(apiKey=92, minVersion=0, maxVersion=0), ApiVersion(apiKey=93, minVersion=0, maxVersion=0), ApiVersion(apiKey=94, minVersion=0, maxVersion=0)], throttleTimeMs=0, supportedFeatures=[SupportedFeatureKey(name='group.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='kraft.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='metadata.version', minVersion=7, maxVersion=33), SupportedFeatureKey(name='share.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='streams.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='transaction.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='eligible.leader.replicas.version', minVersion=0, maxVersion=1)], finalizedFeaturesEpoch=47, finalizedFeatures=[FinalizedFeatureKey(name='group.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='streams.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='transaction.version', maxVersionLevel=2, minVersionLevel=2), FinalizedFeatureKey(name='eligible.leader.replicas.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='share.version', maxVersionLevel=2, minVersionLevel=2), FinalizedFeatureKey(name='metadata.version', maxVersionLevel=33, minVersionLevel=33)], zkMigrationReady=false)\nSCENARIO\trouting-wrong-cluster\t{REBOOTSTRAP_REQUIRED=1}\nRESPONSE\trouting-wrong-cluster\tApiVersionsResponseData(errorCode=129, apiKeys=[], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-controller-wrong-cluster\t{NONE=1}\nRESPONSE\trouting-controller-wrong-cluster\tApiVersionsResponseData(errorCode=0, apiKeys=[ApiVersion(apiKey=1, minVersion=4, maxVersion=18), ApiVersion(apiKey=17, minVersion=0, maxVersion=1), ApiVersion(apiKey=18, minVersion=0, maxVersion=5), ApiVersion(apiKey=19, minVersion=2, maxVersion=7), ApiVersion(apiKey=20, minVersion=1, maxVersion=6), ApiVersion(apiKey=29, minVersion=1, maxVersion=3), ApiVersion(apiKey=30, minVersion=1, maxVersion=3), ApiVersion(apiKey=31, minVersion=1, maxVersion=3), ApiVersion(apiKey=32, minVersion=1, maxVersion=4), ApiVersion(apiKey=33, minVersion=0, maxVersion=2), ApiVersion(apiKey=36, minVersion=0, maxVersion=2), ApiVersion(apiKey=37, minVersion=0, maxVersion=3), ApiVersion(apiKey=38, minVersion=1, maxVersion=3), ApiVersion(apiKey=39, minVersion=1, maxVersion=2), ApiVersion(apiKey=40, minVersion=1, maxVersion=2), ApiVersion(apiKey=41, minVersion=1, maxVersion=3), ApiVersion(apiKey=43, minVersion=0, maxVersion=2), ApiVersion(apiKey=44, minVersion=0, maxVersion=1), ApiVersion(apiKey=45, minVersion=0, maxVersion=1), ApiVersion(apiKey=46, minVersion=0, maxVersion=0), ApiVersion(apiKey=49, minVersion=0, maxVersion=1), ApiVersion(apiKey=50, minVersion=0, maxVersion=0), ApiVersion(apiKey=51, minVersion=0, maxVersion=0), ApiVersion(apiKey=52, minVersion=0, maxVersion=2), ApiVersion(apiKey=53, minVersion=0, maxVersion=1), ApiVersion(apiKey=54, minVersion=0, maxVersion=1), ApiVersion(apiKey=55, minVersion=0, maxVersion=2), ApiVersion(apiKey=56, minVersion=2, maxVersion=3), ApiVersion(apiKey=57, minVersion=0, maxVersion=2), ApiVersion(apiKey=58, minVersion=0, maxVersion=0), ApiVersion(apiKey=59, minVersion=0, maxVersion=1), ApiVersion(apiKey=60, minVersion=0, maxVersion=2), ApiVersion(apiKey=62, minVersion=0, maxVersion=4), ApiVersion(apiKey=63, minVersion=0, maxVersion=2), ApiVersion(apiKey=64, minVersion=0, maxVersion=0), ApiVersion(apiKey=67, minVersion=0, maxVersion=0), ApiVersion(apiKey=70, minVersion=0, maxVersion=0), ApiVersion(apiKey=73, minVersion=0, maxVersion=0), ApiVersion(apiKey=80, minVersion=0, maxVersion=1), ApiVersion(apiKey=81, minVersion=0, maxVersion=0), ApiVersion(apiKey=82, minVersion=0, maxVersion=0), ApiVersion(apiKey=94, minVersion=0, maxVersion=0)], throttleTimeMs=0, supportedFeatures=[SupportedFeatureKey(name='group.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='kraft.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='metadata.version', minVersion=7, maxVersion=33), SupportedFeatureKey(name='share.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='streams.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='transaction.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='eligible.leader.replicas.version', minVersion=0, maxVersion=1)], finalizedFeaturesEpoch=9, finalizedFeatures=[FinalizedFeatureKey(name='group.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='streams.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='transaction.version', maxVersionLevel=2, minVersionLevel=2), FinalizedFeatureKey(name='eligible.leader.replicas.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='share.version', maxVersionLevel=2, minVersionLevel=2), FinalizedFeatureKey(name='metadata.version', maxVersionLevel=33, minVersionLevel=33)], zkMigrationReady=false)\nSCENARIO\tcontroller-unknown-id\t{CONTROLLER_ID_NOT_REGISTERED=1}\nRESPONSE\tcontroller-unknown-id\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 2147483646 is not currently registered.')\nSCENARIO\tcontroller-api-on-broker\t{CONTROLLER_ID_NOT_REGISTERED=1}\nRESPONSE\tcontroller-api-on-broker\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 2147483646 is not currently registered.')\nSCENARIO\ttopology-no-plugin\t{UNSUPPORTED_VERSION=1}\nRESPONSE\ttopology-no-plugin\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=35, errorMessage='The broker has no streams group topology description plugin configured.')\nSCENARIO\tstreams-invalid-group\t{INVALID_REQUEST=1}\nRESPONSE\tstreams-invalid-group\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=42, errorMessage='GroupId can't be empty.', memberId='', memberEpoch=0, heartbeatIntervalMs=0, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=0, acceptableRecoveryLag=-1, status=[], activeTasks=null, standbyTasks=null, warmupTasks=null, topologyDescriptionRequired=false, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nSCENARIO\ttxn-topic-id-missing-group\t{UNKNOWN_TOPIC_ID=1}\nRESPONSE\ttxn-topic-id-missing-group\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=AAAAAAAAAAAAAAAAAAAAKg, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=100)])])\n",
+      "stderr": ""
+    },
+    "default": {
+      "command": [
+        "timeout",
+        "120",
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-routing-comparison-20261102-v2/classes:/opt/kafka/kafka44classes:ro",
+        "--entrypoint",
+        "java",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "-cp",
+        "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+        "ProtocolScenarios",
+        "127.0.0.1:39092",
+        "127.0.0.1:39093"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\trouting-no-identity\t{UNSUPPORTED_VERSION=1}\nRESPONSE\trouting-no-identity\tApiVersionsResponseData(errorCode=35, apiKeys=[ApiVersion(apiKey=18, minVersion=0, maxVersion=4)], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-cluster-only\t{UNSUPPORTED_VERSION=1}\nRESPONSE\trouting-cluster-only\tApiVersionsResponseData(errorCode=35, apiKeys=[ApiVersion(apiKey=18, minVersion=0, maxVersion=4)], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-node-only\t{UNSUPPORTED_VERSION=1}\nRESPONSE\trouting-node-only\tApiVersionsResponseData(errorCode=35, apiKeys=[ApiVersion(apiKey=18, minVersion=0, maxVersion=4)], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-correct-identity\t{UNSUPPORTED_VERSION=1}\nRESPONSE\trouting-correct-identity\tApiVersionsResponseData(errorCode=35, apiKeys=[ApiVersion(apiKey=18, minVersion=0, maxVersion=4)], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-wrong-cluster\t{UNSUPPORTED_VERSION=1}\nRESPONSE\trouting-wrong-cluster\tApiVersionsResponseData(errorCode=35, apiKeys=[ApiVersion(apiKey=18, minVersion=0, maxVersion=4)], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-controller-wrong-cluster\t{UNSUPPORTED_VERSION=1}\nRESPONSE\trouting-controller-wrong-cluster\tApiVersionsResponseData(errorCode=35, apiKeys=[ApiVersion(apiKey=18, minVersion=0, maxVersion=4)], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\tcontroller-unknown-id\tTRANSPORT:EOFException\nSCENARIO\tcontroller-api-on-broker\tTRANSPORT:EOFException\nSCENARIO\ttopology-no-plugin\tTRANSPORT:EOFException\nSCENARIO\tstreams-invalid-group\tTRANSPORT:EOFException\nSCENARIO\ttxn-topic-id-missing-group\tTRANSPORT:EOFException\n",
+      "stderr": ""
+    },
+    "enabled": {
+      "command": [
+        "timeout",
+        "120",
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-routing-comparison-20261102-v2/classes:/opt/kafka/kafka44classes:ro",
+        "--entrypoint",
+        "java",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "-cp",
+        "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+        "ProtocolScenarios",
+        "127.0.0.1:49092",
+        "127.0.0.1:49093"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\trouting-no-identity\t{NONE=1}\nRESPONSE\trouting-no-identity\tApiVersionsResponseData(errorCode=0, apiKeys=[ApiVersion(apiKey=0, minVersion=0, maxVersion=13), ApiVersion(apiKey=1, minVersion=4, maxVersion=18), ApiVersion(apiKey=2, minVersion=1, maxVersion=11), ApiVersion(apiKey=3, minVersion=0, maxVersion=13), ApiVersion(apiKey=8, minVersion=2, maxVersion=10), ApiVersion(apiKey=9, minVersion=1, maxVersion=10), ApiVersion(apiKey=10, minVersion=0, maxVersion=6), ApiVersion(apiKey=11, minVersion=0, maxVersion=9), ApiVersion(apiKey=12, minVersion=0, maxVersion=4), ApiVersion(apiKey=13, minVersion=0, maxVersion=5), ApiVersion(apiKey=14, minVersion=0, maxVersion=5), ApiVersion(apiKey=15, minVersion=0, maxVersion=6), ApiVersion(apiKey=16, minVersion=0, maxVersion=5), ApiVersion(apiKey=17, minVersion=0, maxVersion=1), ApiVersion(apiKey=18, minVersion=0, maxVersion=5), ApiVersion(apiKey=19, minVersion=2, maxVersion=7), ApiVersion(apiKey=20, minVersion=1, maxVersion=6), ApiVersion(apiKey=21, minVersion=0, maxVersion=2), ApiVersion(apiKey=22, minVersion=0, maxVersion=6), ApiVersion(apiKey=23, minVersion=2, maxVersion=4), ApiVersion(apiKey=24, minVersion=0, maxVersion=5), ApiVersion(apiKey=25, minVersion=0, maxVersion=4), ApiVersion(apiKey=26, minVersion=0, maxVersion=5), ApiVersion(apiKey=27, minVersion=1, maxVersion=2), ApiVersion(apiKey=28, minVersion=0, maxVersion=6), ApiVersion(apiKey=29, minVersion=1, maxVersion=3), ApiVersion(apiKey=30, minVersion=1, maxVersion=3), ApiVersion(apiKey=31, minVersion=1, maxVersion=3), ApiVersion(apiKey=32, minVersion=1, maxVersion=4), ApiVersion(apiKey=33, minVersion=0, maxVersion=2), ApiVersion(apiKey=34, minVersion=1, maxVersion=2), ApiVersion(apiKey=35, minVersion=1, maxVersion=5), ApiVersion(apiKey=36, minVersion=0, maxVersion=2), ApiVersion(apiKey=37, minVersion=0, maxVersion=3), ApiVersion(apiKey=38, minVersion=1, maxVersion=3), ApiVersion(apiKey=39, minVersion=1, maxVersion=2), ApiVersion(apiKey=40, minVersion=1, maxVersion=2), ApiVersion(apiKey=41, minVersion=1, maxVersion=3), ApiVersion(apiKey=42, minVersion=0, maxVersion=3), ApiVersion(apiKey=43, minVersion=0, maxVersion=2), ApiVersion(apiKey=44, minVersion=0, maxVersion=1), ApiVersion(apiKey=45, minVersion=0, maxVersion=1), ApiVersion(apiKey=46, minVersion=0, maxVersion=0), ApiVersion(apiKey=47, minVersion=0, maxVersion=0), ApiVersion(apiKey=48, minVersion=0, maxVersion=1), ApiVersion(apiKey=49, minVersion=0, maxVersion=1), ApiVersion(apiKey=50, minVersion=0, maxVersion=0), ApiVersion(apiKey=51, minVersion=0, maxVersion=0), ApiVersion(apiKey=55, minVersion=0, maxVersion=2), ApiVersion(apiKey=57, minVersion=0, maxVersion=2), ApiVersion(apiKey=60, minVersion=0, maxVersion=2), ApiVersion(apiKey=61, minVersion=0, maxVersion=0), ApiVersion(apiKey=64, minVersion=0, maxVersion=0), ApiVersion(apiKey=65, minVersion=0, maxVersion=0), ApiVersion(apiKey=66, minVersion=0, maxVersion=2), ApiVersion(apiKey=68, minVersion=0, maxVersion=1), ApiVersion(apiKey=69, minVersion=0, maxVersion=1), ApiVersion(apiKey=74, minVersion=0, maxVersion=1), ApiVersion(apiKey=75, minVersion=0, maxVersion=0), ApiVersion(apiKey=76, minVersion=1, maxVersion=1), ApiVersion(apiKey=77, minVersion=1, maxVersion=1), ApiVersion(apiKey=78, minVersion=1, maxVersion=2), ApiVersion(apiKey=79, minVersion=1, maxVersion=2), ApiVersion(apiKey=80, minVersion=0, maxVersion=1), ApiVersion(apiKey=81, minVersion=0, maxVersion=0), ApiVersion(apiKey=83, minVersion=0, maxVersion=0), ApiVersion(apiKey=84, minVersion=0, maxVersion=0), ApiVersion(apiKey=85, minVersion=0, maxVersion=1), ApiVersion(apiKey=86, minVersion=0, maxVersion=0), ApiVersion(apiKey=87, minVersion=0, maxVersion=1), ApiVersion(apiKey=88, minVersion=0, maxVersion=1), ApiVersion(apiKey=89, minVersion=0, maxVersion=1), ApiVersion(apiKey=90, minVersion=0, maxVersion=1), ApiVersion(apiKey=91, minVersion=0, maxVersion=0), ApiVersion(apiKey=92, minVersion=0, maxVersion=0), ApiVersion(apiKey=93, minVersion=0, maxVersion=0), ApiVersion(apiKey=94, minVersion=0, maxVersion=0)], throttleTimeMs=0, supportedFeatures=[SupportedFeatureKey(name='metadata.version', minVersion=7, maxVersion=34), SupportedFeatureKey(name='group.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='transaction.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='share.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='streams.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='eligible.leader.replicas.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='kraft.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='krabka.version', minVersion=0, maxVersion=2)], finalizedFeaturesEpoch=1023, finalizedFeatures=[FinalizedFeatureKey(name='eligible.leader.replicas.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='group.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='kraft.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='metadata.version', maxVersionLevel=33, minVersionLevel=33), FinalizedFeatureKey(name='share.version', maxVersionLevel=2, minVersionLevel=2), FinalizedFeatureKey(name='streams.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='transaction.version', maxVersionLevel=2, minVersionLevel=2)], zkMigrationReady=false)\nSCENARIO\trouting-cluster-only\t{INVALID_REQUEST=1}\nRESPONSE\trouting-cluster-only\tApiVersionsResponseData(errorCode=42, apiKeys=[], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-node-only\t{INVALID_REQUEST=1}\nRESPONSE\trouting-node-only\tApiVersionsResponseData(errorCode=42, apiKeys=[], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-correct-identity\t{NONE=1}\nRESPONSE\trouting-correct-identity\tApiVersionsResponseData(errorCode=0, apiKeys=[ApiVersion(apiKey=0, minVersion=0, maxVersion=13), ApiVersion(apiKey=1, minVersion=4, maxVersion=18), ApiVersion(apiKey=2, minVersion=1, maxVersion=11), ApiVersion(apiKey=3, minVersion=0, maxVersion=13), ApiVersion(apiKey=8, minVersion=2, maxVersion=10), ApiVersion(apiKey=9, minVersion=1, maxVersion=10), ApiVersion(apiKey=10, minVersion=0, maxVersion=6), ApiVersion(apiKey=11, minVersion=0, maxVersion=9), ApiVersion(apiKey=12, minVersion=0, maxVersion=4), ApiVersion(apiKey=13, minVersion=0, maxVersion=5), ApiVersion(apiKey=14, minVersion=0, maxVersion=5), ApiVersion(apiKey=15, minVersion=0, maxVersion=6), ApiVersion(apiKey=16, minVersion=0, maxVersion=5), ApiVersion(apiKey=17, minVersion=0, maxVersion=1), ApiVersion(apiKey=18, minVersion=0, maxVersion=5), ApiVersion(apiKey=19, minVersion=2, maxVersion=7), ApiVersion(apiKey=20, minVersion=1, maxVersion=6), ApiVersion(apiKey=21, minVersion=0, maxVersion=2), ApiVersion(apiKey=22, minVersion=0, maxVersion=6), ApiVersion(apiKey=23, minVersion=2, maxVersion=4), ApiVersion(apiKey=24, minVersion=0, maxVersion=5), ApiVersion(apiKey=25, minVersion=0, maxVersion=4), ApiVersion(apiKey=26, minVersion=0, maxVersion=5), ApiVersion(apiKey=27, minVersion=1, maxVersion=2), ApiVersion(apiKey=28, minVersion=0, maxVersion=6), ApiVersion(apiKey=29, minVersion=1, maxVersion=3), ApiVersion(apiKey=30, minVersion=1, maxVersion=3), ApiVersion(apiKey=31, minVersion=1, maxVersion=3), ApiVersion(apiKey=32, minVersion=1, maxVersion=4), ApiVersion(apiKey=33, minVersion=0, maxVersion=2), ApiVersion(apiKey=34, minVersion=1, maxVersion=2), ApiVersion(apiKey=35, minVersion=1, maxVersion=5), ApiVersion(apiKey=36, minVersion=0, maxVersion=2), ApiVersion(apiKey=37, minVersion=0, maxVersion=3), ApiVersion(apiKey=38, minVersion=1, maxVersion=3), ApiVersion(apiKey=39, minVersion=1, maxVersion=2), ApiVersion(apiKey=40, minVersion=1, maxVersion=2), ApiVersion(apiKey=41, minVersion=1, maxVersion=3), ApiVersion(apiKey=42, minVersion=0, maxVersion=3), ApiVersion(apiKey=43, minVersion=0, maxVersion=2), ApiVersion(apiKey=44, minVersion=0, maxVersion=1), ApiVersion(apiKey=45, minVersion=0, maxVersion=1), ApiVersion(apiKey=46, minVersion=0, maxVersion=0), ApiVersion(apiKey=47, minVersion=0, maxVersion=0), ApiVersion(apiKey=48, minVersion=0, maxVersion=1), ApiVersion(apiKey=49, minVersion=0, maxVersion=1), ApiVersion(apiKey=50, minVersion=0, maxVersion=0), ApiVersion(apiKey=51, minVersion=0, maxVersion=0), ApiVersion(apiKey=55, minVersion=0, maxVersion=2), ApiVersion(apiKey=57, minVersion=0, maxVersion=2), ApiVersion(apiKey=60, minVersion=0, maxVersion=2), ApiVersion(apiKey=61, minVersion=0, maxVersion=0), ApiVersion(apiKey=64, minVersion=0, maxVersion=0), ApiVersion(apiKey=65, minVersion=0, maxVersion=0), ApiVersion(apiKey=66, minVersion=0, maxVersion=2), ApiVersion(apiKey=68, minVersion=0, maxVersion=1), ApiVersion(apiKey=69, minVersion=0, maxVersion=1), ApiVersion(apiKey=74, minVersion=0, maxVersion=1), ApiVersion(apiKey=75, minVersion=0, maxVersion=0), ApiVersion(apiKey=76, minVersion=1, maxVersion=1), ApiVersion(apiKey=77, minVersion=1, maxVersion=1), ApiVersion(apiKey=78, minVersion=1, maxVersion=2), ApiVersion(apiKey=79, minVersion=1, maxVersion=2), ApiVersion(apiKey=80, minVersion=0, maxVersion=1), ApiVersion(apiKey=81, minVersion=0, maxVersion=0), ApiVersion(apiKey=83, minVersion=0, maxVersion=0), ApiVersion(apiKey=84, minVersion=0, maxVersion=0), ApiVersion(apiKey=85, minVersion=0, maxVersion=1), ApiVersion(apiKey=86, minVersion=0, maxVersion=0), ApiVersion(apiKey=87, minVersion=0, maxVersion=1), ApiVersion(apiKey=88, minVersion=0, maxVersion=1), ApiVersion(apiKey=89, minVersion=0, maxVersion=1), ApiVersion(apiKey=90, minVersion=0, maxVersion=1), ApiVersion(apiKey=91, minVersion=0, maxVersion=0), ApiVersion(apiKey=92, minVersion=0, maxVersion=0), ApiVersion(apiKey=93, minVersion=0, maxVersion=0), ApiVersion(apiKey=94, minVersion=0, maxVersion=0)], throttleTimeMs=0, supportedFeatures=[SupportedFeatureKey(name='metadata.version', minVersion=7, maxVersion=34), SupportedFeatureKey(name='group.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='transaction.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='share.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='streams.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='eligible.leader.replicas.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='kraft.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='krabka.version', minVersion=0, maxVersion=2)], finalizedFeaturesEpoch=1023, finalizedFeatures=[FinalizedFeatureKey(name='eligible.leader.replicas.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='group.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='kraft.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='metadata.version', maxVersionLevel=33, minVersionLevel=33), FinalizedFeatureKey(name='share.version', maxVersionLevel=2, minVersionLevel=2), FinalizedFeatureKey(name='streams.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='transaction.version', maxVersionLevel=2, minVersionLevel=2)], zkMigrationReady=false)\nSCENARIO\trouting-wrong-cluster\t{REBOOTSTRAP_REQUIRED=1}\nRESPONSE\trouting-wrong-cluster\tApiVersionsResponseData(errorCode=129, apiKeys=[], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-controller-wrong-cluster\t{NONE=1}\nRESPONSE\trouting-controller-wrong-cluster\tApiVersionsResponseData(errorCode=0, apiKeys=[ApiVersion(apiKey=1, minVersion=4, maxVersion=18), ApiVersion(apiKey=17, minVersion=0, maxVersion=1), ApiVersion(apiKey=18, minVersion=0, maxVersion=5), ApiVersion(apiKey=19, minVersion=2, maxVersion=7), ApiVersion(apiKey=20, minVersion=1, maxVersion=6), ApiVersion(apiKey=29, minVersion=1, maxVersion=3), ApiVersion(apiKey=30, minVersion=1, maxVersion=3), ApiVersion(apiKey=31, minVersion=1, maxVersion=3), ApiVersion(apiKey=32, minVersion=1, maxVersion=4), ApiVersion(apiKey=33, minVersion=0, maxVersion=2), ApiVersion(apiKey=36, minVersion=0, maxVersion=2), ApiVersion(apiKey=37, minVersion=0, maxVersion=3), ApiVersion(apiKey=38, minVersion=1, maxVersion=3), ApiVersion(apiKey=39, minVersion=1, maxVersion=2), ApiVersion(apiKey=40, minVersion=1, maxVersion=2), ApiVersion(apiKey=41, minVersion=1, maxVersion=3), ApiVersion(apiKey=43, minVersion=0, maxVersion=2), ApiVersion(apiKey=44, minVersion=0, maxVersion=1), ApiVersion(apiKey=45, minVersion=0, maxVersion=1), ApiVersion(apiKey=46, minVersion=0, maxVersion=0), ApiVersion(apiKey=49, minVersion=0, maxVersion=1), ApiVersion(apiKey=50, minVersion=0, maxVersion=0), ApiVersion(apiKey=51, minVersion=0, maxVersion=0), ApiVersion(apiKey=52, minVersion=0, maxVersion=2), ApiVersion(apiKey=53, minVersion=0, maxVersion=1), ApiVersion(apiKey=54, minVersion=0, maxVersion=1), ApiVersion(apiKey=55, minVersion=0, maxVersion=2), ApiVersion(apiKey=56, minVersion=2, maxVersion=3), ApiVersion(apiKey=57, minVersion=0, maxVersion=2), ApiVersion(apiKey=58, minVersion=0, maxVersion=0), ApiVersion(apiKey=59, minVersion=0, maxVersion=1), ApiVersion(apiKey=60, minVersion=0, maxVersion=2), ApiVersion(apiKey=62, minVersion=0, maxVersion=4), ApiVersion(apiKey=63, minVersion=0, maxVersion=2), ApiVersion(apiKey=64, minVersion=0, maxVersion=0), ApiVersion(apiKey=67, minVersion=0, maxVersion=0), ApiVersion(apiKey=70, minVersion=0, maxVersion=0), ApiVersion(apiKey=73, minVersion=0, maxVersion=0), ApiVersion(apiKey=80, minVersion=0, maxVersion=1), ApiVersion(apiKey=81, minVersion=0, maxVersion=0), ApiVersion(apiKey=82, minVersion=0, maxVersion=0), ApiVersion(apiKey=94, minVersion=0, maxVersion=0)], throttleTimeMs=0, supportedFeatures=[SupportedFeatureKey(name='metadata.version', minVersion=7, maxVersion=34), SupportedFeatureKey(name='group.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='transaction.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='share.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='streams.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='eligible.leader.replicas.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='kraft.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='krabka.version', minVersion=0, maxVersion=2)], finalizedFeaturesEpoch=9, finalizedFeatures=[FinalizedFeatureKey(name='eligible.leader.replicas.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='group.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='kraft.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='metadata.version', maxVersionLevel=33, minVersionLevel=33), FinalizedFeatureKey(name='share.version', maxVersionLevel=2, minVersionLevel=2), FinalizedFeatureKey(name='streams.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='transaction.version', maxVersionLevel=2, minVersionLevel=2)], zkMigrationReady=false)\nSCENARIO\tcontroller-unknown-id\t{CONTROLLER_ID_NOT_REGISTERED=1}\nRESPONSE\tcontroller-unknown-id\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 2147483646 is not currently registered.')\nSCENARIO\tcontroller-api-on-broker\t{CONTROLLER_ID_NOT_REGISTERED=1}\nRESPONSE\tcontroller-api-on-broker\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 2147483646 is not currently registered.')\nSCENARIO\ttopology-no-plugin\t{UNSUPPORTED_VERSION=1}\nRESPONSE\ttopology-no-plugin\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=35, errorMessage='The broker has no streams group topology description plugin configured.')\nSCENARIO\tstreams-invalid-group\t{INVALID_REQUEST=1}\nRESPONSE\tstreams-invalid-group\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=42, errorMessage='GroupId can't be empty.', memberId='', memberEpoch=0, heartbeatIntervalMs=0, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=0, acceptableRecoveryLag=-1, status=[], activeTasks=null, standbyTasks=null, warmupTasks=null, topologyDescriptionRequired=false, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nSCENARIO\ttxn-topic-id-missing-group\t{UNKNOWN_TOPIC_ID=1}\nRESPONSE\ttxn-topic-id-missing-group\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=AAAAAAAAAAAAAAAAAAAAKg, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=100)])])\n",
+      "stderr": ""
+    }
+  },
+  "protocol_differences": {
+    "default": [
+      {
+        "scenario": "routing-no-identity",
+        "oracle": "{NONE=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-cluster-only",
+        "oracle": "{INVALID_REQUEST=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-node-only",
+        "oracle": "{INVALID_REQUEST=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-correct-identity",
+        "oracle": "{NONE=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-wrong-cluster",
+        "oracle": "{REBOOTSTRAP_REQUIRED=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-controller-wrong-cluster",
+        "oracle": "{NONE=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "controller-unknown-id",
+        "oracle": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "controller-api-on-broker",
+        "oracle": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "topology-no-plugin",
+        "oracle": "{UNSUPPORTED_VERSION=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "streams-invalid-group",
+        "oracle": "{INVALID_REQUEST=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "txn-topic-id-missing-group",
+        "oracle": "{UNKNOWN_TOPIC_ID=1}",
+        "candidate": "TRANSPORT:EOFException"
+      }
+    ],
+    "enabled": []
+  },
+  "cleanup": {
+    "command": [
+      "timeout",
+      "90",
+      "docker",
+      "rm",
+      "-f",
+      "krabka-kafka44---kafka44-routing-comparison-20261102-v2"
+    ],
+    "returncode": 0,
+    "stdout": "krabka-kafka44---kafka44-routing-comparison-20261102-v2\n",
+    "stderr": ""
+  },
+  "scope": "Eleven released-codec wire scenarios only, six ApiVersions v5 identity cases and five controller/Streams/transaction negative cases. Enabled error maps match released oracle; defaults differ. Not full qualification."
+}
