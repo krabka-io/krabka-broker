@@ -1,8 +1,8 @@
 # Released Kafka 4.4 DLQ component qualification (#1974)
 
 This is **partial qualification**: released handler components, live destination Produce boundaries,
-and a real released share-consumer rejection/copy boundary run. Candidate
-wire-level differential and mid-ARCHIVING crash qualification remain incomplete.
+and a real released share-consumer rejection/copy boundary run. Exact-boundary candidate differential is measured below; broader
+mid-ARCHIVING crash and multi-broker qualification remain incomplete.
 
 ## Reproduction
 
@@ -59,9 +59,10 @@ a separately scoped follow-up; do not advertise this capability as parity.
 
 ## Still required before closing #1974
 
-- Real released Kafka and Krabka source fetch/copy enabled and disabled at exact
-  destination limits; observe actual produce errors, request counts and meters.
-- Durable final ARCHIVED state after both success and failure on both brokers.
+- Full released-broker request/failure/written JMX meters; actual candidate
+  counters and released component counters are measured, not equivalent evidence.
+- Decode durable final ARCHIVED state after both success and failure on both
+  brokers; end-to-end outcomes, clean restart and group lag are measured below.
 - Controlled leader changes and process restarts while ARCHIVING, including
   append-before-ARCHIVED crash point, with measured duplicate/loss outcomes.
 - Agree a separately scoped extension implementation if native plugins are wanted.
