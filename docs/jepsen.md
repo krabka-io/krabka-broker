@@ -262,7 +262,11 @@ after those fixes, and is not explained by any of them.
   open on a partition when brokers were killed never got its marker. Completion
   gave up on an unexpected marker answer, and the reaper waited on each abort
   in turn, so the partition's last stable offset stayed behind the transaction
-  and a `read_committed` consumer read nothing past it.
+  and a `read_committed` consumer read nothing past it. `completion_model`
+  found a third path: a coordinator that loaded its `__transaction_state`
+  partition after a failover acted on records the new leader had not
+  committed, which a second failover could take back. A load now publishes
+  only once the high watermark covers what it replayed.
 - **Committed records no consumer read**
   ([#1964](https://github.com/krabka-io/krabka-broker/pull/1964)). A KIP-848
   group actor stopped after a failed write, and its group then refused offset
