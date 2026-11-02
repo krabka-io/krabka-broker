@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/controller_unregister.rs" 6 0 6 28 *)
+
+(* <controller_unregister::ControllerUnregisterDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_ControllerUnregisterDecision = Voter | MetadataTooOld | NotRegistered | Append
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ControllerUnregisterDecision [#"/workspace/crates/verified/src/controller_unregister.rs" 6 0 6 28]
+  (self: t_ControllerUnregisterDecision) (return (x: t_ControllerUnregisterDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ControllerUnregisterDecision = Any.any_l () | & self: t_ControllerUnregisterDecision = self ])
+  [ return (result: t_ControllerUnregisterDecision) -> (! return {result}) ]

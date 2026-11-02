@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_controller_unregister_decision": {
+        "prover": "alt-ergo",
+        "time": 0.012
+      }
+    }
+  }
+}

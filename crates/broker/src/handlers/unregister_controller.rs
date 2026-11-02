@@ -50,8 +50,14 @@ use {
         unregister_controller_response::UnregisterControllerResponse,
     },
     krabka_raft::RaftError,
+    krabka_verified::controller_unregister::{
+        ControllerUnregisterDecision, controller_unregister_decision,
+    },
 };
 
+#[cfg(test)]
+#[path = "unregister_controller/model.rs"]
+mod model;
 #[cfg(test)]
 mod tests;
 
@@ -137,27 +143,27 @@ struct Unregistration {
 /// against `image`, in their order, or `None` when the record may be written.
 fn refusal(image: &krabka_metadata::MetadataImage, controller_id: i32) -> Option<Unregistration> {
     let node_id = u64::try_from(controller_id).ok().map(NodeId);
-    if node_id.is_some_and(|id| image.voters().contains(id)) {
-        return Some(Unregistration {
+    let decision = controller_unregister_decision(
+        node_id.is_some_and(|id| image.voters().contains(id)),
+        image
+            .finalized_metadata_version()
+            .is_some_and(|level| level >= CONTROLLER_UNREGISTRATION_MIN_LEVEL),
+        node_id.is_some_and(|id| image.controller(id).is_some()),
+    );
+    match decision {
+        ControllerUnregisterDecision::Voter => Some(Unregistration {
             error_code: codes::INVALID_REQUEST,
             message: Some(format!(
                 "Cannot unregister controller {controller_id} because it is part of the voter set."
             )),
-        });
-    }
-    if image
-        .finalized_metadata_version()
-        .is_none_or(|level| level < CONTROLLER_UNREGISTRATION_MIN_LEVEL)
-    {
-        return Some(Unregistration {
+        }),
+        ControllerUnregisterDecision::MetadataTooOld => Some(Unregistration {
             error_code: codes::UNSUPPORTED_VERSION,
             message: Some(UNSUPPORTED_METADATA_VERSION_MESSAGE.to_owned()),
-        });
+        }),
+        ControllerUnregisterDecision::NotRegistered => Some(not_registered(controller_id)),
+        ControllerUnregisterDecision::Append => None,
     }
-    if node_id.is_none_or(|id| image.controller(id).is_none()) {
-        return Some(not_registered(controller_id));
-    }
-    None
 }
 
 /// Writes the `UnregisterControllerRecord` and reports how it went.

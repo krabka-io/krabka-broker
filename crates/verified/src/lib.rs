@@ -34,6 +34,7 @@ mod composition;
 #[cfg(all(creusot, not(test)))]
 mod composition;
 pub mod consensus;
+pub mod controller_unregister;
 pub mod delegation_token;
 pub mod delivery;
 pub mod directory;

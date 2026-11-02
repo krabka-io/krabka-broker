@@ -1,0 +1,41 @@
+(* #"/workspace/crates/verified/src/controller_unregister.rs" 22 0 26 33 *)
+
+let%span scontroller_unregister = "/workspace/crates/verified/src/controller_unregister.rs" 17 10 17 66
+let%span scontroller_unregister'0 = "/workspace/crates/verified/src/controller_unregister.rs" 18 10 18 98
+let%span scontroller_unregister'1 = "/workspace/crates/verified/src/controller_unregister.rs" 19 10 19 111
+let%span scontroller_unregister'2 = "/workspace/crates/verified/src/controller_unregister.rs" 20 10 20 103
+
+use creusot.prelude.Any
+
+type t_ControllerUnregisterDecision = Voter | MetadataTooOld | NotRegistered | Append
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let controller_unregister_decision [#"/workspace/crates/verified/src/controller_unregister.rs" 22 0 26 33] (voter: bool)
+  (feature_enabled: bool) (registered: bool) (return (x: t_ControllerUnregisterDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {voter = false} (! bb2) | br1 -> {voter} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- Voter ] s1 | s1 = return {_ret} ]
+  | bb2 = any [ br0 -> {feature_enabled = false} (! bb3) | br1 -> {feature_enabled} (! bb4) ]
+  | bb4 = any [ br0 -> {registered = false} (! bb5) | br1 -> {registered} (! bb6) ]
+  | bb6 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- NotRegistered ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- MetadataTooOld ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ControllerUnregisterDecision = Any.any_l ()
+  | & voter: bool = voter
+  | & feature_enabled: bool = feature_enabled
+  | & registered: bool = registered ])
+  [ return (result: t_ControllerUnregisterDecision) ->
+  {[@stop_split] [@expl:controller_unregister_decision ensures] ([@stop_split] [@expl:controller_unregister_decision ensures #0] [%#scontroller_unregister] (result
+        = Voter)
+      = voter)
+    /\ ([@stop_split] [@expl:controller_unregister_decision ensures #1] [%#scontroller_unregister'0] (result
+        = MetadataTooOld)
+      = (not voter /\ not feature_enabled))
+    /\ ([@stop_split] [@expl:controller_unregister_decision ensures #2] [%#scontroller_unregister'1] (result
+        = NotRegistered)
+      = (not voter /\ feature_enabled /\ not registered))
+    /\ ([@stop_split] [@expl:controller_unregister_decision ensures #3] [%#scontroller_unregister'2] (result = Append)
+    = (not voter /\ feature_enabled /\ registered))}
+    (! return {result}) ]

@@ -23,7 +23,7 @@ krabka_macros::wire_codec_helpers! {
     version [MAX_VERSION];
 }
 
-fn registration(node_id: u64) -> MetadataRecord {
+pub(super) fn registration(node_id: u64) -> MetadataRecord {
     MetadataRecord::V1ControllerRegistration(ControllerRegistrationRecord {
         node_id: NodeId(node_id),
         incarnation_id: uuid::Uuid::from_u128(u128::from(node_id)),
@@ -49,17 +49,21 @@ fn metadata_version(level: i16) -> MetadataRecord {
     })
 }
 
-/// An image with voter 1, registered controllers 1 and 7, at `level`.
-fn image_at(level: i16) -> MetadataImage {
-    let mut image = MetadataImage::new(uuid::Uuid::nil());
-    image.apply(&MetadataRecord::V1Voters(krabka_metadata::VotersRecord {
-        voters: VoterSet::from_voters([Voter {
-            id: NodeId(1),
+pub(super) fn voters(ids: &[u64]) -> MetadataRecord {
+    MetadataRecord::V1Voters(krabka_metadata::VotersRecord {
+        voters: VoterSet::from_voters(ids.iter().map(|id| Voter {
+            id: NodeId(*id),
             directory_id: uuid::Uuid::nil(),
             endpoints: Vec::new(),
             kraft_version: KRaftVersionRange::default(),
-        }]),
-    }));
+        })),
+    })
+}
+
+/// An image with voter 1, registered controllers 1 and 7, at `level`.
+pub(super) fn image_at(level: i16) -> MetadataImage {
+    let mut image = MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&voters(&[1]));
     for record in [metadata_version(level), registration(1), registration(7)] {
         image.apply(&record);
     }
