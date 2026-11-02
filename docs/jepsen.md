@@ -233,30 +233,47 @@ refuses a path with a colon in it. The job adds the report to the run's
 summary. A red nightly run names the lane in the `nightly-red` issue. The run
 takes about two and a half hours.
 
-## Known failures
+## Bugs the suite found
 
-The manifest marks each entry that krabka failed with the bug it showed. The
-faults are random, so an entry that is not marked can still hit one of these
-until it is fixed.
+No entry in the manifest is marked `known_failure`, so any invalid entry fails
+the job. The suite's first runs found the broker bugs below, each fixed since.
+One failure is still open: `assign-mixed`, which was never marked, was invalid
+once on `unseen` (committed records that no consumer read) in a dispatch run
+after those fixes, and is not explained by any of them.
 
-- **Duplicate records.** With `acks=all` and an idempotent producer, a
-  partitioned or paused follower makes the produce time out, and the client
-  retries the batch. The leader appends the retry again instead of answering
-  it with the original offset. The log then holds two or three copies of one
-  batch, with the same producer id, epoch and sequence under one leader epoch.
-  It happens with and without transactions, and for a retry that arrives after
-  other producers' batches.
-- **A partition stuck after re-election.** After an unclean restart the
-  controller re-elects a partition's leader at a new epoch. Either the new
-  leader goes on fetching as a follower at the old epoch, or its followers do,
-  each logging `holding the partition back until the metadata image settles`
-  until the test ends. The partition serves no reads and commits no writes.
-  When it is a `__transaction_state` partition, `InitProducerId` fails and no
-  transactional client can start.
-- **A hanging transaction.** A transaction that is open on a partition when
-  brokers are killed never gets its abort marker, although the producer's
-  `transaction.timeout.ms` is one second. Its partition's last stable offset
-  stays behind it, and a `read_committed` consumer reads nothing past it.
+- **Duplicate records**
+  ([#1947](https://github.com/krabka-io/krabka-broker/pull/1947)). With
+  `acks=all` and an idempotent producer, a partitioned or paused follower makes
+  the produce time out, and the client retries the batch. The leader appended
+  the retry again instead of answering it with the original offset, so the log
+  held two or three copies of one batch, with the same producer id, epoch and
+  sequence under one leader epoch.
+- **A partition stuck after re-election**
+  ([#1936](https://github.com/krabka-io/krabka-broker/pull/1936)). After an
+  unclean restart the controller re-elects a partition's leader at a new epoch.
+  A re-registration could overwrite an uncommitted election, and an epoch bump
+  that kept the same leader could be lost, so a leader or its followers went on
+  fetching at the old epoch, each logging `holding the partition back until the
+  metadata image settles` until the test ended. On a `__transaction_state`
+  partition no transactional client could start.
+- **A hanging transaction**
+  ([#1941](https://github.com/krabka-io/krabka-broker/pull/1941),
+  [#1953](https://github.com/krabka-io/krabka-broker/pull/1953)). A transaction
+  open on a partition when brokers were killed never got its marker. Completion
+  gave up on an unexpected marker answer, and the reaper waited on each abort
+  in turn, so the partition's last stable offset stayed behind the transaction
+  and a `read_committed` consumer read nothing past it.
+- **Committed records no consumer read**
+  ([#1964](https://github.com/krabka-io/krabka-broker/pull/1964)). A KIP-848
+  group actor stopped after a failed write, and its group then refused offset
+  commits.
+
+The harness had two bugs of its own
+([#1961](https://github.com/krabka-io/krabka-broker/pull/1961)): Jepsen's DB
+package picked the kill or the pause schedule at random at each step, so a kill
+or pause of every node could last a whole test, and the controller-leader
+lookup asked one node at a time with a 3 s timeout, holding the single nemesis
+thread.
 
 ## Run one test by hand
 
