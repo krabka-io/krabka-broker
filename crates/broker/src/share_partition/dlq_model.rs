@@ -9,10 +9,11 @@ use {
         AckType, AcquisitionState, RecordState,
         test_support::{DeadLetterQueue, acquire_window},
     },
-    crate::model_check::{assert_pinned_count, run_bfs},
-    assert2::assert,
+    crate::model_check::{
+        KnownFailure, assert_pinned_count, check_model_with_known_failures, run_bfs,
+    },
     krabka_log::Offset,
-    stateright::{Checker as _, Model, Property},
+    stateright::{Checker as _, Expectation, Model, Property},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -137,7 +138,7 @@ impl Model for DlqModel {
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
-        vec![
+        let mut properties = vec![
             Property::always("no_stranded_archiving", |m: &Self, s: &State| {
                 s.live.start_offset == Offset(1)
                     || [
@@ -193,7 +194,11 @@ impl Model for DlqModel {
                         && s.live.start_offset == Offset(1)
                 },
             ),
-        ]
+        ];
+        if self.lose_recovery {
+            properties.retain(|p| p.expectation != Expectation::Sometimes);
+        }
+        properties
     }
 }
 #[test]
@@ -211,15 +216,22 @@ fn dlq_archiving_fault_schedules() {
 }
 #[test]
 fn dlq_model_detects_lost_recovery_mutant() {
-    let checker = run_bfs(
+    check_model_with_known_failures(
         DlqModel {
             lose_recovery: true,
         },
         "dlq_archiving_mutant",
-        32,
-        10_000,
+        (32, 10_000, 1000),
+        20,
+        &[
+            KnownFailure {
+                property: "recovered_archiving_has_work",
+                depth: 2,
+            },
+            KnownFailure {
+                property: "no_stranded_archiving",
+                depth: 2,
+            },
+        ],
     );
-    assert_pinned_count(checker.unique_state_count(), 20, "dlq_archiving_mutant");
-    let path = checker.discovery("recovered_archiving_has_work").unwrap();
-    assert!(path.into_actions().len() == 2);
 }

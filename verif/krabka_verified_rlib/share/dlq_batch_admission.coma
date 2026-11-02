@@ -1,0 +1,44 @@
+(* #"/workspace/crates/verified/src/share.rs" 139 0 143 22 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/logic/ord.rs" 22 8 22 20
+let%span sshare = "/workspace/crates/verified/src/share.rs" 136 10 136 92
+let%span sshare'0 = "/workspace/crates/verified/src/share.rs" 137 10 137 98
+let%span sshare'1 = "/workspace/crates/verified/src/share.rs" 138 10 138 87
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_DlqBatchAdmission = Flush | AppendContinue | AppendStop
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let dlq_batch_admission [#"/workspace/crates/verified/src/share.rs" 139 0 143 22] (projected_bytes: Int64.t)
+  (limit: Int64.t) (has_records: bool) (return (x: t_DlqBatchAdmission)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_15 <- Int64.gt projected_bytes limit ] s1
+    | s1 = any [ br0 -> {_15 = false} (! bb5) | br1 -> {_15} (! bb1) ] ]
+  | bb1 = any [ br0 -> {has_records = false} (! bb3) | br1 -> {has_records} (! bb2) ]
+  | bb2 = s0 [ s0 = [ &_ret <- Flush ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- AppendStop ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- AppendContinue ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_DlqBatchAdmission = Any.any_l ()
+  | & projected_bytes: Int64.t = projected_bytes
+  | & limit: Int64.t = limit
+  | & has_records: bool = has_records
+  | & _15: bool = Any.any_l () ])
+  [ return (result: t_DlqBatchAdmission) ->
+  {[@stop_split] [@expl:dlq_batch_admission ensures] ([@stop_split] [@expl:dlq_batch_admission ensures #0] [%#sshare] (result
+        = Flush)
+      = (has_records /\ gt_log_Int (Int64.to_int projected_bytes) (Int64.to_int limit)))
+    /\ ([@stop_split] [@expl:dlq_batch_admission ensures #1] [%#sshare'0] (result = AppendStop)
+      = (not has_records /\ gt_log_Int (Int64.to_int projected_bytes) (Int64.to_int limit)))
+    /\ ([@stop_split] [@expl:dlq_batch_admission ensures #2] [%#sshare'1] (result = AppendContinue)
+    = (Int64.to_int projected_bytes <= Int64.to_int limit))}
+    (! return {result}) ]

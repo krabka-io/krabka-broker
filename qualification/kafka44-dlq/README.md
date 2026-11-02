@@ -236,3 +236,59 @@ pinned at two actions (Persist, Crash). The hard caps remain depth32/generated
 the isolated one-offset transition graph, not arbitrary multi-record schedules.
 Verified-share runtime regression filter:16 passed. The full Creusot discharge
 remains pending the matching0.14 runtime; runtime tests are not formal proofs.
+
+## Measured leader failure and mid-ARCHIVING restart
+
+`ShareFault.java` drives real source production, share rejection and DLQ
+verification. Fresh names use `-Ddlq.run=...` (default `fault02`). Prepare the
+share-state topic with one partition on replicas [3,1,2], min ISR2. The probe
+creates a source on broker1 and DLQ on replicas [2,3], min ISR1; it asserts
+source/DLQ leaders1/2 before the fault. Three combined broker/controller nodes
+run the same pinned release, with private data, RF3 internal topics and two
+replicas required for state persistence. Their PLAINTEXT listeners are39761–3,
+controllers39771–3. Candidate listeners are39791–3/controllers39781–3, same
+RF/ISR settings, metadata4.4-IV2/share2 and unstable switches. Candidate config
+must explicitly name all three `controller_quorum_voters`.
+
+After the source is acquired, pause destination leader2 and release the probe's
+acknowledgement gate file. The observer decodes the actual state log on broker3,
+asserts the latest group record contains deliveryState3, then immediately kills
+source broker1 and restarts it from the same disk. This observation and kill
+must be one orchestrated operation, not separate human/model turns. The first
+released attempt missed the window (ARCHIVED preceded the kill) and is **not**
+used as crash evidence. The successful second attempt and candidate mirror are
+retained as `fault-release-*` / `fault-candidate-*`.
+
+Released: ARCHIVING write1793585113581ms, observed1793585114532ms, Docker kill
+signal1793585115008ms (actual Docker events retained). No ARCHIVED record
+precedes that signal. After restart, before another source share fetch, the
+group still has lag1; re-polling the same group resumes archival. Final ARCHIVED
+write1793585251074ms, one intact DLQ record, lag0 and no source redelivery.
+Candidate: ARCHIVING write1793585653494ms, observation1793585653762ms, SIGKILL
+1793585653763ms. Source re-poll yields one intact DLQ record, zero redelivery and
+lag0; durable terminal-prefix pruning remains start1/no state rows. Candidate
+acquisition deliveryCount2 versus released1 reflects an earlier expired probe
+acquisition; it is not a claim of identical fault-run delivery counters.
+
+Both destinations failed over while their old leader remained paused. These
+runs demonstrate the measured **pre-append** crash schedule, not exactly-once
+archival. The append-before-durable-ARCHIVED crash window is still modeled but
+not live-injected, so duplicate/loss guarantees beyond these schedules remain
+unqualified. The rejected commit can return UNKNOWN_SERVER_ERROR during source
+death; recovery is verified through the persisted state and later consumer run.
+
+## Formal proof execution
+
+Pinned image `ghcr.io/krabka-io/creusot:v0.14.0-4b4c83aaef59d968`, digest
+`sha256:992bd1a7a51c58e188dc2b31a6eef36be106217dcf24450f9a4a52cfdeee561b`.
+Actual source compilation:
+`cargo creusot --package krabka-verified --output-dir /proof-output --why3find-arg=-j --why3find-arg=2 -- --offline --ignore-rust-version --target-dir /proof-target`.
+Creusot emits `/proof-output/verif`; its automatic why3 phase still selected the
+read-only source checkout's `verif`, so that wrapper phase failed on filesystem
+writes. The emitted production Coma was then proved directly using
+`why3find prove -j 2 --summary --no-autodetect-provers verif/krabka_verified_rlib`
+from the private output directory with the image's `DUNE_DIR_LOCATIONS` and
+`WHY3CONFIG`. The functional admission VC passed Alt-Ergo in0.009s and generated
+Clone VC in0.008s. These are **two obligations, one functional**, covering the
+three postconditions jointly. Only the four new proof artifacts were copied
+back; no unrelated proof-session churn. Full fresh package replay runs separately.

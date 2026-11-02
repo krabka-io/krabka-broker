@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/share.rs" 124 0 124 72 *)
+
+(* <share::DlqBatchAdmission as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_DlqBatchAdmission = Flush | AppendContinue | AppendStop
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_DlqBatchAdmission [#"/workspace/crates/verified/src/share.rs" 124 0 124 72] (self: t_DlqBatchAdmission)
+  (return (x: t_DlqBatchAdmission)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_DlqBatchAdmission = Any.any_l () | & self: t_DlqBatchAdmission = self ])
+  [ return (result: t_DlqBatchAdmission) -> (! return {result}) ]

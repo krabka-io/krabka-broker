@@ -1,0 +1,5 @@
+destination_pause_ns=1793585653471232776
+destination_pid=424280
+observed_archiving_ns=1793585653762916173
+kill_signal_ns=1793585653763152285
+source_pid=424279
