@@ -20,18 +20,25 @@ use {
     crate::{
         blocking::spawn_blocking,
         error::BrokerError,
+        partition::Partition,
         txn::{bootstrap, partitioner::partition_for_tid, state::TxnEntry},
     },
     krabka_ids::PartitionIndex,
+    krabka_log::Offset,
     krabka_metadata::MetadataImage,
     std::{
         collections::BTreeMap,
         sync::{Arc, PoisonError, atomic::Ordering},
-        time::Duration,
+        time::{Duration, Instant},
     },
     tokio::{sync::Mutex, task::JoinHandle, time},
     tracing::{info, warn},
 };
+
+/// How long a load waits on the high watermark before it checks its term
+/// again. A term change wakes the wait sooner, so this only bounds a missed
+/// wake-up; each expiry logs `await_hw_at_least`'s stall diagnostic.
+const REPLAY_COMMIT_RECHECK: Duration = Duration::from_secs(60);
 
 /// The load tasks that one refresh started.
 ///
@@ -302,6 +309,16 @@ impl TxnCoordinator {
             );
             Ok(RecoveredTransactions::default())
         };
+        // The replay read the log to its end, and a record above the high
+        // watermark is not the new leader's to keep yet: the next move of the
+        // partition can go to a replica that never had it. Publish only once
+        // the high watermark covers everything the replay read, so the cache
+        // never holds a record the log can take back. This holds the write
+        // lock, so the log end cannot move while it waits.
+        if let Some(part) = self.partitions.get(bootstrap::TOPIC, partition) {
+            self.await_replay_committed(&part, partition, generation, part.log_end_offset())
+                .await;
+        }
         let prepared = self.publish_load(partition, generation, replay).await;
         drop(state_partition_write);
         self.load_finished.notify_waiters();
@@ -310,6 +327,51 @@ impl TxnCoordinator {
         for tid in &prepared {
             self.request_completion(tid);
         }
+    }
+
+    /// Waits until the high watermark of `part` reaches `end`, the log end
+    /// the replay read to, or until `partition` stops loading for
+    /// `generation`. The caller's publication checks the term again, so a
+    /// load whose term ended publishes nothing.
+    // cargo-mutants: a wait over the partition's high watermark and the
+    // leadership notifier; `completion_model` checks the rule it carries.
+    #[cfg_attr(test, mutants::skip)]
+    async fn await_replay_committed(
+        &self,
+        part: &Partition,
+        partition: PartitionIndex,
+        generation: u64,
+        end: Offset,
+    ) {
+        loop {
+            // Register for the next term change before reading the term, so a
+            // change between the read and the wait still wakes the wait.
+            let term_changed = self.leadership_changed.notified();
+            tokio::pin!(term_changed);
+            term_changed.as_mut().enable();
+            if !self.loading_in(partition, generation).await {
+                return;
+            }
+            let committed = part.await_hw_at_least(end, Instant::now() + REPLAY_COMMIT_RECHECK);
+            tokio::select! {
+                reached = committed => {
+                    if reached.is_ok() {
+                        return;
+                    }
+                }
+                () = &mut term_changed => {}
+            }
+        }
+    }
+
+    /// Whether `partition` is loading in the term of `generation`.
+    async fn loading_in(&self, partition: PartitionIndex, generation: u64) -> bool {
+        self.leader_partitions
+            .read()
+            .await
+            .get(&partition)
+            .and_then(|leadership| leadership.term.as_ref())
+            .is_some_and(|term| term.generation == generation && term.status == LoadStatus::Loading)
     }
 
     /// Publishes a replay if `partition` is still loading for `generation`,
