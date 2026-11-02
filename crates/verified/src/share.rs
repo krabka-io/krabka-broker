@@ -132,9 +132,9 @@ pub enum DlqBatchAdmission {
 /// cross the destination limit. The caller appends the original record without
 /// payload rewriting; this decision neither strips nor substitutes its bytes.
 #[must_use]
-#[ensures((result == DlqBatchAdmission::Flush) == (has_records && projected_bytes > limit))]
-#[ensures((result == DlqBatchAdmission::AppendStop) == (!has_records && projected_bytes > limit))]
-#[ensures((result == DlqBatchAdmission::AppendContinue) == (projected_bytes <= limit))]
+#[ensures((result == DlqBatchAdmission::Flush) == (has_records && projected_bytes@ > limit@))]
+#[ensures((result == DlqBatchAdmission::AppendStop) == (!has_records && projected_bytes@ > limit@))]
+#[ensures((result == DlqBatchAdmission::AppendContinue) == (projected_bytes@ <= limit@))]
 pub fn dlq_batch_admission(
     projected_bytes: i64,
     limit: i64,
