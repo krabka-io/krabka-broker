@@ -140,9 +140,9 @@ java -cp "$DLQ_CLASSES:$KAFKA_LIBS/*" ShareBoundary 127.0.0.1:39745 fresh01 veri
 ```
 
 The verify mode asserts zero share-group lag; it does not decode persisted
-ARCHIVED state. Actual manager request meters and controlled retry/error
-injection remain covered only by the earlier released component probe, not
-this end-to-end run. Keep those distinctions when evaluating closure.
+ARCHIVED state. This initial run alone did not collect manager meters or inject errors. The
+later actual JMX and three-node crash schedules below supply those additional
+observations; the released component probe isolates retry/error classification.
 
 ## Candidate end-to-end differential (2026-11-02)
 
@@ -160,16 +160,15 @@ outcomes after substituting fresh equal-length names: copy=true 352 bytes,
 copy=false 250 bytes, rejection below the boundary and intact output at/above.
 `share-boundary-candidate-metrics.txt` records one actual DLQ produce attempt
 per group, one failure for each of the two undersized destinations, and one
-written record for each of the other six groups. Released component counters
-agree; full released broker JMX counters were not collected.
+written record for each of the other six groups. Released component counters agree; the later actual released JMX run below
+confirms the same eight per-group meter outcomes.
 
 Candidate group offsets have startOffset=1 and lag=0 for all eight groups both
 before and after clean process restart, unlike released startOffset=0/lag=0.
 Do not hide that administrative reporting difference or equate it to a DLQ
 payload/archival difference without deeper persister analysis. This restart is
-**after** completion, not a crash during ARCHIVING. Persisted raw state codes,
-controlled mid-flight crashes and multi-broker leader change remain required
-for the stronger acceptance criteria.
+**after** completion, not a crash during ARCHIVING. The later decoded state and controlled three-node crash schedules below
+provide additional evidence beyond this clean-restart run.
 
 ## Bounded Stateright model and proof boundary
 
