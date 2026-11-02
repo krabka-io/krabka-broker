@@ -1,0 +1,318 @@
+{
+  "qualification_pass": false,
+  "candidate_revision": "b734bbab95deb758c12f3895678c6c421abf04ee",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "image_check": {
+    "command": [
+      "docker",
+      "inspect",
+      "qualification-tiered-current",
+      "--format",
+      "{{.Config.Image}}"
+    ],
+    "returncode": 0,
+    "stdout": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b\n",
+    "stderr": ""
+  },
+  "setup": [
+    {
+      "command": [
+        "docker",
+        "cp",
+        "qualification-tiered-current:/opt/kafka/libs/.",
+        "../qualification-tiered-runtime/task-evidence-v2/libs/"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "javac",
+        "--release",
+        "17",
+        "-cp",
+        "../qualification-tiered-runtime/task-evidence-v2/libs/*",
+        "-d",
+        "../qualification-tiered-runtime/task-evidence-v2/classes",
+        "tools/kafka44/CopyProbe.java",
+        "tools/kafka44/RecordingStorage.java"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "config_sha256": "sha256:0d35038e4b03729006708db18d724dfd8a42234a4d91e56666c594ded02a0904",
+  "source_sha256": {
+    "tools/kafka44/CopyProbe.java": "sha256:a521f74d6dfb255f6a26c09fa928e8ec78f25d047eba9063cf778b293f6c1fbf",
+    "tools/kafka44/RecordingStorage.java": "sha256:d5619828be3a1e90e644dfb2201e32e7857cf6b6835e12c514b67aa7d5f31269"
+  },
+  "limits": "Prepared copy-only fixture, not remote reads/durability/crash/failover or full qualification",
+  "status": "copy-smoke-pass-not-qualified",
+  "results": {
+    "oracle": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-evidence-v2/classes:../qualification-tiered-runtime/task-evidence-v2/libs/*",
+        "CopyProbe",
+        "127.0.0.1:60992",
+        "../qualification-tiered-runtime/archive"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-c5843934-18bd-4879-8aa8-e85e5ff4aa92\nDETAIL\tcopy-probe-c5843934-18bd-4879-8aa8-e85e5ff4aa92\tfiles=5\nSCENARIO\tdelay-then-dynamic-zero-copies\tPASS\n",
+      "stderr": ""
+    },
+    "enabled": {
+      "command": [
+        "java",
+        "-cp",
+        "../qualification-tiered-runtime/task-evidence-v2/classes:../qualification-tiered-runtime/task-evidence-v2/libs/*",
+        "CopyProbe",
+        "127.0.0.1:49092",
+        "../qualification-tiered-runtime/candidate-archive2"
+      ],
+      "returncode": 0,
+      "stdout": "BEFORE\t0\tcopy-probe-9e774b93-1272-4a2e-8254-be3302ab1e24\nDETAIL\tcopy-probe-9e774b93-1272-4a2e-8254-be3302ab1e24\tfiles=5\nSCENARIO\tdelay-then-dynamic-zero-copies\tPASS\n",
+      "stderr": ""
+    }
+  },
+  "date": "2026-11-02",
+  "binary_sha256": "fea75051c3f895c6b954af9bfe4685042077586255fa8291cc37775285059d4e",
+  "runtime_source_revision": "b734bbab95deb758c12f3895678c6c421abf04ee",
+  "runtime_flags": [
+    "--remote-log-manager-interval",
+    "500ms"
+  ],
+  "oracle_configuration": "node.id=1\nprocess.roles=broker,controller\nlisteners=PLAINTEXT://127.0.0.1:60992,CONTROLLER://127.0.0.1:60993\nadvertised.listeners=PLAINTEXT://127.0.0.1:60992\ncontroller.listener.names=CONTROLLER\nlistener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT\ninter.broker.listener.name=PLAINTEXT\ncontroller.quorum.voters=1@127.0.0.1:60993\nlog.dirs=/evidence/oracle-data\nremote.log.storage.system.enable=true\nremote.log.storage.manager.class.name=RecordingStorage\nremote.log.storage.manager.class.path=/evidence/storage.jar\nremote.log.storage.manager.impl.prefix=rsm.config.\nrsm.config.dir=/evidence/archive\nremote.log.metadata.manager.class.name=org.apache.kafka.server.log.remote.metadata.storage.TopicBasedRemoteLogMetadataManager\nremote.log.metadata.manager.listener.name=PLAINTEXT\nremote.log.metadata.manager.impl.prefix=rlmm.config.\nrlmm.config.remote.log.metadata.topic.replication.factor=1\nremote.log.manager.task.interval.ms=500\noffsets.topic.replication.factor=1\ntransaction.state.log.replication.factor=1\ntransaction.state.log.min.isr=1\n",
+  "recording_backend": {
+    "executed_source_path": "../qualification-tiered-runtime/RecordingStorage.java",
+    "executed_source_sha256": "a97fc2de32f1a61b1f7025e656baa109ea0d08aa83ed76086f7ea22f8e1f9a96",
+    "executed_class_sha256": "113e14c8745efb9cdfaf7e5e1dfe181e5a976cb59fb7515adf601880e5f2dc47",
+    "repository_source_note": "Only the added Javadoc changes from executed backend; -g:none original/repository classes independently cmp-identical."
+  },
+  "candidate_configuration_sha256": "0d35038e4b03729006708db18d724dfd8a42234a4d91e56666c594ded02a0904",
+  "source_parent": "abee7e842",
+  "source_qualification_limit": "retained runtime predates main transaction fixes and sibling Streams/DLQ implementation heads; does not qualify final combined binary",
+  "earlier_attempts": [
+    "Initial native prototype omitted explicit self-bootstrap for topic-backed RLMM and could not copy; corrected fresh data config explicitly uses49092,RF1,minISR1. No pass attributed to failed setup.",
+    "First AXL task rejected successful raw multiline prototype rows because parser expects exactly3columns. Output corrected; second full task passes both endpoints."
+  ],
+  "archive_files": {
+    "oracle": [
+      {
+        "path": "../qualification-tiered-runtime/archive/copies.tsv",
+        "bytes": 425,
+        "sha256": "391f51c1d9a53528f990706731e32ed49a22cfa1f3e1d1e2e0a9950f03ea5eba"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/ACYsflLRQTWAG5_nxWVObw/OFFSET",
+        "bytes": 112,
+        "sha256": "df1f33990414af79a751d9bcdce8f56c078377bccd636d49aceb5cd173536e7e"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/ACYsflLRQTWAG5_nxWVObw/PRODUCER_SNAPSHOT",
+        "bytes": 56,
+        "sha256": "ebaa896990e4fc8f3309303c2944477ec7cdaac44f726d2f85234259f1db2ad5"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/ACYsflLRQTWAG5_nxWVObw/log",
+        "bytes": 984135,
+        "sha256": "f5d639f2da71392745a7937f9e2d69c51ca12059c556c9c38ad15bf6f8f04554"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/ACYsflLRQTWAG5_nxWVObw/LEADER_EPOCH",
+        "bytes": 8,
+        "sha256": "3b1ad48c005681b75e5b9e53fce52657a0ffcf46192b467c2d7fb7c5d84eaceb"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/ACYsflLRQTWAG5_nxWVObw/TIMESTAMP",
+        "bytes": 168,
+        "sha256": "f51f3058da1efdbd49163ad1ddfae60e3196926232d548aff62a8badad29e7da"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/cC3nUnnGQ6aU_Fmscwl7sQ/OFFSET",
+        "bytes": 112,
+        "sha256": "df1f33990414af79a751d9bcdce8f56c078377bccd636d49aceb5cd173536e7e"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/cC3nUnnGQ6aU_Fmscwl7sQ/PRODUCER_SNAPSHOT",
+        "bytes": 56,
+        "sha256": "7af19103649d391421e8fd90a2d450aa80f5c80ee09bd9811e20e3e946c77d5b"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/cC3nUnnGQ6aU_Fmscwl7sQ/log",
+        "bytes": 984135,
+        "sha256": "19d1ac0280ec984c8f90a120493d735c2e5cf7ffcfd76230af500fb5fd5203c9"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/cC3nUnnGQ6aU_Fmscwl7sQ/LEADER_EPOCH",
+        "bytes": 8,
+        "sha256": "3b1ad48c005681b75e5b9e53fce52657a0ffcf46192b467c2d7fb7c5d84eaceb"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/cC3nUnnGQ6aU_Fmscwl7sQ/TIMESTAMP",
+        "bytes": 168,
+        "sha256": "21135515c3f8f85624bd3b4b28298019e340bfd3ba653a60f4724cbbe905a798"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/BakHgxiqRzSXq1PBSeAGqQ/OFFSET",
+        "bytes": 64,
+        "sha256": "f550ba40e0d2cee2b03de90b195ee50a2a82ca0225330ee2facc43d41f916ce8"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/BakHgxiqRzSXq1PBSeAGqQ/PRODUCER_SNAPSHOT",
+        "bytes": 56,
+        "sha256": "09964f317c51798bdb5efbb018561846b9a1b909f7b9b49ce690a177e505ae17"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/BakHgxiqRzSXq1PBSeAGqQ/log",
+        "bytes": 590481,
+        "sha256": "05022babdef72daa3a2b6d76e36ea2c3cbccb2a524289cfa42a1465a4044e09e"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/BakHgxiqRzSXq1PBSeAGqQ/LEADER_EPOCH",
+        "bytes": 8,
+        "sha256": "3b1ad48c005681b75e5b9e53fce52657a0ffcf46192b467c2d7fb7c5d84eaceb"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/BakHgxiqRzSXq1PBSeAGqQ/TIMESTAMP",
+        "bytes": 96,
+        "sha256": "3a17c1344e7fde3da975edd08f45323e9fc764dbe4e2a32765208ed1389e6de1"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/cjagy8AZTxyl3u8mxWk78g/OFFSET",
+        "bytes": 112,
+        "sha256": "df1f33990414af79a751d9bcdce8f56c078377bccd636d49aceb5cd173536e7e"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/cjagy8AZTxyl3u8mxWk78g/PRODUCER_SNAPSHOT",
+        "bytes": 56,
+        "sha256": "e7b79aa9c3ce703baded99c0008f115e2ea64e0b0888cfb4e8227c71117f2615"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/cjagy8AZTxyl3u8mxWk78g/log",
+        "bytes": 984135,
+        "sha256": "29622a6d24feebf985a3bec360f214335d6974f0d5d1d72dc341b2019347c526"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/cjagy8AZTxyl3u8mxWk78g/LEADER_EPOCH",
+        "bytes": 8,
+        "sha256": "3b1ad48c005681b75e5b9e53fce52657a0ffcf46192b467c2d7fb7c5d84eaceb"
+      },
+      {
+        "path": "../qualification-tiered-runtime/archive/cjagy8AZTxyl3u8mxWk78g/TIMESTAMP",
+        "bytes": 168,
+        "sha256": "ded91c0cb1569f8b341e865042338e6f6a8039d96d2ff851121d203f806b03bb"
+      }
+    ],
+    "enabled": [
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-5755f137-089d-45c9-8429-845a0cf75c18-0-hbxDmbOOS-CaiYTss2JjCQ/00000000000000000000-ebuoik97T0ueeFgj0MRCMA.timeindex",
+        "bytes": 132,
+        "sha256": "07e58b2ef1165a5f3918fa4924bd19c8ea47e0888c96381a0ab1d67865182fc8"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-5755f137-089d-45c9-8429-845a0cf75c18-0-hbxDmbOOS-CaiYTss2JjCQ/00000000000000000000-ebuoik97T0ueeFgj0MRCMA.index",
+        "bytes": 112,
+        "sha256": "df1f33990414af79a751d9bcdce8f56c078377bccd636d49aceb5cd173536e7e"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-5755f137-089d-45c9-8429-845a0cf75c18-0-hbxDmbOOS-CaiYTss2JjCQ/00000000000000000015-7JYiM-xkRlmXatbuQrQvhQ.snapshot",
+        "bytes": 56,
+        "sha256": "3d09d24331cc16371959841182fbd0d547542b651d4220889802cce3560eaeee"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-5755f137-089d-45c9-8429-845a0cf75c18-0-hbxDmbOOS-CaiYTss2JjCQ/00000000000000000015-7JYiM-xkRlmXatbuQrQvhQ.leader_epoch_checkpoint",
+        "bytes": 9,
+        "sha256": "970d885d11799eb60092fdbbf2bd9be7f2a24933cc1eea451f4ac3f6cdaf629c"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-5755f137-089d-45c9-8429-845a0cf75c18-0-hbxDmbOOS-CaiYTss2JjCQ/00000000000000000015-7JYiM-xkRlmXatbuQrQvhQ.log",
+        "bytes": 590481,
+        "sha256": "d70b4ac208dce0a1e189cb80432bcdb82591c1705856bcb19bb49e0dd6572bfe"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-5755f137-089d-45c9-8429-845a0cf75c18-0-hbxDmbOOS-CaiYTss2JjCQ/00000000000000000015-7JYiM-xkRlmXatbuQrQvhQ.timeindex",
+        "bytes": 84,
+        "sha256": "ed1df83355409faa59f8b999b15958eb7e0a28cad17e9c73e8e0a75e62c312a4"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-5755f137-089d-45c9-8429-845a0cf75c18-0-hbxDmbOOS-CaiYTss2JjCQ/00000000000000000000-ebuoik97T0ueeFgj0MRCMA.snapshot",
+        "bytes": 56,
+        "sha256": "1ec7dd2323e9b36542f30443cb5c0b73cadb0937d18d276cb5277193cc2dff9e"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-5755f137-089d-45c9-8429-845a0cf75c18-0-hbxDmbOOS-CaiYTss2JjCQ/00000000000000000015-7JYiM-xkRlmXatbuQrQvhQ.index",
+        "bytes": 64,
+        "sha256": "f550ba40e0d2cee2b03de90b195ee50a2a82ca0225330ee2facc43d41f916ce8"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-5755f137-089d-45c9-8429-845a0cf75c18-0-hbxDmbOOS-CaiYTss2JjCQ/00000000000000000000-ebuoik97T0ueeFgj0MRCMA.log",
+        "bytes": 984135,
+        "sha256": "39fac703cdef4ab7fbd5e9008f5883e38024379f9f99d2b3718c574e834e49a6"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-5755f137-089d-45c9-8429-845a0cf75c18-0-hbxDmbOOS-CaiYTss2JjCQ/00000000000000000000-ebuoik97T0ueeFgj0MRCMA.leader_epoch_checkpoint",
+        "bytes": 8,
+        "sha256": "3b1ad48c005681b75e5b9e53fce52657a0ffcf46192b467c2d7fb7c5d84eaceb"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-c594aced-e00e-440f-9f69-57dbc5313242-0-Pm5iX_HlQ4SVrKW0ziC68A/00000000000000000000-IOn055toQh2EYc36PJg0_Q.timeindex",
+        "bytes": 168,
+        "sha256": "3a3b22914d85f6e3bb9a3e9e6758242f6d8df8c13472f96484d752cb1a8d700f"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-c594aced-e00e-440f-9f69-57dbc5313242-0-Pm5iX_HlQ4SVrKW0ziC68A/00000000000000000000-IOn055toQh2EYc36PJg0_Q.log",
+        "bytes": 984135,
+        "sha256": "34d05424a90d2c3a3f5f84764066db7b3691f16b5cfde6468fbe33e9ed50b623"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-c594aced-e00e-440f-9f69-57dbc5313242-0-Pm5iX_HlQ4SVrKW0ziC68A/00000000000000000000-IOn055toQh2EYc36PJg0_Q.leader_epoch_checkpoint",
+        "bytes": 8,
+        "sha256": "3b1ad48c005681b75e5b9e53fce52657a0ffcf46192b467c2d7fb7c5d84eaceb"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-c594aced-e00e-440f-9f69-57dbc5313242-0-Pm5iX_HlQ4SVrKW0ziC68A/00000000000000000000-IOn055toQh2EYc36PJg0_Q.snapshot",
+        "bytes": 56,
+        "sha256": "286a0b94f34cded46984badd9569f41d580e09535016ab1c37a25c0aded2465f"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-c594aced-e00e-440f-9f69-57dbc5313242-0-Pm5iX_HlQ4SVrKW0ziC68A/00000000000000000000-IOn055toQh2EYc36PJg0_Q.index",
+        "bytes": 112,
+        "sha256": "df1f33990414af79a751d9bcdce8f56c078377bccd636d49aceb5cd173536e7e"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-9e774b93-1272-4a2e-8254-be3302ab1e24-0-_7jcavkwQLWQyDWRDH2lgQ/00000000000000000000-Au3NYpg9SEC9d2ocu2PiXg.leader_epoch_checkpoint",
+        "bytes": 8,
+        "sha256": "3b1ad48c005681b75e5b9e53fce52657a0ffcf46192b467c2d7fb7c5d84eaceb"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-9e774b93-1272-4a2e-8254-be3302ab1e24-0-_7jcavkwQLWQyDWRDH2lgQ/00000000000000000000-Au3NYpg9SEC9d2ocu2PiXg.log",
+        "bytes": 984135,
+        "sha256": "4a5164f6c186db20812bf30d3948cb8f557f9349ff32ee7423e8504a00fc0d3f"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-9e774b93-1272-4a2e-8254-be3302ab1e24-0-_7jcavkwQLWQyDWRDH2lgQ/00000000000000000000-Au3NYpg9SEC9d2ocu2PiXg.snapshot",
+        "bytes": 56,
+        "sha256": "a30317520fc7f1c65418059cbf1876823fc3fc5097b23037f69b0270ab25bc1f"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-9e774b93-1272-4a2e-8254-be3302ab1e24-0-_7jcavkwQLWQyDWRDH2lgQ/00000000000000000000-Au3NYpg9SEC9d2ocu2PiXg.index",
+        "bytes": 112,
+        "sha256": "df1f33990414af79a751d9bcdce8f56c078377bccd636d49aceb5cd173536e7e"
+      },
+      {
+        "path": "../qualification-tiered-runtime/candidate-archive2/copy-probe-9e774b93-1272-4a2e-8254-be3302ab1e24-0-_7jcavkwQLWQyDWRDH2lgQ/00000000000000000000-Au3NYpg9SEC9d2ocu2PiXg.timeindex",
+        "bytes": 168,
+        "sha256": "cdb456468bf9bf6b39de47a13ae747fc72f2c25e5fd8269f825b32bce206dc2e"
+      }
+    ]
+  },
+  "oracle_dynamic_topic_config": {
+    "__remote_log_metadata": {
+      "min.insync.replicas": "1"
+    }
+  }
+}

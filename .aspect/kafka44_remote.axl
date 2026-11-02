@@ -1,0 +1,54 @@
+"""Copy-only released/client differential smoke against prepared isolated brokers."""
+
+load("./kafka44.axl", "IMAGE", "input_problems")
+load("./verify_release.axl", "text_sha256")
+
+def _run(ctx, argv, timeout = 120):
+    result = ctx.std.process.command("timeout").args([str(timeout)] + argv).stdout("piped").stderr("piped").spawn().wait_with_output()
+    return {"command": argv, "returncode": result.status.code, "stdout": result.stdout, "stderr": result.stderr}
+
+def copy_probe_success(result):
+    rows = [line for line in result["stdout"].splitlines() if line.startswith("SCENARIO\t")]
+    return result["returncode"] == 0 and rows == ["SCENARIO\tdelay-then-dynamic-zero-copies\tPASS"]
+
+def _impl(ctx: TaskContext) -> int:
+    a = ctx.args
+    problems = input_problems(a.revision, [])
+    if not all([a.oracle_container, a.oracle_bootstrap, a.oracle_archive, a.enabled_bootstrap, a.enabled_archive, a.enabled_config, a.output]):
+        problems.append("all prepared isolated broker, archive, configuration and output arguments required")
+    if problems:
+        fail("; ".join(problems))
+    if ctx.std.fs.exists(a.output):
+        fail("output must be a new directory")
+    image = _run(ctx, ["docker", "inspect", a.oracle_container, "--format", "{{.Config.Image}}"])
+    if image["returncode"] or image["stdout"].strip() != IMAGE:
+        fail("oracle container must use the exact pinned released image")
+    revision = _run(ctx, ["git", "rev-parse", "--verify", a.revision + "^{commit}"])
+    if revision["returncode"]:
+        fail("candidate revision must exist locally")
+    _run(ctx, ["mkdir", "-p", a.output + "/libs", a.output + "/classes"])
+    setup = [_run(ctx, ["docker", "cp", a.oracle_container + ":/opt/kafka/libs/.", a.output + "/libs/"])]
+    setup.append(_run(ctx, ["javac", "--release", "17", "-cp", a.output + "/libs/*", "-d", a.output + "/classes", "tools/kafka44/CopyProbe.java", "tools/kafka44/RecordingStorage.java"]))
+    evidence = {"qualification_pass": False, "candidate_revision": a.revision, "oracle_image": IMAGE, "image_check": image, "setup": setup, "config_sha256": text_sha256(ctx.std.fs.read_to_string(a.enabled_config)), "source_sha256": {path: text_sha256(ctx.std.fs.read_to_string(path)) for path in ["tools/kafka44/CopyProbe.java", "tools/kafka44/RecordingStorage.java"]}, "limits": "Prepared copy-only fixture, not remote reads/durability/crash/failover or full qualification"}
+    if any([r["returncode"] for r in setup]):
+        evidence["status"] = "setup-failure"
+        ctx.std.fs.write(a.output + "/evidence.json", json.encode(evidence) + "\n")
+        return 1
+    results = {}
+    for side, endpoint, archive in [("oracle", a.oracle_bootstrap, a.oracle_archive), ("enabled", a.enabled_bootstrap, a.enabled_archive)]:
+        results[side] = _run(ctx, ["java", "-cp", a.output + "/classes:" + a.output + "/libs/*", "CopyProbe", endpoint, archive])
+    failed = any([not copy_probe_success(r) for r in results.values()])
+    evidence.update({"status": "failed" if failed else "copy-smoke-pass-not-qualified", "results": results})
+    ctx.std.fs.write(a.output + "/evidence.json", json.encode(evidence) + "\n")
+    return 1 if failed else 0
+
+kafka44_remote = task(summary = "Run copy-delay smoke on prepared isolated released/enabled brokers", implementation = _impl, args = {name: args.string(default = "", description = description) for name, description in {
+    "revision": "Exact enabled candidate source SHA.",
+    "oracle_container": "Prepared pinned released container with RecordingStorage backend.",
+    "oracle_bootstrap": "Isolated released broker endpoint.",
+    "oracle_archive": "Owned recording-backend archive path on this host.",
+    "enabled_bootstrap": "Isolated enabled candidate endpoint.",
+    "enabled_archive": "Owned candidate local archive path on this host.",
+    "enabled_config": "Exact effective candidate configuration file.",
+    "output": "New evidence directory.",
+}.items()})

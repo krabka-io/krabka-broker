@@ -16,6 +16,11 @@
       "stdout": "SCENARIO\tdiscover-remote.copy.lag.ms\t0\nDETAIL\tremote.copy.lag.ms=-2\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value -2 for configuration remote.copy.lag.ms: Value must be at least -1\nSCENARIO\tvalidate-remote.copy.lag.ms=-2\tINVALID_CONFIG\nSCENARIO\tvalidate-remote.copy.lag.ms=-1\tNONE\nSCENARIO\tvalidate-remote.copy.lag.ms=0\tNONE\nSCENARIO\tvalidate-remote.copy.lag.ms=1000\tNONE\nDETAIL\tremote.copy.lag.ms=not-a-number\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value not-a-number for configuration remote.copy.lag.ms: Not a number of type LONG\nSCENARIO\tvalidate-remote.copy.lag.ms=not-a-number\tINVALID_CONFIG\nSCENARIO\tdiscover-remote.copy.lag.bytes\t-1\nDETAIL\tremote.copy.lag.bytes=-2\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value -2 for configuration remote.copy.lag.bytes: Value must be at least -1\nSCENARIO\tvalidate-remote.copy.lag.bytes=-2\tINVALID_CONFIG\nSCENARIO\tvalidate-remote.copy.lag.bytes=-1\tNONE\nSCENARIO\tvalidate-remote.copy.lag.bytes=0\tNONE\nSCENARIO\tvalidate-remote.copy.lag.bytes=1000\tNONE\nDETAIL\tremote.copy.lag.bytes=not-a-number\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value not-a-number for configuration remote.copy.lag.bytes: Not a number of type LONG\nSCENARIO\tvalidate-remote.copy.lag.bytes=not-a-number\tINVALID_CONFIG\nSCENARIO\tvalidate-only-preserves-config\tPASS\n",
       "sha256": "44dea033ebbcfe8824dc0c3a1ecde0665bcc31f02bb74d3c3c33cd22381dfaa7",
       "returncode": 0
+    },
+    "default": {
+      "stdout": "SCENARIO\tdiscover-remote.copy.lag.ms\tMISSING\nDETAIL\tremote.copy.lag.ms=-2\torg.apache.kafka.common.errors.InvalidConfigurationException: Unknown topic config name: remote.copy.lag.ms\nSCENARIO\tvalidate-remote.copy.lag.ms=-2\tINVALID_CONFIG\nDETAIL\tremote.copy.lag.ms=-1\torg.apache.kafka.common.errors.InvalidConfigurationException: Unknown topic config name: remote.copy.lag.ms\nSCENARIO\tvalidate-remote.copy.lag.ms=-1\tINVALID_CONFIG\nDETAIL\tremote.copy.lag.ms=0\torg.apache.kafka.common.errors.InvalidConfigurationException: Unknown topic config name: remote.copy.lag.ms\nSCENARIO\tvalidate-remote.copy.lag.ms=0\tINVALID_CONFIG\nDETAIL\tremote.copy.lag.ms=1000\torg.apache.kafka.common.errors.InvalidConfigurationException: Unknown topic config name: remote.copy.lag.ms\nSCENARIO\tvalidate-remote.copy.lag.ms=1000\tINVALID_CONFIG\nDETAIL\tremote.copy.lag.ms=not-a-number\torg.apache.kafka.common.errors.InvalidConfigurationException: Unknown topic config name: remote.copy.lag.ms\nSCENARIO\tvalidate-remote.copy.lag.ms=not-a-number\tINVALID_CONFIG\nSCENARIO\tdiscover-remote.copy.lag.bytes\tMISSING\nDETAIL\tremote.copy.lag.bytes=-2\torg.apache.kafka.common.errors.InvalidConfigurationException: Unknown topic config name: remote.copy.lag.bytes\nSCENARIO\tvalidate-remote.copy.lag.bytes=-2\tINVALID_CONFIG\nDETAIL\tremote.copy.lag.bytes=-1\torg.apache.kafka.common.errors.InvalidConfigurationException: Unknown topic config name: remote.copy.lag.bytes\nSCENARIO\tvalidate-remote.copy.lag.bytes=-1\tINVALID_CONFIG\nDETAIL\tremote.copy.lag.bytes=0\torg.apache.kafka.common.errors.InvalidConfigurationException: Unknown topic config name: remote.copy.lag.bytes\nSCENARIO\tvalidate-remote.copy.lag.bytes=0\tINVALID_CONFIG\nDETAIL\tremote.copy.lag.bytes=1000\torg.apache.kafka.common.errors.InvalidConfigurationException: Unknown topic config name: remote.copy.lag.bytes\nSCENARIO\tvalidate-remote.copy.lag.bytes=1000\tINVALID_CONFIG\nDETAIL\tremote.copy.lag.bytes=not-a-number\torg.apache.kafka.common.errors.InvalidConfigurationException: Unknown topic config name: remote.copy.lag.bytes\nSCENARIO\tvalidate-remote.copy.lag.bytes=not-a-number\tINVALID_CONFIG\nSCENARIO\tvalidate-only-preserves-config\tPASS\n",
+      "returncode": 0,
+      "sha256": "1229e2607f2ccd6f9c3e5081bbc43faa01a9c9f5152338fd11b191d20a724a99"
     }
   },
   "oracle_collector": {
@@ -42,7 +47,49 @@
   },
   "limits": [
     "validate-only configuration checks, not remote IO or eligibility scheduling",
-    "isolated enabled candidate only; default gate comparison remains separate",
+    "default gate has eight explicit differences: keys absent and valid values rejected; not declared parity",
     "oracle collector runs on merged source parent ff09ae16e; retained candidate runtime is b734bbab9"
+  ],
+  "default_differences": [
+    {
+      "scenario": "discover-remote.copy.lag.ms",
+      "oracle": "0",
+      "default": "MISSING"
+    },
+    {
+      "scenario": "validate-remote.copy.lag.ms=-1",
+      "oracle": "NONE",
+      "default": "INVALID_CONFIG"
+    },
+    {
+      "scenario": "validate-remote.copy.lag.ms=0",
+      "oracle": "NONE",
+      "default": "INVALID_CONFIG"
+    },
+    {
+      "scenario": "validate-remote.copy.lag.ms=1000",
+      "oracle": "NONE",
+      "default": "INVALID_CONFIG"
+    },
+    {
+      "scenario": "discover-remote.copy.lag.bytes",
+      "oracle": "-1",
+      "default": "MISSING"
+    },
+    {
+      "scenario": "validate-remote.copy.lag.bytes=-1",
+      "oracle": "NONE",
+      "default": "INVALID_CONFIG"
+    },
+    {
+      "scenario": "validate-remote.copy.lag.bytes=0",
+      "oracle": "NONE",
+      "default": "INVALID_CONFIG"
+    },
+    {
+      "scenario": "validate-remote.copy.lag.bytes=1000",
+      "oracle": "NONE",
+      "default": "INVALID_CONFIG"
+    }
   ]
 }

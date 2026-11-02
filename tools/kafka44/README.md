@@ -93,3 +93,19 @@ The CI matrix runs plain, authorization and transaction variants independently. 
 ### Delayed-copy configuration fixture
 
 `--protocol-scenarios` also executes `ConfigScenarios.java` using only the pinned released jars: thirteen topic discovery/validate-only cases for `remote.copy.lag.ms` and `remote.copy.lag.bytes`, including -2/-1/0/1000/nonnumeric values and unchanged configuration. Candidate differences or missing cases fail collection. `qualification/kafka44-delayed-copy-config.json` records the first actual released/enabled comparison and a successful full oracle collector invocation. No remote-storage IO or upload scheduling is inferred from config acceptance.
+
+### Copy-only delayed upload smoke
+
+`aspect kafka44-remote` runs the retained released-client `CopyProbe.java` against two **prepared isolated** brokers and archives. It validates the oracle container's immutable image, compiles only against its exported4.4 jars, records candidate revision/config/source hashes and raw outputs, and requires both exact successful scenario rows. It neither provisions nor restarts arbitrary candidate endpoints.
+
+Prepare the released broker with `RecordingStorage.java` compiled against the pinned image's jars and placed on `remote.log.storage.manager.class.path`; this is a copy-only recording backend, **not production storage or a remote-read test**. Configure `remote.log.storage.system.enable=true`, `remote.log.storage.manager.class.name=RecordingStorage`, `remote.log.storage.manager.impl.prefix=rsm.config.`, and `rsm.config.dir` to the mounted archive directory. Use the topic-backed remote metadata manager, RF1/minISR1 only for this single-node fixture. The retained receipt includes the complete oracle properties and dynamic internal-topic minISR override. Configure the candidate with a fresh owned data directory, enabled API gates, local `[remote_storage] storage_dir`, explicit self-bootstrap and RF1/minISR1 under `[remote_storage.kafka_metadata]`. Set both copier intervals to500ms (candidate `--remote-log-manager-interval 500ms`). Preserve all setup outputs and exact binary SHA.
+
+```console
+aspect kafka44-remote --revision <exact-runtime-sha> \
+  --oracle-container <owned-pinned-oracle> --oracle-bootstrap <oracle-endpoint> \
+  --oracle-archive <mounted-archive-host-path> \
+  --enabled-bootstrap <owned-candidate-endpoint> --enabled-archive <local-archive> \
+  --enabled-config <effective-candidate-toml> --output <new-evidence-directory>
+```
+
+The first actual task pass is retained in `qualification/kafka44-delayed-copy-runtime.json`. The probe creates a fresh topic, snapshots archive filenames, produces24 acknowledged64KiB records with1MiB segment roll, observes no new archive files for3seconds under60s/100MB thresholds, then changes lag.ms to0 and requires new files. This is a short copy/dynamic-update smoke, not proof of threshold timing or uploaded data integrity, remote reads, crash recovery, leadership fencing or multibroker parity. No clean CI result may broaden that claim.
