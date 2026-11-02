@@ -14,6 +14,7 @@ use {
     crate::share_partition::state::DlqCause,
     bytes::Bytes,
     krabka_protocol::records::{HEADER_LEN, Record, RecordBatch, RecordHeader},
+    krabka_verified::share::{DlqBatchAdmission, dlq_batch_admission},
     std::collections::BTreeMap,
 };
 
@@ -133,7 +134,6 @@ pub(super) fn build_round(
             ..Default::default()
         };
         let record_size = i64::try_from(record.encoded_len()).unwrap_or(i64::MAX);
-        use krabka_verified::share::{DlqBatchAdmission, dlq_batch_admission};
         let projected = size.saturating_add(record_size);
         let admission = dlq_batch_admission(projected, limit, !records.is_empty());
         if admission == DlqBatchAdmission::Flush {

@@ -9,6 +9,7 @@ use {
         test_support::{DeadLetterQueue, acquire_window},
     },
     crate::model_check::run_bfs,
+    assert2::assert,
     krabka_log::Offset,
     stateright::{Checker as _, Model, Property},
 };
@@ -126,7 +127,7 @@ impl Model for DlqModel {
                 s.attempts = 0;
                 s.crashes += 1;
                 if self.lose_recovery && s.live.start_offset == Offset(0) {
-                    s.live.take_pending_dlq();
+                    let _ = s.live.take_pending_dlq();
                 }
             }
             _ => return None,
