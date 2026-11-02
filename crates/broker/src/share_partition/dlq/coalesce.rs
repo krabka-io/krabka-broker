@@ -35,6 +35,7 @@ use {
         sync::{Arc, Mutex, MutexGuard, PoisonError},
     },
     tokio::{sync::oneshot, task::yield_now},
+    tokio_util::{sync::CancellationToken, task::TaskTracker},
 };
 
 /// The `timeout.ms` of the produce request: Kafka's
@@ -92,6 +93,8 @@ struct Queue {
 struct Inner<T> {
     transport: T,
     queues: Mutex<HashMap<NodeId, Queue>>,
+    shutdown: CancellationToken,
+    tasks: TaskTracker,
 }
 
 /// The queues of the brokers that dead-letter rounds go to, and the task that
@@ -106,17 +109,34 @@ impl<T: ProduceTransport> Coalescer<T> {
             inner: Arc::new(Inner {
                 transport,
                 queues: Mutex::default(),
+                shutdown: CancellationToken::new(),
+                tasks: TaskTracker::new(),
             }),
         }
+    }
+
+    /// Cancel and join owned sends; a request already on the wire has unknown outcome.
+    pub(super) async fn stop(&self) {
+        {
+            let _queues = self.inner.queues();
+            self.inner.shutdown.cancel();
+            self.inner.tasks.close();
+        }
+        self.inner.tasks.wait().await;
     }
 
     /// Produces `produce` to `node`, in a request that may carry the rounds of
     /// other ranges too, and answers with that request's response.
     pub(super) async fn produce(&self, node: NodeId, produce: Produce) -> Answer {
         let (done, answer) = oneshot::channel();
-        let start = enqueue(&mut self.inner.queues(), node, Pending { produce, done });
-        if start {
-            tokio::spawn(Arc::clone(&self.inner).drain(node));
+        {
+            let mut queues = self.inner.queues();
+            if self.inner.shutdown.is_cancelled() {
+                return Err("the dead-letter sender stopped".to_owned());
+            }
+            if enqueue(&mut queues, node, Pending { produce, done }) {
+                self.inner.tasks.spawn(Arc::clone(&self.inner).drain(node));
+            }
         }
         answer
             .await
@@ -178,7 +198,11 @@ impl<T: ProduceTransport> Inner<T> {
                 guard.finished = true;
                 return;
             };
-            let response = self.transport.send(node, request).await.map(Arc::new);
+            let response = tokio::select! {
+                biased;
+                () = self.shutdown.cancelled() => return,
+                answer = self.transport.send(node, request) => answer.map(Arc::new),
+            };
             for done in answers {
                 // A writer that gave up has dropped its end; the records it
                 // sent are in the request regardless.
@@ -974,5 +998,25 @@ mod tests {
         assert!(
             *seen.lock().expect("seen lock") == vec![vec![1, 0, 0], vec![1, 1, 0], vec![1, 1, 1]]
         );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn stop_cancels_inflight_and_queued_sends_and_refuses_new_work() {
+        let broker = FakeBroker::held();
+        let coalescer = Arc::new(Coalescer::new(broker.clone()));
+        let first = spawn_round(&coalescer, 0, "first");
+        settle().await;
+        let second = spawn_round(&coalescer, 0, "second");
+        settle().await;
+        coalescer.stop().await;
+        assert!(first.await.unwrap().is_err() && second.await.unwrap().is_err());
+        assert!(
+            coalescer
+                .produce(NodeId(1), round().values(&["late"]).call())
+                .await
+                .is_err()
+        );
+        broker.release();
+        settle().await;
+        assert!(broker.sent().len() == 1);
     }
 }

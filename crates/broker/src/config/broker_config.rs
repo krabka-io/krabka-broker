@@ -50,6 +50,7 @@ use {
         replica_selector::ReplicaSelectorKind,
         schema_validation::SchemaValidator,
         share_coordinator::config::ShareCoordinatorConfig,
+        share_partition::dlq::DlqManagerFactory,
         topic_policy::TopicPolicy,
     },
     krabka_audit::AuditMode,
@@ -1000,6 +1001,13 @@ krabka_macros::broker_config! {
 
         /// KIP-932 share-group configuration.
         pub share_group: Box<ShareGroupConfig>,
+
+        /// Native per-broker KIP-1191 DLQ-manager registration.
+        ///
+        /// None selects the stock writer. Factories create one independent
+        /// manager per broker start; graceful shutdown cancels pending writes
+        /// before calling its stop callback exactly once. No JVM class loading.
+        pub share_dlq_manager_factory: Option<Arc<dyn DlqManagerFactory>>,
 
         /// KIP-1071 streams-group (Streams rebalance protocol) configuration.
         pub streams_group: Box<StreamsGroupConfig>,

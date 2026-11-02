@@ -52,10 +52,11 @@ Pinned release sources:
 - [Default implementation](https://github.com/apache/kafka/blob/4.4.0/server/src/main/java/org/apache/kafka/server/share/dlq/DefaultShareGroupDLQManager.java): validation and delegation to the state manager.
 - [SharePartition](https://github.com/apache/kafka/blob/4.4.0/core/src/main/java/kafka/server/share/SharePartition.java): `initiateDLQAndArchive` archives even when enqueue fails; `maybeResumeDlqArchiving` re-enqueues recovered ARCHIVING ranges. This establishes a source-level duplicate window after DLQ append but before durable ARCHIVED. Failure can leave no DLQ record although the source is archived. **These are source-derived expectations, not measured crash guarantees.**
 
-Krabka's internal `DlqSink` is not a user-loadable manager extension. No native
-custom-manager configuration or JVM-class loading counterpart is supported by
-this change. Designing a native registration/lifecycle/error contract requires
-a separately scoped follow-up; do not advertise this capability as parity.
+The separately tracked [native manager follow-up](https://github.com/krabka-io/krabka-broker/issues/1982)
+adds public per-broker factory registration and enqueue/stop lifecycle; see
+[the native API contract](../../docs/compatibility/kafka-4.4-native-dlq-manager.md).
+This is a native Rust embedding API, not JVM class/JAR loading or a class-name
+loader in the stock executable. Keep that deployment boundary explicit.
 
 ## Still required before closing #1974
 
@@ -63,9 +64,10 @@ a separately scoped follow-up; do not advertise this capability as parity.
   counters and released component counters are measured, not equivalent evidence.
 - Resolve/accept the terminal-prefix persistence difference measured below:
   released retains ARCHIVED rows/start=0/count=1; candidate prunes/start=1/count=0.
-- Controlled leader changes and process restarts while ARCHIVING, including
-  append-before-ARCHIVED crash point, with measured duplicate/loss outcomes.
-- Agree a separately scoped extension implementation if native plugins are wanted.
+- The append-before-ARCHIVED crash point with measured duplicate/loss outcomes;
+  actual pre-append ARCHIVING crash plus destination failover is measured below.
+- Complete validation of the separately scoped native extension follow-up #1982;
+  implementation and behavioral tests are included in this branch.
 
 Existing Krabka tests cover failed writes still archiving, recovered cause
 inference, and per-attempt leader lookup. They do not replace multi-broker crash
@@ -204,7 +206,7 @@ that an IO write succeeds. Saturated projected byte size, record encoding,
 original key/value cloning and destination errors are adapter obligations
 exercised by the real exact-boundary differential above. The proof runtime must
 match repository pin v0.14.0; installed local0.13.0 refuses std0.14.0, so contracts
-are not discharged merely by adding them.
+were initially blocked locally; the pinned-image discharge is recorded below.
 
 ## Durable state decoded using released Kafka tooling
 
@@ -234,8 +236,9 @@ and mutant unique counts are pinned in source; the recovery counterexample is
 pinned at two actions (Persist, Crash). The hard caps remain depth32/generated
 10,000, not the observed completion counts. This is small by design: it proves
 the isolated one-offset transition graph, not arbitrary multi-record schedules.
-Verified-share runtime regression filter:16 passed. The full Creusot discharge
-remains pending the matching0.14 runtime; runtime tests are not formal proofs.
+Verified-share runtime regression filter:16 passed. The pinned0.14 formal replay
+completed successfully across617 files, including the new functional and Clone
+VCs. Runtime tests are not formal proofs.
 
 ## Measured leader failure and mid-ARCHIVING restart
 
@@ -291,4 +294,25 @@ from the private output directory with the image's `DUNE_DIR_LOCATIONS` and
 `WHY3CONFIG`. The functional admission VC passed Alt-Ergo in0.009s and generated
 Clone VC in0.008s. These are **two obligations, one functional**, covering the
 three postconditions jointly. Only the four new proof artifacts were copied
-back; no unrelated proof-session churn. Full fresh package replay runs separately.
+back; no unrelated proof-session churn. Full fresh package replay completed:
+`Proved (617 files)`. This is a file count, not617 newly introduced obligations.
+
+## Actual released-broker JMX meters
+
+`JmxCounts.java` reads the released broker's actual `ShareGroupMetrics` MBeans
+using a loopback-only RMI endpoint, not injected component metrics. A fresh
+`j01` exact-boundary run against pinned4.4 completed all8 cases. Retained
+`share-boundary-release-jmx-run.txt` and `share-boundary-release-jmx-counts.txt`
+assert one produce attempt per group, one failure for each undersized
+copied/headers-only destination, zero writes there, and one write in each of
+six successful groups. These match the previously retained actual candidate
+counters. Missing zero-valued meter series are read as zero, not fabricated
+positive counts. No broker restart occurs between the run and the meter read.
+
+The isolated released server uses client39902/controller39903 and JMX39904.
+JMX binds127.0.0.1 with both registry and RMI port39904, auth/SSL disabled only
+on that private test endpoint. The same RF1/minISR1 setup as the earlier single
+node is used, with a512MiB heap. Run `JmxCounts` with
+`service:jmx:rmi:///jndi/rmi://127.0.0.1:39904/jmxrmi j01` after `ShareBoundary`.
+This closes the earlier released-JMX counter gap for the size scenarios; it is
+not a rate/timer calibration or post-crash counter continuity guarantee.

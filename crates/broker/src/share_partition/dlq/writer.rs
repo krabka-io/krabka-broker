@@ -635,6 +635,8 @@ impl DlqSink for DlqWriter {
         }
         Ok(())
     }
+
+    async fn stop(&self) { self.sender.stop().await; }
 }
 
 #[cfg(test)]

@@ -457,6 +457,7 @@ impl BrokerHandle {
         // are not drained, but this method does not return while a child can
         // still mutate the victim's data files.
         self.stop_listeners().await;
+        self.broker.share_partition_leaders.shutdown().await;
 
         // The supervisor's cancellation epilogue aborts and joins its private
         // ordinary and WAL follower tasks. Its run loop races every reconcile
@@ -577,6 +578,7 @@ impl BrokerHandle {
             let _ = task.await;
         }
         self.stop_listeners().await;
+        self.broker.share_partition_leaders.shutdown().await;
         self.broker
             .audit_log
             .emit(krabka_audit::AuditEvent::Lifecycle {
@@ -613,6 +615,7 @@ impl BrokerHandle {
 
 impl Drop for BrokerHandle {
     fn drop(&mut self) {
+        self.broker.share_partition_leaders.shutdown_background();
         self.auto_join_shutdown.cancel();
         self.broker.supervisor_shutdown.cancel();
         self.shutdown.cancel();

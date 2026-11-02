@@ -36,11 +36,13 @@ use {
         fmt::{Debug, Formatter, Result},
         sync::{Arc, OnceLock, Weak},
     },
-    tokio::sync::{Mutex, Semaphore},
+    tokio::sync::{Mutex, OnceCell, Semaphore, watch},
+    tokio_util::{sync::CancellationToken, task::TaskTracker},
 };
 
 mod cells;
 mod dead_letter;
+mod lifecycle;
 mod metadata_lookup;
 pub(crate) mod persistence;
 mod sessions;
@@ -68,6 +70,9 @@ pub(crate) struct SharePartitionLeaderManager {
     /// Where the records of a group's dead-letter queue are written
     /// (KIP-1191).
     dlq: Arc<dyn DlqSink>,
+    shutdown: CancellationToken,
+    background_tasks: TaskTracker,
+    stopped: OnceCell<watch::Receiver<bool>>,
     /// The writes to the dead-letter queue that may run at once, across every
     /// partition this broker leads: the writes that wait for a permit hold
     /// their records in `Archiving`, and hold the SPSO with them.
@@ -107,6 +112,9 @@ impl SharePartitionLeaderManager {
             sessions: ShareSessionCache::new(session_max),
             leaders: DashMap::new(),
             dlq,
+            shutdown: CancellationToken::new(),
+            background_tasks: TaskTracker::new(),
+            stopped: OnceCell::new(),
             dead_letter_writes: Semaphore::new(dead_letter::MAX_CONCURRENT_DEAD_LETTER_WRITES),
             me: Weak::clone(me),
             remote_reader: OnceLock::new(),

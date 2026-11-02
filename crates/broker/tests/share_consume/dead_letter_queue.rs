@@ -1149,3 +1149,6 @@ fn source_values() -> Vec<Option<Bytes>> {
         .map(|offset| Some(Bytes::from(format!("v{offset}"))))
         .collect()
 }
+
+#[path = "dead_letter_queue/native.rs"]
+mod native;

@@ -36,10 +36,14 @@ impl SharePartitionLeaderManager {
     pub(crate) fn spawn_lock_sweeper(self: &Arc<Self>) {
         let mgr = Arc::clone(self);
         let period = (mgr.config.record_lock_duration / 2).max(Duration::from_millis(100));
-        tokio::spawn(async move {
+        self.background_tasks.spawn(async move {
             let mut tick = interval(period);
             loop {
-                tick.tick().await;
+                tokio::select! {
+                    biased;
+                    () = mgr.shutdown.cancelled() => break,
+                    _ = tick.tick() => {}
+                }
                 // Snapshot keys + cells, releasing all DashMap guards first.
                 let cells: Vec<LeaderCell> = mgr
                     .leaders

@@ -19,8 +19,13 @@ impl SharePartitionLeaderManager {
         let mgr = Arc::clone(self);
         let mut images = mgr.controller.watch_image();
         let mut enabled = share_groups_enabled(&images.borrow_and_update());
-        tokio::spawn(async move {
-            while images.changed().await.is_ok() {
+        self.background_tasks.spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    () = mgr.shutdown.cancelled() => break,
+                    result = images.changed() => if result.is_err() { break; },
+                }
                 let now = share_groups_enabled(&images.borrow_and_update());
                 if enabled && !now {
                     mgr.clear();
