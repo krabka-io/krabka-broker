@@ -1,0 +1,39 @@
+(* #"/workspace/crates/verified/src/streams_cleanup.rs" 24 0 29 15 *)
+
+let%span sstreams_cleanup = "/workspace/crates/verified/src/streams_cleanup.rs" 31 38 31 40
+let%span sstreams_cleanup'0 = "/workspace/crates/verified/src/streams_cleanup.rs" 22 28 22 76
+let%span sstreams_cleanup'1 = "/workspace/crates/verified/src/streams_cleanup.rs" 23 28 23 104
+
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type tup2_i32_i32 = { f0: Int32.t; f1: Int32.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let finish_store [#"/workspace/crates/verified/src/streams_cleanup.rs" 24 0 29 15] (epoch: Int32.t)
+  (previous_failed: Int32.t) (succeeded: bool) (permanent: bool) (return (x: tup2_i32_i32)) = (! bb0
+  [ bb0 = any [ br0 -> {succeeded = false} (! bb2) | br1 -> {succeeded} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_13 <- epoch ] s1 | s1 = bb3 ]
+  | bb2 = s0 [ s0 = [ &_13 <- [%#sstreams_cleanup] (-2: Int32.t) ] s1 | s1 = bb3 ]
+  | bb3 = any [ br0 -> {succeeded = false} (! bb4) | br1 -> {succeeded} (! bb6) ]
+  | bb4 = any [ br0 -> {permanent = false} (! bb6) | br1 -> {permanent} (! bb5) ]
+  | bb5 = s0 [ s0 = [ &_15 <- epoch ] s1 | s1 = bb7 ]
+  | bb6 = s0 [ s0 = [ &_15 <- previous_failed ] s1 | s1 = bb7 ]
+  | bb7 = s0 [ s0 = [ &_ret <- { f0 = _13; f1 = _15 } ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: tup2_i32_i32 = Any.any_l ()
+  | & epoch: Int32.t = epoch
+  | & previous_failed: Int32.t = previous_failed
+  | & succeeded: bool = succeeded
+  | & permanent: bool = permanent
+  | & _13: Int32.t = Any.any_l ()
+  | & _15: Int32.t = Any.any_l () ])
+  [ return (result: tup2_i32_i32) ->
+  {[@stop_split] [@expl:finish_store ensures] ([@stop_split] [@expl:finish_store ensures #0] [%#sstreams_cleanup'0] Int32.to_int result.f0
+      = (if succeeded then Int32.to_int epoch else - 2))
+    /\ ([@stop_split] [@expl:finish_store ensures #1] [%#sstreams_cleanup'1] Int32.to_int result.f1
+    = (if not succeeded /\ permanent then Int32.to_int epoch else Int32.to_int previous_failed))}
+    (! return {result}) ]

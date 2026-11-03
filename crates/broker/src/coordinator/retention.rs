@@ -24,11 +24,11 @@
 //! for those groups, and the new leader — which replays the partition on the
 //! way in — does the work instead.
 //!
-//! Share groups (KIP-932) and streams groups (KIP-1071) are skipped outright.
+//! Share groups (KIP-932) are skipped. Streams groups route through their
+//! membership actor before consulting the offsets home; only empty groups expire.
 //! A streams group keeps its committed offsets on the same `groups` entry a
 //! classic group would use, but its members live in a streams actor, so the
-//! offset home looks memberless and would otherwise be reaped out from under a
-//! live application.
+//! offset home looks memberless and must never decide Streams membership.
 //!
 //! # A pass that fails changes nothing
 //!
@@ -43,6 +43,7 @@ use {
         unified::{
             GroupType,
             actor::{GroupActorMessage, ReapOutcome},
+            streams::actor::StreamsGroupActorMessage,
         },
     },
     crate::{
@@ -113,6 +114,44 @@ pub async fn sweep(
 ) -> Vec<ReapedGroup> {
     let group_ids = coordinator.group_ids();
     let mut changed = Vec::new();
+    for group_id in coordinator.streams_group_ids() {
+        if !owned(&group_id) {
+            continue;
+        }
+        let Some(handle) = coordinator.find_streams(&group_id) else {
+            continue;
+        };
+        let offset_home = coordinator.find(&group_id);
+        let Ok(outcome) = ask(&handle.tx, |reply| {
+            StreamsGroupActorMessage::ReapExpiredOffsets {
+                now_ms,
+                retention_ms,
+                reply,
+            }
+        })
+        .await
+        else {
+            continue;
+        };
+        if outcome.group_deleted
+            && coordinator
+                .streams_groups
+                .remove_if(&group_id, |_, live| Arc::ptr_eq(live, &handle))
+                .is_some()
+        {
+            if let Some(home) = offset_home {
+                coordinator
+                    .groups
+                    .remove_if(&group_id, |_, live| Arc::ptr_eq(live, &home));
+            }
+            coordinator.group_types.remove(&group_id);
+            coordinator.streams_seeds.remove(&group_id);
+            coordinator.streams_seeds_cache.remove(&group_id);
+        }
+        if outcome.group_deleted || !outcome.reaped.is_empty() {
+            changed.push(ReapedGroup { group_id, outcome });
+        }
+    }
     for group_id in group_ids {
         if !sweepable(coordinator, &group_id) || !owned(&group_id) {
             continue;

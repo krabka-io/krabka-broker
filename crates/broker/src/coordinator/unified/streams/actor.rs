@@ -68,19 +68,20 @@ use {
     },
     super::{
         config::StreamsGroupConfig,
-        description::{
-            DescriptionEpochs, SolicitationBackoff, StoredDescription, TopologyDescription,
-        },
+        description::{DescriptionEpochs, DescriptionRuntime, TopologyDescription},
         persistence::StreamsGroupTopologyValue,
         state::{self, StreamsGroupState, StreamsGroupStatePhase},
     },
     crate::{
         codes,
         config_keys::parse::java_trim,
-        coordinator::unified::{
-            GroupCoordinator,
-            actor::{CommitFence, SubscribedTopics},
-            offsets_log::{OffsetsLog, write_failure_code},
+        coordinator::{
+            DeleteGroupError,
+            unified::{
+                GroupCoordinator,
+                actor::{CommitFence, ReapOutcome, SubscribedTopics},
+                offsets_log::{OffsetsLog, write_failure_code},
+            },
         },
         error::BrokerError,
         metadata_source::MetadataSource,
@@ -141,6 +142,20 @@ pub enum StreamsGroupActorMessage {
         reply: oneshot::Sender<PushAnswer>,
     },
     Seed(super::super::StreamsGroupSeed),
+    /// Retention runs under the Streams membership actor, never its offset home.
+    ReapExpiredOffsets {
+        now_ms: i64,
+        retention_ms: i64,
+        reply: oneshot::Sender<ReapOutcome>,
+    },
+    Delete(oneshot::Sender<Result<(), DeleteGroupError>>),
+    Convert {
+        member_id: String,
+        now_ms: i64,
+        reply: oneshot::Sender<Result<super::migration::DowngradeOutcome, BrokerError>>,
+    },
+    DeleteDescription(oneshot::Sender<Result<bool, BrokerError>>),
+    PrepareConversion(oneshot::Sender<Result<bool, BrokerError>>),
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -174,6 +189,8 @@ pub struct StreamsDescribeView {
     /// KIP-1331: the topology description that the plugin holds for the
     /// group's current topology epoch.
     pub topology_description: Option<TopologyDescription>,
+    /// The backend failed while reading an otherwise reliably stored epoch.
+    pub topology_description_error: bool,
 }
 
 /// One member of a [`StreamsDescribeView`].
@@ -206,6 +223,7 @@ pub struct StreamsDescribeMember {
 #[derive(Debug)]
 pub struct StreamsGroupActorHandle {
     pub tx: mpsc::Sender<StreamsGroupActorMessage>,
+    owner: Arc<()>,
     _task: JoinHandle<()>,
 }
 
@@ -215,10 +233,16 @@ impl StreamsGroupActorHandle {
         config: Arc<StreamsGroupConfig>,
         coordinator: Arc<super::super::GroupCoordinator>,
     ) -> Self {
+        let owner = Arc::new(());
+        let actor_owner = Arc::clone(&owner);
         let (tx, task) = spawn_mailbox(config.actor_mailbox_capacity, |rx| {
-            actor_loop(group_id, config, coordinator, rx)
+            actor_loop(group_id, config, coordinator, actor_owner, rx)
         });
-        Self { tx, _task: task }
+        Self {
+            tx,
+            owner,
+            _task: task,
+        }
     }
 }
 
@@ -608,11 +632,8 @@ struct ActorState {
     /// only through its plugin paths; without a plugin the group writes the
     /// record as Kafka 4.3.1 does, whatever epochs a replayed record held.
     trunk_records: bool,
-    /// The description that the in-memory plugin holds for the group. It is
-    /// not persisted: the plugin loses it with the broker.
-    description: Option<StoredDescription>,
-    /// The window in which no other member is asked for the description.
-    description_backoff: SolicitationBackoff,
+    /// Shared with replacement actors, but not persisted across broker restarts.
+    description_runtime: Arc<DescriptionRuntime>,
 }
 
 impl ActorState {
@@ -628,7 +649,7 @@ impl ActorState {
         let next = resolve_broker_and_group_config(defaults, image, node, &self.state.group_id);
         if next != *config {
             *config = next;
-            self.trunk_records = config.topology_description_plugin.is_configured();
+            self.trunk_records = config.description_plugin_configured();
             *tick = session_tick(config);
         }
     }
@@ -648,8 +669,7 @@ impl ActorState {
             assignment_timestamp_ms: 0,
             description_epochs: DescriptionEpochs::default(),
             trunk_records: false,
-            description: None,
-            description_backoff: SolicitationBackoff::default(),
+            description_runtime: Arc::default(),
         }
     }
 }
@@ -709,6 +729,7 @@ async fn actor_loop(
     group_id: String,
     default_config: Arc<StreamsGroupConfig>,
     coordinator: Arc<super::super::GroupCoordinator>,
+    owner: Arc<()>,
     mut rx: mpsc::Receiver<StreamsGroupActorMessage>,
 ) {
     let node = coordinator.node_id();
@@ -718,7 +739,20 @@ async fn actor_loop(
         |image| resolve_broker_and_group_config(&default_config, &image, node, &group_id),
     );
     let mut actor = ActorState::new(group_id);
-    actor.trunk_records = config.topology_description_plugin.is_configured();
+    // A stale Streams lookup after conversion must not recreate plugin state.
+    if coordinator
+        .group_type(&actor.state.group_id)
+        .is_none_or(|kind| kind == super::super::GroupType::Streams)
+    {
+        actor.description_runtime = Arc::clone(
+            coordinator
+                .streams_description_runtime
+                .entry(actor.state.group_id.clone())
+                .or_default()
+                .value(),
+        );
+    }
+    actor.trunk_records = config.description_plugin_configured();
     let mut tick = session_tick(&config);
     loop {
         let wake = tokio::select! {
@@ -757,7 +791,7 @@ async fn actor_loop(
                     refused.send();
                     continue;
                 }
-                close_refused_group(&mut actor, turn, &mut rx, *refused).await;
+                close_refused_group(&mut actor, turn, &owner, &mut rx, *refused).await;
                 break;
             }
             Wake::SessionCheck => {
@@ -805,6 +839,7 @@ async fn actor_loop(
 async fn close_refused_group(
     actor: &mut ActorState,
     turn: StreamsTurn<'_>,
+    owner: &Arc<()>,
     rx: &mut mpsc::Receiver<StreamsGroupActorMessage>,
     refused: DeferredReply,
 ) {
@@ -825,7 +860,7 @@ async fn close_refused_group(
         }
     }
     if actor.holds_nothing() {
-        forget_abandoned_group(turn.coordinator, &actor.state.group_id);
+        forget_abandoned_group(turn.coordinator, actor, owner);
     }
     refused.send();
 }
@@ -895,6 +930,13 @@ impl ActorState {
 /// that every flush caches, or an empty group when nothing was written.
 fn persisted_state(coordinator: &GroupCoordinator, group_id: &str) -> ActorState {
     let mut actor = ActorState::new(group_id.to_owned());
+    actor.description_runtime = Arc::clone(
+        coordinator
+            .streams_description_runtime
+            .entry(group_id.to_owned())
+            .or_default()
+            .value(),
+    );
     if let Some(seed) = coordinator.cached_streams_seed(group_id) {
         apply_seed(&mut actor, seed);
     }
@@ -904,16 +946,22 @@ fn persisted_state(coordinator: &GroupCoordinator, group_id: &str) -> ActorState
 /// Drops the registry entry and the `Streams` type lock of a group whose
 /// actor closed without writing a record. A newer actor for the same id, whose
 /// mailbox is open, keeps both.
-fn forget_abandoned_group(coordinator: &super::super::GroupCoordinator, group_id: &str) {
-    coordinator
-        .streams_groups
-        .remove_if(group_id, |_, handle| handle.tx.is_closed());
-    coordinator
-        .group_types
-        .remove_if(group_id, |_, group_type| {
-            *group_type == super::super::GroupType::Streams
-                && !coordinator.streams_groups.contains_key(group_id)
-        });
+fn forget_abandoned_group(coordinator: &GroupCoordinator, actor: &ActorState, owner: &Arc<()>) {
+    use dashmap::mapref::entry::Entry;
+    let group_id = &actor.state.group_id;
+    if let Entry::Occupied(entry) = coordinator.streams_groups.entry(group_id.clone())
+        && entry.get().tx.is_closed()
+        && Arc::ptr_eq(&entry.get().owner, owner)
+    {
+        // Keep replacement spawning blocked while retiring the old runtime.
+        description::retire_runtime(actor, coordinator);
+        coordinator
+            .group_types
+            .remove_if(group_id, |_, group_type| {
+                *group_type == super::super::GroupType::Streams
+            });
+        entry.remove();
+    }
 }
 
 /// Handles one mailbox message.
@@ -930,6 +978,18 @@ async fn handle_message(
             client_host,
             reply,
         } => {
+            // A conversion can finish between wire lookup and handle acquisition.
+            // Do not let a stale Streams lookup overwrite classic ownership.
+            if turn
+                .coordinator
+                .group_type(&actor.state.group_id)
+                .is_some_and(|kind| kind != super::super::GroupType::Streams)
+            {
+                return Step::RefusedJoin(Box::new(DeferredReply {
+                    reply,
+                    response: response::error_resp(codes::GROUP_ID_NOT_FOUND, None),
+                }));
+            }
             match handle_heartbeat(actor, turn, &request, super::super::ClientIdentity {
                 id: &client_id,
                 host: &client_host,
@@ -983,10 +1043,13 @@ async fn handle_message(
                 actor.topology.as_ref(),
                 actor.ready_topology(),
             );
+            match description::stored_description(actor, turn.config).await {
+                Ok(description) => view.topology_description = description,
+                Err(_) => view.topology_description_error = true,
+            }
             turn.config
                 .selected_task_assignor_name()
                 .clone_into(&mut view.assignor_name);
-            view.topology_description = description::stored_description(actor);
             let _ = reply.send(view);
         }
         StreamsGroupActorMessage::PushDescription { push, reply } => {
@@ -1037,6 +1100,64 @@ async fn handle_message(
         }
         StreamsGroupActorMessage::Seed(seed) => {
             apply_seed(actor, seed);
+        }
+        StreamsGroupActorMessage::Delete(reply) => {
+            let result = description::delete(actor, turn).await;
+            let stop = result.is_ok() || matches!(result, Err(DeleteGroupError::Internal));
+            let _ = reply.send(result);
+            if stop {
+                return Step::Stop;
+            }
+        }
+        StreamsGroupActorMessage::Convert {
+            member_id,
+            now_ms,
+            reply,
+        } => {
+            let result = description::convert(actor, turn, &member_id, now_ms).await;
+            let stop = matches!(
+                &result,
+                Ok(super::migration::DowngradeOutcome::Converted
+                    | super::migration::DowngradeOutcome::Removed)
+            ) || result.is_err();
+            let _ = reply.send(result);
+            if stop {
+                return Step::Stop;
+            }
+        }
+        StreamsGroupActorMessage::PrepareConversion(reply) => {
+            let result = description::prepare_conversion(actor, turn).await;
+            let failed = result.is_err();
+            let _ = reply.send(result);
+            if failed {
+                return Step::Stop;
+            }
+        }
+        StreamsGroupActorMessage::ReapExpiredOffsets {
+            now_ms,
+            retention_ms,
+            reply,
+        } => match description::reap(actor, turn, now_ms, retention_ms).await {
+            Ok(outcome) => {
+                let stop = outcome.group_deleted;
+                let _ = reply.send(outcome);
+                if stop {
+                    return Step::Stop;
+                }
+            }
+            Err(error) => {
+                exit_on_write_failure(&actor.state.group_id, &error);
+                let _ = reply.send(ReapOutcome::default());
+                return Step::Stop;
+            }
+        },
+        StreamsGroupActorMessage::DeleteDescription(reply) => {
+            let result = description::cleanup(actor, turn, true).await;
+            let failed = result.is_err();
+            let _ = reply.send(result);
+            if failed {
+                return Step::Stop;
+            }
         }
         StreamsGroupActorMessage::Shutdown(reply) => {
             let _ = reply.send(());
