@@ -1,0 +1,106 @@
+{
+  "image": "apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f",
+  "kafka_version": "4.4.0",
+  "java_runtime": "25.0.4.1+1-1-26.04.4-Ubuntu",
+  "default": {
+    "accepted": true,
+    "ordered_names": [
+      "sticky"
+    ]
+  },
+  "group_override_ascii": "auto",
+  "group_override_unicode": "\u00a0custom\u00a0",
+  "group_override_blank": "",
+  "ordered_registry": {
+    "accepted": true,
+    "ordered_names": [
+      "first",
+      "second"
+    ]
+  },
+  "native_profile_registry": {
+    "accepted": true,
+    "ordered_names": [
+      "first",
+      "second",
+      "sticky"
+    ]
+  },
+  "first_default_member": [
+    "a"
+  ],
+  "selected_second_member": [
+    "b"
+  ],
+  "reverse_order": {
+    "accepted": true,
+    "ordered_names": [
+      "second",
+      "first"
+    ]
+  },
+  "duplicate_name": {
+    "accepted": false,
+    "error": "ConfigException",
+    "message": "Invalid value AssignorProbe$Duplicate for configuration group.streams.assignors: Assignor name 'first' is already registered by another configured assignor. Assignor names, whether built-in or custom, must be unique"
+  },
+  "reserved_builtin_name": {
+    "accepted": false,
+    "error": "ConfigException",
+    "message": "Invalid value AssignorProbe$Reserved for configuration group.streams.assignors: Assignor name 'sticky' is reserved by a built-in assignor. A custom assignor must not reuse the name of a built-in assignor"
+  },
+  "unknown_class": {
+    "accepted": false,
+    "error": "ConfigException",
+    "message": "Invalid value not.present.Assignor for configuration group.streams.assignors: Class cannot be found"
+  },
+  "wrong_class_type": {
+    "accepted": false,
+    "error": "ConfigException",
+    "message": "Invalid value java.lang.String for configuration group.streams.assignors: Class is not an instance of org.apache.kafka.coordinator.group.api.streams.assignor.TaskAssignor"
+  },
+  "empty_registration_list": {
+    "accepted": false,
+    "error": "ConfigException",
+    "message": "Configuration 'group.streams.assignors' must not be empty. Valid values include: any non-empty value"
+  },
+  "blank_plugin_name": {
+    "accepted": true,
+    "ordered_names": [
+      ""
+    ]
+  },
+  "blank_default_member": [
+    "b"
+  ],
+  "padded_plugin_name": {
+    "accepted": true,
+    "ordered_names": [
+      " padded "
+    ]
+  },
+  "padded_default_member": [
+    "b"
+  ],
+  "legacy_alias_plugin_name": {
+    "accepted": true,
+    "ordered_names": [
+      "auto"
+    ]
+  },
+  "legacy_available_plugin_name": {
+    "accepted": true,
+    "ordered_names": [
+      "highly_available"
+    ]
+  },
+  "legacy_hyphen_plugin_name": {
+    "accepted": true,
+    "ordered_names": [
+      "highly-available"
+    ]
+  },
+  "qualification_scope": "released component registration/execution; not broker wire/coordinator/plugin JVM parity",
+  "probe_source_sha256": "c2aee31549465208a6e5fc8fdc371f3cc8284303774cdad61d6dc4772bef1bfd",
+  "native_profile": "The native registry retains sticky, matching native_profile_registry. Names are bytewise unique; only sticky is reserved; group overrides use Java STRING trimming."
+}
