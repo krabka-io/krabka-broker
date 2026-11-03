@@ -355,6 +355,7 @@ pub(super) fn build_describe(
         .collect();
     members.sort_by(|a, b| a.member_id.cmp(&b.member_id));
     StreamsDescribeView {
+        assignor_name: "sticky".into(),
         group_id: state.group_id.clone(),
         group_epoch: state.group_epoch,
         assignment_epoch: state.target.epoch,

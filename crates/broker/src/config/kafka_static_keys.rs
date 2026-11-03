@@ -274,7 +274,7 @@ pub const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = &[
     KafkaStaticKey::new(
         "group.streams.assignors",
         Some("streams_group_assignor"),
-        |c| c.streams_group.assignor.config_name().to_owned(),
+        |c| c.streams_group.registered_task_assignor_names(),
     ),
     KafkaStaticKey::new(
         "share.coordinator.load.buffer.size",

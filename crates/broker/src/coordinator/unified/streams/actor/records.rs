@@ -283,7 +283,7 @@ pub(super) async fn reconcile_and_flush(
     turn: StreamsTurn<'_>,
 ) -> Result<(), BrokerError> {
     let recorder = StreamsRecorder::start(actor, &[]);
-    super::reconciliation::reconcile(actor, turn.config, turn.metadata_source);
+    super::reconciliation::reconcile(actor, turn.config, turn.metadata_source)?;
     let pending = recorder.finish(actor);
     turn.flush(actor, pending, super::chrono_now_ms()).await
 }

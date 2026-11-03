@@ -215,7 +215,8 @@ fn reconcile(state: &mut State) -> bool {
         &config(),
         &topology,
         &task_counts(state.partitions),
-    );
+    )
+    .expect("built-in assignment");
     true
 }
 

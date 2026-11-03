@@ -1231,7 +1231,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/src/handlers/streams_group_describe/tests.rs::version_1_names_the_assignor_and_the_topology_description_status",
         ],
-        note: "Kafka trunk's StreamsGroupDescribe v1, served only under `unstable.api.versions.enable`.",
+        note: "Kafka 4.4 StreamsGroupDescribe v1, served only under `unstable.api.versions.enable`. Reports the selected native task assignor; custom execution uses the Rust registration API documented in docs/streams-task-assignors.md, not JVM class loading.",
     },
     KipAnnotation {
         key: "SASL/GSSAPI",

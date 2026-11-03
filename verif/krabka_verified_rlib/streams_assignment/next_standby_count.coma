@@ -1,0 +1,49 @@
+(* #"/workspace/crates/verified/src/streams_assignment.rs" 12 0 12 74 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/logic/ord.rs" 34 8 34 21
+let%span sstreams_assignment = "/workspace/crates/verified/src/streams_assignment.rs" 13 17 13 18
+let%span sstreams_assignment'0 = "/workspace/crates/verified/src/streams_assignment.rs" 16 23 16 24
+let%span sstreams_assignment'1 = "/workspace/crates/verified/src/streams_assignment.rs" 16 13 16 24
+let%span sstreams_assignment'2 = "/workspace/crates/verified/src/streams_assignment.rs" 8 28 11 1
+
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i32 = None | Some Int32.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let next_standby_count [#"/workspace/crates/verified/src/streams_assignment.rs" 12 0 12 74] (current': Int32.t)
+  (maximum: Int32.t) (return (x: t_Option_i32)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_6 <- Int32.lt current' ([%#sstreams_assignment] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_6 = false} (! bb2) | br1 -> {_6} (! bb4) ] ]
+  | bb2 = s0
+    [ s0 = [ &_8 <- Int32.ge current' maximum ] s1 | s1 = any [ br0 -> {_8 = false} (! bb5) | br1 -> {_8} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = Int32.add [%#sstreams_assignment'1] {current'} {[%#sstreams_assignment'0] (1: Int32.t)}
+        (fun (_x: Int32.t) -> [ &_11 <- _x ] s1)
+    | s1 = [ &_ret <- Some _11 ] s2
+    | s2 = return {_ret} ] ]
+  [ & _ret: t_Option_i32 = Any.any_l ()
+  | & current': Int32.t = current'
+  | & maximum: Int32.t = maximum
+  | & _6: bool = Any.any_l ()
+  | & _8: bool = Any.any_l ()
+  | & _11: Int32.t = Any.any_l () ])
+  [ return (result: t_Option_i32) ->
+  {[@stop_split] [@expl:next_standby_count ensures] [%#sstreams_assignment'2] match result with
+      | Some next -> ge_log_Int (Int32.to_int current') 0
+      /\ Int32.to_int current' < Int32.to_int maximum
+      /\ Int32.to_int next = Int32.to_int current' + 1 /\ Int32.to_int next <= Int32.to_int maximum
+      | None -> Int32.to_int current' < 0 \/ ge_log_Int (Int32.to_int current') (Int32.to_int maximum)
+      end}
+    (! return {result}) ]
