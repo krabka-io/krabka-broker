@@ -1,0 +1,1011 @@
+{
+  "date": "2026-11-03",
+  "qualification_pass": false,
+  "status": "integrated-scoped-evidence-not-full-parity",
+  "candidate": {
+    "source_revision": "679706fcaf1b51783a302cdd562c087561db4381",
+    "sha256": "a0045c991818fdd6dcd06bdc25099813e91fd281eafc520522f23439b16c1a43",
+    "path": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-broker"
+  },
+  "implementation_heads": {
+    "dlq_configuration": "8019c0156c6ac262741aac408742c5c4853e0bad",
+    "streams_lifecycle": "985947b4e8d4efb6335a0ee1cfeaf6c0817dd630",
+    "dlq_payload": "7d24f261fcd630ac58b12de518604666db419b59",
+    "streams_assignors": "c235ed8a54c4ec663e642bd5d982e5d7e1678e23"
+  },
+  "implementation_tree_hashes": {
+    "crates/broker": "645ac76b705ba81e9750d1c1671e6d4d230533dc",
+    "crates/verified": "45d6fefe1af5d6e89db7cac9685848be2aed55c9",
+    "crates/raft": "823abe060b84580397e8c8cef5469845b80102e0"
+  },
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "raw_artifacts": {
+    "binary.json": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/binary.json",
+      "sha256": "20ef1f718d7386a2c54f80f05185ca66b2eba4e9741e65a48433cf80b9f0e32d"
+    },
+    "build.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/build.log",
+      "sha256": "eb0f727f352c1856dbcf2f6bc5088a12f536f153eb42aba9a7e4eb61c1d3ce02"
+    },
+    "implementation-source-tree.txt": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/implementation-source-tree.txt",
+      "sha256": "0d8a9ac5e957ab46db01ecfd5ccf9fd727307a82906d01ba13117acaec12eb3a"
+    },
+    "collection/evidence.json": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/collection/evidence.json",
+      "sha256": "1dc83e64139327c48324bdb2acf7e12c7286448bd229c33aab3e9339e6a929c1"
+    },
+    "discovery-ready/evidence.json": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/discovery-ready/evidence.json",
+      "sha256": "78849d2b1fc159e9c8dc62f472432a761f3bc49ccba0b22a77513105f9e1ad70"
+    },
+    "enabled-results.json": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled-results.json",
+      "sha256": "3c17c0d03b835aa0ed983332bbd094d8a8ee1753336e23654808be912bb165b0"
+    },
+    "recovery.json": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/recovery.json",
+      "sha256": "b289fec4b87bb289d9bf2aadd77261f4348e5a6a4948484a1eec036864f96acf"
+    },
+    "remote/evidence.json": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/evidence.json",
+      "sha256": "159e24ea9ad6fd604fe4ec412acaca62c2e052702041d3b189f54fa642d8cab7"
+    },
+    "default/effective.toml": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/default/effective.toml",
+      "sha256": "924149516ede303535330f784c67030b50f85a0925aa2948dae32964970446a7"
+    },
+    "enabled/effective.toml": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled/effective.toml",
+      "sha256": "0c203ccc9e0d254bc2013ab5a1669bac4ee884f5dc01c116f4076b33f48becb9"
+    }
+  },
+  "enabled_released_codec_execution": {
+    "protocol": {
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-final-oracle/classes:/classes:ro",
+        "--entrypoint",
+        "java",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "-cp",
+        "/opt/kafka/libs/*:/classes",
+        "ProtocolScenarios",
+        "127.0.0.1:63092",
+        "127.0.0.1:63093"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\trouting-no-identity\t{NONE=1}\nRESPONSE\trouting-no-identity\tApiVersionsResponseData(errorCode=0, apiKeys=[ApiVersion(apiKey=0, minVersion=0, maxVersion=13), ApiVersion(apiKey=1, minVersion=4, maxVersion=18), ApiVersion(apiKey=2, minVersion=1, maxVersion=11), ApiVersion(apiKey=3, minVersion=0, maxVersion=13), ApiVersion(apiKey=8, minVersion=2, maxVersion=10), ApiVersion(apiKey=9, minVersion=1, maxVersion=10), ApiVersion(apiKey=10, minVersion=0, maxVersion=6), ApiVersion(apiKey=11, minVersion=0, maxVersion=9), ApiVersion(apiKey=12, minVersion=0, maxVersion=4), ApiVersion(apiKey=13, minVersion=0, maxVersion=5), ApiVersion(apiKey=14, minVersion=0, maxVersion=5), ApiVersion(apiKey=15, minVersion=0, maxVersion=6), ApiVersion(apiKey=16, minVersion=0, maxVersion=5), ApiVersion(apiKey=17, minVersion=0, maxVersion=1), ApiVersion(apiKey=18, minVersion=0, maxVersion=5), ApiVersion(apiKey=19, minVersion=2, maxVersion=7), ApiVersion(apiKey=20, minVersion=1, maxVersion=6), ApiVersion(apiKey=21, minVersion=0, maxVersion=2), ApiVersion(apiKey=22, minVersion=0, maxVersion=6), ApiVersion(apiKey=23, minVersion=2, maxVersion=4), ApiVersion(apiKey=24, minVersion=0, maxVersion=5), ApiVersion(apiKey=25, minVersion=0, maxVersion=4), ApiVersion(apiKey=26, minVersion=0, maxVersion=5), ApiVersion(apiKey=27, minVersion=1, maxVersion=2), ApiVersion(apiKey=28, minVersion=0, maxVersion=6), ApiVersion(apiKey=29, minVersion=1, maxVersion=3), ApiVersion(apiKey=30, minVersion=1, maxVersion=3), ApiVersion(apiKey=31, minVersion=1, maxVersion=3), ApiVersion(apiKey=32, minVersion=1, maxVersion=4), ApiVersion(apiKey=33, minVersion=0, maxVersion=2), ApiVersion(apiKey=34, minVersion=1, maxVersion=2), ApiVersion(apiKey=35, minVersion=1, maxVersion=5), ApiVersion(apiKey=36, minVersion=0, maxVersion=2), ApiVersion(apiKey=37, minVersion=0, maxVersion=3), ApiVersion(apiKey=38, minVersion=1, maxVersion=3), ApiVersion(apiKey=39, minVersion=1, maxVersion=2), ApiVersion(apiKey=40, minVersion=1, maxVersion=2), ApiVersion(apiKey=41, minVersion=1, maxVersion=3), ApiVersion(apiKey=42, minVersion=0, maxVersion=3), ApiVersion(apiKey=43, minVersion=0, maxVersion=2), ApiVersion(apiKey=44, minVersion=0, maxVersion=1), ApiVersion(apiKey=45, minVersion=0, maxVersion=1), ApiVersion(apiKey=46, minVersion=0, maxVersion=0), ApiVersion(apiKey=47, minVersion=0, maxVersion=0), ApiVersion(apiKey=48, minVersion=0, maxVersion=1), ApiVersion(apiKey=49, minVersion=0, maxVersion=1), ApiVersion(apiKey=50, minVersion=0, maxVersion=0), ApiVersion(apiKey=51, minVersion=0, maxVersion=0), ApiVersion(apiKey=55, minVersion=0, maxVersion=2), ApiVersion(apiKey=56, minVersion=2, maxVersion=3), ApiVersion(apiKey=57, minVersion=0, maxVersion=2), ApiVersion(apiKey=59, minVersion=0, maxVersion=1), ApiVersion(apiKey=60, minVersion=0, maxVersion=2), ApiVersion(apiKey=61, minVersion=0, maxVersion=0), ApiVersion(apiKey=62, minVersion=0, maxVersion=4), ApiVersion(apiKey=63, minVersion=0, maxVersion=2), ApiVersion(apiKey=64, minVersion=0, maxVersion=0), ApiVersion(apiKey=65, minVersion=0, maxVersion=0), ApiVersion(apiKey=66, minVersion=0, maxVersion=2), ApiVersion(apiKey=67, minVersion=0, maxVersion=0), ApiVersion(apiKey=68, minVersion=0, maxVersion=1), ApiVersion(apiKey=69, minVersion=0, maxVersion=1), ApiVersion(apiKey=70, minVersion=0, maxVersion=0), ApiVersion(apiKey=73, minVersion=0, maxVersion=0), ApiVersion(apiKey=74, minVersion=0, maxVersion=1), ApiVersion(apiKey=75, minVersion=0, maxVersion=0), ApiVersion(apiKey=76, minVersion=1, maxVersion=1), ApiVersion(apiKey=77, minVersion=1, maxVersion=1), ApiVersion(apiKey=78, minVersion=1, maxVersion=2), ApiVersion(apiKey=79, minVersion=1, maxVersion=2), ApiVersion(apiKey=80, minVersion=0, maxVersion=1), ApiVersion(apiKey=81, minVersion=0, maxVersion=0), ApiVersion(apiKey=82, minVersion=0, maxVersion=0), ApiVersion(apiKey=83, minVersion=0, maxVersion=0), ApiVersion(apiKey=84, minVersion=0, maxVersion=0), ApiVersion(apiKey=85, minVersion=0, maxVersion=1), ApiVersion(apiKey=86, minVersion=0, maxVersion=0), ApiVersion(apiKey=87, minVersion=0, maxVersion=1), ApiVersion(apiKey=88, minVersion=0, maxVersion=1), ApiVersion(apiKey=89, minVersion=0, maxVersion=1), ApiVersion(apiKey=90, minVersion=0, maxVersion=1), ApiVersion(apiKey=91, minVersion=0, maxVersion=0), ApiVersion(apiKey=92, minVersion=0, maxVersion=0), ApiVersion(apiKey=93, minVersion=0, maxVersion=0), ApiVersion(apiKey=94, minVersion=0, maxVersion=0), ApiVersion(apiKey=1020, minVersion=0, maxVersion=0)], throttleTimeMs=0, supportedFeatures=[SupportedFeatureKey(name='metadata.version', minVersion=7, maxVersion=34), SupportedFeatureKey(name='group.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='transaction.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='share.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='streams.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='eligible.leader.replicas.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='kraft.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='krabka.version', minVersion=0, maxVersion=2)], finalizedFeaturesEpoch=518, finalizedFeatures=[FinalizedFeatureKey(name='eligible.leader.replicas.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='group.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='kraft.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='metadata.version', maxVersionLevel=33, minVersionLevel=33), FinalizedFeatureKey(name='share.version', maxVersionLevel=2, minVersionLevel=2), FinalizedFeatureKey(name='streams.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='transaction.version', maxVersionLevel=2, minVersionLevel=2)], zkMigrationReady=false)\nSCENARIO\trouting-cluster-only\t{INVALID_REQUEST=1}\nRESPONSE\trouting-cluster-only\tApiVersionsResponseData(errorCode=42, apiKeys=[], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-node-only\t{INVALID_REQUEST=1}\nRESPONSE\trouting-node-only\tApiVersionsResponseData(errorCode=42, apiKeys=[], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-correct-identity\t{NONE=1}\nRESPONSE\trouting-correct-identity\tApiVersionsResponseData(errorCode=0, apiKeys=[ApiVersion(apiKey=0, minVersion=0, maxVersion=13), ApiVersion(apiKey=1, minVersion=4, maxVersion=18), ApiVersion(apiKey=2, minVersion=1, maxVersion=11), ApiVersion(apiKey=3, minVersion=0, maxVersion=13), ApiVersion(apiKey=8, minVersion=2, maxVersion=10), ApiVersion(apiKey=9, minVersion=1, maxVersion=10), ApiVersion(apiKey=10, minVersion=0, maxVersion=6), ApiVersion(apiKey=11, minVersion=0, maxVersion=9), ApiVersion(apiKey=12, minVersion=0, maxVersion=4), ApiVersion(apiKey=13, minVersion=0, maxVersion=5), ApiVersion(apiKey=14, minVersion=0, maxVersion=5), ApiVersion(apiKey=15, minVersion=0, maxVersion=6), ApiVersion(apiKey=16, minVersion=0, maxVersion=5), ApiVersion(apiKey=17, minVersion=0, maxVersion=1), ApiVersion(apiKey=18, minVersion=0, maxVersion=5), ApiVersion(apiKey=19, minVersion=2, maxVersion=7), ApiVersion(apiKey=20, minVersion=1, maxVersion=6), ApiVersion(apiKey=21, minVersion=0, maxVersion=2), ApiVersion(apiKey=22, minVersion=0, maxVersion=6), ApiVersion(apiKey=23, minVersion=2, maxVersion=4), ApiVersion(apiKey=24, minVersion=0, maxVersion=5), ApiVersion(apiKey=25, minVersion=0, maxVersion=4), ApiVersion(apiKey=26, minVersion=0, maxVersion=5), ApiVersion(apiKey=27, minVersion=1, maxVersion=2), ApiVersion(apiKey=28, minVersion=0, maxVersion=6), ApiVersion(apiKey=29, minVersion=1, maxVersion=3), ApiVersion(apiKey=30, minVersion=1, maxVersion=3), ApiVersion(apiKey=31, minVersion=1, maxVersion=3), ApiVersion(apiKey=32, minVersion=1, maxVersion=4), ApiVersion(apiKey=33, minVersion=0, maxVersion=2), ApiVersion(apiKey=34, minVersion=1, maxVersion=2), ApiVersion(apiKey=35, minVersion=1, maxVersion=5), ApiVersion(apiKey=36, minVersion=0, maxVersion=2), ApiVersion(apiKey=37, minVersion=0, maxVersion=3), ApiVersion(apiKey=38, minVersion=1, maxVersion=3), ApiVersion(apiKey=39, minVersion=1, maxVersion=2), ApiVersion(apiKey=40, minVersion=1, maxVersion=2), ApiVersion(apiKey=41, minVersion=1, maxVersion=3), ApiVersion(apiKey=42, minVersion=0, maxVersion=3), ApiVersion(apiKey=43, minVersion=0, maxVersion=2), ApiVersion(apiKey=44, minVersion=0, maxVersion=1), ApiVersion(apiKey=45, minVersion=0, maxVersion=1), ApiVersion(apiKey=46, minVersion=0, maxVersion=0), ApiVersion(apiKey=47, minVersion=0, maxVersion=0), ApiVersion(apiKey=48, minVersion=0, maxVersion=1), ApiVersion(apiKey=49, minVersion=0, maxVersion=1), ApiVersion(apiKey=50, minVersion=0, maxVersion=0), ApiVersion(apiKey=51, minVersion=0, maxVersion=0), ApiVersion(apiKey=55, minVersion=0, maxVersion=2), ApiVersion(apiKey=56, minVersion=2, maxVersion=3), ApiVersion(apiKey=57, minVersion=0, maxVersion=2), ApiVersion(apiKey=59, minVersion=0, maxVersion=1), ApiVersion(apiKey=60, minVersion=0, maxVersion=2), ApiVersion(apiKey=61, minVersion=0, maxVersion=0), ApiVersion(apiKey=62, minVersion=0, maxVersion=4), ApiVersion(apiKey=63, minVersion=0, maxVersion=2), ApiVersion(apiKey=64, minVersion=0, maxVersion=0), ApiVersion(apiKey=65, minVersion=0, maxVersion=0), ApiVersion(apiKey=66, minVersion=0, maxVersion=2), ApiVersion(apiKey=67, minVersion=0, maxVersion=0), ApiVersion(apiKey=68, minVersion=0, maxVersion=1), ApiVersion(apiKey=69, minVersion=0, maxVersion=1), ApiVersion(apiKey=70, minVersion=0, maxVersion=0), ApiVersion(apiKey=73, minVersion=0, maxVersion=0), ApiVersion(apiKey=74, minVersion=0, maxVersion=1), ApiVersion(apiKey=75, minVersion=0, maxVersion=0), ApiVersion(apiKey=76, minVersion=1, maxVersion=1), ApiVersion(apiKey=77, minVersion=1, maxVersion=1), ApiVersion(apiKey=78, minVersion=1, maxVersion=2), ApiVersion(apiKey=79, minVersion=1, maxVersion=2), ApiVersion(apiKey=80, minVersion=0, maxVersion=1), ApiVersion(apiKey=81, minVersion=0, maxVersion=0), ApiVersion(apiKey=82, minVersion=0, maxVersion=0), ApiVersion(apiKey=83, minVersion=0, maxVersion=0), ApiVersion(apiKey=84, minVersion=0, maxVersion=0), ApiVersion(apiKey=85, minVersion=0, maxVersion=1), ApiVersion(apiKey=86, minVersion=0, maxVersion=0), ApiVersion(apiKey=87, minVersion=0, maxVersion=1), ApiVersion(apiKey=88, minVersion=0, maxVersion=1), ApiVersion(apiKey=89, minVersion=0, maxVersion=1), ApiVersion(apiKey=90, minVersion=0, maxVersion=1), ApiVersion(apiKey=91, minVersion=0, maxVersion=0), ApiVersion(apiKey=92, minVersion=0, maxVersion=0), ApiVersion(apiKey=93, minVersion=0, maxVersion=0), ApiVersion(apiKey=94, minVersion=0, maxVersion=0), ApiVersion(apiKey=1020, minVersion=0, maxVersion=0)], throttleTimeMs=0, supportedFeatures=[SupportedFeatureKey(name='metadata.version', minVersion=7, maxVersion=34), SupportedFeatureKey(name='group.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='transaction.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='share.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='streams.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='eligible.leader.replicas.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='kraft.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='krabka.version', minVersion=0, maxVersion=2)], finalizedFeaturesEpoch=518, finalizedFeatures=[FinalizedFeatureKey(name='eligible.leader.replicas.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='group.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='kraft.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='metadata.version', maxVersionLevel=33, minVersionLevel=33), FinalizedFeatureKey(name='share.version', maxVersionLevel=2, minVersionLevel=2), FinalizedFeatureKey(name='streams.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='transaction.version', maxVersionLevel=2, minVersionLevel=2)], zkMigrationReady=false)\nSCENARIO\trouting-wrong-cluster\t{REBOOTSTRAP_REQUIRED=1}\nRESPONSE\trouting-wrong-cluster\tApiVersionsResponseData(errorCode=129, apiKeys=[], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\trouting-controller-wrong-cluster\t{NONE=1}\nRESPONSE\trouting-controller-wrong-cluster\tApiVersionsResponseData(errorCode=0, apiKeys=[ApiVersion(apiKey=1, minVersion=4, maxVersion=18), ApiVersion(apiKey=17, minVersion=0, maxVersion=1), ApiVersion(apiKey=18, minVersion=0, maxVersion=5), ApiVersion(apiKey=19, minVersion=2, maxVersion=7), ApiVersion(apiKey=20, minVersion=1, maxVersion=6), ApiVersion(apiKey=29, minVersion=1, maxVersion=3), ApiVersion(apiKey=30, minVersion=1, maxVersion=3), ApiVersion(apiKey=31, minVersion=1, maxVersion=3), ApiVersion(apiKey=32, minVersion=1, maxVersion=4), ApiVersion(apiKey=33, minVersion=0, maxVersion=2), ApiVersion(apiKey=36, minVersion=0, maxVersion=2), ApiVersion(apiKey=37, minVersion=0, maxVersion=3), ApiVersion(apiKey=38, minVersion=1, maxVersion=3), ApiVersion(apiKey=39, minVersion=1, maxVersion=2), ApiVersion(apiKey=40, minVersion=1, maxVersion=2), ApiVersion(apiKey=41, minVersion=1, maxVersion=3), ApiVersion(apiKey=43, minVersion=0, maxVersion=2), ApiVersion(apiKey=44, minVersion=0, maxVersion=1), ApiVersion(apiKey=45, minVersion=0, maxVersion=1), ApiVersion(apiKey=46, minVersion=0, maxVersion=0), ApiVersion(apiKey=49, minVersion=0, maxVersion=1), ApiVersion(apiKey=50, minVersion=0, maxVersion=0), ApiVersion(apiKey=51, minVersion=0, maxVersion=0), ApiVersion(apiKey=52, minVersion=0, maxVersion=2), ApiVersion(apiKey=53, minVersion=0, maxVersion=1), ApiVersion(apiKey=54, minVersion=0, maxVersion=1), ApiVersion(apiKey=55, minVersion=0, maxVersion=2), ApiVersion(apiKey=56, minVersion=2, maxVersion=3), ApiVersion(apiKey=57, minVersion=0, maxVersion=2), ApiVersion(apiKey=58, minVersion=0, maxVersion=0), ApiVersion(apiKey=59, minVersion=0, maxVersion=1), ApiVersion(apiKey=60, minVersion=0, maxVersion=2), ApiVersion(apiKey=62, minVersion=0, maxVersion=4), ApiVersion(apiKey=63, minVersion=0, maxVersion=2), ApiVersion(apiKey=64, minVersion=0, maxVersion=0), ApiVersion(apiKey=67, minVersion=0, maxVersion=0), ApiVersion(apiKey=70, minVersion=0, maxVersion=0), ApiVersion(apiKey=73, minVersion=0, maxVersion=0), ApiVersion(apiKey=80, minVersion=0, maxVersion=1), ApiVersion(apiKey=81, minVersion=0, maxVersion=0), ApiVersion(apiKey=82, minVersion=0, maxVersion=0), ApiVersion(apiKey=94, minVersion=0, maxVersion=0)], throttleTimeMs=0, supportedFeatures=[SupportedFeatureKey(name='metadata.version', minVersion=7, maxVersion=34), SupportedFeatureKey(name='group.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='transaction.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='share.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='streams.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='eligible.leader.replicas.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='kraft.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='krabka.version', minVersion=0, maxVersion=2)], finalizedFeaturesEpoch=9, finalizedFeatures=[FinalizedFeatureKey(name='eligible.leader.replicas.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='group.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='kraft.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='metadata.version', maxVersionLevel=33, minVersionLevel=33), FinalizedFeatureKey(name='share.version', maxVersionLevel=2, minVersionLevel=2), FinalizedFeatureKey(name='streams.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='transaction.version', maxVersionLevel=2, minVersionLevel=2)], zkMigrationReady=false)\nSCENARIO\tcontroller-register-nonvoter\t{NONE=1}\nRESPONSE\tcontroller-register-nonvoter\tControllerRegistrationResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tcontroller-remove-registered\t{}\nRESPONSE\tcontroller-remove-registered\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tcontroller-repeat-remove\t{CONTROLLER_ID_NOT_REGISTERED=1}\nRESPONSE\tcontroller-repeat-remove\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 424242 is not currently registered.')\nSCENARIO\tcontroller-reregister\t{NONE=1}\nRESPONSE\tcontroller-reregister\tControllerRegistrationResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tcontroller-forwarded-remove\t{}\nRESPONSE\tcontroller-forwarded-remove\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tcontroller-refuse-voter\t{INVALID_REQUEST=1}\nRESPONSE\tcontroller-refuse-voter\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=42, errorMessage='Cannot unregister controller 1 because it is part of the voter set.')\nSCENARIO\tcontroller-unknown-id\t{CONTROLLER_ID_NOT_REGISTERED=1}\nRESPONSE\tcontroller-unknown-id\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 2147483646 is not currently registered.')\nSCENARIO\tcontroller-api-on-broker\t{CONTROLLER_ID_NOT_REGISTERED=1}\nRESPONSE\tcontroller-api-on-broker\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 2147483646 is not currently registered.')\nSCENARIO\ttopology-no-plugin\t{UNSUPPORTED_VERSION=1}\nRESPONSE\ttopology-no-plugin\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=35, errorMessage='The broker has no streams group topology description plugin configured.')\nSCENARIO\tstreams-invalid-group\t{INVALID_REQUEST=1}\nRESPONSE\tstreams-invalid-group\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=42, errorMessage='GroupId can't be empty.', memberId='', memberEpoch=0, heartbeatIntervalMs=0, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=0, acceptableRecoveryLag=-1, status=[], activeTasks=null, standbyTasks=null, warmupTasks=null, topologyDescriptionRequired=false, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nSCENARIO\ttxn-topic-id-missing-group\t{UNKNOWN_TOPIC_ID=1}\nRESPONSE\ttxn-topic-id-missing-group\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=AAAAAAAAAAAAAAAAAAAAKg, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=100)])])\n",
+      "stderr": ""
+    },
+    "config": {
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-final-oracle/classes:/classes:ro",
+        "--entrypoint",
+        "java",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "-cp",
+        "/opt/kafka/libs/*:/classes",
+        "ConfigScenarios",
+        "127.0.0.1:63092"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tdiscover-remote.copy.lag.ms\t0\nDETAIL\tremote.copy.lag.ms=-2\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value -2 for configuration remote.copy.lag.ms: Value must be at least -1\nSCENARIO\tvalidate-remote.copy.lag.ms=-2\tINVALID_CONFIG\nSCENARIO\tvalidate-remote.copy.lag.ms=-1\tNONE\nSCENARIO\tvalidate-remote.copy.lag.ms=0\tNONE\nSCENARIO\tvalidate-remote.copy.lag.ms=1000\tNONE\nDETAIL\tremote.copy.lag.ms=not-a-number\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value not-a-number for configuration remote.copy.lag.ms: Not a number of type LONG\nSCENARIO\tvalidate-remote.copy.lag.ms=not-a-number\tINVALID_CONFIG\nSCENARIO\tdiscover-remote.copy.lag.bytes\t-1\nDETAIL\tremote.copy.lag.bytes=-2\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value -2 for configuration remote.copy.lag.bytes: Value must be at least -1\nSCENARIO\tvalidate-remote.copy.lag.bytes=-2\tINVALID_CONFIG\nSCENARIO\tvalidate-remote.copy.lag.bytes=-1\tNONE\nSCENARIO\tvalidate-remote.copy.lag.bytes=0\tNONE\nSCENARIO\tvalidate-remote.copy.lag.bytes=1000\tNONE\nDETAIL\tremote.copy.lag.bytes=not-a-number\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value not-a-number for configuration remote.copy.lag.bytes: Not a number of type LONG\nSCENARIO\tvalidate-remote.copy.lag.bytes=not-a-number\tINVALID_CONFIG\nSCENARIO\tvalidate-only-preserves-config\tPASS\n",
+      "stderr": ""
+    },
+    "authorization": {
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-final-oracle/classes:/classes:ro",
+        "--entrypoint",
+        "java",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "-cp",
+        "/opt/kafka/libs/*:/classes",
+        "AuthorizationScenarios",
+        "127.0.0.1:63094",
+        "127.0.0.1:63092"
+      ],
+      "returncode": 0,
+      "stdout": "SETUP\tACL-visible-attempt\t0\t[(pattern=ResourcePattern(resourceType=CLUSTER, name=kafka-cluster, patternType=LITERAL), entry=(principal=User:operator, host=*, operation=ALTER, permissionType=ALLOW)), (pattern=ResourcePattern(resourceType=GROUP, name=kafka44-denied, patternType=LITERAL), entry=(principal=User:operator, host=*, operation=READ, permissionType=ALLOW)), (pattern=ResourcePattern(resourceType=TRANSACTIONAL_ID, name=kafka44-denied, patternType=LITERAL), entry=(principal=User:writer, host=*, operation=WRITE, permissionType=ALLOW)), (pattern=ResourcePattern(resourceType=TRANSACTIONAL_ID, name=kafka44-denied, patternType=LITERAL), entry=(principal=User:reader, host=*, operation=WRITE, permissionType=ALLOW)), (pattern=ResourcePattern(resourceType=GROUP, name=kafka44-denied, patternType=LITERAL), entry=(principal=User:reader, host=*, operation=READ, permissionType=ALLOW))]\nSCENARIO\tpreauth-routing-identity\t{NONE=1}\nRESPONSE\tpreauth-routing-identity\tApiVersionsResponseData(errorCode=0, apiKeys=[ApiVersion(apiKey=0, minVersion=0, maxVersion=13), ApiVersion(apiKey=1, minVersion=4, maxVersion=18), ApiVersion(apiKey=2, minVersion=1, maxVersion=11), ApiVersion(apiKey=3, minVersion=0, maxVersion=13), ApiVersion(apiKey=8, minVersion=2, maxVersion=10), ApiVersion(apiKey=9, minVersion=1, maxVersion=10), ApiVersion(apiKey=10, minVersion=0, maxVersion=6), ApiVersion(apiKey=11, minVersion=0, maxVersion=9), ApiVersion(apiKey=12, minVersion=0, maxVersion=4), ApiVersion(apiKey=13, minVersion=0, maxVersion=5), ApiVersion(apiKey=14, minVersion=0, maxVersion=5), ApiVersion(apiKey=15, minVersion=0, maxVersion=6), ApiVersion(apiKey=16, minVersion=0, maxVersion=5), ApiVersion(apiKey=17, minVersion=0, maxVersion=1), ApiVersion(apiKey=18, minVersion=0, maxVersion=5), ApiVersion(apiKey=19, minVersion=2, maxVersion=7), ApiVersion(apiKey=20, minVersion=1, maxVersion=6), ApiVersion(apiKey=21, minVersion=0, maxVersion=2), ApiVersion(apiKey=22, minVersion=0, maxVersion=6), ApiVersion(apiKey=23, minVersion=2, maxVersion=4), ApiVersion(apiKey=24, minVersion=0, maxVersion=5), ApiVersion(apiKey=25, minVersion=0, maxVersion=4), ApiVersion(apiKey=26, minVersion=0, maxVersion=5), ApiVersion(apiKey=27, minVersion=1, maxVersion=2), ApiVersion(apiKey=28, minVersion=0, maxVersion=6), ApiVersion(apiKey=29, minVersion=1, maxVersion=3), ApiVersion(apiKey=30, minVersion=1, maxVersion=3), ApiVersion(apiKey=31, minVersion=1, maxVersion=3), ApiVersion(apiKey=32, minVersion=1, maxVersion=4), ApiVersion(apiKey=33, minVersion=0, maxVersion=2), ApiVersion(apiKey=34, minVersion=1, maxVersion=2), ApiVersion(apiKey=35, minVersion=1, maxVersion=5), ApiVersion(apiKey=36, minVersion=0, maxVersion=2), ApiVersion(apiKey=37, minVersion=0, maxVersion=3), ApiVersion(apiKey=38, minVersion=1, maxVersion=3), ApiVersion(apiKey=39, minVersion=1, maxVersion=2), ApiVersion(apiKey=40, minVersion=1, maxVersion=2), ApiVersion(apiKey=41, minVersion=1, maxVersion=3), ApiVersion(apiKey=42, minVersion=0, maxVersion=3), ApiVersion(apiKey=43, minVersion=0, maxVersion=2), ApiVersion(apiKey=44, minVersion=0, maxVersion=1), ApiVersion(apiKey=45, minVersion=0, maxVersion=1), ApiVersion(apiKey=46, minVersion=0, maxVersion=0), ApiVersion(apiKey=47, minVersion=0, maxVersion=0), ApiVersion(apiKey=48, minVersion=0, maxVersion=1), ApiVersion(apiKey=49, minVersion=0, maxVersion=1), ApiVersion(apiKey=50, minVersion=0, maxVersion=0), ApiVersion(apiKey=51, minVersion=0, maxVersion=0), ApiVersion(apiKey=55, minVersion=0, maxVersion=2), ApiVersion(apiKey=57, minVersion=0, maxVersion=2), ApiVersion(apiKey=60, minVersion=0, maxVersion=2), ApiVersion(apiKey=61, minVersion=0, maxVersion=0), ApiVersion(apiKey=64, minVersion=0, maxVersion=0), ApiVersion(apiKey=65, minVersion=0, maxVersion=0), ApiVersion(apiKey=66, minVersion=0, maxVersion=2), ApiVersion(apiKey=68, minVersion=0, maxVersion=1), ApiVersion(apiKey=69, minVersion=0, maxVersion=1), ApiVersion(apiKey=74, minVersion=0, maxVersion=1), ApiVersion(apiKey=75, minVersion=0, maxVersion=0), ApiVersion(apiKey=76, minVersion=1, maxVersion=1), ApiVersion(apiKey=77, minVersion=1, maxVersion=1), ApiVersion(apiKey=78, minVersion=1, maxVersion=2), ApiVersion(apiKey=79, minVersion=1, maxVersion=2), ApiVersion(apiKey=80, minVersion=0, maxVersion=1), ApiVersion(apiKey=81, minVersion=0, maxVersion=0), ApiVersion(apiKey=83, minVersion=0, maxVersion=0), ApiVersion(apiKey=84, minVersion=0, maxVersion=0), ApiVersion(apiKey=85, minVersion=0, maxVersion=1), ApiVersion(apiKey=86, minVersion=0, maxVersion=0), ApiVersion(apiKey=87, minVersion=0, maxVersion=1), ApiVersion(apiKey=88, minVersion=0, maxVersion=1), ApiVersion(apiKey=89, minVersion=0, maxVersion=1), ApiVersion(apiKey=90, minVersion=0, maxVersion=1), ApiVersion(apiKey=91, minVersion=0, maxVersion=0), ApiVersion(apiKey=92, minVersion=0, maxVersion=0), ApiVersion(apiKey=93, minVersion=0, maxVersion=0), ApiVersion(apiKey=94, minVersion=0, maxVersion=0)], throttleTimeMs=0, supportedFeatures=[SupportedFeatureKey(name='metadata.version', minVersion=7, maxVersion=34), SupportedFeatureKey(name='group.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='transaction.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='share.version', minVersion=0, maxVersion=2), SupportedFeatureKey(name='streams.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='eligible.leader.replicas.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='kraft.version', minVersion=0, maxVersion=1), SupportedFeatureKey(name='krabka.version', minVersion=0, maxVersion=2)], finalizedFeaturesEpoch=533, finalizedFeatures=[FinalizedFeatureKey(name='eligible.leader.replicas.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='group.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='kraft.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='metadata.version', maxVersionLevel=33, minVersionLevel=33), FinalizedFeatureKey(name='share.version', maxVersionLevel=2, minVersionLevel=2), FinalizedFeatureKey(name='streams.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='transaction.version', maxVersionLevel=2, minVersionLevel=2)], zkMigrationReady=false)\nSCENARIO\tauthenticated-routing-identity\t{REBOOTSTRAP_REQUIRED=1}\nRESPONSE\tauthenticated-routing-identity\tApiVersionsResponseData(errorCode=129, apiKeys=[], throttleTimeMs=0, supportedFeatures=[], finalizedFeaturesEpoch=-1, finalizedFeatures=[], zkMigrationReady=false)\nSCENARIO\tcontroller-cluster-authorization\t{CLUSTER_AUTHORIZATION_FAILED=1}\nRESPONSE\tcontroller-cluster-authorization\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=31, errorMessage='Request UnregisterController needs ALTER permission.')\nSCENARIO\ttopology-group-authorization\t{GROUP_AUTHORIZATION_FAILED=1}\nRESPONSE\ttopology-group-authorization\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=30, errorMessage=null)\nSCENARIO\tstreams-group-authorization\t{GROUP_AUTHORIZATION_FAILED=1}\nRESPONSE\tstreams-group-authorization\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=30, errorMessage=null, memberId='', memberEpoch=0, heartbeatIntervalMs=0, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=0, acceptableRecoveryLag=-1, status=[], activeTasks=null, standbyTasks=null, warmupTasks=null, topologyDescriptionRequired=false, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nSCENARIO\ttxn-transactional-id-authorization\t{TRANSACTIONAL_ID_AUTHORIZATION_FAILED=1}\nRESPONSE\ttxn-transactional-id-authorization\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=AAAAAAAAAAAAAAAAAAAAKg, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=53)])])\nSCENARIO\tcontroller-authorized-unknown-id\t{CONTROLLER_ID_NOT_REGISTERED=1}\nRESPONSE\tcontroller-authorized-unknown-id\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 2147483646 is not currently registered.')\nSCENARIO\ttopology-authorized-no-plugin\t{UNSUPPORTED_VERSION=1}\nRESPONSE\ttopology-authorized-no-plugin\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=35, errorMessage='The broker has no streams group topology description plugin configured.')\nSCENARIO\ttxn-group-authorization-after-tid-allow\t{GROUP_AUTHORIZATION_FAILED=1}\nRESPONSE\ttxn-group-authorization-after-tid-allow\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=AAAAAAAAAAAAAAAAAAAAKg, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=30)])])\nSCENARIO\ttxn-unknown-id-after-tid-group-allow\t{UNKNOWN_TOPIC_ID=1}\nRESPONSE\ttxn-unknown-id-after-tid-group-allow\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=AAAAAAAAAAAAAAAAAAAAKg, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=100)])])\n",
+      "stderr": ""
+    },
+    "transactions": {
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-final-oracle/classes:/classes:ro",
+        "--entrypoint",
+        "java",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "-cp",
+        "/opt/kafka/libs/*:/classes",
+        "TransactionScenarios",
+        "127.0.0.1:63092"
+      ],
+      "returncode": 0,
+      "stdout": "SETUP\ttopic=kafka44-txn-f1a49014-1c7f-4b1e-8caa-d7818db9f4a9\ttopicId=HJ6zqZP6SbefXFI3844pCw\tgroup=kafka44-group-f1a49014-1c7f-4b1e-8caa-d7818db9f4a9\nWIRE\tgroup-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-group-f1a49014-1c7f-4b1e-8caa-d7818db9f4a9', nodeId=1, host='127.0.0.1', port=63092, errorCode=0, errorMessage=null)])\nSCENARIO\tgroup-coordinator\t{NONE=1}\nWIRE\tmissing-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-group-f1a49014-1c7f-4b1e-8caa-d7818db9f4a9-missing', nodeId=1, host='127.0.0.1', port=63092, errorCode=0, errorMessage=null)])\nSCENARIO\tmissing-group-coordinator\t{NONE=1}\nWIRE\tcommit-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-f1a49014-1c7f-4b1e-8caa-d7818db9f4a9-commit', nodeId=1, host='127.0.0.1', port=63092, errorCode=0, errorMessage=null)])\nSCENARIO\tcommit-coordinator\t{NONE=1}\nWIRE\tcommit-init-v5\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=6, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tcommit-init-v5\t{NONE=1}\nWIRE\tmissing-group-v6\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=HJ6zqZP6SbefXFI3844pCw, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=69)])])\nSCENARIO\tmissing-group-v6\t{GROUP_ID_NOT_FOUND=1}\nWIRE\tmissing-group-legacy-v5\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-txn-f1a49014-1c7f-4b1e-8caa-d7818db9f4a9', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=22)])])\nSCENARIO\tmissing-group-legacy-v5\t{ILLEGAL_GENERATION=1}\nWIRE\tcommit-offset-v6\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=HJ6zqZP6SbefXFI3844pCw, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tcommit-offset-v6\t{NONE=1}\nOBSERVATION\tpending-commit-invisible\tnull\tstable=false\tattempt=0\nSCENARIO\tpending-commit-invisible\tPASS\nWIRE\tcommit-end-v5\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=6, producerEpoch=1)\nSCENARIO\tcommit-end-v5\t{NONE=1}\nOBSERVATION\tcommitted-offset-visible\t7\tstable=true\tattempt=0\nSCENARIO\tcommitted-offset-visible\tPASS\nWIRE\tabort-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-f1a49014-1c7f-4b1e-8caa-d7818db9f4a9-abort', nodeId=1, host='127.0.0.1', port=63092, errorCode=0, errorMessage=null)])\nSCENARIO\tabort-coordinator\t{NONE=1}\nWIRE\tabort-init-v5\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=7, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tabort-init-v5\t{NONE=1}\nWIRE\tabort-offset-v6\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=HJ6zqZP6SbefXFI3844pCw, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tabort-offset-v6\t{NONE=1}\nOBSERVATION\tpending-abort-keeps-old-offset\t7\tstable=false\tattempt=0\nSCENARIO\tpending-abort-keeps-old-offset\tPASS\nWIRE\tabort-end-v5\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=7, producerEpoch=1)\nSCENARIO\tabort-end-v5\t{NONE=1}\nOBSERVATION\taborted-offset-not-visible\t7\tstable=true\tattempt=0\nSCENARIO\taborted-offset-not-visible\tPASS\nRECOVERY\tkafka44-txn-f1a49014-1c7f-4b1e-8caa-d7818db9f4a9\tkafka44-group-f1a49014-1c7f-4b1e-8caa-d7818db9f4a9\tHJ6zqZP6SbefXFI3844pCw\n",
+      "stderr": ""
+    },
+    "legacy": {
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-final-oracle/classes:/classes:ro",
+        "--entrypoint",
+        "java",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "-cp",
+        "/opt/kafka/libs/*:/classes",
+        "TransactionScenarios",
+        "127.0.0.1:63092",
+        "legacy"
+      ],
+      "returncode": 0,
+      "stdout": "SETUP\ttopic=kafka44-txn-ab0aa484-54e0-4712-ab6f-cabc2d7a959e\ttopicId=Jx1U1CT-TDKdzuEHZy1NgQ\tgroup=kafka44-group-ab0aa484-54e0-4712-ab6f-cabc2d7a959e\nWIRE\tgroup-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-group-ab0aa484-54e0-4712-ab6f-cabc2d7a959e', nodeId=1, host='127.0.0.1', port=63092, errorCode=0, errorMessage=null)])\nSCENARIO\tgroup-coordinator\t{NONE=1}\nWIRE\tmissing-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-group-ab0aa484-54e0-4712-ab6f-cabc2d7a959e-missing', nodeId=1, host='127.0.0.1', port=63092, errorCode=0, errorMessage=null)])\nSCENARIO\tmissing-group-coordinator\t{NONE=1}\nWIRE\tcommit-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-ab0aa484-54e0-4712-ab6f-cabc2d7a959e-commit', nodeId=1, host='127.0.0.1', port=63092, errorCode=0, errorMessage=null)])\nSCENARIO\tcommit-coordinator\t{NONE=1}\nWIRE\tcommit-init-v5\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=8, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tcommit-init-v5\t{NONE=1}\nWIRE\tmissing-group-legacy-v5\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-txn-ab0aa484-54e0-4712-ab6f-cabc2d7a959e', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=22)])])\nSCENARIO\tmissing-group-legacy-v5\t{ILLEGAL_GENERATION=1}\nWIRE\tcommit-offset-v5\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-txn-ab0aa484-54e0-4712-ab6f-cabc2d7a959e', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tcommit-offset-v5\t{NONE=1}\nOBSERVATION\tpending-commit-invisible\tnull\tstable=false\tattempt=0\nSCENARIO\tpending-commit-invisible\tPASS\nWIRE\tcommit-end-v5\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=8, producerEpoch=1)\nSCENARIO\tcommit-end-v5\t{NONE=1}\nOBSERVATION\tcommitted-offset-visible\t7\tstable=true\tattempt=0\nSCENARIO\tcommitted-offset-visible\tPASS\nWIRE\tabort-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-ab0aa484-54e0-4712-ab6f-cabc2d7a959e-abort', nodeId=1, host='127.0.0.1', port=63092, errorCode=0, errorMessage=null)])\nSCENARIO\tabort-coordinator\t{NONE=1}\nWIRE\tabort-init-v5\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=9, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tabort-init-v5\t{NONE=1}\nWIRE\tabort-offset-v5\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-txn-ab0aa484-54e0-4712-ab6f-cabc2d7a959e', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tabort-offset-v5\t{NONE=1}\nOBSERVATION\tpending-abort-keeps-old-offset\t7\tstable=false\tattempt=0\nSCENARIO\tpending-abort-keeps-old-offset\tPASS\nWIRE\tabort-end-v5\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=9, producerEpoch=1)\nSCENARIO\tabort-end-v5\t{NONE=1}\nOBSERVATION\taborted-offset-not-visible\t7\tstable=true\tattempt=0\nSCENARIO\taborted-offset-not-visible\tPASS\nRECOVERY\tkafka44-txn-ab0aa484-54e0-4712-ab6f-cabc2d7a959e\tkafka44-group-ab0aa484-54e0-4712-ab6f-cabc2d7a959e\tJx1U1CT-TDKdzuEHZy1NgQ\n",
+      "stderr": ""
+    },
+    "controller-before": {
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-final-oracle/classes:/classes:ro",
+        "--entrypoint",
+        "java",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "-cp",
+        "/opt/kafka/libs/*:/classes",
+        "ControllerRecovery",
+        "127.0.0.1:63093",
+        "prepare"
+      ],
+      "returncode": 0,
+      "stdout": "RESPONSE\tregister-before-restart\tControllerRegistrationResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tregister-before-restart\tNONE\nRESPONSE\tremove-before-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tremove-before-restart\tNONE\nRESPONSE\tremoved-before-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 424243 is not currently registered.')\nSCENARIO\tremoved-before-restart\tCONTROLLER_ID_NOT_REGISTERED\n",
+      "stderr": ""
+    }
+  },
+  "enabled_oracle_error_map_differences": {
+    "protocol_differences": [],
+    "config_differences": [],
+    "authorization_differences": [],
+    "transaction_differences": [],
+    "legacy_transaction_differences": []
+  },
+  "discovery": {
+    "status": "collected-not-qualified",
+    "api_differences": {
+      "default": [
+        {
+          "api": "AllocateProducerIds(67)",
+          "oracle": null,
+          "candidate": "0"
+        },
+        {
+          "api": "AlterPartition(56)",
+          "oracle": null,
+          "candidate": "2 to 3"
+        },
+        {
+          "api": "ApiVersions(18)",
+          "oracle": "0 to 5",
+          "candidate": "0 to 4"
+        },
+        {
+          "api": "AssignReplicasToDirs(73)",
+          "oracle": null,
+          "candidate": "0"
+        },
+        {
+          "api": "BrokerHeartbeat(63)",
+          "oracle": null,
+          "candidate": "0 to 2"
+        },
+        {
+          "api": "BrokerRegistration(62)",
+          "oracle": null,
+          "candidate": "0 to 4"
+        },
+        {
+          "api": "ControllerRegistration(70)",
+          "oracle": null,
+          "candidate": "0"
+        },
+        {
+          "api": "DeleteGroups(42)",
+          "oracle": "0 to 3",
+          "candidate": "0 to 2"
+        },
+        {
+          "api": "FetchSnapshot(59)",
+          "oracle": null,
+          "candidate": "0 to 1"
+        },
+        {
+          "api": "StreamsGroupDescribe(89)",
+          "oracle": "0 to 1",
+          "candidate": "0"
+        },
+        {
+          "api": "StreamsGroupHeartbeat(88)",
+          "oracle": "0 to 1",
+          "candidate": "0"
+        },
+        {
+          "api": "StreamsGroupTopologyDescriptionUpdate(93)",
+          "oracle": "0",
+          "candidate": "UNSUPPORTED"
+        },
+        {
+          "api": "TxnOffsetCommit(28)",
+          "oracle": "0 to 6",
+          "candidate": "0 to 5"
+        },
+        {
+          "api": "UNKNOWN(1020)",
+          "oracle": null,
+          "candidate": "0"
+        },
+        {
+          "api": "UnregisterController(94)",
+          "oracle": "0",
+          "candidate": "UNSUPPORTED"
+        },
+        {
+          "api": "UpdateRaftVoter(82)",
+          "oracle": null,
+          "candidate": "0"
+        }
+      ],
+      "enabled": [
+        {
+          "api": "AllocateProducerIds(67)",
+          "oracle": null,
+          "candidate": "0"
+        },
+        {
+          "api": "AlterPartition(56)",
+          "oracle": null,
+          "candidate": "2 to 3"
+        },
+        {
+          "api": "AssignReplicasToDirs(73)",
+          "oracle": null,
+          "candidate": "0"
+        },
+        {
+          "api": "BrokerHeartbeat(63)",
+          "oracle": null,
+          "candidate": "0 to 2"
+        },
+        {
+          "api": "BrokerRegistration(62)",
+          "oracle": null,
+          "candidate": "0 to 4"
+        },
+        {
+          "api": "ControllerRegistration(70)",
+          "oracle": null,
+          "candidate": "0"
+        },
+        {
+          "api": "FetchSnapshot(59)",
+          "oracle": null,
+          "candidate": "0 to 1"
+        },
+        {
+          "api": "InitProducerId(22)",
+          "oracle": "0 to 5",
+          "candidate": "0 to 6"
+        },
+        {
+          "api": "UNKNOWN(1020)",
+          "oracle": null,
+          "candidate": "0"
+        },
+        {
+          "api": "UpdateRaftVoter(82)",
+          "oracle": null,
+          "candidate": "0"
+        }
+      ]
+    },
+    "probe_returncodes": {
+      "default": {
+        "api-versions": 0,
+        "features": 0,
+        "broker-configs": 0
+      },
+      "enabled": {
+        "api-versions": 0,
+        "features": 0,
+        "broker-configs": 0
+      }
+    }
+  },
+  "recovery": {
+    "default": {
+      "old_pid": 2604949,
+      "new_pid": 2622130,
+      "sigterm_stopped": true,
+      "log_end": [
+        "{\"error\":\"connection closed\",\"message\":\"metadata consumer: fetch failed; retrying\",\"partition\":14,\"severity\":\"WARNING\",\"target\":\"krabka_remote_storage_topic::kafka_log::consumer\",\"timestamp\":\"2026-11-03T00:55:38.485306Z\"}",
+        "{\"error\":\"connection closed\",\"message\":\"metadata consumer: fetch failed; retrying\",\"partition\":45,\"severity\":\"WARNING\",\"target\":\"krabka_remote_storage_topic::kafka_log::consumer\",\"timestamp\":\"2026-11-03T00:55:38.485316Z\"}",
+        "{\"error\":\"connection closed\",\"message\":\"metadata consumer: fetch failed; retrying\",\"partition\":24,\"severity\":\"WARNING\",\"target\":\"krabka_remote_storage_topic::kafka_log::consumer\",\"timestamp\":\"2026-11-03T00:55:38.485318Z\"}",
+        "{\"error\":\"connection closed\",\"message\":\"metadata consumer: fetch failed; retrying\",\"partition\":31,\"severity\":\"WARNING\",\"target\":\"krabka_remote_storage_topic::kafka_log::consumer\",\"timestamp\":\"2026-11-03T00:55:38.485326Z\"}",
+        "{\"error\":\"connection closed\",\"message\":\"metadata consumer: fetch failed; retrying\",\"partition\":10,\"severity\":\"WARNING\",\"target\":\"krabka_remote_storage_topic::kafka_log::consumer\",\"timestamp\":\"2026-11-03T00:55:38.485342Z\"}",
+        "{\"leader\":\"Some(NodeId(1))\",\"message\":\"kraft: graceful shutdown completed\",\"node\":1,\"severity\":\"INFO\",\"target\":\"krabka_raft::kraft::controller::graceful_shutdown\",\"timestamp\":\"2026-11-03T00:55:38.501860Z\"}",
+        "{\"message\":\"controlled shutdown complete (leadership drained)\",\"severity\":\"INFO\",\"target\":\"krabka_broker::startup\",\"timestamp\":\"2026-11-03T00:55:38.502584Z\"}",
+        "{\"message\":\"krabka-broker stopped\",\"severity\":\"INFO\",\"target\":\"krabka_broker::startup\",\"timestamp\":\"2026-11-03T00:55:38.502624Z\"}"
+      ],
+      "legacy": {
+        "command": [
+          "docker",
+          "run",
+          "--rm",
+          "--network",
+          "host",
+          "-v",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-final-oracle/classes:/classes:ro",
+          "--entrypoint",
+          "java",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "-cp",
+          "/opt/kafka/libs/*:/classes",
+          "TransactionScenarios",
+          "127.0.0.1:62092",
+          "recover",
+          "kafka44-txn-023f1e22-d53c-4039-be76-82ccf14eb0e0",
+          "kafka44-group-023f1e22-d53c-4039-be76-82ccf14eb0e0",
+          "yPldt2NOSOuyboxQcb15Wg"
+        ],
+        "returncode": 0,
+        "stdout": "SCENARIO\trestart-preserves-topic-id\tPASS\nOBSERVATION\trestart-preserves-commit-not-abort\t7\tstable=true\tattempt=0\nSCENARIO\trestart-preserves-commit-not-abort\tPASS\n",
+        "stderr": ""
+      }
+    },
+    "enabled": {
+      "old_pid": 2608462,
+      "new_pid": 2622148,
+      "sigterm_stopped": true,
+      "log_end": [
+        "{\"error\":\"connection closed\",\"message\":\"metadata consumer: fetch failed; retrying\",\"partition\":48,\"severity\":\"WARNING\",\"target\":\"krabka_remote_storage_topic::kafka_log::consumer\",\"timestamp\":\"2026-11-03T00:55:38.587101Z\"}",
+        "{\"error\":\"connection closed\",\"message\":\"metadata consumer: fetch failed; retrying\",\"partition\":7,\"severity\":\"WARNING\",\"target\":\"krabka_remote_storage_topic::kafka_log::consumer\",\"timestamp\":\"2026-11-03T00:55:38.587119Z\"}",
+        "{\"error\":\"connection closed\",\"message\":\"metadata consumer: fetch failed; retrying\",\"partition\":41,\"severity\":\"WARNING\",\"target\":\"krabka_remote_storage_topic::kafka_log::consumer\",\"timestamp\":\"2026-11-03T00:55:38.587134Z\"}",
+        "{\"error\":\"connection closed\",\"message\":\"metadata consumer: fetch failed; retrying\",\"partition\":47,\"severity\":\"WARNING\",\"target\":\"krabka_remote_storage_topic::kafka_log::consumer\",\"timestamp\":\"2026-11-03T00:55:38.586990Z\"}",
+        "{\"error\":\"connection closed\",\"message\":\"metadata consumer: fetch failed; retrying\",\"partition\":25,\"severity\":\"WARNING\",\"target\":\"krabka_remote_storage_topic::kafka_log::consumer\",\"timestamp\":\"2026-11-03T00:55:38.587166Z\"}",
+        "{\"leader\":\"Some(NodeId(1))\",\"message\":\"kraft: graceful shutdown completed\",\"node\":1,\"severity\":\"INFO\",\"target\":\"krabka_raft::kraft::controller::graceful_shutdown\",\"timestamp\":\"2026-11-03T00:55:38.611057Z\"}",
+        "{\"message\":\"controlled shutdown complete (leadership drained)\",\"severity\":\"INFO\",\"target\":\"krabka_broker::startup\",\"timestamp\":\"2026-11-03T00:55:38.611962Z\"}",
+        "{\"message\":\"krabka-broker stopped\",\"severity\":\"INFO\",\"target\":\"krabka_broker::startup\",\"timestamp\":\"2026-11-03T00:55:38.611990Z\"}"
+      ],
+      "modern": {
+        "command": [
+          "docker",
+          "run",
+          "--rm",
+          "--network",
+          "host",
+          "-v",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-final-oracle/classes:/classes:ro",
+          "--entrypoint",
+          "java",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "-cp",
+          "/opt/kafka/libs/*:/classes",
+          "TransactionScenarios",
+          "127.0.0.1:63092",
+          "recover",
+          "kafka44-txn-f1a49014-1c7f-4b1e-8caa-d7818db9f4a9",
+          "kafka44-group-f1a49014-1c7f-4b1e-8caa-d7818db9f4a9",
+          "HJ6zqZP6SbefXFI3844pCw"
+        ],
+        "returncode": 0,
+        "stdout": "SCENARIO\trestart-preserves-topic-id\tPASS\nOBSERVATION\trestart-preserves-commit-not-abort\t7\tstable=true\tattempt=0\nSCENARIO\trestart-preserves-commit-not-abort\tPASS\n",
+        "stderr": ""
+      },
+      "legacy": {
+        "command": [
+          "docker",
+          "run",
+          "--rm",
+          "--network",
+          "host",
+          "-v",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-final-oracle/classes:/classes:ro",
+          "--entrypoint",
+          "java",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "-cp",
+          "/opt/kafka/libs/*:/classes",
+          "TransactionScenarios",
+          "127.0.0.1:63092",
+          "recover",
+          "kafka44-txn-ab0aa484-54e0-4712-ab6f-cabc2d7a959e",
+          "kafka44-group-ab0aa484-54e0-4712-ab6f-cabc2d7a959e",
+          "Jx1U1CT-TDKdzuEHZy1NgQ"
+        ],
+        "returncode": 0,
+        "stdout": "SCENARIO\trestart-preserves-topic-id\tPASS\nOBSERVATION\trestart-preserves-commit-not-abort\t7\tstable=true\tattempt=0\nSCENARIO\trestart-preserves-commit-not-abort\tPASS\n",
+        "stderr": ""
+      },
+      "controller": {
+        "command": [
+          "docker",
+          "run",
+          "--rm",
+          "--network",
+          "host",
+          "-v",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-final-oracle/classes:/classes:ro",
+          "--entrypoint",
+          "java",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "-cp",
+          "/opt/kafka/libs/*:/classes",
+          "ControllerRecovery",
+          "127.0.0.1:63093",
+          "recover"
+        ],
+        "returncode": 0,
+        "stdout": "RESPONSE\tremoved-after-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 424243 is not currently registered.')\nSCENARIO\tremoved-after-restart\tCONTROLLER_ID_NOT_REGISTERED\n",
+        "stderr": ""
+      }
+    }
+  },
+  "scoped_copy": {
+    "status": "copy-smoke-pass-not-qualified",
+    "results": {
+      "dynamic-zero-oracle": {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+          "CopyProbe",
+          "127.0.0.1:60992",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/archive",
+          "dynamic-zero"
+        ],
+        "returncode": 0,
+        "stdout": "BEFORE\t0\tcopy-probe-c1b8503e-13e0-458e-bcef-2446e552c664\nDETAIL\tcopy-probe-c1b8503e-13e0-458e-bcef-2446e552c664\tfiles=5\nSCENARIO\tdelay-then-dynamic-zero-copies\tPASS\n",
+        "stderr": "",
+        "archive_records": {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+            "CopyArchiveRecords",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/archive",
+            "copy-probe-c1b8503e-13e0-458e-bcef-2446e552c664",
+            "24"
+          ],
+          "returncode": 0,
+          "stdout": "RECORDS\tcopy-probe-c1b8503e-13e0-458e-bcef-2446e552c664\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+          "stderr": ""
+        }
+      },
+      "dynamic-zero-enabled": {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+          "CopyProbe",
+          "127.0.0.1:63092",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled/archive",
+          "dynamic-zero"
+        ],
+        "returncode": 0,
+        "stdout": "BEFORE\t0\tcopy-probe-7d962389-ea2a-4ce3-973e-2377eaec38b8\nDETAIL\tcopy-probe-7d962389-ea2a-4ce3-973e-2377eaec38b8\tfiles=5\nSCENARIO\tdelay-then-dynamic-zero-copies\tPASS\n",
+        "stderr": "",
+        "archive_records": {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+            "CopyArchiveRecords",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled/archive",
+            "copy-probe-7d962389-ea2a-4ce3-973e-2377eaec38b8",
+            "24"
+          ],
+          "returncode": 0,
+          "stdout": "RECORDS\tcopy-probe-7d962389-ea2a-4ce3-973e-2377eaec38b8\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+          "stderr": ""
+        }
+      },
+      "age-oracle": {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+          "CopyProbe",
+          "127.0.0.1:60992",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/archive",
+          "age"
+        ],
+        "returncode": 0,
+        "stdout": "BEFORE\t0\tcopy-probe-149b3719-0242-428b-806c-aa3a7f83bb85\nDETAIL\tcopy-probe-149b3719-0242-428b-806c-aa3a7f83bb85\tfiles=5\nSCENARIO\tdelay-then-age-copies\tPASS\n",
+        "stderr": "",
+        "archive_records": {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+            "CopyArchiveRecords",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/archive",
+            "copy-probe-149b3719-0242-428b-806c-aa3a7f83bb85",
+            "24"
+          ],
+          "returncode": 0,
+          "stdout": "RECORDS\tcopy-probe-149b3719-0242-428b-806c-aa3a7f83bb85\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+          "stderr": ""
+        }
+      },
+      "age-enabled": {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+          "CopyProbe",
+          "127.0.0.1:63092",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled/archive",
+          "age"
+        ],
+        "returncode": 0,
+        "stdout": "BEFORE\t0\tcopy-probe-c26a6b2a-02f4-4565-b839-808be24bd92f\nDETAIL\tcopy-probe-c26a6b2a-02f4-4565-b839-808be24bd92f\tfiles=5\nSCENARIO\tdelay-then-age-copies\tPASS\n",
+        "stderr": "",
+        "archive_records": {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+            "CopyArchiveRecords",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled/archive",
+            "copy-probe-c26a6b2a-02f4-4565-b839-808be24bd92f",
+            "24"
+          ],
+          "returncode": 0,
+          "stdout": "RECORDS\tcopy-probe-c26a6b2a-02f4-4565-b839-808be24bd92f\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+          "stderr": ""
+        }
+      },
+      "bytes-oracle": {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+          "CopyProbe",
+          "127.0.0.1:60992",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/archive",
+          "bytes"
+        ],
+        "returncode": 0,
+        "stdout": "BEFORE\t0\tcopy-probe-818f9876-41d3-48af-9a62-e2d95c456e34\nDETAIL\tcopy-probe-818f9876-41d3-48af-9a62-e2d95c456e34\tfiles=5\nSCENARIO\tdelay-then-bytes-copies\tPASS\n",
+        "stderr": "",
+        "archive_records": {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+            "CopyArchiveRecords",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/archive",
+            "copy-probe-818f9876-41d3-48af-9a62-e2d95c456e34",
+            "48"
+          ],
+          "returncode": 0,
+          "stdout": "RECORDS\tcopy-probe-818f9876-41d3-48af-9a62-e2d95c456e34\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+          "stderr": ""
+        }
+      },
+      "bytes-enabled": {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+          "CopyProbe",
+          "127.0.0.1:63092",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled/archive",
+          "bytes"
+        ],
+        "returncode": 0,
+        "stdout": "BEFORE\t0\tcopy-probe-8a87be46-675c-45f1-983e-976952013732\nDETAIL\tcopy-probe-8a87be46-675c-45f1-983e-976952013732\tfiles=10\nSCENARIO\tdelay-then-bytes-copies\tPASS\n",
+        "stderr": "",
+        "archive_records": {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+            "CopyArchiveRecords",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled/archive",
+            "copy-probe-8a87be46-675c-45f1-983e-976952013732",
+            "48"
+          ],
+          "returncode": 0,
+          "stdout": "RECORDS\tcopy-probe-8a87be46-675c-45f1-983e-976952013732\tcount=30\tCRC/key/value/contiguous-prefix-valid\n",
+          "stderr": ""
+        }
+      },
+      "derived-age-oracle": {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+          "CopyProbe",
+          "127.0.0.1:60992",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/archive",
+          "derived-age"
+        ],
+        "returncode": 0,
+        "stdout": "BEFORE\t0\tcopy-probe-c14ed739-89b0-44aa-a4df-7890eae13507\nDETAIL\tcopy-probe-c14ed739-89b0-44aa-a4df-7890eae13507\tfiles=5\nSCENARIO\tdelay-then-derived-age-copies\tPASS\n",
+        "stderr": "",
+        "archive_records": {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+            "CopyArchiveRecords",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/archive",
+            "copy-probe-c14ed739-89b0-44aa-a4df-7890eae13507",
+            "24"
+          ],
+          "returncode": 0,
+          "stdout": "RECORDS\tcopy-probe-c14ed739-89b0-44aa-a4df-7890eae13507\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+          "stderr": ""
+        }
+      },
+      "derived-age-enabled": {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+          "CopyProbe",
+          "127.0.0.1:63092",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled/archive",
+          "derived-age"
+        ],
+        "returncode": 0,
+        "stdout": "BEFORE\t0\tcopy-probe-29d26449-59ed-4b5d-8069-73b5ca3b56ac\nDETAIL\tcopy-probe-29d26449-59ed-4b5d-8069-73b5ca3b56ac\tfiles=5\nSCENARIO\tdelay-then-derived-age-copies\tPASS\n",
+        "stderr": "",
+        "archive_records": {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+            "CopyArchiveRecords",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled/archive",
+            "copy-probe-29d26449-59ed-4b5d-8069-73b5ca3b56ac",
+            "24"
+          ],
+          "returncode": 0,
+          "stdout": "RECORDS\tcopy-probe-29d26449-59ed-4b5d-8069-73b5ca3b56ac\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+          "stderr": ""
+        }
+      },
+      "failed-upload-oracle": {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+          "FaultCopyProbe",
+          "127.0.0.1:60992",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/archive",
+          "failed-upload"
+        ],
+        "returncode": 0,
+        "stdout": "FAULT\tcopy-fault-5c6a63e2-2ad6-4889-98ed-2daa7d80cec3\tarchive-writes-denied-for-3s\nDETAIL\tcopy-fault-5c6a63e2-2ad6-4889-98ed-2daa7d80cec3\tarchive-present-after-permission-recovery\nSCENARIO\tdelay-then-failed-upload-copies\tPASS\n",
+        "stderr": "",
+        "original_permissions": {
+          "command": [
+            "stat",
+            "-c",
+            "%a",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/archive"
+          ],
+          "returncode": 0,
+          "stdout": "777\n",
+          "stderr": ""
+        },
+        "permission_restore": {
+          "command": [
+            "chmod",
+            "777",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/archive"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "archive_records": {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+            "CopyArchiveRecords",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/archive",
+            "copy-fault-5c6a63e2-2ad6-4889-98ed-2daa7d80cec3",
+            "24"
+          ],
+          "returncode": 0,
+          "stdout": "RECORDS\tcopy-fault-5c6a63e2-2ad6-4889-98ed-2daa7d80cec3\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+          "stderr": ""
+        }
+      },
+      "failed-upload-enabled": {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+          "FaultCopyProbe",
+          "127.0.0.1:63092",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled/archive",
+          "failed-upload"
+        ],
+        "returncode": 0,
+        "stdout": "FAULT\tcopy-fault-848849f7-6f6b-4740-8105-65135658094d\tarchive-writes-denied-for-3s\nDETAIL\tcopy-fault-848849f7-6f6b-4740-8105-65135658094d\tarchive-present-after-permission-recovery\nSCENARIO\tdelay-then-failed-upload-copies\tPASS\n",
+        "stderr": "",
+        "original_permissions": {
+          "command": [
+            "stat",
+            "-c",
+            "%a",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled/archive"
+          ],
+          "returncode": 0,
+          "stdout": "775\n",
+          "stderr": ""
+        },
+        "permission_restore": {
+          "command": [
+            "chmod",
+            "775",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled/archive"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "archive_records": {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/remote/libs/*",
+            "CopyArchiveRecords",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261103-integrated/enabled/archive",
+            "copy-fault-848849f7-6f6b-4740-8105-65135658094d",
+            "24"
+          ],
+          "returncode": 0,
+          "stdout": "RECORDS\tcopy-fault-848849f7-6f6b-4740-8105-65135658094d\tcount=15\tCRC/key/value/contiguous-prefix-valid\n",
+          "stderr": ""
+        }
+      }
+    },
+    "duration": "56.9s"
+  },
+  "default_behavior": {
+    "modern_transaction_returncode": 1,
+    "legacy_transaction_returncode": 0,
+    "protocol_differences": [
+      {
+        "scenario": "routing-no-identity",
+        "oracle": "{NONE=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-cluster-only",
+        "oracle": "{INVALID_REQUEST=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-node-only",
+        "oracle": "{INVALID_REQUEST=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-correct-identity",
+        "oracle": "{NONE=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-wrong-cluster",
+        "oracle": "{REBOOTSTRAP_REQUIRED=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-controller-wrong-cluster",
+        "oracle": "{NONE=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "controller-remove-registered",
+        "oracle": "{}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "controller-repeat-remove",
+        "oracle": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "controller-forwarded-remove",
+        "oracle": "{}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "controller-refuse-voter",
+        "oracle": "{INVALID_REQUEST=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "controller-unknown-id",
+        "oracle": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "controller-api-on-broker",
+        "oracle": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "topology-no-plugin",
+        "oracle": "{UNSUPPORTED_VERSION=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "streams-invalid-group",
+        "oracle": "{INVALID_REQUEST=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "txn-topic-id-missing-group",
+        "oracle": "{UNKNOWN_TOPIC_ID=1}",
+        "candidate": "TRANSPORT:EOFException"
+      }
+    ],
+    "config_differences": [
+      {
+        "scenario": "discover-remote.copy.lag.ms",
+        "oracle": "0",
+        "candidate": "MISSING"
+      },
+      {
+        "scenario": "validate-remote.copy.lag.ms=-1",
+        "oracle": "NONE",
+        "candidate": "INVALID_CONFIG"
+      },
+      {
+        "scenario": "validate-remote.copy.lag.ms=0",
+        "oracle": "NONE",
+        "candidate": "INVALID_CONFIG"
+      },
+      {
+        "scenario": "validate-remote.copy.lag.ms=1000",
+        "oracle": "NONE",
+        "candidate": "INVALID_CONFIG"
+      },
+      {
+        "scenario": "discover-remote.copy.lag.bytes",
+        "oracle": "-1",
+        "candidate": "MISSING"
+      },
+      {
+        "scenario": "validate-remote.copy.lag.bytes=-1",
+        "oracle": "NONE",
+        "candidate": "INVALID_CONFIG"
+      },
+      {
+        "scenario": "validate-remote.copy.lag.bytes=0",
+        "oracle": "NONE",
+        "candidate": "INVALID_CONFIG"
+      },
+      {
+        "scenario": "validate-remote.copy.lag.bytes=1000",
+        "oracle": "NONE",
+        "candidate": "INVALID_CONFIG"
+      }
+    ],
+    "authorization_differences": [
+      {
+        "scenario": "preauth-routing-identity",
+        "oracle": "{NONE=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "authenticated-routing-identity",
+        "oracle": "{REBOOTSTRAP_REQUIRED=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "controller-cluster-authorization",
+        "oracle": "{CLUSTER_AUTHORIZATION_FAILED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "topology-group-authorization",
+        "oracle": "{GROUP_AUTHORIZATION_FAILED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "streams-group-authorization",
+        "oracle": "{GROUP_AUTHORIZATION_FAILED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "txn-transactional-id-authorization",
+        "oracle": "{TRANSACTIONAL_ID_AUTHORIZATION_FAILED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "controller-authorized-unknown-id",
+        "oracle": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "topology-authorized-no-plugin",
+        "oracle": "{UNSUPPORTED_VERSION=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "txn-group-authorization-after-tid-allow",
+        "oracle": "{GROUP_AUTHORIZATION_FAILED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "txn-unknown-id-after-tid-group-allow",
+        "oracle": "{UNKNOWN_TOPIC_ID=1}",
+        "candidate": "TRANSPORT:EOFException"
+      }
+    ]
+  },
+  "checks": {
+    "build": {
+      "command": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo build -p krabka-broker --bin krabka-broker",
+      "result": "passed",
+      "duration": "1m09s"
+    },
+    "axl": {
+      "passed": 566,
+      "suites": 31
+    },
+    "check_scripts": "passed (27 scripts)",
+    "diff_check": "passed"
+  },
+  "setup_failures": [
+    "Initial --remote-log-manager-interval 500 was rejected (explicit500ms corrected) before serving.",
+    "Initial enabled process collided on default health listener9405; relaunched with health-listen-addr none. First paired collector enabled discovery failed before readiness; retained verbatim and superseded for discovery only by discovery-ready receipt."
+  ],
+  "limits": [
+    "This exact combined implementation binary has scoped runtime evidence, not full six-surface qualification.",
+    "Defaults remain4.3 and fail released4.4 gates; enabled advertises InitProducerIdv6 and additional controller/internal APIs.",
+    "Streams positive native plugin/assignor fault models and DLQ runtime/fault cases remain bounded by their separate sibling receipts; negative wire probes do not establish their complete integrated behavior.",
+    "Clean single-nodeRF1/minISR1 restart, not crash/pending-marker/coordinator-move qualification.",
+    "Copy checks decode uploaded prefixes and exercise permission failure/retry; no full fsync/remote-read/metadata-failure/midcopy-crash claim.",
+    "No default graduation, release publication, issue1969 closure, or full interoperability pass."
+  ]
+}
