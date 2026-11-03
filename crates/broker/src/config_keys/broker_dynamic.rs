@@ -183,18 +183,35 @@ pub fn topic_broker_synonyms(topic_key: &str) -> Vec<BrokerSynonym> {
     }
 }
 
+/// KIP-1191 broker settings defined by released Kafka 4.4, not 4.3.1.
+pub fn served_dlq_configs(
+    unstable: UnstableApiVersions,
+) -> impl Iterator<Item = &'static kafka_broker::KafkaBrokerConfig> {
+    kafka_broker::KAFKA_44_DLQ_CONFIGS
+        .iter()
+        .filter(move |_| unstable == UnstableApiVersions::Enabled)
+}
+
+fn dlq_config(
+    name: &str,
+    unstable: UnstableApiVersions,
+) -> Option<&'static kafka_broker::KafkaBrokerConfig> {
+    served_dlq_configs(unstable).find(|row| row.name == name)
+}
+
 /// The row that types a broker key, for `DescribeConfigs`: its own registry
 /// row, the row of the topic key it sets the default of on a broker serving
 /// `unstable`, or, for a `KafkaConfig` key krabka has no row for, the one
 /// [`kafka_broker`] states. `None` is a name Kafka does not define, which
 /// Kafka reports untyped and withholds the value of.
 pub fn broker_key_row(name: &str, unstable: UnstableApiVersions) -> Option<registry::ConfigKey> {
-    registry::lookup(ConfigScope::Broker, name)
+    dlq_config(name, unstable)
+        .map(kafka_broker::KafkaBrokerConfig::row)
+        .or_else(|| registry::lookup(ConfigScope::Broker, name).copied())
         .or_else(|| {
             let topic = served_topic_default(name, unstable)?;
-            registry::lookup(ConfigScope::Topic, topic)
+            registry::lookup(ConfigScope::Topic, topic).copied()
         })
-        .copied()
         .or_else(|| kafka_broker::resolve(name).map(kafka_broker::KafkaBrokerConfig::row))
 }
 
@@ -269,6 +286,9 @@ pub enum BrokerKeyKind {
 /// The kind of a broker key on a broker serving `unstable`, for the APPEND
 /// and SUBTRACT checks.
 pub fn broker_key_kind(name: &str, unstable: UnstableApiVersions) -> BrokerKeyKind {
+    if dlq_config(name, unstable).is_some() {
+        return BrokerKeyKind::Scalar;
+    }
     if let Some(row) = registry::lookup(ConfigScope::Broker, name)
         && row.config_type == registry::ConfigType::List
     {
@@ -352,6 +372,9 @@ fn check_broker_value(
     value: &str,
     unstable: UnstableApiVersions,
 ) -> Result<(), String> {
+    if let Some(row) = dlq_config(name, unstable) {
+        return row.canonical(value).map(drop);
+    }
     if THROTTLE_RATES.contains(&name) {
         return check_range(name, parse_long(name, value)?, Some(0), None).map(drop);
     }
@@ -533,6 +556,43 @@ mod tests {
         assert2::check,
         rstest_bdd::datatable::Rows,
     };
+
+    #[test]
+    fn released_44_dlq_configs_are_typed_validated_and_gated() {
+        use UnstableApiVersions::{Disabled, Enabled};
+        let boolean = "errors.deadletterqueue.auto.create.topics.enable";
+        let prefix = "errors.deadletterqueue.topic.name.prefix";
+        for per_broker in [false, true] {
+            for valid in ["true", "FALSE", " true "] {
+                check!(
+                    validate_dynamic_broker_configs(&map(&[(boolean, valid)]), per_broker, Enabled)
+                        .is_ok()
+                );
+            }
+            check!(
+                validate_dynamic_broker_configs(&map(&[(boolean, "yes")]), per_broker, Enabled)
+                    .is_err()
+            );
+            // Unknown keys remain storable on the released-4.3.1 baseline.
+            check!(
+                validate_dynamic_broker_configs(&map(&[(boolean, "yes")]), per_broker, Disabled)
+                    .is_ok()
+            );
+            for value in ["", "dlq.", " arbitrary prefix ", "__"] {
+                check!(
+                    validate_dynamic_broker_configs(&map(&[(prefix, value)]), per_broker, Enabled)
+                        .is_ok()
+                );
+            }
+        }
+        for key in [boolean, prefix] {
+            check!(broker_key_kind(key, Enabled) == BrokerKeyKind::Scalar);
+            check!(broker_key_kind(key, Disabled) == BrokerKeyKind::Unknown);
+            check!(broker_key_row(key, Disabled).is_none());
+            let row = broker_key_row(key, Enabled).expect("4.4 config row");
+            check!(!row.read_only && !row.sensitive && !row.internal);
+        }
+    }
 
     /// Controller-side validation skips broker-local membership checks but
     /// must reject a wildcard mixed with explicit directories after a merge.

@@ -1,0 +1,24 @@
+kafka.server:group=grpj01f0,name=DeadLetterQueueRecordCount,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01f0,name=DeadLetterQueueTotalProduceRequestsPerSec,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01f1,name=DeadLetterQueueFailedProduceRequestsPerSec,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01f1,name=DeadLetterQueueTotalProduceRequestsPerSec,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01f2,name=DeadLetterQueueRecordCount,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01f2,name=DeadLetterQueueTotalProduceRequestsPerSec,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01f3,name=DeadLetterQueueRecordCount,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01f3,name=DeadLetterQueueTotalProduceRequestsPerSec,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01t0,name=DeadLetterQueueRecordCount,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01t0,name=DeadLetterQueueTotalProduceRequestsPerSec,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01t1,name=DeadLetterQueueFailedProduceRequestsPerSec,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01t1,name=DeadLetterQueueTotalProduceRequestsPerSec,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01t2,name=DeadLetterQueueRecordCount,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01t2,name=DeadLetterQueueTotalProduceRequestsPerSec,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01t3,name=DeadLetterQueueRecordCount,type=ShareGroupMetrics Count=1
+kafka.server:group=grpj01t3,name=DeadLetterQueueTotalProduceRequestsPerSec,type=ShareGroupMetrics Count=1
+ASSERT group=grpj01t0 produce=1 failed=0 written=1
+ASSERT group=grpj01t1 produce=1 failed=1 written=0
+ASSERT group=grpj01t2 produce=1 failed=0 written=1
+ASSERT group=grpj01t3 produce=1 failed=0 written=1
+ASSERT group=grpj01f0 produce=1 failed=0 written=1
+ASSERT group=grpj01f1 produce=1 failed=1 written=0
+ASSERT group=grpj01f2 produce=1 failed=0 written=1
+ASSERT group=grpj01f3 produce=1 failed=0 written=1

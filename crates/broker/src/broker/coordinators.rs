@@ -14,6 +14,7 @@ use {
         },
         config::BrokerConfig,
         coordinator::GroupCoordinator,
+        error::BrokerError,
         metadata_source::MetadataSource,
         metrics::BrokerMetrics,
         network::client::InterBrokerClient,
@@ -23,7 +24,10 @@ use {
             coordinator::ShareCoordinator,
             persister_client::{InterBrokerListener, SharePersister},
         },
-        share_partition::{dlq::DlqWriter, manager::SharePartitionLeaderManager},
+        share_partition::{
+            dlq::{DlqManagerContext, DlqSink, DlqWriter},
+            manager::SharePartitionLeaderManager,
+        },
         txn::coordinator::TxnCoordinator,
     },
     std::sync::Arc,
@@ -54,7 +58,7 @@ pub(super) struct CoordinatorInputs<'a> {
 pub(super) async fn start_coordinators(
     config: &BrokerConfig,
     inputs: CoordinatorInputs<'_>,
-) -> CoordinatorStartup {
+) -> Result<CoordinatorStartup, BrokerError> {
     let CoordinatorInputs {
         controller,
         partitions,
@@ -65,6 +69,27 @@ pub(super) async fn start_coordinators(
         metrics,
     } = inputs;
     let listener_protocol = inter_broker_listener_protocol(config);
+    let dead_letters = Arc::new(DlqWriter::new(
+        config,
+        Arc::clone(controller),
+        Arc::clone(partitions),
+        Arc::clone(auto_topic_creation),
+        Arc::clone(inter_broker_client),
+        listener_protocol,
+        metrics.clone(),
+    ));
+    let native_dlq = config
+        .share_dlq_manager_factory
+        .as_ref()
+        .map(|factory| {
+            factory.create(DlqManagerContext {
+                broker: config.node_id,
+                stock: Arc::<DlqWriter>::clone(&dead_letters),
+                metrics: metrics.clone(),
+            })
+        })
+        .transpose()
+        .map_err(|error| BrokerError::Startup(format!("native DLQ manager: {error}")))?;
     let mut txn_coordinator = TxnCoordinator::new(
         config.node_id,
         Arc::clone(partitions),
@@ -111,15 +136,8 @@ pub(super) async fn start_coordinators(
     ));
     group_coordinator.set_share_persister(Arc::clone(&share_persister));
     group_coordinator.set_metadata_source(Arc::clone(controller));
-    let dead_letters = Arc::new(DlqWriter::new(
-        config,
-        Arc::clone(controller),
-        Arc::clone(partitions),
-        Arc::clone(auto_topic_creation),
-        Arc::clone(inter_broker_client),
-        listener_protocol,
-        metrics.clone(),
-    ));
+    let selected_dlq: Arc<dyn DlqSink> =
+        native_dlq.unwrap_or_else(|| Arc::<DlqWriter>::clone(&dead_letters));
     let share_partition_leaders = SharePartitionLeaderManager::new(
         config.node_id,
         Arc::clone(partitions),
@@ -127,7 +145,7 @@ pub(super) async fn start_coordinators(
         Arc::clone(&share_persister),
         Arc::new((*config.share_group).clone()),
         config.share_session_cache_max_when_unlimited,
-        Arc::<DlqWriter>::clone(&dead_letters),
+        selected_dlq,
     );
     share_partition_leaders.spawn_lock_sweeper();
     share_partition_leaders.spawn_share_version_watcher();
@@ -173,12 +191,12 @@ pub(super) async fn start_coordinators(
     {
         tracing::warn!(%error, "barrier coordinator recovery error");
     }
-    CoordinatorStartup {
+    Ok(CoordinatorStartup {
         txn_coordinator,
         barrier_coordinator,
         share_coordinator,
         share_partition_leaders,
         share_persister,
         dead_letters,
-    }
+    })
 }

@@ -1,0 +1,8 @@
+copy=true limit=100000 encoded_bytes=352 dlq_count=1 value_bytes=100
+copy=true limit=351 encoded_bytes=352 dlq_count=0 value_bytes=-1
+copy=true limit=352 encoded_bytes=352 dlq_count=1 value_bytes=100
+copy=true limit=353 encoded_bytes=352 dlq_count=1 value_bytes=100
+copy=false limit=100000 encoded_bytes=250 dlq_count=1 value_bytes=-1
+copy=false limit=249 encoded_bytes=250 dlq_count=0 value_bytes=-1
+copy=false limit=250 encoded_bytes=250 dlq_count=1 value_bytes=-1
+copy=false limit=251 encoded_bytes=250 dlq_count=1 value_bytes=-1

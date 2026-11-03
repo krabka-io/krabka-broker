@@ -23,7 +23,16 @@
 //! Whether a write succeeds does not decide the record's fate. Kafka archives
 //! the record whatever [`DlqSink::write`] answers, and logs a failure.
 
-use {crate::share_partition::state::DlqCause, async_trait::async_trait, krabka_log::Offset};
+use {
+    crate::{metrics::BrokerMetrics, share_partition::state::DlqCause},
+    async_trait::async_trait,
+    krabka_log::Offset,
+    krabka_metadata::NodeId,
+    std::{
+        fmt::{Debug, Formatter, Result as FmtResult},
+        sync::Arc,
+    },
+};
 
 mod coalesce;
 mod record;
@@ -68,6 +77,50 @@ pub trait DlqSink: Send + Sync {
     /// records are durable in the topic, or when the write has failed for
     /// good.
     async fn write(&self, request: DlqRequest) -> Result<(), DlqError>;
+
+    /// Stop owned workers after the broker has cancelled and drained enqueue futures.
+    ///
+    /// Implementations must await termination of their own background IO here.
+    /// Abrupt process death cannot run this callback; durable ARCHIVING ranges
+    /// are replayed by the next leader and may duplicate a completed append.
+    async fn stop(&self) {}
+}
+
+/// Per-broker factory for a native share DLQ manager.
+///
+/// Register with `BrokerConfig::share_dlq_manager_factory`. One manager is
+/// constructed for each broker start, before coordinator background tasks.
+/// The factory carries its own validated native settings; this is not Java
+/// class loading or a dynamic-library ABI. Its manager receives the same
+/// inclusive offset ranges as Kafka's `ShareGroupDLQManager.enqueue`.
+/// Errors abort startup rather than silently falling back to the stock writer.
+pub trait DlqManagerFactory: Debug + Send + Sync {
+    /// Construct an independent manager for this broker's lifecycle.
+    ///
+    /// # Errors
+    ///
+    /// Return a configuration or resource-initialization error to abort startup.
+    fn create(&self, context: DlqManagerContext) -> Result<Arc<dyn DlqSink>, DlqError>;
+}
+
+/// Broker identity and the fully configured stock writer available to a native factory.
+///
+/// A manager may wrap the stock writer to retain built-in source resolution,
+/// validation, routing and metrics, or implement a distinct archival backend.
+#[derive(Clone)]
+pub struct DlqManagerContext {
+    pub broker: NodeId,
+    pub stock: Arc<dyn DlqSink>,
+    /// Standard per-group counters; a stock delegate already records them.
+    pub metrics: BrokerMetrics,
+}
+
+impl Debug for DlqManagerContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.debug_struct("DlqManagerContext")
+            .field("broker", &self.broker)
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(test)]

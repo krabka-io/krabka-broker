@@ -348,7 +348,8 @@ impl Broker {
             auto_topic_creation: &auto_topic_creation,
             metrics: &metrics,
         })
-        .await;
+        .await?;
+        let dlq_startup = share_partition_leaders.startup_guard();
 
         // 4b. Spawn the replicator supervisor. Started AFTER the controller
         //    is up and self-registration succeeded so the supervisor's
@@ -541,6 +542,7 @@ impl Broker {
         // is bound and its accept loop is running, so the last readiness
         // condition this node controls on its own is met here.
         health.mark_listeners_bound();
+        dlq_startup.disarm();
         Ok(handle)
     }
 }

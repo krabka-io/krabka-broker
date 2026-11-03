@@ -1,0 +1,16 @@
+krabka_broker_share_group_dlq_records_total{group_id="grpc02f3"} 1
+krabka_broker_share_group_dlq_records_total{group_id="grpc02t0"} 1
+krabka_broker_share_group_dlq_records_total{group_id="grpc02f2"} 1
+krabka_broker_share_group_dlq_records_total{group_id="grpc02t2"} 1
+krabka_broker_share_group_dlq_records_total{group_id="grpc02t3"} 1
+krabka_broker_share_group_dlq_records_total{group_id="grpc02f0"} 1
+krabka_broker_share_group_dlq_produce_requests_total{group_id="grpc02t1"} 1
+krabka_broker_share_group_dlq_produce_requests_total{group_id="grpc02t2"} 1
+krabka_broker_share_group_dlq_produce_requests_total{group_id="grpc02t0"} 1
+krabka_broker_share_group_dlq_produce_requests_total{group_id="grpc02f3"} 1
+krabka_broker_share_group_dlq_produce_requests_total{group_id="grpc02t3"} 1
+krabka_broker_share_group_dlq_produce_requests_total{group_id="grpc02f1"} 1
+krabka_broker_share_group_dlq_produce_requests_total{group_id="grpc02f2"} 1
+krabka_broker_share_group_dlq_produce_requests_total{group_id="grpc02f0"} 1
+krabka_broker_share_group_dlq_failed_produce_requests_total{group_id="grpc02f1"} 1
+krabka_broker_share_group_dlq_failed_produce_requests_total{group_id="grpc02t1"} 1

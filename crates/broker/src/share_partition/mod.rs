@@ -11,3 +11,6 @@ pub mod manager;
 pub mod session;
 pub(crate) mod source;
 pub mod state;
+
+/// Native share DLQ manager registration and enqueue lifecycle.
+pub use dlq::{DlqError, DlqManagerContext, DlqManagerFactory, DlqRequest, DlqSink};

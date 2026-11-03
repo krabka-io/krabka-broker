@@ -524,6 +524,20 @@ types.
 
 Creusot also creates sessions for logic functions, lemmas, private helper functions, and generated `Clone` implementations. These sessions support the contracts in the ledger. They are not additional production kernels. Public logic functions and lemmas, such as `kafka_rank`, `local_retention_model`, or `lemma_two_sites_never_survive`, state a row's rule and are named in its contract cell where the rule matters. The field accessor `TransactionSnapshot::identity` is proved with the transaction kernels and decides nothing on its own.
 
+## DLQ batch admission proof
+
+[`dlq_batch_admission`](../crates/verified/src/share.rs) is called by the real
+[`build_round`](../crates/broker/src/share_partition/dlq/record.rs). Its three
+unconditional equivalences jointly establish first-record progress even when
+oversized, no later-record append beyond the limit, and exact-boundary admission.
+The compound functional VC and generated enum Clone VC are discharged by
+Alt-Ergo with pinned Creusot0.14.0; the new
+[functional session](../verif/krabka_verified_rlib/share/dlq_batch_admission/proof.json)
+and [Clone session](../verif/krabka_verified_rlib/share/impl_Clone_for_DlqBatchAdmission/clone/proof.json)
+are retained. The host supplies a saturated projected encoded size and appends
+the original record. Source cloning, encoder correctness, IO success, retries
+and concurrent archival ordering are outside this pure decision's proof.
+
 ## Run the Creusot Proofs
 
 The [`.creusot-version`](../.creusot-version) file pins the Creusot release.

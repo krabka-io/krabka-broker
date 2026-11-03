@@ -52,12 +52,12 @@ Feature: Share dead-letter writes preserve causes and allow source consumption t
     Then the source share start offset reaches 1
     And the created DLQ contains v0 and opts into group dead-letter writes
 
-  Scenario: a copied record too big for the topic is written with headers alone
+  Scenario: a copied record too big for the topic fails and still archives
     Given one acquired 1000-byte source record targets a DLQ topic with a 1100-byte message limit
     When the member rejects source offsets 0 through 0
-    And the consumer waits for 1 dead-letter records
     Then the source share start offset reaches 1
-    And the oversized DLQ copy contains only its offset and rejection headers without key or value
+    And the DLQ meters report 0 written records, 1 produce attempts, and 1 failures
+    And the DLQ is empty
 
   Scenario: records that only the remote tier holds are acquired and dead lettered
     Given three source records have left local disk and are acquired from the remote tier

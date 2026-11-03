@@ -120,6 +120,38 @@ pub fn share_prune_frontier(offsets: &[i64]) -> Option<i64> {
     Some(frontier)
 }
 
+/// Admission of an intact record to a DLQ produce batch.
+#[krabka_macros::model_type(runtime(Debug, Clone, Copy, PartialEq, Eq))]
+pub enum DlqBatchAdmission {
+    Flush,
+    AppendContinue,
+    AppendStop,
+}
+
+/// Admit the first record even when oversized, and bound subsequent records.
+///
+/// The caller appends the original record without
+/// payload rewriting; this decision neither strips nor substitutes its bytes.
+#[must_use]
+#[ensures((result == DlqBatchAdmission::Flush) == (has_records && projected_bytes@ > limit@))]
+#[ensures((result == DlqBatchAdmission::AppendStop) == (!has_records && projected_bytes@ > limit@))]
+#[ensures((result == DlqBatchAdmission::AppendContinue) == (projected_bytes@ <= limit@))]
+pub fn dlq_batch_admission(
+    projected_bytes: i64,
+    limit: i64,
+    has_records: bool,
+) -> DlqBatchAdmission {
+    if projected_bytes > limit {
+        if has_records {
+            DlqBatchAdmission::Flush
+        } else {
+            DlqBatchAdmission::AppendStop
+        }
+    } else {
+        DlqBatchAdmission::AppendContinue
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

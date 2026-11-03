@@ -6,7 +6,8 @@
 //! hands over the runs that the machine has noted only once the coordinator has
 //! stored them as `Archiving`. A leader that stops before the second phase
 //! ends leaves those runs in the coordinator, and the next leader that loads
-//! the partition resumes them, so a record is written at least once.
+//! the partition resumes them. This can duplicate a previously appended copy;
+//! a terminal destination failure can archive a range without any DLQ copy.
 //!
 //! The second phase is Kafka's `SharePartition.initiateDLQAndArchive`: it
 //! archives the run whether or not the write worked, because a record that
@@ -73,6 +74,9 @@ impl SharePartitionLeaderManager {
         cell: &Arc<Mutex<AcquisitionState>>,
         ranges: Vec<DlqRange>,
     ) {
+        if self.shutdown.is_cancelled() {
+            return;
+        }
         let ranges = coalesce(ranges);
         if ranges.is_empty() {
             return;
@@ -81,7 +85,7 @@ impl SharePartitionLeaderManager {
             return;
         };
         let (key, cell) = (key.clone(), Arc::clone(cell));
-        tokio::spawn(async move {
+        self.background_tasks.spawn(async move {
             join_all(
                 ranges
                     .into_iter()
@@ -118,8 +122,15 @@ impl SharePartitionLeaderManager {
         let written = {
             // The semaphore is never closed, so a permit is always granted.
             let _permit = self.dead_letter_writes.acquire().await;
-            self.dlq.write(request).await
+            tokio::select! {
+                biased;
+                () = self.shutdown.cancelled() => return,
+                result = self.dlq.write(request) => result,
+            }
         };
+        if self.shutdown.is_cancelled() {
+            return;
+        }
         if let Err(error) = written {
             tracing::error!(
                 group,
@@ -132,6 +143,9 @@ impl SharePartitionLeaderManager {
             );
         }
         let mut state = cell.lock().await;
+        if self.shutdown.is_cancelled() {
+            return;
+        }
         state.finish_archiving(range.first, range.last);
         // Best-effort: a failed write keeps the state dirty, so a later write
         // carries the archived run to the coordinator. The state stays in

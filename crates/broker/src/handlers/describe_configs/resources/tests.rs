@@ -118,6 +118,8 @@ fn static_view(result: &DescribeConfigsResult) -> Vec<DescribeConfigsResourceRes
             !TOPIC_DEFAULT_SYNONYMS
                 .iter()
                 .any(|(broker, _)| *broker == entry.name)
+                && !broker_dynamic::served_dlq_configs(UnstableApiVersions::Enabled)
+                    .any(|row| row.name == entry.name)
                 && (EMITTED_ELSEWHERE.contains(&entry.name.as_str())
                     || lookup(&entry.name).is_none())
         })
@@ -3046,4 +3048,90 @@ fn expected_plain_configs(rows: &[PlainConfig<'_>]) -> Vec<DescribeConfigsResour
             },
         )
         .collect()
+}
+
+/// Released 4.4 public DLQ keys use the same dynamic layers the writer reads.
+#[test]
+fn dlq_broker_config_discovery_precedence_and_reset() {
+    for (key, default, kind, cluster, local) in [
+        (
+            "errors.deadletterqueue.auto.create.topics.enable",
+            "false",
+            ConfigType::Boolean,
+            "true",
+            "false",
+        ),
+        (
+            "errors.deadletterqueue.topic.name.prefix",
+            "dlq.",
+            ConfigType::String,
+            "cluster.",
+            "",
+        ),
+    ] {
+        let mut image = MetadataImage::new(Uuid::nil());
+        for (node, value, effective, source, chain) in [
+            (None, None, default, CONFIG_SOURCE_DEFAULT, vec![
+                CONFIG_SOURCE_DEFAULT,
+            ]),
+            (
+                Some(DEFAULT_BROKER_CONFIG_NODE_ID),
+                Some(cluster),
+                cluster,
+                CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                vec![CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, CONFIG_SOURCE_DEFAULT],
+            ),
+            (
+                Some(SERVING_NODE),
+                Some(local),
+                local,
+                CONFIG_SOURCE_DYNAMIC_BROKER,
+                vec![
+                    CONFIG_SOURCE_DYNAMIC_BROKER,
+                    CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                    CONFIG_SOURCE_DEFAULT,
+                ],
+            ),
+            (
+                Some(SERVING_NODE),
+                None,
+                cluster,
+                CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                vec![CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, CONFIG_SOURCE_DEFAULT],
+            ),
+            (
+                Some(DEFAULT_BROKER_CONFIG_NODE_ID),
+                None,
+                default,
+                CONFIG_SOURCE_DEFAULT,
+                vec![CONFIG_SOURCE_DEFAULT],
+            ),
+        ] {
+            if let Some(node_id) = node {
+                image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                    node_id,
+                    config_name: key.to_owned(),
+                    config_value: value.map(str::to_owned),
+                }));
+            }
+            let result = describe(&image, RESOURCE_TYPE_BROKER, "1", None, EVERYTHING);
+            let entry = result
+                .configs
+                .iter()
+                .find(|entry| entry.name == key)
+                .expect("public DLQ config is discoverable even unset");
+            check!(entry.value.as_deref() == Some(effective));
+            check!(entry.config_type == kind.wire());
+            check!(entry.config_source == source);
+            check!(!entry.read_only && !entry.is_sensitive);
+            check!(
+                entry
+                    .synonyms
+                    .iter()
+                    .map(|synonym| synonym.source)
+                    .collect::<Vec<_>>()
+                    == chain
+            );
+        }
+    }
 }

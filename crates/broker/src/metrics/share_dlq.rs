@@ -11,7 +11,7 @@ use super::{BrokerMetrics, ShareGroupIdLabel};
 impl BrokerMetrics {
     /// Records `count` dead-letter records that a produce round wrote for
     /// `group_id`: Kafka's `recordDLQRecordWrite`.
-    pub(crate) fn record_share_dlq_records(&self, group_id: &str, count: usize) {
+    pub fn record_share_dlq_records(&self, group_id: &str, count: usize) {
         self.share_group_dlq_records
             .get_or_create(&label(group_id))
             .inc_by(u64::try_from(count).unwrap_or(u64::MAX));
@@ -19,7 +19,7 @@ impl BrokerMetrics {
 
     /// Records one attempt to produce dead-letter records for `group_id`:
     /// Kafka's `recordDLQProduce`.
-    pub(crate) fn record_share_dlq_produce(&self, group_id: &str) {
+    pub fn record_share_dlq_produce(&self, group_id: &str) {
         self.share_group_dlq_produce_requests
             .get_or_create(&label(group_id))
             .inc();
@@ -27,7 +27,7 @@ impl BrokerMetrics {
 
     /// Records a dead-letter write of `group_id` that failed: Kafka's
     /// `recordDLQProduceFailed`.
-    pub(crate) fn record_share_dlq_produce_failed(&self, group_id: &str) {
+    pub fn record_share_dlq_produce_failed(&self, group_id: &str) {
         self.share_group_dlq_failed_produce_requests
             .get_or_create(&label(group_id))
             .inc();
