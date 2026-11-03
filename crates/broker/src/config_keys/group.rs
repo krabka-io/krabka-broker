@@ -628,7 +628,7 @@ fn check_bounds(
     }
     assignment("streams.assignment.interval.ms", "streams")?;
     if trunk {
-        check_trunk_streams_bounds(overrides)?;
+        check_trunk_streams_bounds(overrides, streams)?;
     }
     for (session, heartbeat, default_session, default_heartbeat) in [
         (
@@ -672,7 +672,10 @@ fn check_bounds(
 
 /// The trunk-only bounds of `GroupConfig.validateValues`: the task offset
 /// interval floor, the warmup replica ceiling, and the registered assignor.
-fn check_trunk_streams_bounds(overrides: &BTreeMap<String, String>) -> Result<(), String> {
+fn check_trunk_streams_bounds(
+    overrides: &BTreeMap<String, String>,
+    streams: &StreamsGroupConfig,
+) -> Result<(), String> {
     let int = |name: &str| {
         let value = overrides.get(name)?;
         int_value(value)
@@ -694,12 +697,18 @@ fn check_trunk_streams_bounds(overrides: &BTreeMap<String, String>) -> Result<()
     }
     if let Some(value) = overrides.get(KEY_ASSIGNOR_NAME)
         && !REGISTERED_ASSIGNORS.contains(&java_trim(value))
+        && streams.task_assignors.get(java_trim(value)).is_none()
     {
         return Err(format!(
             "{KEY_ASSIGNOR_NAME} '{}' is not a registered task assignor. Registered assignors \
              are: [{}].",
             java_trim(value),
-            REGISTERED_ASSIGNORS.join(", ")
+            REGISTERED_ASSIGNORS
+                .iter()
+                .copied()
+                .chain(streams.task_assignors.names())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     Ok(())

@@ -10,7 +10,7 @@
 use {
     super::DlqError,
     crate::{
-        config_keys::ERRORS_DEADLETTERQUEUE_GROUP_ENABLE,
+        config_keys::{ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, parse::java_trim},
         share_partition::group_settings::{KEY_DLQ_COPY_RECORD_ENABLE, KEY_DLQ_TOPIC_NAME},
     },
     krabka_metadata::{MetadataImage, NodeId},
@@ -50,14 +50,14 @@ impl ClusterSettings {
             auto_create: value(KEY_AUTO_CREATE).is_some_and(|enabled| is_true(enabled)),
             topic_prefix: value(KEY_TOPIC_PREFIX).map_or_else(
                 || DEFAULT_TOPIC_PREFIX.to_owned(),
-                |prefix| prefix.trim().to_owned(),
+                |prefix| java_trim(prefix).to_owned(),
             ),
         }
     }
 }
 
 /// A boolean config, as Kafka's `ConfigDef` reads it: `true` in any case.
-fn is_true(value: &str) -> bool { value.trim().eq_ignore_ascii_case("true") }
+fn is_true(value: &str) -> bool { java_trim(value).eq_ignore_ascii_case("true") }
 
 /// The dead-letter settings of one group.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +73,7 @@ impl GroupSettings {
     /// The settings of `group`, or `None` when it names no dead-letter topic.
     pub(super) fn resolve(image: &MetadataImage, group: &str) -> Option<Self> {
         let configs = image.group_config(group)?;
-        let topic = configs.get(KEY_DLQ_TOPIC_NAME)?.trim();
+        let topic = java_trim(configs.get(KEY_DLQ_TOPIC_NAME)?);
         (!topic.is_empty()).then(|| Self {
             topic: topic.to_owned(),
             copy_record: configs
@@ -182,6 +182,74 @@ mod tests {
             config_name: name.to_owned(),
             config_value: Some(value.to_owned()),
         })
+    }
+
+    #[test]
+    fn dlq_runtime_replays_and_resets_both_broker_layers() {
+        let uuid = uuid::Uuid::nil();
+        let mut image = MetadataImage::new(uuid);
+        let mut records = Vec::new();
+        for (node_id, auto, prefix, expected_auto, expected_prefix) in [
+            (
+                DEFAULT_BROKER_CONFIG_NODE_ID,
+                Some("true"),
+                Some("cluster."),
+                true,
+                "cluster.",
+            ),
+            (NODE, Some("false"), Some(""), false, ""),
+            (NODE, None, None, true, "cluster."),
+            (DEFAULT_BROKER_CONFIG_NODE_ID, None, None, false, "dlq."),
+        ] {
+            for (key, value) in [(KEY_AUTO_CREATE, auto), (KEY_TOPIC_PREFIX, prefix)] {
+                let record = MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                    node_id,
+                    config_name: key.to_owned(),
+                    config_value: value.map(str::to_owned),
+                });
+                image.apply(&record);
+                records.push(record);
+            }
+            let expected = ClusterSettings {
+                auto_create: expected_auto,
+                topic_prefix: expected_prefix.into(),
+            };
+            assert!(ClusterSettings::resolve(&image, NODE) == expected);
+            let mut restarted = MetadataImage::new(uuid);
+            for record in &records {
+                restarted.apply(record);
+            }
+            assert!(ClusterSettings::resolve(&restarted, NODE) == expected);
+        }
+    }
+
+    #[test]
+    fn dlq_string_resolution_uses_java_trim_not_unicode_whitespace() {
+        for (raw, expected) in [
+            (" \tdlq.\r\n", "dlq."),
+            ("\u{0}dlq.\u{1f}", "dlq."),
+            ("\u{a0}dlq.\u{a0}", "\u{a0}dlq.\u{a0}"),
+            ("\u{2003}", "\u{2003}"),
+        ] {
+            let mut image = image(&[entry(KEY_DLQ_TOPIC_NAME, raw)], None);
+            image.apply(&broker_config(NODE, KEY_TOPIC_PREFIX, raw));
+            assert!(ClusterSettings::resolve(&image, NODE).topic_prefix == expected);
+            assert!(
+                GroupSettings::resolve(&image, "g")
+                    == Some(GroupSettings {
+                        topic: expected.to_owned(),
+                        copy_record: false
+                    })
+            );
+        }
+        let mut image = image(
+            &[entry(KEY_DLQ_TOPIC_NAME, "dlq.g")],
+            Some(&[entry(ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "true")]),
+        );
+        image.apply(&broker_config(NODE, KEY_TOPIC_PREFIX, "\u{a0}dlq."));
+        assert!(outcome(&image).is_err());
+        image.apply(&broker_config(NODE, KEY_TOPIC_PREFIX, " \tdlq."));
+        assert!(outcome(&image) == Ok(TopicState::Exists));
     }
 
     /// An image with `group` configured as `group_configs`, and the topic

@@ -489,6 +489,7 @@ fn broker_configs(
     // `config.nonInternalValues()`), and every topic-default broker key it
     // serves. Another emitter below answers the keys the process synthesises.
     if node_id.is_some() {
+        keys.extend(broker_dynamic::served_dlq_configs(unstable).map(|row| row.name));
         for name in broker_dynamic::served_topic_default_synonyms(unstable) {
             keys.insert(name);
         }
@@ -598,6 +599,9 @@ const EMITTED_ELSEWHERE: &[&str] = &[
 /// registry row's, the one its topic-key synonym family gives it on a broker
 /// serving `unstable`, or the roster's.
 fn broker_default(key: &str, unstable: UnstableApiVersions) -> Option<&'static str> {
+    if let Some(row) = broker_dynamic::served_dlq_configs(unstable).find(|row| row.name == key) {
+        return row.default;
+    }
     if let Some(row) = registry::lookup(ConfigScope::Broker, key) {
         return row.default;
     }
