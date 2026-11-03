@@ -1,0 +1,8 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_next_standby_count": { "prover": "alt-ergo", "time": 0.007 }
+    }
+  }
+}

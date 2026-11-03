@@ -1,8 +1,12 @@
 //! KIP-1071 Streams rebalance-protocol configuration.
 use {
-    super::description::{NativeBackend, TopologyDescriptionPlugin},
+    super::{
+        assignor::{AssignorInput, AssignorMember, StreamsAssignment, TaskAssignorRegistry},
+        description::{NativeBackend, TopologyDescriptionPlugin},
+    },
     crate::{
         api_catalog::UnstableApiVersions,
+        config_keys::parse::java_trim,
         coordinator::unified::config::{
             MAX_ASSIGNMENT_INTERVAL, MIN_ASSIGNMENT_INTERVAL, broker_assignment_interval,
             clamp_to_range,
@@ -12,6 +16,7 @@ use {
     std::{
         borrow::Cow,
         collections::{BTreeMap, BTreeSet},
+        iter::once,
         str::FromStr,
         time::Duration,
     },
@@ -41,9 +46,8 @@ pub(crate) const STREAMS_GROUP_ASSIGNMENT_INTERVAL_MS: &str =
 
 /// The `streams.assignor.name` value of a streams group.
 ///
-/// Every value runs the same assignor, a port of Kafka's `StickyTaskAssignor`,
-/// the only built-in streams assignor in Kafka. The value is kept only for
-/// the configuration surface.
+/// Legacy built-in aliases all run Kafka's sticky algorithm. Native custom
+/// selections use `StreamsGroupConfig::task_assignor_name` instead.
 ///
 /// `from_config_name` also accepts `highly-available`, the spelling of the
 /// runtime flag and of the file config.
@@ -341,6 +345,10 @@ pub struct StreamsGroupConfig {
     /// Server-side assignor selection.
     #[default(StreamsAssignorKind::Auto)]
     pub assignor: StreamsAssignorKind,
+    /// Native extensions registered before startup; first entry is default.
+    pub task_assignors: TaskAssignorRegistry,
+    /// Group override; absent selects the registry/broker default.
+    pub task_assignor_name: Option<String>,
     /// Kafka's `group.streams.rack.aware.assignment.tags`, which a group
     /// overrides with `streams.rack.aware.assignment.tags`: the client tag
     /// keys every member must send. A version 1 heartbeat of a member that
@@ -379,6 +387,50 @@ impl StreamsGroupConfig {
     pub fn description_plugin_configured(&self) -> bool {
         self.topology_description_backend.is_some()
             || self.topology_description_plugin.is_configured()
+    }
+
+    /// Broker configuration projection for the native registration list.
+    #[must_use]
+    pub fn registered_task_assignor_names(&self) -> String {
+        if self.task_assignors.default_name().is_none() {
+            self.assignor.config_name().into()
+        } else {
+            self.task_assignors
+                .names()
+                .chain(once("sticky"))
+                .collect::<Vec<_>>()
+                .join(",")
+        }
+    }
+
+    /// The implementation selected for the next assignment and describe.
+    #[must_use]
+    pub fn selected_task_assignor_name(&self) -> &str {
+        self.task_assignor_name
+            .as_deref()
+            .or_else(|| self.task_assignors.default_name())
+            .unwrap_or("sticky")
+    }
+
+    /// Execute the selected implementation without fallback on failure.
+    /// # Errors
+    /// Returns implementation failures or an unregistered selection.
+    pub fn assign_tasks(
+        &self,
+        members: &[AssignorMember],
+        input: &AssignorInput,
+    ) -> Result<StreamsAssignment, String> {
+        let name = self.selected_task_assignor_name();
+        if name == "sticky" {
+            return Ok(super::assignor::assign(members, input));
+        }
+        let assignment = self
+            .task_assignors
+            .get(name)
+            .ok_or_else(|| format!("unregistered Streams task assignor: {name}"))?
+            .assign(members, input)?;
+        super::assignor::validate_assignment(&assignment, members, input)?;
+        Ok(assignment)
     }
 
     /// The broker streams settings as `node` applies them as of `image`: the
@@ -458,7 +510,14 @@ impl StreamsGroupConfig {
                 KEY_TASK_OFFSET_INTERVAL_MS => {
                     out.task_offset_interval = parse_positive_millis(key, value)?;
                 }
-                KEY_ASSIGNOR_NAME => out.assignor = StreamsAssignorKind::parse(value)?,
+                KEY_ASSIGNOR_NAME => {
+                    if self.task_assignors.get(java_trim(value)).is_some() {
+                        out.task_assignor_name = Some(java_trim(value).into());
+                    } else {
+                        out.assignor = StreamsAssignorKind::parse(java_trim(value))?;
+                        out.task_assignor_name = Some("sticky".into());
+                    }
+                }
                 KEY_RACK_AWARE_ASSIGNMENT_TAGS => {
                     out.rack_aware_assignment_tags = parse_tag_list(value)?;
                 }
@@ -495,7 +554,7 @@ impl StreamsGroupConfig {
         KEY_TASK_OFFSET_INTERVAL_MS.into() => self.task_offset_interval.as_millis().to_string(),
         KEY_INITIAL_REBALANCE_DELAY_MS.into() => self.initial_rebalance_delay.as_millis().to_string(),
         KEY_ASSIGNMENT_INTERVAL_MS.into() => self.assignment_interval.as_millis().to_string(),
-        KEY_ASSIGNOR_NAME.into() => self.assignor.config_name().into(),
+        KEY_ASSIGNOR_NAME.into() => if self.task_assignors.default_name().is_some() { self.selected_task_assignor_name() } else { self.assignor.config_name() }.into(),
         KEY_RACK_AWARE_ASSIGNMENT_TAGS.into() => self.rack_aware_assignment_tags.join(","),
         KEY_SHARE_AUTO_OFFSET_RESET.into() => self.share_auto_offset_reset.config_value()}
     }
@@ -844,6 +903,8 @@ mod tests {
             acceptable_recovery_lag: 10_000,
             task_offset_interval: Duration::from_mins(1),
             assignor: StreamsAssignorKind::Auto,
+            task_assignors: TaskAssignorRegistry::default(),
+            task_assignor_name: None,
             rack_aware_assignment_tags: Vec::new(),
             share_auto_offset_reset: ShareAutoOffsetReset::Latest,
             unstable_api_versions: UnstableApiVersions::Disabled,

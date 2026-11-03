@@ -307,6 +307,9 @@ async fn load_view(batches: Vec<RecordBatch>, tids: &[&str]) -> PartitionView {
             log.append(&mut batch).unwrap();
         }
     }
+    // Replication committed every record: a load publishes only up to the
+    // high watermark.
+    part.replica_state.lock().await.hw = part.log_end_offset();
     let coordinator = Arc::new(TxnCoordinator::new(
         NodeId(1),
         Arc::clone(&partitions),
@@ -430,4 +433,53 @@ async fn readiness_refresh_waits_for_the_installed_local_leader_epoch() {
         .finished()
         .await;
     assert!(coordinator.load_status(P0).await == Some(LoadStatus::Loaded));
+}
+
+/// A load publishes only records the state partition has committed. The
+/// replay reads the log to its end, and a record above the high watermark can
+/// still be truncated by the next move of the partition, so the load answers
+/// `COORDINATOR_LOAD_IN_PROGRESS` until the high watermark covers it
+/// (`completion_model`).
+#[tokio::test]
+async fn a_load_waits_until_the_high_watermark_covers_the_replay() {
+    use krabka_protocol::records::Record;
+
+    let dir = TempDir::new().expect("tempdir");
+    let partitions = Arc::new(PartitionRegistry::new());
+    let part = open_state_partition(dir.path());
+    partitions.insert(bootstrap::TOPIC.into(), P0, Arc::clone(&part));
+    let entry = prepared_entry();
+    let mut batch = RecordBatch {
+        records: vec![Record {
+            key: Some(encode_key(TID).unwrap().into()),
+            value: Some(
+                encode_value(&entry, TxnVersion::Verified, false)
+                    .unwrap()
+                    .into(),
+            ),
+            ..Default::default()
+        }],
+        ..RecordBatch::default()
+    };
+    part.log.lock().unwrap().append(&mut batch).unwrap();
+    assert!(part.high_watermark().await < part.log_end_offset());
+    let coordinator = coordinator(NodeId(1), &partitions);
+
+    let loads = coordinator
+        .refresh_leader_partitions(&image(NodeId(1), krabka_metadata::LeaderEpoch(0)))
+        .await;
+    check!(
+        coordinator
+            .wait_for_load(P0, Duration::from_millis(200))
+            .await
+            == Some(LoadStatus::Loading)
+    );
+    check!(view(&coordinator).await == unavailable_view(codes::COORDINATOR_LOAD_IN_PROGRESS));
+
+    // The leader alone is in sync, so the high watermark moves to the log end.
+    part.install_isr(&[NodeId(1)], &[NodeId(1), NodeId(2)], NodeId(1))
+        .await;
+    loads.finished().await;
+    check!(coordinator.load_status(P0).await == Some(LoadStatus::Loaded));
+    check!(view(&coordinator).await.entry == Some(entry));
 }

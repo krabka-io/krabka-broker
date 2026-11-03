@@ -74,6 +74,7 @@ use {
     },
     crate::{
         codes,
+        config_keys::parse::java_trim,
         coordinator::{
             DeleteGroupError,
             unified::{
@@ -170,6 +171,7 @@ pub struct StreamsHeartbeatResult {
 /// `StreamsGroupDescribe` handler.
 #[derive(Debug, Clone)]
 pub struct StreamsDescribeView {
+    pub assignor_name: String,
     pub group_id: String,
     pub group_epoch: i32,
     pub assignment_epoch: i32,
@@ -803,8 +805,12 @@ async fn actor_loop(
                 if actor.state.members.is_empty() || !actor.assignment_pending() {
                     continue;
                 }
-                if reconcile_and_flush(&mut actor, turn).await.is_err() {
-                    break;
+                if let Err(error) = reconcile_and_flush(&mut actor, turn).await {
+                    if matches!(error, BrokerError::StreamsTaskAssignment { .. }) {
+                        tracing::warn!(%error, "Streams delayed assignment failed; retaining prior state");
+                    } else {
+                        break;
+                    }
                 }
             }
             Wake::Image(image) => {
@@ -1041,6 +1047,9 @@ async fn handle_message(
                 Ok(description) => view.topology_description = description,
                 Err(_) => view.topology_description_error = true,
             }
+            turn.config
+                .selected_task_assignor_name()
+                .clone_into(&mut view.assignor_name);
             let _ = reply.send(view);
         }
         StreamsGroupActorMessage::PushDescription { push, reply } => {
@@ -1195,7 +1204,16 @@ pub(crate) fn resolve_group_config_from_image(
     let Some(overrides) = image.group_config(group_id) else {
         return defaults.clone();
     };
-    match defaults.with_group_overrides(overrides) {
+    // Kafka 4.4 falls back to the broker default if a persisted selection is
+    // unavailable on this node. Preserve all unrelated group overrides.
+    let mut applicable = overrides.clone();
+    if let Some(name) = applicable.get(super::config::KEY_ASSIGNOR_NAME)
+        && defaults.task_assignors.get(java_trim(name)).is_none()
+        && super::config::StreamsAssignorKind::from_config_name(java_trim(name)).is_none()
+    {
+        applicable.remove(super::config::KEY_ASSIGNOR_NAME);
+    }
+    match defaults.with_group_overrides(&applicable) {
         Ok(config) => config,
         Err(error) => {
             tracing::error!(group_id, %error, "ignoring invalid persisted streams group config");

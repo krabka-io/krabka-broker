@@ -29,7 +29,9 @@
 //!   and the completion queue are gone, and the new leader holds the tail
 //!   (`true`) or truncates it (`false`). `Load` rebuilds the cache from the
 //!   last record of the new leader's log, as `replay_partition` reads it to the
-//!   log end, and queues a `Prepare*` entry for completion.
+//!   log end, and queues a `Prepare*` entry for completion. It runs only once
+//!   the tail has committed, as `await_replay_committed` holds the publication
+//!   until the high watermark covers the log end.
 //! - A marker fan-out tries each partition once. A leader answers `NONE`. An
 //!   old leader whose partition `MoveLeader` moved, or whose partition writer
 //!   is gone, answers `NOT_LEADER_OR_FOLLOWER`, with the marker kept or lost.
@@ -83,48 +85,34 @@
 //!   converged run after `Heal`, and, with refusals, a fenced-or-unexpected
 //!   marker answer.
 //!
-//! # Known failures
+//! # The uncommitted load
 //!
-//! Both properties fail on the current code, with every marker leader
-//! answering. Both failures share one cause: a coordinator load publishes
-//! records its new leader has not committed. `replay_partition` reads the log
-//! to its end, not to the high watermark, and the coordinator acts on what it
-//! read before the record commits. A second move of the state partition, to a
-//! replica that never had the record, then takes it back.
+//! Before `load_partition` waited for the high watermark, both properties failed with
+//! every marker leader answering, from one cause: a coordinator load
+//! published records its new leader had not committed. `replay_partition`
+//! reads the log to its end, not to the high watermark, and the coordinator
+//! acted on what it read before the record committed. A second move of the
+//! state partition, to a replica that never had the record, then took it back.
 //!
-//! [`CONVERGED`] fails at depth 10:
+//! [`CONVERGED`] failed at depth 10:
 //!
 //! ```text
 //! Add(0), Failover(true), Load, Add(0), Produce(0), End(true),
 //! Failover(false), Load, End(true), Heal
 //! ```
 //!
-//! The registration of partition 0 is appended but not committed when the
-//! state partition moves. The new leader's load publishes the uncommitted
-//! `Ongoing` record. The producer's retry of the registration finds the
-//! partition registered and gets `NONE` without a write (`PersistRetry`), and
-//! the producer writes its batch. The second move truncates the record, and
-//! the next load finds the transaction `Empty`. The reaper aborts only an
-//! `Ongoing` transaction it holds, so the batch on partition 0 stays open for
-//! good. That is the Jepsen symptom: the abort the timeout should bring never
-//! comes. An `EndTxn(abort)` does not help: an abort of an `Empty`
-//! transaction marks no partition.
+//! The load published an uncommitted `Ongoing` registration, the producer's
+//! retry of it got `NONE` without a write, and after the second move the next
+//! load found the transaction `Empty`, which the reaper never aborts.
+//! [`ONE_OUTCOME`] failed at depth 16: a load published and completed an
+//! uncommitted `PrepareAbort` (ABORT on partition 0), the second move truncated
+//! it, and the producer then committed the `Ongoing` transaction on partition
+//! 1. A load now waits for the high watermark, so neither trace exists and
+//! both properties hold without refused markers.
 //!
-//! [`ONE_OUTCOME`] fails at depth 16:
+//! # Known failure
 //!
-//! ```text
-//! Add(0), Commit, Produce(0), Add(1), Commit, Tick, ReaperTick,
-//! Failover(true), Load, CompletionRun, Marker(0, Written), Failover(false),
-//! Load, End(true), Commit, Marker(1, Written)
-//! ```
-//!
-//! The reaper appends a `PrepareAbort` that has not committed when the state
-//! partition moves. The load publishes it and queues it, and the completion
-//! task writes the ABORT marker of partition 0. The second move truncates the
-//! record, the next load finds the transaction `Ongoing`, and the producer
-//! commits it: partition 1 gets a COMMIT marker.
-//!
-//! With refusals, [`CONVERGED`] fails sooner, at depth 7:
+//! With refusals, [`CONVERGED`] fails at depth 7:
 //!
 //! ```text
 //! Add(0), Commit, Produce(0), End(true), Commit, Marker(0, Refused), Heal
@@ -183,7 +171,7 @@ use {
     crate::{
         codes,
         error::BrokerError,
-        model_check::{KnownFailure, Quiescence, check_model_with_known_failures},
+        model_check::{KnownFailure, Quiescence, check_model, check_model_with_known_failures},
     },
     krabka_ids::PartitionIndex,
     krabka_log::ProducerId,
@@ -208,19 +196,18 @@ const MAX_UNIQUE_STATES: usize = 500_000;
 
 // The exact unique-state count of each exhaustive search below. A changed
 // count is a changed model; see `model_check::assert_pinned_count`.
-const PINNED_UNIQUE_STATES_REFUSALS: usize = 87_607;
-const PINNED_UNIQUE_STATES_NO_REFUSALS: usize = 76_353;
+const PINNED_UNIQUE_STATES_REFUSALS: usize = 60_467;
+const PINNED_UNIQUE_STATES_NO_REFUSALS: usize = 50_631;
 
-/// The liveness property this model exists for. It fails on the current code.
+/// The liveness property this model exists for. With refused markers it fails
+/// on the current code, as it would in Kafka.
 const CONVERGED: &str = "every_transaction_ends_when_quiescent";
-/// The atomicity property. It fails on the current code too.
+/// The atomicity property.
 const ONE_OUTCOME: &str = "one_outcome_per_transaction";
 
-// The number of actions in each shortest counterexample. The module
-// documentation gives each trace.
+// The number of actions in the shortest counterexample of `CONVERGED` with
+// refused markers. The module documentation gives the trace.
 const CONVERGED_DEPTH_REFUSALS: usize = 7;
-const CONVERGED_DEPTH_NO_REFUSALS: usize = 10;
-const ONE_OUTCOME_DEPTH: usize = 16;
 
 /// One partition's bit in a partition set.
 fn bit(partition: u8) -> u8 { 1 << partition }
@@ -1007,7 +994,11 @@ impl Model for CompletionModel {
         }
         if s.op.is_none() {
             if s.cache.is_none() {
-                actions.push(Act::Load);
+                // `await_replay_committed`: the load publishes only once the
+                // high watermark covers the log end it replayed to.
+                if s.tail.is_empty() {
+                    actions.push(Act::Load);
+                }
             } else {
                 actions.push(Act::ReaperTick);
             }
@@ -1177,9 +1168,9 @@ impl Quiescence for CompletionModel {
     }
 }
 
-/// A marker leader that refuses a `PrepareCommit`'s marker strands it: the
-/// shortest path to a transaction that never ends. The atomicity failure
-/// below is reachable here too.
+/// A marker leader that refuses a `PrepareCommit`'s marker strands it, as in
+/// Kafka: the one remaining path to a transaction that never ends. Atomicity
+/// holds.
 #[test]
 fn a_refused_marker_strands_a_prepared_commit() {
     check_model_with_known_failures(
@@ -1190,26 +1181,19 @@ fn a_refused_marker_strands_a_prepared_commit() {
         "txn_completion",
         (MAX_DEPTH, TARGET_STATE_COUNT, MAX_UNIQUE_STATES),
         PINNED_UNIQUE_STATES_REFUSALS,
-        &[
-            KnownFailure {
-                property: CONVERGED,
-                depth: CONVERGED_DEPTH_REFUSALS,
-            },
-            KnownFailure {
-                property: ONE_OUTCOME,
-                depth: ONE_OUTCOME_DEPTH,
-            },
-        ],
+        &[KnownFailure {
+            property: CONVERGED,
+            depth: CONVERGED_DEPTH_REFUSALS,
+        }],
     );
 }
 
-/// With every marker leader answering, a coordinator that loads an
-/// uncommitted registration, and then loses it to a second failover, still
-/// leaves a transaction open for good, and an uncommitted `Prepare*` that a
-/// load completes can still split the outcome.
+/// With every marker leader answering, every transaction ends once the faults
+/// heal, and none commits on one partition and aborts on another: a load
+/// publishes only records the state partition has committed.
 #[test]
-fn a_load_of_an_uncommitted_record_loses_the_transaction() {
-    check_model_with_known_failures(
+fn a_load_publishes_only_committed_records() {
+    check_model(
         CompletionModel {
             fault_budget: 2,
             refusals: false,
@@ -1217,15 +1201,5 @@ fn a_load_of_an_uncommitted_record_loses_the_transaction() {
         "txn_completion_no_refusals",
         (MAX_DEPTH, TARGET_STATE_COUNT, MAX_UNIQUE_STATES),
         PINNED_UNIQUE_STATES_NO_REFUSALS,
-        &[
-            KnownFailure {
-                property: CONVERGED,
-                depth: CONVERGED_DEPTH_NO_REFUSALS,
-            },
-            KnownFailure {
-                property: ONE_OUTCOME,
-                depth: ONE_OUTCOME_DEPTH,
-            },
-        ],
     );
 }

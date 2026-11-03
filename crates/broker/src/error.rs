@@ -30,6 +30,15 @@ pub enum BrokerError {
     #[error("protocol: {0}")]
     Protocol(#[from] krabka_protocol::ProtocolError),
 
+    /// A native Streams task assignor failed before any records were appended.
+    #[error("Failed to compute a new target assignment for epoch {epoch}: {detail}")]
+    StreamsTaskAssignment {
+        /// The attempted target assignment's group epoch.
+        epoch: i32,
+        /// The assignor or output-validator failure.
+        detail: String,
+    },
+
     /// Consensus or raft transport error.
     #[error("raft: {0}")]
     Raft(#[from] krabka_raft::RaftError),

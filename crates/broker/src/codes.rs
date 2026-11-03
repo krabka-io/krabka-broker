@@ -723,7 +723,8 @@ pub fn from_broker_error(err: &BrokerError) -> i16 {
         | BrokerError::InvalidLeaderRebalanceInterval { .. }
         | BrokerError::InvalidRuntimeConfig(_)
         | BrokerError::ShutdownTimeout(_)
-        | BrokerError::Raft(_) => UNKNOWN_SERVER_ERROR,
+        | BrokerError::Raft(_)
+        | BrokerError::StreamsTaskAssignment { .. } => UNKNOWN_SERVER_ERROR,
     }
 }
 
