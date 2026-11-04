@@ -15,7 +15,7 @@ those labels are not a current claim that executed scenarios never ran.
 | Routing | Six identity cases plus auth/preauth;40 explicit two-node before/after crash/restart assertions | Cluster replacement/pipelined rejection are not established by node-preserving restart |
 | Controller removal | Positive register/remove/retry, voter rejection, metadata32/33 boundary and same-data crash durability; native forwarding regression | Further released/native forwarding/failure/authorization-race permutations |
 | Topic-ID transactions | Modern16/legacy15 positive cases, pending single-node crash and RF3 coordinator/offsets-owner movement with commit/abort | Deterministic mid-marker cut and power-loss durability are not claimed |
-| Streams | Positive lifecycle9; durable backend13 strict set/get/delete failure/repair cases and exact-source restart, with measured legacy DeleteGroups correction | Shared-backend coordinator movement and additional minimum-level/authorization permutations |
+| Streams | Positive lifecycle9; durable backend13 strict set/get/delete failure/repair cases and exact-source restart, with measured legacy DeleteGroups correction | Shared-backend coordinator movement and additional authorization permutations; streams0→1 minimum now measured |
 
 All candidate identities are pinned in their respective receipts, not silently
 relabelled final-head runs. This index is not a production/default graduation.
@@ -334,3 +334,15 @@ explicit. The repeatable caller-owned `aspect kafka44-share-minimum` task has
 strict parser negative controls; the retained receipt executes its identical
 Java fixture directly, not the full AXL orchestration. No destination ACL or
 coordinator-movement coverage is inferred. See [SHARE_MINIMUM.md](SHARE_MINIMUM.md).
+
+## Streams immediate-below/at-minimum feature levels (2026-11-04)
+
+[`kafka44-streams-minimum-20261104.json`](../../qualification/kafka44-streams-minimum-20261104.json)
+records paired streams.version0 rejection of Heartbeatv1 and
+TopologyDescriptionUpdatev0 with UNSUPPORTED_VERSION. Explicit upgrade1 then
+passes the nine strict positive lifecycle assertions on both endpoints. Separate
+fresh owned fixtures execute direct Java and the complete
+`aspect kafka44-streams-minimum` task (3.2s); all owned runtimes are stopped.
+The native filesystem SPI binary is pinned to source3af529aa6, not relabelled
+a current-integration build or arbitrary JVM class loading. No new default, ACL,
+coordinator-movement or crash claim follows. See [STREAMS_MINIMUM.md](STREAMS_MINIMUM.md).
