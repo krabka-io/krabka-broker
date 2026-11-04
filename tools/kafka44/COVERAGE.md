@@ -2,6 +2,26 @@
 
 This ledger maps acceptance obligations to evidence, not feature inventory. A source file, passing expected-failure test, bounded model, or green CI gate does not establish runtime parity. `qualification_pass` remains false. Paths below are repository-relative unless labeled private. Evidence baseline: `e201a1dfafd26f4ddae193a3cd1f0b340c819aa6`.
 
+## Current bounded evidence index (2026-11-04)
+
+The detailed matrix below began at the stated baseline and retains historical
+obligations. Later receipts supersede its old “pending”/“negative only” labels;
+those labels are not a current claim that executed scenarios never ran.
+
+| Surface | Executed evidence | Still not discharged by these receipts |
+| --- | --- | --- |
+| DLQ | Eight size/header/payload boundaries plus restart; historical three-node ARCHIVING crash/destination failover and lost-confirmation duplicate witnesses | Share-coordinator movement, denied destination and minimum-feature permutations |
+| Delayed uploads | Age/byte/dynamic/retention-derived delay and failure checks; pending-delay crash, natural eviction and48 exact remote reads | Interrupted upload and released/native leader-movement parity |
+| Routing | Six identity cases plus auth/preauth;40 explicit two-node before/after crash/restart assertions | Cluster replacement/pipelined rejection are not established by node-preserving restart |
+| Controller removal | Positive register/remove/retry, voter rejection, metadata32/33 boundary and same-data crash durability; native forwarding regression | Further released/native forwarding/failure/authorization-race permutations |
+| Topic-ID transactions | Modern16/legacy15 positive cases, pending single-node crash and RF3 coordinator/offsets-owner movement with commit/abort | Deterministic mid-marker cut and power-loss durability are not claimed |
+| Streams | Positive lifecycle9; durable backend13 strict set/get/delete failure/repair cases and exact-source restart, with measured legacy DeleteGroups correction | Shared-backend coordinator movement and additional minimum-level/authorization permutations |
+
+All candidate identities are pinned in their respective receipts, not silently
+relabelled final-head runs. This index is not a production/default graduation.
+`qualification_pass=false`; #1969 remains open until its acceptance matrix is
+complete or remaining failures are explicitly resolved as linked blockers.
+
 ## Six-surface matrix
 
 | Surface and invariants | Production-linked model coverage | Implementation regressions to execute | Released 4.4 oracle execution | Fault / recovery / multi-broker obligations | Actual execution receipt |
