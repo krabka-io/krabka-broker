@@ -69,17 +69,44 @@ pub(super) async fn compute_proposal(
     record: &PartitionRecord,
     policy: LeaderPolicy,
 ) -> Option<Proposal> {
-    // Kafka's `Partition.getOutOfSyncReplicas` reads the leader's log end
-    // offset once per scan, as here.
-    let leader_leo = part.log_end_offset();
+    let transition = part.lock_produce_transition().await;
+    if transition.leader_node_id != record.leader
+        || transition.leader_epoch.0 != record.leader_epoch.0
+    {
+        return None;
+    }
     let epoch_start = leader_epoch_start(part, LeaderEpoch(record.leader_epoch.0));
-    propose_with_policy(
-        &mut *part.replica_state.lock().await,
-        policy,
-        record,
-        leader_leo,
-        epoch_start,
-    )
+    let (proposal, advanced) = {
+        let mut state = part.replica_state.lock().await;
+        // A no-proposal result can also mean installation is still catching
+        // up with the image, not that its ISR is stable. Do not publish HW
+        // against the old ISR while a committed expansion awaits installation.
+        if !installed_leader_matches(&state, record) {
+            return None;
+        }
+        // Append publishes its HW under this lock after releasing the log
+        // lock. Read LEO here too: a pre-await sample could clamp an append's
+        // newer HW back down when this scan finally acquires replica state.
+        let leader_leo = part.log_end_offset();
+        let previous = state.hw;
+        let proposal = propose_with_policy(&mut state, policy, record, leader_leo, epoch_start);
+        // An ISR shrink can arrive before the scan learns that the removed
+        // follower is fenced. Its recently caught-up progress holds HW back
+        // under the old policy. Refreshing eligibility must reconsider HW even
+        // when membership needs no further proposal and no follower fetches.
+        // A proposed ISR expansion may add a replica that holds the old HW
+        // but trails LEO. Leave durability to the committed ISR installation
+        // rather than advancing past that proposed member in this scan.
+        if !part.diskless && proposal.is_none() {
+            state.recompute_hw_for_leader_append(leader_leo);
+        }
+        (proposal, state.hw > previous)
+    };
+    drop(transition);
+    if advanced {
+        part.hw_advance_notify.notify_waiters();
+    }
+    proposal
 }
 
 /// Install `policy` on `st`, then read the proposal at the current instant.
@@ -93,6 +120,18 @@ fn propose_with_policy(
 ) -> Option<Proposal> {
     st.set_policy(policy);
     proposal_at(st, record, leader_leo, epoch_start, Instant::now())
+}
+
+/// Whether the local durability authority has installed this metadata row.
+fn installed_leader_matches(st: &ReplicaState, record: &PartitionRecord) -> bool {
+    let (Some(leader), replicas) = st.leader_and_replicas() else {
+        return false;
+    };
+    leader == record.leader
+        && replicas.contains(&leader)
+        && st.isr.contains(&leader)
+        && st.current_leader_epoch == LeaderEpoch(record.leader_epoch.0)
+        && st.isr == record.isr.iter().copied().collect::<HashSet<_>>()
 }
 
 /// [`compute_proposal`] at the scan instant `now`, with the leader's log
@@ -110,17 +149,9 @@ fn proposal_at(
     let (Some(leader), replicas) = st.leader_and_replicas() else {
         return None;
     };
-    // A malformed metadata installation must never propose an ISR without its
-    // assigned leader. Normal installations establish both facts together.
-    if !replicas.contains(&leader) || !st.isr.contains(&leader) {
-        return None;
-    }
-    // The proposal carries the image's partition epoch, so it must be built
-    // on the image's ISR at the image's leader epoch. Until this leader has
-    // installed that state, wait for a later scan rather than stamp a newer
-    // epoch on an older ISR.
-    let image_isr: HashSet<NodeId> = record.isr.iter().copied().collect();
-    if st.current_leader_epoch != LeaderEpoch(record.leader_epoch.0) || image_isr != st.isr {
+    // Until this leader has installed the image's authority, wait for a
+    // later scan rather than stamp a newer epoch on an older ISR.
+    if !installed_leader_matches(st, record) {
         return None;
     }
 

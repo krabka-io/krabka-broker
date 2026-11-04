@@ -30,6 +30,8 @@ use {
 };
 
 mod alter_partition;
+#[cfg(test)]
+mod policy_watermark_tests;
 mod proposal;
 mod request_builder;
 #[cfg(test)]
@@ -155,7 +157,7 @@ mod tests {
         krabka_ids::PartitionIndex,
         krabka_metadata::MetadataImage,
         krabka_units::{hours, secs},
-        std::{sync::atomic::Ordering, time::Duration},
+        std::time::Duration,
         tempfile::tempdir,
         tokio::time::{sleep, timeout},
     };
@@ -178,7 +180,7 @@ mod tests {
             .log_dir(log_dir.path())
             .topic("t")
             .call();
-        part.current_leader.store(1, Ordering::Release);
+        part.install_replication_target(None, 1, 10).await;
         set_replica_state(&part, partition().leader_epoch(10).call(), &[
             StaleFollower {
                 node: NodeId(2),
