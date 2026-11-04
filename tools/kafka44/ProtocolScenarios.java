@@ -53,9 +53,32 @@ public class ProtocolScenarios {
         }
     }
 
+    private static AbstractResponse topologyAfterCoordinatorReady(String endpoint, AbstractRequest request) throws Exception {
+        // A fresh reference has not yet created/loaded __consumer_offsets.
+        // Resolve ownership before comparing the missing-group error; retain
+        // every loading/ownership response instead of silently normalizing it.
+        for (int attempt = 0; attempt < 40; attempt++) {
+            FindCoordinatorResponse found = (FindCoordinatorResponse) exchange(endpoint,
+                new FindCoordinatorRequest.Builder(new FindCoordinatorRequestData()
+                    .setKeyType((byte) 0).setCoordinatorKeys(List.of("kafka44-negative"))).build((short) 4));
+            var coordinator = found.coordinatorByKey("kafka44-negative").orElseThrow();
+            System.out.println("PRECONDITION\tnegative-group-coordinator\t" + found.data());
+            if (coordinator.errorCode() == 0) {
+                AbstractResponse response = exchange(endpoint, request);
+                if (!response.errorCounts().keySet().stream().anyMatch(error -> error.code() == 14 || error.code() == 15 || error.code() == 16)) return response;
+                System.out.println("RETRY\ttopology-coordinator-loading\t" + response.data());
+            } else if (coordinator.errorCode() != 14 && coordinator.errorCode() != 15 && coordinator.errorCode() != 16) {
+                throw new IllegalStateException("unexpected coordinator error " + found.data());
+            }
+            Thread.sleep(250);
+        }
+        throw new IllegalStateException("negative group coordinator did not become ready");
+    }
+
     private static void probe(String name, String endpoint, AbstractRequest request) {
         try {
-            AbstractResponse response = exchange(endpoint, request);
+            AbstractResponse response = request instanceof StreamsGroupTopologyDescriptionUpdateRequest
+                ? topologyAfterCoordinatorReady(endpoint, request) : exchange(endpoint, request);
             TreeMap<String, Integer> errors = new TreeMap<>();
             response.errorCounts().forEach((error, count) -> errors.put(error.name(), count));
             System.out.println("SCENARIO\t" + name + "\t" + errors);

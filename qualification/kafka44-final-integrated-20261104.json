@@ -1,0 +1,882 @@
+{
+  "date": "2026-11-04",
+  "qualification_pass": false,
+  "status": "bounded-final-integrated-evidence-not-full-qualification",
+  "candidate": {
+    "source_revision": "d4890ecde31f111c21f17de6e67e866b1c04d2cb",
+    "sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+    "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+    "source_trees": {
+      "crates/broker": "787adc2e68c1e5d5e1e0b7af2ac4d6a75fd06213",
+      "crates/verified": "45d6fefe1af5d6e89db7cac9685848be2aed55c9",
+      "crates/raft": "823abe060b84580397e8c8cef5469845b80102e0"
+    },
+    "production_build": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo build -p krabka-broker --bin krabka-broker",
+    "build_complete_before_copy": true,
+    "copy_after_all_native_test_linking": true
+  },
+  "merged_dlq_revision": "35f29a0b4e177c1bb8a41eeefe3ef3ebde466a95",
+  "native_checks_revision": "95ea069171a87f16eccf76e3c9b2f29fa5b85a07",
+  "checks_build_tree_equivalence": "git diff 95ea069 d4890ecd -- crates Cargo.toml Cargo.lock is empty; production build executed after actual main merge",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "wire_enabled_oracle": {
+    "protocol": {
+      "oracle": {
+        "routing-no-identity": "{NONE=1}",
+        "routing-cluster-only": "{INVALID_REQUEST=1}",
+        "routing-node-only": "{INVALID_REQUEST=1}",
+        "routing-correct-identity": "{NONE=1}",
+        "routing-wrong-cluster": "{REBOOTSTRAP_REQUIRED=1}",
+        "routing-controller-wrong-cluster": "{NONE=1}",
+        "controller-register-nonvoter": "{NONE=1}",
+        "controller-remove-registered": "{}",
+        "controller-repeat-remove": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "controller-reregister": "{NONE=1}",
+        "controller-forwarded-remove": "{}",
+        "controller-refuse-voter": "{INVALID_REQUEST=1}",
+        "controller-unknown-id": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "controller-api-on-broker": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "topology-no-plugin": "{GROUP_ID_NOT_FOUND=1}",
+        "streams-invalid-group": "{INVALID_REQUEST=1}",
+        "txn-topic-id-missing-group": "{UNKNOWN_TOPIC_ID=1}"
+      },
+      "enabled": {
+        "routing-no-identity": "{NONE=1}",
+        "routing-cluster-only": "{INVALID_REQUEST=1}",
+        "routing-node-only": "{INVALID_REQUEST=1}",
+        "routing-correct-identity": "{NONE=1}",
+        "routing-wrong-cluster": "{REBOOTSTRAP_REQUIRED=1}",
+        "routing-controller-wrong-cluster": "{NONE=1}",
+        "controller-register-nonvoter": "{NONE=1}",
+        "controller-remove-registered": "{}",
+        "controller-repeat-remove": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "controller-reregister": "{NONE=1}",
+        "controller-forwarded-remove": "{}",
+        "controller-refuse-voter": "{INVALID_REQUEST=1}",
+        "controller-unknown-id": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "controller-api-on-broker": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "topology-no-plugin": "{GROUP_ID_NOT_FOUND=1}",
+        "streams-invalid-group": "{INVALID_REQUEST=1}",
+        "txn-topic-id-missing-group": "{UNKNOWN_TOPIC_ID=1}"
+      },
+      "count_per_endpoint": 17
+    },
+    "config": {
+      "oracle": {
+        "discover-remote.copy.lag.ms": "0",
+        "validate-remote.copy.lag.ms=-2": "INVALID_CONFIG",
+        "validate-remote.copy.lag.ms=-1": "NONE",
+        "validate-remote.copy.lag.ms=0": "NONE",
+        "validate-remote.copy.lag.ms=1000": "NONE",
+        "validate-remote.copy.lag.ms=not-a-number": "INVALID_CONFIG",
+        "discover-remote.copy.lag.bytes": "-1",
+        "validate-remote.copy.lag.bytes=-2": "INVALID_CONFIG",
+        "validate-remote.copy.lag.bytes=-1": "NONE",
+        "validate-remote.copy.lag.bytes=0": "NONE",
+        "validate-remote.copy.lag.bytes=1000": "NONE",
+        "validate-remote.copy.lag.bytes=not-a-number": "INVALID_CONFIG",
+        "validate-only-preserves-config": "PASS"
+      },
+      "enabled": {
+        "discover-remote.copy.lag.ms": "0",
+        "validate-remote.copy.lag.ms=-2": "INVALID_CONFIG",
+        "validate-remote.copy.lag.ms=-1": "NONE",
+        "validate-remote.copy.lag.ms=0": "NONE",
+        "validate-remote.copy.lag.ms=1000": "NONE",
+        "validate-remote.copy.lag.ms=not-a-number": "INVALID_CONFIG",
+        "discover-remote.copy.lag.bytes": "-1",
+        "validate-remote.copy.lag.bytes=-2": "INVALID_CONFIG",
+        "validate-remote.copy.lag.bytes=-1": "NONE",
+        "validate-remote.copy.lag.bytes=0": "NONE",
+        "validate-remote.copy.lag.bytes=1000": "NONE",
+        "validate-remote.copy.lag.bytes=not-a-number": "INVALID_CONFIG",
+        "validate-only-preserves-config": "PASS"
+      },
+      "count_per_endpoint": 13
+    },
+    "authorization": {
+      "oracle": {
+        "preauth-routing-identity": "{NONE=1}",
+        "authenticated-routing-identity": "{REBOOTSTRAP_REQUIRED=1}",
+        "controller-cluster-authorization": "{CLUSTER_AUTHORIZATION_FAILED=1}",
+        "topology-group-authorization": "{GROUP_AUTHORIZATION_FAILED=1}",
+        "streams-group-authorization": "{GROUP_AUTHORIZATION_FAILED=1}",
+        "txn-transactional-id-authorization": "{TRANSACTIONAL_ID_AUTHORIZATION_FAILED=1}",
+        "controller-authorized-unknown-id": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "topology-authorized-no-plugin": "{GROUP_ID_NOT_FOUND=1}",
+        "txn-group-authorization-after-tid-allow": "{GROUP_AUTHORIZATION_FAILED=1}",
+        "txn-unknown-id-after-tid-group-allow": "{UNKNOWN_TOPIC_ID=1}"
+      },
+      "enabled": {
+        "preauth-routing-identity": "{NONE=1}",
+        "authenticated-routing-identity": "{REBOOTSTRAP_REQUIRED=1}",
+        "controller-cluster-authorization": "{CLUSTER_AUTHORIZATION_FAILED=1}",
+        "topology-group-authorization": "{GROUP_AUTHORIZATION_FAILED=1}",
+        "streams-group-authorization": "{GROUP_AUTHORIZATION_FAILED=1}",
+        "txn-transactional-id-authorization": "{TRANSACTIONAL_ID_AUTHORIZATION_FAILED=1}",
+        "controller-authorized-unknown-id": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "topology-authorized-no-plugin": "{GROUP_ID_NOT_FOUND=1}",
+        "txn-group-authorization-after-tid-allow": "{GROUP_AUTHORIZATION_FAILED=1}",
+        "txn-unknown-id-after-tid-group-allow": "{UNKNOWN_TOPIC_ID=1}"
+      },
+      "count_per_endpoint": 10
+    },
+    "transaction": {
+      "oracle": {
+        "group-coordinator": "{NONE=1}",
+        "missing-group-coordinator": "{NONE=1}",
+        "commit-coordinator": "{NONE=1}",
+        "commit-init-v5": "{NONE=1}",
+        "missing-group-v6": "{GROUP_ID_NOT_FOUND=1}",
+        "missing-group-legacy-v5": "{ILLEGAL_GENERATION=1}",
+        "commit-offset-v6": "{NONE=1}",
+        "pending-commit-invisible": "PASS",
+        "commit-end-v5": "{NONE=1}",
+        "committed-offset-visible": "PASS",
+        "abort-coordinator": "{NONE=1}",
+        "abort-init-v5": "{NONE=1}",
+        "abort-offset-v6": "{NONE=1}",
+        "pending-abort-keeps-old-offset": "PASS",
+        "abort-end-v5": "{NONE=1}",
+        "aborted-offset-not-visible": "PASS"
+      },
+      "enabled": {
+        "group-coordinator": "{NONE=1}",
+        "missing-group-coordinator": "{NONE=1}",
+        "commit-coordinator": "{NONE=1}",
+        "commit-init-v5": "{NONE=1}",
+        "missing-group-v6": "{GROUP_ID_NOT_FOUND=1}",
+        "missing-group-legacy-v5": "{ILLEGAL_GENERATION=1}",
+        "commit-offset-v6": "{NONE=1}",
+        "pending-commit-invisible": "PASS",
+        "commit-end-v5": "{NONE=1}",
+        "committed-offset-visible": "PASS",
+        "abort-coordinator": "{NONE=1}",
+        "abort-init-v5": "{NONE=1}",
+        "abort-offset-v6": "{NONE=1}",
+        "pending-abort-keeps-old-offset": "PASS",
+        "abort-end-v5": "{NONE=1}",
+        "aborted-offset-not-visible": "PASS"
+      },
+      "count_per_endpoint": 16
+    },
+    "legacy_transaction": {
+      "oracle": {
+        "group-coordinator": "{NONE=1}",
+        "missing-group-coordinator": "{NONE=1}",
+        "commit-coordinator": "{NONE=1}",
+        "commit-init-v5": "{NONE=1}",
+        "missing-group-legacy-v5": "{ILLEGAL_GENERATION=1}",
+        "commit-offset-v5": "{NONE=1}",
+        "pending-commit-invisible": "PASS",
+        "commit-end-v5": "{NONE=1}",
+        "committed-offset-visible": "PASS",
+        "abort-coordinator": "{NONE=1}",
+        "abort-init-v5": "{NONE=1}",
+        "abort-offset-v5": "{NONE=1}",
+        "pending-abort-keeps-old-offset": "PASS",
+        "abort-end-v5": "{NONE=1}",
+        "aborted-offset-not-visible": "PASS"
+      },
+      "enabled": {
+        "group-coordinator": "{NONE=1}",
+        "missing-group-coordinator": "{NONE=1}",
+        "commit-coordinator": "{NONE=1}",
+        "commit-init-v5": "{NONE=1}",
+        "missing-group-legacy-v5": "{ILLEGAL_GENERATION=1}",
+        "commit-offset-v5": "{NONE=1}",
+        "pending-commit-invisible": "PASS",
+        "commit-end-v5": "{NONE=1}",
+        "committed-offset-visible": "PASS",
+        "abort-coordinator": "{NONE=1}",
+        "abort-init-v5": "{NONE=1}",
+        "abort-offset-v5": "{NONE=1}",
+        "pending-abort-keeps-old-offset": "PASS",
+        "abort-end-v5": "{NONE=1}",
+        "aborted-offset-not-visible": "PASS"
+      },
+      "count_per_endpoint": 15
+    },
+    "streams": {
+      "oracle": {
+        "first-solicited": "PASS",
+        "second-not-solicited": "PASS",
+        "initial-not-stored": "PASS",
+        "push-success": "PASS",
+        "stored-exact-source": "PASS",
+        "leave-members": "PASS",
+        "delete-group": "PASS",
+        "recreated-solicited": "PASS",
+        "recreated-not-stored": "PASS"
+      },
+      "enabled": {
+        "first-solicited": "PASS",
+        "second-not-solicited": "PASS",
+        "initial-not-stored": "PASS",
+        "push-success": "PASS",
+        "stored-exact-source": "PASS",
+        "leave-members": "PASS",
+        "delete-group": "PASS",
+        "recreated-solicited": "PASS",
+        "recreated-not-stored": "PASS"
+      },
+      "count_per_endpoint": 9
+    }
+  },
+  "wire_counts": {
+    "enabled": 80,
+    "oracle": 80
+  },
+  "discovery_exit_codes": {
+    "oracle": {
+      "api-versions": 0,
+      "features": 0,
+      "broker-configs": 0
+    },
+    "default": {
+      "api-versions": 0,
+      "features": 0,
+      "broker-configs": 0
+    },
+    "enabled": {
+      "api-versions": 0,
+      "features": 0,
+      "broker-configs": 0
+    }
+  },
+  "api_differences": {
+    "default": [
+      {
+        "api": "AllocateProducerIds(67)",
+        "oracle": null,
+        "candidate": "0"
+      },
+      {
+        "api": "AlterPartition(56)",
+        "oracle": null,
+        "candidate": "2 to 3"
+      },
+      {
+        "api": "ApiVersions(18)",
+        "oracle": "0 to 5",
+        "candidate": "0 to 4"
+      },
+      {
+        "api": "AssignReplicasToDirs(73)",
+        "oracle": null,
+        "candidate": "0"
+      },
+      {
+        "api": "BrokerHeartbeat(63)",
+        "oracle": null,
+        "candidate": "0 to 2"
+      },
+      {
+        "api": "BrokerRegistration(62)",
+        "oracle": null,
+        "candidate": "0 to 4"
+      },
+      {
+        "api": "ControllerRegistration(70)",
+        "oracle": null,
+        "candidate": "0"
+      },
+      {
+        "api": "DeleteGroups(42)",
+        "oracle": "0 to 3",
+        "candidate": "0 to 2"
+      },
+      {
+        "api": "FetchSnapshot(59)",
+        "oracle": null,
+        "candidate": "0 to 1"
+      },
+      {
+        "api": "StreamsGroupDescribe(89)",
+        "oracle": "0 to 1",
+        "candidate": "0"
+      },
+      {
+        "api": "StreamsGroupHeartbeat(88)",
+        "oracle": "0 to 1",
+        "candidate": "0"
+      },
+      {
+        "api": "StreamsGroupTopologyDescriptionUpdate(93)",
+        "oracle": "0",
+        "candidate": "UNSUPPORTED"
+      },
+      {
+        "api": "TxnOffsetCommit(28)",
+        "oracle": "0 to 6",
+        "candidate": "0 to 5"
+      },
+      {
+        "api": "UNKNOWN(1020)",
+        "oracle": null,
+        "candidate": "0"
+      },
+      {
+        "api": "UnregisterController(94)",
+        "oracle": "0",
+        "candidate": "UNSUPPORTED"
+      },
+      {
+        "api": "UpdateRaftVoter(82)",
+        "oracle": null,
+        "candidate": "0"
+      }
+    ],
+    "enabled": [
+      {
+        "api": "AllocateProducerIds(67)",
+        "oracle": null,
+        "candidate": "0"
+      },
+      {
+        "api": "AlterPartition(56)",
+        "oracle": null,
+        "candidate": "2 to 3"
+      },
+      {
+        "api": "AssignReplicasToDirs(73)",
+        "oracle": null,
+        "candidate": "0"
+      },
+      {
+        "api": "BrokerHeartbeat(63)",
+        "oracle": null,
+        "candidate": "0 to 2"
+      },
+      {
+        "api": "BrokerRegistration(62)",
+        "oracle": null,
+        "candidate": "0 to 4"
+      },
+      {
+        "api": "ControllerRegistration(70)",
+        "oracle": null,
+        "candidate": "0"
+      },
+      {
+        "api": "FetchSnapshot(59)",
+        "oracle": null,
+        "candidate": "0 to 1"
+      },
+      {
+        "api": "InitProducerId(22)",
+        "oracle": "0 to 5",
+        "candidate": "0 to 6"
+      },
+      {
+        "api": "UNKNOWN(1020)",
+        "oracle": null,
+        "candidate": "0"
+      },
+      {
+        "api": "UpdateRaftVoter(82)",
+        "oracle": null,
+        "candidate": "0"
+      }
+    ]
+  },
+  "default_gates_differences": {
+    "protocol": [
+      {
+        "scenario": "routing-no-identity",
+        "oracle": "{NONE=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-cluster-only",
+        "oracle": "{INVALID_REQUEST=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-node-only",
+        "oracle": "{INVALID_REQUEST=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-correct-identity",
+        "oracle": "{NONE=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-wrong-cluster",
+        "oracle": "{REBOOTSTRAP_REQUIRED=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "routing-controller-wrong-cluster",
+        "oracle": "{NONE=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "controller-remove-registered",
+        "oracle": "{}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "controller-repeat-remove",
+        "oracle": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "controller-forwarded-remove",
+        "oracle": "{}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "controller-refuse-voter",
+        "oracle": "{INVALID_REQUEST=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "controller-unknown-id",
+        "oracle": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "controller-api-on-broker",
+        "oracle": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "topology-no-plugin",
+        "oracle": "{GROUP_ID_NOT_FOUND=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "streams-invalid-group",
+        "oracle": "{INVALID_REQUEST=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "txn-topic-id-missing-group",
+        "oracle": "{UNKNOWN_TOPIC_ID=1}",
+        "candidate": "TRANSPORT:EOFException"
+      }
+    ],
+    "config": [
+      {
+        "scenario": "discover-remote.copy.lag.ms",
+        "oracle": "0",
+        "candidate": "MISSING"
+      },
+      {
+        "scenario": "validate-remote.copy.lag.ms=-1",
+        "oracle": "NONE",
+        "candidate": "INVALID_CONFIG"
+      },
+      {
+        "scenario": "validate-remote.copy.lag.ms=0",
+        "oracle": "NONE",
+        "candidate": "INVALID_CONFIG"
+      },
+      {
+        "scenario": "validate-remote.copy.lag.ms=1000",
+        "oracle": "NONE",
+        "candidate": "INVALID_CONFIG"
+      },
+      {
+        "scenario": "discover-remote.copy.lag.bytes",
+        "oracle": "-1",
+        "candidate": "MISSING"
+      },
+      {
+        "scenario": "validate-remote.copy.lag.bytes=-1",
+        "oracle": "NONE",
+        "candidate": "INVALID_CONFIG"
+      },
+      {
+        "scenario": "validate-remote.copy.lag.bytes=0",
+        "oracle": "NONE",
+        "candidate": "INVALID_CONFIG"
+      },
+      {
+        "scenario": "validate-remote.copy.lag.bytes=1000",
+        "oracle": "NONE",
+        "candidate": "INVALID_CONFIG"
+      }
+    ],
+    "authorization": [
+      {
+        "scenario": "preauth-routing-identity",
+        "oracle": "{NONE=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "authenticated-routing-identity",
+        "oracle": "{REBOOTSTRAP_REQUIRED=1}",
+        "candidate": "{UNSUPPORTED_VERSION=1}"
+      },
+      {
+        "scenario": "controller-cluster-authorization",
+        "oracle": "{CLUSTER_AUTHORIZATION_FAILED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "topology-group-authorization",
+        "oracle": "{GROUP_AUTHORIZATION_FAILED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "streams-group-authorization",
+        "oracle": "{GROUP_AUTHORIZATION_FAILED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "txn-transactional-id-authorization",
+        "oracle": "{TRANSACTIONAL_ID_AUTHORIZATION_FAILED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "controller-authorized-unknown-id",
+        "oracle": "{CONTROLLER_ID_NOT_REGISTERED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "topology-authorized-no-plugin",
+        "oracle": "{GROUP_ID_NOT_FOUND=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "txn-group-authorization-after-tid-allow",
+        "oracle": "{GROUP_AUTHORIZATION_FAILED=1}",
+        "candidate": "TRANSPORT:EOFException"
+      },
+      {
+        "scenario": "txn-unknown-id-after-tid-group-allow",
+        "oracle": "{UNKNOWN_TOPIC_ID=1}",
+        "candidate": "TRANSPORT:EOFException"
+      }
+    ],
+    "transaction": [
+      {
+        "error": "missing protocol scenario rows"
+      }
+    ],
+    "legacy_transaction": [],
+    "streams": null
+  },
+  "collection_exit_code": 1,
+  "collection_exit_explanation": "Expected stable-default gating differences remain; do not infer default/released parity from enabled fixtures. All ready discovery commands exit0.",
+  "coordinator_readiness_correction": {
+    "first_collection_retained": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/evidence.json",
+    "initial_enabled_difference": [
+      {
+        "scenario": "topology-no-plugin",
+        "oracle": "{NOT_COORDINATOR=1}",
+        "candidate": "{GROUP_ID_NOT_FOUND=1}"
+      }
+    ],
+    "change": "Resolve FindCoordinator for the missing group before topology comparison; bounded14/15/16 loading retries retain raw PRECONDITION/RETRY responses. Never normalize unknown or terminal errors.",
+    "accepted_fixture_sha256": "sha256:182f4eae3728475289b0255614af76a61f0f501c784afaf938ef6ead7f964dbe"
+  },
+  "copy_fault_data": {
+    "status": "copy-smoke-pass-not-qualified",
+    "executions": {
+      "dynamic-zero-oracle": {
+        "returncode": 0,
+        "archive_record_check": 0,
+        "scenario_rows": {
+          "delay-then-dynamic-zero-copies": "PASS"
+        },
+        "record_rows": {},
+        "permission_restore": null
+      },
+      "dynamic-zero-enabled": {
+        "returncode": 0,
+        "archive_record_check": 0,
+        "scenario_rows": {
+          "delay-then-dynamic-zero-copies": "PASS"
+        },
+        "record_rows": {},
+        "permission_restore": null
+      },
+      "age-oracle": {
+        "returncode": 0,
+        "archive_record_check": 0,
+        "scenario_rows": {
+          "delay-then-age-copies": "PASS"
+        },
+        "record_rows": {},
+        "permission_restore": null
+      },
+      "age-enabled": {
+        "returncode": 0,
+        "archive_record_check": 0,
+        "scenario_rows": {
+          "delay-then-age-copies": "PASS"
+        },
+        "record_rows": {},
+        "permission_restore": null
+      },
+      "bytes-oracle": {
+        "returncode": 0,
+        "archive_record_check": 0,
+        "scenario_rows": {
+          "delay-then-bytes-copies": "PASS"
+        },
+        "record_rows": {},
+        "permission_restore": null
+      },
+      "bytes-enabled": {
+        "returncode": 0,
+        "archive_record_check": 0,
+        "scenario_rows": {
+          "delay-then-bytes-copies": "PASS"
+        },
+        "record_rows": {},
+        "permission_restore": null
+      },
+      "derived-age-oracle": {
+        "returncode": 0,
+        "archive_record_check": 0,
+        "scenario_rows": {
+          "delay-then-derived-age-copies": "PASS"
+        },
+        "record_rows": {},
+        "permission_restore": null
+      },
+      "derived-age-enabled": {
+        "returncode": 0,
+        "archive_record_check": 0,
+        "scenario_rows": {
+          "delay-then-derived-age-copies": "PASS"
+        },
+        "record_rows": {},
+        "permission_restore": null
+      },
+      "failed-upload-oracle": {
+        "returncode": 0,
+        "archive_record_check": 0,
+        "scenario_rows": {
+          "delay-then-failed-upload-copies": "PASS"
+        },
+        "record_rows": {},
+        "permission_restore": 0
+      },
+      "failed-upload-enabled": {
+        "returncode": 0,
+        "archive_record_check": 0,
+        "scenario_rows": {
+          "delay-then-failed-upload-copies": "PASS"
+        },
+        "record_rows": {},
+        "permission_restore": 0
+      }
+    }
+  },
+  "candidate_sigkill_recovery": {
+    "enabled-controller-prepare": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection-ready/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection-ready/classes",
+        "ControllerRecovery",
+        "127.0.0.1:65193",
+        "prepare"
+      ],
+      "returncode": 0,
+      "stdout": "RESPONSE\tregister-before-restart\tControllerRegistrationResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tregister-before-restart\tNONE\nRESPONSE\tremove-before-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=0, errorMessage='')\nSCENARIO\tremove-before-restart\tNONE\nRESPONSE\tremoved-before-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 424243 is not currently registered.')\nSCENARIO\tremoved-before-restart\tCONTROLLER_ID_NOT_REGISTERED\n",
+      "stderr": ""
+    },
+    "default-kill": {
+      "pid": 994613,
+      "signal": "SIGKILL",
+      "verified_executable_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c"
+    },
+    "enabled-kill": {
+      "pid": 994614,
+      "signal": "SIGKILL",
+      "verified_executable_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c"
+    },
+    "default-legacy_transaction_scenarios": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection-ready/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection-ready/classes",
+        "TransactionScenarios",
+        "127.0.0.1:65092",
+        "recover",
+        "kafka44-txn-43646961-9073-4a1d-83ba-439d0f8d8e6c",
+        "kafka44-group-43646961-9073-4a1d-83ba-439d0f8d8e6c",
+        "6CHicORUSwqWV_E6exlmow"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\trestart-preserves-topic-id\tPASS\nOBSERVATION\trestart-preserves-commit-not-abort\t7\tstable=true\tattempt=0\nSCENARIO\trestart-preserves-commit-not-abort\tPASS\n",
+      "stderr": ""
+    },
+    "enabled-transaction_scenarios": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection-ready/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection-ready/classes",
+        "TransactionScenarios",
+        "127.0.0.1:65192",
+        "recover",
+        "kafka44-txn-60381654-a041-43d0-8f6a-acc48cfdbdc5",
+        "kafka44-group-60381654-a041-43d0-8f6a-acc48cfdbdc5",
+        "JxlyZGAWS027GeHm7zUGJQ"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\trestart-preserves-topic-id\tPASS\nOBSERVATION\trestart-preserves-commit-not-abort\t7\tstable=true\tattempt=0\nSCENARIO\trestart-preserves-commit-not-abort\tPASS\n",
+      "stderr": ""
+    },
+    "enabled-legacy_transaction_scenarios": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection-ready/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection-ready/classes",
+        "TransactionScenarios",
+        "127.0.0.1:65192",
+        "recover",
+        "kafka44-txn-2e8afe40-52f8-44d5-93c9-f299f43de536",
+        "kafka44-group-2e8afe40-52f8-44d5-93c9-f299f43de536",
+        "QS03LCfOSE6jrIyYgk-UhQ"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\trestart-preserves-topic-id\tPASS\nOBSERVATION\trestart-preserves-commit-not-abort\t7\tstable=true\tattempt=0\nSCENARIO\trestart-preserves-commit-not-abort\tPASS\n",
+      "stderr": ""
+    },
+    "enabled-controller-after-crash": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection-ready/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection-ready/classes",
+        "ControllerRecovery",
+        "127.0.0.1:65193",
+        "recover"
+      ],
+      "returncode": 0,
+      "stdout": "RESPONSE\tremoved-after-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 424243 is not currently registered.')\nSCENARIO\tremoved-after-restart\tCONTROLLER_ID_NOT_REGISTERED\n",
+      "stderr": ""
+    }
+  },
+  "released_data_upgrade_rollback": {
+    "status": "scoped-pass",
+    "candidate_exit": 0,
+    "previous_image": "ghcr.io/krabka-io/krabka-broker@sha256:577a686c1b24a5a655ec8a2a82c877e119e3dd3f07b5fa617e91d05851714e1e",
+    "cases": {
+      "seed": {
+        "exact-records-readable": "PASS"
+      },
+      "upgrade": {
+        "identity-features-offset-preserved": "PASS",
+        "unsupported-finalization-refused-without-mutation": "PASS",
+        "exact-records-readable": "PASS"
+      },
+      "rollback": {
+        "identity-features-offset-preserved": "PASS",
+        "exact-records-readable": "PASS"
+      }
+    }
+  },
+  "checks": {
+    "shutdown_blocked_cell_lock": "1passed",
+    "streams_cleanup_7381_schedules": "1passed3.43s",
+    "native_integration": {
+      "passed": 43,
+      "suite_counts": [
+        1,
+        2,
+        8,
+        1,
+        7,
+        23,
+        1
+      ]
+    },
+    "workspace_all_targets_clippy": "passed4m53s",
+    "production_build": "passed49.57s",
+    "axl": "568passed32suites",
+    "cpd": "0clones",
+    "formatter": "passed",
+    "check_scripts": "passed27scripts",
+    "diff_check": "passed"
+  },
+  "limits": [
+    "Defaults unchanged; released API/feature/configuration graduation and issue1969/1970 completion are not justified",
+    "Enabled discovery retains additional/trunk APIs (including InitProducerId6); exact released ceilings are not blindly promoted",
+    "Streams positive9 uses reference in-memory topology storage; custom backend fault/movement and broader plugin parity remain separate",
+    "SIGKILL checks completed RF1 transactions and controller deletion, not host power loss or released pending-marker/multibroker transaction differential",
+    "Scoped copies verify uploaded prefix CRC/records and tested upload-access retry, not fsync, mid-copy crash, metadata-write failure or complete remote durability",
+    "Full six-surface/default/minimum-level/fault qualification remains incomplete; bounded1975 progress may land without closing1969 or graduating1970"
+  ],
+  "raw_artifacts": {
+    "0": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/evidence.json",
+      "sha256": "76ca5aa13ae0657ca9e2727fd36c688c4d29675f720c2bd9a00e6ca982fd5698"
+    },
+    "1": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection-ready/evidence.json",
+      "sha256": "e3a8bb09b6d57ac123f8be5437a0c6248924df17aaafe2fb14a5d76bd2b23d11"
+    },
+    "2": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/evidence.json",
+      "sha256": "a049502183ca46c0872d5825d8d9c31385c886ae9092cfbdca2dd95573ed4fad"
+    },
+    "3": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-upgrade/evidence.json",
+      "sha256": "bfaaff238c6920f8d544593404102dcda83a9a9a9be8e7148d19303a6d70ec66"
+    },
+    "4": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-crash-recovery.json",
+      "sha256": "8490a95a0852b1a01ecbe69c141199d63b284f3ca1f632767b425237c89f3720"
+    },
+    "5": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/binary.json",
+      "sha256": "51c2251746dd72aa2982d1a218c031f126325c8d810fa124d0cf12a18309d856"
+    },
+    "6": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/default/effective.toml",
+      "sha256": "df62c041fbad74c57744b7f41682321c65ae261d1b2ca8224970a70c66db4b07"
+    },
+    "7": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/enabled/effective.toml",
+      "sha256": "ee36aa89a11d41f526720dc7369670782504b2cb67f9094fc8b74d47b520baa4"
+    },
+    "8": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/tools/kafka44/ProtocolScenarios.java",
+      "sha256": "182f4eae3728475289b0255614af76a61f0f501c784afaf938ef6ead7f964dbe"
+    },
+    "9": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-final-shutdown-20261104.log",
+      "sha256": "85f4a8f9639c12b2c164c949318ca1cef1acfeea5e249eaf79ce1db3db5bfd00"
+    },
+    "10": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-final-streams-model-20261104.log",
+      "sha256": "bc0f505bfa1990709e12de711fb539471f8773d3d2885dea4dbd05f2caa91784"
+    },
+    "11": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-final-native-20261104.log",
+      "sha256": "83ef262bb678d0b738ff00181a516abae2e191cc51ee27d5648a59854b532f4c"
+    },
+    "12": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-final-clippy-20261104.log",
+      "sha256": "6e9ebcabaf0241997a3dcbf0792a924d843828ad646a9cfd42ce931105fb794c"
+    },
+    "13": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-final-production-build-20261104.log",
+      "sha256": "2791d33092d96579c5d297d7c0a1854f4a49569da10d247e7c174257589fd2c1"
+    },
+    "14": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-final-axl-20261104.log",
+      "sha256": "f384053f5f075daac9246d24fdd53bf8c4d53094bb958e9af2443a207131673f"
+    },
+    "15": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-final-cpd-20261104.log",
+      "sha256": "771a8d387796a0db0e9948531611cb6cb507949d9999a47bb756f0934eaa3db1"
+    },
+    "16": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-final-format-20261104.log",
+      "sha256": "0bf7f41c0fd5f890f92cfa3560c06fabc0aa6403218e4f5ea08dafa006d3a0ee"
+    },
+    "17": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-final-scripts-20261104.log",
+      "sha256": "46052bc9fbac43a87c9c290f4addfd0ff5f6fa0e33071c58a1ab59f04a3087d8"
+    }
+  }
+}
