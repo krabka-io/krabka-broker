@@ -1,0 +1,318 @@
+{
+  "qualification_pass": false,
+  "commands": [
+    {
+      "command": [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        "dlq-minimum-owned-20261104",
+        "--network",
+        "host",
+        "-e",
+        "KAFKA_NODE_ID=1",
+        "-e",
+        "KAFKA_PROCESS_ROLES=broker,controller",
+        "-e",
+        "KAFKA_LISTENERS=PLAINTEXT://127.0.0.1:64820,CONTROLLER://127.0.0.1:64821",
+        "-e",
+        "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:64820",
+        "-e",
+        "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+        "-e",
+        "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+        "-e",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "-e",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:64821",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR=1",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR=1",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_NUM_PARTITIONS=1",
+        "-e",
+        "KAFKA_HEAP_OPTS=-Xmx384m -Xms128m",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+      ],
+      "returncode": 0,
+      "stdout": "bb6b9937aec2863f3fe6abe742f78c21fb89f90fcc577fd93633b79109e78e55\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--user",
+        "1001:1001",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/enabled:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/enabled",
+        "--entrypoint",
+        "/usr/bin/krabka-format",
+        "ghcr.io/krabka-io/krabka-broker@sha256:577a686c1b24a5a655ec8a2a82c877e119e3dd3f07b5fa617e91d05851714e1e",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/enabled/data",
+        "--node-id",
+        "1",
+        "--standalone",
+        "--controller-listener",
+        "127.0.0.1:64823",
+        "--release-version",
+        "4.4-IV2",
+        "--feature",
+        "share.version=1",
+        "--unstable-feature-versions-enable"
+      ],
+      "returncode": 0,
+      "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/enabled/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id YfWCYP9ARNKfxL9VVr_xVg (6 seed record(s))\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--user",
+        "1001:1001",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/default:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/default",
+        "--entrypoint",
+        "/usr/bin/krabka-format",
+        "ghcr.io/krabka-io/krabka-broker@sha256:577a686c1b24a5a655ec8a2a82c877e119e3dd3f07b5fa617e91d05851714e1e",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/default/data",
+        "--node-id",
+        "1",
+        "--standalone",
+        "--controller-listener",
+        "127.0.0.1:64825",
+        "--release-version",
+        "4.4-IV2",
+        "--feature",
+        "share.version=1",
+        "--unstable-feature-versions-enable"
+      ],
+      "returncode": 0,
+      "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/default/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id iJqy9R7JQSKabGr2pwPKIg (6 seed record(s))\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "sha256sum",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker"
+      ],
+      "returncode": 0,
+      "stdout": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c  /home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker\n",
+      "stderr": ""
+    }
+  ],
+  "enabled": {
+    "pid": 1788717,
+    "command": [
+      "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+      "--config-file",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/enabled/effective.toml",
+      "--controller-listen-addr",
+      "127.0.0.1:64823",
+      "--metrics-listen-addr",
+      "none",
+      "--health-listen-addr",
+      "none"
+    ]
+  },
+  "default": {
+    "pid": 1788877,
+    "command": [
+      "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+      "--config-file",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/default/effective.toml",
+      "--controller-listen-addr",
+      "127.0.0.1:64825",
+      "--metrics-listen-addr",
+      "none",
+      "--health-listen-addr",
+      "none"
+    ]
+  },
+  "oracle_configuration": {
+    "KAFKA_NODE_ID": "1",
+    "KAFKA_PROCESS_ROLES": "broker,controller",
+    "KAFKA_LISTENERS": "PLAINTEXT://127.0.0.1:64820,CONTROLLER://127.0.0.1:64821",
+    "KAFKA_ADVERTISED_LISTENERS": "PLAINTEXT://127.0.0.1:64820",
+    "KAFKA_CONTROLLER_LISTENER_NAMES": "CONTROLLER",
+    "KAFKA_INTER_BROKER_LISTENER_NAME": "PLAINTEXT",
+    "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+    "KAFKA_CONTROLLER_QUORUM_VOTERS": "1@127.0.0.1:64821",
+    "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR": "1",
+    "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR": "1",
+    "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR": "1",
+    "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR": "1",
+    "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR": "1",
+    "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_NUM_PARTITIONS": "1",
+    "KAFKA_HEAP_OPTS": "-Xmx384m -Xms128m"
+  },
+  "oracle_fixture": {
+    "command": [
+      "java",
+      "-cp",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/classes",
+      "ShareMinimum",
+      "127.0.0.1:64820",
+      "enabled"
+    ],
+    "returncode": 1,
+    "stdout": "FEATURES\tbefore\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (share.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (metadata.version -> FinalizedVersionRange[min_version_level:33, max_version_level:33])}, finalizedFeaturesEpoch:33, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:33]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\n",
+    "stderr": "Exception in thread \"main\" java.lang.AssertionError: requires fresh level1\n\tat ShareMinimum.require(ShareMinimum.java:14)\n\tat ShareMinimum.main(ShareMinimum.java:20)\n"
+  },
+  "enabled_fixture": {
+    "command": [
+      "java",
+      "-cp",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/classes",
+      "ShareMinimum",
+      "127.0.0.1:64822",
+      "enabled"
+    ],
+    "returncode": 0,
+    "stdout": "FEATURES\tbefore\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:33, max_version_level:33]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:43, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:34]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nFEATURES\tlevel1\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:33, max_version_level:33]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:43, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:34]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSTATE\tlevel1\tSharePartitionOffsetInfo{startOffset=1, leaderEpoch=0, lag=0}\nSCENARIO\tshare1-reject-dlq-count0-lag0\tPASS\nFEATURES\tlevel2\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:33, max_version_level:33]), (share.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:291, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:34]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSTATE\tlevel2\tSharePartitionOffsetInfo{startOffset=1, leaderEpoch=0, lag=0}\nSCENARIO\tshare2-reject-dlq-count1-lag0\tPASS\n",
+    "stderr": ""
+  },
+  "default_fixture": {
+    "command": [
+      "java",
+      "-cp",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/classes",
+      "ShareMinimum",
+      "127.0.0.1:64824",
+      "default"
+    ],
+    "returncode": 0,
+    "stdout": "FEATURES\tbefore\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:30, max_version_level:30]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:18, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:30]), (share.version -> SupportedVersionRange[min_version:0, max_version:1]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nRESPONSE\tdefault-update\torg.apache.kafka.common.errors.InvalidUpdateVersionException: The update failed for all features since the following feature had an error: Invalid update version 2 for feature share.version. Local controller 1 only supports versions 0-1\nSCENARIO\tdefault-refuses-share2\tPASS\n",
+    "stderr": ""
+  },
+  "default_v2_format": {
+    "command": [
+      "docker",
+      "run",
+      "--rm",
+      "--user",
+      "1001:1001",
+      "-v",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/default-v2:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/default-v2",
+      "--entrypoint",
+      "/usr/bin/krabka-format",
+      "ghcr.io/krabka-io/krabka-broker@sha256:577a686c1b24a5a655ec8a2a82c877e119e3dd3f07b5fa617e91d05851714e1e",
+      "--log-dir",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/default-v2/data",
+      "--node-id",
+      "1",
+      "--standalone",
+      "--controller-listener",
+      "127.0.0.1:64825",
+      "--release-version",
+      "4.3-IV0",
+      "--feature",
+      "share.version=1"
+    ],
+    "returncode": 0,
+    "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/default-v2/data with metadata.version 4.3-IV0.\nFormatted 1 log directory with cluster-id kNccCkBzSUy7KOZSCoLanw (6 seed record(s))\n",
+    "stderr": ""
+  },
+  "default_v2": {
+    "pid": 1794682,
+    "command": [
+      "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+      "--config-file",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/default-v2/effective.toml",
+      "--controller-listen-addr",
+      "127.0.0.1:64825",
+      "--metrics-listen-addr",
+      "none",
+      "--health-listen-addr",
+      "none"
+    ]
+  },
+  "oracle_corrected": {
+    "command": [
+      "java",
+      "-cp",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/classes",
+      "ShareMinimum",
+      "127.0.0.1:64820",
+      "enabled"
+    ],
+    "returncode": 0,
+    "stdout": "FEATURES\tbefore\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:33, max_version_level:33])}, finalizedFeaturesEpoch:144, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:33]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nFEATURES\tlevel1\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:33, max_version_level:33])}, finalizedFeaturesEpoch:144, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:33]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSTATE\tlevel1\tSharePartitionOffsetInfo{startOffset=0, leaderEpoch=0, lag=0}\nSCENARIO\tshare1-reject-dlq-count0-lag0\tPASS\nFEATURES\tlevel2\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (share.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (metadata.version -> FinalizedVersionRange[min_version_level:33, max_version_level:33])}, finalizedFeaturesEpoch:249, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:33]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSTATE\tlevel2\tSharePartitionOffsetInfo{startOffset=0, leaderEpoch=0, lag=0}\nSCENARIO\tshare2-reject-dlq-count1-lag0\tPASS\n",
+    "stderr": ""
+  },
+  "retained_provisioning_failures": [
+    "Oracle image autoformatted share.version2; fixture correctly refused before any records/configs; safe downgrade of fresh task-owned oracle to1 succeeded before corrected run",
+    "Default first format metadata33 was refused by default controller maximum30. Retained logs; fresh default-v2 formatted4.3-IV0/metadata30 instead. First client waited/retried and successfully connected corrected fresh runtime."
+  ],
+  "oracle_fresh_downgrade": {
+    "command": [
+      "docker",
+      "exec",
+      "dlq-minimum-owned-20261104",
+      "/opt/kafka/bin/kafka-features.sh",
+      "--bootstrap-server",
+      "127.0.0.1:64820",
+      "downgrade",
+      "--feature",
+      "share.version=1"
+    ],
+    "returncode": 0,
+    "stdout": "share.version was downgraded to 1.\n"
+  },
+  "identity": {
+    "enabled": {
+      "pid": 1788717,
+      "proc_exe_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c"
+    },
+    "default_v2": {
+      "pid": 1794682,
+      "proc_exe_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c"
+    }
+  },
+  "configurations": {
+    "enabled": "broker_id = 1\nlog_dir = \"/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/enabled/data\"\n[[listeners]]\nname = \"PLAINTEXT\"\nbind_addr = \"127.0.0.1:64822\"\nadvertised = \"127.0.0.1:64822\"\nprotocol = \"Plaintext\"\n[server_properties]\n\"unstable.api.versions.enable\" = \"true\"\n\"unstable.feature.versions.enable\" = \"true\"\n[runtime]\ndefault_replication_factor = 1\ndefault_min_insync_replicas = 1\noffsets_topic_replication_factor = 1\ntransaction_state_replication_factor = 1\ntransaction_state_min_isr = 1\nshare_state_replication_factor = 1\nshare_state_min_isr = 1\n",
+    "default_v2": "broker_id = 1\nlog_dir = \"/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/default-v2/data\"\n[[listeners]]\nname = \"PLAINTEXT\"\nbind_addr = \"127.0.0.1:64824\"\nadvertised = \"127.0.0.1:64824\"\nprotocol = \"Plaintext\"\n[server_properties]\n\"unstable.api.versions.enable\" = \"false\"\n\"unstable.feature.versions.enable\" = \"false\"\n[runtime]\ndefault_replication_factor = 1\ndefault_min_insync_replicas = 1\noffsets_topic_replication_factor = 1\ntransaction_state_replication_factor = 1\ntransaction_state_min_isr = 1\nshare_state_replication_factor = 1\nshare_state_min_isr = 1\n"
+  },
+  "oracle_inspect": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b\n",
+  "oracle_stop": {
+    "returncode": 0,
+    "stdout": "Flag --time has been deprecated, use --timeout instead\ndlq-minimum-owned-20261104\n",
+    "stderr": ""
+  },
+  "limitations": [
+    "Immutable historical candidate binary7c4e3aa7, implementation d4890ecd; not fresh parent integration build",
+    "RF1 no coordinator movement, crash, or destination authorization injection",
+    "No default production graduation; enabled/default gates intentionally differ",
+    "AXL task parser unit executed; lifecycle-independent AXL orchestration not executed as full task. Direct same Java fixture executions retained",
+    "Source startOffset differs oracle0/native1, both lag0; no exact state parity"
+  ],
+  "checks": {
+    "java_compile": "PASS pinned released libs",
+    "axl_parser": "aspect tests kafka44-share-minimum:1 passed",
+    "diff": "git diff --check PASS"
+  },
+  "sources": {
+    "tools/kafka44/ShareMinimum.java": "ab9e2b03350013e8e5c42e2a2e160e74fd9a9e31029ff4807d2b22d49e9416ab",
+    ".aspect/kafka44_share_minimum.axl": "802ca543d8b60981ab5ab0b80471ea23b5fa26461d6af10940ca98665239dd3b",
+    ".aspect/kafka44_share_minimum_test.axl": "fb5755ae17025dee559ea4f66d080187d76f7a63231d6677617e1b966a3426d6"
+  },
+  "retained_default_failed_start_log": "{\"bootstrap_mode\":\"Bootstrap\",\"directory_id\":\"954cbffc-55cc-4593-99aa-c3d181d223d7\",\"log_dir\":\"/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/default/data\",\"message\":\"selected bootstrap mode\",\"metadata_log_dir\":\"/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-minimum/.private/runtime/default/data\",\"severity\":\"INFO\",\"target\":\"krabka_broker::startup\",\"timestamp\":\"2026-11-04T17:32:15.293101Z\"}\n{\"message\":\"controller listener is PLAINTEXT: every peer is ANONYMOUS, and each controller RPC is authorized for that principal\",\"severity\":\"WARNING\",\"target\":\"krabka_broker::broker::metadata_phase\",\"timestamp\":\"2026-11-04T17:32:15.293884Z\"}\n{\"message\":\"deriving static KIP-595 voters from controller_quorum_voters\",\"mode\":\"Bootstrap\",\"node_id\":1,\"severity\":\"INFO\",\"target\":\"krabka_broker::broker::metadata_phase\",\"timestamp\":\"2026-11-04T17:32:15.294006Z\",\"voter_count\":1}\n{\"message\":\"loaded the bootstrap records of the bootstrap checkpoint\",\"records\":6,\"severity\":\"INFO\",\"target\":\"krabka_raft::kraft::controller::startup\",\"timestamp\":\"2026-11-04T17:32:15.295085Z\"}\n{\"addr\":\"127.0.0.1:64825\",\"message\":\"controller started\",\"node_id\":1,\"severity\":\"INFO\",\"target\":\"krabka_raft::controller::startup\",\"timestamp\":\"2026-11-04T17:32:15.295352Z\"}\n{\"addr\":\"127.0.0.1:64825\",\"message\":\"controller listener started\",\"severity\":\"INFO\",\"target\":\"krabka_raft::server\",\"timestamp\":\"2026-11-04T17:32:15.295381Z\"}\n{\"message\":\"kraft: performing controller activation. The metadata log appears to be empty: appending the bootstrap records\",\"metadata_version\":33,\"records\":7,\"severity\":\"INFO\",\"target\":\"krabka_raft::kraft::controller::activation\",\"timestamp\":\"2026-11-04T17:32:15.297516Z\"}\n{\"message\":\"controller stopping: it replayed an unsupported feature level\",\"refusal\":\"Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=33), but this controller only supports versions 7-30\",\"severity\":\"ERROR\",\"target\":\"krabka_raft::controller::startup\",\"timestamp\":\"2026-11-04T17:32:15.298994Z\"}\n{\"attempt\":1,\"error\":\"controller shut down\",\"message\":\"startup metadata submit retry\",\"operation\":\"broker self-registration\",\"severity\":\"WARNING\",\"target\":\"krabka_broker::broker::registration\",\"timestamp\":\"2026-11-04T17:32:15.299296Z\"}\n{\"error\":\"Encountered fatal fault: Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=33), but this controller only supports versions 7-30\",\"message\":\"halting: the metadata controller met a fatal fault\",\"severity\":\"ERROR\",\"target\":\"krabka_broker::startup\",\"timestamp\":\"2026-11-04T17:32:15.299435Z\"}\nError: Encountered fatal fault: Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=33), but this controller only supports versions 7-30\n",
+  "shutdown_observation": {
+    "enabled": true,
+    "default_v2": true
+  },
+  "result": "PASS oracle+enabled share1 zero DLQ/share2 one exact DLQ, both lag0; default rejects feature2"
+}

@@ -1,0 +1,14 @@
+"""Strict minimum-feature scenario validation."""
+
+load("./kafka44_share_minimum.axl", "valid_outcomes")
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+def _test_outcomes(_ctx):
+    valid = "SCENARIO\tshare1-reject-dlq-count0-lag0\tPASS\nSCENARIO\tshare2-reject-dlq-count1-lag0\tPASS"
+    check_eq("paired exact cases", valid_outcomes(valid), True)
+    for invalid in ["", valid + "\nSCENARIO\textra\tFAIL", valid + "\nSCENARIO\tshare2-reject-dlq-count1-lag0\tPASS", valid.replace("PASS", "FAIL"), valid.replace("\tPASS", "\textra\tPASS")]:
+        check_eq("reject incomplete/extra/failed/malformed", valid_outcomes(invalid), False)
+    check_eq("default", valid_outcomes("SCENARIO\tdefault-refuses-share2\tPASS", True), True)
+
+kafka44_share_minimum_tests = suite("kafka44-share-minimum", [_test_outcomes])
+test_kafka44_share_minimum = suite_task(kafka44_share_minimum_tests)

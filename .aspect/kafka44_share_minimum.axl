@@ -1,0 +1,44 @@
+"""Caller-provisioned released/candidate share1-to-share2 differential."""
+
+load("./kafka44.axl", "command_receipt")
+
+CASES = ["share1-reject-dlq-count0-lag0", "share2-reject-dlq-count1-lag0"]
+
+def valid_outcomes(output, defaults = False):
+    expected = ["default-refuses-share2"] if defaults else CASES
+    rows = [line.split("\t") for line in output.splitlines() if line.startswith("SCENARIO\t")]
+    return rows == [["SCENARIO", name, "PASS"] for name in expected]
+
+def _save(ctx, path, evidence):
+    ctx.std.fs.write(path, json.encode(evidence) + "\n")
+
+def _impl(ctx: TaskContext) -> int:
+    a = ctx.args
+    if not all([a.oracle, a.enabled, a.default, a.libs, a.output]):
+        fail("fresh caller-owned oracle/enabled level1 endpoints, default endpoint, released libs and fresh output required")
+    if command_receipt(ctx, ["mkdir", a.output])["returncode"]:
+        fail("output must not exist")
+    root = command_receipt(ctx, ["realpath", a.output])["stdout"].strip()
+    evidence = {"qualification_pass": False, "commands": {}, "status": "incomplete", "limits": ["Caller pins owned runtimes, image, executable and configuration", "Oracle/enabled must start share.version1; fixture upgrades to2", "No denied-destination or multibroker claim"]}
+    ctx.defer(_save, ctx, root + "/evidence.json", evidence)
+    commands = evidence["commands"]
+    commands["mkdir"] = command_receipt(ctx, ["mkdir", root + "/classes"])
+    commands["sources"] = command_receipt(ctx, ["sha256sum", "tools/kafka44/ShareMinimum.java"])
+    if commands["mkdir"]["returncode"] or commands["sources"]["returncode"]:
+        return 1
+    commands["compile"] = command_receipt(ctx, ["javac", "--release", "17", "-cp", a.libs + "/*", "-d", root + "/classes", "tools/kafka44/ShareMinimum.java"])
+    if commands["compile"]["returncode"]:
+        return 1
+    for side, endpoint in [("oracle", a.oracle), ("enabled", a.enabled), ("default", a.default)]:
+        result = command_receipt(ctx, ["java", "-cp", a.libs + "/*:" + root + "/classes", "ShareMinimum", endpoint, "default" if side == "default" else "enabled"], 150)
+        commands[side] = result
+        if result["returncode"] or not valid_outcomes(result["stdout"], side == "default"):
+            return 1
+    evidence["status"] = "paired-minimum-and-default-pass"
+    return 0
+
+kafka44_share_minimum = task(
+    summary = "Compare share1 rejects versus share2 DLQ writes on fresh owned brokers",
+    implementation = _impl,
+    args = {name: args.string(default = "", description = name + " (owned isolated fixture)") for name in ["oracle", "enabled", "default", "libs", "output"]},
+)
