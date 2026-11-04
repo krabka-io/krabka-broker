@@ -1,0 +1,13 @@
+"""Strict disabled/enabled Streams scenario validation."""
+
+load("./kafka44_streams_minimum.axl", "CASES", "valid_outcomes")
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+def _test_outcomes(_ctx):
+    valid = "\n".join(["SCENARIO\t" + case + "\tPASS" for case in CASES])
+    check_eq("exact cases", valid_outcomes(valid), True)
+    for invalid in ["", valid + "\nSCENARIO\textra\tFAIL", valid + "\nSCENARIO\tfirst-solicited\tPASS", valid.replace("PASS", "FAIL"), valid.replace("\tPASS", "\textra\tPASS")]:
+        check_eq("reject incomplete/extra/failed/malformed", valid_outcomes(invalid), False)
+
+kafka44_streams_minimum_tests = suite("kafka44-streams-minimum", [_test_outcomes])
+test_kafka44_streams_minimum = suite_task(kafka44_streams_minimum_tests)

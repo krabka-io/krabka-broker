@@ -1,0 +1,44 @@
+"""Caller-provisioned released/candidate Streams minimum-feature differential."""
+
+load("./kafka44.axl", "command_receipt")
+
+CASES = ["streams0-heartbeat-unsupported", "streams0-topology-update-unsupported", "first-solicited", "second-not-solicited", "initial-not-stored", "push-success", "stored-exact-source", "leave-members", "delete-group", "recreated-solicited", "recreated-not-stored"]
+
+def valid_outcomes(output):
+    expected = CASES
+    rows = [line.split("\t") for line in output.splitlines() if line.startswith("SCENARIO\t")]
+    return rows == [["SCENARIO", name, "PASS"] for name in expected]
+
+def _save(ctx, path, evidence):
+    ctx.std.fs.write(path, json.encode(evidence) + "\n")
+
+def _impl(ctx: TaskContext) -> int:
+    a = ctx.args
+    if not all([a.oracle, a.enabled, a.libs, a.output]):
+        fail("fresh caller-owned oracle/enabled Streams plugin endpoints, released libs and fresh output required")
+    if command_receipt(ctx, ["mkdir", a.output])["returncode"]:
+        fail("output must not exist")
+    root = command_receipt(ctx, ["realpath", a.output])["stdout"].strip()
+    evidence = {"qualification_pass": False, "commands": {}, "status": "incomplete", "limits": ["Caller pins owned runtimes, image, executable and configuration", "Fresh oracle/enabled only; fixture disables Streams then upgrades to1", "No denied-destination or multibroker claim"]}
+    ctx.defer(_save, ctx, root + "/evidence.json", evidence)
+    commands = evidence["commands"]
+    commands["mkdir"] = command_receipt(ctx, ["mkdir", root + "/classes"])
+    commands["sources"] = command_receipt(ctx, ["sha256sum", "tools/kafka44/ProtocolScenarios.java", "tools/kafka44/StreamsPositive.java", "tools/kafka44/StreamsMinimum.java"])
+    if commands["mkdir"]["returncode"] or commands["sources"]["returncode"]:
+        return 1
+    commands["compile"] = command_receipt(ctx, ["javac", "--release", "17", "-cp", a.libs + "/*", "-d", root + "/classes", "tools/kafka44/ProtocolScenarios.java", "tools/kafka44/StreamsPositive.java", "tools/kafka44/StreamsMinimum.java"])
+    if commands["compile"]["returncode"]:
+        return 1
+    for side, endpoint in [("oracle", a.oracle), ("enabled", a.enabled)]:
+        result = command_receipt(ctx, ["java", "-cp", a.libs + "/*:" + root + "/classes", "StreamsMinimum", endpoint], 150)
+        commands[side] = result
+        if result["returncode"] or not valid_outcomes(result["stdout"]):
+            return 1
+    evidence["status"] = "paired-streams-minimum-pass"
+    return 0
+
+kafka44_streams_minimum = task(
+    summary = "Compare disabled Streams errors then enabled lifecycle on fresh owned brokers",
+    implementation = _impl,
+    args = {name: args.string(default = "", description = name + " (owned isolated fixture)") for name in ["oracle", "enabled", "libs", "output"]},
+)
