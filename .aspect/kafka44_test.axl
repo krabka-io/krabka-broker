@@ -1,6 +1,6 @@
 """Input safety tests for the released Kafka evidence task."""
 
-load("./kafka44.axl", "api_differences", "authorization_input_problems", "input_problems", "scenario_differences", "transaction_recovery_args")
+load("./kafka44.axl", "api_differences", "dlq_results_valid", "authorization_input_problems", "input_problems", "scenario_differences", "transaction_recovery_args")
 load("./testing.axl", "check_eq", "suite", "suite_task")
 
 def _test_revision(_ctx):
@@ -65,5 +65,16 @@ def _test_transaction_recovery(_ctx):
     check_eq("sixteen modern state cases", scenario_differences(rows, rows, 16), [])
     check_eq("truncated commit-abort is not parity", len(scenario_differences(rows, rows.splitlines()[0], 16)), 1)
 
-kafka44_tests = suite("kafka44", [_test_revision, _test_candidate_pairs, _test_api_differences, _test_protocol_differences, _test_authorization_inputs, _test_authorization_differences, _test_transaction_recovery, _test_config_results, _test_streams_results])
+def _test_dlq_results(_ctx):
+    rows = ["SCENARIO\tdlq-boundary-" + c + "-" + str(i) + "\tPASS" for c in ["true", "false"] for i in range(4)]
+    output = "\n".join(rows)
+    check_eq("complete DLQ boundary", dlq_results_valid(output), True)
+    check_eq("truncated DLQ", dlq_results_valid("\n".join(rows[:-1])), False)
+    check_eq("duplicate DLQ", dlq_results_valid(output + "\n" + rows[0]), False)
+    check_eq("wrong identities", dlq_results_valid(output.replace("boundary-true-0", "boundary-true-9")), False)
+    check_eq("equal failure is not pass", dlq_results_valid(output.replace("PASS", "FAIL")), False)
+    check_eq("recovery distinct", dlq_results_valid(output, True), False)
+    check_eq("complete recovery", dlq_results_valid(output.replace("boundary", "recovery"), True), True)
+
+kafka44_tests = suite("kafka44", [_test_dlq_results, _test_revision, _test_candidate_pairs, _test_api_differences, _test_protocol_differences, _test_authorization_inputs, _test_authorization_differences, _test_transaction_recovery, _test_config_results, _test_streams_results])
 test_kafka44 = suite_task(kafka44_tests)

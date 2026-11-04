@@ -25,6 +25,7 @@ public class ShareBoundary {
           var info=admin.listShareGroupOffsets(Map.of(group,new ListShareGroupOffsetsSpec().topicPartitions(List.of(tp)))).partitionsToOffsetInfo(group).get().get(tp);
           if(info==null || !info.lag().equals(Optional.of(0L)))throw new AssertionError("nonzero lag: "+info);
           System.out.printf("group=%s source_start_offset=%d lag=%d%n",group,info.startOffset(),info.lag().orElse(-1L));
+          System.out.printf("SCENARIO\tdlq-recovery-%s-%d\tPASS%n",c,i);
         }
         return;
       }
@@ -55,6 +56,13 @@ public class ShareBoundary {
             long end=System.nanoTime()+Duration.ofSeconds(step==1?4:12).toNanos();
             while(count==0 && System.nanoTime()<end) for(var record:consumer.poll(Duration.ofMillis(200))) {
               count++;value=record.value()==null?-1:record.value().length;
+              if(!Arrays.equals(record.key(),copy?new byte[]{1}:null) || !Arrays.equals(record.value(),copy?new byte[100]:null))throw new AssertionError("incorrect DLQ payload");
+              var expectedHeaders=Map.of("__dlq.errors.topic",src,"__dlq.errors.partition","0","__dlq.errors.offset","0","__dlq.errors.group",group,"__dlq.errors.delivery.count","1","__dlq.errors.message","Offset rejected by client.");
+              if(record.headers().toArray().length!=expectedHeaders.size())throw new AssertionError("incorrect provenance header count");
+              for(var e:expectedHeaders.entrySet()) {
+                var h=record.headers().lastHeader(e.getKey());
+                if(h==null || !Arrays.equals(h.value(),e.getValue().getBytes(java.nio.charset.StandardCharsets.UTF_8)))throw new AssertionError("incorrect provenance header "+e.getKey());
+              }
               bytes=MemoryRecords.withRecords(org.apache.kafka.common.compress.Compression.NONE,new SimpleRecord(record.timestamp(),record.key(),record.value(),record.headers().toArray())).sizeInBytes();
             }
           }
@@ -62,6 +70,7 @@ public class ShareBoundary {
           int expected=step==1?0:1;
           if(count!=expected || (count>0 && value!=(copy?100:-1)))throw new AssertionError("count="+count+" value="+value+" limit="+limit+" size="+size);
           System.out.printf("copy=%s limit=%d encoded_bytes=%d dlq_count=%d value_bytes=%d%n",copy,limit,size,count,value);
+          System.out.printf("SCENARIO\tdlq-boundary-%s-%d\tPASS%n",copy,step);
         }
       }
     }

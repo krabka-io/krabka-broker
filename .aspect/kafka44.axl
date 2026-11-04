@@ -97,7 +97,7 @@ def _protocol_setup(ctx, name, output):
     # javac is local; the only linked client codecs come from the pinned oracle.
     results = [_command(ctx, ["mkdir", output + "/libs", output + "/classes"])]
     results.append(_command(ctx, ["docker", "cp", name + ":/opt/kafka/libs/.", output + "/libs/"]))
-    results.append(_command(ctx, ["javac", "--release", "17", "-cp", output + "/libs/*", "-d", output + "/classes", "tools/kafka44/ProtocolScenarios.java", "tools/kafka44/AuthorizationScenarios.java", "tools/kafka44/TransactionScenarios.java", "tools/kafka44/PendingTransactionRecovery.java", "tools/kafka44/ConfigScenarios.java", "tools/kafka44/ControllerRecovery.java", "tools/kafka44/StreamsPositive.java"]))
+    results.append(_command(ctx, ["javac", "--release", "17", "-cp", output + "/libs/*", "-d", output + "/classes", "tools/kafka44/ProtocolScenarios.java", "tools/kafka44/AuthorizationScenarios.java", "tools/kafka44/TransactionScenarios.java", "tools/kafka44/PendingTransactionRecovery.java", "tools/kafka44/ConfigScenarios.java", "tools/kafka44/ControllerRecovery.java", "tools/kafka44/StreamsPositive.java", "qualification/kafka44-dlq/ShareBoundary.java"]))
     results.append(_command(ctx, ["docker", "cp", output + "/classes", name + ":/opt/kafka/kafka44classes"]))
     return results
 
@@ -114,6 +114,15 @@ def _config_scenarios(ctx, name, bootstrap, classes):
 def _streams(ctx, name, bootstrap, classes):
     argv = ["docker", "exec", name, "java"] if name else ["docker", "run", "--rm", "--network", "host", "-v", classes + ":/opt/kafka/kafka44classes:ro", "--entrypoint", "java", IMAGE]
     return _command(ctx, argv + ["-cp", "/opt/kafka/libs/*:/opt/kafka/kafka44classes", "StreamsPositive", bootstrap, "fixture"], 180)
+
+def dlq_results_valid(output, recovery = False):
+    expected = ["dlq-" + ("recovery" if recovery else "boundary") + "-" + copy + "-" + str(i) for copy in ["true", "false"] for i in range(4)]
+    rows = [line.split("\t") for line in output.splitlines() if line.startswith("SCENARIO\t")]
+    return len(rows) == 8 and sorted([row[1] for row in rows if len(row) == 3 and row[2] == "PASS"]) == sorted(expected)
+
+def _dlq(ctx, name, bootstrap, classes, run, recover = False):
+    argv = ["docker", "exec", name, "java"] if name else ["docker", "run", "--rm", "--network", "host", "-v", classes + ":/opt/kafka/kafka44classes:ro", "--entrypoint", "java", IMAGE]
+    return _command(ctx, argv + ["-cp", "/opt/kafka/libs/*:/opt/kafka/kafka44classes", "ShareBoundary", bootstrap, run] + (["verify"] if recover else []), 240)
 
 def _authorization(ctx, name, bootstrap, classes, admin_bootstrap):
     argv = ["docker", "exec", name, "java"] if name else ["docker", "run", "--rm", "--network", "host", "-v", classes + ":/opt/kafka/kafka44classes:ro", "--entrypoint", "java", IMAGE]
@@ -147,6 +156,8 @@ def _impl(ctx: TaskContext) -> int:
     if a.protocol_scenarios and a.default_bootstrap and not (a.default_controller and a.enabled_controller):
         problems.append("protocol scenarios require both candidate controller addresses")
     problems.extend(authorization_input_problems(a.authorization_scenarios, a.protocol_scenarios, a.default_bootstrap, [a.default_auth_bootstrap, a.enabled_auth_bootstrap]))
+    if a.dlq_scenarios and not a.protocol_scenarios:
+        problems.append("DLQ scenarios require --protocol-scenarios")
     if a.streams_scenarios and not a.protocol_scenarios:
         problems.append("streams scenarios require --protocol-scenarios")
     if a.transaction_scenarios and not a.protocol_scenarios:
@@ -205,6 +216,8 @@ def _impl(ctx: TaskContext) -> int:
             "KAFKA_SUPER_USERS": "User:ANONYMOUS",
             "KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND": "false",
         })
+    if a.dlq_scenarios:
+        env.update({"KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR": "1", "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR": "1", "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_NUM_PARTITIONS": "1"})
     if a.streams_scenarios:
         env["KAFKA_GROUP_STREAMS_TOPOLOGY_DESCRIPTION_PLUGIN_CLASS"] = "org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin"
     evidence["oracle_configuration"] = env
@@ -274,6 +287,21 @@ def _impl(ctx: TaskContext) -> int:
             for side, result in evidence["streams_scenarios"].items()
             if side != "oracle"
         }
+    if a.dlq_scenarios:
+        evidence["dlq_fixture_sha256"] = text_sha256(ctx.std.fs.read_to_string("qualification/kafka44-dlq/ShareBoundary.java"))
+        run = text_sha256(a.output)[7:17]
+        evidence["dlq_run"] = run
+        evidence["dlq_scenarios"] = {"oracle": _dlq(ctx, name, "localhost:9092", absolute, run)}
+        if a.enabled_bootstrap:
+            evidence["dlq_scenarios"]["enabled"] = _dlq(ctx, "", a.enabled_bootstrap, absolute, run)
+        evidence["dlq_differences"] = {side: scenario_differences(evidence["dlq_scenarios"]["oracle"]["stdout"], result["stdout"], 8) for side, result in evidence["dlq_scenarios"].items() if side != "oracle"}
+        evidence["dlq_oracle_restart"] = _command(ctx, ["docker", "restart", "--time", "30", name], 60)
+        for _ in range(30):
+            result = _tool(ctx, ["kafka-topics.sh", "--list"], "localhost:9092", name, 10)
+            if result["returncode"] == 0:
+                break
+        evidence["dlq_restart_readiness"] = result
+        evidence["dlq_recovery"] = _dlq(ctx, name, "localhost:9092", absolute, run, True)
     if a.authorization_scenarios:
         evidence["authorization_fixture_sha256"] = text_sha256(ctx.std.fs.read_to_string("tools/kafka44/AuthorizationScenarios.java"))
         evidence["authorization_scenarios"] = {"oracle": _authorization(ctx, name, "localhost:9094", absolute, "localhost:9092")}
@@ -344,7 +372,10 @@ def _impl(ctx: TaskContext) -> int:
                     evidence["pending_after_crash"][key] = {"returncode": 1, "stdout": "Missing unique pending transaction identity"}
                 else:
                     evidence["pending_after_crash"][key] = _command(ctx, ["docker", "exec", name, "java", "-cp", "/opt/kafka/libs/*:/opt/kafka/kafka44classes", "PendingTransactionRecovery", "resolve", "localhost:9092"] + rows[0] + [key.split("-")[1]], 120)
-    failed = evidence.get("transaction_oracle_stop", {}).get("returncode", 0) != 0
+    if a.dlq_scenarios:
+        evidence["dlq_valid"] = all([r["returncode"] == 0 and dlq_results_valid(r["stdout"]) for r in evidence["dlq_scenarios"].values()]) and not any(evidence["dlq_differences"].values()) and evidence["dlq_oracle_restart"]["returncode"] == 0 and evidence["dlq_restart_readiness"]["returncode"] == 0 and evidence["dlq_recovery"]["returncode"] == 0 and dlq_results_valid(evidence["dlq_recovery"]["stdout"], True)
+    failed = not evidence.get("dlq_valid", True)
+    failed = failed or evidence.get("transaction_oracle_stop", {}).get("returncode", 0) != 0
     failed = failed or any([r["returncode"] for probes in evidence["sides"].values() for r in probes.values()])
     if a.streams_scenarios:
         failed = failed or any([r["returncode"] or len(scenario_results(r["stdout"])) != 9 for r in evidence["streams_scenarios"].values()]) or any(evidence["streams_differences"].values())
@@ -372,7 +403,7 @@ def _impl(ctx: TaskContext) -> int:
 kafka44 = task(
     summary = "Collect released Kafka 4.4 oracle/candidate evidence (not parity)",
     implementation = _impl,
-    args = {"oracle_crash_recovery": args.boolean(default = False, description = "SIGKILL only the task-owned isolated oracle before transaction recovery instead of clean restart."), "streams_scenarios": args.boolean(default = False, description = "Execute nine positive reference in-memory Streams lifecycle cases (oracle and enabled candidate only)."), "transaction_scenarios": args.boolean(default = False, description = "Execute explicit v6 commit/abort offset-state scenarios on isolated brokers."), "authorization_scenarios": args.boolean(default = False, description = "Execute synthetic SASL user authorization and preauth routing probes."), "default_auth_bootstrap": args.string(default = "", description = "Isolated default SASL listener with synthetic denied user."), "enabled_auth_bootstrap": args.string(default = "", description = "Isolated enabled SASL listener with synthetic denied user."), "protocol_scenarios": args.boolean(default = False, description = "Execute seventeen released-codec negative protocol scenarios (not qualification)."), "default_controller": args.string(default = "", description = "Isolated default controller address."), "enabled_controller": args.string(default = "", description = "Isolated enabled controller address.")} | {name: args.string(default = "", description = description) for name, description in {
+    args = {"dlq_scenarios": args.boolean(default = False, description = "Execute exact DLQ payload/size boundaries and owned-oracle restart using released share clients."), "oracle_crash_recovery": args.boolean(default = False, description = "SIGKILL only the task-owned isolated oracle before transaction recovery instead of clean restart."), "streams_scenarios": args.boolean(default = False, description = "Execute nine positive reference in-memory Streams lifecycle cases (oracle and enabled candidate only)."), "transaction_scenarios": args.boolean(default = False, description = "Execute explicit v6 commit/abort offset-state scenarios on isolated brokers."), "authorization_scenarios": args.boolean(default = False, description = "Execute synthetic SASL user authorization and preauth routing probes."), "default_auth_bootstrap": args.string(default = "", description = "Isolated default SASL listener with synthetic denied user."), "enabled_auth_bootstrap": args.string(default = "", description = "Isolated enabled SASL listener with synthetic denied user."), "protocol_scenarios": args.boolean(default = False, description = "Execute seventeen released-codec negative protocol scenarios (not qualification)."), "default_controller": args.string(default = "", description = "Isolated default controller address."), "enabled_controller": args.string(default = "", description = "Isolated enabled controller address.")} | {name: args.string(default = "", description = description) for name, description in {
         "revision": "Exact candidate commit SHA.",
         "output": "New evidence directory.",
         "default_bootstrap": "Isolated default candidate address.",
