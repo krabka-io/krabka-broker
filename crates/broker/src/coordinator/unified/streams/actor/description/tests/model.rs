@@ -210,8 +210,9 @@ async fn replay(trace: &[Action]) -> bool {
 
 #[test]
 fn streams_cleanup_stateright_actor_schedules() {
-    let runtime = Builder::new_multi_thread()
-        .worker_threads(2)
+    // Replays are sequential: run each actor schedule on the calling thread
+    // instead of paying cross-thread wakeups for every request in every trace.
+    let runtime = Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("runtime");
