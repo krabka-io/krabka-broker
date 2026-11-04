@@ -15,7 +15,7 @@ those labels are not a current claim that executed scenarios never ran.
 | Routing | Six identity cases plus auth/preauth;40 explicit two-node before/after crash/restart assertions | Cluster replacement/pipelined rejection are not established by node-preserving restart |
 | Controller removal | Positive register/remove/retry, voter rejection, metadata32/33 boundary and same-data crash durability; native forwarding regression | Further released/native forwarding/failure/authorization-race permutations |
 | Topic-ID transactions | Modern16/legacy15 positive cases, pending single-node crash and RF3 coordinator/offsets-owner movement with commit/abort | Deterministic mid-marker cut and power-loss durability are not claimed |
-| Streams | Positive lifecycle9; durable backend13 strict set/get/delete failure/repair cases and exact-source restart, with measured legacy DeleteGroups correction | Shared-backend coordinator movement and additional authorization permutations; streams0→1 minimum now measured |
+| Streams | Positive lifecycle9; durable backend13 strict set/get/delete failure/repair cases and exact-source restart, with measured legacy DeleteGroups correction | RF3 shared-backend owner movement passes; additional authorization/concurrent-write permutations unmeasured |
 
 All candidate identities are pinned in their respective receipts, not silently
 relabelled final-head runs. This index is not a production/default graduation.
@@ -358,3 +358,28 @@ through remote reads. Released leader2→3 and candidate1→2 transitions are
 explicit; configuration/initial setup failures/commands/binary7c4e3aa7 remain
 pinned. This is delayed pending-copy leader loss, not a cut during upload I/O.
 See [COPY-MOVEMENT.md](COPY-MOVEMENT.md) for the deterministic-cut limitation.
+
+## Streams shared-backend coordinator movement (2026-11-04)
+
+[`kafka44-streams-movement-20261104.json`](../../qualification/kafka44-streams-movement-20261104.json)
+records real RF3 original-owner SIGKILL and changed group owners: released1→2,
+native2→3. Both preserve STORED topology/exact source, with independent raw
+before/after topology object equality, then delete successfully on the new owner
+and recreate with no stored description. Released custom plugin nodes share the
+same actual filesystem mount; native nodes share the production filesystem SPI.
+This bounded empty-member topology case does not establish concurrent plugin
+write interruption, active-member reconciliation, fsync/power-loss or arbitrary
+JVM loading. Direct phased Java executions passed; full phased AXL orchestration
+is not claimed. See [STREAMS_MOVEMENT.md](STREAMS_MOVEMENT.md).
+
+## Actual DLQ share-state owner movement discrepancy (2026-11-04)
+
+[`kafka44-share-state-movement-20261104.json`](../../qualification/kafka44-share-state-movement-20261104.json)
+records actual state owner3→1 after source acquisition but before rejection,
+without killing source1/destination2. Released finishes with one readable DLQ
+record/lag0/no source redelivery. Candidate7c4e3aa7 yields no source redelivery
+but no consumer-readable DLQ record within15s. Offline logs contain two valid
+DLQ records and terminal source state: physical data loss is not established.
+Visibility/retry/replication remains an active blocker under
+[#1969](https://github.com/krabka-io/krabka-broker/issues/1969), not a pass.
+See [SHARE-STATE-MOVEMENT.md](SHARE-STATE-MOVEMENT.md).
