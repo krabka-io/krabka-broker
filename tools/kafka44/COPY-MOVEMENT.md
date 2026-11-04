@@ -12,7 +12,7 @@ CopyMovementProbe leader BOOTSTRAP TOPIC
 CopyMovementProbe read BOOTSTRAP TOPIC LOCAL_OFFSET0_PATH ARCHIVE
 ```
 
-Seed creates one RF3 partition with a 30-second copy-age threshold, writes48
+Seed first requires the remote metadata topic to have RF3 and ISR3, then creates one RF3 partition with a 30-second copy-age threshold, writes48
 records with exact distinct keys/64KiB payloads, validates acknowledged offsets,
 and requires no early archive files. Discover the actual leader, SIGKILL only
 that owned process, then discover a different leader through a surviving broker.

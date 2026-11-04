@@ -1,0 +1,1220 @@
+{
+  "qualification_pass": false,
+  "scope": "RF3 delayed copy old-leader SIGKILL before copy eligible, different surviving leader, natural eviction then exact remote consumer48 read",
+  "passed_sides": [
+    "released4.4.0",
+    "candidate7c4e3aa7"
+  ],
+  "oracle": {
+    "qualification_pass": false,
+    "scope": "RF3 delayed copy old-leader SIGKILL before copy eligible, different surviving leader, natural eviction then exact remote consumer48 read",
+    "image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+    "binary_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+    "commands": [
+      {
+        "command": [
+          "javac",
+          "--release",
+          "17",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "-d",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes",
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-copy-movement/tools/kafka44/CopyProbe.java",
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-copy-movement/tools/kafka44/CopyMovementProbe.java",
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-copy-movement/tools/kafka44/RecordingStorage.java"
+        ],
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "jar",
+          "cf",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/storage.jar",
+          "-C",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes",
+          "RecordingStorage.class"
+        ],
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "docker",
+          "run",
+          "-d",
+          "--network",
+          "host",
+          "--user",
+          "0",
+          "--name",
+          "qualification-copy-movement-1",
+          "-v",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime:/evidence",
+          "--entrypoint",
+          "sh",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "-c",
+          "/opt/kafka/bin/kafka-storage.sh format --ignore-formatted --cluster-id MkU3OEVBNTcwNTJENDM2Qk --release-version 4.4-IV2 --config /evidence/oracle/1/server.properties && exec /opt/kafka/bin/kafka-server-start.sh /evidence/oracle/1/server.properties"
+        ],
+        "returncode": 0,
+        "stdout": "f884a7aaa2b537d5ab276e2107c63d35a7e87814d28d8db3a3361c0c7b402650\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "docker",
+          "run",
+          "-d",
+          "--network",
+          "host",
+          "--user",
+          "0",
+          "--name",
+          "qualification-copy-movement-2",
+          "-v",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime:/evidence",
+          "--entrypoint",
+          "sh",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "-c",
+          "/opt/kafka/bin/kafka-storage.sh format --ignore-formatted --cluster-id MkU3OEVBNTcwNTJENDM2Qk --release-version 4.4-IV2 --config /evidence/oracle/2/server.properties && exec /opt/kafka/bin/kafka-server-start.sh /evidence/oracle/2/server.properties"
+        ],
+        "returncode": 0,
+        "stdout": "fef66286ed2eca41d5435bcf4d1a1403b7c44a763231ba255b26ddafd914b5d0\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "docker",
+          "run",
+          "-d",
+          "--network",
+          "host",
+          "--user",
+          "0",
+          "--name",
+          "qualification-copy-movement-3",
+          "-v",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime:/evidence",
+          "--entrypoint",
+          "sh",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "-c",
+          "/opt/kafka/bin/kafka-storage.sh format --ignore-formatted --cluster-id MkU3OEVBNTcwNTJENDM2Qk --release-version 4.4-IV2 --config /evidence/oracle/3/server.properties && exec /opt/kafka/bin/kafka-server-start.sh /evidence/oracle/3/server.properties"
+        ],
+        "returncode": 0,
+        "stdout": "8891db48007d0596e0f89ca3db54cd809a43b4e8156be757cef40338a2cd7be5\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "CopyMovementProbe",
+          "seed",
+          "127.0.0.1:62610",
+          "copy-movement-oracle-1793813679",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/oracle-archive"
+        ],
+        "returncode": 0,
+        "stdout": "SCENARIO\tdelayed-copy-seeded-rf3-48-before-movement\tPASS\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "CopyMovementProbe",
+          "leader",
+          "127.0.0.1:62610",
+          "copy-movement-oracle-1793813679"
+        ],
+        "returncode": 0,
+        "stdout": "LEADER\t2\t127.0.0.1:62620\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "docker",
+          "kill",
+          "--signal",
+          "KILL",
+          "qualification-copy-movement-2"
+        ],
+        "returncode": 0,
+        "stdout": "qualification-copy-movement-2\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "CopyMovementProbe",
+          "leader",
+          "127.0.0.1:62610",
+          "copy-movement-oracle-1793813679"
+        ],
+        "returncode": 0,
+        "stdout": "LEADER\t3\t127.0.0.1:62630\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "CopyMovementProbe",
+          "read",
+          "127.0.0.1:62610",
+          "copy-movement-oracle-1793813679",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/oracle/3/data/copy-movement-oracle-1793813679-0/00000000000000000000.log",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/oracle-archive"
+        ],
+        "returncode": 0,
+        "stdout": "WITNESS\tlocal-offset0-absent\t/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/oracle/3/data/copy-movement-oracle-1793813679-0/00000000000000000000.log\nSCENARIO\tpost-movement-eviction-read-exact-48\tPASS\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "docker",
+          "stop",
+          "qualification-copy-movement-1"
+        ],
+        "returncode": 0,
+        "stdout": "qualification-copy-movement-1\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "docker",
+          "stop",
+          "qualification-copy-movement-2"
+        ],
+        "returncode": 0,
+        "stdout": "qualification-copy-movement-2\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "docker",
+          "stop",
+          "qualification-copy-movement-3"
+        ],
+        "returncode": 0,
+        "stdout": "qualification-copy-movement-3\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+          "--log-dir",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/1/data",
+          "--node-id",
+          "1",
+          "--cluster-id",
+          "4650bf7c-4ffd-40da-a622-bdf124eebc37",
+          "--directory-id",
+          "a33f39d8-38cd-4d1e-8f72-870f903c045f",
+          "--initial-controllers",
+          "1@127.0.0.1:62711:a33f39d8-38cd-4d1e-8f72-870f903c045f,2@127.0.0.1:62721:c5655023-db95-4001-8617-f9107d149b62,3@127.0.0.1:62731:b6f0de20-78bc-4472-86ef-466b6cfa23b3",
+          "--release-version",
+          "4.4-IV2",
+          "--unstable-feature-versions-enable"
+        ],
+        "returncode": 0,
+        "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/1/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id RlC_fE_9QNqmIr3xJO68Nw (6 seed record(s))\n",
+        "stderr": ""
+      },
+      {
+        "start": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+          "--config-file",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/1/config.toml",
+          "--controller-listen-addr",
+          "127.0.0.1:62711",
+          "--metrics-listen-addr",
+          "none",
+          "--health-listen-addr",
+          "none"
+        ],
+        "pid": 1803331
+      },
+      {
+        "command": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+          "--log-dir",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/2/data",
+          "--node-id",
+          "2",
+          "--cluster-id",
+          "4650bf7c-4ffd-40da-a622-bdf124eebc37",
+          "--directory-id",
+          "c5655023-db95-4001-8617-f9107d149b62",
+          "--initial-controllers",
+          "1@127.0.0.1:62711:a33f39d8-38cd-4d1e-8f72-870f903c045f,2@127.0.0.1:62721:c5655023-db95-4001-8617-f9107d149b62,3@127.0.0.1:62731:b6f0de20-78bc-4472-86ef-466b6cfa23b3",
+          "--release-version",
+          "4.4-IV2",
+          "--unstable-feature-versions-enable"
+        ],
+        "returncode": 0,
+        "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/2/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id RlC_fE_9QNqmIr3xJO68Nw (6 seed record(s))\n",
+        "stderr": ""
+      },
+      {
+        "start": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+          "--config-file",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/2/config.toml",
+          "--controller-listen-addr",
+          "127.0.0.1:62721",
+          "--metrics-listen-addr",
+          "none",
+          "--health-listen-addr",
+          "none"
+        ],
+        "pid": 1803349
+      },
+      {
+        "command": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+          "--log-dir",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/3/data",
+          "--node-id",
+          "3",
+          "--cluster-id",
+          "4650bf7c-4ffd-40da-a622-bdf124eebc37",
+          "--directory-id",
+          "b6f0de20-78bc-4472-86ef-466b6cfa23b3",
+          "--initial-controllers",
+          "1@127.0.0.1:62711:a33f39d8-38cd-4d1e-8f72-870f903c045f,2@127.0.0.1:62721:c5655023-db95-4001-8617-f9107d149b62,3@127.0.0.1:62731:b6f0de20-78bc-4472-86ef-466b6cfa23b3",
+          "--release-version",
+          "4.4-IV2",
+          "--unstable-feature-versions-enable"
+        ],
+        "returncode": 0,
+        "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/3/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id RlC_fE_9QNqmIr3xJO68Nw (6 seed record(s))\n",
+        "stderr": ""
+      },
+      {
+        "start": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+          "--config-file",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/3/config.toml",
+          "--controller-listen-addr",
+          "127.0.0.1:62731",
+          "--metrics-listen-addr",
+          "none",
+          "--health-listen-addr",
+          "none"
+        ],
+        "pid": 1803385
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "CopyMovementProbe",
+          "seed",
+          "127.0.0.1:62710",
+          "copy-movement-candidate-1793813751",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate-archive"
+        ],
+        "returncode": 0,
+        "stdout": "SCENARIO\tdelayed-copy-seeded-rf3-48-before-movement\tPASS\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "CopyMovementProbe",
+          "leader",
+          "127.0.0.1:62710",
+          "copy-movement-candidate-1793813751"
+        ],
+        "returncode": 0,
+        "stdout": "LEADER\t3\t127.0.0.1:62730\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "CopyMovementProbe",
+          "leader",
+          "127.0.0.1:62710",
+          "copy-movement-candidate-1793813751"
+        ],
+        "returncode": 0,
+        "stdout": "LEADER\t1\t127.0.0.1:62710\n",
+        "stderr": ""
+      }
+    ],
+    "cases": [
+      {
+        "side": "oracle",
+        "topic": "copy-movement-oracle-1793813679",
+        "old_leader": 2,
+        "new_leader": 3,
+        "local_offset0": "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/oracle/3/data/copy-movement-oracle-1793813679-0/00000000000000000000.log",
+        "local_offset0_exists": false,
+        "archive_files": [
+          "oracle-archive/copy-movement-oracle-1793813679/oa8IzE1STAejSjI1O16abg/OFFSET",
+          "oracle-archive/copy-movement-oracle-1793813679/oa8IzE1STAejSjI1O16abg/PRODUCER_SNAPSHOT",
+          "oracle-archive/copy-movement-oracle-1793813679/oa8IzE1STAejSjI1O16abg/log",
+          "oracle-archive/copy-movement-oracle-1793813679/oa8IzE1STAejSjI1O16abg/LEADER_EPOCH",
+          "oracle-archive/copy-movement-oracle-1793813679/oa8IzE1STAejSjI1O16abg/TIMESTAMP",
+          "oracle-archive/copy-movement-oracle-1793813679/5qboBxvUTRqf_QdFzYzEnw/OFFSET",
+          "oracle-archive/copy-movement-oracle-1793813679/5qboBxvUTRqf_QdFzYzEnw/PRODUCER_SNAPSHOT",
+          "oracle-archive/copy-movement-oracle-1793813679/5qboBxvUTRqf_QdFzYzEnw/log",
+          "oracle-archive/copy-movement-oracle-1793813679/5qboBxvUTRqf_QdFzYzEnw/LEADER_EPOCH",
+          "oracle-archive/copy-movement-oracle-1793813679/5qboBxvUTRqf_QdFzYzEnw/TIMESTAMP",
+          "oracle-archive/copy-movement-oracle-1793813679/ShycyG4RQuKV2v_0zHDXsQ/OFFSET",
+          "oracle-archive/copy-movement-oracle-1793813679/ShycyG4RQuKV2v_0zHDXsQ/PRODUCER_SNAPSHOT",
+          "oracle-archive/copy-movement-oracle-1793813679/ShycyG4RQuKV2v_0zHDXsQ/log",
+          "oracle-archive/copy-movement-oracle-1793813679/ShycyG4RQuKV2v_0zHDXsQ/LEADER_EPOCH",
+          "oracle-archive/copy-movement-oracle-1793813679/ShycyG4RQuKV2v_0zHDXsQ/TIMESTAMP",
+          "oracle-archive/copy-movement-oracle-1793813679/09WOlnHWTumXxLkO8A9LrQ/OFFSET",
+          "oracle-archive/copy-movement-oracle-1793813679/09WOlnHWTumXxLkO8A9LrQ/PRODUCER_SNAPSHOT",
+          "oracle-archive/copy-movement-oracle-1793813679/09WOlnHWTumXxLkO8A9LrQ/log",
+          "oracle-archive/copy-movement-oracle-1793813679/09WOlnHWTumXxLkO8A9LrQ/LEADER_EPOCH",
+          "oracle-archive/copy-movement-oracle-1793813679/09WOlnHWTumXxLkO8A9LrQ/TIMESTAMP"
+        ],
+        "exact_remote_read_passed": true
+      }
+    ]
+  },
+  "candidate": {
+    "qualification_pass": false,
+    "scope": "RF3 delayed copy old-leader SIGKILL before copy eligible, different surviving leader, natural eviction then exact remote consumer48 read",
+    "image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+    "binary_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+    "commands": [
+      {
+        "command": [
+          "javac",
+          "--release",
+          "17",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "-d",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/classes",
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-copy-movement/tools/kafka44/CopyProbe.java",
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-copy-movement/tools/kafka44/CopyMovementProbe.java",
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-copy-movement/tools/kafka44/RecordingStorage.java"
+        ],
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "jar",
+          "cf",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/storage.jar",
+          "-C",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/classes",
+          "RecordingStorage.class"
+        ],
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+          "--log-dir",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/1/data",
+          "--node-id",
+          "1",
+          "--cluster-id",
+          "f1cd429e-2d88-42e9-8a89-d64ea3704e6b",
+          "--directory-id",
+          "28b37730-edbe-4bb5-a6ae-d941bc9cac9b",
+          "--initial-controllers",
+          "1@127.0.0.1:62711:28b37730-edbe-4bb5-a6ae-d941bc9cac9b,2@127.0.0.1:62721:417b661b-da05-40a5-a4d0-61e04115fbab,3@127.0.0.1:62731:8d6f3da3-03af-4c9a-a6a6-f1eae5bb002d",
+          "--release-version",
+          "4.4-IV2",
+          "--unstable-feature-versions-enable"
+        ],
+        "returncode": 0,
+        "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/1/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id 8c1Cni2IQumKidZOo3BOaw (6 seed record(s))\n",
+        "stderr": ""
+      },
+      {
+        "start": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+          "--config-file",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/1/config.toml",
+          "--controller-listen-addr",
+          "127.0.0.1:62711",
+          "--metrics-listen-addr",
+          "none",
+          "--health-listen-addr",
+          "none"
+        ],
+        "pid": 1810215
+      },
+      {
+        "command": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+          "--log-dir",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/2/data",
+          "--node-id",
+          "2",
+          "--cluster-id",
+          "f1cd429e-2d88-42e9-8a89-d64ea3704e6b",
+          "--directory-id",
+          "417b661b-da05-40a5-a4d0-61e04115fbab",
+          "--initial-controllers",
+          "1@127.0.0.1:62711:28b37730-edbe-4bb5-a6ae-d941bc9cac9b,2@127.0.0.1:62721:417b661b-da05-40a5-a4d0-61e04115fbab,3@127.0.0.1:62731:8d6f3da3-03af-4c9a-a6a6-f1eae5bb002d",
+          "--release-version",
+          "4.4-IV2",
+          "--unstable-feature-versions-enable"
+        ],
+        "returncode": 0,
+        "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/2/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id 8c1Cni2IQumKidZOo3BOaw (6 seed record(s))\n",
+        "stderr": ""
+      },
+      {
+        "start": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+          "--config-file",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/2/config.toml",
+          "--controller-listen-addr",
+          "127.0.0.1:62721",
+          "--metrics-listen-addr",
+          "none",
+          "--health-listen-addr",
+          "none"
+        ],
+        "pid": 1810233
+      },
+      {
+        "command": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+          "--log-dir",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/3/data",
+          "--node-id",
+          "3",
+          "--cluster-id",
+          "f1cd429e-2d88-42e9-8a89-d64ea3704e6b",
+          "--directory-id",
+          "8d6f3da3-03af-4c9a-a6a6-f1eae5bb002d",
+          "--initial-controllers",
+          "1@127.0.0.1:62711:28b37730-edbe-4bb5-a6ae-d941bc9cac9b,2@127.0.0.1:62721:417b661b-da05-40a5-a4d0-61e04115fbab,3@127.0.0.1:62731:8d6f3da3-03af-4c9a-a6a6-f1eae5bb002d",
+          "--release-version",
+          "4.4-IV2",
+          "--unstable-feature-versions-enable"
+        ],
+        "returncode": 0,
+        "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/3/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id 8c1Cni2IQumKidZOo3BOaw (6 seed record(s))\n",
+        "stderr": ""
+      },
+      {
+        "start": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+          "--config-file",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/3/config.toml",
+          "--controller-listen-addr",
+          "127.0.0.1:62731",
+          "--metrics-listen-addr",
+          "none",
+          "--health-listen-addr",
+          "none"
+        ],
+        "pid": 1810269
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "CopyMovementProbe",
+          "seed",
+          "127.0.0.1:62710",
+          "copy-movement-candidate-1793813872",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate-archive"
+        ],
+        "returncode": 0,
+        "stdout": "PRECONDITION\tremote-metadata-rf3-isr3-ready\nSCENARIO\tdelayed-copy-seeded-rf3-48-before-movement\tPASS\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "CopyMovementProbe",
+          "leader",
+          "127.0.0.1:62710",
+          "copy-movement-candidate-1793813872"
+        ],
+        "returncode": 0,
+        "stdout": "LEADER\t1\t127.0.0.1:62710\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "CopyMovementProbe",
+          "leader",
+          "127.0.0.1:62720",
+          "copy-movement-candidate-1793813872"
+        ],
+        "returncode": 0,
+        "stdout": "LEADER\t2\t127.0.0.1:62720\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "CopyMovementProbe",
+          "read",
+          "127.0.0.1:62720",
+          "copy-movement-candidate-1793813872",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/2/data/copy-movement-candidate-1793813872-0/00000000000000000000.log",
+          "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate-archive"
+        ],
+        "returncode": 0,
+        "stdout": "WITNESS\tlocal-offset0-absent\t/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/2/data/copy-movement-candidate-1793813872-0/00000000000000000000.log\nSCENARIO\tpost-movement-eviction-read-exact-48\tPASS\n",
+        "stderr": ""
+      }
+    ],
+    "cases": [
+      {
+        "side": "candidate",
+        "topic": "copy-movement-candidate-1793813872",
+        "old_leader": 1,
+        "new_leader": 2,
+        "local_offset0": "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/2/data/copy-movement-candidate-1793813872-0/00000000000000000000.log",
+        "local_offset0_exists": false,
+        "archive_files": [
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000015-tlxrhdOfSs6x6dw4tP8lUw.snapshot",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000030-5w_w816mQQy7r4fEkolPuQ.leader_epoch_checkpoint",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000000-2mkpIQvpTPiLOJYPZBYISQ.log",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000000-2mkpIQvpTPiLOJYPZBYISQ.leader_epoch_checkpoint",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000000-2mkpIQvpTPiLOJYPZBYISQ.index",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000030-5w_w816mQQy7r4fEkolPuQ.snapshot",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000015-tlxrhdOfSs6x6dw4tP8lUw.index",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000015-tlxrhdOfSs6x6dw4tP8lUw.log",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000015-tlxrhdOfSs6x6dw4tP8lUw.leader_epoch_checkpoint",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000000-2mkpIQvpTPiLOJYPZBYISQ.timeindex",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000030-5w_w816mQQy7r4fEkolPuQ.timeindex",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000030-5w_w816mQQy7r4fEkolPuQ.index",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000015-tlxrhdOfSs6x6dw4tP8lUw.timeindex",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000030-5w_w816mQQy7r4fEkolPuQ.log",
+          "candidate-archive/copy-movement-candidate-1793813872-0-HHdqzA-dT--_Igt-47-ibg/00000000000000000000-2mkpIQvpTPiLOJYPZBYISQ.snapshot"
+        ],
+        "exact_remote_read_passed": true
+      }
+    ]
+  },
+  "failed_attempts": [
+    {
+      "qualification_pass": false,
+      "scope": "RF3 delayed copy old-leader SIGKILL before copy eligible, different surviving leader, natural eviction then exact remote consumer48 read",
+      "image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+      "binary_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+      "commands": [
+        {
+          "command": [
+            "javac",
+            "--release",
+            "17",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+            "-d",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-copy-movement/tools/kafka44/CopyProbe.java",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-copy-movement/tools/kafka44/CopyMovementProbe.java",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-copy-movement/tools/kafka44/RecordingStorage.java"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "jar",
+            "cf",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/storage.jar",
+            "-C",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes",
+            "RecordingStorage.class"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "docker",
+            "run",
+            "-d",
+            "--network",
+            "host",
+            "--user",
+            "0",
+            "--name",
+            "qualification-copy-movement-1",
+            "-v",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime:/evidence",
+            "--entrypoint",
+            "sh",
+            "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+            "-c",
+            "/opt/kafka/bin/kafka-storage.sh format --ignore-formatted --cluster-id MkU3OEVBNTcwNTJENDM2Qk --release-version 4.4-IV2 --config /evidence/oracle/1/server.properties && exec /opt/kafka/bin/kafka-server-start.sh /evidence/oracle/1/server.properties"
+          ],
+          "returncode": 0,
+          "stdout": "f884a7aaa2b537d5ab276e2107c63d35a7e87814d28d8db3a3361c0c7b402650\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "docker",
+            "run",
+            "-d",
+            "--network",
+            "host",
+            "--user",
+            "0",
+            "--name",
+            "qualification-copy-movement-2",
+            "-v",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime:/evidence",
+            "--entrypoint",
+            "sh",
+            "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+            "-c",
+            "/opt/kafka/bin/kafka-storage.sh format --ignore-formatted --cluster-id MkU3OEVBNTcwNTJENDM2Qk --release-version 4.4-IV2 --config /evidence/oracle/2/server.properties && exec /opt/kafka/bin/kafka-server-start.sh /evidence/oracle/2/server.properties"
+          ],
+          "returncode": 0,
+          "stdout": "fef66286ed2eca41d5435bcf4d1a1403b7c44a763231ba255b26ddafd914b5d0\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "docker",
+            "run",
+            "-d",
+            "--network",
+            "host",
+            "--user",
+            "0",
+            "--name",
+            "qualification-copy-movement-3",
+            "-v",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime:/evidence",
+            "--entrypoint",
+            "sh",
+            "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+            "-c",
+            "/opt/kafka/bin/kafka-storage.sh format --ignore-formatted --cluster-id MkU3OEVBNTcwNTJENDM2Qk --release-version 4.4-IV2 --config /evidence/oracle/3/server.properties && exec /opt/kafka/bin/kafka-server-start.sh /evidence/oracle/3/server.properties"
+          ],
+          "returncode": 0,
+          "stdout": "8891db48007d0596e0f89ca3db54cd809a43b4e8156be757cef40338a2cd7be5\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+            "CopyMovementProbe",
+            "seed",
+            "127.0.0.1:62610",
+            "copy-movement-oracle-1793813679",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/oracle-archive"
+          ],
+          "returncode": 0,
+          "stdout": "SCENARIO\tdelayed-copy-seeded-rf3-48-before-movement\tPASS\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+            "CopyMovementProbe",
+            "leader",
+            "127.0.0.1:62610",
+            "copy-movement-oracle-1793813679"
+          ],
+          "returncode": 0,
+          "stdout": "LEADER\t2\t127.0.0.1:62620\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "docker",
+            "kill",
+            "--signal",
+            "KILL",
+            "qualification-copy-movement-2"
+          ],
+          "returncode": 0,
+          "stdout": "qualification-copy-movement-2\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+            "CopyMovementProbe",
+            "leader",
+            "127.0.0.1:62610",
+            "copy-movement-oracle-1793813679"
+          ],
+          "returncode": 0,
+          "stdout": "LEADER\t3\t127.0.0.1:62630\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+            "CopyMovementProbe",
+            "read",
+            "127.0.0.1:62610",
+            "copy-movement-oracle-1793813679",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/oracle/3/data/copy-movement-oracle-1793813679-0/00000000000000000000.log",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/oracle-archive"
+          ],
+          "returncode": 0,
+          "stdout": "WITNESS\tlocal-offset0-absent\t/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/oracle/3/data/copy-movement-oracle-1793813679-0/00000000000000000000.log\nSCENARIO\tpost-movement-eviction-read-exact-48\tPASS\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "docker",
+            "stop",
+            "qualification-copy-movement-1"
+          ],
+          "returncode": 0,
+          "stdout": "qualification-copy-movement-1\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "docker",
+            "stop",
+            "qualification-copy-movement-2"
+          ],
+          "returncode": 0,
+          "stdout": "qualification-copy-movement-2\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "docker",
+            "stop",
+            "qualification-copy-movement-3"
+          ],
+          "returncode": 0,
+          "stdout": "qualification-copy-movement-3\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+            "--log-dir",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/1/data",
+            "--node-id",
+            "1",
+            "--cluster-id",
+            "4650bf7c-4ffd-40da-a622-bdf124eebc37",
+            "--directory-id",
+            "a33f39d8-38cd-4d1e-8f72-870f903c045f",
+            "--initial-controllers",
+            "1@127.0.0.1:62711:a33f39d8-38cd-4d1e-8f72-870f903c045f,2@127.0.0.1:62721:c5655023-db95-4001-8617-f9107d149b62,3@127.0.0.1:62731:b6f0de20-78bc-4472-86ef-466b6cfa23b3",
+            "--release-version",
+            "4.4-IV2",
+            "--unstable-feature-versions-enable"
+          ],
+          "returncode": 0,
+          "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/1/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id RlC_fE_9QNqmIr3xJO68Nw (6 seed record(s))\n",
+          "stderr": ""
+        },
+        {
+          "start": [
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+            "--config-file",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/1/config.toml",
+            "--controller-listen-addr",
+            "127.0.0.1:62711",
+            "--metrics-listen-addr",
+            "none",
+            "--health-listen-addr",
+            "none"
+          ],
+          "pid": 1803331
+        },
+        {
+          "command": [
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+            "--log-dir",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/2/data",
+            "--node-id",
+            "2",
+            "--cluster-id",
+            "4650bf7c-4ffd-40da-a622-bdf124eebc37",
+            "--directory-id",
+            "c5655023-db95-4001-8617-f9107d149b62",
+            "--initial-controllers",
+            "1@127.0.0.1:62711:a33f39d8-38cd-4d1e-8f72-870f903c045f,2@127.0.0.1:62721:c5655023-db95-4001-8617-f9107d149b62,3@127.0.0.1:62731:b6f0de20-78bc-4472-86ef-466b6cfa23b3",
+            "--release-version",
+            "4.4-IV2",
+            "--unstable-feature-versions-enable"
+          ],
+          "returncode": 0,
+          "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/2/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id RlC_fE_9QNqmIr3xJO68Nw (6 seed record(s))\n",
+          "stderr": ""
+        },
+        {
+          "start": [
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+            "--config-file",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/2/config.toml",
+            "--controller-listen-addr",
+            "127.0.0.1:62721",
+            "--metrics-listen-addr",
+            "none",
+            "--health-listen-addr",
+            "none"
+          ],
+          "pid": 1803349
+        },
+        {
+          "command": [
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+            "--log-dir",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/3/data",
+            "--node-id",
+            "3",
+            "--cluster-id",
+            "4650bf7c-4ffd-40da-a622-bdf124eebc37",
+            "--directory-id",
+            "b6f0de20-78bc-4472-86ef-466b6cfa23b3",
+            "--initial-controllers",
+            "1@127.0.0.1:62711:a33f39d8-38cd-4d1e-8f72-870f903c045f,2@127.0.0.1:62721:c5655023-db95-4001-8617-f9107d149b62,3@127.0.0.1:62731:b6f0de20-78bc-4472-86ef-466b6cfa23b3",
+            "--release-version",
+            "4.4-IV2",
+            "--unstable-feature-versions-enable"
+          ],
+          "returncode": 0,
+          "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/3/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id RlC_fE_9QNqmIr3xJO68Nw (6 seed record(s))\n",
+          "stderr": ""
+        },
+        {
+          "start": [
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+            "--config-file",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/3/config.toml",
+            "--controller-listen-addr",
+            "127.0.0.1:62731",
+            "--metrics-listen-addr",
+            "none",
+            "--health-listen-addr",
+            "none"
+          ],
+          "pid": 1803385
+        },
+        {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+            "CopyMovementProbe",
+            "seed",
+            "127.0.0.1:62710",
+            "copy-movement-candidate-1793813751",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate-archive"
+          ],
+          "returncode": 0,
+          "stdout": "SCENARIO\tdelayed-copy-seeded-rf3-48-before-movement\tPASS\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+            "CopyMovementProbe",
+            "leader",
+            "127.0.0.1:62710",
+            "copy-movement-candidate-1793813751"
+          ],
+          "returncode": 0,
+          "stdout": "LEADER\t3\t127.0.0.1:62730\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+            "CopyMovementProbe",
+            "leader",
+            "127.0.0.1:62710",
+            "copy-movement-candidate-1793813751"
+          ],
+          "returncode": 0,
+          "stdout": "LEADER\t1\t127.0.0.1:62710\n",
+          "stderr": ""
+        }
+      ],
+      "cases": [
+        {
+          "side": "oracle",
+          "topic": "copy-movement-oracle-1793813679",
+          "old_leader": 2,
+          "new_leader": 3,
+          "local_offset0": "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/oracle/3/data/copy-movement-oracle-1793813679-0/00000000000000000000.log",
+          "local_offset0_exists": false,
+          "archive_files": [
+            "oracle-archive/copy-movement-oracle-1793813679/oa8IzE1STAejSjI1O16abg/OFFSET",
+            "oracle-archive/copy-movement-oracle-1793813679/oa8IzE1STAejSjI1O16abg/PRODUCER_SNAPSHOT",
+            "oracle-archive/copy-movement-oracle-1793813679/oa8IzE1STAejSjI1O16abg/log",
+            "oracle-archive/copy-movement-oracle-1793813679/oa8IzE1STAejSjI1O16abg/LEADER_EPOCH",
+            "oracle-archive/copy-movement-oracle-1793813679/oa8IzE1STAejSjI1O16abg/TIMESTAMP",
+            "oracle-archive/copy-movement-oracle-1793813679/5qboBxvUTRqf_QdFzYzEnw/OFFSET",
+            "oracle-archive/copy-movement-oracle-1793813679/5qboBxvUTRqf_QdFzYzEnw/PRODUCER_SNAPSHOT",
+            "oracle-archive/copy-movement-oracle-1793813679/5qboBxvUTRqf_QdFzYzEnw/log",
+            "oracle-archive/copy-movement-oracle-1793813679/5qboBxvUTRqf_QdFzYzEnw/LEADER_EPOCH",
+            "oracle-archive/copy-movement-oracle-1793813679/5qboBxvUTRqf_QdFzYzEnw/TIMESTAMP",
+            "oracle-archive/copy-movement-oracle-1793813679/ShycyG4RQuKV2v_0zHDXsQ/OFFSET",
+            "oracle-archive/copy-movement-oracle-1793813679/ShycyG4RQuKV2v_0zHDXsQ/PRODUCER_SNAPSHOT",
+            "oracle-archive/copy-movement-oracle-1793813679/ShycyG4RQuKV2v_0zHDXsQ/log",
+            "oracle-archive/copy-movement-oracle-1793813679/ShycyG4RQuKV2v_0zHDXsQ/LEADER_EPOCH",
+            "oracle-archive/copy-movement-oracle-1793813679/ShycyG4RQuKV2v_0zHDXsQ/TIMESTAMP",
+            "oracle-archive/copy-movement-oracle-1793813679/09WOlnHWTumXxLkO8A9LrQ/OFFSET",
+            "oracle-archive/copy-movement-oracle-1793813679/09WOlnHWTumXxLkO8A9LrQ/PRODUCER_SNAPSHOT",
+            "oracle-archive/copy-movement-oracle-1793813679/09WOlnHWTumXxLkO8A9LrQ/log",
+            "oracle-archive/copy-movement-oracle-1793813679/09WOlnHWTumXxLkO8A9LrQ/LEADER_EPOCH",
+            "oracle-archive/copy-movement-oracle-1793813679/09WOlnHWTumXxLkO8A9LrQ/TIMESTAMP"
+          ],
+          "exact_remote_read_passed": true
+        }
+      ],
+      "failure": "Fixture configuration error: comma-separated remote_storage.kafka_metadata.bootstrap interpreted as single DNS address; candidate RLMM could not start. Candidate assertion not reached; retained failed attempt."
+    },
+    {
+      "qualification_pass": false,
+      "scope": "RF3 delayed copy old-leader SIGKILL before copy eligible, different surviving leader, natural eviction then exact remote consumer48 read",
+      "image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+      "binary_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+      "commands": [
+        {
+          "command": [
+            "javac",
+            "--release",
+            "17",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+            "-d",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v2/classes",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-copy-movement/tools/kafka44/CopyProbe.java",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-copy-movement/tools/kafka44/CopyMovementProbe.java",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-copy-movement/tools/kafka44/RecordingStorage.java"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "jar",
+            "cf",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v2/storage.jar",
+            "-C",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v2/classes",
+            "RecordingStorage.class"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+            "--log-dir",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v2/candidate/1/data",
+            "--node-id",
+            "1",
+            "--cluster-id",
+            "56e0ff5d-07ea-4a5c-93bc-bc129bb0518a",
+            "--directory-id",
+            "28025c12-9441-48b4-bb78-4372c327ca0b",
+            "--initial-controllers",
+            "1@127.0.0.1:62711:28025c12-9441-48b4-bb78-4372c327ca0b,2@127.0.0.1:62721:ea334302-fde4-46a2-9c41-0feffe343dcf,3@127.0.0.1:62731:e7666584-ae2b-4bbb-aab5-b9687f37db49",
+            "--release-version",
+            "4.4-IV2",
+            "--unstable-feature-versions-enable"
+          ],
+          "returncode": 0,
+          "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v2/candidate/1/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id VuD_XQfqSlyTvLwSm7BRig (6 seed record(s))\n",
+          "stderr": ""
+        },
+        {
+          "start": [
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+            "--config-file",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v2/candidate/1/config.toml",
+            "--controller-listen-addr",
+            "127.0.0.1:62711",
+            "--metrics-listen-addr",
+            "none",
+            "--health-listen-addr",
+            "none"
+          ],
+          "pid": 1806079
+        },
+        {
+          "command": [
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+            "--log-dir",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v2/candidate/2/data",
+            "--node-id",
+            "2",
+            "--cluster-id",
+            "56e0ff5d-07ea-4a5c-93bc-bc129bb0518a",
+            "--directory-id",
+            "ea334302-fde4-46a2-9c41-0feffe343dcf",
+            "--initial-controllers",
+            "1@127.0.0.1:62711:28025c12-9441-48b4-bb78-4372c327ca0b,2@127.0.0.1:62721:ea334302-fde4-46a2-9c41-0feffe343dcf,3@127.0.0.1:62731:e7666584-ae2b-4bbb-aab5-b9687f37db49",
+            "--release-version",
+            "4.4-IV2",
+            "--unstable-feature-versions-enable"
+          ],
+          "returncode": 0,
+          "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v2/candidate/2/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id VuD_XQfqSlyTvLwSm7BRig (6 seed record(s))\n",
+          "stderr": ""
+        },
+        {
+          "start": [
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+            "--config-file",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v2/candidate/2/config.toml",
+            "--controller-listen-addr",
+            "127.0.0.1:62721",
+            "--metrics-listen-addr",
+            "none",
+            "--health-listen-addr",
+            "none"
+          ],
+          "pid": 1806097
+        },
+        {
+          "command": [
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+            "--log-dir",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v2/candidate/3/data",
+            "--node-id",
+            "3",
+            "--cluster-id",
+            "56e0ff5d-07ea-4a5c-93bc-bc129bb0518a",
+            "--directory-id",
+            "e7666584-ae2b-4bbb-aab5-b9687f37db49",
+            "--initial-controllers",
+            "1@127.0.0.1:62711:28025c12-9441-48b4-bb78-4372c327ca0b,2@127.0.0.1:62721:ea334302-fde4-46a2-9c41-0feffe343dcf,3@127.0.0.1:62731:e7666584-ae2b-4bbb-aab5-b9687f37db49",
+            "--release-version",
+            "4.4-IV2",
+            "--unstable-feature-versions-enable"
+          ],
+          "returncode": 0,
+          "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v2/candidate/3/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id VuD_XQfqSlyTvLwSm7BRig (6 seed record(s))\n",
+          "stderr": ""
+        },
+        {
+          "start": [
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+            "--config-file",
+            "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v2/candidate/3/config.toml",
+            "--controller-listen-addr",
+            "127.0.0.1:62731",
+            "--metrics-listen-addr",
+            "none",
+            "--health-listen-addr",
+            "none"
+          ],
+          "pid": 1806132
+        }
+      ],
+      "cases": [],
+      "failure": "Fault fired before native remote metadata topic creation completed; with one broker killed RF3 metadata initialization cannot complete. Corrected fixture waits for actual RF3/ISR3 metadata readiness before fault."
+    }
+  ],
+  "local_before_eviction_witnesses": {
+    "copy-movement-runtime": [],
+    "copy-movement-runtime-v3": [
+      {
+        "path": "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/2/data/copy-movement-candidate-1793813872-0/00000000000000000000.log",
+        "exists_before_eviction": true,
+        "size": 984135,
+        "sha256": "c11f144341562a80832e68b3dbbfba91296b9e9d9311b5c8272b29a832c9a988",
+        "observed_unix": 1793813909.4563067
+      }
+    ]
+  },
+  "configurations": {
+    "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/oracle/3/server.properties": {
+      "sha256": "a034e00de3eab908d333ca57f0eb222eb775e6f0435578e48090291f8912ca5a",
+      "text": "node.id=3\nprocess.roles=broker,controller\nlisteners=PLAINTEXT://127.0.0.1:62630,CONTROLLER://127.0.0.1:62631\nadvertised.listeners=PLAINTEXT://127.0.0.1:62630\ncontroller.listener.names=CONTROLLER\nlistener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT\ninter.broker.listener.name=PLAINTEXT\ncontroller.quorum.voters=1@127.0.0.1:62611,2@127.0.0.1:62621,3@127.0.0.1:62631\nlog.dirs=/evidence/oracle/3/data\nremote.log.storage.system.enable=true\nremote.log.storage.manager.class.name=RecordingStorage\nremote.log.storage.manager.class.path=/evidence/storage.jar\nremote.log.storage.manager.impl.prefix=rsm.config.\nrsm.config.dir=/evidence/oracle-archive\nremote.log.metadata.manager.class.name=org.apache.kafka.server.log.remote.metadata.storage.TopicBasedRemoteLogMetadataManager\nremote.log.metadata.manager.listener.name=PLAINTEXT\nremote.log.metadata.manager.impl.prefix=rlmm.config.\nrlmm.config.remote.log.metadata.topic.replication.factor=3\nremote.log.manager.task.interval.ms=500\nlog.retention.check.interval.ms=1000\nlog.segment.delete.delay.ms=1000\noffsets.topic.replication.factor=3\n"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/oracle/2/server.properties": {
+      "sha256": "7b84f16082a381a4f3e955f8fea3c73ffc1e0ef47f8aac4b9f399ad868c59884",
+      "text": "node.id=2\nprocess.roles=broker,controller\nlisteners=PLAINTEXT://127.0.0.1:62620,CONTROLLER://127.0.0.1:62621\nadvertised.listeners=PLAINTEXT://127.0.0.1:62620\ncontroller.listener.names=CONTROLLER\nlistener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT\ninter.broker.listener.name=PLAINTEXT\ncontroller.quorum.voters=1@127.0.0.1:62611,2@127.0.0.1:62621,3@127.0.0.1:62631\nlog.dirs=/evidence/oracle/2/data\nremote.log.storage.system.enable=true\nremote.log.storage.manager.class.name=RecordingStorage\nremote.log.storage.manager.class.path=/evidence/storage.jar\nremote.log.storage.manager.impl.prefix=rsm.config.\nrsm.config.dir=/evidence/oracle-archive\nremote.log.metadata.manager.class.name=org.apache.kafka.server.log.remote.metadata.storage.TopicBasedRemoteLogMetadataManager\nremote.log.metadata.manager.listener.name=PLAINTEXT\nremote.log.metadata.manager.impl.prefix=rlmm.config.\nrlmm.config.remote.log.metadata.topic.replication.factor=3\nremote.log.manager.task.interval.ms=500\nlog.retention.check.interval.ms=1000\nlog.segment.delete.delay.ms=1000\noffsets.topic.replication.factor=3\n"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/oracle/1/server.properties": {
+      "sha256": "07f0de111904dfdfe7585df9e69714d7a1b9708e6005d8ebbf8fcfd3aa27b35e",
+      "text": "node.id=1\nprocess.roles=broker,controller\nlisteners=PLAINTEXT://127.0.0.1:62610,CONTROLLER://127.0.0.1:62611\nadvertised.listeners=PLAINTEXT://127.0.0.1:62610\ncontroller.listener.names=CONTROLLER\nlistener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT\ninter.broker.listener.name=PLAINTEXT\ncontroller.quorum.voters=1@127.0.0.1:62611,2@127.0.0.1:62621,3@127.0.0.1:62631\nlog.dirs=/evidence/oracle/1/data\nremote.log.storage.system.enable=true\nremote.log.storage.manager.class.name=RecordingStorage\nremote.log.storage.manager.class.path=/evidence/storage.jar\nremote.log.storage.manager.impl.prefix=rsm.config.\nrsm.config.dir=/evidence/oracle-archive\nremote.log.metadata.manager.class.name=org.apache.kafka.server.log.remote.metadata.storage.TopicBasedRemoteLogMetadataManager\nremote.log.metadata.manager.listener.name=PLAINTEXT\nremote.log.metadata.manager.impl.prefix=rlmm.config.\nrlmm.config.remote.log.metadata.topic.replication.factor=3\nremote.log.manager.task.interval.ms=500\nlog.retention.check.interval.ms=1000\nlog.segment.delete.delay.ms=1000\noffsets.topic.replication.factor=3\n"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/3/config.toml": {
+      "sha256": "5ec8e8c0299cc2cbc87a5cfdf47d87a6b9fe6c5318a3a6d57fc24d4fececd0bc",
+      "text": "broker_id=3\nlog_dir=\"/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/3/data\"\ncontroller_quorum_voters=[\"1@127.0.0.1:62711\",\"2@127.0.0.1:62721\",\"3@127.0.0.1:62731\"]\nlog_retention_check_interval=\"1s\"\nremote_log_manager_interval=\"500ms\"\n[[listeners]]\nname=\"PLAINTEXT\"\nbind_addr=\"127.0.0.1:62730\"\nadvertised=\"127.0.0.1:62730\"\nprotocol=\"Plaintext\"\n[server_properties]\n\"unstable.api.versions.enable\"=\"true\"\n\"unstable.feature.versions.enable\"=\"true\"\n[runtime]\ndefault_replication_factor=3\ndefault_min_insync_replicas=2\noffsets_topic_replication_factor=3\ntransaction_state_replication_factor=3\ntransaction_state_min_isr=2\n[remote_storage]\nstorage_dir=\"/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate-archive\"\n[remote_storage.kafka_metadata]\nbootstrap=\"127.0.0.1:62710,127.0.0.1:62720,127.0.0.1:62730\"\nreplication=3\nmin_isr=2\n"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/2/config.toml": {
+      "sha256": "6f427863dc4ba8ff7ead93d89985f7f84af8543d1bfe1363c074a8cb3d63a725",
+      "text": "broker_id=2\nlog_dir=\"/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/2/data\"\ncontroller_quorum_voters=[\"1@127.0.0.1:62711\",\"2@127.0.0.1:62721\",\"3@127.0.0.1:62731\"]\nlog_retention_check_interval=\"1s\"\nremote_log_manager_interval=\"500ms\"\n[[listeners]]\nname=\"PLAINTEXT\"\nbind_addr=\"127.0.0.1:62720\"\nadvertised=\"127.0.0.1:62720\"\nprotocol=\"Plaintext\"\n[server_properties]\n\"unstable.api.versions.enable\"=\"true\"\n\"unstable.feature.versions.enable\"=\"true\"\n[runtime]\ndefault_replication_factor=3\ndefault_min_insync_replicas=2\noffsets_topic_replication_factor=3\ntransaction_state_replication_factor=3\ntransaction_state_min_isr=2\n[remote_storage]\nstorage_dir=\"/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate-archive\"\n[remote_storage.kafka_metadata]\nbootstrap=\"127.0.0.1:62710,127.0.0.1:62720,127.0.0.1:62730\"\nreplication=3\nmin_isr=2\n"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/1/config.toml": {
+      "sha256": "cf7455cf37c6e00e6ad903d826ad48d34ea673f9dd1cb178754c629cdce73d88",
+      "text": "broker_id=1\nlog_dir=\"/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate/1/data\"\ncontroller_quorum_voters=[\"1@127.0.0.1:62711\",\"2@127.0.0.1:62721\",\"3@127.0.0.1:62731\"]\nlog_retention_check_interval=\"1s\"\nremote_log_manager_interval=\"500ms\"\n[[listeners]]\nname=\"PLAINTEXT\"\nbind_addr=\"127.0.0.1:62710\"\nadvertised=\"127.0.0.1:62710\"\nprotocol=\"Plaintext\"\n[server_properties]\n\"unstable.api.versions.enable\"=\"true\"\n\"unstable.feature.versions.enable\"=\"true\"\n[runtime]\ndefault_replication_factor=3\ndefault_min_insync_replicas=2\noffsets_topic_replication_factor=3\ntransaction_state_replication_factor=3\ntransaction_state_min_isr=2\n[remote_storage]\nstorage_dir=\"/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime/candidate-archive\"\n[remote_storage.kafka_metadata]\nbootstrap=\"127.0.0.1:62710,127.0.0.1:62720,127.0.0.1:62730\"\nreplication=3\nmin_isr=2\n"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/3/config.toml": {
+      "sha256": "a58185269d30cd0e0cb637fabd5a2d6f13b603b4b6cfb05fd5641b0d16a9ccc2",
+      "text": "broker_id=3\nlog_dir=\"/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/3/data\"\ncontroller_quorum_voters=[\"1@127.0.0.1:62711\",\"2@127.0.0.1:62721\",\"3@127.0.0.1:62731\"]\nlog_retention_check_interval=\"1s\"\nremote_log_manager_interval=\"500ms\"\n[[listeners]]\nname=\"PLAINTEXT\"\nbind_addr=\"127.0.0.1:62730\"\nadvertised=\"127.0.0.1:62730\"\nprotocol=\"Plaintext\"\n[server_properties]\n\"unstable.api.versions.enable\"=\"true\"\n\"unstable.feature.versions.enable\"=\"true\"\n[runtime]\ndefault_replication_factor=3\ndefault_min_insync_replicas=2\noffsets_topic_replication_factor=3\ntransaction_state_replication_factor=3\ntransaction_state_min_isr=2\n[remote_storage]\nstorage_dir=\"/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate-archive\"\n[remote_storage.kafka_metadata]\nbootstrap=\"127.0.0.1:62730\"\nreplication=3\nmin_isr=2\n"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/2/config.toml": {
+      "sha256": "1995add9445d40ede94046a3e2445da26223d4fcd3f2674f7badf04260ca7985",
+      "text": "broker_id=2\nlog_dir=\"/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/2/data\"\ncontroller_quorum_voters=[\"1@127.0.0.1:62711\",\"2@127.0.0.1:62721\",\"3@127.0.0.1:62731\"]\nlog_retention_check_interval=\"1s\"\nremote_log_manager_interval=\"500ms\"\n[[listeners]]\nname=\"PLAINTEXT\"\nbind_addr=\"127.0.0.1:62720\"\nadvertised=\"127.0.0.1:62720\"\nprotocol=\"Plaintext\"\n[server_properties]\n\"unstable.api.versions.enable\"=\"true\"\n\"unstable.feature.versions.enable\"=\"true\"\n[runtime]\ndefault_replication_factor=3\ndefault_min_insync_replicas=2\noffsets_topic_replication_factor=3\ntransaction_state_replication_factor=3\ntransaction_state_min_isr=2\n[remote_storage]\nstorage_dir=\"/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate-archive\"\n[remote_storage.kafka_metadata]\nbootstrap=\"127.0.0.1:62720\"\nreplication=3\nmin_isr=2\n"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/1/config.toml": {
+      "sha256": "2a81a198dfcdab75c107d075c6fe84cb37edf24b80edd44e0bb679e39d425df0",
+      "text": "broker_id=1\nlog_dir=\"/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate/1/data\"\ncontroller_quorum_voters=[\"1@127.0.0.1:62711\",\"2@127.0.0.1:62721\",\"3@127.0.0.1:62731\"]\nlog_retention_check_interval=\"1s\"\nremote_log_manager_interval=\"500ms\"\n[[listeners]]\nname=\"PLAINTEXT\"\nbind_addr=\"127.0.0.1:62710\"\nadvertised=\"127.0.0.1:62710\"\nprotocol=\"Plaintext\"\n[server_properties]\n\"unstable.api.versions.enable\"=\"true\"\n\"unstable.feature.versions.enable\"=\"true\"\n[runtime]\ndefault_replication_factor=3\ndefault_min_insync_replicas=2\noffsets_topic_replication_factor=3\ntransaction_state_replication_factor=3\ntransaction_state_min_isr=2\n[remote_storage]\nstorage_dir=\"/home/matt/.openclaw/workspace/coordinator/.private/copy-movement-runtime-v3/candidate-archive\"\n[remote_storage.kafka_metadata]\nbootstrap=\"127.0.0.1:62710\"\nreplication=3\nmin_isr=2\n"
+    }
+  },
+  "limits": [
+    "No mid-upload interruption; fault before30second eligibility",
+    "Pinned candidate predates final Streams fix",
+    "No arbitrary fault schedule or broad Kafka4.4 qualification"
+  ],
+  "fixture_sha256": "0ec4798f0c7cca7c438255f536c42c4d3359ac1dd05fbccc2e66720840a84aa0"
+}
