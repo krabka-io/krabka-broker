@@ -20,37 +20,6 @@ struct LeaderCell {
     cell: Arc<Mutex<AcquisitionState>>,
 }
 
-#[cfg(test)]
-mod tests {
-    use {
-        super::*,
-        crate::share_partition::manager::test_support::manager,
-        assert2::assert,
-        krabka_log::Offset,
-        tokio::{task::yield_now, time::timeout},
-    };
-
-    #[tokio::test]
-    async fn shutdown_cancels_a_sweep_waiting_for_a_cell_lock() {
-        let manager = manager();
-        let cell = Arc::new(Mutex::new(AcquisitionState::new(Offset(0))));
-        manager
-            .leaders
-            .insert(("g".to_owned(), uuid::Uuid::nil(), 0), Arc::clone(&cell));
-        let held = cell.lock().await;
-        manager.spawn_lock_sweeper();
-        // The interval's first tick is immediate. Let the worker reach the
-        // locked cell, which remains locked throughout shutdown.
-        yield_now().await;
-        assert!(manager.background_tasks.len() == 1);
-        timeout(Duration::from_secs(2), manager.shutdown())
-            .await
-            .expect("shutdown must cancel the blocked sweep");
-        assert!(manager.background_tasks.len() == 0);
-        drop(held);
-    }
-}
-
 impl SharePartitionLeaderManager {
     /// Spawns the background acquisition-lock-timeout sweeper.
     ///
@@ -111,5 +80,36 @@ impl SharePartitionLeaderManager {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        crate::share_partition::manager::test_support::manager,
+        assert2::assert,
+        krabka_log::Offset,
+        tokio::{task::yield_now, time::timeout},
+    };
+
+    #[tokio::test]
+    async fn shutdown_cancels_a_sweep_waiting_for_a_cell_lock() {
+        let manager = manager();
+        let cell = Arc::new(Mutex::new(AcquisitionState::new(Offset(0))));
+        manager
+            .leaders
+            .insert(("g".to_owned(), uuid::Uuid::nil(), 0), Arc::clone(&cell));
+        let held = cell.lock().await;
+        manager.spawn_lock_sweeper();
+        // The interval's first tick is immediate. Let the worker reach the
+        // locked cell, which remains locked throughout shutdown.
+        yield_now().await;
+        assert!(manager.background_tasks.len() == 1);
+        timeout(Duration::from_secs(2), manager.shutdown())
+            .await
+            .expect("shutdown must cancel the blocked sweep");
+        assert!(manager.background_tasks.len() == 0);
+        drop(held);
     }
 }
