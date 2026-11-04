@@ -1,0 +1,10 @@
+"""Strict Streams scenario receipt checks."""
+
+load("./kafka44_streams_storage.axl", "outcomes")
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+def _test_outcomes(_ctx):
+    check_eq("only exact PASS markers", outcomes("SCENARIO\tstore\tPASS\nRESPONSE\tignored\nSCENARIO\tget\tFAIL"), ["store"])
+
+kafka44_streams_storage_tests = suite("kafka44-streams-storage", [_test_outcomes])
+test_kafka44_streams_storage = suite_task(kafka44_streams_storage_tests)

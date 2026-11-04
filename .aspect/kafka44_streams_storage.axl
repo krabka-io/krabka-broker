@@ -1,0 +1,51 @@
+"""Caller-owned Streams SPI fixtures; only the supplied owned oracle is restarted."""
+
+load("./kafka44.axl", "IMAGE", "command_receipt")
+
+FAULT_CASES = ["initial-solicitation", "transient-set-failed", "transient-set-no-description", "transient-set-repair-stored", "get-error-not-missing", "get-repair-stored", "legacy-delete-failure-unknown-server", "delete-failure-reported", "delete-failure-group-retained", "delete-repair-success", "delete-recreate-clean", "permanent-set-failed", "permanent-set-status"]
+
+def outcomes(text):
+    return [line.split("\t")[1] for line in text.splitlines() if line.startswith("SCENARIO\t") and line.endswith("\tPASS")]
+
+def _save(ctx, path, evidence):
+    ctx.std.fs.write(path, json.encode(evidence) + "\n")
+
+def _impl(ctx: TaskContext) -> int:
+    a = ctx.args
+    if not all([a.oracle_container, a.oracle_endpoint, a.oracle_flags, a.native_endpoint, a.native_flags, a.libs, a.output]):
+        fail("all owned fixture endpoints, flag paths, released libs and fresh output are required")
+    if command_receipt(ctx, ["mkdir", a.output])["returncode"]:
+        fail("output must not exist")
+    root = command_receipt(ctx, ["realpath", a.output])["stdout"].strip()
+    evidence = {"qualification_pass": False, "status": "incomplete", "commands": {}, "limits": ["Caller provisions owned fixtures and pins native executable separately", "Native embedding SPI is not arbitrary JVM plugin class compatibility", "No coordinator movement, abrupt crash or power-loss claim"]}
+    ctx.defer(_save, ctx, root + "/evidence.json", evidence)
+    c = evidence["commands"]
+    c["inspect"] = command_receipt(ctx, ["docker", "inspect", "--format={{.Config.Image}}", a.oracle_container])
+    if c["inspect"]["returncode"] or c["inspect"]["stdout"].strip() != IMAGE:
+        fail("oracle must use the pinned released image")
+    c["mkdir"] = command_receipt(ctx, ["mkdir", root + "/classes"])
+    sources = ["tools/kafka44/" + name + ".java" for name in ["ProtocolScenarios", "StreamsPositive", "StreamsFault", "StreamsStorageRestart", "FaultTopologyPlugin"]]
+    c["sources"] = command_receipt(ctx, ["sha256sum"] + sources)
+    c["compile"] = command_receipt(ctx, ["javac", "-cp", a.libs + "/*", "-d", root + "/classes"] + sources)
+    if c["compile"]["returncode"]:
+        return 1
+    cp = a.libs + "/*:" + root + "/classes"
+    if a.mode not in ["faults", "prepare", "recover"]:
+        fail("mode must be faults, prepare or recover")
+    for side, endpoint, flags in [("oracle", a.oracle_endpoint, a.oracle_flags), ("native", a.native_endpoint, a.native_flags)]:
+        fixture = ["StreamsFault", endpoint, flags] if a.mode == "faults" else ["StreamsStorageRestart", endpoint, flags, a.mode]
+        expected = FAULT_CASES if a.mode == "faults" else ["stored-before-restart" if a.mode == "prepare" else "exact-description-after-restart"]
+        result = command_receipt(ctx, ["java", "-cp", cp] + fixture, 120)
+        c[side + "_" + a.mode] = result
+        if result["returncode"] or outcomes(result["stdout"]) != expected:
+            return 1
+    evidence["status"] = "paired-" + a.mode + "-pass"
+
+    # Restart orchestration is intentionally owner-driven: never kill arbitrary candidate endpoints.
+    return 0
+
+kafka44_streams_storage = task(
+    summary = "Compare strict Streams injected-backend failures on two caller-owned isolated brokers",
+    implementation = _impl,
+    args = {name: args.string(default = "", description = name.replace("_", " ") + " (owned isolated fixture only)") for name in ["oracle_container", "oracle_endpoint", "oracle_flags", "native_endpoint", "native_flags", "libs", "output"]} | {"mode": args.string(default = "faults", description = "faults, prepare or recover; owned lifecycle happens between prepare and recover")},
+)

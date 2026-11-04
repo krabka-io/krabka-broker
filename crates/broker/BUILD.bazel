@@ -12,6 +12,9 @@ exports_files(["Cargo.toml"])
 # makes them targets that reach nothing, which is the true answer.
 exports_files(glob(["benches/*.rs"]))
 
+# Native embedding harness source; the runtime is built with Cargo.
+exports_files(["examples/streams_fault_broker.rs"])
+
 crate_library(name = "broker")
 
 # The broker server. `bazel run //crates/broker:krabka-broker -- --help`.

@@ -29,7 +29,7 @@ use {
 pub async fn handle(
     broker: &Broker,
     req: DeleteGroupsRequest,
-    _version: ApiVersion,
+    version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<DeleteGroupsResponse, BrokerError> {
     // Kafka's `handleDeleteGroupsRequest` drops duplicate ids first
@@ -61,13 +61,7 @@ pub async fn handle(
         Vec::with_capacity(authorized.len() + denied.len());
     for gid in authorized {
         let error_code = delete_one(broker, &gid).await;
-        results.push(DeletableGroupResult {
-            group_id: gid,
-            error_code,
-            error_message: (error_code == codes::GROUP_DELETION_FAILED)
-                .then(|| "Topology description plugin failed to delete the topology.".to_owned()),
-            ..Default::default()
-        });
+        results.push(deletion_result(gid, error_code, version));
     }
     results.extend(denied.into_iter().map(|gid| DeletableGroupResult {
         group_id: gid,
@@ -80,6 +74,23 @@ pub async fn handle(
         ..Default::default()
     };
     Ok(resp)
+}
+
+/// Released Kafka maps the KIP-1331 deletion error to `UNKNOWN_SERVER_ERROR`
+/// before `DeleteGroups` v3, which introduced the per-group error message.
+fn deletion_result(group_id: String, error_code: i16, version: ApiVersion) -> DeletableGroupResult {
+    let error_code = if version < 3 && error_code == codes::GROUP_DELETION_FAILED {
+        codes::UNKNOWN_SERVER_ERROR
+    } else {
+        error_code
+    };
+    DeletableGroupResult {
+        group_id,
+        error_code,
+        error_message: (error_code == codes::GROUP_DELETION_FAILED)
+            .then(|| "Topology description plugin failed to delete the topology.".to_owned()),
+        ..Default::default()
+    }
 }
 
 /// Deletes one authorized group and returns its result's error code.
@@ -295,11 +306,8 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// Trunk's v3 (KIP-1331) gives each group result a nullable
-    /// `ErrorMessage`. The only topology description plugin krabka runs is
-    /// Kafka's in-memory one, which cannot fail a delete, so krabka never
-    /// answers `GROUP_DELETION_FAILED` and the message is always null: the
-    /// v3 answer is the v2 answer with one null string per result.
+    /// KIP-1331 adds a nullable per-group error message in v3. Ordinary
+    /// authorization errors still carry null, independently of plugin failures.
     #[tokio::test]
     async fn handle_answers_v3_with_a_null_error_message_per_group() {
         use krabka_protocol::{Decode as _, Encode as _};
@@ -344,3 +352,7 @@ mod tests {
         broker_handle.shutdown().await;
     }
 }
+
+#[cfg(test)]
+#[path = "delete_groups/legacy_tests.rs"]
+mod legacy_tests;
