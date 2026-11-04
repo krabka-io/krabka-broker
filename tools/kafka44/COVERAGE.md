@@ -194,3 +194,34 @@ This closes the single-node pending-offset recovery evidence gap only. It does
 not close coordinator movement, offsets-topic leader failure, mid-marker crash,
 power-loss durability, or the remaining six-surface obligations. Keep #1969 open
 and `qualification_pass=false` until those obligations have verifiable evidence.
+
+## Pending transactional offsets with real coordinator movement (2026-11-04)
+
+`qualification/kafka44-pending-movement-20261104.json` records a caller-owned
+three-node RF3/minISR2 matrix on the pinned released4.4 oracle and the immutable
+final candidate binary7c4e3aa7. Each endpoint executes v6 and legacyv5, commit and
+abort, after killing either the transaction coordinator or the group coordinator
+(the leader of that group's offsets partition). Every accepted case requires the
+selected owner endpoint to change, the original topic UUID to survive, pending42
+to remain invisible over committed7 after failure, then stable42 on commit or7
+on abort using the original producer identity. Shared ownership is recorded when
+one failure moves both roles. Exact configs, source/tree/binary identities,
+wire responses and lifecycle provisioning commands are retained.
+
+The first oracle attempt found asynchronous transaction completion returning
+`CONCURRENT_TRANSACTIONS` on reinitialization after a visible baseline commit.
+The fixture now permits a bounded, wire-recorded retry for InitProducerId only.
+An initial candidate attempt resolved after8s, shorter than the default9s broker
+failure detector, and reached the dead coordinator. It is retained as a failed
+setup, not parity evidence. Accepted candidate runs wait20s for startup, election
+and rejoin and still explicitly verify ownership and exact state. A separate
+released Admin readiness diagnostic after the first rejoin observed100/100
+internal partitions with three replicas and three ISR; it is not mislabeled as
+an orchestration precondition. See the caller-owned recipe in `README.md`.
+
+This strengthens the transaction coordinator-movement and offsets-leader-failure
+rows for pending offsets, not the other five surfaces' movement obligations. It
+does not inject a deterministic mid-marker cut or power failure, nor discharge
+the remaining default/minimum-feature/DLQ/Streams/remote-storage obligations.
+The matrix is separately provisioned, not automatically run by the single-node
+oracle CI lane. `qualification_pass=false`; #1969 must remain open.

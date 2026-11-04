@@ -1,0 +1,1996 @@
+{
+  "qualification_pass": false,
+  "scope": "RF3/minISR2 pending transactional offsets, modern v6 and legacy v5, commit and abort after transaction or group/offsets coordinator process SIGKILL. Sixteen passed cases. Not deterministic mid-marker fault, power loss or full six-surface qualification.",
+  "fixture_revision": "8c1f58162e6ee0f420b3fe1d1e594e853dbb1e54",
+  "production_build_receipt": "qualification/kafka44-final-integrated-20261104.json",
+  "production_trees": {
+    "crates/broker": "787adc2e68c1e5d5e1e0b7af2ac4d6a75fd06213",
+    "crates/raft": "823abe060b84580397e8c8cef5469845b80102e0",
+    "crates/verified": "45d6fefe1af5d6e89db7cac9685848be2aed55c9"
+  },
+  "fixture_sha256": {
+    "tools/kafka44/PendingTransactionRecovery.java": "785ba6aa62aede23f27e0f6597a0e4dd0c3cf20c930bb190777c44be59e218ad",
+    "tools/kafka44/TransactionScenarios.java": "ca494b0ddaaff4c3987d87d54ba0bcd10de74a9f92a4318217a0b0544855866e",
+    "tools/kafka44/ProtocolScenarios.java": "182f4eae3728475289b0255614af76a61f0f501c784afaf938ef6ead7f964dbe"
+  },
+  "binary_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "cases": [
+    {
+      "side": "oracle",
+      "mode": "modern",
+      "target": "transaction",
+      "resolution": "commit",
+      "old_owners": [
+        "127.0.0.1:62010",
+        "127.0.0.1:62030"
+      ],
+      "new_owners": [
+        "127.0.0.1:62010",
+        "127.0.0.1:62010"
+      ],
+      "killed_node": 3,
+      "passed": true
+    },
+    {
+      "side": "oracle",
+      "mode": "modern",
+      "target": "transaction",
+      "resolution": "abort",
+      "old_owners": [
+        "127.0.0.1:62010",
+        "127.0.0.1:62020"
+      ],
+      "new_owners": [
+        "127.0.0.1:62010",
+        "127.0.0.1:62030"
+      ],
+      "killed_node": 2,
+      "passed": true
+    },
+    {
+      "side": "oracle",
+      "mode": "modern",
+      "target": "offsets",
+      "resolution": "commit",
+      "old_owners": [
+        "127.0.0.1:62010",
+        "127.0.0.1:62010"
+      ],
+      "new_owners": [
+        "127.0.0.1:62020",
+        "127.0.0.1:62020"
+      ],
+      "killed_node": 1,
+      "passed": true
+    },
+    {
+      "side": "oracle",
+      "mode": "modern",
+      "target": "offsets",
+      "resolution": "abort",
+      "old_owners": [
+        "127.0.0.1:62030",
+        "127.0.0.1:62020"
+      ],
+      "new_owners": [
+        "127.0.0.1:62020",
+        "127.0.0.1:62020"
+      ],
+      "killed_node": 3,
+      "passed": true
+    },
+    {
+      "side": "oracle",
+      "mode": "legacy",
+      "target": "transaction",
+      "resolution": "commit",
+      "old_owners": [
+        "127.0.0.1:62020",
+        "127.0.0.1:62010"
+      ],
+      "new_owners": [
+        "127.0.0.1:62020",
+        "127.0.0.1:62030"
+      ],
+      "killed_node": 1,
+      "passed": true
+    },
+    {
+      "side": "oracle",
+      "mode": "legacy",
+      "target": "transaction",
+      "resolution": "abort",
+      "old_owners": [
+        "127.0.0.1:62020",
+        "127.0.0.1:62020"
+      ],
+      "new_owners": [
+        "127.0.0.1:62010",
+        "127.0.0.1:62030"
+      ],
+      "killed_node": 2,
+      "passed": true
+    },
+    {
+      "side": "oracle",
+      "mode": "legacy",
+      "target": "offsets",
+      "resolution": "commit",
+      "old_owners": [
+        "127.0.0.1:62030",
+        "127.0.0.1:62030"
+      ],
+      "new_owners": [
+        "127.0.0.1:62020",
+        "127.0.0.1:62020"
+      ],
+      "killed_node": 3,
+      "passed": true
+    },
+    {
+      "side": "oracle",
+      "mode": "legacy",
+      "target": "offsets",
+      "resolution": "abort",
+      "old_owners": [
+        "127.0.0.1:62010",
+        "127.0.0.1:62010"
+      ],
+      "new_owners": [
+        "127.0.0.1:62030",
+        "127.0.0.1:62030"
+      ],
+      "killed_node": 1,
+      "passed": true
+    },
+    {
+      "side": "candidate",
+      "mode": "modern",
+      "target": "transaction",
+      "resolution": "commit",
+      "old_owners": [
+        "127.0.0.1:62110",
+        "127.0.0.1:62120"
+      ],
+      "new_owners": [
+        "127.0.0.1:62110",
+        "127.0.0.1:62130"
+      ],
+      "killed_node": 2,
+      "passed": true
+    },
+    {
+      "side": "candidate",
+      "mode": "modern",
+      "target": "transaction",
+      "resolution": "abort",
+      "old_owners": [
+        "127.0.0.1:62110",
+        "127.0.0.1:62130"
+      ],
+      "new_owners": [
+        "127.0.0.1:62110",
+        "127.0.0.1:62120"
+      ],
+      "killed_node": 3,
+      "passed": true
+    },
+    {
+      "side": "candidate",
+      "mode": "modern",
+      "target": "offsets",
+      "resolution": "commit",
+      "old_owners": [
+        "127.0.0.1:62110",
+        "127.0.0.1:62120"
+      ],
+      "new_owners": [
+        "127.0.0.1:62130",
+        "127.0.0.1:62120"
+      ],
+      "killed_node": 1,
+      "passed": true
+    },
+    {
+      "side": "candidate",
+      "mode": "modern",
+      "target": "offsets",
+      "resolution": "abort",
+      "old_owners": [
+        "127.0.0.1:62120",
+        "127.0.0.1:62120"
+      ],
+      "new_owners": [
+        "127.0.0.1:62110",
+        "127.0.0.1:62110"
+      ],
+      "killed_node": 2,
+      "passed": true
+    },
+    {
+      "side": "candidate",
+      "mode": "legacy",
+      "target": "transaction",
+      "resolution": "commit",
+      "old_owners": [
+        "127.0.0.1:62130",
+        "127.0.0.1:62110"
+      ],
+      "new_owners": [
+        "127.0.0.1:62130",
+        "127.0.0.1:62120"
+      ],
+      "killed_node": 1,
+      "passed": true
+    },
+    {
+      "side": "candidate",
+      "mode": "legacy",
+      "target": "transaction",
+      "resolution": "abort",
+      "old_owners": [
+        "127.0.0.1:62130",
+        "127.0.0.1:62130"
+      ],
+      "new_owners": [
+        "127.0.0.1:62120",
+        "127.0.0.1:62110"
+      ],
+      "killed_node": 3,
+      "passed": true
+    },
+    {
+      "side": "candidate",
+      "mode": "legacy",
+      "target": "offsets",
+      "resolution": "commit",
+      "old_owners": [
+        "127.0.0.1:62120",
+        "127.0.0.1:62120"
+      ],
+      "new_owners": [
+        "127.0.0.1:62130",
+        "127.0.0.1:62130"
+      ],
+      "killed_node": 2,
+      "passed": true
+    },
+    {
+      "side": "candidate",
+      "mode": "legacy",
+      "target": "offsets",
+      "resolution": "abort",
+      "old_owners": [
+        "127.0.0.1:62110",
+        "127.0.0.1:62130"
+      ],
+      "new_owners": [
+        "127.0.0.1:62120",
+        "127.0.0.1:62130"
+      ],
+      "killed_node": 1,
+      "passed": true
+    }
+  ],
+  "oracle_and_initial_candidate_commands": [
+    {
+      "command": [
+        "javac",
+        "--release",
+        "17",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "-d",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969-followthrough/tools/kafka44/ProtocolScenarios.java",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969-followthrough/tools/kafka44/TransactionScenarios.java",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969-followthrough/tools/kafka44/PendingTransactionRecovery.java"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "run",
+        "-d",
+        "--network",
+        "host",
+        "--name",
+        "qualification-1969-move-v2-1",
+        "-e",
+        "KAFKA_NODE_ID=1",
+        "-e",
+        "KAFKA_PROCESS_ROLES=broker,controller",
+        "-e",
+        "KAFKA_LISTENERS=PLAINTEXT://:62010,CONTROLLER://:62011",
+        "-e",
+        "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:62010",
+        "-e",
+        "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+        "-e",
+        "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+        "-e",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "-e",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:62011,2@127.0.0.1:62021,3@127.0.0.1:62031",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2",
+        "-e",
+        "KAFKA_MIN_INSYNC_REPLICAS=2",
+        "-e",
+        "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+      ],
+      "returncode": 0,
+      "stdout": "8c8cb5b7151f947fc07cc32e405602a9575722600059940f1c9327b1a5aa89dc\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "run",
+        "-d",
+        "--network",
+        "host",
+        "--name",
+        "qualification-1969-move-v2-2",
+        "-e",
+        "KAFKA_NODE_ID=2",
+        "-e",
+        "KAFKA_PROCESS_ROLES=broker,controller",
+        "-e",
+        "KAFKA_LISTENERS=PLAINTEXT://:62020,CONTROLLER://:62021",
+        "-e",
+        "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:62020",
+        "-e",
+        "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+        "-e",
+        "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+        "-e",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "-e",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:62011,2@127.0.0.1:62021,3@127.0.0.1:62031",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2",
+        "-e",
+        "KAFKA_MIN_INSYNC_REPLICAS=2",
+        "-e",
+        "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+      ],
+      "returncode": 0,
+      "stdout": "440d16d357f3a59a17bc36611f4b6b2b07247046e055233e8ccbd72a85c88035\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "run",
+        "-d",
+        "--network",
+        "host",
+        "--name",
+        "qualification-1969-move-v2-3",
+        "-e",
+        "KAFKA_NODE_ID=3",
+        "-e",
+        "KAFKA_PROCESS_ROLES=broker,controller",
+        "-e",
+        "KAFKA_LISTENERS=PLAINTEXT://:62030,CONTROLLER://:62031",
+        "-e",
+        "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:62030",
+        "-e",
+        "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+        "-e",
+        "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+        "-e",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "-e",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:62011,2@127.0.0.1:62021,3@127.0.0.1:62031",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2",
+        "-e",
+        "KAFKA_MIN_INSYNC_REPLICAS=2",
+        "-e",
+        "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+      ],
+      "returncode": 0,
+      "stdout": "80c7aecdda37cdbfbc598f9440c7011ccae88726935da03a11a3833c74159a8e\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62010",
+        "modern",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-bd86ec27-0e36-4659-9e54-31f6f42a58f7', nodeId=-1, host='', port=-1, errorCode=15, errorMessage='')])\nWIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=1\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-bd86ec27-0e36-4659-9e54-31f6f42a58f7', nodeId=1, host='127.0.0.1', port=62010, errorCode=0, errorMessage='')])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-bd86ec27-0e36-4659-9e54-31f6f42a58f7', nodeId=-1, host='', port=-1, errorCode=15, errorMessage='')])\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=1\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-bd86ec27-0e36-4659-9e54-31f6f42a58f7', nodeId=3, host='127.0.0.1', port=62030, errorCode=0, errorMessage='')])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=16, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=1\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=14, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=2\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=0TFN1Qm4SaaphQoxPiu3YQ, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=51, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=1\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=0TFN1Qm4SaaphQoxPiu3YQ, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62010\t127.0.0.1:62030\nPENDING\tkafka44-pending-bd86ec27-0e36-4659-9e54-31f6f42a58f7\tkafka44-pending-group-bd86ec27-0e36-4659-9e54-31f6f42a58f7\t0TFN1Qm4SaaphQoxPiu3YQ\tkafka44-pending-txn-bd86ec27-0e36-4659-9e54-31f6f42a58f7\t0\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "kill",
+        "--signal",
+        "KILL",
+        "qualification-1969-move-v2-3"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-3\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62010",
+        "kafka44-pending-bd86ec27-0e36-4659-9e54-31f6f42a58f7",
+        "kafka44-pending-group-bd86ec27-0e36-4659-9e54-31f6f42a58f7",
+        "0TFN1Qm4SaaphQoxPiu3YQ",
+        "kafka44-pending-txn-bd86ec27-0e36-4659-9e54-31f6f42a58f7",
+        "0",
+        "2",
+        "commit"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-bd86ec27-0e36-4659-9e54-31f6f42a58f7', nodeId=1, host='127.0.0.1', port=62010, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-bd86ec27-0e36-4659-9e54-31f6f42a58f7', nodeId=1, host='127.0.0.1', port=62010, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62010\t127.0.0.1:62010\nWIRE\tpending-resolve-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=3)\nSCENARIO\tpending-resolve-commit\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\tnull\tstable=true\tattempt=0\nOBSERVATION\tpending-resolution-visible\t42\tstable=true\tattempt=1\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "start",
+        "qualification-1969-move-v2-3"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-3\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62010",
+        "modern",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-0d7f2d7a-efff-4fa1-a946-5ef4b6e561e7', nodeId=1, host='127.0.0.1', port=62010, errorCode=0, errorMessage='')])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-0d7f2d7a-efff-4fa1-a946-5ef4b6e561e7', nodeId=2, host='127.0.0.1', port=62020, errorCode=0, errorMessage='')])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=14, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=1\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=1000, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=tkL6tVcYR4Gbo9xuis4oQg, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=1000, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=51, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=1\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=1000, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=tkL6tVcYR4Gbo9xuis4oQg, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62010\t127.0.0.1:62020\nPENDING\tkafka44-pending-0d7f2d7a-efff-4fa1-a946-5ef4b6e561e7\tkafka44-pending-group-0d7f2d7a-efff-4fa1-a946-5ef4b6e561e7\ttkL6tVcYR4Gbo9xuis4oQg\tkafka44-pending-txn-0d7f2d7a-efff-4fa1-a946-5ef4b6e561e7\t1000\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "kill",
+        "--signal",
+        "KILL",
+        "qualification-1969-move-v2-2"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62010",
+        "kafka44-pending-0d7f2d7a-efff-4fa1-a946-5ef4b6e561e7",
+        "kafka44-pending-group-0d7f2d7a-efff-4fa1-a946-5ef4b6e561e7",
+        "tkL6tVcYR4Gbo9xuis4oQg",
+        "kafka44-pending-txn-0d7f2d7a-efff-4fa1-a946-5ef4b6e561e7",
+        "1000",
+        "2",
+        "abort"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-0d7f2d7a-efff-4fa1-a946-5ef4b6e561e7', nodeId=1, host='127.0.0.1', port=62010, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-0d7f2d7a-efff-4fa1-a946-5ef4b6e561e7', nodeId=3, host='127.0.0.1', port=62030, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62010\t127.0.0.1:62030\nWIRE\tpending-resolve-abort\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=1000, producerEpoch=3)\nSCENARIO\tpending-resolve-abort\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\tnull\tstable=true\tattempt=0\nOBSERVATION\tpending-resolution-visible\t7\tstable=true\tattempt=1\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "start",
+        "qualification-1969-move-v2-2"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62010",
+        "modern",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-bb99280a-a1cb-4e10-a565-6cb1117d2026', nodeId=1, host='127.0.0.1', port=62010, errorCode=0, errorMessage='')])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-bb99280a-a1cb-4e10-a565-6cb1117d2026', nodeId=1, host='127.0.0.1', port=62010, errorCode=0, errorMessage='')])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=14, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=1\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=2000, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=4dXOOA7SSnyuZhvTtRjn3A, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=2000, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=2000, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=4dXOOA7SSnyuZhvTtRjn3A, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62010\t127.0.0.1:62010\nPENDING\tkafka44-pending-bb99280a-a1cb-4e10-a565-6cb1117d2026\tkafka44-pending-group-bb99280a-a1cb-4e10-a565-6cb1117d2026\t4dXOOA7SSnyuZhvTtRjn3A\tkafka44-pending-txn-bb99280a-a1cb-4e10-a565-6cb1117d2026\t2000\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "kill",
+        "--signal",
+        "KILL",
+        "qualification-1969-move-v2-1"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-1\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62020",
+        "kafka44-pending-bb99280a-a1cb-4e10-a565-6cb1117d2026",
+        "kafka44-pending-group-bb99280a-a1cb-4e10-a565-6cb1117d2026",
+        "4dXOOA7SSnyuZhvTtRjn3A",
+        "kafka44-pending-txn-bb99280a-a1cb-4e10-a565-6cb1117d2026",
+        "2000",
+        "2",
+        "commit"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-bb99280a-a1cb-4e10-a565-6cb1117d2026', nodeId=2, host='127.0.0.1', port=62020, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-bb99280a-a1cb-4e10-a565-6cb1117d2026', nodeId=2, host='127.0.0.1', port=62020, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62020\t127.0.0.1:62020\nWIRE\tpending-resolve-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=2000, producerEpoch=3)\nSCENARIO\tpending-resolve-commit\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\tnull\tstable=true\tattempt=0\nOBSERVATION\tpending-resolution-visible\t42\tstable=true\tattempt=1\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "start",
+        "qualification-1969-move-v2-1"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-1\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62010",
+        "modern",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-f8ca211b-323c-4b6e-b493-bcaf20d9d900', nodeId=3, host='127.0.0.1', port=62030, errorCode=0, errorMessage='')])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-f8ca211b-323c-4b6e-b493-bcaf20d9d900', nodeId=2, host='127.0.0.1', port=62020, errorCode=0, errorMessage='')])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=14, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=1\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=3000, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=GtZVdB2zToyzrsycwKBJFg, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=3000, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=51, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=1\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=3000, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=GtZVdB2zToyzrsycwKBJFg, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62030\t127.0.0.1:62020\nPENDING\tkafka44-pending-f8ca211b-323c-4b6e-b493-bcaf20d9d900\tkafka44-pending-group-f8ca211b-323c-4b6e-b493-bcaf20d9d900\tGtZVdB2zToyzrsycwKBJFg\tkafka44-pending-txn-f8ca211b-323c-4b6e-b493-bcaf20d9d900\t3000\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "kill",
+        "--signal",
+        "KILL",
+        "qualification-1969-move-v2-3"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-3\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62010",
+        "kafka44-pending-f8ca211b-323c-4b6e-b493-bcaf20d9d900",
+        "kafka44-pending-group-f8ca211b-323c-4b6e-b493-bcaf20d9d900",
+        "GtZVdB2zToyzrsycwKBJFg",
+        "kafka44-pending-txn-f8ca211b-323c-4b6e-b493-bcaf20d9d900",
+        "3000",
+        "2",
+        "abort"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-f8ca211b-323c-4b6e-b493-bcaf20d9d900', nodeId=2, host='127.0.0.1', port=62020, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-f8ca211b-323c-4b6e-b493-bcaf20d9d900', nodeId=2, host='127.0.0.1', port=62020, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62020\t127.0.0.1:62020\nWIRE\tpending-resolve-abort\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=3000, producerEpoch=3)\nSCENARIO\tpending-resolve-abort\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\t7\tstable=true\tattempt=0\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "start",
+        "qualification-1969-move-v2-3"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-3\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62010",
+        "legacy",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-4c6a6deb-8c85-4405-822d-767c83ab830f', nodeId=2, host='127.0.0.1', port=62020, errorCode=0, errorMessage='')])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-4c6a6deb-8c85-4405-822d-767c83ab830f', nodeId=1, host='127.0.0.1', port=62010, errorCode=0, errorMessage='')])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=14, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=1\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=4000, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-4c6a6deb-8c85-4405-822d-767c83ab830f', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=4000, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=51, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=1\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=4000, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-4c6a6deb-8c85-4405-822d-767c83ab830f', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62020\t127.0.0.1:62010\nPENDING\tkafka44-pending-4c6a6deb-8c85-4405-822d-767c83ab830f\tkafka44-pending-group-4c6a6deb-8c85-4405-822d-767c83ab830f\tRu3Fkn3zTQeKjoBImR1oSQ\tkafka44-pending-txn-4c6a6deb-8c85-4405-822d-767c83ab830f\t4000\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "kill",
+        "--signal",
+        "KILL",
+        "qualification-1969-move-v2-1"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-1\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62020",
+        "kafka44-pending-4c6a6deb-8c85-4405-822d-767c83ab830f",
+        "kafka44-pending-group-4c6a6deb-8c85-4405-822d-767c83ab830f",
+        "Ru3Fkn3zTQeKjoBImR1oSQ",
+        "kafka44-pending-txn-4c6a6deb-8c85-4405-822d-767c83ab830f",
+        "4000",
+        "2",
+        "commit"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-4c6a6deb-8c85-4405-822d-767c83ab830f', nodeId=2, host='127.0.0.1', port=62020, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-4c6a6deb-8c85-4405-822d-767c83ab830f', nodeId=3, host='127.0.0.1', port=62030, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62020\t127.0.0.1:62030\nWIRE\tpending-resolve-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=4000, producerEpoch=3)\nSCENARIO\tpending-resolve-commit\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\tnull\tstable=true\tattempt=0\nOBSERVATION\tpending-resolution-visible\t42\tstable=true\tattempt=1\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "start",
+        "qualification-1969-move-v2-1"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-1\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62010",
+        "legacy",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-f522fc2a-791f-419e-a758-39b1e753e521', nodeId=2, host='127.0.0.1', port=62020, errorCode=0, errorMessage='')])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-f522fc2a-791f-419e-a758-39b1e753e521', nodeId=2, host='127.0.0.1', port=62020, errorCode=0, errorMessage='')])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=3001, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-f522fc2a-791f-419e-a758-39b1e753e521', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=3001, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=3001, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-f522fc2a-791f-419e-a758-39b1e753e521', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62020\t127.0.0.1:62020\nPENDING\tkafka44-pending-f522fc2a-791f-419e-a758-39b1e753e521\tkafka44-pending-group-f522fc2a-791f-419e-a758-39b1e753e521\ts7nJSNXVT3enRScZJ0NECw\tkafka44-pending-txn-f522fc2a-791f-419e-a758-39b1e753e521\t3001\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "kill",
+        "--signal",
+        "KILL",
+        "qualification-1969-move-v2-2"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62010",
+        "kafka44-pending-f522fc2a-791f-419e-a758-39b1e753e521",
+        "kafka44-pending-group-f522fc2a-791f-419e-a758-39b1e753e521",
+        "s7nJSNXVT3enRScZJ0NECw",
+        "kafka44-pending-txn-f522fc2a-791f-419e-a758-39b1e753e521",
+        "3001",
+        "2",
+        "abort"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-f522fc2a-791f-419e-a758-39b1e753e521', nodeId=1, host='127.0.0.1', port=62010, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-f522fc2a-791f-419e-a758-39b1e753e521', nodeId=3, host='127.0.0.1', port=62030, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62010\t127.0.0.1:62030\nWIRE\tpending-resolve-abort\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=3001, producerEpoch=3)\nSCENARIO\tpending-resolve-abort\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\tnull\tstable=true\tattempt=0\nOBSERVATION\tpending-resolution-visible\t7\tstable=true\tattempt=1\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "start",
+        "qualification-1969-move-v2-2"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62010",
+        "legacy",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-3ed32779-c5c1-4f8e-abd3-2f710113781e', nodeId=3, host='127.0.0.1', port=62030, errorCode=0, errorMessage='')])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-3ed32779-c5c1-4f8e-abd3-2f710113781e', nodeId=3, host='127.0.0.1', port=62030, errorCode=0, errorMessage='')])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=14, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=1\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=5000, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-3ed32779-c5c1-4f8e-abd3-2f710113781e', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=5000, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=5000, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-3ed32779-c5c1-4f8e-abd3-2f710113781e', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62030\t127.0.0.1:62030\nPENDING\tkafka44-pending-3ed32779-c5c1-4f8e-abd3-2f710113781e\tkafka44-pending-group-3ed32779-c5c1-4f8e-abd3-2f710113781e\tknPGFj7ZRl2vVLXAk7PjuQ\tkafka44-pending-txn-3ed32779-c5c1-4f8e-abd3-2f710113781e\t5000\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "kill",
+        "--signal",
+        "KILL",
+        "qualification-1969-move-v2-3"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-3\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62010",
+        "kafka44-pending-3ed32779-c5c1-4f8e-abd3-2f710113781e",
+        "kafka44-pending-group-3ed32779-c5c1-4f8e-abd3-2f710113781e",
+        "knPGFj7ZRl2vVLXAk7PjuQ",
+        "kafka44-pending-txn-3ed32779-c5c1-4f8e-abd3-2f710113781e",
+        "5000",
+        "2",
+        "commit"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-3ed32779-c5c1-4f8e-abd3-2f710113781e', nodeId=2, host='127.0.0.1', port=62020, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-3ed32779-c5c1-4f8e-abd3-2f710113781e', nodeId=2, host='127.0.0.1', port=62020, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62020\t127.0.0.1:62020\nWIRE\tpending-resolve-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=5000, producerEpoch=3)\nSCENARIO\tpending-resolve-commit\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\tnull\tstable=true\tattempt=0\nOBSERVATION\tpending-resolution-visible\t42\tstable=true\tattempt=1\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "start",
+        "qualification-1969-move-v2-3"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-3\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62010",
+        "legacy",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-3597ee5e-14a6-42ff-a1ce-61c113ec0b17', nodeId=1, host='127.0.0.1', port=62010, errorCode=0, errorMessage='')])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-3597ee5e-14a6-42ff-a1ce-61c113ec0b17', nodeId=1, host='127.0.0.1', port=62010, errorCode=0, errorMessage='')])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=14, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=1\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=6000, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-3597ee5e-14a6-42ff-a1ce-61c113ec0b17', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=6000, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=6000, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-3597ee5e-14a6-42ff-a1ce-61c113ec0b17', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62010\t127.0.0.1:62010\nPENDING\tkafka44-pending-3597ee5e-14a6-42ff-a1ce-61c113ec0b17\tkafka44-pending-group-3597ee5e-14a6-42ff-a1ce-61c113ec0b17\tggdEP12BQEaBsITM2Cxv8Q\tkafka44-pending-txn-3597ee5e-14a6-42ff-a1ce-61c113ec0b17\t6000\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "kill",
+        "--signal",
+        "KILL",
+        "qualification-1969-move-v2-1"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-1\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62020",
+        "kafka44-pending-3597ee5e-14a6-42ff-a1ce-61c113ec0b17",
+        "kafka44-pending-group-3597ee5e-14a6-42ff-a1ce-61c113ec0b17",
+        "ggdEP12BQEaBsITM2Cxv8Q",
+        "kafka44-pending-txn-3597ee5e-14a6-42ff-a1ce-61c113ec0b17",
+        "6000",
+        "2",
+        "abort"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-3597ee5e-14a6-42ff-a1ce-61c113ec0b17', nodeId=3, host='127.0.0.1', port=62030, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-3597ee5e-14a6-42ff-a1ce-61c113ec0b17', nodeId=3, host='127.0.0.1', port=62030, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62030\t127.0.0.1:62030\nWIRE\tpending-resolve-abort\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=6000, producerEpoch=3)\nSCENARIO\tpending-resolve-abort\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\tnull\tstable=true\tattempt=0\nOBSERVATION\tpending-resolution-visible\t7\tstable=true\tattempt=1\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "start",
+        "qualification-1969-move-v2-1"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-1\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "stop",
+        "qualification-1969-move-v2-1"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-1\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "stop",
+        "qualification-1969-move-v2-2"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "stop",
+        "qualification-1969-move-v2-3"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-1969-move-v2-3\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/candidate/1/data",
+        "--node-id",
+        "1",
+        "--cluster-id",
+        "86727587-6c70-4c01-ad4b-9bf2d3bf738f",
+        "--directory-id",
+        "0f81044d-3019-40bb-b178-056684ea0ca3",
+        "--initial-controllers",
+        "1@127.0.0.1:62111:0f81044d-3019-40bb-b178-056684ea0ca3,2@127.0.0.1:62121:8a424e47-ba1c-4da5-9040-9cc3c2052516,3@127.0.0.1:62131:f29767a5-d71f-4d1a-8add-a99280d859a3",
+        "--release-version",
+        "4.4-IV2",
+        "--unstable-feature-versions-enable"
+      ],
+      "returncode": 0,
+      "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/candidate/1/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id hnJ1h2xwTAGtS5vy079zjw (6 seed record(s))\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/candidate/1/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62111",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1241950
+    },
+    {
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/candidate/2/data",
+        "--node-id",
+        "2",
+        "--cluster-id",
+        "86727587-6c70-4c01-ad4b-9bf2d3bf738f",
+        "--directory-id",
+        "8a424e47-ba1c-4da5-9040-9cc3c2052516",
+        "--initial-controllers",
+        "1@127.0.0.1:62111:0f81044d-3019-40bb-b178-056684ea0ca3,2@127.0.0.1:62121:8a424e47-ba1c-4da5-9040-9cc3c2052516,3@127.0.0.1:62131:f29767a5-d71f-4d1a-8add-a99280d859a3",
+        "--release-version",
+        "4.4-IV2",
+        "--unstable-feature-versions-enable"
+      ],
+      "returncode": 0,
+      "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/candidate/2/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id hnJ1h2xwTAGtS5vy079zjw (6 seed record(s))\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/candidate/2/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62121",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1241969
+    },
+    {
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/candidate/3/data",
+        "--node-id",
+        "3",
+        "--cluster-id",
+        "86727587-6c70-4c01-ad4b-9bf2d3bf738f",
+        "--directory-id",
+        "f29767a5-d71f-4d1a-8add-a99280d859a3",
+        "--initial-controllers",
+        "1@127.0.0.1:62111:0f81044d-3019-40bb-b178-056684ea0ca3,2@127.0.0.1:62121:8a424e47-ba1c-4da5-9040-9cc3c2052516,3@127.0.0.1:62131:f29767a5-d71f-4d1a-8add-a99280d859a3",
+        "--release-version",
+        "4.4-IV2",
+        "--unstable-feature-versions-enable"
+      ],
+      "returncode": 0,
+      "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/candidate/3/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id hnJ1h2xwTAGtS5vy079zjw (6 seed record(s))\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/candidate/3/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62131",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1242005
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62110",
+        "modern",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-580f4162-d5d2-4d9d-811a-dc66d1e1a47f', nodeId=-1, host='', port=-1, errorCode=15, errorMessage=null)])\nWIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=1\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-580f4162-d5d2-4d9d-811a-dc66d1e1a47f', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-580f4162-d5d2-4d9d-811a-dc66d1e1a47f', nodeId=-1, host='', port=-1, errorCode=15, errorMessage=null)])\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=1\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-580f4162-d5d2-4d9d-811a-dc66d1e1a47f', nodeId=1, host='127.0.0.1', port=62110, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=NOhontw4Q4eT-4pANkqNNA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=NOhontw4Q4eT-4pANkqNNA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62120\t127.0.0.1:62110\nPENDING\tkafka44-pending-580f4162-d5d2-4d9d-811a-dc66d1e1a47f\tkafka44-pending-group-580f4162-d5d2-4d9d-811a-dc66d1e1a47f\tNOhontw4Q4eT-4pANkqNNA\tkafka44-pending-txn-580f4162-d5d2-4d9d-811a-dc66d1e1a47f\t0\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62120",
+        "kafka44-pending-580f4162-d5d2-4d9d-811a-dc66d1e1a47f",
+        "kafka44-pending-group-580f4162-d5d2-4d9d-811a-dc66d1e1a47f",
+        "NOhontw4Q4eT-4pANkqNNA",
+        "kafka44-pending-txn-580f4162-d5d2-4d9d-811a-dc66d1e1a47f",
+        "0",
+        "2",
+        "commit"
+      ],
+      "returncode": 1,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-580f4162-d5d2-4d9d-811a-dc66d1e1a47f', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-580f4162-d5d2-4d9d-811a-dc66d1e1a47f', nodeId=1, host='127.0.0.1', port=62110, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62120\t127.0.0.1:62110\n",
+      "stderr": "Exception in thread \"main\" java.net.ConnectException: Connection refused (connect failed)\n\tat java.base/sun.nio.ch.Net.pollConnect(Native Method)\n\tat java.base/sun.nio.ch.Net.pollConnectNow(Net.java:639)\n\tat java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:543)\n\tat java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)\n\tat java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)\n\tat java.base/java.net.Socket.connect(Socket.java:659)\n\tat ProtocolScenarios.exchange(ProtocolScenarios.java:42)\n\tat ProtocolScenarios.exchange(ProtocolScenarios.java:36)\n\tat TransactionScenarios.call(TransactionScenarios.java:22)\n\tat TransactionScenarios.call(TransactionScenarios.java:17)\n\tat TransactionScenarios.finish(TransactionScenarios.java:73)\n\tat PendingTransactionRecovery.main(PendingTransactionRecovery.java:63)\n"
+    }
+  ],
+  "accepted_candidate_commands": [
+    {
+      "command": [
+        "javac",
+        "--release",
+        "17",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "-d",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969-followthrough/tools/kafka44/ProtocolScenarios.java",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969-followthrough/tools/kafka44/TransactionScenarios.java",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969-followthrough/tools/kafka44/PendingTransactionRecovery.java"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/1/data",
+        "--node-id",
+        "1",
+        "--cluster-id",
+        "2b7c303b-4e1d-4c27-8476-594960e7a24b",
+        "--directory-id",
+        "2b6dfa5b-2127-4c75-a6b4-1f08d2dcb8fc",
+        "--initial-controllers",
+        "1@127.0.0.1:62111:2b6dfa5b-2127-4c75-a6b4-1f08d2dcb8fc,2@127.0.0.1:62121:06c544bc-d8c2-4502-b003-d37bc1fbd7a9,3@127.0.0.1:62131:ef1b5cfa-e4ad-45bb-ad70-ea77e4bce0b2",
+        "--release-version",
+        "4.4-IV2",
+        "--unstable-feature-versions-enable"
+      ],
+      "returncode": 0,
+      "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/1/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id K3wwO04dTCeEdllJYOeiSw (6 seed record(s))\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/1/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62111",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1244446
+    },
+    {
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/2/data",
+        "--node-id",
+        "2",
+        "--cluster-id",
+        "2b7c303b-4e1d-4c27-8476-594960e7a24b",
+        "--directory-id",
+        "06c544bc-d8c2-4502-b003-d37bc1fbd7a9",
+        "--initial-controllers",
+        "1@127.0.0.1:62111:2b6dfa5b-2127-4c75-a6b4-1f08d2dcb8fc,2@127.0.0.1:62121:06c544bc-d8c2-4502-b003-d37bc1fbd7a9,3@127.0.0.1:62131:ef1b5cfa-e4ad-45bb-ad70-ea77e4bce0b2",
+        "--release-version",
+        "4.4-IV2",
+        "--unstable-feature-versions-enable"
+      ],
+      "returncode": 0,
+      "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/2/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id K3wwO04dTCeEdllJYOeiSw (6 seed record(s))\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/2/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62121",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1244465
+    },
+    {
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/3/data",
+        "--node-id",
+        "3",
+        "--cluster-id",
+        "2b7c303b-4e1d-4c27-8476-594960e7a24b",
+        "--directory-id",
+        "ef1b5cfa-e4ad-45bb-ad70-ea77e4bce0b2",
+        "--initial-controllers",
+        "1@127.0.0.1:62111:2b6dfa5b-2127-4c75-a6b4-1f08d2dcb8fc,2@127.0.0.1:62121:06c544bc-d8c2-4502-b003-d37bc1fbd7a9,3@127.0.0.1:62131:ef1b5cfa-e4ad-45bb-ad70-ea77e4bce0b2",
+        "--release-version",
+        "4.4-IV2",
+        "--unstable-feature-versions-enable"
+      ],
+      "returncode": 0,
+      "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/3/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id K3wwO04dTCeEdllJYOeiSw (6 seed record(s))\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/3/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62131",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1244500
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62110",
+        "modern",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-95113745-ca5f-4a8e-afc1-2d0f77527a8e', nodeId=-1, host='', port=-1, errorCode=15, errorMessage=null)])\nWIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=1\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-95113745-ca5f-4a8e-afc1-2d0f77527a8e', nodeId=1, host='127.0.0.1', port=62110, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-95113745-ca5f-4a8e-afc1-2d0f77527a8e', nodeId=-1, host='', port=-1, errorCode=15, errorMessage=null)])\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=1\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-95113745-ca5f-4a8e-afc1-2d0f77527a8e', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=WfKDZD2IRQO95EBe9astBg, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=WfKDZD2IRQO95EBe9astBg, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62110\t127.0.0.1:62120\nPENDING\tkafka44-pending-95113745-ca5f-4a8e-afc1-2d0f77527a8e\tkafka44-pending-group-95113745-ca5f-4a8e-afc1-2d0f77527a8e\tWfKDZD2IRQO95EBe9astBg\tkafka44-pending-txn-95113745-ca5f-4a8e-afc1-2d0f77527a8e\t0\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62110",
+        "kafka44-pending-95113745-ca5f-4a8e-afc1-2d0f77527a8e",
+        "kafka44-pending-group-95113745-ca5f-4a8e-afc1-2d0f77527a8e",
+        "WfKDZD2IRQO95EBe9astBg",
+        "kafka44-pending-txn-95113745-ca5f-4a8e-afc1-2d0f77527a8e",
+        "0",
+        "2",
+        "commit"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-95113745-ca5f-4a8e-afc1-2d0f77527a8e', nodeId=1, host='127.0.0.1', port=62110, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-95113745-ca5f-4a8e-afc1-2d0f77527a8e', nodeId=3, host='127.0.0.1', port=62130, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62110\t127.0.0.1:62130\nWIRE\tpending-resolve-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=3)\nSCENARIO\tpending-resolve-commit\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\t42\tstable=true\tattempt=0\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/2/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62121",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1245610
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62110",
+        "modern",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-e05fe814-8af6-41dc-bf60-a059db7049c3', nodeId=1, host='127.0.0.1', port=62110, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-e05fe814-8af6-41dc-bf60-a059db7049c3', nodeId=3, host='127.0.0.1', port=62130, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=1000, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=ORKuu2TCQcCzAUOKW7i4ww, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=1000, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=1000, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=ORKuu2TCQcCzAUOKW7i4ww, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62110\t127.0.0.1:62130\nPENDING\tkafka44-pending-e05fe814-8af6-41dc-bf60-a059db7049c3\tkafka44-pending-group-e05fe814-8af6-41dc-bf60-a059db7049c3\tORKuu2TCQcCzAUOKW7i4ww\tkafka44-pending-txn-e05fe814-8af6-41dc-bf60-a059db7049c3\t1000\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62110",
+        "kafka44-pending-e05fe814-8af6-41dc-bf60-a059db7049c3",
+        "kafka44-pending-group-e05fe814-8af6-41dc-bf60-a059db7049c3",
+        "ORKuu2TCQcCzAUOKW7i4ww",
+        "kafka44-pending-txn-e05fe814-8af6-41dc-bf60-a059db7049c3",
+        "1000",
+        "2",
+        "abort"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-e05fe814-8af6-41dc-bf60-a059db7049c3', nodeId=1, host='127.0.0.1', port=62110, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-e05fe814-8af6-41dc-bf60-a059db7049c3', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62110\t127.0.0.1:62120\nWIRE\tpending-resolve-abort\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=1000, producerEpoch=3)\nSCENARIO\tpending-resolve-abort\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\t7\tstable=true\tattempt=0\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/3/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62131",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1246539
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62110",
+        "modern",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-11aec96d-3e2c-45ab-88a6-0702de6f98eb', nodeId=1, host='127.0.0.1', port=62110, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-11aec96d-3e2c-45ab-88a6-0702de6f98eb', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=2000, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=RV3GaHZ6SGilPO8YQX8xBA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=2000, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=2000, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=RV3GaHZ6SGilPO8YQX8xBA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62110\t127.0.0.1:62120\nPENDING\tkafka44-pending-11aec96d-3e2c-45ab-88a6-0702de6f98eb\tkafka44-pending-group-11aec96d-3e2c-45ab-88a6-0702de6f98eb\tRV3GaHZ6SGilPO8YQX8xBA\tkafka44-pending-txn-11aec96d-3e2c-45ab-88a6-0702de6f98eb\t2000\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62120",
+        "kafka44-pending-11aec96d-3e2c-45ab-88a6-0702de6f98eb",
+        "kafka44-pending-group-11aec96d-3e2c-45ab-88a6-0702de6f98eb",
+        "RV3GaHZ6SGilPO8YQX8xBA",
+        "kafka44-pending-txn-11aec96d-3e2c-45ab-88a6-0702de6f98eb",
+        "2000",
+        "2",
+        "commit"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-11aec96d-3e2c-45ab-88a6-0702de6f98eb', nodeId=3, host='127.0.0.1', port=62130, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-11aec96d-3e2c-45ab-88a6-0702de6f98eb', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62130\t127.0.0.1:62120\nWIRE\tpending-resolve-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=2000, producerEpoch=3)\nSCENARIO\tpending-resolve-commit\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\t42\tstable=true\tattempt=0\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/1/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62111",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1247525
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62110",
+        "modern",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-e16719e2-185e-451e-8838-57587e3505e1', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-e16719e2-185e-451e-8838-57587e3505e1', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=2001, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=bzkBD7gsT7iUi1FpYHzWNA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=2001, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=2001, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=bzkBD7gsT7iUi1FpYHzWNA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62120\t127.0.0.1:62120\nPENDING\tkafka44-pending-e16719e2-185e-451e-8838-57587e3505e1\tkafka44-pending-group-e16719e2-185e-451e-8838-57587e3505e1\tbzkBD7gsT7iUi1FpYHzWNA\tkafka44-pending-txn-e16719e2-185e-451e-8838-57587e3505e1\t2001\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62110",
+        "kafka44-pending-e16719e2-185e-451e-8838-57587e3505e1",
+        "kafka44-pending-group-e16719e2-185e-451e-8838-57587e3505e1",
+        "bzkBD7gsT7iUi1FpYHzWNA",
+        "kafka44-pending-txn-e16719e2-185e-451e-8838-57587e3505e1",
+        "2001",
+        "2",
+        "abort"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-e16719e2-185e-451e-8838-57587e3505e1', nodeId=1, host='127.0.0.1', port=62110, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-e16719e2-185e-451e-8838-57587e3505e1', nodeId=1, host='127.0.0.1', port=62110, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62110\t127.0.0.1:62110\nWIRE\tpending-resolve-abort\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=2001, producerEpoch=3)\nSCENARIO\tpending-resolve-abort\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\t7\tstable=true\tattempt=0\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/2/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62121",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1248399
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62110",
+        "legacy",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-5a7a4afc-8926-4be0-9406-75eb64528af6', nodeId=3, host='127.0.0.1', port=62130, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-5a7a4afc-8926-4be0-9406-75eb64528af6', nodeId=1, host='127.0.0.1', port=62110, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=3000, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-5a7a4afc-8926-4be0-9406-75eb64528af6', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=3000, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=3000, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-5a7a4afc-8926-4be0-9406-75eb64528af6', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62130\t127.0.0.1:62110\nPENDING\tkafka44-pending-5a7a4afc-8926-4be0-9406-75eb64528af6\tkafka44-pending-group-5a7a4afc-8926-4be0-9406-75eb64528af6\tw_O_B2pVTVSECLze66Qc-w\tkafka44-pending-txn-5a7a4afc-8926-4be0-9406-75eb64528af6\t3000\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62120",
+        "kafka44-pending-5a7a4afc-8926-4be0-9406-75eb64528af6",
+        "kafka44-pending-group-5a7a4afc-8926-4be0-9406-75eb64528af6",
+        "w_O_B2pVTVSECLze66Qc-w",
+        "kafka44-pending-txn-5a7a4afc-8926-4be0-9406-75eb64528af6",
+        "3000",
+        "2",
+        "commit"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-5a7a4afc-8926-4be0-9406-75eb64528af6', nodeId=3, host='127.0.0.1', port=62130, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-5a7a4afc-8926-4be0-9406-75eb64528af6', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62130\t127.0.0.1:62120\nWIRE\tpending-resolve-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=3000, producerEpoch=3)\nSCENARIO\tpending-resolve-commit\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\t42\tstable=true\tattempt=0\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/1/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62111",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1250397
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62110",
+        "legacy",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-8134884d-12e3-493e-ac62-af212178a40e', nodeId=3, host='127.0.0.1', port=62130, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-8134884d-12e3-493e-ac62-af212178a40e', nodeId=3, host='127.0.0.1', port=62130, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=4000, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-8134884d-12e3-493e-ac62-af212178a40e', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=4000, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=4000, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-8134884d-12e3-493e-ac62-af212178a40e', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62130\t127.0.0.1:62130\nPENDING\tkafka44-pending-8134884d-12e3-493e-ac62-af212178a40e\tkafka44-pending-group-8134884d-12e3-493e-ac62-af212178a40e\tn-7xU5_rQKCCPm2P6i4G3w\tkafka44-pending-txn-8134884d-12e3-493e-ac62-af212178a40e\t4000\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62110",
+        "kafka44-pending-8134884d-12e3-493e-ac62-af212178a40e",
+        "kafka44-pending-group-8134884d-12e3-493e-ac62-af212178a40e",
+        "n-7xU5_rQKCCPm2P6i4G3w",
+        "kafka44-pending-txn-8134884d-12e3-493e-ac62-af212178a40e",
+        "4000",
+        "2",
+        "abort"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-8134884d-12e3-493e-ac62-af212178a40e', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-8134884d-12e3-493e-ac62-af212178a40e', nodeId=1, host='127.0.0.1', port=62110, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62120\t127.0.0.1:62110\nWIRE\tpending-resolve-abort\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=4000, producerEpoch=3)\nSCENARIO\tpending-resolve-abort\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\t7\tstable=true\tattempt=0\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/3/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62131",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1251673
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62110",
+        "legacy",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-2d3be310-c45b-46f0-8ab4-c2e1632c28ab', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-2d3be310-c45b-46f0-8ab4-c2e1632c28ab', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=5000, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-2d3be310-c45b-46f0-8ab4-c2e1632c28ab', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=5000, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=5000, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-2d3be310-c45b-46f0-8ab4-c2e1632c28ab', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62120\t127.0.0.1:62120\nPENDING\tkafka44-pending-2d3be310-c45b-46f0-8ab4-c2e1632c28ab\tkafka44-pending-group-2d3be310-c45b-46f0-8ab4-c2e1632c28ab\tc6fCWlwHS32fG5dQxwsbiw\tkafka44-pending-txn-2d3be310-c45b-46f0-8ab4-c2e1632c28ab\t5000\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62110",
+        "kafka44-pending-2d3be310-c45b-46f0-8ab4-c2e1632c28ab",
+        "kafka44-pending-group-2d3be310-c45b-46f0-8ab4-c2e1632c28ab",
+        "c6fCWlwHS32fG5dQxwsbiw",
+        "kafka44-pending-txn-2d3be310-c45b-46f0-8ab4-c2e1632c28ab",
+        "5000",
+        "2",
+        "commit"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-2d3be310-c45b-46f0-8ab4-c2e1632c28ab', nodeId=3, host='127.0.0.1', port=62130, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-2d3be310-c45b-46f0-8ab4-c2e1632c28ab', nodeId=3, host='127.0.0.1', port=62130, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62130\t127.0.0.1:62130\nWIRE\tpending-resolve-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=5000, producerEpoch=3)\nSCENARIO\tpending-resolve-commit\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\t42\tstable=true\tattempt=0\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/2/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62121",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1252601
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "seed",
+        "127.0.0.1:62110",
+        "legacy",
+        "3"
+      ],
+      "returncode": 0,
+      "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-4743f734-59f3-47b8-a19a-85a2178b4e40', nodeId=1, host='127.0.0.1', port=62110, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-4743f734-59f3-47b8-a19a-85a2178b4e40', nodeId=3, host='127.0.0.1', port=62130, errorCode=0, errorMessage=null)])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=6000, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-4743f734-59f3-47b8-a19a-85a2178b4e40', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=6000, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=6000, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-4743f734-59f3-47b8-a19a-85a2178b4e40', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\t127.0.0.1:62110\t127.0.0.1:62130\nPENDING\tkafka44-pending-4743f734-59f3-47b8-a19a-85a2178b4e40\tkafka44-pending-group-4743f734-59f3-47b8-a19a-85a2178b4e40\tnCw8EcGiQVmQo6BPc4B2bQ\tkafka44-pending-txn-4743f734-59f3-47b8-a19a-85a2178b4e40\t6000\t2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "PendingTransactionRecovery",
+        "resolve",
+        "127.0.0.1:62120",
+        "kafka44-pending-4743f734-59f3-47b8-a19a-85a2178b4e40",
+        "kafka44-pending-group-4743f734-59f3-47b8-a19a-85a2178b4e40",
+        "nCw8EcGiQVmQo6BPc4B2bQ",
+        "kafka44-pending-txn-4743f734-59f3-47b8-a19a-85a2178b4e40",
+        "6000",
+        "2",
+        "abort"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-4743f734-59f3-47b8-a19a-85a2178b4e40', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-4743f734-59f3-47b8-a19a-85a2178b4e40', nodeId=3, host='127.0.0.1', port=62130, errorCode=0, errorMessage=null)])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\t127.0.0.1:62120\t127.0.0.1:62130\nWIRE\tpending-resolve-abort\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=6000, producerEpoch=3)\nSCENARIO\tpending-resolve-abort\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\t7\tstable=true\tattempt=0\nSCENARIO\tpending-resolution-visible\tPASS\n",
+      "stderr": ""
+    },
+    {
+      "start_command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/1/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62111",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1253565
+    }
+  ],
+  "candidate_configs": {
+    "1": "broker_id = 1\nlog_dir = \"/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/1/data\"\ncontroller_quorum_voters = [\"1@127.0.0.1:62111\", \"2@127.0.0.1:62121\", \"3@127.0.0.1:62131\"]\n[[listeners]]\nname = \"PLAINTEXT\"\nbind_addr = \"127.0.0.1:62110\"\nadvertised = \"127.0.0.1:62110\"\nprotocol = \"Plaintext\"\n[runtime]\noffsets_topic_replication_factor = 3\ntransaction_state_replication_factor = 3\ntransaction_state_min_isr = 2\ndefault_replication_factor = 3\ndefault_min_insync_replicas = 2\n[server_properties]\n\"unstable.api.versions.enable\" = \"true\"\n\"unstable.feature.versions.enable\" = \"true\"\n",
+    "2": "broker_id = 2\nlog_dir = \"/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/2/data\"\ncontroller_quorum_voters = [\"1@127.0.0.1:62111\", \"2@127.0.0.1:62121\", \"3@127.0.0.1:62131\"]\n[[listeners]]\nname = \"PLAINTEXT\"\nbind_addr = \"127.0.0.1:62120\"\nadvertised = \"127.0.0.1:62120\"\nprotocol = \"Plaintext\"\n[runtime]\noffsets_topic_replication_factor = 3\ntransaction_state_replication_factor = 3\ntransaction_state_min_isr = 2\ndefault_replication_factor = 3\ndefault_min_insync_replicas = 2\n[server_properties]\n\"unstable.api.versions.enable\" = \"true\"\n\"unstable.feature.versions.enable\" = \"true\"\n",
+    "3": "broker_id = 3\nlog_dir = \"/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/3/data\"\ncontroller_quorum_voters = [\"1@127.0.0.1:62111\", \"2@127.0.0.1:62121\", \"3@127.0.0.1:62131\"]\n[[listeners]]\nname = \"PLAINTEXT\"\nbind_addr = \"127.0.0.1:62130\"\nadvertised = \"127.0.0.1:62130\"\nprotocol = \"Plaintext\"\n[runtime]\noffsets_topic_replication_factor = 3\ntransaction_state_replication_factor = 3\ntransaction_state_min_isr = 2\ndefault_replication_factor = 3\ndefault_min_insync_replicas = 2\n[server_properties]\n\"unstable.api.versions.enable\" = \"true\"\n\"unstable.feature.versions.enable\" = \"true\"\n"
+  },
+  "observed_live_processes": [
+    {
+      "pid": 1244446,
+      "proc_exe_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/1/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62111",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ]
+    },
+    {
+      "pid": 1245610,
+      "proc_exe_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3/candidate/2/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62121",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ]
+    }
+  ],
+  "retained_failures": {
+    "initial_released_init_race": {
+      "qualification_pass": false,
+      "scope": "RF3/minISR2 pending transactional offset coordinator and offsets leader process failure; not power loss or mid-marker fault",
+      "binary_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+      "commands": [
+        {
+          "command": [
+            "javac",
+            "--release",
+            "17",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+            "-d",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement/classes",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969-followthrough/tools/kafka44/ProtocolScenarios.java",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969-followthrough/tools/kafka44/TransactionScenarios.java",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969-followthrough/tools/kafka44/PendingTransactionRecovery.java"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "docker",
+            "run",
+            "-d",
+            "--network",
+            "host",
+            "--name",
+            "qualification-1969-move-1",
+            "-e",
+            "KAFKA_NODE_ID=1",
+            "-e",
+            "KAFKA_PROCESS_ROLES=broker,controller",
+            "-e",
+            "KAFKA_LISTENERS=PLAINTEXT://:62010,CONTROLLER://:62011",
+            "-e",
+            "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:62010",
+            "-e",
+            "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+            "-e",
+            "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+            "-e",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+            "-e",
+            "KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:62011,2@127.0.0.1:62021,3@127.0.0.1:62031",
+            "-e",
+            "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3",
+            "-e",
+            "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
+            "-e",
+            "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2",
+            "-e",
+            "KAFKA_MIN_INSYNC_REPLICAS=2",
+            "-e",
+            "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+            "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+          ],
+          "returncode": 0,
+          "stdout": "8552d9cc23ef45fd25e0d041f9ea451d1f83d002dac128586b6d697b49259dc8\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "docker",
+            "run",
+            "-d",
+            "--network",
+            "host",
+            "--name",
+            "qualification-1969-move-2",
+            "-e",
+            "KAFKA_NODE_ID=2",
+            "-e",
+            "KAFKA_PROCESS_ROLES=broker,controller",
+            "-e",
+            "KAFKA_LISTENERS=PLAINTEXT://:62020,CONTROLLER://:62021",
+            "-e",
+            "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:62020",
+            "-e",
+            "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+            "-e",
+            "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+            "-e",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+            "-e",
+            "KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:62011,2@127.0.0.1:62021,3@127.0.0.1:62031",
+            "-e",
+            "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3",
+            "-e",
+            "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
+            "-e",
+            "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2",
+            "-e",
+            "KAFKA_MIN_INSYNC_REPLICAS=2",
+            "-e",
+            "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+            "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+          ],
+          "returncode": 0,
+          "stdout": "331525e7671b0b4175a7ad5970e4e109ec2b2b49f72b12f3b8743281248d5356\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "docker",
+            "run",
+            "-d",
+            "--network",
+            "host",
+            "--name",
+            "qualification-1969-move-3",
+            "-e",
+            "KAFKA_NODE_ID=3",
+            "-e",
+            "KAFKA_PROCESS_ROLES=broker,controller",
+            "-e",
+            "KAFKA_LISTENERS=PLAINTEXT://:62030,CONTROLLER://:62031",
+            "-e",
+            "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:62030",
+            "-e",
+            "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+            "-e",
+            "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+            "-e",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+            "-e",
+            "KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:62011,2@127.0.0.1:62021,3@127.0.0.1:62031",
+            "-e",
+            "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3",
+            "-e",
+            "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
+            "-e",
+            "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2",
+            "-e",
+            "KAFKA_MIN_INSYNC_REPLICAS=2",
+            "-e",
+            "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+            "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+          ],
+          "returncode": 0,
+          "stdout": "75942d0e44bca6099a2b36cb94825054e1ccae7df51aff4c2080c327b7c58ed0\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+            "PendingTransactionRecovery",
+            "seed",
+            "127.0.0.1:62010",
+            "modern",
+            "3"
+          ],
+          "returncode": 1,
+          "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-1caffaa4-ed3f-46ed-a100-e965629d6221', nodeId=-1, host='', port=-1, errorCode=15, errorMessage='')])\nWIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=1\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-1caffaa4-ed3f-46ed-a100-e965629d6221', nodeId=3, host='127.0.0.1', port=62030, errorCode=0, errorMessage='')])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-1caffaa4-ed3f-46ed-a100-e965629d6221', nodeId=-1, host='', port=-1, errorCode=15, errorMessage='')])\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=1\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-1caffaa4-ed3f-46ed-a100-e965629d6221', nodeId=1, host='127.0.0.1', port=62010, errorCode=0, errorMessage='')])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=16, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=1\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=14, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=2\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=aBZgaX9lTUOa9DaXrIhQ8g, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=51, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\n",
+          "stderr": "Exception in thread \"main\" java.lang.IllegalStateException: pending-init failed {CONCURRENT_TRANSACTIONS=1}\n\tat TransactionScenarios.call(TransactionScenarios.java:36)\n\tat TransactionScenarios.call(TransactionScenarios.java:17)\n\tat PendingTransactionRecovery.initialize(PendingTransactionRecovery.java:14)\n\tat PendingTransactionRecovery.main(PendingTransactionRecovery.java:46)\n"
+        },
+        {
+          "command": [
+            "docker",
+            "stop",
+            "qualification-1969-move-1"
+          ],
+          "returncode": 0,
+          "stdout": "qualification-1969-move-1\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "docker",
+            "stop",
+            "qualification-1969-move-2"
+          ],
+          "returncode": 0,
+          "stdout": "qualification-1969-move-2\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "docker",
+            "stop",
+            "qualification-1969-move-3"
+          ],
+          "returncode": 0,
+          "stdout": "qualification-1969-move-3\n",
+          "stderr": ""
+        }
+      ],
+      "cases": [],
+      "failure": "{'command': ['java', '-cp', '/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*', 'PendingTransactionRecovery', 'seed', '127.0.0.1:62010', 'modern', '3'], 'returncode': 1, 'stdout': \"WIRE\\tpending-group-coordinator\\tFIND_COORDINATOR/v4\\tattempt=0\\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-1caffaa4-ed3f-46ed-a100-e965629d6221', nodeId=-1, host='', port=-1, errorCode=15, errorMessage='')])\\nWIRE\\tpending-group-coordinator\\tFIND_COORDINATOR/v4\\tattempt=1\\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-1caffaa4-ed3f-46ed-a100-e965629d6221', nodeId=3, host='127.0.0.1', port=62030, errorCode=0, errorMessage='')])\\nSCENARIO\\tpending-group-coordinator\\t{NONE=1}\\nWIRE\\tpending-txn-coordinator\\tFIND_COORDINATOR/v4\\tattempt=0\\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-1caffaa4-ed3f-46ed-a100-e965629d6221', nodeId=-1, host='', port=-1, errorCode=15, errorMessage='')])\\nWIRE\\tpending-txn-coordinator\\tFIND_COORDINATOR/v4\\tattempt=1\\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-1caffaa4-ed3f-46ed-a100-e965629d6221', nodeId=1, host='127.0.0.1', port=62010, errorCode=0, errorMessage='')])\\nSCENARIO\\tpending-txn-coordinator\\t{NONE=1}\\nWIRE\\tpending-init\\tINIT_PRODUCER_ID/v5\\tattempt=0\\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=16, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\\nWIRE\\tpending-init\\tINIT_PRODUCER_ID/v5\\tattempt=1\\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=14, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\\nWIRE\\tpending-init\\tINIT_PRODUCER_ID/v5\\tattempt=2\\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\\nSCENARIO\\tpending-init\\t{NONE=1}\\nWIRE\\tbaseline-offset\\tTXN_OFFSET_COMMIT/v6\\tattempt=0\\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=aBZgaX9lTUOa9DaXrIhQ8g, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\\nSCENARIO\\tbaseline-offset\\t{NONE=1}\\nWIRE\\tbaseline-commit\\tEND_TXN/v5\\tattempt=0\\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=0, producerEpoch=1)\\nSCENARIO\\tbaseline-commit\\t{NONE=1}\\nOBSERVATION\\tbaseline-visible\\t7\\tstable=true\\tattempt=0\\nSCENARIO\\tbaseline-visible\\tPASS\\nWIRE\\tpending-init\\tINIT_PRODUCER_ID/v5\\tattempt=0\\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=51, producerId=-1, producerEpoch=-1, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\\n\", 'stderr': 'Exception in thread \"main\" java.lang.IllegalStateException: pending-init failed {CONCURRENT_TRANSACTIONS=1}\\n\\tat TransactionScenarios.call(TransactionScenarios.java:36)\\n\\tat TransactionScenarios.call(TransactionScenarios.java:17)\\n\\tat PendingTransactionRecovery.initialize(PendingTransactionRecovery.java:14)\\n\\tat PendingTransactionRecovery.main(PendingTransactionRecovery.java:46)\\n'}"
+    },
+    "candidate_election_wait_too_short": "{'command': ['java', '-cp', '/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*', 'PendingTransactionRecovery', 'resolve', '127.0.0.1:62120', 'kafka44-pending-580f4162-d5d2-4d9d-811a-dc66d1e1a47f', 'kafka44-pending-group-580f4162-d5d2-4d9d-811a-dc66d1e1a47f', 'NOhontw4Q4eT-4pANkqNNA', 'kafka44-pending-txn-580f4162-d5d2-4d9d-811a-dc66d1e1a47f', '0', '2', 'commit'], 'returncode': 1, 'stdout': \"SCENARIO\\tpending-crash-topic-id\\tPASS\\nOBSERVATION\\tpending-invisible-after-crash\\t7\\tstable=false\\tattempt=0\\nSCENARIO\\tpending-invisible-after-crash\\tPASS\\nWIRE\\trecovered-group-coordinator\\tFIND_COORDINATOR/v4\\tattempt=0\\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-580f4162-d5d2-4d9d-811a-dc66d1e1a47f', nodeId=2, host='127.0.0.1', port=62120, errorCode=0, errorMessage=null)])\\nSCENARIO\\trecovered-group-coordinator\\t{NONE=1}\\nWIRE\\trecovered-txn-coordinator\\tFIND_COORDINATOR/v4\\tattempt=0\\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-580f4162-d5d2-4d9d-811a-dc66d1e1a47f', nodeId=1, host='127.0.0.1', port=62110, errorCode=0, errorMessage=null)])\\nSCENARIO\\trecovered-txn-coordinator\\t{NONE=1}\\nOWNERS\\t127.0.0.1:62120\\t127.0.0.1:62110\\n\", 'stderr': 'Exception in thread \"main\" java.net.ConnectException: Connection refused (connect failed)\\n\\tat java.base/sun.nio.ch.Net.pollConnect(Native Method)\\n\\tat java.base/sun.nio.ch.Net.pollConnectNow(Net.java:639)\\n\\tat java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:543)\\n\\tat java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)\\n\\tat java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)\\n\\tat java.base/java.net.Socket.connect(Socket.java:659)\\n\\tat ProtocolScenarios.exchange(ProtocolScenarios.java:42)\\n\\tat ProtocolScenarios.exchange(ProtocolScenarios.java:36)\\n\\tat TransactionScenarios.call(TransactionScenarios.java:22)\\n\\tat TransactionScenarios.call(TransactionScenarios.java:17)\\n\\tat TransactionScenarios.finish(TransactionScenarios.java:73)\\n\\tat PendingTransactionRecovery.main(PendingTransactionRecovery.java:63)\\n'}"
+  },
+  "orchestration": {
+    "finish1969multi.py": "import subprocess as sp,json,os,time,pathlib,uuid,socket,hashlib\nroot=pathlib.Path('/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v2');root.mkdir(exist_ok=True)\nrepo=pathlib.Path('/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969-followthrough')\nlibs='/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*'\nbinary='/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker'\nfmt='/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format'\nimage='apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b'\nr={'qualification_pass':False,'scope':'RF3/minISR2 pending transactional offset coordinator and offsets leader process failure; not power loss or mid-marker fault','binary_sha256':hashlib.sha256(open(binary,'rb').read()).hexdigest(),'commands':[],'cases':[]}\ndef save(): (root/'receipt.json').write_text(json.dumps(r,indent=2))\ndef run(cmd,check=True,timeout=150):\n p=sp.run(list(map(str,cmd)),capture_output=True,text=True,timeout=timeout);row={'command':list(map(str,cmd)),'returncode':p.returncode,'stdout':p.stdout,'stderr':p.stderr};r['commands'].append(row);save()\n if check and p.returncode: raise RuntimeError(str(row))\n return p.stdout\nclasses=root/'classes';classes.mkdir(exist_ok=True)\nrun(['javac','--release','17','-cp',libs,'-d',classes]+[repo/'tools/kafka44'/x for x in ['ProtocolScenarios.java','TransactionScenarios.java','PendingTransactionRecovery.java']])\ndef java(args): return run(['java','-cp',str(classes)+':'+libs,'PendingTransactionRecovery']+args)\nprocesses={};names=[]\ndef ready(port):\n for x in range(120):\n  try:\n   with socket.create_connection(('127.0.0.1',port),timeout=1): return\n  except OSError:time.sleep(.5)\n raise RuntimeError('no listener '+str(port))\ndef candidate_start(n):\n p=root/'candidate'/str(n);cmd=[binary,'--config-file',str(p/'config.toml'),'--controller-listen-addr',f'127.0.0.1:{62100+n*10+1}','--metrics-listen-addr','none','--health-listen-addr','none'];log=open(p/'broker.log','a');proc=sp.Popen(cmd,stdout=log,stderr=log);processes[n]=proc;r['commands'].append({'start_command':cmd,'pid':proc.pid});save()\ntry:\n for side in ['oracle','candidate']:\n  base=62000 if side=='oracle' else 62100\n  if side=='oracle':\n   voters=','.join(f'{n}@127.0.0.1:{base+n*10+1}' for n in range(1,4))\n   for n in range(1,4):\n    name=f'qualification-1969-move-v2-{n}';names.append(name)\n    env={'KAFKA_NODE_ID':n,'KAFKA_PROCESS_ROLES':'broker,controller','KAFKA_LISTENERS':f'PLAINTEXT://:{base+n*10},CONTROLLER://:{base+n*10+1}','KAFKA_ADVERTISED_LISTENERS':f'PLAINTEXT://127.0.0.1:{base+n*10}','KAFKA_CONTROLLER_LISTENER_NAMES':'CONTROLLER','KAFKA_INTER_BROKER_LISTENER_NAME':'PLAINTEXT','KAFKA_LISTENER_SECURITY_PROTOCOL_MAP':'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT','KAFKA_CONTROLLER_QUORUM_VOTERS':voters,'KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR':3,'KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR':3,'KAFKA_TRANSACTION_STATE_LOG_MIN_ISR':2,'KAFKA_MIN_INSYNC_REPLICAS':2,'CLUSTER_ID':'MkU3OEVBNTcwNTJENDM2Qk'}\n    cmd=['docker','run','-d','--network','host','--name',name]\n    for k,v in env.items():cmd+=['-e',f'{k}={v}']\n    run(cmd+[image])\n  else:\n   ids={n:str(uuid.uuid4()) for n in range(1,4)};cluster=str(uuid.uuid4());voters=','.join(f'{n}@127.0.0.1:{base+n*10+1}:{ids[n]}' for n in range(1,4))\n   for n in range(1,4):\n    p=root/side/str(n);p.mkdir(parents=True,exist_ok=True)\n    config=f'''broker_id = {n}\\nlog_dir = \"{p}/data\"\\ncontroller_quorum_voters = [\"1@127.0.0.1:62111\", \"2@127.0.0.1:62121\", \"3@127.0.0.1:62131\"]\\n[[listeners]]\\nname = \"PLAINTEXT\"\\nbind_addr = \"127.0.0.1:{base+n*10}\"\\nadvertised = \"127.0.0.1:{base+n*10}\"\\nprotocol = \"Plaintext\"\\n[runtime]\\noffsets_topic_replication_factor = 3\\ntransaction_state_replication_factor = 3\\ntransaction_state_min_isr = 2\\ndefault_replication_factor = 3\\ndefault_min_insync_replicas = 2\\n[server_properties]\\n\"unstable.api.versions.enable\" = \"true\"\\n\"unstable.feature.versions.enable\" = \"true\"\\n''';(p/'config.toml').write_text(config)\n    run([fmt,'--log-dir',p/'data','--node-id',n,'--cluster-id',cluster,'--directory-id',ids[n],'--initial-controllers',voters,'--release-version','4.4-IV2','--unstable-feature-versions-enable']);candidate_start(n)\n  for n in range(1,4):ready(base+n*10)\n  for mode in ['modern','legacy']:\n   for target in ['transaction','offsets']:\n    for resolution in ['commit','abort']:\n     seed=java(['seed',f'127.0.0.1:{base+10}',mode,'3']);identity=[x.split('\\t')[1:] for x in seed.splitlines() if x.startswith('PENDING\\t')][0];owners=[x.split('\\t')[1:] for x in seed.splitlines() if x.startswith('OWNERS\\t')][0];owner=owners[1 if target=='transaction' else 0];n=(int(owner.split(':')[-1])-base)//10\n     if side=='oracle':run(['docker','kill','--signal','KILL',names[n-1]])\n     else:processes[n].kill();processes[n].wait()\n     survivor=1 if n!=1 else 2\n     # A real election must finish before stable offset fetches can complete.\n     time.sleep(8)\n     resolved=java(['resolve',f'127.0.0.1:{base+survivor*10}']+identity+[resolution]);after=[x.split('\\t')[1:] for x in resolved.splitlines() if x.startswith('OWNERS\\t')][0]\n     if after[1 if target=='transaction' else 0]==owner:raise RuntimeError('owner did not move')\n     r['cases'].append({'side':side,'mode':mode,'target':target,'resolution':resolution,'old_owners':owners,'new_owners':after,'killed_node':n,'passed':True});save()\n     if side=='oracle':run(['docker','start',names[n-1]])\n     else:candidate_start(n)\n     ready(base+n*10);time.sleep(8)\n  if side=='oracle':\n   for name in names:run(['docker','stop',name])\n   names=[]\n  else:\n   for p in processes.values():p.terminate()\n   for p in processes.values():p.wait(timeout=30)\n   processes={}\nexcept Exception as e:r['failure']=str(e);save();raise\nfinally:\n for name in names:run(['docker','stop',name],False)\n for p in processes.values():\n  if p.poll() is None:p.terminate()\n save()\n",
+    "finish1969multi-v3.py": "import subprocess as sp,json,os,time,pathlib,uuid,socket,hashlib\nroot=pathlib.Path('/home/matt/.openclaw/workspace/coordinator/.private/qualification-1969-movement-v3');root.mkdir(exist_ok=True)\nrepo=pathlib.Path('/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969-followthrough')\nlibs='/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*'\nbinary='/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker'\nfmt='/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format'\nimage='apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b'\nr={'qualification_pass':False,'scope':'RF3/minISR2 pending transactional offset coordinator and offsets leader process failure; not power loss or mid-marker fault','binary_sha256':hashlib.sha256(open(binary,'rb').read()).hexdigest(),'commands':[],'cases':[]}\ndef save(): (root/'receipt.json').write_text(json.dumps(r,indent=2))\ndef run(cmd,check=True,timeout=150):\n p=sp.run(list(map(str,cmd)),capture_output=True,text=True,timeout=timeout);row={'command':list(map(str,cmd)),'returncode':p.returncode,'stdout':p.stdout,'stderr':p.stderr};r['commands'].append(row);save()\n if check and p.returncode: raise RuntimeError(str(row))\n return p.stdout\nclasses=root/'classes';classes.mkdir(exist_ok=True)\nrun(['javac','--release','17','-cp',libs,'-d',classes]+[repo/'tools/kafka44'/x for x in ['ProtocolScenarios.java','TransactionScenarios.java','PendingTransactionRecovery.java']])\ndef java(args): return run(['java','-cp',str(classes)+':'+libs,'PendingTransactionRecovery']+args)\nprocesses={};names=[]\ndef ready(port):\n for x in range(120):\n  try:\n   with socket.create_connection(('127.0.0.1',port),timeout=1): return\n  except OSError:time.sleep(.5)\n raise RuntimeError('no listener '+str(port))\ndef candidate_start(n):\n p=root/'candidate'/str(n);cmd=[binary,'--config-file',str(p/'config.toml'),'--controller-listen-addr',f'127.0.0.1:{62100+n*10+1}','--metrics-listen-addr','none','--health-listen-addr','none'];log=open(p/'broker.log','a');proc=sp.Popen(cmd,stdout=log,stderr=log);processes[n]=proc;r['commands'].append({'start_command':cmd,'pid':proc.pid});save()\ntry:\n for side in ['candidate']:\n  base=62000 if side=='oracle' else 62100\n  if side=='oracle':\n   voters=','.join(f'{n}@127.0.0.1:{base+n*10+1}' for n in range(1,4))\n   for n in range(1,4):\n    name=f'qualification-1969-move-v2-{n}';names.append(name)\n    env={'KAFKA_NODE_ID':n,'KAFKA_PROCESS_ROLES':'broker,controller','KAFKA_LISTENERS':f'PLAINTEXT://:{base+n*10},CONTROLLER://:{base+n*10+1}','KAFKA_ADVERTISED_LISTENERS':f'PLAINTEXT://127.0.0.1:{base+n*10}','KAFKA_CONTROLLER_LISTENER_NAMES':'CONTROLLER','KAFKA_INTER_BROKER_LISTENER_NAME':'PLAINTEXT','KAFKA_LISTENER_SECURITY_PROTOCOL_MAP':'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT','KAFKA_CONTROLLER_QUORUM_VOTERS':voters,'KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR':3,'KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR':3,'KAFKA_TRANSACTION_STATE_LOG_MIN_ISR':2,'KAFKA_MIN_INSYNC_REPLICAS':2,'CLUSTER_ID':'MkU3OEVBNTcwNTJENDM2Qk'}\n    cmd=['docker','run','-d','--network','host','--name',name]\n    for k,v in env.items():cmd+=['-e',f'{k}={v}']\n    run(cmd+[image])\n  else:\n   ids={n:str(uuid.uuid4()) for n in range(1,4)};cluster=str(uuid.uuid4());voters=','.join(f'{n}@127.0.0.1:{base+n*10+1}:{ids[n]}' for n in range(1,4))\n   for n in range(1,4):\n    p=root/side/str(n);p.mkdir(parents=True,exist_ok=True)\n    config=f'''broker_id = {n}\\nlog_dir = \"{p}/data\"\\ncontroller_quorum_voters = [\"1@127.0.0.1:62111\", \"2@127.0.0.1:62121\", \"3@127.0.0.1:62131\"]\\n[[listeners]]\\nname = \"PLAINTEXT\"\\nbind_addr = \"127.0.0.1:{base+n*10}\"\\nadvertised = \"127.0.0.1:{base+n*10}\"\\nprotocol = \"Plaintext\"\\n[runtime]\\noffsets_topic_replication_factor = 3\\ntransaction_state_replication_factor = 3\\ntransaction_state_min_isr = 2\\ndefault_replication_factor = 3\\ndefault_min_insync_replicas = 2\\n[server_properties]\\n\"unstable.api.versions.enable\" = \"true\"\\n\"unstable.feature.versions.enable\" = \"true\"\\n''';(p/'config.toml').write_text(config)\n    run([fmt,'--log-dir',p/'data','--node-id',n,'--cluster-id',cluster,'--directory-id',ids[n],'--initial-controllers',voters,'--release-version','4.4-IV2','--unstable-feature-versions-enable']);candidate_start(n)\n  for n in range(1,4):ready(base+n*10)\n  time.sleep(20)\n  for mode in ['modern','legacy']:\n   for target in ['transaction','offsets']:\n    for resolution in ['commit','abort']:\n     seed=java(['seed',f'127.0.0.1:{base+10}',mode,'3']);identity=[x.split('\\t')[1:] for x in seed.splitlines() if x.startswith('PENDING\\t')][0];owners=[x.split('\\t')[1:] for x in seed.splitlines() if x.startswith('OWNERS\\t')][0];owner=owners[1 if target=='transaction' else 0];n=(int(owner.split(':')[-1])-base)//10\n     if side=='oracle':run(['docker','kill','--signal','KILL',names[n-1]])\n     else:processes[n].kill();processes[n].wait()\n     survivor=1 if n!=1 else 2\n     # A real election must finish before stable offset fetches can complete.\n     time.sleep(20)\n     resolved=java(['resolve',f'127.0.0.1:{base+survivor*10}']+identity+[resolution]);after=[x.split('\\t')[1:] for x in resolved.splitlines() if x.startswith('OWNERS\\t')][0]\n     if after[1 if target=='transaction' else 0]==owner:raise RuntimeError('owner did not move')\n     r['cases'].append({'side':side,'mode':mode,'target':target,'resolution':resolution,'old_owners':owners,'new_owners':after,'killed_node':n,'passed':True});save()\n     if side=='oracle':run(['docker','start',names[n-1]])\n     else:candidate_start(n)\n     ready(base+n*10);time.sleep(20)\n  if side=='oracle':\n   for name in names:run(['docker','stop',name])\n   names=[]\n  else:\n   for p in processes.values():p.terminate()\n   for p in processes.values():p.wait(timeout=30)\n   processes={}\nexcept Exception as e:r['failure']=str(e);save();raise\nfinally:\n for name in names:run(['docker','stop',name],False)\n for p in processes.values():\n  if p.poll() is None:p.terminate()\n save()\n"
+  },
+  "single_node_frozen_rerun": {
+    "revision": "8c1f58162e6ee0f420b3fe1d1e594e853dbb1e54",
+    "status": "collected-not-qualified",
+    "pending_before_crash": {
+      "modern-commit": {
+        "command": [
+          "timeout",
+          "120",
+          "docker",
+          "exec",
+          "krabka-kafka44--qualification-1969-finish-oracle-frozen",
+          "java",
+          "-cp",
+          "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+          "PendingTransactionRecovery",
+          "seed",
+          "localhost:9092",
+          "modern"
+        ],
+        "returncode": 0,
+        "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-3cd5acd0-cc15-4780-83c7-f598506af271', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-3cd5acd0-cc15-4780-83c7-f598506af271', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=4, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=eA0vwy6cRTG6pFkR2wHbgQ, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=4, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=4, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=eA0vwy6cRTG6pFkR2wHbgQ, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\tlocalhost:9092\tlocalhost:9092\nPENDING\tkafka44-pending-3cd5acd0-cc15-4780-83c7-f598506af271\tkafka44-pending-group-3cd5acd0-cc15-4780-83c7-f598506af271\teA0vwy6cRTG6pFkR2wHbgQ\tkafka44-pending-txn-3cd5acd0-cc15-4780-83c7-f598506af271\t4\t2\n",
+        "stderr": ""
+      },
+      "modern-abort": {
+        "command": [
+          "timeout",
+          "120",
+          "docker",
+          "exec",
+          "krabka-kafka44--qualification-1969-finish-oracle-frozen",
+          "java",
+          "-cp",
+          "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+          "PendingTransactionRecovery",
+          "seed",
+          "localhost:9092",
+          "modern"
+        ],
+        "returncode": 0,
+        "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-894d4853-7a47-46a4-bdbb-e62811cab180', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-894d4853-7a47-46a4-bdbb-e62811cab180', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=5, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=oLfR7mhcRpK9T4rmYubtuA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=5, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=5, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v6\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='', topicId=oLfR7mhcRpK9T4rmYubtuA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\tlocalhost:9092\tlocalhost:9092\nPENDING\tkafka44-pending-894d4853-7a47-46a4-bdbb-e62811cab180\tkafka44-pending-group-894d4853-7a47-46a4-bdbb-e62811cab180\toLfR7mhcRpK9T4rmYubtuA\tkafka44-pending-txn-894d4853-7a47-46a4-bdbb-e62811cab180\t5\t2\n",
+        "stderr": ""
+      },
+      "legacy-commit": {
+        "command": [
+          "timeout",
+          "120",
+          "docker",
+          "exec",
+          "krabka-kafka44--qualification-1969-finish-oracle-frozen",
+          "java",
+          "-cp",
+          "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+          "PendingTransactionRecovery",
+          "seed",
+          "localhost:9092",
+          "legacy"
+        ],
+        "returncode": 0,
+        "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-b1c9b052-ce04-47d4-98a0-c4cf2ade05d5', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-b1c9b052-ce04-47d4-98a0-c4cf2ade05d5', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=6, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-b1c9b052-ce04-47d4-98a0-c4cf2ade05d5', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=6, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=6, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-b1c9b052-ce04-47d4-98a0-c4cf2ade05d5', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\tlocalhost:9092\tlocalhost:9092\nPENDING\tkafka44-pending-b1c9b052-ce04-47d4-98a0-c4cf2ade05d5\tkafka44-pending-group-b1c9b052-ce04-47d4-98a0-c4cf2ade05d5\t9vPepQYSRdKBFtGF9V9pBw\tkafka44-pending-txn-b1c9b052-ce04-47d4-98a0-c4cf2ade05d5\t6\t2\n",
+        "stderr": ""
+      },
+      "legacy-abort": {
+        "command": [
+          "timeout",
+          "120",
+          "docker",
+          "exec",
+          "krabka-kafka44--qualification-1969-finish-oracle-frozen",
+          "java",
+          "-cp",
+          "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+          "PendingTransactionRecovery",
+          "seed",
+          "localhost:9092",
+          "legacy"
+        ],
+        "returncode": 0,
+        "stdout": "WIRE\tpending-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-e6421e7c-c1fb-4f16-ad1f-6a104c52c9d9', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\tpending-group-coordinator\t{NONE=1}\nWIRE\tpending-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-e6421e7c-c1fb-4f16-ad1f-6a104c52c9d9', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\tpending-txn-coordinator\t{NONE=1}\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=7, producerEpoch=0, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tbaseline-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-e6421e7c-c1fb-4f16-ad1f-6a104c52c9d9', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tbaseline-offset\t{NONE=1}\nWIRE\tbaseline-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=7, producerEpoch=1)\nSCENARIO\tbaseline-commit\t{NONE=1}\nOBSERVATION\tbaseline-visible\t7\tstable=true\tattempt=0\nSCENARIO\tbaseline-visible\tPASS\nWIRE\tpending-init\tINIT_PRODUCER_ID/v5\tattempt=0\tInitProducerIdResponseData(throttleTimeMs=0, errorCode=0, producerId=7, producerEpoch=2, ongoingTxnProducerId=-1, ongoingTxnProducerEpoch=-1)\nSCENARIO\tpending-init\t{NONE=1}\nWIRE\tpending-offset\tTXN_OFFSET_COMMIT/v5\tattempt=0\tTxnOffsetCommitResponseData(throttleTimeMs=0, topics=[TxnOffsetCommitResponseTopic(name='kafka44-pending-e6421e7c-c1fb-4f16-ad1f-6a104c52c9d9', topicId=AAAAAAAAAAAAAAAAAAAAAA, partitions=[TxnOffsetCommitResponsePartition(partitionIndex=0, errorCode=0)])])\nSCENARIO\tpending-offset\t{NONE=1}\nOBSERVATION\tpending-invisible-before-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-before-crash\tPASS\nOWNERS\tlocalhost:9092\tlocalhost:9092\nPENDING\tkafka44-pending-e6421e7c-c1fb-4f16-ad1f-6a104c52c9d9\tkafka44-pending-group-e6421e7c-c1fb-4f16-ad1f-6a104c52c9d9\tO4kuxH5kSnuqlEToIBuLng\tkafka44-pending-txn-e6421e7c-c1fb-4f16-ad1f-6a104c52c9d9\t7\t2\n",
+        "stderr": ""
+      }
+    },
+    "pending_after_crash": {
+      "modern-commit": {
+        "command": [
+          "timeout",
+          "120",
+          "docker",
+          "exec",
+          "krabka-kafka44--qualification-1969-finish-oracle-frozen",
+          "java",
+          "-cp",
+          "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+          "PendingTransactionRecovery",
+          "resolve",
+          "localhost:9092",
+          "kafka44-pending-3cd5acd0-cc15-4780-83c7-f598506af271",
+          "kafka44-pending-group-3cd5acd0-cc15-4780-83c7-f598506af271",
+          "eA0vwy6cRTG6pFkR2wHbgQ",
+          "kafka44-pending-txn-3cd5acd0-cc15-4780-83c7-f598506af271",
+          "4",
+          "2",
+          "commit"
+        ],
+        "returncode": 0,
+        "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-3cd5acd0-cc15-4780-83c7-f598506af271', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-3cd5acd0-cc15-4780-83c7-f598506af271', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\tlocalhost:9092\tlocalhost:9092\nWIRE\tpending-resolve-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=4, producerEpoch=3)\nSCENARIO\tpending-resolve-commit\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\tnull\tstable=true\tattempt=0\nOBSERVATION\tpending-resolution-visible\t42\tstable=true\tattempt=1\nSCENARIO\tpending-resolution-visible\tPASS\n",
+        "stderr": ""
+      },
+      "modern-abort": {
+        "command": [
+          "timeout",
+          "120",
+          "docker",
+          "exec",
+          "krabka-kafka44--qualification-1969-finish-oracle-frozen",
+          "java",
+          "-cp",
+          "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+          "PendingTransactionRecovery",
+          "resolve",
+          "localhost:9092",
+          "kafka44-pending-894d4853-7a47-46a4-bdbb-e62811cab180",
+          "kafka44-pending-group-894d4853-7a47-46a4-bdbb-e62811cab180",
+          "oLfR7mhcRpK9T4rmYubtuA",
+          "kafka44-pending-txn-894d4853-7a47-46a4-bdbb-e62811cab180",
+          "5",
+          "2",
+          "abort"
+        ],
+        "returncode": 0,
+        "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-894d4853-7a47-46a4-bdbb-e62811cab180', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-894d4853-7a47-46a4-bdbb-e62811cab180', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\tlocalhost:9092\tlocalhost:9092\nWIRE\tpending-resolve-abort\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=5, producerEpoch=3)\nSCENARIO\tpending-resolve-abort\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\t7\tstable=true\tattempt=0\nSCENARIO\tpending-resolution-visible\tPASS\n",
+        "stderr": ""
+      },
+      "legacy-commit": {
+        "command": [
+          "timeout",
+          "120",
+          "docker",
+          "exec",
+          "krabka-kafka44--qualification-1969-finish-oracle-frozen",
+          "java",
+          "-cp",
+          "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+          "PendingTransactionRecovery",
+          "resolve",
+          "localhost:9092",
+          "kafka44-pending-b1c9b052-ce04-47d4-98a0-c4cf2ade05d5",
+          "kafka44-pending-group-b1c9b052-ce04-47d4-98a0-c4cf2ade05d5",
+          "9vPepQYSRdKBFtGF9V9pBw",
+          "kafka44-pending-txn-b1c9b052-ce04-47d4-98a0-c4cf2ade05d5",
+          "6",
+          "2",
+          "commit"
+        ],
+        "returncode": 0,
+        "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-b1c9b052-ce04-47d4-98a0-c4cf2ade05d5', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-b1c9b052-ce04-47d4-98a0-c4cf2ade05d5', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\tlocalhost:9092\tlocalhost:9092\nWIRE\tpending-resolve-commit\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=6, producerEpoch=3)\nSCENARIO\tpending-resolve-commit\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\t42\tstable=true\tattempt=0\nSCENARIO\tpending-resolution-visible\tPASS\n",
+        "stderr": ""
+      },
+      "legacy-abort": {
+        "command": [
+          "timeout",
+          "120",
+          "docker",
+          "exec",
+          "krabka-kafka44--qualification-1969-finish-oracle-frozen",
+          "java",
+          "-cp",
+          "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+          "PendingTransactionRecovery",
+          "resolve",
+          "localhost:9092",
+          "kafka44-pending-e6421e7c-c1fb-4f16-ad1f-6a104c52c9d9",
+          "kafka44-pending-group-e6421e7c-c1fb-4f16-ad1f-6a104c52c9d9",
+          "O4kuxH5kSnuqlEToIBuLng",
+          "kafka44-pending-txn-e6421e7c-c1fb-4f16-ad1f-6a104c52c9d9",
+          "7",
+          "2",
+          "abort"
+        ],
+        "returncode": 0,
+        "stdout": "SCENARIO\tpending-crash-topic-id\tPASS\nOBSERVATION\tpending-invisible-after-crash\t7\tstable=false\tattempt=0\nSCENARIO\tpending-invisible-after-crash\tPASS\nWIRE\trecovered-group-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-group-e6421e7c-c1fb-4f16-ad1f-6a104c52c9d9', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-group-coordinator\t{NONE=1}\nWIRE\trecovered-txn-coordinator\tFIND_COORDINATOR/v4\tattempt=0\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='kafka44-pending-txn-e6421e7c-c1fb-4f16-ad1f-6a104c52c9d9', nodeId=1, host='localhost', port=9092, errorCode=0, errorMessage='')])\nSCENARIO\trecovered-txn-coordinator\t{NONE=1}\nOWNERS\tlocalhost:9092\tlocalhost:9092\nWIRE\tpending-resolve-abort\tEND_TXN/v5\tattempt=0\tEndTxnResponseData(throttleTimeMs=0, errorCode=0, producerId=7, producerEpoch=3)\nSCENARIO\tpending-resolve-abort\t{NONE=1}\nOBSERVATION\tpending-resolution-visible\t7\tstable=true\tattempt=0\nSCENARIO\tpending-resolution-visible\tPASS\n",
+        "stderr": ""
+      }
+    }
+  },
+  "checks": {
+    "axl": "568 across32 suites, frozen8c1f58162",
+    "format": "passed",
+    "scripts": "27 accounted for",
+    "diff": "passed"
+  },
+  "limits": [
+    "Task-owned processes only; no host or disk power failure injected.",
+    "Fixed20s candidate startup/election/rejoin waits; changed owners and exact state assertions required for every accepted case. Initial8s candidate failure retained.",
+    "Group coordinator is offsets topic partition leader; shared txn/group ownership is recorded, not assumed independent.",
+    "Internal topic RF3/minISR2 configured; standalone released Admin readiness observation after first candidate rejoin saw100/100 partitions with3replicas/3ISR. This probe is diagnostic, not a precondition asserted by the orchestrator.",
+    "Multibroker provisioning is separate caller-owned execution, not automatic CI; recipe in tools/kafka44/README.md."
+  ],
+  "owned_fixture_cleanup_exit_code": 0
+}
