@@ -147,6 +147,9 @@ pub(super) async fn start_coordinators(
         config.share_session_cache_max_when_unlimited,
         selected_dlq,
     );
+    // Recovery below can suspend startup. Own cleanup before spawning workers,
+    // not only after returning to the outer broker startup future.
+    let dlq_startup = share_partition_leaders.startup_guard();
     share_partition_leaders.spawn_lock_sweeper();
     share_partition_leaders.spawn_share_version_watcher();
     let mut barrier_coordinator = BarrierCoordinator::new(
@@ -191,6 +194,9 @@ pub(super) async fn start_coordinators(
     {
         tracing::warn!(%error, "barrier coordinator recovery error");
     }
+    // There is no suspension between this handoff and installation of the
+    // outer startup guard, so cancellation cannot leave an unguarded manager.
+    dlq_startup.disarm();
     Ok(CoordinatorStartup {
         txn_coordinator,
         barrier_coordinator,
