@@ -34,11 +34,8 @@ fn render_result(legacy_delete: &mut LegacyDelete) {
 #[rstest_bdd_macros::then("the result has error {code} and message {message}")]
 fn expected_result(legacy_delete: &LegacyDelete, code: i16, message: String) {
     let row = legacy_delete.result.as_ref().expect("rendered result");
-    let expected = if message == "generic" {
-        Some("Topology description plugin failed to delete the topology.")
-    } else {
-        None
-    };
+    let expected = (message == "generic")
+        .then_some("Topology description plugin failed to delete the topology.");
     assert!(
         *row == DeletableGroupResult {
             group_id: "app".into(),
