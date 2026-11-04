@@ -1,0 +1,433 @@
+{
+  "qualification_pass": false,
+  "oracle": {
+    "1": {
+      "name": "streams-movement-owned-1-20261104",
+      "config": {
+        "KAFKA_NODE_ID": "1",
+        "KAFKA_PROCESS_ROLES": "broker,controller",
+        "KAFKA_LISTENERS": "PLAINTEXT://127.0.0.1:64900,CONTROLLER://127.0.0.1:64901",
+        "KAFKA_ADVERTISED_LISTENERS": "PLAINTEXT://127.0.0.1:64900",
+        "KAFKA_CONTROLLER_LISTENER_NAMES": "CONTROLLER",
+        "KAFKA_INTER_BROKER_LISTENER_NAME": "PLAINTEXT",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS": "1@127.0.0.1:64901,2@127.0.0.1:64903,3@127.0.0.1:64905",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR": "3",
+        "KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS": "3",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR": "3",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR": "2",
+        "KAFKA_GROUP_STREAMS_TOPOLOGY_DESCRIPTION_PLUGIN_CLASS": "FaultTopologyPlugin",
+        "KAFKA_HEAP_OPTS": "-Xmx384m -Xms128m",
+        "KAFKA_LOG_DIRS": "/evidence/data1",
+        "CLUSTER_ID": "MkU3OEVBNTcwNTJENDM2Qk",
+        "CLASSPATH": "/fixture:/opt/kafka/libs/*"
+      },
+      "command": [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        "streams-movement-owned-1-20261104",
+        "--network",
+        "host",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/oracle-shared:/evidence",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/classes:/fixture:ro",
+        "-e",
+        "KAFKA_NODE_ID=1",
+        "-e",
+        "KAFKA_PROCESS_ROLES=broker,controller",
+        "-e",
+        "KAFKA_LISTENERS=PLAINTEXT://127.0.0.1:64900,CONTROLLER://127.0.0.1:64901",
+        "-e",
+        "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:64900",
+        "-e",
+        "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+        "-e",
+        "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+        "-e",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "-e",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:64901,2@127.0.0.1:64903,3@127.0.0.1:64905",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS=3",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2",
+        "-e",
+        "KAFKA_GROUP_STREAMS_TOPOLOGY_DESCRIPTION_PLUGIN_CLASS=FaultTopologyPlugin",
+        "-e",
+        "KAFKA_HEAP_OPTS=-Xmx384m -Xms128m",
+        "-e",
+        "KAFKA_LOG_DIRS=/evidence/data1",
+        "-e",
+        "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+        "-e",
+        "CLASSPATH=/fixture:/opt/kafka/libs/*",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+      ],
+      "returncode": 0,
+      "stdout": "06d906c072d35cd45e7c7042d77e2ae27c262d6565549412f1f6f3db1f9b8b62\n",
+      "stderr": ""
+    },
+    "2": {
+      "name": "streams-movement-owned-2-20261104",
+      "config": {
+        "KAFKA_NODE_ID": "2",
+        "KAFKA_PROCESS_ROLES": "broker,controller",
+        "KAFKA_LISTENERS": "PLAINTEXT://127.0.0.1:64902,CONTROLLER://127.0.0.1:64903",
+        "KAFKA_ADVERTISED_LISTENERS": "PLAINTEXT://127.0.0.1:64902",
+        "KAFKA_CONTROLLER_LISTENER_NAMES": "CONTROLLER",
+        "KAFKA_INTER_BROKER_LISTENER_NAME": "PLAINTEXT",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS": "1@127.0.0.1:64901,2@127.0.0.1:64903,3@127.0.0.1:64905",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR": "3",
+        "KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS": "3",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR": "3",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR": "2",
+        "KAFKA_GROUP_STREAMS_TOPOLOGY_DESCRIPTION_PLUGIN_CLASS": "FaultTopologyPlugin",
+        "KAFKA_HEAP_OPTS": "-Xmx384m -Xms128m",
+        "KAFKA_LOG_DIRS": "/evidence/data2",
+        "CLUSTER_ID": "MkU3OEVBNTcwNTJENDM2Qk",
+        "CLASSPATH": "/fixture:/opt/kafka/libs/*"
+      },
+      "command": [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        "streams-movement-owned-2-20261104",
+        "--network",
+        "host",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/oracle-shared:/evidence",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/classes:/fixture:ro",
+        "-e",
+        "KAFKA_NODE_ID=2",
+        "-e",
+        "KAFKA_PROCESS_ROLES=broker,controller",
+        "-e",
+        "KAFKA_LISTENERS=PLAINTEXT://127.0.0.1:64902,CONTROLLER://127.0.0.1:64903",
+        "-e",
+        "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:64902",
+        "-e",
+        "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+        "-e",
+        "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+        "-e",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "-e",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:64901,2@127.0.0.1:64903,3@127.0.0.1:64905",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS=3",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2",
+        "-e",
+        "KAFKA_GROUP_STREAMS_TOPOLOGY_DESCRIPTION_PLUGIN_CLASS=FaultTopologyPlugin",
+        "-e",
+        "KAFKA_HEAP_OPTS=-Xmx384m -Xms128m",
+        "-e",
+        "KAFKA_LOG_DIRS=/evidence/data2",
+        "-e",
+        "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+        "-e",
+        "CLASSPATH=/fixture:/opt/kafka/libs/*",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+      ],
+      "returncode": 0,
+      "stdout": "04e6af8562dbab5400a8a18a650f2175da699e3cbe0c42e3c5671571a16b4f39\n",
+      "stderr": ""
+    },
+    "3": {
+      "name": "streams-movement-owned-3-20261104",
+      "config": {
+        "KAFKA_NODE_ID": "3",
+        "KAFKA_PROCESS_ROLES": "broker,controller",
+        "KAFKA_LISTENERS": "PLAINTEXT://127.0.0.1:64904,CONTROLLER://127.0.0.1:64905",
+        "KAFKA_ADVERTISED_LISTENERS": "PLAINTEXT://127.0.0.1:64904",
+        "KAFKA_CONTROLLER_LISTENER_NAMES": "CONTROLLER",
+        "KAFKA_INTER_BROKER_LISTENER_NAME": "PLAINTEXT",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS": "1@127.0.0.1:64901,2@127.0.0.1:64903,3@127.0.0.1:64905",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR": "3",
+        "KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS": "3",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR": "3",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR": "2",
+        "KAFKA_GROUP_STREAMS_TOPOLOGY_DESCRIPTION_PLUGIN_CLASS": "FaultTopologyPlugin",
+        "KAFKA_HEAP_OPTS": "-Xmx384m -Xms128m",
+        "KAFKA_LOG_DIRS": "/evidence/data3",
+        "CLUSTER_ID": "MkU3OEVBNTcwNTJENDM2Qk",
+        "CLASSPATH": "/fixture:/opt/kafka/libs/*"
+      },
+      "command": [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        "streams-movement-owned-3-20261104",
+        "--network",
+        "host",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/oracle-shared:/evidence",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/classes:/fixture:ro",
+        "-e",
+        "KAFKA_NODE_ID=3",
+        "-e",
+        "KAFKA_PROCESS_ROLES=broker,controller",
+        "-e",
+        "KAFKA_LISTENERS=PLAINTEXT://127.0.0.1:64904,CONTROLLER://127.0.0.1:64905",
+        "-e",
+        "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:64904",
+        "-e",
+        "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+        "-e",
+        "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+        "-e",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "-e",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:64901,2@127.0.0.1:64903,3@127.0.0.1:64905",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS=3",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2",
+        "-e",
+        "KAFKA_GROUP_STREAMS_TOPOLOGY_DESCRIPTION_PLUGIN_CLASS=FaultTopologyPlugin",
+        "-e",
+        "KAFKA_HEAP_OPTS=-Xmx384m -Xms128m",
+        "-e",
+        "KAFKA_LOG_DIRS=/evidence/data3",
+        "-e",
+        "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+        "-e",
+        "CLASSPATH=/fixture:/opt/kafka/libs/*",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+      ],
+      "returncode": 0,
+      "stdout": "6d34ab217ffab2abfec6122edccc773b9164131e6862a5f95989d1220287a1af\n",
+      "stderr": ""
+    }
+  },
+  "oracle_prepare": {
+    "command": [
+      "java",
+      "-cp",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/classes",
+      "StreamsMovement",
+      "127.0.0.1:64900",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/oracle-identity",
+      "prepare"
+    ],
+    "returncode": 0,
+    "stdout": "RETRY\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='movement-e144a8a0-1bc9-44cb-b745-de744649cbef', nodeId=-1, host='', port=-1, errorCode=15, errorMessage='')])\nOWNER\t1\t127.0.0.1:64900\nRESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='movement-member', memberEpoch=1, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[Status(statusCode=5, statusDetail='Assignment delayed due to the configured initial rebalance delay.')], activeTasks=[], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null)\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='movement-e144a8a0-1bc9-44cb-b745-de744649cbef', groupState='Assigning', groupEpoch=2, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-e144a8a0-1bc9-44cb-b745-de744649cbef], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='movement-member', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='movement-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-e144a8a0-1bc9-44cb-b745-de744649cbef], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\tstored-exact-source-before-owner-loss\tPASS\n",
+    "stderr": ""
+  },
+  "oracle_kill": {
+    "command": [
+      "docker",
+      "kill",
+      "--signal=KILL",
+      "streams-movement-owned-1-20261104"
+    ],
+    "returncode": 0,
+    "stdout": "streams-movement-owned-1-20261104\n",
+    "stderr": "",
+    "time_ns": 1793814070773997816
+  },
+  "oracle_recover": {
+    "command": [
+      "java",
+      "-cp",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/classes",
+      "StreamsMovement",
+      "127.0.0.1:64902",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/oracle-identity",
+      "recover"
+    ],
+    "returncode": 0,
+    "stdout": "OWNER\t2\t127.0.0.1:64902\nSCENARIO\tcoordinator-owner-changed\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='movement-e144a8a0-1bc9-44cb-b745-de744649cbef', groupState='Empty', groupEpoch=3, assignmentEpoch=3, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-e144a8a0-1bc9-44cb-b745-de744649cbef], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-e144a8a0-1bc9-44cb-b745-de744649cbef], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\tstored-exact-source-after-owner-loss\tPASS\nRESPONSE\tdelete\tDeleteGroupsResponseData(throttleTimeMs=0, results=[DeletableGroupResult(groupId='movement-e144a8a0-1bc9-44cb-b745-de744649cbef', errorCode=0, errorMessage=null)])\nSCENARIO\tdelete-on-new-owner\tPASS\nRESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='recreated-movement-member', memberEpoch=1, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[Status(statusCode=5, statusDetail='Assignment delayed due to the configured initial rebalance delay.')], activeTasks=[], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='movement-e144a8a0-1bc9-44cb-b745-de744649cbef', groupState='Assigning', groupEpoch=2, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-e144a8a0-1bc9-44cb-b745-de744649cbef], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='recreated-movement-member', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='recreated-movement-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nSCENARIO\trecreated-description-absent\tPASS\n",
+    "stderr": ""
+  },
+  "native_prepare": {
+    "command": [
+      "java",
+      "-cp",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/classes",
+      "StreamsMovement",
+      "127.0.0.1:64910",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/native-identity",
+      "prepare"
+    ],
+    "returncode": 0,
+    "stdout": "RETRY\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='movement-2cee44ea-077f-4970-8d59-70325a72816a', nodeId=-1, host='', port=-1, errorCode=15, errorMessage=null)])\nOWNER\t2\t127.0.0.1:64912\nRESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='movement-member', memberEpoch=2, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[], activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null)\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='movement-2cee44ea-077f-4970-8d59-70325a72816a', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-2cee44ea-077f-4970-8d59-70325a72816a], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='movement-member', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='movement-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-2cee44ea-077f-4970-8d59-70325a72816a], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\tstored-exact-source-before-owner-loss\tPASS\n",
+    "stderr": ""
+  },
+  "native": {
+    "1": {
+      "pid": 1825225,
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/streams_fault_broker",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/native-data1",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/native-shared",
+        "127.0.0.1:64910"
+      ],
+      "environment": {
+        "STREAMS_FIXTURE_NODE": "1",
+        "STREAMS_FIXTURE_VOTERS": "1@127.0.0.1:64911,2@127.0.0.1:64913,3@127.0.0.1:64915"
+      },
+      "proc_exe_sha256": "5ebb9d9fa8fead968b9a3feb2efc5a4775dde99647ef4123e50a2b8ff54e91d7"
+    },
+    "2": {
+      "pid": 1825226,
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/streams_fault_broker",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/native-data2",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/native-shared",
+        "127.0.0.1:64912"
+      ],
+      "environment": {
+        "STREAMS_FIXTURE_NODE": "2",
+        "STREAMS_FIXTURE_VOTERS": "1@127.0.0.1:64911,2@127.0.0.1:64913,3@127.0.0.1:64915"
+      },
+      "proc_exe_sha256": "5ebb9d9fa8fead968b9a3feb2efc5a4775dde99647ef4123e50a2b8ff54e91d7"
+    },
+    "3": {
+      "pid": 1825227,
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/streams_fault_broker",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/native-data3",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/native-shared",
+        "127.0.0.1:64914"
+      ],
+      "environment": {
+        "STREAMS_FIXTURE_NODE": "3",
+        "STREAMS_FIXTURE_VOTERS": "1@127.0.0.1:64911,2@127.0.0.1:64913,3@127.0.0.1:64915"
+      },
+      "proc_exe_sha256": "5ebb9d9fa8fead968b9a3feb2efc5a4775dde99647ef4123e50a2b8ff54e91d7"
+    }
+  },
+  "native_binary_sha256": "5ebb9d9fa8fead968b9a3feb2efc5a4775dde99647ef4123e50a2b8ff54e91d7",
+  "native_kill": {
+    "pid": 1825226,
+    "signal": "SIGKILL",
+    "time_ns": 1793814121614518592,
+    "owner": "2"
+  },
+  "native_recover": {
+    "command": [
+      "java",
+      "-cp",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/classes",
+      "StreamsMovement",
+      "127.0.0.1:64910",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/.private/runtime/native-identity",
+      "recover"
+    ],
+    "returncode": 0,
+    "stdout": "OWNER\t3\t127.0.0.1:64914\nSCENARIO\tcoordinator-owner-changed\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='movement-2cee44ea-077f-4970-8d59-70325a72816a', groupState='Empty', groupEpoch=3, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-2cee44ea-077f-4970-8d59-70325a72816a], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-2cee44ea-077f-4970-8d59-70325a72816a], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\tstored-exact-source-after-owner-loss\tPASS\nRESPONSE\tdelete\tDeleteGroupsResponseData(throttleTimeMs=0, results=[DeletableGroupResult(groupId='movement-2cee44ea-077f-4970-8d59-70325a72816a', errorCode=0, errorMessage=null)])\nSCENARIO\tdelete-on-new-owner\tPASS\nRESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='recreated-movement-member', memberEpoch=2, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[], activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='movement-2cee44ea-077f-4970-8d59-70325a72816a', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-2cee44ea-077f-4970-8d59-70325a72816a], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='recreated-movement-member', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='recreated-movement-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nSCENARIO\trecreated-description-absent\tPASS\n",
+    "stderr": ""
+  },
+  "kind": "RF3 shared filesystem Streams topology across actual coordinator SIGKILL and new-owner delete/recreate",
+  "source_revision": "32f1267be91da220149e410f98c527aaa67cbee5",
+  "embedding_example_patch": "diff --git a/crates/broker/examples/streams_fault_broker.rs b/crates/broker/examples/streams_fault_broker.rs\nindex fb59526b3..c43792895 100644\n--- a/crates/broker/examples/streams_fault_broker.rs\n+++ b/crates/broker/examples/streams_fault_broker.rs\n@@ -5,11 +5,13 @@\n //! The controller reserves the port immediately after LISTEN.\n //! This starts a real broker with a filesystem backend installed through the native\n //! embedding SPI. FLAGS/{set,get,delete} contain `ok`, `transient` or `permanent`.\n+//! For isolated clusters, set `STREAMS_FIXTURE_NODE` and `STREAMS_FIXTURE_VOTERS`\n+//! (comma-separated ID@CONTROLLER), and share FLAGS across the nodes.\n //! Missing flags mean healthy IO. The harness preserves DATA and FLAGS on exit.\n //! See tools/kafka44/README.md for the released-codec fault fixture.\n use {\n     krabka_broker::{\n-        Broker, BrokerConfig,\n+        Broker, BrokerConfig, NodeId,\n         api_catalog::UnstableApiVersions,\n         coordinator::unified::streams::description::{\n             BackendFuture, FileTopologyDescriptionBackend, StorageFailure, TopologyDescription,\n@@ -99,6 +101,23 @@ async fn main() -> Result<(), Box<dyn Error>> {\n         .first_mut()\n         .ok_or(\"test configuration has no controller voter\")?\n         .1 = controller_addr.to_string();\n+    if let Ok(node) = env::var(\"STREAMS_FIXTURE_NODE\") {\n+        let node: u64 = node.parse()?;\n+        config.node_id = NodeId(node);\n+        config.broker_id = i32::try_from(node)?;\n+        config.directory_id = uuid::Uuid::from_u128(u128::from(node));\n+        config.auto_join = false;\n+        config.bootstrap_servers.clear();\n+        config.controller_quorum_voters = env::var(\"STREAMS_FIXTURE_VOTERS\")?\n+            .split(',')\n+            .map(|entry| {\n+                let (id, address) = entry.split_once('@').ok_or(\"expected ID@ADDRESS voter\")?;\n+                Ok((NodeId(id.parse()?), address.to_owned()))\n+            })\n+            .collect::<Result<Vec<_>, Box<dyn Error>>>()?;\n+        let nodes = config.controller_quorum_voters.len();\n+        config = config.with_internal_topics_for(nodes);\n+    }\n     config.features.unstable_api_versions = UnstableApiVersions::Enabled;\n     config.features.unstable_feature_versions = UnstableFeatureVersions::Enabled;\n     config.audit_enabled = false;\n",
+  "build": "CARGO_TARGET_DIR=.../streams-delete-legacy-target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo build -p krabka-broker --example streams_fault_broker",
+  "build_log": "(/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/kraft-core)\n   Compiling krabka-audit v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/audit)\n   Compiling krabka-remote-storage v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/remote-storage)\n   Compiling krabka-raft v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/raft)\n   Compiling krabka-remote-storage-topic v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/remote-storage-topic)\n   Compiling krabka-format v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/format)\n   Compiling krabka-authz v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/authz)\n   Compiling krabka-throttle v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/throttle)\n   Compiling krabka-telemetry v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/telemetry)\n   Compiling krabka-restore v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/restore)\n   Compiling krabka-bench-driver v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/bench-driver)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 04s\n",
+  "clippy_initial_failure": "broker v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/broker)\n    Checking krabka-java-regex v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/java-regex)\n    Checking krabka-records-legacy v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/records-legacy)\n    Checking krabka-object-store v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/object-store)\n    Checking krabka-telemetry v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/telemetry)\n    Checking krabka-log v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/log)\n    Checking krabka-audit v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/audit)\n    Checking krabka-kraft-core v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/kraft-core)\n    Checking krabka-remote-storage v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/remote-storage)\n    Checking krabka-raft v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/raft)\n    Checking krabka-remote-storage-topic v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/remote-storage-topic)\n    Checking krabka-throttle v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/throttle)\n    Checking krabka-authz v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/authz)\n    Checking krabka-bench-driver v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/bench-driver)\n    Checking krabka-format v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/format)\n    Checking krabka-restore v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/restore)\nerror: item in documentation is missing backticks\n --> crates/broker/examples/streams_fault_broker.rs:8:32\n  |\n8 | //! For isolated clusters, set STREAMS_FIXTURE_NODE and STREAMS_FIXTURE_VOTERS\n  |                                ^^^^^^^^^^^^^^^^^^^^\n  |\n  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#doc_markdown\n  = note: `-D clippy::doc-markdown` implied by `-D clippy::pedantic`\n  = help: to override `-D clippy::pedantic` add `#[allow(clippy::doc_markdown)]`\nhelp: try\n  |\n8 - //! For isolated clusters, set STREAMS_FIXTURE_NODE and STREAMS_FIXTURE_VOTERS\n8 + //! For isolated clusters, set `STREAMS_FIXTURE_NODE` and STREAMS_FIXTURE_VOTERS\n  |\n\nerror: item in documentation is missing backticks\n --> crates/broker/examples/streams_fault_broker.rs:8:57\n  |\n8 | //! For isolated clusters, set STREAMS_FIXTURE_NODE and STREAMS_FIXTURE_VOTERS\n  |                                                         ^^^^^^^^^^^^^^^^^^^^^^\n  |\n  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#doc_markdown\nhelp: try\n  |\n8 - //! For isolated clusters, set STREAMS_FIXTURE_NODE and STREAMS_FIXTURE_VOTERS\n8 + //! For isolated clusters, set STREAMS_FIXTURE_NODE and `STREAMS_FIXTURE_VOTERS`\n  |\n\nerror: could not compile `krabka-broker` (example \"streams_fault_broker\") due to 2 previous errors\n",
+  "clippy_final": "warning: patch `krabka-admin-ui v0.4.3 (https://github.com/krabka-io/krabka-cli?rev=b39dc88d0da3792db02ad62469b45f4fe312ea75#b39dc88d)` was not used in the crate graph\nwarning: patch `krabka-app-sdk v0.5.0 (https://github.com/krabka-io/krabka-gateway?rev=49870fd8e5f708274ff69a3e64a092844e2f8809#49870fd8)` was not used in the crate graph\nwarning: patch `krabka-blockstore v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph\nwarning: patch `krabka-cli v0.4.3 (https://github.com/krabka-io/krabka-cli?rev=b39dc88d0da3792db02ad62469b45f4fe312ea75#b39dc88d)` was not used in the crate graph\nwarning: patch `krabka-client-coordination v0.8.0 (https://github.com/krabka-io/krabka-client-rs?rev=00cbdc4e9c6cb5ec35f6811431461e584649f11f#00cbdc4e)` was not used in the crate graph\nwarning: patch `krabka-client-streams v0.4.1 (https://github.com/krabka-io/krabka-streams-rs?rev=44afe9b6936eddaaef9eff85f22c9f11fa9056b5#44afe9b6)` was not used in the crate graph\nwarning: patch `krabka-connect v0.4.1 (https://github.com/krabka-io/krabka-connect?rev=ecd5fd77656bc24addb087e714477b9201053a28#ecd5fd77)` was not used in the crate graph\nwarning: patch `krabka-connect-derive v0.4.1 (https://github.com/krabka-io/krabka-connect?rev=ecd5fd77656bc24addb087e714477b9201053a28#ecd5fd77)` was not used in the crate graph\nwarning: patch `krabka-connect-postgres v0.4.1 (https://github.com/krabka-io/krabka-connect?rev=ecd5fd77656bc24addb087e714477b9201053a28#ecd5fd77)` was not used in the crate graph\nwarning: patch `krabka-connect-worker v0.4.1 (https://github.com/krabka-io/krabka-connect?rev=ecd5fd77656bc24addb087e714477b9201053a28#ecd5fd77)` was not used in the crate graph\nwarning: patch `krabka-gateway v0.5.0 (https://github.com/krabka-io/krabka-gateway?rev=49870fd8e5f708274ff69a3e64a092844e2f8809#49870fd8)` was not used in the crate graph\nwarning: patch `krabka-hlc v0.8.0 (https://github.com/krabka-io/krabka-protocol?rev=a4edab3e6e4baea89ee4d000e3db71060228e66a#a4edab3e)` was not used in the crate graph\nwarning: patch `krabka-integration v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph\nwarning: patch `krabka-kafka-tap v0.8.0 (https://github.com/krabka-io/krabka-protocol?rev=a4edab3e6e4baea89ee4d000e3db71060228e66a#a4edab3e)` was not used in the crate graph\nwarning: patch `krabka-logql v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph\nwarning: patch `krabka-metrics v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph\nwarning: patch `krabka-metrics-service v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph\nwarning: patch `krabka-o11y-verified v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph\nwarning: patch `krabka-observability v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph\nwarning: patch `krabka-operator v0.5.0 (https://github.com/krabka-io/krabka-operator?rev=b409b564a8f744be7cc87634e194b6249ed9b5b1#b409b564)` was not used in the crate graph\nwarning: patch `krabka-pprof v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph\nwarning: patch `krabka-profiles v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph\nwarning: patch `krabka-promql v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph\nwarning: patch `krabka-protocol-codegen v0.8.0 (https://github.com/krabka-io/krabka-protocol?rev=a4edab3e6e4baea89ee4d000e3db71060228e66a#a4edab3e)` was not used in the crate graph\nwarning: patch `krabka-query-frontend v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph\nwarning: patch `krabka-rebalancer v0.4.3 (https://github.com/krabka-io/krabka-rebalancer?rev=9df7a58ec6f0e78b582e7d69c60b208a9c73644e#9df7a58e)` was not used in the crate graph\nwarning: patch `krabka-replicator v0.4.1 (https://github.com/krabka-io/krabka-connect?rev=ecd5fd77656bc24addb087e714477b9201053a28#ecd5fd77)` was not used in the crate graph\nwarning: patch `krabka-sdk-conformance v0.5.0 (https://github.com/krabka-io/krabka-gateway?rev=49870fd8e5f708274ff69a3e64a092844e2f8809#49870fd8)` was not used in the crate graph\nwarning: patch `krabka-traceql v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph\nwarning: patch `krabka-traces v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph\nhelp: Check that the patched package version and available features are compatible\n      with the dependency requirements. If the patch has a different version from\n      what is locked in the Cargo.lock file, run `cargo update` to use the new\n      version. This may also occur with an optional dependency that is not enabled.\n    Checking krabka-broker v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-movement/crates/broker)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.46s\n",
+  "sources": {
+    "tools/kafka44/ProtocolScenarios.java": "182f4eae3728475289b0255614af76a61f0f501c784afaf938ef6ead7f964dbe",
+    "tools/kafka44/StreamsPositive.java": "d84434d9ba57781879bcf1d91fb1858ef739c643a7083a4250947d4e94e643a9",
+    "tools/kafka44/StreamsFault.java": "54d94e53ef31501a67219c935ccdb70b182174a51d68a87f673a390e40cabb59",
+    "tools/kafka44/StreamsMovement.java": "b2729b71370667cdd99cb6e3e57e34fa01f4240474199991ce332c3e3652051b",
+    "tools/kafka44/FaultTopologyPlugin.java": "dcb1e557d659c50ee0aa427b6ebe6fa792fa29f33f91c99c26c0430892b709e6",
+    "crates/broker/examples/streams_fault_broker.rs": "5ef6988e68d61c366df27667c93f16204b3d45e5c981fca2a3e0262c74a3f487",
+    ".aspect/kafka44_streams_movement.axl": "7c61381f4b6af30ba79a52954001d157afb9677a4fe74e59dac0f7c45c150aa0"
+  },
+  "exact_topology_audit": {
+    "oracle": {
+      "before": "TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-e144a8a0-1bc9-44cb-b745-de744649cbef], sinkTopic=null, stores=[], successors=[])])], globalStores=[])",
+      "after": "TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-e144a8a0-1bc9-44cb-b745-de744649cbef], sinkTopic=null, stores=[], successors=[])])], globalStores=[])",
+      "equal": true
+    },
+    "native": {
+      "before": "TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-2cee44ea-077f-4970-8d59-70325a72816a], sinkTopic=null, stores=[], successors=[])])], globalStores=[])",
+      "after": "TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-2cee44ea-077f-4970-8d59-70325a72816a], sinkTopic=null, stores=[], successors=[])])], globalStores=[])",
+      "equal": true
+    }
+  },
+  "cleanup": {
+    "native1": {
+      "pid": 1825225,
+      "signal": "SIGINT"
+    },
+    "native3": {
+      "pid": 1825227,
+      "signal": "SIGINT"
+    },
+    "oracle1": {
+      "command": [
+        "docker",
+        "stop",
+        "--time",
+        "30",
+        "streams-movement-owned-1-20261104"
+      ],
+      "returncode": 0,
+      "stdout": "Flag --time has been deprecated, use --timeout instead\nstreams-movement-owned-1-20261104\n",
+      "stderr": ""
+    },
+    "oracle2": {
+      "command": [
+        "docker",
+        "stop",
+        "--time",
+        "30",
+        "streams-movement-owned-2-20261104"
+      ],
+      "returncode": 0,
+      "stdout": "Flag --time has been deprecated, use --timeout instead\nstreams-movement-owned-2-20261104\n",
+      "stderr": ""
+    },
+    "oracle3": {
+      "command": [
+        "docker",
+        "stop",
+        "--time",
+        "30",
+        "streams-movement-owned-3-20261104"
+      ],
+      "returncode": 0,
+      "stdout": "Flag --time has been deprecated, use --timeout instead\nstreams-movement-owned-3-20261104\n",
+      "stderr": ""
+    }
+  },
+  "checks": {
+    "java_compile": "PASS released pinned libraries/JDK17 bytecode",
+    "build": "PASS1m04s",
+    "clippy": "initial doc backtick lint corrected; final example Clippy PASS",
+    "parser": "aspect tests kafka44-streams-movement:1 passed",
+    "script_accounting": "27 accounted PASS",
+    "diff": "git diff --check PASS"
+  },
+  "limitations": [
+    "Full AXL task not executed; identical Java fixtures executed directly",
+    "Empty-membership stored topology, not live member reconciliation or concurrent external writes",
+    "Native production filesystem SPI vs custom released Java filesystem plugin; no arbitraryJVM loading",
+    "RF3 process loss, not power-loss/fsync durability",
+    "No production default graduation"
+  ],
+  "result": "PASS: released owner1\u21922, native owner2\u21923; topology retained then new-owner delete/recreate clean; exact full raw topology equality audited"
+}

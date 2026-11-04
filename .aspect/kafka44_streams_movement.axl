@@ -1,0 +1,46 @@
+"""Caller-provisioned released/candidate shared-backend Streams coordinator movement differential."""
+
+load("./kafka44.axl", "command_receipt")
+
+PREPARE = ["stored-exact-source-before-owner-loss"]
+RECOVER = ["coordinator-owner-changed", "stored-exact-source-after-owner-loss", "delete-on-new-owner", "recreated-description-absent"]
+
+def valid_outcomes(output, recover = False):
+    rows = [line.split("\t") for line in output.splitlines() if line.startswith("SCENARIO\t")]
+    return rows == [["SCENARIO", name, "PASS"] for name in (RECOVER if recover else PREPARE)]
+
+def _save(ctx, path, evidence):
+    ctx.std.fs.write(path, json.encode(evidence) + "\n")
+
+def _impl(ctx: TaskContext) -> int:
+    a = ctx.args
+    if not all([a.oracle, a.enabled, a.oracle_identity, a.enabled_identity, a.libs, a.output]):
+        fail("caller-owned RF3 oracle/enabled Streams shared-backend endpoints and separate identity paths, released libs and fresh output required")
+    if a.mode not in ["prepare", "recover"]:
+        fail("mode must be prepare or recover")
+    if command_receipt(ctx, ["mkdir", a.output])["returncode"]:
+        fail("output must not exist")
+    root = command_receipt(ctx, ["realpath", a.output])["stdout"].strip()
+    evidence = {"qualification_pass": False, "commands": {}, "status": "incomplete", "limits": ["Caller pins owned runtimes, image, executable and configuration", "Owner records identity in prepare, externally kills original coordinator, then recover requires a different owner", "No concurrent set/delete, fsync or power-loss claim"]}
+    ctx.defer(_save, ctx, root + "/evidence.json", evidence)
+    commands = evidence["commands"]
+    commands["mkdir"] = command_receipt(ctx, ["mkdir", root + "/classes"])
+    commands["sources"] = command_receipt(ctx, ["sha256sum", "tools/kafka44/ProtocolScenarios.java", "tools/kafka44/StreamsPositive.java", "tools/kafka44/StreamsFault.java", "tools/kafka44/StreamsMovement.java"])
+    if commands["mkdir"]["returncode"] or commands["sources"]["returncode"]:
+        return 1
+    commands["compile"] = command_receipt(ctx, ["javac", "--release", "17", "-cp", a.libs + "/*", "-d", root + "/classes", "tools/kafka44/ProtocolScenarios.java", "tools/kafka44/StreamsPositive.java", "tools/kafka44/StreamsFault.java", "tools/kafka44/StreamsMovement.java"])
+    if commands["compile"]["returncode"]:
+        return 1
+    for side, endpoint in [("oracle", a.oracle), ("enabled", a.enabled)]:
+        result = command_receipt(ctx, ["java", "-cp", a.libs + "/*:" + root + "/classes", "StreamsMovement", endpoint, a.oracle_identity if side == "oracle" else a.enabled_identity, a.mode], 150)
+        commands[side] = result
+        if result["returncode"] or not valid_outcomes(result["stdout"], a.mode == "recover"):
+            return 1
+    evidence["status"] = "paired-streams-movement-" + a.mode + "-pass"
+    return 0
+
+kafka44_streams_movement = task(
+    summary = "Compare shared-backend topology storage before/after caller-owned coordinator loss",
+    implementation = _impl,
+    args = {name: args.string(default = "", description = name + " (owned isolated fixture)") for name in ["oracle", "enabled", "oracle_identity", "enabled_identity", "libs", "output"]} | {"mode": args.string(default = "prepare", description = "prepare or recover; caller owns lifecycle")},
+)

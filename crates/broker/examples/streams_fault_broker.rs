@@ -5,11 +5,13 @@
 //! The controller reserves the port immediately after LISTEN.
 //! This starts a real broker with a filesystem backend installed through the native
 //! embedding SPI. FLAGS/{set,get,delete} contain `ok`, `transient` or `permanent`.
+//! For isolated clusters, set `STREAMS_FIXTURE_NODE` and `STREAMS_FIXTURE_VOTERS`
+//! (comma-separated ID@CONTROLLER), and share FLAGS across the nodes.
 //! Missing flags mean healthy IO. The harness preserves DATA and FLAGS on exit.
 //! See tools/kafka44/README.md for the released-codec fault fixture.
 use {
     krabka_broker::{
-        Broker, BrokerConfig,
+        Broker, BrokerConfig, NodeId,
         api_catalog::UnstableApiVersions,
         coordinator::unified::streams::description::{
             BackendFuture, FileTopologyDescriptionBackend, StorageFailure, TopologyDescription,
@@ -99,6 +101,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .first_mut()
         .ok_or("test configuration has no controller voter")?
         .1 = controller_addr.to_string();
+    if let Ok(node) = env::var("STREAMS_FIXTURE_NODE") {
+        let node: u64 = node.parse()?;
+        config.node_id = NodeId(node);
+        config.broker_id = i32::try_from(node)?;
+        config.directory_id = uuid::Uuid::from_u128(u128::from(node));
+        config.auto_join = false;
+        config.bootstrap_servers.clear();
+        config.controller_quorum_voters = env::var("STREAMS_FIXTURE_VOTERS")?
+            .split(',')
+            .map(|entry| {
+                let (id, address) = entry.split_once('@').ok_or("expected ID@ADDRESS voter")?;
+                Ok((NodeId(id.parse()?), address.to_owned()))
+            })
+            .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+        let nodes = config.controller_quorum_voters.len();
+        config = config.with_internal_topics_for(nodes);
+    }
     config.features.unstable_api_versions = UnstableApiVersions::Enabled;
     config.features.unstable_feature_versions = UnstableFeatureVersions::Enabled;
     config.audit_enabled = false;
