@@ -1,0 +1,310 @@
+{
+  "qualification_pass": false,
+  "scope": "Released-client DLQ payload, six exact provenance headers, exact destination size boundaries, completed single-node clean restart; not full six-surface qualification",
+  "fixture_revision": "74b8d4e1d4dafb27a655c731e954bad8bb4824f7",
+  "fixture_sha256": "a64beea04b63fd4c62e4c43f084070c6b1108de83d8206e55a8759e7bb56d486",
+  "checks": {
+    "axl": "569 passed across32 suites including strict DLQ parser negative controls",
+    "check_scripts": "27 accounted scripts",
+    "oracle": "exit0,73s;8 boundaries and8 restart assertions",
+    "candidate": "exit0;8 boundaries and8 restart assertions; owned shutdown0",
+    "format": "passed; formatter only sorted AXL test imports"
+  },
+  "oracle": {
+    "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+    "oracle_configuration": {
+      "KAFKA_NODE_ID": "1",
+      "KAFKA_PROCESS_ROLES": "broker,controller",
+      "KAFKA_LISTENERS": "PLAINTEXT://:9092,CONTROLLER://:9093",
+      "KAFKA_ADVERTISED_LISTENERS": "PLAINTEXT://localhost:9092",
+      "KAFKA_CONTROLLER_LISTENER_NAMES": "CONTROLLER",
+      "KAFKA_INTER_BROKER_LISTENER_NAME": "PLAINTEXT",
+      "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+      "KAFKA_CONTROLLER_QUORUM_VOTERS": "1@localhost:9093",
+      "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR": "1",
+      "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR": "1",
+      "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR": "1",
+      "CLUSTER_ID": "MkU3OEVBNTcwNTJENDM2Qk",
+      "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR": "1",
+      "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR": "1",
+      "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_NUM_PARTITIONS": "1"
+    },
+    "startup": {
+      "command": [
+        "timeout",
+        "90",
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        "krabka-kafka44--private-dlq-oracle-final",
+        "-e",
+        "KAFKA_NODE_ID=1",
+        "-e",
+        "KAFKA_PROCESS_ROLES=broker,controller",
+        "-e",
+        "KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093",
+        "-e",
+        "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092",
+        "-e",
+        "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+        "-e",
+        "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+        "-e",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "-e",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
+        "-e",
+        "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR=1",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR=1",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_NUM_PARTITIONS=1",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+      ],
+      "returncode": 0,
+      "stdout": "347e4cfa4bbce30be3350d867caea7d4d224b518d6cc3dd8b83dd7f7310ef355\n",
+      "stderr": ""
+    },
+    "dlq_fixture_sha256": "sha256:a64beea04b63fd4c62e4c43f084070c6b1108de83d8206e55a8759e7bb56d486",
+    "dlq_scenarios": {
+      "oracle": {
+        "command": [
+          "timeout",
+          "240",
+          "docker",
+          "exec",
+          "krabka-kafka44--private-dlq-oracle-final",
+          "java",
+          "-cp",
+          "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+          "ShareBoundary",
+          "localhost:9092",
+          "57fd9a1c34"
+        ],
+        "returncode": 0,
+        "stdout": "copy=true limit=100000 encoded_bytes=366 dlq_count=1 value_bytes=100\nSCENARIO\tdlq-boundary-true-0\tPASS\ncopy=true limit=365 encoded_bytes=366 dlq_count=0 value_bytes=-1\nSCENARIO\tdlq-boundary-true-1\tPASS\ncopy=true limit=366 encoded_bytes=366 dlq_count=1 value_bytes=100\nSCENARIO\tdlq-boundary-true-2\tPASS\ncopy=true limit=367 encoded_bytes=366 dlq_count=1 value_bytes=100\nSCENARIO\tdlq-boundary-true-3\tPASS\ncopy=false limit=100000 encoded_bytes=264 dlq_count=1 value_bytes=-1\nSCENARIO\tdlq-boundary-false-0\tPASS\ncopy=false limit=263 encoded_bytes=264 dlq_count=0 value_bytes=-1\nSCENARIO\tdlq-boundary-false-1\tPASS\ncopy=false limit=264 encoded_bytes=264 dlq_count=1 value_bytes=-1\nSCENARIO\tdlq-boundary-false-2\tPASS\ncopy=false limit=265 encoded_bytes=264 dlq_count=1 value_bytes=-1\nSCENARIO\tdlq-boundary-false-3\tPASS\n",
+        "stderr": ""
+      }
+    },
+    "dlq_oracle_restart": {
+      "command": [
+        "timeout",
+        "60",
+        "docker",
+        "restart",
+        "--time",
+        "30",
+        "krabka-kafka44--private-dlq-oracle-final"
+      ],
+      "returncode": 0,
+      "stdout": "Flag --time has been deprecated, use --timeout instead\nkrabka-kafka44--private-dlq-oracle-final\n",
+      "stderr": ""
+    },
+    "dlq_restart_readiness": {
+      "command": [
+        "timeout",
+        "10",
+        "docker",
+        "exec",
+        "krabka-kafka44--private-dlq-oracle-final",
+        "/opt/kafka/bin/kafka-topics.sh",
+        "--bootstrap-server",
+        "localhost:9092",
+        "--list"
+      ],
+      "returncode": 0,
+      "stdout": "__consumer_offsets\n__share_group_state\ndlq.57fd9a1c34f0\ndlq.57fd9a1c34f1\ndlq.57fd9a1c34f2\ndlq.57fd9a1c34f3\ndlq.57fd9a1c34t0\ndlq.57fd9a1c34t1\ndlq.57fd9a1c34t2\ndlq.57fd9a1c34t3\nkafka44-config-ddbbf403-7540-4bd8-821a-4eb0098447ab\nsrc57fd9a1c34f0\nsrc57fd9a1c34f1\nsrc57fd9a1c34f2\nsrc57fd9a1c34f3\nsrc57fd9a1c34t0\nsrc57fd9a1c34t1\nsrc57fd9a1c34t2\nsrc57fd9a1c34t3\n",
+      "stderr": "[2026-11-04 16:18:48,280] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n[2026-11-04 16:18:48,376] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n[2026-11-04 16:18:48,477] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n[2026-11-04 16:18:48,679] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n[2026-11-04 16:18:49,180] WARN [AdminClient clientId=adminclient-1] Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. (org.apache.kafka.clients.NetworkClient)\n"
+    },
+    "dlq_recovery": {
+      "command": [
+        "timeout",
+        "240",
+        "docker",
+        "exec",
+        "krabka-kafka44--private-dlq-oracle-final",
+        "java",
+        "-cp",
+        "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+        "ShareBoundary",
+        "localhost:9092",
+        "57fd9a1c34",
+        "verify"
+      ],
+      "returncode": 0,
+      "stdout": "group=grp57fd9a1c34t0 source_start_offset=0 lag=0\nSCENARIO\tdlq-recovery-true-0\tPASS\ngroup=grp57fd9a1c34t1 source_start_offset=0 lag=0\nSCENARIO\tdlq-recovery-true-1\tPASS\ngroup=grp57fd9a1c34t2 source_start_offset=0 lag=0\nSCENARIO\tdlq-recovery-true-2\tPASS\ngroup=grp57fd9a1c34t3 source_start_offset=0 lag=0\nSCENARIO\tdlq-recovery-true-3\tPASS\ngroup=grp57fd9a1c34f0 source_start_offset=0 lag=0\nSCENARIO\tdlq-recovery-false-0\tPASS\ngroup=grp57fd9a1c34f1 source_start_offset=0 lag=0\nSCENARIO\tdlq-recovery-false-1\tPASS\ngroup=grp57fd9a1c34f2 source_start_offset=0 lag=0\nSCENARIO\tdlq-recovery-false-2\tPASS\ngroup=grp57fd9a1c34f3 source_start_offset=0 lag=0\nSCENARIO\tdlq-recovery-false-3\tPASS\n",
+      "stderr": ""
+    },
+    "dlq_valid": true,
+    "cleanup": {
+      "command": [
+        "timeout",
+        "90",
+        "docker",
+        "rm",
+        "-f",
+        "krabka-kafka44--private-dlq-oracle-final"
+      ],
+      "returncode": 0,
+      "stdout": "krabka-kafka44--private-dlq-oracle-final\n",
+      "stderr": ""
+    }
+  },
+  "oracle_full_receipt": {
+    "path": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-repeatable/.private/dlq-oracle-final/evidence.json",
+    "sha256": "3c98d2679c8a508bb937efae76ef269188a39b898fcbe2c2f6869627204dc450"
+  },
+  "candidate": {
+    "format": {
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--user",
+        "1001:1001",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-repeatable/.private/dlq-candidate:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-repeatable/.private/dlq-candidate",
+        "--entrypoint",
+        "/usr/bin/krabka-format",
+        "ghcr.io/krabka-io/krabka-broker@sha256:577a686c1b24a5a655ec8a2a82c877e119e3dd3f07b5fa617e91d05851714e1e",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-repeatable/.private/dlq-candidate/data",
+        "--node-id",
+        "1",
+        "--standalone",
+        "--controller-listener",
+        "127.0.0.1:63873",
+        "--release-version",
+        "4.4-IV2",
+        "--feature",
+        "share.version=2",
+        "--unstable-feature-versions-enable"
+      ],
+      "returncode": 0,
+      "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-repeatable/.private/dlq-candidate/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id PJU4kRDXSHWM6SeU001jUQ (6 seed record(s))\n",
+      "stderr": ""
+    },
+    "process": {
+      "pid": 1657469,
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-repeatable/.private/dlq-candidate/effective.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:63873",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ]
+    },
+    "boundaries": {
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-repeatable/.private/dlq-oracle-final/classes:/classes:ro",
+        "--entrypoint",
+        "java",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "-cp",
+        "/opt/kafka/libs/*:/classes",
+        "ShareBoundary",
+        "127.0.0.1:63872",
+        "finaldlq01"
+      ],
+      "returncode": 0,
+      "stdout": "copy=true limit=100000 encoded_bytes=366 dlq_count=1 value_bytes=100\nSCENARIO\tdlq-boundary-true-0\tPASS\ncopy=true limit=365 encoded_bytes=366 dlq_count=0 value_bytes=-1\nSCENARIO\tdlq-boundary-true-1\tPASS\ncopy=true limit=366 encoded_bytes=366 dlq_count=1 value_bytes=100\nSCENARIO\tdlq-boundary-true-2\tPASS\ncopy=true limit=367 encoded_bytes=366 dlq_count=1 value_bytes=100\nSCENARIO\tdlq-boundary-true-3\tPASS\ncopy=false limit=100000 encoded_bytes=264 dlq_count=1 value_bytes=-1\nSCENARIO\tdlq-boundary-false-0\tPASS\ncopy=false limit=263 encoded_bytes=264 dlq_count=0 value_bytes=-1\nSCENARIO\tdlq-boundary-false-1\tPASS\ncopy=false limit=264 encoded_bytes=264 dlq_count=1 value_bytes=-1\nSCENARIO\tdlq-boundary-false-2\tPASS\ncopy=false limit=265 encoded_bytes=264 dlq_count=1 value_bytes=-1\nSCENARIO\tdlq-boundary-false-3\tPASS\n",
+      "stderr": ""
+    },
+    "restart": {
+      "stop_signal": "SIGTERM",
+      "old_pid": 1657469,
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-repeatable/.private/dlq-candidate/effective.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:63873",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1673375
+    },
+    "recovery": {
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-repeatable/.private/dlq-oracle-final/classes:/classes:ro",
+        "--entrypoint",
+        "java",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "-cp",
+        "/opt/kafka/libs/*:/classes",
+        "ShareBoundary",
+        "127.0.0.1:63872",
+        "finaldlq01",
+        "verify"
+      ],
+      "returncode": 0,
+      "stdout": "group=grpfinaldlq01t0 source_start_offset=1 lag=0\nSCENARIO\tdlq-recovery-true-0\tPASS\ngroup=grpfinaldlq01t1 source_start_offset=1 lag=0\nSCENARIO\tdlq-recovery-true-1\tPASS\ngroup=grpfinaldlq01t2 source_start_offset=1 lag=0\nSCENARIO\tdlq-recovery-true-2\tPASS\ngroup=grpfinaldlq01t3 source_start_offset=1 lag=0\nSCENARIO\tdlq-recovery-true-3\tPASS\ngroup=grpfinaldlq01f0 source_start_offset=1 lag=0\nSCENARIO\tdlq-recovery-false-0\tPASS\ngroup=grpfinaldlq01f1 source_start_offset=1 lag=0\nSCENARIO\tdlq-recovery-false-1\tPASS\ngroup=grpfinaldlq01f2 source_start_offset=1 lag=0\nSCENARIO\tdlq-recovery-false-2\tPASS\ngroup=grpfinaldlq01f3 source_start_offset=1 lag=0\nSCENARIO\tdlq-recovery-false-3\tPASS\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "pid": 1673375,
+      "signal": "SIGTERM",
+      "returncode": 0,
+      "runtime_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c"
+    }
+  },
+  "candidate_effective_configuration": "broker_id = 1\nlog_dir = \"/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-repeatable/.private/dlq-candidate/data\"\n[[listeners]]\nname = \"PLAINTEXT\"\nbind_addr = \"127.0.0.1:63872\"\nadvertised = \"127.0.0.1:63872\"\nprotocol = \"Plaintext\"\n[server_properties]\n\"unstable.api.versions.enable\" = \"true\"\n\"unstable.feature.versions.enable\" = \"true\"\n[runtime]\ndefault_replication_factor = 1\ndefault_min_insync_replicas = 1\noffsets_topic_replication_factor = 1\ntransaction_state_replication_factor = 1\ntransaction_state_min_isr = 1\nshare_state_replication_factor = 1\nshare_state_min_isr = 1\n",
+  "candidate_build_receipt": {
+    "source_revision": "d4890ecde31f111c21f17de6e67e866b1c04d2cb",
+    "sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+    "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+    "source_trees": {
+      "crates/broker": "787adc2e68c1e5d5e1e0b7af2ac4d6a75fd06213",
+      "crates/verified": "45d6fefe1af5d6e89db7cac9685848be2aed55c9",
+      "crates/raft": "823abe060b84580397e8c8cef5469845b80102e0"
+    },
+    "production_build": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo build -p krabka-broker --bin krabka-broker",
+    "build_complete_before_copy": true,
+    "copy_after_all_native_test_linking": true
+  },
+  "witnesses": {
+    "candidate_terminal_errors": [
+      "{\"error\":\"Unable to produce to the DLQ topic dlq.finaldlq01t1-0: error 10.\",\"first\":0,\"group\":\"grpfinaldlq01t1\",\"last\":0,\"message\":\"Failed to write to DLQ, proceeding to ARCHIVED regardless.\",\"partition\":0,\"severity\":\"ERROR\",\"target\":\"krabka_broker::share_partition::manager::dead_letter\",\"timestamp\":\"2026-11-04T16:19:54.812300Z\",\"topic_id\":\"59dd1a13-81a5-4fd1-9cf6-39fa6368af2a\"}",
+      "{\"error\":\"Unable to produce to the DLQ topic dlq.finaldlq01f1-0: error 10.\",\"first\":0,\"group\":\"grpfinaldlq01f1\",\"last\":0,\"message\":\"Failed to write to DLQ, proceeding to ARCHIVED regardless.\",\"partition\":0,\"severity\":\"ERROR\",\"target\":\"krabka_broker::share_partition::manager::dead_letter\",\"timestamp\":\"2026-11-04T16:20:28.170440Z\",\"topic_id\":\"67971c89-773c-4506-9f75-35400ea91f3e\"}"
+    ]
+  },
+  "remaining": [
+    "Recorded start-offset difference remains: released0 versus native1; both lag0",
+    "No minimum feature, authorization/denied destination, fault/movement or power-loss claim",
+    "Candidate restarts caller-owned, oracle CI runs only released fixture",
+    "No qualification/default graduation"
+  ],
+  "historical_first_run": {
+    "path": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-dlq-repeatable/.private/dlq-oracle-attempt1/evidence.json",
+    "sha256": "7373c77cbc75d72a4dfe5df549f46de759bd1e2b4332031fee4043a676e590a0",
+    "scope": "Passed initial integration before six exact header-value assertions; not substituted for final-source run"
+  },
+  "paired_scenario_differences": []
+}

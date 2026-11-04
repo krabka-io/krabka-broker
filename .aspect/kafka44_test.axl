@@ -1,6 +1,6 @@
 """Input safety tests for the released Kafka evidence task."""
 
-load("./kafka44.axl", "api_differences", "dlq_results_valid", "authorization_input_problems", "input_problems", "scenario_differences", "transaction_recovery_args")
+load("./kafka44.axl", "api_differences", "authorization_input_problems", "dlq_results_valid", "input_problems", "scenario_differences", "transaction_recovery_args")
 load("./testing.axl", "check_eq", "suite", "suite_task")
 
 def _test_revision(_ctx):
