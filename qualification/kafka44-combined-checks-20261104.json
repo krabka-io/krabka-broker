@@ -15,7 +15,8 @@
     "native_deletion": {
       "log": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-complete-delete-all.log",
       "sha256": "caa41367fe8e797952b26a4209a06508b56b9e7210941e29d8499c0288a04cc1",
-      "tail": "te_legacy_delete_error_mapping::case_09 ... ok\ntest handlers::delete_groups::legacy_tests::handler_legacy_delete_feature_scenarios::handler_legacy_delete_legacy_delete_error_mapping::case_07 ... ok\ntest handlers::delete_groups::legacy_tests::handler_legacy_delete_feature_scenarios::handler_legacy_delete_legacy_delete_error_mapping::case_03 ... ok\ntest handlers::delete_groups::legacy_tests::handler_legacy_delete_feature_scenarios::handler_legacy_delete_legacy_delete_error_mapping::case_04 ... ok\n\ntest result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 8999 filtered out; finished in 0.37s\n\n"
+      "tail": "te_legacy_delete_error_mapping::case_09 ... ok\ntest handlers::delete_groups::legacy_tests::handler_legacy_delete_feature_scenarios::handler_legacy_delete_legacy_delete_error_mapping::case_07 ... ok\ntest handlers::delete_groups::legacy_tests::handler_legacy_delete_feature_scenarios::handler_legacy_delete_legacy_delete_error_mapping::case_03 ... ok\ntest handlers::delete_groups::legacy_tests::handler_legacy_delete_feature_scenarios::handler_legacy_delete_legacy_delete_error_mapping::case_04 ... ok\n\ntest result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 8999 filtered out; finished in 0.37s\n\n",
+      "scope_note": "Executed combined production code and complete-struct BDD assertions before final test-only if/Option lint simplification2ebcabdd6. Final all-target Clippy compiled that simplification. No production source changed afterward."
     },
     "format": {
       "log": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-complete-format.log",
