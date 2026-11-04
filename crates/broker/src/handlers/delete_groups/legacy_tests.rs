@@ -34,13 +34,19 @@ fn render_result(legacy_delete: &mut LegacyDelete) {
 #[rstest_bdd_macros::then("the result has error {code} and message {message}")]
 fn expected_result(legacy_delete: &LegacyDelete, code: i16, message: String) {
     let row = legacy_delete.result.as_ref().expect("rendered result");
-    assert!(row.group_id == "app" && row.error_code == code);
     let expected = if message == "generic" {
         Some("Topology description plugin failed to delete the topology.")
     } else {
         None
     };
-    assert!(row.error_message.as_deref() == expected);
+    assert!(
+        *row == DeletableGroupResult {
+            group_id: "app".into(),
+            error_code: code,
+            error_message: expected.map(str::to_owned),
+            ..Default::default()
+        }
+    );
 }
 
 rstest_bdd_macros::scenarios!("tests/features/handler_legacy_delete.feature", fixtures = [legacy_delete: LegacyDelete]);

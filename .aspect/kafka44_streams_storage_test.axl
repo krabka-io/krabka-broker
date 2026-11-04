@@ -4,7 +4,10 @@ load("./kafka44_streams_storage.axl", "outcomes")
 load("./testing.axl", "check_eq", "suite", "suite_task")
 
 def _test_outcomes(_ctx):
-    check_eq("only exact PASS markers", outcomes("SCENARIO\tstore\tPASS\nRESPONSE\tignored\nSCENARIO\tget\tFAIL"), ["store"])
+    check_eq("exact PASS markers", outcomes("SCENARIO\tstore\tPASS\nRESPONSE\tignored"), ["store"])
+    for invalid in ["SCENARIO\tget\tFAIL", "SCENARIO\tget\textra\tPASS", "SCENARIO\t\tPASS", "SCENARIO\tget"]:
+        check_eq("malformed or failed row invalidates receipt", outcomes("SCENARIO\tstore\tPASS\n" + invalid), ["INVALID_SCENARIO_RECEIPT"])
+    check_eq("duplicates remain visible to exact comparison", outcomes("SCENARIO\tstore\tPASS\nSCENARIO\tstore\tPASS"), ["store", "store"])
 
 kafka44_streams_storage_tests = suite("kafka44-streams-storage", [_test_outcomes])
 test_kafka44_streams_storage = suite_task(kafka44_streams_storage_tests)

@@ -205,6 +205,7 @@ cut.
 ## Repeatable released-client DLQ boundaries
 
 `aspect kafka44 --protocol-scenarios --dlq-scenarios --revision <full-sha> --output <fresh-directory>` reuses `qualification/kafka44-dlq/ShareBoundary.java` (not a second implementation). Eight explicit assertions check copied/headers-only destination size boundaries, intact payloads and six provenance headers. Eight recovery assertions verify zero share lag after restarting only the task-owned oracle. Duplicate, missing or misnamed scenario rows fail collection. The optional explicitly enabled candidate executes the same boundary fixture; candidate restart remains caller-owned. Raw source start offsets retain the released/native terminal-prefix difference. This is not authorization, minimum-feature, denied-destination or multibroker-fault coverage, and never changes `qualification_pass=false`.
+
 ### Isolated Streams backend faults and persistent restart
 
 `StreamsFault.java` checks thirteen strict set/get/delete failure-and-repair
