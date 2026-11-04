@@ -10,7 +10,7 @@ those labels are not a current claim that executed scenarios never ran.
 
 | Surface | Executed evidence | Still not discharged by these receipts |
 | --- | --- | --- |
-| DLQ | Eight size/header/payload boundaries plus restart; historical three-node ARCHIVING crash/destination failover and lost-confirmation duplicate witnesses | Share-coordinator movement and denied destination; immediate-below/at DLQ minimum now measured1→2 |
+| DLQ | Eight size/header/payload boundaries plus restart; historical three-node ARCHIVING crash/destination failover and lost-confirmation duplicate witnesses | Coupled share-state-owner/DLQ-follower loss now passes with the measured watermark fix; denied destination remains unmeasured; minimum measured1→2 |
 | Delayed uploads | Age/byte/dynamic/retention-derived delay and failure checks; pending-delay crash, natural eviction and48 exact remote reads | Mid-upload interruption remains unmeasured; RF3 leader-loss/new-leader remote reads now pass |
 | Routing | Six identity cases plus auth/preauth;40 explicit two-node before/after crash/restart assertions | Cluster replacement/pipelined rejection are not established by node-preserving restart |
 | Controller removal | Positive register/remove/retry, voter rejection, metadata32/33 boundary and same-data crash durability; native forwarding regression | Further released/native forwarding/failure/authorization-race permutations |
@@ -387,3 +387,23 @@ as explanations; destination HW/LSO/ISR and Produce outcomes still require
 capture before a causal claim. Visibility/retry/replication remains an active blocker under
 [#1969](https://github.com/krabka-io/krabka-broker/issues/1969), not a pass.
 See [SHARE-STATE-MOVEMENT.md](SHARE-STATE-MOVEMENT.md).
+
+## Coupled DLQ fault: corrected runtime (2026-11-04)
+
+The failure above is retained as a historical counterexample, not a current
+unresolved result for that schedule. The corrected run is
+[`kafka44-share-state-movement-fixed-20261104.json`](../../qualification/kafka44-share-state-movement-fixed-20261104.json).
+Fresh released and native clusters complete the same coupled state-owner and
+DLQ-follower loss with exactly one consumer-readable destination record, source
+lag0 and no source redelivery. Native Fetch reaches HW1/LSO1 with389 bytes.
+See [the fault procedure and limits](SHARE-STATE-MOVEMENT.md).
+
+The final frozen source passes34 ISR-maintenance tests (including9 behavioral
+controls), workspace/all-targets Clippy, formatting and zero-repeat CPD. Receipt
+log hashes are independently verified. Installed ISR/leader/epoch matching and
+pending-expansion controls prevent policy refresh from advancing durability
+against stale authority; LEO is sampled under replica-state lock.
+
+This repairs the measured availability failure, not arbitrary exactly-once
+archival, every ACL permutation, power-loss safety or production-default
+qualification. Historical failed runs remain retained; `qualification_pass=false`.
