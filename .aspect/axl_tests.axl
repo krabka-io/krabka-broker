@@ -33,6 +33,7 @@ load("./generate_config_reference_test.axl", "generate_config_reference_tests")
 load("./generate_kip_matrix_test.axl", "generate_kip_matrix_tests")
 load("./jepsen_test.axl", "jepsen_tests")
 load("./kafka44_remote_test.axl", "kafka44_remote_tests")
+load("./kafka44_share_minimum_test.axl", "kafka44_share_minimum_tests")
 load("./kafka44_streams_storage_test.axl", "kafka44_streams_storage_tests")
 load("./kafka44_test.axl", "kafka44_tests")
 load("./kafka44_upgrade_test.axl", "kafka44_upgrade_tests")
@@ -72,6 +73,7 @@ SUITES = [
     kafka44_tests,
     kafka44_upgrade_tests,
     kafka44_streams_storage_tests,
+    kafka44_share_minimum_tests,
     kafka44_remote_tests,
     kind_smoke_tests,
     mutants_shard_tests,
