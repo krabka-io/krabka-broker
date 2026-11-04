@@ -376,10 +376,14 @@ is not claimed. See [STREAMS_MOVEMENT.md](STREAMS_MOVEMENT.md).
 
 [`kafka44-share-state-movement-20261104.json`](../../qualification/kafka44-share-state-movement-20261104.json)
 records actual state owner3→1 after source acquisition but before rejection,
-without killing source1/destination2. Released finishes with one readable DLQ
+without killing source1/destination2. The killed broker3 is also destination
+follower3 (replicas[2,3], minISR1), so this is a coupled state-owner/follower-loss
+fault, not isolated state ownership. Released finishes with one readable DLQ
 record/lag0/no source redelivery. Candidate7c4e3aa7 yields no source redelivery
 but no consumer-readable DLQ record within15s. Offline logs contain two valid
 DLQ records and terminal source state: physical data loss is not established.
-Visibility/retry/replication remains an active blocker under
+Independent QA excludes committed-offset skipping and transactional isolation
+as explanations; destination HW/LSO/ISR and Produce outcomes still require
+capture before a causal claim. Visibility/retry/replication remains an active blocker under
 [#1969](https://github.com/krabka-io/krabka-broker/issues/1969), not a pass.
 See [SHARE-STATE-MOVEMENT.md](SHARE-STATE-MOVEMENT.md).
