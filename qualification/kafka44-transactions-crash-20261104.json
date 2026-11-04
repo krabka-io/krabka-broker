@@ -1,0 +1,231 @@
+{
+  "date": "2026-11-04",
+  "qualification_pass": false,
+  "scoped_pass": true,
+  "candidate": {
+    "source_revision": "f392992a452aa623c184f2041b38ca68fc5101f0",
+    "sha256": "a0045c991818fdd6dcd06bdc25099813e91fd281eafc520522f23439b16c1a43"
+  },
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "repeatable_oracle_command": "aspect kafka44 --revision FULL_SHA --protocol-scenarios --transaction-scenarios --oracle-crash-recovery --output NEW_DIRECTORY",
+  "oracle_stop": {
+    "command": [
+      "timeout",
+      "60",
+      "docker",
+      "kill",
+      "--signal",
+      "KILL",
+      "krabka-kafka44-n-20261104-final-crash-oracle-collection"
+    ],
+    "returncode": 0,
+    "stdout": "krabka-kafka44-n-20261104-final-crash-oracle-collection\n",
+    "stderr": ""
+  },
+  "oracle_start": {
+    "command": [
+      "timeout",
+      "60",
+      "docker",
+      "start",
+      "krabka-kafka44-n-20261104-final-crash-oracle-collection"
+    ],
+    "returncode": 0,
+    "stdout": "krabka-kafka44-n-20261104-final-crash-oracle-collection\n",
+    "stderr": ""
+  },
+  "oracle_restart_kind": "SIGKILL",
+  "oracle_recovery": {
+    "modern": {
+      "command": [
+        "timeout",
+        "120",
+        "docker",
+        "exec",
+        "krabka-kafka44-n-20261104-final-crash-oracle-collection",
+        "java",
+        "-cp",
+        "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+        "TransactionScenarios",
+        "localhost:9092",
+        "recover",
+        "kafka44-txn-4d218001-fbf9-4ec9-89ed-2e4a6aa85f37",
+        "kafka44-group-4d218001-fbf9-4ec9-89ed-2e4a6aa85f37",
+        "rvuof0uoR06UN52x9I7ovg"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\trestart-preserves-topic-id\tPASS\nOBSERVATION\trestart-preserves-commit-not-abort\t7\tstable=true\tattempt=0\nSCENARIO\trestart-preserves-commit-not-abort\tPASS\n",
+      "stderr": ""
+    },
+    "legacy": {
+      "command": [
+        "timeout",
+        "120",
+        "docker",
+        "exec",
+        "krabka-kafka44-n-20261104-final-crash-oracle-collection",
+        "java",
+        "-cp",
+        "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+        "TransactionScenarios",
+        "localhost:9092",
+        "recover",
+        "kafka44-txn-0d55bea3-0e2b-4b25-b423-0d1146b8ccb7",
+        "kafka44-group-0d55bea3-0e2b-4b25-b423-0d1146b8ccb7",
+        "kaa4bCr7RCaUjMpNugeeyA"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\trestart-preserves-topic-id\tPASS\nOBSERVATION\trestart-preserves-commit-not-abort\t7\tstable=true\tattempt=0\nSCENARIO\trestart-preserves-commit-not-abort\tPASS\n",
+      "stderr": ""
+    }
+  },
+  "oracle_controller_recovery": {
+    "command": [
+      "timeout",
+      "90",
+      "docker",
+      "exec",
+      "krabka-kafka44-n-20261104-final-crash-oracle-collection",
+      "java",
+      "-cp",
+      "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+      "ControllerRecovery",
+      "localhost:9093",
+      "recover"
+    ],
+    "returncode": 0,
+    "stdout": "RESPONSE\tremoved-after-restart\tUnregisterControllerResponseData(throttleTimeMs=0, errorCode=136, errorMessage='Controller ID 424243 is not currently registered.')\nSCENARIO\tremoved-after-restart\tCONTROLLER_ID_NOT_REGISTERED\n",
+    "stderr": ""
+  },
+  "direct_sigkill_recovery": {
+    "candidate-kill": {
+      "pid": 831189,
+      "signal": "SIGKILL",
+      "executable": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-broker"
+    },
+    "candidate-recover-modern": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-fixture-libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/classes",
+        "TransactionScenarios",
+        "127.0.0.1:65192",
+        "recover",
+        "kafka44-txn-74fdd3f3-efb1-4607-9bbc-ddd67182874c",
+        "kafka44-group-74fdd3f3-efb1-4607-9bbc-ddd67182874c",
+        "SQSB9djdTCSZdESa-ExmRw"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\trestart-preserves-topic-id\tPASS\nOBSERVATION\trestart-preserves-commit-not-abort\t7\tstable=true\tattempt=0\nSCENARIO\trestart-preserves-commit-not-abort\tPASS\n",
+      "stderr": ""
+    },
+    "candidate-recover-legacy": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-fixture-libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/classes",
+        "TransactionScenarios",
+        "127.0.0.1:65192",
+        "recover",
+        "kafka44-txn-2c49e761-4e04-43db-8a81-a852789bdf2f",
+        "kafka44-group-2c49e761-4e04-43db-8a81-a852789bdf2f",
+        "C-Ibe8NzSrK7XQP-1oH_nQ"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\trestart-preserves-topic-id\tPASS\nOBSERVATION\trestart-preserves-commit-not-abort\t7\tstable=true\tattempt=0\nSCENARIO\trestart-preserves-commit-not-abort\tPASS\n",
+      "stderr": ""
+    },
+    "oracle-recover-modern": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-fixture-libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/classes",
+        "TransactionScenarios",
+        "127.0.0.1:64092",
+        "recover",
+        "kafka44-txn-a66febe0-cf60-4547-930c-419c3e5f2797",
+        "kafka44-group-a66febe0-cf60-4547-930c-419c3e5f2797",
+        "Fwsmssz6ThKBvi6l4JLJjg"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\trestart-preserves-topic-id\tPASS\nOBSERVATION\trestart-preserves-commit-not-abort\t7\tstable=true\tattempt=0\nSCENARIO\trestart-preserves-commit-not-abort\tPASS\n",
+      "stderr": ""
+    },
+    "oracle-recover-legacy": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-fixture-libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/classes",
+        "TransactionScenarios",
+        "127.0.0.1:64092",
+        "recover",
+        "kafka44-txn-f85727a3-577f-4a38-b0f1-a6daee339cf1",
+        "kafka44-group-f85727a3-577f-4a38-b0f1-a6daee339cf1",
+        "ILLV0zusSQWpd9lYYGOBLg"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\trestart-preserves-topic-id\tPASS\nOBSERVATION\trestart-preserves-commit-not-abort\t7\tstable=true\tattempt=0\nSCENARIO\trestart-preserves-commit-not-abort\tPASS\n",
+      "stderr": ""
+    }
+  },
+  "native_checks": {
+    "build": "passed50.83s",
+    "native_transactions": "23passed17.48s",
+    "native_transaction_crash_marker_subset": "3passed14.74s",
+    "native_tiered_multibroker": "7passed24.59s",
+    "native_controller_forwarding": "1passed4.66s",
+    "native_feature_boundaries": "12passed (1+2+8+1 suites)"
+  },
+  "raw_artifacts": {
+    "evidence.json": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/first-collection/evidence.json",
+      "sha256": "78105ead559d98074cb6e6809ab28f718cd27edee4d2fdfd020b1e6489fe807a"
+    },
+    "first-enabled.json": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/first-enabled.json",
+      "sha256": "8f11a6ca3c996133c841c112b55893a573f256ea5ba187ee74f237722ee49bca"
+    },
+    "crash-first.json": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/crash-first.json",
+      "sha256": "97c1b1590c62d66713156fea538204657d9626fee736fa9b7f7c93c3133d971a"
+    },
+    "oracle-reopen.txt": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/oracle-reopen.txt",
+      "sha256": "6e0306dcd5b4c87fcde5220d54feb5f637dd15c5c269469f36938c101862afcc"
+    },
+    "qualification-txn-all-20261104.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-txn-all-20261104.log",
+      "sha256": "1002035f881fea6f45d5f33c41057b03c11f809c9a06168b64c14ca0a6f22bd5"
+    },
+    "qualification-txn-recovery-20261104.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-txn-recovery-20261104.log",
+      "sha256": "fed1c90d7ba9362496d6c749f110b69dcbe5bd5d2b8e037146d1248f51998761"
+    },
+    "qualification-final-build-20261104.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-final-build-20261104.log",
+      "sha256": "0a8729b5d0c3eab8265f9fba678b1dc33fe28c93b2824f4ecc6b9b8c3742e9e4"
+    },
+    "qualification-native-multibroker-20261104.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-native-multibroker-20261104.log",
+      "sha256": "24588c8aeb798f43969d0a7389ba155ec31aa40817848cf0bf7cd6d13634bd46"
+    },
+    "qualification-native-feature-boundaries-20261104.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-native-feature-boundaries-20261104.log",
+      "sha256": "d511ec02938f286c66472d7279c45497e1f7e53c5e8184213982c9e2d5548950"
+    },
+    "task-owned-oracle": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/crash-oracle-collection/evidence.json",
+      "sha256": "4a2b48dbc27e02798cb46b554f92206838015501b42f31d80fdb4ab0e5d7768b"
+    }
+  },
+  "limits": [
+    "1979 not yet merged; this is f392 source, not final integration",
+    "First discovery contains failed default startup before archive creation; historical failed log retained",
+    "Defaults remain gated; qualification_pass=false",
+    "SIGKILL recovery is RF1 completed transactions; native multibroker regressions separate",
+    "Reference oracle restart failed reformat then exact data reopened without format in qualification-streams-recovery-final",
+    "Task-owned oracle mode now repeatable; private paired SIGKILL execution also pins exact retained data/process",
+    "Native multibroker tests do not establish released-oracle replication parity",
+    "Restart-after-SIGKILL is not host power-loss durability or crash while a pending transaction is undecided"
+  ]
+}

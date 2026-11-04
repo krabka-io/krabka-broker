@@ -147,6 +147,8 @@ def _impl(ctx: TaskContext) -> int:
         problems.append("streams scenarios require --protocol-scenarios")
     if a.transaction_scenarios and not a.protocol_scenarios:
         problems.append("transaction scenarios require --protocol-scenarios")
+    if a.oracle_crash_recovery and not a.transaction_scenarios:
+        problems.append("oracle crash recovery requires --transaction-scenarios")
     if not a.output:
         problems.append("output directory is required")
     if problems:
@@ -306,7 +308,12 @@ def _impl(ctx: TaskContext) -> int:
 
         # Only restart the isolated oracle owned by this invocation. Candidate
         # lifecycle belongs to its caller and is never inferred from endpoints.
-        evidence["transaction_oracle_restart"] = _command(ctx, ["docker", "restart", "--time", "30", name], 60)
+        evidence["transaction_oracle_restart_kind"] = "SIGKILL" if a.oracle_crash_recovery else "clean-SIGTERM"
+        if a.oracle_crash_recovery:
+            evidence["transaction_oracle_stop"] = _command(ctx, ["docker", "kill", "--signal", "KILL", name], 60)
+            evidence["transaction_oracle_restart"] = _command(ctx, ["docker", "start", name], 60)
+        else:
+            evidence["transaction_oracle_restart"] = _command(ctx, ["docker", "restart", "--time", "30", name], 60)
         for _ in range(30):
             result = _tool(ctx, ["kafka-topics.sh", "--list"], "localhost:9092", name, 10)
             if result["returncode"] == 0:
@@ -317,7 +324,8 @@ def _impl(ctx: TaskContext) -> int:
             "modern": _transaction_recovery(ctx, name, evidence["transaction_scenarios"]["oracle"]),
             "legacy": _transaction_recovery(ctx, name, evidence["legacy_transaction_scenarios"]["oracle"]),
         }
-    failed = any([r["returncode"] for probes in evidence["sides"].values() for r in probes.values()])
+    failed = evidence.get("transaction_oracle_stop", {}).get("returncode", 0) != 0
+    failed = failed or any([r["returncode"] for probes in evidence["sides"].values() for r in probes.values()])
     if a.streams_scenarios:
         failed = failed or any([r["returncode"] or len(scenario_results(r["stdout"])) != 9 for r in evidence["streams_scenarios"].values()]) or any(evidence["streams_differences"].values())
     evidence["status"] = "probe-failure" if failed else "collected-not-qualified"
@@ -341,7 +349,7 @@ def _impl(ctx: TaskContext) -> int:
 kafka44 = task(
     summary = "Collect released Kafka 4.4 oracle/candidate evidence (not parity)",
     implementation = _impl,
-    args = {"streams_scenarios": args.boolean(default = False, description = "Execute nine positive reference in-memory Streams lifecycle cases (oracle and enabled candidate only)."), "transaction_scenarios": args.boolean(default = False, description = "Execute explicit v6 commit/abort offset-state scenarios on isolated brokers."), "authorization_scenarios": args.boolean(default = False, description = "Execute synthetic SASL user authorization and preauth routing probes."), "default_auth_bootstrap": args.string(default = "", description = "Isolated default SASL listener with synthetic denied user."), "enabled_auth_bootstrap": args.string(default = "", description = "Isolated enabled SASL listener with synthetic denied user."), "protocol_scenarios": args.boolean(default = False, description = "Execute seventeen released-codec negative protocol scenarios (not qualification)."), "default_controller": args.string(default = "", description = "Isolated default controller address."), "enabled_controller": args.string(default = "", description = "Isolated enabled controller address.")} | {name: args.string(default = "", description = description) for name, description in {
+    args = {"oracle_crash_recovery": args.boolean(default = False, description = "SIGKILL only the task-owned isolated oracle before transaction recovery instead of clean restart."), "streams_scenarios": args.boolean(default = False, description = "Execute nine positive reference in-memory Streams lifecycle cases (oracle and enabled candidate only)."), "transaction_scenarios": args.boolean(default = False, description = "Execute explicit v6 commit/abort offset-state scenarios on isolated brokers."), "authorization_scenarios": args.boolean(default = False, description = "Execute synthetic SASL user authorization and preauth routing probes."), "default_auth_bootstrap": args.string(default = "", description = "Isolated default SASL listener with synthetic denied user."), "enabled_auth_bootstrap": args.string(default = "", description = "Isolated enabled SASL listener with synthetic denied user."), "protocol_scenarios": args.boolean(default = False, description = "Execute seventeen released-codec negative protocol scenarios (not qualification)."), "default_controller": args.string(default = "", description = "Isolated default controller address."), "enabled_controller": args.string(default = "", description = "Isolated enabled controller address.")} | {name: args.string(default = "", description = description) for name, description in {
         "revision": "Exact candidate commit SHA.",
         "output": "New evidence directory.",
         "default_bootstrap": "Isolated default candidate address.",

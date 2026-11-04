@@ -149,3 +149,11 @@ Therefore `qualification_pass=false`, defaults remain unchanged, and #1969 stays
 ## Repeatable positive Streams lifecycle (2026-11-04)
 
 The durable `StreamsPositive.java` fixture and `--streams-scenarios` lane retain nine strict positive lifecycle assertions on the released reference in-memory plugin. Historical paired receipt: [`kafka44-streams-positive-historical-20261104.json`](../../qualification/kafka44-streams-positive-historical-20261104.json), 9/9 per endpoint. This strengthens earlier negative-only protocol checks but pins historical binary679706f, not final source. Full storage/fault/movement and default qualification remain open.
+
+## Abrupt completed-transaction recovery (2026-11-04)
+
+`qualification/kafka44-transactions-crash-20261104.json` pins freshly built source f392992a4 and actual paired released/candidate SIGKILL recovery: both modern and legacy groups retain exact topic UUIDs and committed offset7, excluding aborted42 (four assertions per endpoint). The private oracle launcher initially refused to reformat existing data; that failed attempt is preserved. Recovery succeeds after reopening the exact same oracle data without formatting.
+
+The durable `--oracle-crash-recovery` mode separately passes in26.0s on the task-owned pinned oracle; CI now runs clean and SIGKILL variants independently. It checks kill/start success and both transaction identities plus durable controller removal. It never restarts arbitrary candidates. Fresh native tests also pass23 transaction cases (17.48s), seven tiered multi-broker cases (24.59s), controller forwarding (4.66s), and12 feature-boundary cases. Native transaction cases include pending markers, unreplicated decision crash/retry, coordinator failover and timeout-abort crash variants. These are native regressions, not a released multi-node differential.
+
+This receipt predates final DLQ integration. It is completed-transaction RF1 process-crash evidence, not pending-marker released parity, power-loss/fsync durability, a complete upgrade matrix or final-head qualification. `qualification_pass` remains false.
