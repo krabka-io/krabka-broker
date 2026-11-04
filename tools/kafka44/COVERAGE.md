@@ -225,3 +225,28 @@ does not inject a deterministic mid-marker cut or power failure, nor discharge
 the remaining default/minimum-feature/DLQ/Streams/remote-storage obligations.
 The matrix is separately provisioned, not automatically run by the single-node
 oracle CI lane. `qualification_pass=false`; #1969 must remain open.
+
+## Durable Streams SPI differential and legacy deletion correction (2026-11-04)
+
+[`kafka44-streams-durable-20261104.json`](../../qualification/kafka44-streams-durable-20261104.json)
+records actual pinned released Kafka4.4/custom Java filesystem plugin versus a
+fresh native real-broker embedding binary built from `3af529aa6`. Each endpoint
+passes thirteen strict transient/permanent set/get/delete failure and repair
+assertions, followed by exact-source description verification after clean
+same-data restart. The new repository task independently repeats paired
+`faults`, `prepare` and `recover` modes, retaining raw responses and exact source,
+jar, executable and configuration identities. The native side calls the real
+production filesystem backend, not an independent storage simulation.
+
+Importantly, the fresh **before-fix** current-main binary actually failed:
+DeleteGroupsv2 returned134 for backend deletion failure, where released Kafka
+returned−1. That failed raw execution is retained alongside the focused
+version-boundary correction; v0–v2 now map to UNKNOWN_SERVER_ERROR and v3 keeps
+GROUP_DELETION_FAILED. The receipt never relabels the prior privately corrected
+binary as unmodified main. A first durable Java plugin serialization setup failure
+is retained separately from successful corrected runs.
+
+This is external-filesystem SPI/RF1 clean restart evidence, not multi-broker
+coordinator movement, power-loss/fsync durability, arbitrary JVM plugin loading,
+new minimum-level/authorization permutations, or production-default graduation.
+`qualification_pass` remains false; other #1969 obligations remain open.

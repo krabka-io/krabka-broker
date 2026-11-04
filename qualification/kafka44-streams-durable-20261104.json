@@ -1,0 +1,749 @@
+{
+  "qualification_pass": false,
+  "image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "source_revision": "3af529aa64809fbc874b118315ddb9b609aefa86",
+  "binary": "/home/matt/.openclaw/workspace/coordinator/.private/streams-delete-legacy-target/debug/examples/streams_fault_broker",
+  "binary_sha256": "af3d1c59d868a308a4f15a38077206acae924f5dc6ecdb8204b948449c9bd32e",
+  "commands": [
+    {
+      "command": [
+        "javac",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*",
+        "-d",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/classes",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-finish/tools/kafka44/ProtocolScenarios.java",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-finish/tools/kafka44/StreamsPositive.java",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-finish/tools/kafka44/StreamsFault.java",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-finish/tools/kafka44/StreamsStorageRestart.java",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-finish/tools/kafka44/FaultTopologyPlugin.java"
+      ],
+      "log": "compile.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        "streams-owned-1677079",
+        "--network",
+        "host",
+        "--user",
+        "0:0",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/oracle:/evidence",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run:/fixture:ro",
+        "-v",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs:/libs:ro",
+        "--entrypoint",
+        "/bin/bash",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "-c",
+        "export CLASSPATH=/fixture/classes:/libs/*; if [ ! -f /evidence/data/meta.properties ]; then /opt/kafka/bin/kafka-storage.sh format --standalone --cluster-id MkU3OEVBNTcwNTJENDM2Qk --release-version 4.4-IV2 --feature streams.version=1 --config /evidence/broker.properties || exit; fi; exec /opt/kafka/bin/kafka-server-start.sh /evidence/broker.properties"
+      ],
+      "log": "oracle-start.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/classes",
+        "StreamsFault",
+        "127.0.0.1:64662",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/oracle"
+      ],
+      "log": "oracle-StreamsFault-faults.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/classes",
+        "StreamsStorageRestart",
+        "127.0.0.1:64662",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/oracle",
+        "prepare"
+      ],
+      "log": "oracle-StreamsStorageRestart-prepare.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "docker",
+        "stop",
+        "streams-owned-1677079"
+      ],
+      "log": "oracle-stop.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "docker",
+        "start",
+        "streams-owned-1677079"
+      ],
+      "log": "oracle-restart.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/classes",
+        "StreamsStorageRestart",
+        "127.0.0.1:64662",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/oracle",
+        "recover"
+      ],
+      "log": "oracle-StreamsStorageRestart-recover.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/classes",
+        "StreamsFault",
+        "127.0.0.1:64664",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-flags"
+      ],
+      "log": "native-StreamsFault-faults.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/classes",
+        "StreamsStorageRestart",
+        "127.0.0.1:64664",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-flags",
+        "prepare"
+      ],
+      "log": "native-StreamsStorageRestart-prepare.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/classes",
+        "StreamsStorageRestart",
+        "127.0.0.1:64664",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-flags",
+        "recover"
+      ],
+      "log": "native-StreamsStorageRestart-recover.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "aspect",
+        "kafka44-streams-storage",
+        "--oracle-container",
+        "streams-owned-1677079",
+        "--oracle-endpoint",
+        "127.0.0.1:64662",
+        "--oracle-flags",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/oracle",
+        "--native-endpoint",
+        "127.0.0.1:64664",
+        "--native-flags",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-flags",
+        "--libs",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs",
+        "--output",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-faults",
+        "--mode",
+        "faults"
+      ],
+      "log": "axl-faults.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "aspect",
+        "kafka44-streams-storage",
+        "--oracle-container",
+        "streams-owned-1677079",
+        "--oracle-endpoint",
+        "127.0.0.1:64662",
+        "--oracle-flags",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/oracle",
+        "--native-endpoint",
+        "127.0.0.1:64664",
+        "--native-flags",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-flags",
+        "--libs",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs",
+        "--output",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-prepare",
+        "--mode",
+        "prepare"
+      ],
+      "log": "axl-prepare.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "docker",
+        "restart",
+        "streams-owned-1677079"
+      ],
+      "log": "oracle-axl-restart.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "aspect",
+        "kafka44-streams-storage",
+        "--oracle-container",
+        "streams-owned-1677079",
+        "--oracle-endpoint",
+        "127.0.0.1:64662",
+        "--oracle-flags",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/oracle",
+        "--native-endpoint",
+        "127.0.0.1:64664",
+        "--native-flags",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-flags",
+        "--libs",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs",
+        "--output",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-recover",
+        "--mode",
+        "recover"
+      ],
+      "log": "axl-recover.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "docker",
+        "logs",
+        "streams-owned-1677079"
+      ],
+      "log": "oracle-full-runtime.log",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "docker",
+        "stop",
+        "streams-owned-1677079"
+      ],
+      "log": "oracle-final-stop.log",
+      "returncode": 0
+    }
+  ],
+  "limitations": [
+    "RF1 clean restart, not coordinator movement or power-loss durability",
+    "Native embedding SPI, not arbitrary JVM class compatibility",
+    "No Streams coordinator movement differential",
+    "No new Streams minimum-level or positive authorization permutation evidence",
+    "No final production-default qualification or arbitrary JVM class loading support"
+  ],
+  "native_launches": [
+    [
+      "/home/matt/.openclaw/workspace/coordinator/.private/streams-delete-legacy-target/debug/examples/streams_fault_broker",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-data",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-flags",
+      "127.0.0.1:64664"
+    ],
+    [
+      "/home/matt/.openclaw/workspace/coordinator/.private/streams-delete-legacy-target/debug/examples/streams_fault_broker",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-data",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-flags",
+      "127.0.0.1:64664",
+      "rejoin"
+    ],
+    [
+      "/home/matt/.openclaw/workspace/coordinator/.private/streams-delete-legacy-target/debug/examples/streams_fault_broker",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-data",
+      "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-flags",
+      "127.0.0.1:64664",
+      "rejoin"
+    ]
+  ],
+  "result": "PASS: 13 faults and exact persistent restart per side; AXL faults/prepare/recover executed",
+  "native_shutdown_exit": 0,
+  "files_sha256": {
+    "axl-faults.log": "103385585017b9e292d5923dcb5f3b821552e9efe961a0a2e3c4ed87c15361aa",
+    "oracle-restart.log": "289f1f3ff95fa2ce30cfd0c4b2a7bb551f800bf8f6463f37058cbcacae7de77e",
+    "native-StreamsStorageRestart-prepare.log": "28cd9eee5206cc20386b440aa90a15e4549163f78312cab2ecbe72b9b7402eb1",
+    "oracle-final-stop.log": "289f1f3ff95fa2ce30cfd0c4b2a7bb551f800bf8f6463f37058cbcacae7de77e",
+    "oracle-axl-restart.log": "289f1f3ff95fa2ce30cfd0c4b2a7bb551f800bf8f6463f37058cbcacae7de77e",
+    "oracle-StreamsStorageRestart-recover.log": "8e7c2f6cfe9653a02820b7c4838c7b56c50503f9f3f39c6a4f6c8ff194491120",
+    "native-restart.log": "288ab3607c3c1684aa50231c1361c65e600ae4e6b9b77edf952727e7e8dd8a48",
+    "native-StreamsFault-faults.log": "99f1b0f8f9427fe03be02d646fa90470742e9b11f8906e7d1d6a5e8e67ad58fc",
+    "native-StreamsStorageRestart-recover.log": "4e8e7a317f3f00b561169ba8013131345d6433584300de378b36cb6802a9d8fc",
+    "axl-recover.log": "08dba4ebce8c07f47486e384a439027fd446df456da6b554c617cffb07eb2470",
+    "oracle-full-runtime.log": "90defcdfa4bb5946f1571486c8eeb6058bc555d3f3fc38ae8cddf6689373007e",
+    "oracle-start.log": "1de2e8fd893a3ba7c5b473dc7c8538f2485b5d8f301a3b93113b4e08031e14fa",
+    "oracle-StreamsFault-faults.log": "7819be5b89b1f04420f777f285210bc276c75f2b5f10659aa72614d203c2c171",
+    "oracle-StreamsStorageRestart-prepare.log": "4c6b5b0114784a8e1617ecf86cb6af2ccc142e45133549ed6c033a6828c704c3",
+    "compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "axl-prepare.log": "3ba77b876e3052adfc883b62d29a53f8e4dd562879c5327b7f6bfbbb50e66209",
+    "oracle-stop.log": "289f1f3ff95fa2ce30cfd0c4b2a7bb551f800bf8f6463f37058cbcacae7de77e",
+    "native-start.log": "b2770d0445fbc941af2b9937c212b8b486ca07e2c6982e58bb5b775f96672ffc"
+  },
+  "sources_sha256": {
+    "ProtocolScenarios.java": "182f4eae3728475289b0255614af76a61f0f501c784afaf938ef6ead7f964dbe",
+    "StreamsPositive.java": "d84434d9ba57781879bcf1d91fb1858ef739c643a7083a4250947d4e94e643a9",
+    "StreamsFault.java": "54d94e53ef31501a67219c935ccdb70b182174a51d68a87f673a390e40cabb59",
+    "StreamsStorageRestart.java": "1d6ab9717887f817db3175c60c378a16701b9943720bae65bcc3a335b9634af0",
+    "FaultTopologyPlugin.java": "dcb1e557d659c50ee0aa427b6ebe6fa792fa29f33f91c99c26c0430892b709e6"
+  },
+  "kind": "paired-released-durable-filesystem-Streams-faults-clean-restart",
+  "date": "2026-11-04",
+  "axl_receipts": {
+    "faults": {
+      "qualification_pass": false,
+      "status": "paired-faults-pass",
+      "commands": {
+        "inspect": {
+          "command": [
+            "timeout",
+            "90",
+            "docker",
+            "inspect",
+            "--format={{.Config.Image}}",
+            "streams-owned-1677079"
+          ],
+          "returncode": 0,
+          "stdout": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b\n",
+          "stderr": ""
+        },
+        "mkdir": {
+          "command": [
+            "timeout",
+            "90",
+            "mkdir",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-faults/classes"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "sources": {
+          "command": [
+            "timeout",
+            "90",
+            "sha256sum",
+            "tools/kafka44/ProtocolScenarios.java",
+            "tools/kafka44/StreamsPositive.java",
+            "tools/kafka44/StreamsFault.java",
+            "tools/kafka44/StreamsStorageRestart.java",
+            "tools/kafka44/FaultTopologyPlugin.java"
+          ],
+          "returncode": 0,
+          "stdout": "182f4eae3728475289b0255614af76a61f0f501c784afaf938ef6ead7f964dbe  tools/kafka44/ProtocolScenarios.java\nd84434d9ba57781879bcf1d91fb1858ef739c643a7083a4250947d4e94e643a9  tools/kafka44/StreamsPositive.java\n54d94e53ef31501a67219c935ccdb70b182174a51d68a87f673a390e40cabb59  tools/kafka44/StreamsFault.java\n1d6ab9717887f817db3175c60c378a16701b9943720bae65bcc3a335b9634af0  tools/kafka44/StreamsStorageRestart.java\ndcb1e557d659c50ee0aa427b6ebe6fa792fa29f33f91c99c26c0430892b709e6  tools/kafka44/FaultTopologyPlugin.java\n",
+          "stderr": ""
+        },
+        "compile": {
+          "command": [
+            "timeout",
+            "90",
+            "javac",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*",
+            "-d",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-faults/classes",
+            "tools/kafka44/ProtocolScenarios.java",
+            "tools/kafka44/StreamsPositive.java",
+            "tools/kafka44/StreamsFault.java",
+            "tools/kafka44/StreamsStorageRestart.java",
+            "tools/kafka44/FaultTopologyPlugin.java"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "oracle_faults": {
+          "command": [
+            "timeout",
+            "120",
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-faults/classes",
+            "StreamsFault",
+            "127.0.0.1:64662",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/oracle"
+          ],
+          "returncode": 0,
+          "stdout": "RESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='fault-member', memberEpoch=1, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[Status(statusCode=5, statusDetail='Assignment delayed due to the configured initial rebalance delay.')], activeTasks=[], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nSCENARIO\tinitial-solicitation\tPASS\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=135, errorMessage='injected-transient')\nSCENARIO\ttransient-set-failed\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-e8b76d74-4bd2-4657-8861-fb05c0c79330', groupState='Assigning', groupEpoch=2, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-e8b76d74-4bd2-4657-8861-fb05c0c79330], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='fault-member', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='fault-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nSCENARIO\ttransient-set-no-description\tPASS\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null)\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-e8b76d74-4bd2-4657-8861-fb05c0c79330', groupState='Assigning', groupEpoch=2, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-e8b76d74-4bd2-4657-8861-fb05c0c79330], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='fault-member', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='fault-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-e8b76d74-4bd2-4657-8861-fb05c0c79330], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\ttransient-set-repair-stored\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-e8b76d74-4bd2-4657-8861-fb05c0c79330', groupState='Assigning', groupEpoch=2, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-e8b76d74-4bd2-4657-8861-fb05c0c79330], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='fault-member', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='fault-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=2, assignorName='sticky')])\nSCENARIO\tget-error-not-missing\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-e8b76d74-4bd2-4657-8861-fb05c0c79330', groupState='Assigning', groupEpoch=2, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-e8b76d74-4bd2-4657-8861-fb05c0c79330], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='fault-member', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='fault-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-e8b76d74-4bd2-4657-8861-fb05c0c79330], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\tget-repair-stored\tPASS\nRESPONSE\tdelete\tDeleteGroupsResponseData(throttleTimeMs=0, results=[DeletableGroupResult(groupId='fault-e8b76d74-4bd2-4657-8861-fb05c0c79330', errorCode=-1, errorMessage=null)])\nSCENARIO\tlegacy-delete-failure-unknown-server\tPASS\nRESPONSE\tdelete\tDeleteGroupsResponseData(throttleTimeMs=0, results=[DeletableGroupResult(groupId='fault-e8b76d74-4bd2-4657-8861-fb05c0c79330', errorCode=134, errorMessage='Topology description plugin failed to delete the topology.')])\nSCENARIO\tdelete-failure-reported\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-e8b76d74-4bd2-4657-8861-fb05c0c79330', groupState='Empty', groupEpoch=3, assignmentEpoch=3, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-e8b76d74-4bd2-4657-8861-fb05c0c79330], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nSCENARIO\tdelete-failure-group-retained\tPASS\nRESPONSE\tdelete\tDeleteGroupsResponseData(throttleTimeMs=0, results=[DeletableGroupResult(groupId='fault-e8b76d74-4bd2-4657-8861-fb05c0c79330', errorCode=0, errorMessage=null)])\nSCENARIO\tdelete-repair-success\tPASS\nRESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='recreated', memberEpoch=1, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[Status(statusCode=5, statusDetail='Assignment delayed due to the configured initial rebalance delay.')], activeTasks=[], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-e8b76d74-4bd2-4657-8861-fb05c0c79330', groupState='Assigning', groupEpoch=2, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-e8b76d74-4bd2-4657-8861-fb05c0c79330], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='recreated', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='recreated', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nSCENARIO\tdelete-recreate-clean\tPASS\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=135, errorMessage='injected-permanent')\nSCENARIO\tpermanent-set-failed\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-e8b76d74-4bd2-4657-8861-fb05c0c79330', groupState='Assigning', groupEpoch=2, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-e8b76d74-4bd2-4657-8861-fb05c0c79330], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='recreated', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='recreated', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nSCENARIO\tpermanent-set-status\tPASS\n",
+          "stderr": ""
+        },
+        "native_faults": {
+          "command": [
+            "timeout",
+            "120",
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-faults/classes",
+            "StreamsFault",
+            "127.0.0.1:64664",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-flags"
+          ],
+          "returncode": 0,
+          "stdout": "RESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='fault-member', memberEpoch=2, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[], activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nSCENARIO\tinitial-solicitation\tPASS\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=135, errorMessage='Topology description plugin failed.')\nSCENARIO\ttransient-set-failed\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-77a412bf-0218-4483-b6e0-45587a910965', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-77a412bf-0218-4483-b6e0-45587a910965], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='fault-member', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='fault-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nSCENARIO\ttransient-set-no-description\tPASS\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null)\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-77a412bf-0218-4483-b6e0-45587a910965', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-77a412bf-0218-4483-b6e0-45587a910965], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='fault-member', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='fault-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-77a412bf-0218-4483-b6e0-45587a910965], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\ttransient-set-repair-stored\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-77a412bf-0218-4483-b6e0-45587a910965', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-77a412bf-0218-4483-b6e0-45587a910965], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='fault-member', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='fault-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=2, assignorName='sticky')])\nSCENARIO\tget-error-not-missing\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-77a412bf-0218-4483-b6e0-45587a910965', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-77a412bf-0218-4483-b6e0-45587a910965], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='fault-member', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='fault-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-77a412bf-0218-4483-b6e0-45587a910965], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\tget-repair-stored\tPASS\nRESPONSE\tdelete\tDeleteGroupsResponseData(throttleTimeMs=0, results=[DeletableGroupResult(groupId='fault-77a412bf-0218-4483-b6e0-45587a910965', errorCode=-1, errorMessage=null)])\nSCENARIO\tlegacy-delete-failure-unknown-server\tPASS\nRESPONSE\tdelete\tDeleteGroupsResponseData(throttleTimeMs=0, results=[DeletableGroupResult(groupId='fault-77a412bf-0218-4483-b6e0-45587a910965', errorCode=134, errorMessage='Topology description plugin failed to delete the topology.')])\nSCENARIO\tdelete-failure-reported\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-77a412bf-0218-4483-b6e0-45587a910965', groupState='Empty', groupEpoch=3, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-77a412bf-0218-4483-b6e0-45587a910965], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nSCENARIO\tdelete-failure-group-retained\tPASS\nRESPONSE\tdelete\tDeleteGroupsResponseData(throttleTimeMs=0, results=[DeletableGroupResult(groupId='fault-77a412bf-0218-4483-b6e0-45587a910965', errorCode=0, errorMessage=null)])\nSCENARIO\tdelete-repair-success\tPASS\nRESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='recreated', memberEpoch=2, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[], activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-77a412bf-0218-4483-b6e0-45587a910965', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-77a412bf-0218-4483-b6e0-45587a910965], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='recreated', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='recreated', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nSCENARIO\tdelete-recreate-clean\tPASS\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=135, errorMessage='Topology description plugin failed.')\nSCENARIO\tpermanent-set-failed\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-77a412bf-0218-4483-b6e0-45587a910965', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-77a412bf-0218-4483-b6e0-45587a910965], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='recreated', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='recreated', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nSCENARIO\tpermanent-set-status\tPASS\n",
+          "stderr": ""
+        }
+      },
+      "limits": [
+        "Caller provisions owned fixtures and pins native executable separately",
+        "Native embedding SPI is not arbitrary JVM plugin class compatibility",
+        "No coordinator movement, abrupt crash or power-loss claim"
+      ]
+    },
+    "prepare": {
+      "qualification_pass": false,
+      "status": "paired-prepare-pass",
+      "commands": {
+        "inspect": {
+          "command": [
+            "timeout",
+            "90",
+            "docker",
+            "inspect",
+            "--format={{.Config.Image}}",
+            "streams-owned-1677079"
+          ],
+          "returncode": 0,
+          "stdout": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b\n",
+          "stderr": ""
+        },
+        "mkdir": {
+          "command": [
+            "timeout",
+            "90",
+            "mkdir",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-prepare/classes"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "sources": {
+          "command": [
+            "timeout",
+            "90",
+            "sha256sum",
+            "tools/kafka44/ProtocolScenarios.java",
+            "tools/kafka44/StreamsPositive.java",
+            "tools/kafka44/StreamsFault.java",
+            "tools/kafka44/StreamsStorageRestart.java",
+            "tools/kafka44/FaultTopologyPlugin.java"
+          ],
+          "returncode": 0,
+          "stdout": "182f4eae3728475289b0255614af76a61f0f501c784afaf938ef6ead7f964dbe  tools/kafka44/ProtocolScenarios.java\nd84434d9ba57781879bcf1d91fb1858ef739c643a7083a4250947d4e94e643a9  tools/kafka44/StreamsPositive.java\n54d94e53ef31501a67219c935ccdb70b182174a51d68a87f673a390e40cabb59  tools/kafka44/StreamsFault.java\n1d6ab9717887f817db3175c60c378a16701b9943720bae65bcc3a335b9634af0  tools/kafka44/StreamsStorageRestart.java\ndcb1e557d659c50ee0aa427b6ebe6fa792fa29f33f91c99c26c0430892b709e6  tools/kafka44/FaultTopologyPlugin.java\n",
+          "stderr": ""
+        },
+        "compile": {
+          "command": [
+            "timeout",
+            "90",
+            "javac",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*",
+            "-d",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-prepare/classes",
+            "tools/kafka44/ProtocolScenarios.java",
+            "tools/kafka44/StreamsPositive.java",
+            "tools/kafka44/StreamsFault.java",
+            "tools/kafka44/StreamsStorageRestart.java",
+            "tools/kafka44/FaultTopologyPlugin.java"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "oracle_prepare": {
+          "command": [
+            "timeout",
+            "120",
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-prepare/classes",
+            "StreamsStorageRestart",
+            "127.0.0.1:64662",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/oracle",
+            "prepare"
+          ],
+          "returncode": 0,
+          "stdout": "RESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='persistent-member', memberEpoch=1, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[Status(statusCode=5, statusDetail='Assignment delayed due to the configured initial rebalance delay.')], activeTasks=[], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null)\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='restart-0a1715a6-d1d6-4a8c-b876-c0a25e4e1f1e', groupState='Assigning', groupEpoch=2, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-0a1715a6-d1d6-4a8c-b876-c0a25e4e1f1e], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='persistent-member', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='persistent-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-0a1715a6-d1d6-4a8c-b876-c0a25e4e1f1e], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\tstored-before-restart\tPASS\n",
+          "stderr": ""
+        },
+        "native_prepare": {
+          "command": [
+            "timeout",
+            "120",
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-prepare/classes",
+            "StreamsStorageRestart",
+            "127.0.0.1:64664",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-flags",
+            "prepare"
+          ],
+          "returncode": 0,
+          "stdout": "RESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='persistent-member', memberEpoch=2, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[], activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null)\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='restart-61a6105c-696b-47a1-84e6-3878d2c7abfb', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-61a6105c-696b-47a1-84e6-3878d2c7abfb], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='persistent-member', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='persistent-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-61a6105c-696b-47a1-84e6-3878d2c7abfb], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\tstored-before-restart\tPASS\n",
+          "stderr": ""
+        }
+      },
+      "limits": [
+        "Caller provisions owned fixtures and pins native executable separately",
+        "Native embedding SPI is not arbitrary JVM plugin class compatibility",
+        "No coordinator movement, abrupt crash or power-loss claim"
+      ]
+    },
+    "recover": {
+      "qualification_pass": false,
+      "status": "paired-recover-pass",
+      "commands": {
+        "inspect": {
+          "command": [
+            "timeout",
+            "90",
+            "docker",
+            "inspect",
+            "--format={{.Config.Image}}",
+            "streams-owned-1677079"
+          ],
+          "returncode": 0,
+          "stdout": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b\n",
+          "stderr": ""
+        },
+        "mkdir": {
+          "command": [
+            "timeout",
+            "90",
+            "mkdir",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-recover/classes"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "sources": {
+          "command": [
+            "timeout",
+            "90",
+            "sha256sum",
+            "tools/kafka44/ProtocolScenarios.java",
+            "tools/kafka44/StreamsPositive.java",
+            "tools/kafka44/StreamsFault.java",
+            "tools/kafka44/StreamsStorageRestart.java",
+            "tools/kafka44/FaultTopologyPlugin.java"
+          ],
+          "returncode": 0,
+          "stdout": "182f4eae3728475289b0255614af76a61f0f501c784afaf938ef6ead7f964dbe  tools/kafka44/ProtocolScenarios.java\nd84434d9ba57781879bcf1d91fb1858ef739c643a7083a4250947d4e94e643a9  tools/kafka44/StreamsPositive.java\n54d94e53ef31501a67219c935ccdb70b182174a51d68a87f673a390e40cabb59  tools/kafka44/StreamsFault.java\n1d6ab9717887f817db3175c60c378a16701b9943720bae65bcc3a335b9634af0  tools/kafka44/StreamsStorageRestart.java\ndcb1e557d659c50ee0aa427b6ebe6fa792fa29f33f91c99c26c0430892b709e6  tools/kafka44/FaultTopologyPlugin.java\n",
+          "stderr": ""
+        },
+        "compile": {
+          "command": [
+            "timeout",
+            "90",
+            "javac",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*",
+            "-d",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-recover/classes",
+            "tools/kafka44/ProtocolScenarios.java",
+            "tools/kafka44/StreamsPositive.java",
+            "tools/kafka44/StreamsFault.java",
+            "tools/kafka44/StreamsStorageRestart.java",
+            "tools/kafka44/FaultTopologyPlugin.java"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "oracle_recover": {
+          "command": [
+            "timeout",
+            "120",
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-recover/classes",
+            "StreamsStorageRestart",
+            "127.0.0.1:64662",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/oracle",
+            "recover"
+          ],
+          "returncode": 0,
+          "stdout": "RESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='restart-0a1715a6-d1d6-4a8c-b876-c0a25e4e1f1e', groupState='Assigning', groupEpoch=2, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-0a1715a6-d1d6-4a8c-b876-c0a25e4e1f1e], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='persistent-member', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='persistent-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-0a1715a6-d1d6-4a8c-b876-c0a25e4e1f1e], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\texact-description-after-restart\tPASS\n",
+          "stderr": ""
+        },
+        "native_recover": {
+          "command": [
+            "timeout",
+            "120",
+            "java",
+            "-cp",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-harness-final-20261104/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/axl-recover/classes",
+            "StreamsStorageRestart",
+            "127.0.0.1:64664",
+            "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-run/native-flags",
+            "recover"
+          ],
+          "returncode": 0,
+          "stdout": "RESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='restart-61a6105c-696b-47a1-84e6-3878d2c7abfb', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-61a6105c-696b-47a1-84e6-3878d2c7abfb], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='persistent-member', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='persistent-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-61a6105c-696b-47a1-84e6-3878d2c7abfb], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\texact-description-after-restart\tPASS\n",
+          "stderr": ""
+        }
+      },
+      "limits": [
+        "Caller provisions owned fixtures and pins native executable separately",
+        "Native embedding SPI is not arbitrary JVM plugin class compatibility",
+        "No coordinator movement, abrupt crash or power-loss claim"
+      ]
+    }
+  },
+  "native_example_source_sha256": "deff68c002f0adee351f4e8655eb3e78471066e50536967145d4aa2eb3ed247f",
+  "production_tree": "88b03241653f8da3bf72d7ac6c69a42b09220171",
+  "native_build_log": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-corrected-build.log",
+  "released_jar_sha256": {
+    "swagger-annotations-2.2.52.jar": "f086c5ca01eb0a2f8b6709d892203629a0fcff6d21701fc2f900f288d12e9c43",
+    "jline-terminal-3.30.16.jar": "9266b1656f802aeb867cf899c3ba8dc7c52f8208006cb7d31ee1097c7339dc8d",
+    "jetty-client-12.0.39.jar": "bc2bf4cc3942a34f0ac0ba30ca343bc54d4698d6a5f4b0eba8b84425208923ca",
+    "connect-mirror-client-4.4.0.jar": "86e2d6a261f7055f829e42e397f102efa29522d7f1c18fc48bfeb035bc82afb5",
+    "jetty-http-12.0.39.jar": "1bbccba6e05bb1e738018d224e00455a81260a89faa97b6b56f1998149b2ce01",
+    "jackson-annotations-2.21.jar": "53ca085f4a150f703f49e1aabd935bd03b43e1ea3d55d135438292af22cef56b",
+    "osgi-resource-locator-1.0.3.jar": "aab5d7849f7cfcda2cc7c541ba1bd365151d42276f151c825387245dfde3dd74",
+    "connect-runtime-4.4.0.jar": "1d086126228a8f21a1e45196b47815e0e50b379fbeea7d264715da1d259379b8",
+    "aopalliance-repackaged-3.0.6.jar": "a82b6d1a348324ef88dc807c7cd7aaf633985cbff7b30036fb61a1b86981d840",
+    "commons-collections-3.2.2.jar": "eeeae917917144a68a741d4c0dff66aa5c5c5fd85593ff217bced3fc8ca783b8",
+    "jose4j-0.9.6.jar": "7314af50cde9c99e8eaf43eee617a23edcc6bb43036221064355094999d837ef",
+    "connect-mirror-4.4.0.jar": "49b4421df6de6ac5b11ad7d993daa41e3dbf5068b95a14e3b982ea9442d81218",
+    "jakarta.xml.bind-api-3.0.1.jar": "b8fb4bee3ff5b5c1ef77144d8411316018d7bbd41fcf1ede0646f7978546b867",
+    "kafka-clients-4.4.0.jar": "9e4514622675f9b24c83373d0d5b35dd7a4dba34bad69762fe90a9e54cfb71de",
+    "jackson-core-2.21.7.jar": "8c5623b98f32d5f7e1287ff61ed50e08ab7b11381e991fff89327faabba42261",
+    "kafka-shell-4.4.0.jar": "d89885515f9a22ca3477c0251914749dfd12627289c9c284b03dee23273f6524",
+    "connect-api-4.4.0.jar": "d37a0ff5a98a382bb89497e31561998130e8e8dbec1943fcf50e888f5aa5feb4",
+    "jakarta.servlet-api-6.0.0.jar": "c034eb1afb158987dbb53a5fea0cadf611c8dae8daadd59c44d9d5ab70129cef",
+    "commons-net-3.13.0.jar": "9e88444afadc9467f0bf3d328f93b9538da35a9be05cdee430766e64fddbd6c5",
+    "maven-artifact-3.9.16.jar": "54cc1c1ef932e3d4a903352111b42b4d3c3ed8e7a1d0de73b625309d9c3ad3e8",
+    "opentelemetry-proto-1.3.2-alpha.jar": "5e5d61a86cbdbc1db8c806894b6e4e253ea151671903ed51c021c705f7c37440",
+    "kafka-transaction-coordinator-4.4.0.jar": "c639d68e98e1522da4a816adf5c1cf5810bae242aa76f551dacd744c1ed9a03f",
+    "connect-transforms-4.4.0.jar": "4d777f41a429277e2d17c37cc6d999bf6c2eff398a2428f094739a9ce3c5ca1d",
+    "jersey-server-3.1.10.jar": "1b33a9be417b72f7ceef3afe9780781b66122b0f1db78f2f82502988072cfab0",
+    "HdrHistogram-2.2.2.jar": "22d1d4316c4ec13a68b559e98c8256d69071593731da96136640f864fa14fad8",
+    "kafka-storage-4.4.0.jar": "7186226265e8aee59a0871c1303ccb5872bffe6030dfd78154785be806157c37",
+    "connect-basic-auth-extension-4.4.0.jar": "0e076cb030626c5209e58221e538070263fea058f9a37e47d3bdb3621240cab3",
+    "kafka-streams-examples-4.4.0.jar": "5b357c3c032417a43a0bc6aa4973c7740a0980711c27cf330f297753ecf5205d",
+    "commons-validator-1.10.1.jar": "ed74711a78d793ca37f6075e4a1e93d107233dfd20d0bb17e32bad88d38e56aa",
+    "jackson-module-blackbird-2.21.7.jar": "b41fb816cbaa5f2393136cf1c525e0d9a9f9bcea14207a09e8e703df53351596",
+    "jakarta.validation-api-3.0.2.jar": "291c25e6910cc6a7ebd96d4c6baebf6d7c37676c5482c2d96146e901b62c1fc9",
+    "jline-native-3.30.16.jar": "e6bacede8a1b15641f1eea3a4c1096beaf3dc660000a37455cde627ec839023b",
+    "jakarta.activation-2.0.1.jar": "b9e24b7dd6e07495562ea96531be3130c96dba4d78e1dfd88adbbdebf4332871",
+    "log4j-1.2-api-2.25.5.jar": "4dd812dc5a6343f542a9e0046b1ec78ecf10bdd5a8c15745101cdd8b9aa24974",
+    "kafka-server-4.4.0.jar": "8ff196f798b55e4aef25981e10651c241669e8d89b4c1577070cc3e66947de84",
+    "kafka-streams-test-utils-4.4.0.jar": "39bc16beafc2847e5e55a327bbb4017a2f0050bb3bae92ccf6ae0c7b93950e5c",
+    "kafka-group-coordinator-4.4.0.jar": "28957c8b6b47e06e3612438027fa2117818e48ac7befeb4808d9b4b415b82f9d",
+    "commons-beanutils-1.11.0.jar": "9e44ba68ec9a3f21286fa2a8bbb003b735c0f69101bb43144b79f4f8aaa74709",
+    "javassist-3.30.2-GA.jar": "eba37290994b5e4868f3af98ff113f6244a6b099385d9ad46881307d3cb01aaf",
+    "jetty-ee10-servlet-12.0.39.jar": "310d0f0f803575fac4d1550ac0dc7c4f7e60f86f1867c747391dc936031e7797",
+    "classgraph-4.8.179.jar": "16558357f234052370109127a45d69a9bd6d8646925594792634486dc48b159d",
+    "javax.activation-api-1.2.0.jar": "43fdef0b5b6ceb31b0424b208b930c74ab58fac2ceeb7b3f6fd3aeb8b5ca4393",
+    "kafka-raft-4.4.0.jar": "b2de0c677eb89633fdbdfd5e00a46dcac684b02a9aa4409b7dbf6dc82b5e60e9",
+    "plexus-utils-3.6.1.jar": "05a63effd67e2d6b9d610cc82e2bd7473289d34802e57a529b28110f28af5679",
+    "hk2-utils-3.0.6.jar": "fc84d85a0744b576d9ec7db5845eeb998ed532a9450dd19c8c922c3ee6926206",
+    "jaxb-api-2.3.1.jar": "88b955a0df57880a26a74708bc34f74dcaf8ebf4e78843a28b50eae945732b06",
+    "jline-reader-3.30.16.jar": "3bdbc857bc81dd4aa5f31ed30666c970cddd5f8c935537cf3c82b1d161a7c63d",
+    "log4j-api-2.25.5.jar": "64777f73ea0b3104c04eb82befbdccc30a425a19e83ad06cb2f93aa303511863",
+    "jetty-ee10-servlets-12.0.39.jar": "9231f22549934b0d10588154f86459b2eec8ccb50c3ec493c1dde4d2d12d9543",
+    "kafka-tools-api-4.4.0.jar": "fd3a1205f33a086b49882b6724b2c0c622847724cee2ef1f1b77d876a6a02830",
+    "lz4-java-1.11.2.jar": "8a7458657938e9b692224db83aac458c13abd7a59ab75c3d3b08bd2233a646a2",
+    "kafka-streams-4.4.0.jar": "5f700818dcb727b91c3e81e51b076533165154bf4444667f5de730f252e9b513",
+    "jackson-databind-2.21.7.jar": "1290c2795e93e8a6861a6c4d9ff0d844d32f5ea178362cb2721edf5561e828b1",
+    "connect-json-4.4.0.jar": "36d0aa2ba4f59995e0b52ae788be88fef4be2a4e54f7a9f87a47bde466b2156c",
+    "caffeine-3.2.0.jar": "ec411dfdf0c03f25218648ce89861630b71680e5858a9a7278ebac8e55cab3d7",
+    "zstd-jni-1.5.7-17.jar": "c9043e2da8a16c13b6cd7661a5cb56685a573c3546ef4bd0ead67b0b67c2e107",
+    "protobuf-java-3.25.5.jar": "8540247fad9e06baefa8fb45eb313802d019f485f14300e0f9d6b556ed88e753",
+    "commons-digester-2.1.jar": "e0b2b980a84fc6533c5ce291f1917b32c507f62bcad64198fff44368c2196a3d",
+    "snappy-java-1.1.10.7.jar": "4c766cb3f855415ee734b2392949a0b6f12a60879334a74518deaf6270d32e36",
+    "jakarta.ws.rs-api-3.1.0.jar": "6b3b3628b8b4aedda0d24c3354335e985497d8ef3c510b8f3028e920d5b8663d",
+    "hash4j-0.22.0.jar": "23028a3fd006e530bf495f551083208187cafd8f80624d048eba56442f16a50e",
+    "jetty-io-12.0.39.jar": "b021ebb8eb8d9074b98184ff83f8e57dc224b86c4414e72cf77f9d314149a77d",
+    "kafka-group-coordinator-api-4.4.0.jar": "506c1bd3cf56b3dc3b39319eecfd0c8168062cb17bb0b7f45ce9f97ca36698e2",
+    "commons-logging-1.3.5.jar": "6d7a744e4027649fbb50895df9497d109f98c766a637062fe8d2eabbb3140ba4",
+    "kafka-share-coordinator-4.4.0.jar": "d83e8ea6104666b217c9d4958b625ace81b00bbae136341b751ce8226a1dc731",
+    "jersey-client-3.1.10.jar": "96cf86c23b515da20a30a39633a920f12a420d1e5f02c55ef5577ca2694d11c6",
+    "kafka-server-common-4.4.0.jar": "987786824a52518d63f532e7460cce551149a9e97654efa7aaf7a0a34e4004cc",
+    "jetty-security-12.0.39.jar": "88d9c86676f49d64fa19a7c43be368b1b8726b910f70185ce8df723ea2224b35",
+    "scala-logging_2.13-3.9.6.jar": "0ad0c3f4d89d538b3b6c300158555e266aa69cf1b5f6522aba8b5bad238eb994",
+    "scala-reflect-2.13.18.jar": "6935ff1982b2ac93d695f15aa66921be2f602921277afe002f018fd8c7d6e29b",
+    "jetty-server-12.0.39.jar": "3a2f2c445016ce2371d1a0577a9e69c225f9b82d431bac6bb4e530bf30b010bf",
+    "hk2-api-3.0.6.jar": "c049a21a9fd9316c7e291a2bc28835f70d25affb623dc1599a83b6b84ec83a4f",
+    "connect-file-4.4.0.jar": "1bf7b456ecc6f7e0218fa628082b71ab1a32fe1b335e31c6addce58fd82a3641",
+    "jackson-jakarta-rs-base-2.21.7.jar": "202b61a95e735d01ae03e411b8f6ae1245bbf19c87d4746c0204579f5c2e456b",
+    "jersey-hk2-3.1.10.jar": "00ed71c496a856ac1f73272482a7abe27b5a96b823c29cc08f4b708c8d3e647e",
+    "kafka-streams-scala_2.13-4.4.0.jar": "29b214ba45ed434601aeec4ead2134a916a87e85b26925f6167d6a4f3ceb3e6b",
+    "jakarta.inject-api-2.0.1.jar": "f7dc98062fccf14126abb751b64fab12c312566e8cbdc8483598bffcea93af7c",
+    "activation-1.1.1.jar": "ae475120e9fcd99b4b00b38329bd61cdc5eb754eee03fe66c01f50e137724f99",
+    "jackson-dataformat-csv-2.21.7.jar": "588050148497158cabdc05c0ae3a7e123194a486b8c62745778fc6239f9b085e",
+    "pcollections-4.0.2.jar": "2bbeef5797a241300c4f7513cd546239629ed7deda4fc0c31df90bb95f5f13ef",
+    "jersey-common-3.1.10.jar": "b8df5de87d48d6abf555f340755a056c8cb29a660af958e959db8a4cb3552b54",
+    "jakarta.activation-api-2.1.0.jar": "56e8d994095fe49c28138c60291482f66f18d12ac2b720e938697dce6a3135c7",
+    "jakarta.annotation-api-2.1.1.jar": "5f65fdaf424eee2b55e1d882ba9bb376be93fb09b37b808be6e22e8851c909fe",
+    "scala-library-2.13.18.jar": "4e85d96ff7bc7dc627985523c3541b9917aaa08e956391380c42db21a2c4e5a0",
+    "log4j-core-2.25.5.jar": "050c4f85deb48b055e9c041ac39043fbb79ce477841a11a1eb2969c86c6a0072",
+    "log4j-slf4j-impl-2.25.5.jar": "3d25b926bc6025c47ec010459749c12aa66b9d5537ba1922d67d89a098a66607",
+    "kafka_2.13-4.4.0.jar": "2880caa1bd99e060f7a8e33df1d49f6b1a989385a6758c6a127ef8bcb38bb0b1",
+    "jopt-simple-5.0.4.jar": "df26cc58f235f477db07f753ba5a3ab243ebe5789d9f89ecf68dd62ea9a66c28",
+    "jackson-module-jakarta-xmlbind-annotations-2.21.7.jar": "76054ca6e252e7142fec9c0e9a146bd8c43cde13dddf2d1cdaecd9db981c2ddc",
+    "jackson-datatype-jdk8-2.21.7.jar": "b8f62f98363ed9aa259b3a479a64fcbe7e081158a8bec6733972e900d12f4e47",
+    "jackson-dataformat-yaml-2.21.7.jar": "df2b3e6a194181dc067b7211d750926b4ae9e4f3c892a0005b8219a9b59be681",
+    "jetty-alpn-client-12.0.39.jar": "131fd1b0d62872f44f92332c061397cebf0480898b7b302740d08c1a853e3d08",
+    "kafka-coordinator-common-4.4.0.jar": "6c645027e886b572fc2e78d24315d2c3555b2344aea8c5fde6f49df589f4bc8a",
+    "rocksdbjni-10.1.3.jar": "e7f925287d9fe2574fb7c7a86f7facaa9b8ab602a2eed0e598bf633528121498",
+    "jetty-util-12.0.39.jar": "5034589c368cce15eb80171f41c399391b60d3649bde2bafe48f4b6a1c7e84df",
+    "trogdor-4.4.0.jar": "7531ebfa5a973732e9d8299fbdde0e263e4c9067cddcd1f6a44f856231e28369",
+    "re2j-1.8.jar": "7b52c72156dd7f98b3237a5b35c1d34fba381b21048c89208913ad80a45dfbd7",
+    "argparse4j-0.7.0.jar": "65ceb669d88f63306c680f8088bbf765bbca72d288a61a03703000076c3d3f56",
+    "jersey-container-servlet-3.1.10.jar": "4aadc66d2d36afb273b3898581d6aa51e0f992308d56fd51b8e3201efa461f67",
+    "jspecify-1.0.0.jar": "1fad6e6be7557781e4d33729d49ae1cdc8fdda6fe477bb0cc68ce351eafdfbab",
+    "snakeyaml-2.5.jar": "e6682acf1ace77508ef13649cbf4f8d09d2cf5457bdb61d25ffb6ac0233d78dd",
+    "hk2-locator-3.0.6.jar": "e2664d21b017c3aa1518b913264602bea604edc54d356103c10afba99abd04fc",
+    "jetty-session-12.0.39.jar": "62de5256e331f68c7191533dbd928197b99221293054cb339be7c790636f3007",
+    "metrics-core-2.2.0.jar": "6b7a14a6f34c10f8683f7b5e2f39df0f07b58c7dff0e468ebbc713905c46979c",
+    "kafka-storage-api-4.4.0.jar": "4ef3480e039832b898e4b6a15090dc3fd25fc12c1571dbdf426db3ceda134e3c",
+    "kafka-metadata-4.4.0.jar": "26ba6ebbf022a19e9420e18fa1d382fff1c007828b6bf32032c854dd00e81079",
+    "jackson-jakarta-rs-json-provider-2.21.7.jar": "32473ee172e0c181ba63688ee4a94349de77de05bd4279d0846a9515a56bb0fe",
+    "slf4j-api-1.7.36.jar": "d3ef575e3e4979678dc01bf1dcce51021493b4d11fb7f1be8ad982877c16a1c0",
+    "jersey-container-servlet-core-3.1.10.jar": "fd15e7e37215d772ccdae8d4076c41a11ad3fec9ca88a1f8a8f6dacf4663bb69",
+    "kafka-tools-4.4.0.jar": "5505c1612f07f74b8ade30c3662020c1a5c1cd0efd5f154ec8e676984e5df375"
+  },
+  "retained_before_fix": {
+    "binary_sha256": "8f72dd107ca2b5b61d3f6e690b14e938f79203f6b7395c5bde449e27d2b56c59",
+    "source_revision": "a6d375763a787f91a447bffe874188b2d7ee818b",
+    "wire_failure": "RETRY\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='fault-9003e496-7ee6-41d4-807d-0a166d9701d0', nodeId=-1, host='', port=-1, errorCode=15, errorMessage=null)])\nRESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='fault-member', memberEpoch=2, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[], activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nSCENARIO\tinitial-solicitation\tPASS\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=135, errorMessage='Topology description plugin failed.')\nSCENARIO\ttransient-set-failed\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-9003e496-7ee6-41d4-807d-0a166d9701d0', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-9003e496-7ee6-41d4-807d-0a166d9701d0], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='fault-member', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='fault-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nSCENARIO\ttransient-set-no-description\tPASS\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null)\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-9003e496-7ee6-41d4-807d-0a166d9701d0', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-9003e496-7ee6-41d4-807d-0a166d9701d0], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='fault-member', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='fault-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-9003e496-7ee6-41d4-807d-0a166d9701d0], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\ttransient-set-repair-stored\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-9003e496-7ee6-41d4-807d-0a166d9701d0', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-9003e496-7ee6-41d4-807d-0a166d9701d0], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='fault-member', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='fault-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=2, assignorName='sticky')])\nSCENARIO\tget-error-not-missing\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='fault-9003e496-7ee6-41d4-807d-0a166d9701d0', groupState='Stable', groupEpoch=2, assignmentEpoch=2, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-9003e496-7ee6-41d4-807d-0a166d9701d0], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='fault-member', memberEpoch=2, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='fault-member', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[TaskIds(subtopologyId='0', partitions=[0])], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-9003e496-7ee6-41d4-807d-0a166d9701d0], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nSCENARIO\tget-repair-stored\tPASS\nRESPONSE\tdelete\tDeleteGroupsResponseData(throttleTimeMs=0, results=[DeletableGroupResult(groupId='fault-9003e496-7ee6-41d4-807d-0a166d9701d0', errorCode=134, errorMessage=null)])\nException in thread \"main\" java.lang.IllegalStateException: ASSERT: legacy delete failure\n\tat StreamsPositive.require(StreamsPositive.java:7)\n\tat StreamsFault.main(StreamsFault.java:28)\n",
+    "private_directory": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-current-run"
+  },
+  "retained_plugin_setup_failure": {
+    "directory": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-fresh-run",
+    "problem": "first durable Java plugin lacked Node polymorphic deserialization, get status2; corrected plugin separately rerun"
+  },
+  "oracle_config": {
+    "text": "node.id=1\nprocess.roles=broker,controller\nlisteners=PLAINTEXT://127.0.0.1:64662,CONTROLLER://127.0.0.1:64663\nadvertised.listeners=PLAINTEXT://127.0.0.1:64662\ncontroller.listener.names=CONTROLLER\nlistener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT\ninter.broker.listener.name=PLAINTEXT\ncontroller.quorum.bootstrap.servers=127.0.0.1:64663\nlog.dirs=/evidence/data\noffsets.topic.replication.factor=1\ntransaction.state.log.replication.factor=1\ntransaction.state.log.min.isr=1\ngroup.streams.topology.description.plugin.class=FaultTopologyPlugin\n",
+    "sha256": "de331d24fa3c66aa0b27895163ba5fd93cce12c1ec0bba2aaf84d8d6a5379589"
+  },
+  "native_config": "BrokerConfig::for_tests(data) with explicit loopback/controller, unstable API+feature gates enabled, native FileTopologyDescriptionBackend(flags/store); exact source hashed",
+  "native_build": "CARGO_TARGET_DIR=/home/matt/.openclaw/workspace/coordinator/.private/streams-delete-legacy-target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo build -p krabka-broker --example streams_fault_broker",
+  "checks": {
+    "AXL": "569 tests/33 suites PASS",
+    "scripts": "27 accounted PASS",
+    "format": "PASS",
+    "CPD": "0 clones PASS",
+    "diff_check": "PASS",
+    "legacy_deletion_BDD": "12 passed/0 failed, 0.35s (fresh test profile build3m04s)",
+    "legacy_deletion_log": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-legacy-bdd.log",
+    "clippy": "cargo clippy -p krabka-broker --example streams_fault_broker -- -D warnings PASS3m52s",
+    "clippy_log": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-streams-clippy.log"
+  }
+}
