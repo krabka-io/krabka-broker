@@ -1,0 +1,560 @@
+{
+  "qualification_pass": false,
+  "scope": "RF1 SIGKILL while copy age threshold pending, natural local eviction, exact48 remote consumer reads",
+  "accepted_reads": {
+    "oracle": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/repository-classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+        "RemoteRecoveryProbe",
+        "read",
+        "127.0.0.1:28692",
+        "copy-recovery-oracle-1793809086",
+        "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/oracle-data/copy-recovery-oracle-1793809086-0/00000000000000000000.log",
+        "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/archive"
+      ],
+      "returncode": 0,
+      "stdout": "WITNESS\tlocal-offset0-absent\t/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/oracle-data/copy-recovery-oracle-1793809086-0/00000000000000000000.log\nSCENARIO\tpost-eviction-restart-read-exact-48\tPASS\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/repository-classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+        "RemoteRecoveryProbe",
+        "read",
+        "127.0.0.1:28792",
+        "copy-recovery-candidate-1793809123",
+        "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/candidate-data/copy-recovery-candidate-1793809123-0/00000000000000000000.log",
+        "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/candidate-archive"
+      ],
+      "returncode": 0,
+      "stdout": "WITNESS\tlocal-offset0-absent\t/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/candidate-data/copy-recovery-candidate-1793809123-0/00000000000000000000.log\nSCENARIO\tpost-eviction-restart-read-exact-48\tPASS\n",
+      "stderr": ""
+    }
+  },
+  "failed_attempts": {
+    "optional_index_generic_error": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/repository-classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+        "RemoteRecoveryProbe",
+        "read",
+        "127.0.0.1:28692",
+        "copy-recovery-oracle-1793809086",
+        "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/oracle-data/copy-recovery-oracle-1793809086-0/00000000000000000000.log",
+        "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/archive"
+      ],
+      "returncode": 0,
+      "stdout": "WITNESS\tlocal-offset0-absent\t/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/oracle-data/copy-recovery-oracle-1793809086-0/00000000000000000000.log\nSCENARIO\tpost-eviction-restart-read-exact-48\tPASS\n",
+      "stderr": ""
+    },
+    "storage-recovery-20261104": {
+      "log": "Traceback (most recent call last):\n  File \"/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-20261104/run.py\", line 57, in <module>\n    ready(54492);ready(54592)\n    ~~~~~^^^^^^^\n  File \"/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-20261104/run.py\", line 19, in ready\n    raise RuntimeError('listener not ready')\nRuntimeError: listener not ready\n",
+      "evidence": {
+        "qualification_pass": false,
+        "binary_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+        "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "commands": [
+          {
+            "command": [
+              "docker",
+              "run",
+              "-d",
+              "--name",
+              "storage-recovery-20261104",
+              "--network",
+              "host",
+              "--user",
+              "0",
+              "-v",
+              "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-20261104:/evidence",
+              "-v",
+              "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime:/backend:ro",
+              "--entrypoint",
+              "sh",
+              "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+              "-c",
+              "/opt/kafka/bin/kafka-storage.sh format --standalone --cluster-id MkU3OEVBNTcwNTJENDM2Qk --release-version 4.4-IV2 --config /evidence/oracle.properties && exec /opt/kafka/bin/kafka-server-start.sh /evidence/oracle.properties"
+            ],
+            "returncode": 0,
+            "stdout": "8c853c13e6cab2649f869b0d9182ae7176ae8f48ae965a5a689d70b7dd655537\n",
+            "stderr": ""
+          },
+          {
+            "command": [
+              "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+              "--log-dir",
+              "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-20261104/candidate-data",
+              "--node-id",
+              "1",
+              "--standalone",
+              "--controller-listener",
+              "127.0.0.1:54593",
+              "--release-version",
+              "4.4-IV2",
+              "--unstable-feature-versions-enable"
+            ],
+            "returncode": 0,
+            "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-20261104/candidate-data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id UM954w56RjaOfhDf6_rUXw (6 seed record(s))\n",
+            "stderr": ""
+          },
+          {
+            "command": [
+              "docker",
+              "stop",
+              "--timeout",
+              "30",
+              "storage-recovery-20261104"
+            ],
+            "returncode": 0,
+            "stdout": "storage-recovery-20261104\n",
+            "stderr": ""
+          },
+          {
+            "command": [
+              "docker",
+              "logs",
+              "storage-recovery-20261104"
+            ],
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "You cannot specify controller.quorum.voters and format the node with --initial-controllers or --standalone. If you want to use dynamic quorum, please remove controller.quorum.voters and specify controller.quorum.bootstrap.servers instead.\n"
+          }
+        ],
+        "candidate_pid": 1625124
+      }
+    },
+    "storage-recovery-corrected-20261104": {
+      "log": "Traceback (most recent call last):\n  File \"/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-corrected-20261104/run.py\", line 57, in <module>\n    ready(54692);ready(54792)\n    ~~~~~^^^^^^^\n  File \"/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-corrected-20261104/run.py\", line 19, in ready\n    raise RuntimeError('listener not ready')\nRuntimeError: listener not ready\n",
+      "evidence": {
+        "qualification_pass": false,
+        "binary_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+        "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "commands": [
+          {
+            "command": [
+              "docker",
+              "run",
+              "-d",
+              "--name",
+              "storage-recovery-corrected-20261104",
+              "--network",
+              "host",
+              "--user",
+              "0",
+              "-v",
+              "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-corrected-20261104:/evidence",
+              "-v",
+              "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime:/backend:ro",
+              "--entrypoint",
+              "sh",
+              "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+              "-c",
+              "/opt/kafka/bin/kafka-storage.sh format --ignore-formatted --standalone --cluster-id MkU3OEVBNTcwNTJENDM2Qk --release-version 4.4-IV2 --config /evidence/oracle.properties && exec /opt/kafka/bin/kafka-server-start.sh /evidence/oracle.properties"
+            ],
+            "returncode": 0,
+            "stdout": "3f73a6e6cb9f0d7562f1d4f914e0bc97280a0906ed1f5a639ee17926be6905cb\n",
+            "stderr": ""
+          },
+          {
+            "command": [
+              "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+              "--log-dir",
+              "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-corrected-20261104/candidate-data",
+              "--node-id",
+              "1",
+              "--standalone",
+              "--controller-listener",
+              "127.0.0.1:54793",
+              "--release-version",
+              "4.4-IV2",
+              "--unstable-feature-versions-enable"
+            ],
+            "returncode": 0,
+            "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-corrected-20261104/candidate-data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id VIf20xjtQqmmF1_W4lAt7w (6 seed record(s))\n",
+            "stderr": ""
+          },
+          {
+            "command": [
+              "docker",
+              "stop",
+              "--timeout",
+              "30",
+              "storage-recovery-corrected-20261104"
+            ],
+            "returncode": 0,
+            "stdout": "storage-recovery-corrected-20261104\n",
+            "stderr": ""
+          },
+          {
+            "command": [
+              "docker",
+              "logs",
+              "storage-recovery-corrected-20261104"
+            ],
+            "returncode": 0,
+            "stdout": {
+              "bytes": 331649,
+              "sha256": "ca22efadf9bab4fa43cc6da5a3280a74a689b1a51a71922a017f22631fefe44d",
+              "head": "Bootstrap metadata: BootstrapMetadata(records=[ApiMessageAndVersion(FeatureLevelRecord(name='metadata.version', featureLevel=33) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='eligible.leader.replicas.version', featureLevel=1) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='group.version', featureLevel=1) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='share.version', featureLevel=2) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='streams.version', featureLevel=1) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='transaction.version', featureLevel=2) at version 0)], metadataVersionLevel=33, source=format command)\nFormatting dynamic metadata voter directory /evidence/oracle-data with metadata.version 4.4-IV2.\n[2026-11-04 16:16:55,830] INFO Registered `kafka:type=kafka.Log4jController` MBean (org.apache.kafka.server.logger.Log4jControllerRegistration)\n[2026-11-04 16:16:56,001] INFO Registered signal handlers for TERM, INT, HUP (org.apache.kafka.common.utils.internals.LoggingSignalHandler)\n[2026-11-04 16:16:56,002] INFO [ControllerServer id=1] Starting controller (kafka.server.ControllerServer)\n[2026-11-04 16:16:56,169] INFO Updated connection-accept-rate max connection creation rate to 2147483647 (kafka.network.ConnectionQuotas)\n[2026-11-04 16:16:56,188] INFO [SocketServer listenerType=CONTROLLER, nodeId=1] Created data-plane acceptor and processors for endpoint : ListenerName(CONTROLLER) (kafka.network.SocketServer)\n[2026-11-04 16:16:56,193] INFO authorizerStart completed for endpoint CONTROLLER. Endpoint is now READY. (org.apache.kafka.server.network.EndpointReadyFutures)\n[2026-11-04 16:16:56,195] INFO [SharedServer id=1] Starting SharedServer (kafka.server.SharedServer)\n[2026-11-04 16:16:56,240] INFO [LogLoader partition=__cluster_metadata-0, dir=/evidence/oracle-data] Loading producer state till offset 0 (org.apache.kafka.storage.internals.log.UnifiedLog)\n[2026-11-04 16:16:56,240] INFO [LogLoader part",
+              "tail": "dler on Controller 1] shut down completely (kafka.server.KafkaRequestHandlerPool)\n[2026-11-04 16:17:22,623] INFO [ExpirationReaper-1-AlterAcls]: Shutting down (org.apache.kafka.server.purgatory.DelayedOperationPurgatory$ExpiredOperationReaper)\n[2026-11-04 16:17:22,623] INFO [ExpirationReaper-1-AlterAcls]: Shutdown completed (org.apache.kafka.server.purgatory.DelayedOperationPurgatory$ExpiredOperationReaper)\n[2026-11-04 16:17:22,623] INFO [ExpirationReaper-1-AlterAcls]: Stopped (org.apache.kafka.server.purgatory.DelayedOperationPurgatory$ExpiredOperationReaper)\n[2026-11-04 16:17:22,623] INFO [controller-1-ThrottledChannelReaper-Fetch]: Shutting down (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:22,623] INFO [controller-1-ThrottledChannelReaper-Fetch]: Shutdown completed (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:22,623] INFO [controller-1-ThrottledChannelReaper-Fetch]: Stopped (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:22,623] INFO [controller-1-ThrottledChannelReaper-Produce]: Shutting down (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:22,623] INFO [controller-1-ThrottledChannelReaper-Produce]: Shutdown completed (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:22,623] INFO [controller-1-ThrottledChannelReaper-Produce]: Stopped (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:22,623] INFO [controller-1-ThrottledChannelReaper-Request]: Shutting down (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:22,624] INFO [controller-1-ThrottledChannelReaper-Request]: Shutdown completed (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:22,624] INFO [controller-1-ThrottledChannelReaper-Request]: Stopped (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:22,624] INFO [controller-1-ThrottledChannelReaper-ControllerMutation]: Shutting down (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:22,624] INFO [controller-1-ThrottledChannelReaper-ControllerMutation]: Shutdown completed (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:22,624] INFO [controller-1-ThrottledChannelReaper-ControllerMutation]: Stopped (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:22,624] INFO [QuorumController id=1] closed event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:17:22,624] INFO [SharedServer id=1] Stopping SharedServer (kafka.server.SharedServer)\n[2026-11-04 16:17:22,625] INFO [MetadataLoader id=1] beginShutdown: shutting down event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:17:22,625] INFO [SnapshotGenerator id=1] close: shutting down event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:17:22,625] INFO [SnapshotGenerator id=1] closed event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:17:22,625] INFO [MetadataLoader id=1] closed event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:17:22,625] INFO [SnapshotGenerator id=1] closed event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:17:22,625] INFO Metrics scheduler closed (org.apache.kafka.common.metrics.Metrics)\n[2026-11-04 16:17:22,625] INFO Closing reporter org.apache.kafka.common.metrics.JmxReporter (org.apache.kafka.common.metrics.Metrics)\n[2026-11-04 16:17:22,625] INFO Metrics reporters closed (org.apache.kafka.common.metrics.Metrics)\n[2026-11-04 16:17:22,626] INFO App info kafka.server for 1 unregistered (org.apache.kafka.common.utils.internals.AppInfoParser)\n[2026-11-04 16:17:22,626] INFO App info kafka.server for 1 unregistered (org.apache.kafka.common.utils.internals.AppInfoParser)\n",
+              "raw_retained_in_private_evidence": true
+            },
+            "stderr": "WARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::invokeCleaner has been called by org.apache.kafka.common.utils.internals.ByteBufferUnmapper (file:/opt/kafka/libs/kafka-clients-4.4.0.jar)\nWARNING: Please consider reporting this to the maintainers of class org.apache.kafka.common.utils.internals.ByteBufferUnmapper\nWARNING: sun.misc.Unsafe::invokeCleaner will be removed in a future release\nWARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::invokeCleaner has been called by org.apache.kafka.common.utils.internals.ByteBufferUnmapper (file:/opt/kafka/libs/kafka-clients-4.4.0.jar)\nWARNING: Please consider reporting this to the maintainers of class org.apache.kafka.common.utils.internals.ByteBufferUnmapper\nWARNING: sun.misc.Unsafe::invokeCleaner will be removed in a future release\n"
+          }
+        ],
+        "candidate_pid": 1630432
+      }
+    },
+    "storage-recovery-ports-20261104": {
+      "log": "Traceback (most recent call last):\n  File \"/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-ports-20261104/run.py\", line 60, in <module>\n    run(['java','-cp',cp,'RemoteRecoveryProbe','seed',f'127.0.0.1:{port}',topic,r/arc])\n    ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-ports-20261104/run.py\", line 12, in run\n    if check:p.check_returncode()\n             ~~~~~~~~~~~~~~~~~~^^\n  File \"/usr/lib/python3.14/subprocess.py\", line 509, in check_returncode\n    raise CalledProcessError(self.returncode, self.args, self.stdout,\n                             self.stderr)\nsubprocess.CalledProcessError: Command '['java', '-cp', '/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/repository-classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*', 'RemoteRecoveryProbe', 'seed', '127.0.0.1:28492', 'copy-recovery-oracle-1793809065', '/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-ports-20261104/archive']' returned non-zero exit status 1.\n",
+      "evidence": {
+        "qualification_pass": false,
+        "binary_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+        "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+        "commands": [
+          {
+            "command": [
+              "docker",
+              "run",
+              "-d",
+              "--name",
+              "storage-recovery-ports-20261104",
+              "--network",
+              "host",
+              "--user",
+              "0",
+              "-v",
+              "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-ports-20261104:/evidence",
+              "-v",
+              "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime:/backend:ro",
+              "--entrypoint",
+              "sh",
+              "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+              "-c",
+              "/opt/kafka/bin/kafka-storage.sh format --ignore-formatted --standalone --cluster-id MkU3OEVBNTcwNTJENDM2Qk --release-version 4.4-IV2 --config /evidence/oracle.properties && exec /opt/kafka/bin/kafka-server-start.sh /evidence/oracle.properties"
+            ],
+            "returncode": 0,
+            "stdout": "a72bc9355670d97f0ce2212ab01d5b911d2e09e77f01fee5aaf456e902e3a067\n",
+            "stderr": ""
+          },
+          {
+            "command": [
+              "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+              "--log-dir",
+              "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-ports-20261104/candidate-data",
+              "--node-id",
+              "1",
+              "--standalone",
+              "--controller-listener",
+              "127.0.0.1:28593",
+              "--release-version",
+              "4.4-IV2",
+              "--unstable-feature-versions-enable"
+            ],
+            "returncode": 0,
+            "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-ports-20261104/candidate-data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id QKNwAlTkRGOVQh6eqlFvsA (6 seed record(s))\n",
+            "stderr": ""
+          },
+          {
+            "command": [
+              "java",
+              "-cp",
+              "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/repository-classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+              "RemoteRecoveryProbe",
+              "seed",
+              "127.0.0.1:28492",
+              "copy-recovery-oracle-1793809065",
+              "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-ports-20261104/archive"
+            ],
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "Exception in thread \"main\" java.util.concurrent.ExecutionException: org.apache.kafka.common.errors.InvalidConfigurationException: Invalid value 30000 for configuration remote.copy.lag.ms: Value must not exceed local.retention.ms (effective value: 1000)\n\tat java.base/java.util.concurrent.CompletableFuture.wrapInExecutionException(CompletableFuture.java:345)\n\tat java.base/java.util.concurrent.CompletableFuture.reportGet(CompletableFuture.java:440)\n\tat java.base/java.util.concurrent.CompletableFuture.get(CompletableFuture.java:2094)\n\tat org.apache.kafka.common.internals.KafkaFutureImpl.get(KafkaFutureImpl.java:155)\n\tat RemoteRecoveryProbe.main(RemoteRecoveryProbe.java:18)\nCaused by: org.apache.kafka.common.errors.InvalidConfigurationException: Invalid value 30000 for configuration remote.copy.lag.ms: Value must not exceed local.retention.ms (effective value: 1000)\n"
+          },
+          {
+            "command": [
+              "docker",
+              "stop",
+              "--timeout",
+              "30",
+              "storage-recovery-ports-20261104"
+            ],
+            "returncode": 0,
+            "stdout": "storage-recovery-ports-20261104\n",
+            "stderr": ""
+          },
+          {
+            "command": [
+              "docker",
+              "logs",
+              "storage-recovery-ports-20261104"
+            ],
+            "returncode": 0,
+            "stdout": {
+              "bytes": 224350,
+              "sha256": "54bce37aa2675191dc0907ce59aaa6408020bd513a2509808483b49b67c4593c",
+              "head": "Bootstrap metadata: BootstrapMetadata(records=[ApiMessageAndVersion(FeatureLevelRecord(name='metadata.version', featureLevel=33) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='eligible.leader.replicas.version', featureLevel=1) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='group.version', featureLevel=1) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='share.version', featureLevel=2) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='streams.version', featureLevel=1) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='transaction.version', featureLevel=2) at version 0)], metadataVersionLevel=33, source=format command)\nFormatting dynamic metadata voter directory /evidence/oracle-data with metadata.version 4.4-IV2.\n[2026-11-04 16:17:44,937] INFO Registered `kafka:type=kafka.Log4jController` MBean (org.apache.kafka.server.logger.Log4jControllerRegistration)\n[2026-11-04 16:17:45,119] INFO Registered signal handlers for TERM, INT, HUP (org.apache.kafka.common.utils.internals.LoggingSignalHandler)\n[2026-11-04 16:17:45,121] INFO [ControllerServer id=1] Starting controller (kafka.server.ControllerServer)\n[2026-11-04 16:17:45,285] INFO Updated connection-accept-rate max connection creation rate to 2147483647 (kafka.network.ConnectionQuotas)\n[2026-11-04 16:17:45,302] INFO [SocketServer listenerType=CONTROLLER, nodeId=1] Created data-plane acceptor and processors for endpoint : ListenerName(CONTROLLER) (kafka.network.SocketServer)\n[2026-11-04 16:17:45,306] INFO authorizerStart completed for endpoint CONTROLLER. Endpoint is now READY. (org.apache.kafka.server.network.EndpointReadyFutures)\n[2026-11-04 16:17:45,307] INFO [SharedServer id=1] Starting SharedServer (kafka.server.SharedServer)\n[2026-11-04 16:17:45,349] INFO [LogLoader partition=__cluster_metadata-0, dir=/evidence/oracle-data] Loading producer state till offset 0 (org.apache.kafka.storage.internals.log.UnifiedLog)\n[2026-11-04 16:17:45,350] INFO [LogLoader part",
+              "tail": "dler on Controller 1] shut down completely (kafka.server.KafkaRequestHandlerPool)\n[2026-11-04 16:17:46,778] INFO [ExpirationReaper-1-AlterAcls]: Shutting down (org.apache.kafka.server.purgatory.DelayedOperationPurgatory$ExpiredOperationReaper)\n[2026-11-04 16:17:46,778] INFO [ExpirationReaper-1-AlterAcls]: Stopped (org.apache.kafka.server.purgatory.DelayedOperationPurgatory$ExpiredOperationReaper)\n[2026-11-04 16:17:46,778] INFO [ExpirationReaper-1-AlterAcls]: Shutdown completed (org.apache.kafka.server.purgatory.DelayedOperationPurgatory$ExpiredOperationReaper)\n[2026-11-04 16:17:46,779] INFO [controller-1-ThrottledChannelReaper-Fetch]: Shutting down (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:46,779] INFO [controller-1-ThrottledChannelReaper-Fetch]: Shutdown completed (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:46,779] INFO [controller-1-ThrottledChannelReaper-Fetch]: Stopped (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:46,779] INFO [controller-1-ThrottledChannelReaper-Produce]: Shutting down (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:46,779] INFO [controller-1-ThrottledChannelReaper-Produce]: Shutdown completed (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:46,779] INFO [controller-1-ThrottledChannelReaper-Produce]: Stopped (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:46,779] INFO [controller-1-ThrottledChannelReaper-Request]: Shutting down (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:46,779] INFO [controller-1-ThrottledChannelReaper-Request]: Shutdown completed (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:46,779] INFO [controller-1-ThrottledChannelReaper-Request]: Stopped (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:46,779] INFO [controller-1-ThrottledChannelReaper-ControllerMutation]: Shutting down (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:46,779] INFO [controller-1-ThrottledChannelReaper-ControllerMutation]: Shutdown completed (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:46,779] INFO [controller-1-ThrottledChannelReaper-ControllerMutation]: Stopped (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:17:46,779] INFO [QuorumController id=1] closed event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:17:46,780] INFO [SharedServer id=1] Stopping SharedServer (kafka.server.SharedServer)\n[2026-11-04 16:17:46,780] INFO [MetadataLoader id=1] beginShutdown: shutting down event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:17:46,780] INFO [SnapshotGenerator id=1] close: shutting down event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:17:46,780] INFO [SnapshotGenerator id=1] closed event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:17:46,780] INFO [MetadataLoader id=1] closed event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:17:46,781] INFO [SnapshotGenerator id=1] closed event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:17:46,781] INFO Metrics scheduler closed (org.apache.kafka.common.metrics.Metrics)\n[2026-11-04 16:17:46,781] INFO Closing reporter org.apache.kafka.common.metrics.JmxReporter (org.apache.kafka.common.metrics.Metrics)\n[2026-11-04 16:17:46,781] INFO Metrics reporters closed (org.apache.kafka.common.metrics.Metrics)\n[2026-11-04 16:17:46,781] INFO App info kafka.server for 1 unregistered (org.apache.kafka.common.utils.internals.AppInfoParser)\n[2026-11-04 16:17:46,782] INFO App info kafka.server for 1 unregistered (org.apache.kafka.common.utils.internals.AppInfoParser)\n",
+              "raw_retained_in_private_evidence": true
+            },
+            "stderr": "WARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::invokeCleaner has been called by org.apache.kafka.common.utils.internals.ByteBufferUnmapper (file:/opt/kafka/libs/kafka-clients-4.4.0.jar)\nWARNING: Please consider reporting this to the maintainers of class org.apache.kafka.common.utils.internals.ByteBufferUnmapper\nWARNING: sun.misc.Unsafe::invokeCleaner will be removed in a future release\n"
+          }
+        ],
+        "candidate_pid": 1643287,
+        "oracle": {
+          "topic": "copy-recovery-oracle-1793809065"
+        }
+      }
+    }
+  },
+  "limits": [
+    "Not mid-upload interruption",
+    "Not leader movement",
+    "Not power-loss/fsync durability",
+    "Released recording RSM SPI versus native local backend, not production storage parity",
+    "Candidate binary predates current origin/main; pinned d4890ecde implementation"
+  ],
+  "runtime": {
+    "qualification_pass": false,
+    "binary_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+    "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+    "commands": [
+      {
+        "command": [
+          "docker",
+          "run",
+          "-d",
+          "--name",
+          "storage-recovery-valid-20261104",
+          "--network",
+          "host",
+          "--user",
+          "0",
+          "-v",
+          "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104:/evidence",
+          "-v",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime:/backend:ro",
+          "--entrypoint",
+          "sh",
+          "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+          "-c",
+          "/opt/kafka/bin/kafka-storage.sh format --ignore-formatted --standalone --cluster-id MkU3OEVBNTcwNTJENDM2Qk --release-version 4.4-IV2 --config /evidence/oracle.properties && exec /opt/kafka/bin/kafka-server-start.sh /evidence/oracle.properties"
+        ],
+        "returncode": 0,
+        "stdout": "0a87bc7610225d847d122f1a34d5581dd9a07168558ab37fc869b9d9df7dfe35\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+          "--log-dir",
+          "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/candidate-data",
+          "--node-id",
+          "1",
+          "--standalone",
+          "--controller-listener",
+          "127.0.0.1:28793",
+          "--release-version",
+          "4.4-IV2",
+          "--unstable-feature-versions-enable"
+        ],
+        "returncode": 0,
+        "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/candidate-data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id r_kahwO0RrmLX-iUiuGOFw (6 seed record(s))\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/repository-classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "RemoteRecoveryProbe",
+          "seed",
+          "127.0.0.1:28692",
+          "copy-recovery-oracle-1793809086",
+          "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/archive"
+        ],
+        "returncode": 0,
+        "stdout": "SCENARIO\tdelayed-copy-seeded-48-before-restart\tPASS\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "docker",
+          "kill",
+          "--signal",
+          "KILL",
+          "storage-recovery-valid-20261104"
+        ],
+        "returncode": 0,
+        "stdout": "storage-recovery-valid-20261104\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "docker",
+          "start",
+          "storage-recovery-valid-20261104"
+        ],
+        "returncode": 0,
+        "stdout": "storage-recovery-valid-20261104\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/repository-classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "RemoteRecoveryProbe",
+          "read",
+          "127.0.0.1:28692",
+          "copy-recovery-oracle-1793809086"
+        ],
+        "returncode": 1,
+        "stdout": "",
+        "stderr": "Exception in thread \"main\" java.lang.IllegalStateException: read requires physically evicted local offset0 and topic archive\n\tat RemoteRecoveryProbe.main(RemoteRecoveryProbe.java:32)\n"
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/repository-classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "RemoteRecoveryProbe",
+          "seed",
+          "127.0.0.1:28792",
+          "copy-recovery-candidate-1793809123",
+          "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/candidate-archive"
+        ],
+        "returncode": 0,
+        "stdout": "SCENARIO\tdelayed-copy-seeded-48-before-restart\tPASS\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-tiered-runtime/repository-classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-remote/libs/*",
+          "RemoteRecoveryProbe",
+          "read",
+          "127.0.0.1:28792",
+          "copy-recovery-candidate-1793809123"
+        ],
+        "returncode": 1,
+        "stdout": "",
+        "stderr": "Exception in thread \"main\" java.lang.IllegalStateException: read requires physically evicted local offset0 and topic archive\n\tat RemoteRecoveryProbe.main(RemoteRecoveryProbe.java:32)\n"
+      },
+      {
+        "command": [
+          "docker",
+          "stop",
+          "--timeout",
+          "30",
+          "storage-recovery-valid-20261104"
+        ],
+        "returncode": 0,
+        "stdout": "storage-recovery-valid-20261104\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "docker",
+          "logs",
+          "storage-recovery-valid-20261104"
+        ],
+        "returncode": 0,
+        "stdout": {
+          "bytes": 725774813,
+          "sha256": "6d13de0718f1d748c109294b9364ab3075fe84b905a411d6782d06c068fe4554",
+          "head": "Bootstrap metadata: BootstrapMetadata(records=[ApiMessageAndVersion(FeatureLevelRecord(name='metadata.version', featureLevel=33) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='eligible.leader.replicas.version', featureLevel=1) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='group.version', featureLevel=1) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='share.version', featureLevel=2) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='streams.version', featureLevel=1) at version 0), ApiMessageAndVersion(FeatureLevelRecord(name='transaction.version', featureLevel=2) at version 0)], metadataVersionLevel=33, source=format command)\nFormatting dynamic metadata voter directory /evidence/oracle-data with metadata.version 4.4-IV2.\n[2026-11-04 16:18:05,819] INFO Registered `kafka:type=kafka.Log4jController` MBean (org.apache.kafka.server.logger.Log4jControllerRegistration)\n[2026-11-04 16:18:05,991] INFO Registered signal handlers for TERM, INT, HUP (org.apache.kafka.common.utils.internals.LoggingSignalHandler)\n[2026-11-04 16:18:05,992] INFO [ControllerServer id=1] Starting controller (kafka.server.ControllerServer)\n[2026-11-04 16:18:06,159] INFO Updated connection-accept-rate max connection creation rate to 2147483647 (kafka.network.ConnectionQuotas)\n[2026-11-04 16:18:06,178] INFO [SocketServer listenerType=CONTROLLER, nodeId=1] Created data-plane acceptor and processors for endpoint : ListenerName(CONTROLLER) (kafka.network.SocketServer)\n[2026-11-04 16:18:06,183] INFO authorizerStart completed for endpoint CONTROLLER. Endpoint is now READY. (org.apache.kafka.server.network.EndpointReadyFutures)\n[2026-11-04 16:18:06,184] INFO [SharedServer id=1] Starting SharedServer (kafka.server.SharedServer)\n[2026-11-04 16:18:06,228] INFO [LogLoader partition=__cluster_metadata-0, dir=/evidence/oracle-data] Loading producer state till offset 0 (org.apache.kafka.storage.internals.log.UnifiedLog)\n[2026-11-04 16:18:06,228] INFO [LogLoader part",
+          "tail": "dler on Controller 1] shut down completely (kafka.server.KafkaRequestHandlerPool)\n[2026-11-04 16:19:45,305] INFO [ExpirationReaper-1-AlterAcls]: Shutting down (org.apache.kafka.server.purgatory.DelayedOperationPurgatory$ExpiredOperationReaper)\n[2026-11-04 16:19:45,305] INFO [ExpirationReaper-1-AlterAcls]: Stopped (org.apache.kafka.server.purgatory.DelayedOperationPurgatory$ExpiredOperationReaper)\n[2026-11-04 16:19:45,305] INFO [ExpirationReaper-1-AlterAcls]: Shutdown completed (org.apache.kafka.server.purgatory.DelayedOperationPurgatory$ExpiredOperationReaper)\n[2026-11-04 16:19:45,306] INFO [controller-1-ThrottledChannelReaper-Fetch]: Shutting down (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:19:45,306] INFO [controller-1-ThrottledChannelReaper-Fetch]: Stopped (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:19:45,306] INFO [controller-1-ThrottledChannelReaper-Fetch]: Shutdown completed (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:19:45,306] INFO [controller-1-ThrottledChannelReaper-Produce]: Shutting down (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:19:45,306] INFO [controller-1-ThrottledChannelReaper-Produce]: Stopped (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:19:45,306] INFO [controller-1-ThrottledChannelReaper-Produce]: Shutdown completed (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:19:45,306] INFO [controller-1-ThrottledChannelReaper-Request]: Shutting down (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:19:45,306] INFO [controller-1-ThrottledChannelReaper-Request]: Shutdown completed (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:19:45,306] INFO [controller-1-ThrottledChannelReaper-Request]: Stopped (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:19:45,306] INFO [controller-1-ThrottledChannelReaper-ControllerMutation]: Shutting down (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:19:45,306] INFO [controller-1-ThrottledChannelReaper-ControllerMutation]: Shutdown completed (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:19:45,306] INFO [controller-1-ThrottledChannelReaper-ControllerMutation]: Stopped (org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)\n[2026-11-04 16:19:45,306] INFO [QuorumController id=1] closed event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:19:45,307] INFO [SharedServer id=1] Stopping SharedServer (kafka.server.SharedServer)\n[2026-11-04 16:19:45,307] INFO [MetadataLoader id=1] beginShutdown: shutting down event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:19:45,307] INFO [SnapshotGenerator id=1] close: shutting down event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:19:45,307] INFO [SnapshotGenerator id=1] closed event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:19:45,307] INFO [MetadataLoader id=1] closed event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:19:45,307] INFO [SnapshotGenerator id=1] closed event queue. (org.apache.kafka.queue.KafkaEventQueue)\n[2026-11-04 16:19:45,308] INFO Metrics scheduler closed (org.apache.kafka.common.metrics.Metrics)\n[2026-11-04 16:19:45,308] INFO Closing reporter org.apache.kafka.common.metrics.JmxReporter (org.apache.kafka.common.metrics.Metrics)\n[2026-11-04 16:19:45,308] INFO Metrics reporters closed (org.apache.kafka.common.metrics.Metrics)\n[2026-11-04 16:19:45,308] INFO App info kafka.server for 1 unregistered (org.apache.kafka.common.utils.internals.AppInfoParser)\n[2026-11-04 16:19:45,308] INFO App info kafka.server for 1 unregistered (org.apache.kafka.common.utils.internals.AppInfoParser)\n",
+          "raw_retained_in_private_evidence": true
+        },
+        "stderr": "WARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::invokeCleaner has been called by org.apache.kafka.common.utils.internals.ByteBufferUnmapper (file:/opt/kafka/libs/kafka-clients-4.4.0.jar)\nWARNING: Please consider reporting this to the maintainers of class org.apache.kafka.common.utils.internals.ByteBufferUnmapper\nWARNING: sun.misc.Unsafe::invokeCleaner will be removed in a future release\nWARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::invokeCleaner has been called by org.apache.kafka.common.utils.internals.ByteBufferUnmapper (file:/opt/kafka/libs/kafka-clients-4.4.0.jar)\nWARNING: Please consider reporting this to the maintainers of class org.apache.kafka.common.utils.internals.ByteBufferUnmapper\nWARNING: sun.misc.Unsafe::invokeCleaner will be removed in a future release\nWARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::invokeCleaner has been called by org.apache.kafka.common.utils.internals.ByteBufferUnmapper (file:/opt/kafka/libs/kafka-clients-4.4.0.jar)\nWARNING: Please consider reporting this to the maintainers of class org.apache.kafka.common.utils.internals.ByteBufferUnmapper\nWARNING: sun.misc.Unsafe::invokeCleaner will be removed in a future release\n"
+      }
+    ],
+    "candidate_pid": 1653630,
+    "oracle": {
+      "topic": "copy-recovery-oracle-1793809086",
+      "local_offset0_path": "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/oracle-data/copy-recovery-oracle-1793809086-0/00000000000000000000.log",
+      "local_offset0_exists_before_read": false,
+      "archive_files": [
+        "archive/copy-recovery-oracle-1793809086/1t1Dd4PZRK2Nfh8v1YRd1A/OFFSET",
+        "archive/copy-recovery-oracle-1793809086/1t1Dd4PZRK2Nfh8v1YRd1A/PRODUCER_SNAPSHOT",
+        "archive/copy-recovery-oracle-1793809086/1t1Dd4PZRK2Nfh8v1YRd1A/log",
+        "archive/copy-recovery-oracle-1793809086/1t1Dd4PZRK2Nfh8v1YRd1A/LEADER_EPOCH",
+        "archive/copy-recovery-oracle-1793809086/1t1Dd4PZRK2Nfh8v1YRd1A/TIMESTAMP",
+        "archive/copy-recovery-oracle-1793809086/OkyGAwa1RQuOOk1P7IjbJQ/OFFSET",
+        "archive/copy-recovery-oracle-1793809086/OkyGAwa1RQuOOk1P7IjbJQ/PRODUCER_SNAPSHOT",
+        "archive/copy-recovery-oracle-1793809086/OkyGAwa1RQuOOk1P7IjbJQ/log",
+        "archive/copy-recovery-oracle-1793809086/OkyGAwa1RQuOOk1P7IjbJQ/LEADER_EPOCH",
+        "archive/copy-recovery-oracle-1793809086/OkyGAwa1RQuOOk1P7IjbJQ/TIMESTAMP",
+        "archive/copy-recovery-oracle-1793809086/a26qw6jbQmWZ_Umm4Yhrag/OFFSET",
+        "archive/copy-recovery-oracle-1793809086/a26qw6jbQmWZ_Umm4Yhrag/PRODUCER_SNAPSHOT",
+        "archive/copy-recovery-oracle-1793809086/a26qw6jbQmWZ_Umm4Yhrag/log",
+        "archive/copy-recovery-oracle-1793809086/a26qw6jbQmWZ_Umm4Yhrag/LEADER_EPOCH",
+        "archive/copy-recovery-oracle-1793809086/a26qw6jbQmWZ_Umm4Yhrag/TIMESTAMP"
+      ]
+    },
+    "candidate": {
+      "topic": "copy-recovery-candidate-1793809123",
+      "local_offset0_path": "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/candidate-data/copy-recovery-candidate-1793809123-0/00000000000000000000.log",
+      "local_offset0_exists_before_read": false,
+      "archive_files": [
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000030--TBmpeE7RUmocLuZT5LdIA.snapshot",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000015-X8jtNYBxTXSyQUrIJITSxA.timeindex",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000015-X8jtNYBxTXSyQUrIJITSxA.leader_epoch_checkpoint",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000015-X8jtNYBxTXSyQUrIJITSxA.snapshot",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000000-0KIT_QFMToGFA7sNPVmNBw.timeindex",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000015-X8jtNYBxTXSyQUrIJITSxA.log",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000030--TBmpeE7RUmocLuZT5LdIA.leader_epoch_checkpoint",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000000-0KIT_QFMToGFA7sNPVmNBw.snapshot",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000000-0KIT_QFMToGFA7sNPVmNBw.log",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000000-0KIT_QFMToGFA7sNPVmNBw.index",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000015-X8jtNYBxTXSyQUrIJITSxA.index",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000000-0KIT_QFMToGFA7sNPVmNBw.leader_epoch_checkpoint",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000030--TBmpeE7RUmocLuZT5LdIA.index",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000030--TBmpeE7RUmocLuZT5LdIA.timeindex",
+        "candidate-archive/copy-recovery-candidate-1793809123-0-m9WTJRRAQWqDTZUBhqU1vg/00000000000000000030--TBmpeE7RUmocLuZT5LdIA.log"
+      ]
+    }
+  },
+  "artifacts": {
+    "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/oracle.properties": {
+      "sha256": "c8303d9f24ae66c5d75df6d57842697592365832154fe96f062da0ca0d36bd77"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/candidate.toml": {
+      "sha256": "6b80d1029701319d83882a1aa1adf04d93ba22f67e39ed8a1c559f3b54f4be2f"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/candidate-1.log": {
+      "sha256": "e55a3133bb32cadffdc093481a4fe3ea7af2f4d575c946ded2fcd22ed58a3464"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/candidate-2.log": {
+      "sha256": "808e067db8a826b88c6b797765961f45daf0d13158aba7d5350d8d05016cb6b2"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/candidate-3.log": {
+      "sha256": "cf3d20b64c2a7001a1a9e76415385d783adab94d458470447382d0c83888f285"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/run.py": {
+      "sha256": "c942e73bff5d49ca61a5b5c113b711a2a11c2bf5eeb513993a401d3795cfd683"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/storage-recovery-valid-20261104/read-corrected.py": {
+      "sha256": "65ed9ebc32126823b066fe219f16100eb2d9a10db28b749f73ebb8557ad44aec"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969-storage/tools/kafka44/RemoteRecoveryProbe.java": {
+      "sha256": "a478e9edbaab62cc7735be65bc0157d9150a07298ceeb82acbb71d21ce8e4628"
+    },
+    "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969-storage/tools/kafka44/RecordingStorage.java": {
+      "sha256": "26bb0ce4d8dd60d1ada89cb99561ceaa9b964367dd18f6c78e8170763e686b29"
+    }
+  },
+  "current_process_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+  "oracle_remote_fetch_errors_after_fix": "r=LeaderAndEpoch{leader=Optional[127.0.0.1:28692 (id: 1 rack: null isFenced: false)], epoch=6}}. (org.apache.kafka.clients.consumer.internals.SubscriptionState)\n[2026-11-04 16:20:36,541] INFO Initialized for all the 1 assigned user-partitions mapped to the 1 meta-partitions in 41 ms (org.apache.kafka.server.log.remote.metadata.storage.ConsumerTask)\n[2026-11-04 16:20:36,588] INFO [Producer clientId=__remote_log_metadata_client_1_producer] ProducerId set to 3000 with epoch 0 (org.apache.kafka.clients.producer.internals.TransactionManager)\n[2026-11-04 16:20:36,945] INFO [RemoteLogManager=1 partition=n04QXMhYQse4wbIWIIZHfw:copy-recovery-oracle-1793809086-0] Found the logStartOffset: 0 for partition: n04QXMhYQse4wbIWIIZHfw:copy-recovery-oracle-1793809086-0 after becoming leader (org.apache.kafka.server.log.remote.storage.RemoteLogManager$RLMCopyTask)\n[2026-11-04 16:20:36,945] INFO [RemoteLogManager=1 partition=n04QXMhYQse4wbIWIIZHfw:copy-recovery-oracle-1793809086-0] Found the highest copiedRemoteOffset: Optional[OffsetAndEpoch[offset=47, epoch=0]] for partition: n04QXMhYQse4wbIWIIZHfw:copy-recovery-oracle-1793809086-0 after becoming leader (org.apache.kafka.server.log.remote.storage.RemoteLogManager$RLMCopyTask)\nWARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::invokeCleaner has been called by org.apache.kafka.common.utils.internals.ByteBufferUnmapper (file:/opt/kafka/libs/kafka-clients-4.4.0.jar)\nWARNING: Please consider reporting this to the maintainers of class org.apache.kafka.common.utils.internals.ByteBufferUnmapper\nWARNING: sun.misc.Unsafe::invokeCleaner will be removed in a future release\nWARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::invokeCleaner has been called by org.apache.kafka.common.utils.internals.ByteBufferUnmapper (file:/opt/kafka/libs/kafka-clients-4.4.0.jar)\nWARNING: Please consider reporting this to the maintainers of class org.apache.kafka.common.utils.internals.ByteBufferUnmapper\nWARNING: sun.misc.Unsafe::invokeCleaner will be removed in a future release\nWARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::invokeCleaner has been called by org.apache.kafka.common.utils.internals.ByteBufferUnmapper (file:/opt/kafka/libs/kafka-clients-4.4.0.jar)\nWARNING: Please consider reporting this to the maintainers of class org.apache.kafka.common.utils.internals.ByteBufferUnmapper\nWARNING: sun.misc.Unsafe::invokeCleaner will be removed in a future release\nWARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::invokeCleaner has been called by org.apache.kafka.common.utils.internals.ByteBufferUnmapper (file:/opt/kafka/libs/kafka-clients-4.4.0.jar)\nWARNING: Please consider reporting this to the maintainers of class org.apache.kafka.common.utils.internals.ByteBufferUnmapper\nWARNING: sun.misc.Unsafe::invokeCleaner will be removed in a future release\n",
+  "cleanup": {
+    "candidate_sigterm_pid": 1663804,
+    "oracle_stop_returncode": 0,
+    "oracle_stop_stdout": "storage-recovery-valid-20261104\n"
+  }
+}

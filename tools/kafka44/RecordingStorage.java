@@ -26,7 +26,7 @@ public class RecordingStorage implements RemoteStorageManager {
         try {InputStream in=Files.newInputStream(dir(m).resolve("log"));in.skipNBytes(start);return in;} catch(Exception e){throw new RemoteStorageException(e);}
     }
     public InputStream fetchIndex(RemoteLogSegmentMetadata m,IndexType t) throws RemoteStorageException {
-        try{return Files.newInputStream(dir(m).resolve(t.name()));}catch(Exception e){throw new RemoteStorageException(e);}
+        try{return Files.newInputStream(dir(m).resolve(t.name()));}catch(NoSuchFileException e){throw new RemoteResourceNotFoundException(e);}catch(Exception e){throw new RemoteStorageException(e);}
     }
     public void deleteLogSegmentData(RemoteLogSegmentMetadata m) throws RemoteStorageException {throw new RemoteStorageException("fixture never deletes archives");}
     public void close() {}

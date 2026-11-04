@@ -247,3 +247,31 @@ restart. The task never stops arbitrary candidates. Pin native source revision,
 executable digest, oracle configuration and lifecycle commands alongside receipts.
 Missing/error/duplicate scenario rows fail collection. RF1 clean restart is not
 coordinator movement, abrupt-crash or shared multi-node durability qualification.
+### Delayed-copy process recovery and remote reads
+
+`RemoteRecoveryProbe` is a split-process released-client fixture. Compile it with
+`CopyProbe.java` and the pinned Kafka 4.4 libraries. On a freshly provisioned,
+task-owned remote-storage broker, run:
+
+```
+java -cp "$CLASSES:$KAFKA_LIBS/*" RemoteRecoveryProbe seed "$BOOTSTRAP" "$TOPIC" "$ARCHIVE"
+```
+
+This acknowledges and checks offsets 0..47 with deterministic 64KiB payloads,
+requires no current-topic archive yet, and uses 30s copy lag / 35s local retention.
+SIGKILL and restart the **owned** broker with exactly the same data/configuration.
+Poll for the physical disappearance of its partition's offset-zero `.log` and
+current-topic archive creation; do not remove local files manually. Then run:
+
+```
+java -cp "$CLASSES:$KAFKA_LIBS/*" RemoteRecoveryProbe read "$BOOTSTRAP" "$TOPIC" "$LOCAL_OFFSET_ZERO_LOG" "$ARCHIVE"
+```
+
+The reader requires that eviction witness, reads offset zero without reset, and
+checks every offset, key and payload byte across all 48 acknowledged records.
+Set the broker local-retention sweep and remote-manager intervals low for this
+bounded fixture (1s and 500ms respectively). `RecordingStorage` now reports absent
+optional indexes with the SPI's `RemoteResourceNotFoundException`; a generic
+storage failure incorrectly makes the released remote reader retry indefinitely.
+These checks cover restart while copying is **delayed**, not interruption inside
+an upload, leader movement, power-loss durability or production storage backends.

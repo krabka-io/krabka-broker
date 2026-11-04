@@ -250,3 +250,26 @@ This is external-filesystem SPI/RF1 clean restart evidence, not multi-broker
 coordinator movement, power-loss/fsync durability, arbitrary JVM plugin loading,
 new minimum-level/authorization permutations, or production-default graduation.
 `qualification_pass` remains false; other #1969 obligations remain open.
+## Delayed pending-copy crash, natural eviction and exact remote reads (2026-11-04)
+
+`qualification/kafka44-copy-recovery-remote-read-20261104.json` records actual
+released4.4 / immutable candidate7c4e3aa7 (implementation d4890ecd) RF1 runs.
+Both acknowledge offsets0..47, require no current-topic archive before a30s copy
+age threshold, receive SIGKILL and reopen the exact same data/configuration.
+Natural35s local retention physically removes offset-zero `.log`; the strict
+reader then consumes all48 exact offsets/keys and every deterministic64KiB
+payload byte. Both corrected read executions pass. Candidate `/proc/PID/exe`
+is independently hashed. The released fixture uses the recording RSM SPI and
+native uses its real local backend / topic-backed metadata.
+
+Failed provisioning (static voter/standalone conflict and bind collision), the
+released invalid30s-copy/1s-retention request, incomplete reader arguments, and
+released fetch failure from an absent optional TRANSACTION index are retained.
+The recording fixture now returns the SPI's RemoteResourceNotFoundException for
+missing indexes; after that correction and restart, actual remote reading passes.
+Additional owned reopenings used for corrected reads are retained, not hidden.
+
+This proves pending-delay process-crash recovery and post-eviction consumer data
+integrity on the pinned implementation, not a kill inside an upload, leader
+movement, power-loss durability, production backend parity or current-main/default
+graduation. `qualification_pass` remains false.
