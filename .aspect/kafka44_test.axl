@@ -50,6 +50,12 @@ def _test_config_results(_ctx):
     check_eq("thirteen config cases", scenario_differences(rows, rows, 13), [])
     check_eq("truncated config output fails", len(scenario_differences(rows, rows.splitlines()[0], 13)), 1)
 
+def _test_streams_results(_ctx):
+    rows = "\n".join(["SCENARIO\tstreams-" + str(i) + "\tPASS" for i in range(9)])
+    check_eq("nine positive lifecycle cases", scenario_differences(rows, rows, 9), [])
+    check_eq("truncated lifecycle output fails", len(scenario_differences(rows, rows.splitlines()[0], 9)), 1)
+    check_eq("stored state mismatch fails", len(scenario_differences(rows, rows.replace("streams-0\tPASS", "streams-0\tFAIL"), 9)), 1)
+
 def _test_transaction_recovery(_ctx):
     check_eq("missing recovery identity fails", transaction_recovery_args(""), [])
     check_eq("malformed recovery identity fails", transaction_recovery_args("RECOVERY\ta\tb"), [])
@@ -59,5 +65,5 @@ def _test_transaction_recovery(_ctx):
     check_eq("sixteen modern state cases", scenario_differences(rows, rows, 16), [])
     check_eq("truncated commit-abort is not parity", len(scenario_differences(rows, rows.splitlines()[0], 16)), 1)
 
-kafka44_tests = suite("kafka44", [_test_revision, _test_candidate_pairs, _test_api_differences, _test_protocol_differences, _test_authorization_inputs, _test_authorization_differences, _test_transaction_recovery, _test_config_results])
+kafka44_tests = suite("kafka44", [_test_revision, _test_candidate_pairs, _test_api_differences, _test_protocol_differences, _test_authorization_inputs, _test_authorization_differences, _test_transaction_recovery, _test_config_results, _test_streams_results])
 test_kafka44 = suite_task(kafka44_tests)

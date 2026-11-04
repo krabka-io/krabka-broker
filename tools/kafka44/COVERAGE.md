@@ -144,3 +144,8 @@ All ten scoped released/enabled copy executions pass in56.9s: dynamic-zero, age,
 The first paired collection retains an enabled startup/readiness failure (health listener collision); corrected ready discovery is separately retained and supersedes only that failed discovery. The enabled behavioral rows were collected after startup and pass; no failed response is erased. Ready discovery confirms explicit API differences, including InitProducerIdv6 and additional controller/internal API rows. Defaults retain16 API-range differences and gated behavior/configuration differences.
 
 Therefore `qualification_pass=false`, defaults remain unchanged, and #1969 stays open. The evidence-machinery PR is bounded progress, not full issue1969 completion. Full integrated positive Streams/native storage and DLQ fault/movement behavior, further minimum-level/authorization cases, pending-marker/crash recovery, and the broader release qualification remain separate obligations.
+
+
+## Repeatable positive Streams lifecycle (2026-11-04)
+
+The durable `StreamsPositive.java` fixture and `--streams-scenarios` lane retain nine strict positive lifecycle assertions on the released reference in-memory plugin. Historical paired receipt: [`kafka44-streams-positive-historical-20261104.json`](../../qualification/kafka44-streams-positive-historical-20261104.json), 9/9 per endpoint. This strengthens earlier negative-only protocol checks but pins historical binary679706f, not final source. Full storage/fault/movement and default qualification remain open.

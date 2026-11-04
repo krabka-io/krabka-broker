@@ -119,3 +119,10 @@ The current `all` mode also includes `failed-upload`: it temporarily denies writ
 ## Integrated candidate receipt
 
 The [2026-11-03 integrated receipt](../../qualification/kafka44-integrated-20261103.json) records an actual fresh binary containing all scoped Streams/DLQ implementation heads, released-codec behavioral/configuration/authorization comparisons, clean transaction/controller restart and scoped copy-failure/content checks. It also retains setup failures, default gate failures and enabled discovery differences. See the [coverage ledger](COVERAGE.md#exact-integrated-implementation-candidate-2026-11-03) for boundaries. This is bounded evidence, not full interoperability qualification or default graduation.
+
+
+## Positive reference Streams lifecycle
+
+`aspect kafka44 --protocol-scenarios --streams-scenarios --revision <full-sha> --output <new-directory>` configures the immutable released oracle with its reference in-memory topology plugin. Nine explicit assertions cover first-member solicitation, no duplicate solicitation, initial NOT_STORED, successful push, STORED with the exact source topic, leaving both members, successful group deletion, and recreated-group solicitation/empty storage. Every response remains in raw output. The optional enabled candidate must independently configure the same reference plugin. The default candidate is deliberately not passed this positive fixture; default rejection coverage remains separate. Missing rows, response errors, assertion failures or outcome differences fail the task.
+
+The CI `streams` variant runs the released oracle fixture. It does not establish candidate behavior. `qualification/kafka44-streams-positive-historical-20261104.json` retains the initial paired 9/9 pass against the historical integrated679706f binary; its explicit executable identity must not be relabeled as the final head. Reference memory-plugin, single-node checks do not qualify durable shared storage, injected plugin failures or coordinator movement.

@@ -1,0 +1,145 @@
+{
+  "date": "2026-11-04",
+  "qualification_pass": false,
+  "scoped_pass": true,
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "candidate": {
+    "sha256": "a0045c991818fdd6dcd06bdc25099813e91fd281eafc520522f23439b16c1a43",
+    "path": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-broker",
+    "checkout_revision_at_launch": "9052741c31197723583005d83ce5d018afffe1b4",
+    "source_revision": "679706fcaf1b51783a302cdd562c087561db4381",
+    "source_identity_basis": "Exact SHA-256 equality to qualification/kafka44-integrated-20261103.json; checkout HEAD at launch differs and is NOT claimed built."
+  },
+  "cases": {
+    "oracle": [
+      "CASE\tfirst-solicited\tPASS",
+      "CASE\tsecond-not-solicited\tPASS",
+      "CASE\tinitial-not-stored\tPASS",
+      "CASE\tpush-success\tPASS",
+      "CASE\tstored-exact-source\tPASS",
+      "CASE\tleave-members\tPASS",
+      "CASE\tdelete-group\tPASS",
+      "CASE\trecreated-solicited\tPASS",
+      "CASE\trecreated-not-stored\tPASS"
+    ],
+    "candidate": [
+      "CASE\tfirst-solicited\tPASS",
+      "CASE\tsecond-not-solicited\tPASS",
+      "CASE\tinitial-not-stored\tPASS",
+      "CASE\tpush-success\tPASS",
+      "CASE\tstored-exact-source\tPASS",
+      "CASE\tleave-members\tPASS",
+      "CASE\tdelete-group\tPASS",
+      "CASE\trecreated-solicited\tPASS",
+      "CASE\trecreated-not-stored\tPASS"
+    ]
+  },
+  "executions": {
+    "oracle": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-fixture-libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/classes",
+        "StreamsPositive",
+        "127.0.0.1:64092",
+        "oracle-c1c8033e"
+      ],
+      "returncode": 0,
+      "stdout": "RESPONSE\tfind\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='positive-oracle-c1c8033e', nodeId=1, host='127.0.0.1', port=64092, errorCode=0, errorMessage='')])\nRESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='first-oracle-c1c8033e', memberEpoch=1, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[Status(statusCode=5, statusDetail='Assignment delayed due to the configured initial rebalance delay.')], activeTasks=[], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nCASE\tfirst-solicited\tPASS\nRESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='second-oracle-c1c8033e', memberEpoch=1, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[Status(statusCode=5, statusDetail='Assignment delayed due to the configured initial rebalance delay.')], activeTasks=[], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=false, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nCASE\tsecond-not-solicited\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='positive-oracle-c1c8033e', groupState='Assigning', groupEpoch=3, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-oracle-c1c8033e], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='first-oracle-c1c8033e', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='first-oracle-c1c8033e', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false), Member(memberId='second-oracle-c1c8033e', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='second-oracle-c1c8033e', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nCASE\tinitial-not-stored\tPASS\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null)\nCASE\tpush-success\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='positive-oracle-c1c8033e', groupState='Assigning', groupEpoch=3, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-oracle-c1c8033e], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='first-oracle-c1c8033e', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='first-oracle-c1c8033e', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false), Member(memberId='second-oracle-c1c8033e', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='second-oracle-c1c8033e', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-oracle-c1c8033e], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nCASE\tstored-exact-source\tPASS\nRESPONSE\tleave\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='first-oracle-c1c8033e', memberEpoch=-1, heartbeatIntervalMs=0, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=0, acceptableRecoveryLag=-1, status=[], activeTasks=null, standbyTasks=null, warmupTasks=null, topologyDescriptionRequired=false, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nRESPONSE\tleave\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='second-oracle-c1c8033e', memberEpoch=-1, heartbeatIntervalMs=0, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=0, acceptableRecoveryLag=-1, status=[], activeTasks=null, standbyTasks=null, warmupTasks=null, topologyDescriptionRequired=false, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nCASE\tleave-members\tPASS\nRESPONSE\tdelete\tDeleteGroupsResponseData(throttleTimeMs=0, results=[DeletableGroupResult(groupId='positive-oracle-c1c8033e', errorCode=0, errorMessage=null)])\nCASE\tdelete-group\tPASS\nRESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='recreated-oracle-c1c8033e', memberEpoch=1, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[Status(statusCode=5, statusDetail='Assignment delayed due to the configured initial rebalance delay.')], activeTasks=[], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nCASE\trecreated-solicited\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='positive-oracle-c1c8033e', groupState='Assigning', groupEpoch=2, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-oracle-c1c8033e], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='recreated-oracle-c1c8033e', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='recreated-oracle-c1c8033e', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nCASE\trecreated-not-stored\tPASS\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-fixture-libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/classes",
+        "StreamsPositive",
+        "127.0.0.1:64192",
+        "candidate-42ca063a"
+      ],
+      "returncode": 0,
+      "stdout": "RESPONSE\tfind\tFindCoordinatorResponseData(throttleTimeMs=0, errorCode=0, errorMessage='', nodeId=0, host='', port=0, coordinators=[Coordinator(key='positive-candidate-42ca063a', nodeId=1, host='127.0.0.1', port=64192, errorCode=0, errorMessage=null)])\nRESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='first-candidate-42ca063a', memberEpoch=1, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[Status(statusCode=5, statusDetail='Assignment delayed due to the configured initial rebalance delay.')], activeTasks=[], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nCASE\tfirst-solicited\tPASS\nRESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='second-candidate-42ca063a', memberEpoch=1, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[Status(statusCode=5, statusDetail='Assignment delayed due to the configured initial rebalance delay.')], activeTasks=[], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=false, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nCASE\tsecond-not-solicited\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='positive-candidate-42ca063a', groupState='Assigning', groupEpoch=3, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-candidate-42ca063a], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='first-candidate-42ca063a', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='first-candidate-42ca063a', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false), Member(memberId='second-candidate-42ca063a', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='second-candidate-42ca063a', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nCASE\tinitial-not-stored\tPASS\nRESPONSE\tupdate\tStreamsGroupTopologyDescriptionUpdateResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null)\nCASE\tpush-success\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='positive-candidate-42ca063a', groupState='Assigning', groupEpoch=3, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-candidate-42ca063a], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='first-candidate-42ca063a', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='first-candidate-42ca063a', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false), Member(memberId='second-candidate-42ca063a', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='second-candidate-42ca063a', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=TopologyDescription(subtopologies=[TopologyDescriptionSubtopology(subtopologyId='0', nodes=[TopologyDescriptionNode(name='source-node', nodeType=1, sourceTopics=[source-candidate-42ca063a], sinkTopic=null, stores=[], successors=[])])], globalStores=[]), topologyDescriptionStatus=3, assignorName='sticky')])\nCASE\tstored-exact-source\tPASS\nRESPONSE\tleave\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='first-candidate-42ca063a', memberEpoch=-1, heartbeatIntervalMs=0, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=0, acceptableRecoveryLag=-1, status=[], activeTasks=null, standbyTasks=null, warmupTasks=null, topologyDescriptionRequired=false, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nRESPONSE\tleave\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='second-candidate-42ca063a', memberEpoch=-1, heartbeatIntervalMs=0, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=0, acceptableRecoveryLag=-1, status=[], activeTasks=null, standbyTasks=null, warmupTasks=null, topologyDescriptionRequired=false, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nCASE\tleave-members\tPASS\nRESPONSE\tdelete\tDeleteGroupsResponseData(throttleTimeMs=0, results=[DeletableGroupResult(groupId='positive-candidate-42ca063a', errorCode=0, errorMessage=null)])\nCASE\tdelete-group\tPASS\nRESPONSE\tjoin\tStreamsGroupHeartbeatResponseData(throttleTimeMs=0, errorCode=0, errorMessage=null, memberId='recreated-candidate-42ca063a', memberEpoch=1, heartbeatIntervalMs=5000, acceptableRecoveryLagLegacy=0, taskOffsetIntervalMs=60000, acceptableRecoveryLag=10000, status=[Status(statusCode=5, statusDetail='Assignment delayed due to the configured initial rebalance delay.')], activeTasks=[], standbyTasks=[], warmupTasks=[], topologyDescriptionRequired=true, endpointInformationEpoch=0, partitionsByUserEndpoint=null)\nCASE\trecreated-solicited\tPASS\nRESPONSE\tdescribe\tStreamsGroupDescribeResponseData(throttleTimeMs=0, groups=[DescribedGroup(errorCode=0, errorMessage=null, groupId='positive-candidate-42ca063a', groupState='Assigning', groupEpoch=2, assignmentEpoch=1, topology=Topology(epoch=0, subtopologies=[Subtopology(subtopologyId='0', sourceTopics=[source-candidate-42ca063a], repartitionSinkTopics=[], stateChangelogTopics=[], repartitionSourceTopics=[])]), members=[Member(memberId='recreated-candidate-42ca063a', memberEpoch=1, instanceId=null, rackId=null, clientId='kafka44-qualification', clientHost='/127.0.0.1', topologyEpoch=0, processId='recreated-candidate-42ca063a', userEndpoint=null, clientTags=[], taskOffsets=[], taskEndOffsets=[], assignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), targetAssignment=Assignment(activeTasks=[], standbyTasks=[], warmupTasks=[]), isClassic=false)], authorizedOperations=-2147483648, topologyDescription=null, topologyDescriptionStatus=1, assignorName='sticky')])\nCASE\trecreated-not-stored\tPASS\n",
+      "stderr": ""
+    }
+  },
+  "artifacts": {
+    "format.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/format.log",
+      "sha256": "c920e4d7bb10f72b54c118a35dee9b6b954990768fb182c7c026ed93b36cd921"
+    },
+    "oracle-final.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/oracle-final.log",
+      "sha256": "91e9370ac6b612dd49e284fee37b39ad491d9f9e01de893d40364cf4e1de38d4"
+    },
+    "run.py": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/run.py",
+      "sha256": "af580e4825c9ecfccbcea1b44e376e96ba550cd2d6a7b64bb25f4614dc0f906a"
+    },
+    "oracle-third.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/oracle-third.log",
+      "sha256": "aabf529bfb722f06be3577fc3dee11f58edb6c24db3a55e6b63072622af47ce5"
+    },
+    "StreamsPositive.java": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/StreamsPositive.java",
+      "sha256": "b4dddef8db230ce0fec2b9103985dcd7f2f12327fc7759efcf074bd591875d6b"
+    },
+    "candidate-final.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/candidate-final.log",
+      "sha256": "4f88596d77763335b4359f8870a7367a3ff6cce192a5d9fdaf62e468d5dbaafe"
+    },
+    "launch.py": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/launch.py",
+      "sha256": "127a47f085524c2d19f917012220e36738e1cb0a381b811ec621f7c6ec94fc4c"
+    },
+    "oracle-first.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/oracle-first.log",
+      "sha256": "fb8f20b9422d29b9139f4895a52e18f9e7b62285a104ebbf23fadb3df97aaa3e"
+    },
+    "oracle-second.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/oracle-second.log",
+      "sha256": "aa3ee1eb2a1df33d791b8aa4bf8dc1d219ef4f557e24049bfb0ce51c346651b0"
+    },
+    "oracle-lifecycle.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/oracle-lifecycle.log",
+      "sha256": "3a7724dbda96e4508cc2a588832b25a9d209629599f1c14b06598d7591db7d40"
+    },
+    "candidate.toml": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/candidate.toml",
+      "sha256": "63661dde9444e84fcb81eeed25fb0271b3077a876b72c337d57e0a9df3200eca"
+    },
+    "oracle.properties": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/oracle.properties",
+      "sha256": "61ffdf279143fc5ed258f397a2785e8c7521c3a80702c806eecce795c75f57d8"
+    },
+    "oracle-fourth.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/oracle-fourth.log",
+      "sha256": "6419b8dbc699069949b927b0646cf0adc8a4b7901821c76970faa16ff4a48e3a"
+    },
+    "candidate-lifecycle.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/candidate-lifecycle.log",
+      "sha256": "39ff207e1c9466d4a12efaa2bd30ec0636fb89e3047163bb673e7528b2667230"
+    },
+    "oracle-fifth.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/oracle-fifth.log",
+      "sha256": "c9637fb4bcdc6140805dcdf4bad8f2ca71b4c1578a93e90de21328872ee4cc5c"
+    },
+    "ProtocolScenarios.java": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/ProtocolScenarios.java",
+      "sha256": "9a96fe2eda3c8b094c4fb62ad8ce09cc9f1216044d827e1c6f89b38ee06616b2"
+    },
+    "candidate.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/candidate.log",
+      "sha256": "d38810f3933dea4d331e4e187d5718a66c48dbacdac7677440a7afc4cbd1c674"
+    },
+    "candidate-first.log": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-streams/candidate-first.log",
+      "sha256": "8d62562a70f384f80149ed3b9802059f549a1b6a1071040980a53b3f8e313df8"
+    }
+  },
+  "limits": [
+    "Reference in-memory plugin only; arbitrary JVM/native storage backends not tested",
+    "Single-node RF1; no crash, coordinator movement, pending-marker, upgrade or rollback claim",
+    "Retained integrated binary, not final newly merged source build",
+    "First initial attempts preserved: Admin timeout configuration; missing FindCoordinator initialization; incorrect assumed STORED enum. Corrected harness assertions follow released STORED=3."
+  ]
+}
