@@ -37,3 +37,23 @@ released/candidate configurations at actual supported feature boundaries for DLQ
 remote-copy configuration, controller unregistration, topic-ID transactional
 commits and Streams APIs, with raw feature advertisements and operation responses.
 Do not equate default API gating or a metadata upgrade rejection with that matrix.
+
+## Requests already pipelined behind the handshake
+
+`RoutingPipeline.java` serializes both ApiVersions5 and CreateTopics7 before
+reading any response. Use only dedicated fixtures: it creates a fresh topic.
+
+```
+javac --release 17 -cp "RELEASED_LIBS/*" -d CLASSES tools/kafka44/RoutingPipeline.java
+java -cp "CLASSES:RELEASED_LIBS/*" RoutingPipeline HOST:PORT NODE FRESH_TOPIC wrong-node
+java -cp "CLASSES:RELEASED_LIBS/*" RoutingPipeline HOST:PORT NODE OTHER_FRESH_TOPIC wrong-cluster
+```
+
+Each execution requires routing error129, successful creation on the same
+connection, and independent Admin visibility. Unexpected closure, transport
+errors, missing topics or preexisting topic names fail. Released4.4 **does apply**
+the pipelined mutation; the handshake does not fence other requests. The paired
+[receipt](../../qualification/kafka44-routing-pipeline-20261105.json) measures
+the same behavior on enabled native code. Raw config rows differ and are not
+claimed identical. This does not actually replace a cluster or test a stale
+client after replacement.
