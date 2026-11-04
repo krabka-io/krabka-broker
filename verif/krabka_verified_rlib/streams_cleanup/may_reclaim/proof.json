@@ -1,0 +1,6 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": { "vc_may_reclaim": { "prover": "alt-ergo", "time": 0.005 } }
+  }
+}

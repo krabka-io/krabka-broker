@@ -90,6 +90,13 @@ pub async fn handle(
                 ..Default::default()
             }));
         }
+        Ok(DowngradeOutcome::RetryCleanup) => {
+            return Ok(respond(version, JoinGroupResponse {
+                error_code: codes::REBALANCE_IN_PROGRESS,
+                member_id: req.member_id,
+                ..Default::default()
+            }));
+        }
         Ok(DowngradeOutcome::Removed) => {
             return Ok(respond(version, JoinGroupResponse {
                 error_code: codes::UNKNOWN_MEMBER_ID,

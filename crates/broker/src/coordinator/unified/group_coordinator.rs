@@ -14,7 +14,10 @@ use {
         offsets_log::OffsetsLog,
         seeds::{GroupSeed, ShareGroupSeed, StreamsGroupSeed},
         share::{actor::ShareGroupActorHandle, config::ShareGroupConfig},
-        streams::{actor::StreamsGroupActorHandle, config::StreamsGroupConfig},
+        streams::{
+            actor::StreamsGroupActorHandle, config::StreamsGroupConfig,
+            description::DescriptionRuntime,
+        },
     },
     crate::{
         BrokerError, coordinator::leadership::ShardTerms, metadata_source::MetadataSource,
@@ -85,6 +88,8 @@ pub struct GroupCoordinator {
     pub streams_config: Arc<StreamsGroupConfig>,
     /// Per-`group_id` streams-group actor handles (KIP-1071).
     pub streams_groups: Arc<DashMap<String, Arc<StreamsGroupActorHandle>>>,
+    /// Broker-local plugin data and solicitation windows survive actor reloads.
+    pub(crate) streams_description_runtime: DashMap<String, Arc<DescriptionRuntime>>,
     /// Bootstrap-time streams-group accumulator. `finalize_bootstrap` drains
     /// it.
     pub streams_seeds: Arc<DashMap<String, StreamsGroupSeed>>,
@@ -172,6 +177,7 @@ impl GroupCoordinator {
             share_persister: OnceLock::new(),
             streams_config: Arc::new(streams_config),
             streams_groups: Arc::new(DashMap::new()),
+            streams_description_runtime: DashMap::new(),
             streams_seeds: Arc::new(DashMap::new()),
             streams_seeds_cache: Arc::new(DashMap::new()),
             respawn_seeds: DashMap::new(),

@@ -11,12 +11,11 @@ use {
         actor::GroupActorMessage,
         group_coordinator::{GroupCoordinator, GroupType},
         share::actor::ShareGroupActorMessage,
-        streams::{self, actor::StreamsGroupActorMessage},
+        streams::actor::StreamsGroupActorMessage,
     },
     crate::{
         coordinator::{DeleteGroupError, GroupSnapshot},
         task_util::{ask, cloned_registry_values, shutdown_actor},
-        time_util::now_ms,
     },
     std::sync::Arc,
 };
@@ -107,39 +106,23 @@ impl GroupCoordinator {
     ///
     /// The method returns `NonEmpty` when the streams actor still has live
     /// members. It returns `NotFound` when no streams actor exists for the id.
-    /// In every other case it tombstones the group's records k15–21, drops the
-    /// streams actor, and removes the offset-home `groups` entry. It returns
-    /// `Internal` when the tombstone append fails.
-    async fn delete_streams_group(&self, group_id: &str) -> Result<(), DeleteGroupError> {
+    /// The actor serializes its membership check, plugin cleanup, durable
+    /// offset/group tombstones, and registry retirement with joining members.
+    /// It returns `Internal` when the tombstone append fails.
+    async fn delete_streams_group(
+        self: &Arc<Self>,
+        group_id: &str,
+    ) -> Result<(), DeleteGroupError> {
         // A Streams-locked id with no live streams actor reports NotFound — the
         // safe failure mode (never silently drop an offset home). In practice a
         // live streams group always has an actor (respawned by finalize_bootstrap
         // on replay), so this only guards a genuinely-absent group.
         let handle = self
-            .find_streams(group_id)
+            .find_live_streams(group_id)
             .ok_or(DeleteGroupError::NotFound)?;
-        let view = ask(&handle.tx, |reply| StreamsGroupActorMessage::Describe {
-            reply,
-        })
-        .await
-        .map_err(|_| DeleteGroupError::NotFound)?;
-        if !view.members.is_empty() {
-            return Err(DeleteGroupError::NonEmpty);
-        }
-        // Drained group: per-member records (k16/k20/k21) were already tombstoned
-        // on member leave/expiry, so only the group-level keys remain.
-        let batch = streams::migration::streams_records_tombstone_batch(group_id, &[], now_ms())
-            .map_err(|_| DeleteGroupError::Internal)?;
-        self.offsets_log
-            .append(group_id, batch)
+        ask(&handle.tx, StreamsGroupActorMessage::Delete)
             .await
-            .map_err(|_| DeleteGroupError::Internal)?;
-        self.streams_groups.remove(group_id);
-        self.groups.remove(group_id);
-        self.streams_seeds.remove(group_id);
-        self.streams_seeds_cache.remove(group_id);
-        self.forget_group_metrics(group_id);
-        Ok(())
+            .map_err(|_| DeleteGroupError::NotFound)?
     }
 
     /// Delete a **share** group, per KIP-932.

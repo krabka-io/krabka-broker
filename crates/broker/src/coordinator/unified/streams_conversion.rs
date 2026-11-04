@@ -11,7 +11,7 @@ use {
         group_coordinator::{GroupCoordinator, GroupType},
         streams,
     },
-    crate::error::BrokerError,
+    crate::{error::BrokerError, task_util::ask},
     std::sync::Arc,
     tokio::sync::oneshot,
 };
@@ -168,44 +168,24 @@ impl GroupCoordinator {
         member_id: &str,
         now_ms: i64,
     ) -> Result<streams::migration::DowngradeOutcome, BrokerError> {
-        use streams::{
-            actor::StreamsGroupActorMessage,
-            migration::{DowngradeOutcome, streams_to_classic_batch},
-        };
+        use streams::{actor::StreamsGroupActorMessage, migration::DowngradeOutcome};
 
         if self.group_type(group_id) != Some(GroupType::Streams) {
             return Ok(DowngradeOutcome::NotStreams);
         }
 
-        // Kafka's `StreamsGroup.isEmpty`: a group with a member is not sent
-        // down the classic path.
-        if let Some(handle) = self.find_streams(group_id) {
-            let (tx, rx) = oneshot::channel();
-            if handle
-                .tx
-                .send(StreamsGroupActorMessage::Describe { reply: tx })
-                .await
-                .is_ok()
-                && let Ok(view) = rx.await
-                && !view.members.is_empty()
-            {
-                return Ok(DowngradeOutcome::RejectLiveMembers);
-            }
-        }
-
-        if !member_id.is_empty() {
-            self.streams_seeds.remove(group_id);
-            self.streams_seeds_cache.remove(group_id);
-            self.group_types.remove(group_id);
-            self.streams_groups.remove(group_id);
-            return Ok(DowngradeOutcome::Removed);
-        }
-
-        let batch = streams_to_classic_batch(group_id, now_ms)?;
-        self.offsets_log.append(group_id, batch).await?;
-        self.mark_classic_after_streams_downgrade(group_id);
-        self.streams_groups.remove(group_id);
-        Ok(DowngradeOutcome::Converted)
+        // A cold classic-to-Streams upgrade can hold the type lock without
+        // spawning membership yet. Its reverse still runs under an actor turn.
+        let handle = self
+            .find_live_streams(group_id)
+            .unwrap_or_else(|| self.get_or_create_streams(group_id));
+        ask(&handle.tx, |reply| StreamsGroupActorMessage::Convert {
+            member_id: member_id.to_owned(),
+            now_ms,
+            reply,
+        })
+        .await
+        .unwrap_or(Ok(DowngradeOutcome::RetryCleanup))
     }
 }
 

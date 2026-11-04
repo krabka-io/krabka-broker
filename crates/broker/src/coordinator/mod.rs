@@ -37,6 +37,8 @@ pub enum DeleteGroupError {
     /// A durable side effect of the delete failed, for example the tombstone
     /// append.
     Internal,
+    /// A Streams topology-description plugin could not delete its state.
+    TopologyDescription,
 }
 
 /// Read-only projection of a classic `Group` for the `ListGroups` and

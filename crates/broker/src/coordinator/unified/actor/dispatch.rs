@@ -9,7 +9,9 @@ use {
     super::{
         ActorServices, ErrorCode, GroupActorMessage, ParkedWaiters,
         classic_join::{ClassicJoinMessage, handle_classic_join_message},
-        classic_leave::{handle_classic_delete_message, handle_classic_leave_message},
+        classic_leave::{
+            handle_classic_delete_message, handle_classic_leave_message, reply_streams_delete,
+        },
         classic_sync::handle_classic_sync_message,
         commit_validation::validate_commit_message,
         heartbeat::handle_actor_heartbeat,
@@ -18,7 +20,7 @@ use {
         offset_delete::{delete_held_offsets, offset_delete_guard},
         pending_commits::CommitWaits,
         persistence::leave_written_consumer_group,
-        retention::handle_reap_message,
+        retention::{handle_reap_message, reap_streams_offsets},
         seed::apply_seed,
         topic_deletion::reply_delete_topic_offsets,
         views::{build_classic_view, build_describe, inspect_any},
@@ -34,6 +36,16 @@ use {
     },
     tokio::sync::oneshot,
 };
+
+fn reply_classic_inspect(
+    group: &CoordinatorGroup,
+    reply: oneshot::Sender<super::ClassicView>,
+) -> bool {
+    if let Some(state) = group.as_classic() {
+        let _ = reply.send(build_classic_view(state));
+    }
+    true
+}
 
 fn handle_classic_heartbeat_message(
     group: &mut CoordinatorGroup,
@@ -135,15 +147,13 @@ pub(super) async fn handle_actor_message(
             version,
             reply,
         } => reply_classic_leave(group, parked, services, &req, version, reply).await,
+        GroupActorMessage::StreamsDelete { batch, reply } => {
+            reply_streams_delete(group, services.offsets_log, batch, reply).await
+        }
         GroupActorMessage::ClassicDelete { reply } => {
             handle_classic_delete_message(group, services.offsets_log, reply).await
         }
-        GroupActorMessage::ClassicInspect { reply } => {
-            if let Some(state) = group.as_classic() {
-                let _ = reply.send(build_classic_view(state));
-            }
-            true
-        }
+        GroupActorMessage::ClassicInspect { reply } => reply_classic_inspect(group, reply),
         GroupActorMessage::OffsetDeleteGuard { reply } => {
             let _ = reply.send(offset_delete_guard(group));
             true
@@ -217,22 +227,23 @@ pub(super) async fn handle_actor_message(
             let _ = reply.send(());
             true
         }
+        GroupActorMessage::ReapStreamsOffsets {
+            now_ms,
+            retention_ms,
+            reply,
+        } => {
+            let outcome =
+                reap_streams_offsets(group, services.offsets_log, now_ms, retention_ms).await;
+            let _ = reply.send(outcome);
+            true
+        }
         GroupActorMessage::ReapExpiredOffsets {
             now_ms,
             retention_ms,
             empty_grace_ms,
             reply,
         } => {
-            handle_reap_message(
-                group,
-                services.offsets_log,
-                services.coordinator,
-                now_ms,
-                retention_ms,
-                empty_grace_ms,
-                reply,
-            )
-            .await
+            handle_reap_message(group, services, now_ms, retention_ms, empty_grace_ms, reply).await
         }
         GroupActorMessage::Seed(seed) => {
             if let Some(state) = group.as_consumer_mut() {
@@ -259,6 +270,7 @@ pub(super) async fn handle_actor_message(
             let _ = reply.send(());
             false
         }
+
         #[cfg(test)]
         GroupActorMessage::TestForceConsumerKind => {
             *group = CoordinatorGroup::new_consumer(group.group_id.clone());

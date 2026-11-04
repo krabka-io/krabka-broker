@@ -2,7 +2,7 @@
 use {
     super::{
         assignor::{AssignorInput, AssignorMember, StreamsAssignment, TaskAssignorRegistry},
-        description::TopologyDescriptionPlugin,
+        description::{NativeBackend, TopologyDescriptionPlugin},
     },
     crate::{
         api_catalog::UnstableApiVersions,
@@ -372,6 +372,8 @@ pub struct StreamsGroupConfig {
     /// members push. With none, the default, the broker never asks for one.
     #[default(TopologyDescriptionPlugin::None)]
     pub topology_description_plugin: TopologyDescriptionPlugin,
+    /// Native, asynchronous storage extension. Takes precedence over the built-in plugin.
+    pub topology_description_backend: NativeBackend,
     #[default(64)]
     pub actor_mailbox_capacity: usize,
 }
@@ -380,6 +382,13 @@ pub struct StreamsGroupConfig {
 const MAX_SIZE_DEFAULT: usize = 2_147_483_647;
 
 impl StreamsGroupConfig {
+    /// Whether either a native extension or the reference plugin is configured.
+    #[must_use]
+    pub fn description_plugin_configured(&self) -> bool {
+        self.topology_description_backend.is_some()
+            || self.topology_description_plugin.is_configured()
+    }
+
     /// Broker configuration projection for the native registration list.
     #[must_use]
     pub fn registered_task_assignor_names(&self) -> String {
@@ -900,6 +909,7 @@ mod tests {
             share_auto_offset_reset: ShareAutoOffsetReset::Latest,
             unstable_api_versions: UnstableApiVersions::Disabled,
             topology_description_plugin: TopologyDescriptionPlugin::None,
+            topology_description_backend: None,
             actor_mailbox_capacity: 64,
         };
         assert!(

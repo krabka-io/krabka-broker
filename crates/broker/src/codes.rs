@@ -494,6 +494,8 @@ krabka_macros::wire_codes! {
     // ---------------------------------------------------------------------------
 
     trunk KAFKA_TRUNK_CODES {
+        /// KIP-1331: the description backend could not delete group state.
+        GROUP_DELETION_FAILED = 134;
         /// `STREAMS_TOPOLOGY_DESCRIPTION_UPDATE_FAILED` (135, KIP-1331): the
         /// broker could not store a `StreamsGroupTopologyDescriptionUpdate`.
         STREAMS_TOPOLOGY_DESCRIPTION_UPDATE_FAILED = 135;

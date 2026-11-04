@@ -1,0 +1,24 @@
+(* #"/workspace/crates/verified/src/streams_cleanup.rs" 12 0 12 97 *)
+
+let%span sstreams_cleanup = "/workspace/crates/verified/src/streams_cleanup.rs" 13 4 13 54
+let%span sstreams_cleanup'0 = "/workspace/crates/verified/src/streams_cleanup.rs" 11 28 11 90
+
+use creusot.prelude.Any
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let may_reclaim [#"/workspace/crates/verified/src/streams_cleanup.rs" 12 0 12 97] (has_members: bool)
+  (all_offsets_expired: bool) (initialized: bool) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {has_members = false} (! bb1) | br1 -> {has_members} (! bb3) ]
+  | bb1 = any [ br0 -> {all_offsets_expired = false} (! bb3) | br1 -> {all_offsets_expired} (! bb2) ]
+  | bb2 = s0 [ s0 = [ &_ret <- initialized ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- [%#sstreams_cleanup] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & has_members: bool = has_members
+  | & all_offsets_expired: bool = all_offsets_expired
+  | & initialized: bool = initialized ])
+  [ return (result: bool) -> {[@stop_split] [@expl:may_reclaim ensures] [%#sstreams_cleanup'0] result
+    = (not has_members /\ all_offsets_expired /\ initialized)}
+    (! return {result}) ]

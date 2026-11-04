@@ -49,7 +49,7 @@
 
 use {
     super::{
-        GroupTombstone, group_tombstone_keys,
+        ActorServices, GroupTombstone, group_tombstone_keys,
         offset_delete::{SubscribedTopics, offset_delete_guard},
     },
     crate::{
@@ -81,8 +81,7 @@ pub struct ReapOutcome {
 /// flag: a group that tombstoned itself has no state left to serve.
 pub(super) async fn handle_reap_message(
     group: &mut CoordinatorGroup,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
+    services: ActorServices<'_>,
     now_ms: i64,
     retention_ms: i64,
     empty_grace_ms: i64,
@@ -90,8 +89,8 @@ pub(super) async fn handle_reap_message(
 ) -> bool {
     let outcome = reap_expired_offsets(
         group,
-        offsets_log,
-        coordinator,
+        services.offsets_log,
+        services.coordinator,
         now_ms,
         retention_ms,
         empty_grace_ms,
@@ -349,6 +348,34 @@ fn tombstone_batch(
         }
     }
     Ok(builder.finish(now_ms))
+}
+
+/// The Streams actor owns the membership check; this actor owns offset expiry.
+/// Kafka's Streams offsets age from commit time, with pending transactions held.
+pub(super) async fn reap_streams_offsets(
+    group: &mut CoordinatorGroup,
+    offsets_log: &dyn OffsetsLog,
+    now_ms: i64,
+    retention_ms: i64,
+) -> ReapOutcome {
+    let condition = ExpirationCondition {
+        empty_since_ms: None,
+        subscribed: HashSet::new(),
+    };
+    let expired = expired_offsets(group, &condition, now_ms, retention_ms);
+    if !expired.keys.is_empty() {
+        if append_tombstones(offsets_log, &group.group_id, &expired.keys, None, now_ms)
+            .await
+            .is_err()
+        {
+            return ReapOutcome::default();
+        }
+        group.remove_committed(&expired.keys);
+    }
+    ReapOutcome {
+        reaped: expired.keys,
+        group_deleted: expired.all_expired,
+    }
 }
 
 #[cfg(test)]
