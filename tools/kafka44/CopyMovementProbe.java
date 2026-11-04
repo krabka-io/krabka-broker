@@ -15,7 +15,21 @@ public class CopyMovementProbe {
    try(Admin a=Admin.create(p)) { var t=a.describeTopics(List.of(topic)).allTopicNames().get().get(topic); var part=t.partitions().get(0); System.out.println("LEADER\t"+part.leader().id()+"\t"+part.leader().host()+":"+part.leader().port()); } return;
   }
   if(mode.equals("seed")) {
-   try(Admin a=Admin.create(p)) { a.createTopics(List.of(new NewTopic(topic,1,(short)3).configs(Map.of(
+   try(Admin a=Admin.create(p)) {
+    boolean metadataReady=false;
+    for(int attempt=0;attempt<120;attempt++) {
+     try {
+      var metadata=a.describeTopics(List.of("__remote_log_metadata")).allTopicNames().get().get("__remote_log_metadata");
+      metadataReady=metadata.partitions().stream().allMatch(part -> part.leader()!=null && part.replicas().size()==3 && part.isr().size()==3);
+      if(metadataReady) break;
+     } catch(java.util.concurrent.ExecutionException e) {
+      if(!(e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException)) throw e;
+     }
+     Thread.sleep(500);
+    }
+    if(!metadataReady) throw new IllegalStateException("RF3 remote metadata topic not ready before fault");
+    System.out.println("PRECONDITION\tremote-metadata-rf3-isr3-ready");
+    a.createTopics(List.of(new NewTopic(topic,1,(short)3).configs(Map.of(
     "remote.storage.enable","true","segment.bytes","1048576","max.message.bytes","131072",
     "remote.copy.lag.ms","30000","remote.copy.lag.bytes","100000000",
     "local.retention.ms","35000","local.retention.bytes","-1")))).all().get(); }
