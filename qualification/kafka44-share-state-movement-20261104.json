@@ -1,0 +1,833 @@
+{
+  "qualification_pass": false,
+  "scope": "Share state owner3 SIGKILL after source acquisition before REJECT; owner changes while source1 and destination2 stay fixed; exact1DLQ lag0 no redelivery",
+  "image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "binary_sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+  "commands": [
+    {
+      "command": [
+        "javac",
+        "--release",
+        "17",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "-d",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-share-state-move/qualification/kafka44-dlq/ShareBoundary.java",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-share-state-move/qualification/kafka44-dlq/ShareFault.java",
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-share-state-move/tools/kafka44/ShareStateOwner.java"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "run",
+        "-d",
+        "--network",
+        "host",
+        "--name",
+        "qualification-share-state-move-1",
+        "-e",
+        "KAFKA_NODE_ID=1",
+        "-e",
+        "KAFKA_PROCESS_ROLES=broker,controller",
+        "-e",
+        "KAFKA_LISTENERS=PLAINTEXT://:62810,CONTROLLER://:62811",
+        "-e",
+        "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:62810",
+        "-e",
+        "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+        "-e",
+        "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+        "-e",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "-e",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:62811,2@127.0.0.1:62821,3@127.0.0.1:62831",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR=2",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_NUM_PARTITIONS=1",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=2",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
+        "-e",
+        "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+      ],
+      "returncode": 0,
+      "stdout": "606e87c884eea21280aef29d9400f55ce600abc1f5502a76505b8b031d43b16f\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "run",
+        "-d",
+        "--network",
+        "host",
+        "--name",
+        "qualification-share-state-move-2",
+        "-e",
+        "KAFKA_NODE_ID=2",
+        "-e",
+        "KAFKA_PROCESS_ROLES=broker,controller",
+        "-e",
+        "KAFKA_LISTENERS=PLAINTEXT://:62820,CONTROLLER://:62821",
+        "-e",
+        "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:62820",
+        "-e",
+        "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+        "-e",
+        "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+        "-e",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "-e",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:62811,2@127.0.0.1:62821,3@127.0.0.1:62831",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR=2",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_NUM_PARTITIONS=1",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=2",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
+        "-e",
+        "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+      ],
+      "returncode": 0,
+      "stdout": "717f0f5a1c24be2a1c993c61b9857cd5c9fb85c06f97af56b02b66b80e65af3f\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "run",
+        "-d",
+        "--network",
+        "host",
+        "--name",
+        "qualification-share-state-move-3",
+        "-e",
+        "KAFKA_NODE_ID=3",
+        "-e",
+        "KAFKA_PROCESS_ROLES=broker,controller",
+        "-e",
+        "KAFKA_LISTENERS=PLAINTEXT://:62830,CONTROLLER://:62831",
+        "-e",
+        "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:62830",
+        "-e",
+        "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+        "-e",
+        "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+        "-e",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "-e",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:62811,2@127.0.0.1:62821,3@127.0.0.1:62831",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR=3",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR=2",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_NUM_PARTITIONS=1",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=2",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
+        "-e",
+        "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+      ],
+      "returncode": 0,
+      "stdout": "d10fa6549e0c1b26393ec6d318eec1f15474fac861739ce03624ed886560bf00\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62810",
+        "setup"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62830 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareFault",
+        "127.0.0.1:62810",
+        "setup"
+      ],
+      "returncode": 0,
+      "stdout": "SETUP_COMPLETE source_leader=1 destination_leader=2 state_leader=3\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "kill",
+        "--signal",
+        "KILL",
+        "qualification-share-state-move-3"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-share-state-move-3\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62810",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62830 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62810",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62830 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62810",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62830 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62810",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62830 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62810",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62830 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62810",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62830 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62810",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62830 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62810",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62830 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62810",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62830 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62810",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62830 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62810",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62830 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62830 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62810",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t1\t(partition=0, leader=127.0.0.1:62810 (id: 1 rack: null isFenced: false), replicas=:-1 (id: 3 rack: null isFenced: false), 127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62810 (id: 1 rack: null isFenced: false), 127.0.0.1:62820 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "reject_log": "SOURCE_ACQUIRED offset=0\nREJECT_COMMIT_START\nREJECT_COMMIT_RESULT {LjoIgMdDQxeCsyeeWf2oAA:source-oracle-1793814062-0=Optional.empty}\n",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareFault",
+        "127.0.0.1:62810",
+        "resume"
+      ],
+      "returncode": 0,
+      "stdout": "RECOVERY_POLL_EMPTY\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=oracle-1793814062",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareFault",
+        "127.0.0.1:62810",
+        "verify"
+      ],
+      "returncode": 0,
+      "stdout": "FINAL dlq_records=1 start=0 lag=0\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "stop",
+        "qualification-share-state-move-1"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-share-state-move-1\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "stop",
+        "qualification-share-state-move-2"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-share-state-move-2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "docker",
+        "stop",
+        "qualification-share-state-move-3"
+      ],
+      "returncode": 0,
+      "stdout": "qualification-share-state-move-3\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/1/data",
+        "--node-id",
+        "1",
+        "--cluster-id",
+        "79ec1c15-9837-4045-99df-3486069e9f76",
+        "--directory-id",
+        "e467bf38-653f-44c1-b83b-3c3ac03af5cb",
+        "--initial-controllers",
+        "1@127.0.0.1:62911:e467bf38-653f-44c1-b83b-3c3ac03af5cb,2@127.0.0.1:62921:db8b205e-3f5b-4595-8252-12b3a2c1e247,3@127.0.0.1:62931:95bb3fdd-95a9-4f62-9fb7-902c4e9b3ea1",
+        "--release-version",
+        "4.4-IV2",
+        "--unstable-feature-versions-enable"
+      ],
+      "returncode": 0,
+      "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/1/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id eewcFZg3QEWZ3zSGBp6fdg (6 seed record(s))\n",
+      "stderr": ""
+    },
+    {
+      "start": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/1/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62911",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1826723
+    },
+    {
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/2/data",
+        "--node-id",
+        "2",
+        "--cluster-id",
+        "79ec1c15-9837-4045-99df-3486069e9f76",
+        "--directory-id",
+        "db8b205e-3f5b-4595-8252-12b3a2c1e247",
+        "--initial-controllers",
+        "1@127.0.0.1:62911:e467bf38-653f-44c1-b83b-3c3ac03af5cb,2@127.0.0.1:62921:db8b205e-3f5b-4595-8252-12b3a2c1e247,3@127.0.0.1:62931:95bb3fdd-95a9-4f62-9fb7-902c4e9b3ea1",
+        "--release-version",
+        "4.4-IV2",
+        "--unstable-feature-versions-enable"
+      ],
+      "returncode": 0,
+      "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/2/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id eewcFZg3QEWZ3zSGBp6fdg (6 seed record(s))\n",
+      "stderr": ""
+    },
+    {
+      "start": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/2/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62921",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1826741
+    },
+    {
+      "command": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/3/data",
+        "--node-id",
+        "3",
+        "--cluster-id",
+        "79ec1c15-9837-4045-99df-3486069e9f76",
+        "--directory-id",
+        "95bb3fdd-95a9-4f62-9fb7-902c4e9b3ea1",
+        "--initial-controllers",
+        "1@127.0.0.1:62911:e467bf38-653f-44c1-b83b-3c3ac03af5cb,2@127.0.0.1:62921:db8b205e-3f5b-4595-8252-12b3a2c1e247,3@127.0.0.1:62931:95bb3fdd-95a9-4f62-9fb7-902c4e9b3ea1",
+        "--release-version",
+        "4.4-IV2",
+        "--unstable-feature-versions-enable"
+      ],
+      "returncode": 0,
+      "stdout": "Formatting dynamic metadata voter directory /home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/3/data with metadata.version 4.4-IV2.\nFormatted 1 log directory with cluster-id eewcFZg3QEWZ3zSGBp6fdg (6 seed record(s))\n",
+      "stderr": ""
+    },
+    {
+      "start": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+        "--config-file",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/3/config.toml",
+        "--controller-listen-addr",
+        "127.0.0.1:62931",
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none"
+      ],
+      "pid": 1826776
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62910",
+        "setup"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62930 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareFault",
+        "127.0.0.1:62910",
+        "setup"
+      ],
+      "returncode": 0,
+      "stdout": "SETUP_COMPLETE source_leader=1 destination_leader=2 state_leader=3\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62910",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62930 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62910",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62930 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62910",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62930 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62910",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62930 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62910",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62930 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62910",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62930 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62910",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62930 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62910",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62930 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62910",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62930 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62910",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t3\t(partition=0, leader=127.0.0.1:62930 (id: 3 rack: null isFenced: false), replicas=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62930 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareStateOwner",
+        "127.0.0.1:62910",
+        "read"
+      ],
+      "returncode": 0,
+      "stdout": "STATE_OWNER\t1\t(partition=0, leader=127.0.0.1:62910 (id: 1 rack: null isFenced: false), replicas=:-1 (id: 3 rack: null isFenced: false), 127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), isr=127.0.0.1:62910 (id: 1 rack: null isFenced: false), 127.0.0.1:62920 (id: 2 rack: null isFenced: false), elr=, lastKnownElr=)\n",
+      "stderr": ""
+    },
+    {
+      "reject_log": "SOURCE_ACQUIRED offset=0\nREJECT_COMMIT_START\nREJECT_COMMIT_RESULT {YiVZuGlLRDC-5M615Cagpg:source-candidate-1793814150-0=Optional.empty}\n",
+      "returncode": 0
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareFault",
+        "127.0.0.1:62910",
+        "resume"
+      ],
+      "returncode": 0,
+      "stdout": "RECOVERY_POLL_EMPTY\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "java",
+        "-Ddlq.run=candidate-1793814150",
+        "-Ddlq.expected.count=1",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*",
+        "ShareFault",
+        "127.0.0.1:62910",
+        "verify"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "Exception in thread \"main\" java.lang.AssertionError: lost DLQ record\n\tat ShareFault.main(ShareFault.java:70)\n"
+    }
+  ],
+  "cases": [
+    {
+      "side": "oracle",
+      "run": "oracle-1793814062",
+      "old_state_owner": 3,
+      "new_state_owner": 1,
+      "expected_dlq_count": 1,
+      "passed": true
+    }
+  ],
+  "failure": "Exception in thread \"main\" java.lang.AssertionError: lost DLQ record\n\tat ShareFault.main(ShareFault.java:70)\n\n",
+  "candidate_observed_state_owner_after_fault": 1,
+  "candidate_failure_summary": "No consumer-visible DLQ record within verifier15s; source recovery poll empty. Offline destination log contains two valid payload-bearing DLQ records at offsets0,1, so this is NOT proven physical data loss. State log has ARCHIVING then terminal start1. Exact-one parity not established.",
+  "offline_witnesses": {
+    "candidate-destination": {
+      "paths": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/2/data/dlq.candidate-1793814150-0/00000000000000000000.log"
+      ],
+      "returncode": 0,
+      "stdout": "Dumping /home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/2/data/dlq.candidate-1793814150-0/00000000000000000000.log\nLog starting offset: 0\nbaseOffset: 0 lastOffset: 0 count: 1 baseSequence: -1 lastSequence: -1 producerId: -1 producerEpoch: -1 partitionLeaderEpoch: 0 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 0 CreateTime: 1793814167869 size: 389 magic: 2 compresscodec: none crc: 188774381 isvalid: true\n| offset: 0 CreateTime: 1793814167869 keySize: 1 valueSize: 100 sequence: -1 headerKeys: [__dlq.errors.topic,__dlq.errors.partition,__dlq.errors.offset,__dlq.errors.group,__dlq.errors.delivery.count,__dlq.errors.message] key: \u0001 payload: \u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nbaseOffset: 1 lastOffset: 1 count: 1 baseSequence: -1 lastSequence: -1 producerId: -1 producerEpoch: -1 partitionLeaderEpoch: 0 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 389 CreateTime: 1793814167869 size: 389 magic: 2 compresscodec: none crc: 188774381 isvalid: true\n| offset: 1 CreateTime: 1793814167869 keySize: 1 valueSize: 100 sequence: -1 headerKeys: [__dlq.errors.topic,__dlq.errors.partition,__dlq.errors.offset,__dlq.errors.group,__dlq.errors.delivery.count,__dlq.errors.message] key: \u0001 payload: \u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\n",
+      "stderr": ""
+    },
+    "candidate-share-state": {
+      "paths": [
+        "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/1/data/__share_group_state-0/00000000000000000000.log"
+      ],
+      "returncode": 0,
+      "stdout": "Dumping /home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/1/data/__share_group_state-0/00000000000000000000.log\nLog starting offset: 0\nbaseOffset: 0 lastOffset: 0 count: 1 baseSequence: -1 lastSequence: -1 producerId: -1 producerEpoch: -1 partitionLeaderEpoch: 0 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 0 CreateTime: 1793814152518 size: 159 magic: 2 compresscodec: none crc: 3113411945 isvalid: true\n| offset: 0 CreateTime: 1793814152518 keySize: 50 valueSize: 40 sequence: -1 headerKeys: [] key: {\"type\":\"0\",\"data\":{\"groupId\":\"group-candidate-1793814150\",\"topicId\":\"YiVZuGlLRDC-5M615Cagpg\",\"partition\":0}} payload: {\"version\":\"0\",\"data\":{\"snapshotEpoch\":0,\"stateEpoch\":2,\"leaderEpoch\":0,\"startOffset\":-1,\"createTimestamp\":1793814152518,\"writeTimestamp\":1793814152518,\"stateBatches\":[]}}\nbaseOffset: 1 lastOffset: 1 count: 1 baseSequence: -1 lastSequence: -1 producerId: -1 producerEpoch: -1 partitionLeaderEpoch: 1 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 159 CreateTime: 1793814167866 size: 165 magic: 2 compresscodec: none crc: 1039826519 isvalid: true\n| offset: 1 CreateTime: 1793814167866 keySize: 50 valueSize: 46 sequence: -1 headerKeys: [] key: {\"type\":\"1\",\"data\":{\"groupId\":\"group-candidate-1793814150\",\"topicId\":\"YiVZuGlLRDC-5M615Cagpg\",\"partition\":0}} payload: {\"version\":\"0\",\"data\":{\"snapshotEpoch\":0,\"leaderEpoch\":0,\"startOffset\":0,\"deliveryCompleteCount\":0,\"stateBatches\":[{\"firstOffset\":0,\"lastOffset\":0,\"deliveryState\":3,\"deliveryCount\":1}]}}\nbaseOffset: 2 lastOffset: 2 count: 1 baseSequence: -1 lastSequence: -1 producerId: -1 producerEpoch: -1 partitionLeaderEpoch: 1 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 324 CreateTime: 1793814198873 size: 145 magic: 2 compresscodec: none crc: 3905871491 isvalid: true\n| offset: 2 CreateTime: 1793814198873 keySize: 50 valueSize: 26 sequence: -1 headerKeys: [] key: {\"type\":\"1\",\"data\":{\"groupId\":\"group-candidate-1793814150\",\"topicId\":\"YiVZuGlLRDC-5M615Cagpg\",\"partition\":0}} payload: {\"version\":\"0\",\"data\":{\"snapshotEpoch\":0,\"leaderEpoch\":0,\"startOffset\":1,\"deliveryCompleteCount\":0,\"stateBatches\":[]}}\n",
+      "stderr": ""
+    }
+  },
+  "fixture_commit": "716641da8",
+  "limitations": [
+    "Fault after acquisition beforeREJECT, not duringARCHIVING",
+    "Pinned candidate7c4e3aa7 predates final Streams fix",
+    "No denied-destination ACL scenario",
+    "No root-cause or eventual consumer visibility conclusion"
+  ],
+  "source_hashes": {
+    "tools/kafka44/ShareStateOwner.java": "ce0693f46a5df0d64aec8e2920206b8e8e2f77a5a2224efa6037a838229b5249",
+    "qualification/kafka44-dlq/ShareFault.java": "e7b1be8d14ddd3bed449b20b44a209e74f8b308966151177ec64976057471591",
+    "qualification/kafka44-dlq/ShareBoundary.java": "a64beea04b63fd4c62e4c43f084070c6b1108de83d8206e55a8759e7bb56d486"
+  },
+  "candidate_configurations": {
+    "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/3/config.toml": "broker_id = 3\nlog_dir = \"/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/3/data\"\ncontroller_quorum_voters = [\"1@127.0.0.1:62911\", \"2@127.0.0.1:62921\", \"3@127.0.0.1:62931\"]\n[[listeners]]\nname = \"PLAINTEXT\"\nbind_addr = \"127.0.0.1:62930\"\nadvertised = \"127.0.0.1:62930\"\nprotocol = \"Plaintext\"\n[runtime]\nshare_state_replication_factor=3\nshare_state_min_isr=2\nshare_state_num_partitions=1\noffsets_topic_replication_factor=3\ntransaction_state_replication_factor=3\ntransaction_state_min_isr=2\n[server_properties]\n\"unstable.api.versions.enable\" = \"true\"\n\"unstable.feature.versions.enable\" = \"true\"\n",
+    "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/2/config.toml": "broker_id = 2\nlog_dir = \"/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/2/data\"\ncontroller_quorum_voters = [\"1@127.0.0.1:62911\", \"2@127.0.0.1:62921\", \"3@127.0.0.1:62931\"]\n[[listeners]]\nname = \"PLAINTEXT\"\nbind_addr = \"127.0.0.1:62920\"\nadvertised = \"127.0.0.1:62920\"\nprotocol = \"Plaintext\"\n[runtime]\nshare_state_replication_factor=3\nshare_state_min_isr=2\nshare_state_num_partitions=1\noffsets_topic_replication_factor=3\ntransaction_state_replication_factor=3\ntransaction_state_min_isr=2\n[server_properties]\n\"unstable.api.versions.enable\" = \"true\"\n\"unstable.feature.versions.enable\" = \"true\"\n",
+    "/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/1/config.toml": "broker_id = 1\nlog_dir = \"/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime/candidate/1/data\"\ncontroller_quorum_voters = [\"1@127.0.0.1:62911\", \"2@127.0.0.1:62921\", \"3@127.0.0.1:62931\"]\n[[listeners]]\nname = \"PLAINTEXT\"\nbind_addr = \"127.0.0.1:62910\"\nadvertised = \"127.0.0.1:62910\"\nprotocol = \"Plaintext\"\n[runtime]\nshare_state_replication_factor=3\nshare_state_min_isr=2\nshare_state_num_partitions=1\noffsets_topic_replication_factor=3\ntransaction_state_replication_factor=3\ntransaction_state_min_isr=2\n[server_properties]\n\"unstable.api.versions.enable\" = \"true\"\n\"unstable.feature.versions.enable\" = \"true\"\n"
+  },
+  "orchestrator": {
+    "path": "/home/matt/.openclaw/workspace/coordinator/.private/run-share-state-move.py",
+    "sha256": "9c418823f36e64187f3d42d954674657a6c9c5a1f5de7c7405ba2d022f76f7f9",
+    "text": "import subprocess as sp,json,pathlib,time,socket,uuid,hashlib\nroot=pathlib.Path('/home/matt/.openclaw/workspace/coordinator/.private/share-state-runtime');root.mkdir(exist_ok=True)\nrepo=pathlib.Path('/home/matt/.openclaw/workspace/coordinator/.private/kafka44-share-state-move')\nlibs='/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-collection/libs/*'\nbinary='/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker'\nfmt='/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-format'\nimage='apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b'\nr={'qualification_pass':False,'scope':'Share state owner3 SIGKILL after source acquisition before REJECT; owner changes while source1 and destination2 stay fixed; exact1DLQ lag0 no redelivery','image':image,'binary_sha256':hashlib.sha256(open(binary,'rb').read()).hexdigest(),'commands':[],'cases':[]}\ndef save(): (root/'receipt.json').write_text(json.dumps(r,indent=2))\ndef run(cmd,check=True,timeout=90):\n p=sp.run(list(map(str,cmd)),capture_output=True,text=True,timeout=timeout);r['commands'].append({'command':list(map(str,cmd)),'returncode':p.returncode,'stdout':p.stdout,'stderr':p.stderr});save()\n if check and p.returncode:raise RuntimeError(p.stderr+'\\n'+p.stdout)\n return p.stdout\nclasses=root/'classes';classes.mkdir(exist_ok=True)\nrun(['javac','--release','17','-cp',libs,'-d',classes,repo/'qualification/kafka44-dlq/ShareBoundary.java',repo/'qualification/kafka44-dlq/ShareFault.java',repo/'tools/kafka44/ShareStateOwner.java'])\nprocesses={};names=[]\ndef ready(port):\n for _ in range(120):\n  try:\n   with socket.create_connection(('127.0.0.1',port),timeout=1):return\n  except OSError:time.sleep(.5)\n raise RuntimeError('no port '+str(port))\ndef start(n):\n p=root/'candidate'/str(n);cmd=[binary,'--config-file',str(p/'config.toml'),'--controller-listen-addr',f'127.0.0.1:{62900+n*10+1}','--metrics-listen-addr','none','--health-listen-addr','none'];processes[n]=sp.Popen(cmd,stdout=open(p/'broker.log','a'),stderr=sp.STDOUT);r['commands'].append({'start':cmd,'pid':processes[n].pid});save()\ntry:\n for side in ['oracle','candidate']:\n  base=62800 if side=='oracle' else 62900\n  if side=='oracle':\n   voters=','.join(f'{n}@127.0.0.1:{base+n*10+1}' for n in [1,2,3])\n   for n in [1,2,3]:\n    name=f'qualification-share-state-move-{n}';names.append(name)\n    env={'KAFKA_NODE_ID':n,'KAFKA_PROCESS_ROLES':'broker,controller','KAFKA_LISTENERS':f'PLAINTEXT://:{base+n*10},CONTROLLER://:{base+n*10+1}','KAFKA_ADVERTISED_LISTENERS':f'PLAINTEXT://127.0.0.1:{base+n*10}','KAFKA_CONTROLLER_LISTENER_NAMES':'CONTROLLER','KAFKA_INTER_BROKER_LISTENER_NAME':'PLAINTEXT','KAFKA_LISTENER_SECURITY_PROTOCOL_MAP':'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT','KAFKA_CONTROLLER_QUORUM_VOTERS':voters,'KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR':3,'KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR':3,'KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR':2,'KAFKA_SHARE_COORDINATOR_STATE_TOPIC_NUM_PARTITIONS':1,'KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR':2,'KAFKA_TRANSACTION_STATE_LOG_MIN_ISR':1,'CLUSTER_ID':'MkU3OEVBNTcwNTJENDM2Qk'}\n    cmd=['docker','run','-d','--network','host','--name',name]\n    for k,v in env.items():cmd+=['-e',f'{k}={v}']\n    run(cmd+[image])\n  else:\n   ids={n:str(uuid.uuid4()) for n in [1,2,3]};cluster=str(uuid.uuid4());voters=','.join(f'{n}@127.0.0.1:{base+n*10+1}:{ids[n]}' for n in [1,2,3])\n   for n in [1,2,3]:\n    p=root/side/str(n);p.mkdir(parents=True,exist_ok=True)\n    (p/'config.toml').write_text(f'''broker_id = {n}\\nlog_dir = \"{p}/data\"\\ncontroller_quorum_voters = [\"1@127.0.0.1:62911\", \"2@127.0.0.1:62921\", \"3@127.0.0.1:62931\"]\\n[[listeners]]\\nname = \"PLAINTEXT\"\\nbind_addr = \"127.0.0.1:{base+n*10}\"\\nadvertised = \"127.0.0.1:{base+n*10}\"\\nprotocol = \"Plaintext\"\\n[runtime]\\nshare_state_replication_factor=3\\nshare_state_min_isr=2\\nshare_state_num_partitions=1\\noffsets_topic_replication_factor=3\\ntransaction_state_replication_factor=3\\ntransaction_state_min_isr=2\\n[server_properties]\\n\"unstable.api.versions.enable\" = \"true\"\\n\"unstable.feature.versions.enable\" = \"true\"\\n''')\n    run([fmt,'--log-dir',p/'data','--node-id',n,'--cluster-id',cluster,'--directory-id',ids[n],'--initial-controllers',voters,'--release-version','4.4-IV2','--unstable-feature-versions-enable']);start(n)\n  for n in [1,2,3]:ready(base+n*10)\n  time.sleep(20)\n  endpoint=f'127.0.0.1:{base+10}';runid=side+'-'+str(int(time.time()))\n  def java(cls,args):return run(['java','-Ddlq.run='+runid,'-Ddlq.expected.count=1','-cp',str(classes)+':'+libs,cls,endpoint]+list(args))\n  def state(mode):\n   out=java('ShareStateOwner',[mode]);return int([x.split('\\t')[1] for x in out.splitlines() if x.startswith('STATE_OWNER\\t')][0])\n  old=state('setup');assert old==3\n  java('ShareFault',['setup'])\n  gate=root/(side+'-allow-reject');log=root/(side+'-reject.log')\n  reject=sp.Popen(['java','-Ddlq.run='+runid,'-cp',str(classes)+':'+libs,'ShareFault',endpoint,'reject',str(gate)],stdout=open(log,'w'),stderr=sp.STDOUT)\n  deadline=time.time()+80\n  while time.time()<deadline and 'SOURCE_ACQUIRED' not in log.read_text():\n   if reject.poll() is not None:raise RuntimeError('reject client stopped '+log.read_text())\n   time.sleep(.05)\n  assert 'SOURCE_ACQUIRED' in log.read_text()\n  if side=='oracle':run(['docker','kill','--signal','KILL',names[2]])\n  else:processes[3].kill();processes[3].wait()\n  deadline=time.time()+70;new=old\n  while time.time()<deadline:\n   try:new=state('read')\n   except Exception:time.sleep(.5);continue\n   if new!=old:break\n   time.sleep(.5)\n  assert new!=old\n  gate.touch();reject.wait(timeout=90)\n  r['commands'].append({'reject_log':log.read_text(),'returncode':reject.returncode});save()\n  if reject.returncode:raise RuntimeError(log.read_text())\n  java('ShareFault',['resume']);java('ShareFault',['verify'])\n  r['cases'].append({'side':side,'run':runid,'old_state_owner':old,'new_state_owner':new,'expected_dlq_count':1,'passed':True});save()\n  if side=='oracle':\n   for name in names:run(['docker','stop',name])\n   names=[]\n  else:\n   for p in processes.values():p.terminate()\n   for p in processes.values():p.wait(timeout=30)\n   processes={}\n r['paired_scenarios_passed']=2;save()\nexcept Exception as e:r['failure']=str(e);save();raise\nfinally:\n for name in names:run(['docker','stop',name],False)\n for p in processes.values():\n  if p.poll() is None:p.terminate()\n save()\n"
+  }
+}

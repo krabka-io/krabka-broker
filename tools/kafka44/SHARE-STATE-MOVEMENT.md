@@ -25,3 +25,11 @@ mid-ARCHIVING state-owner loss, source-owner loss, destination-owner loss, or an
 exactly-once archival guarantee for other schedules. Earlier append-before-state
 confirmation tests retained real duplicate witnesses. Keep broad qualification
 false, and retain terminal-prefix representation differences between brokers.
+
+The20261104 paired receipt retains a **failure**, not qualification: released
+finished with one consumer-readable DLQ record, lag0 and no source redelivery.
+Candidate recovery returned no source record but destination verification saw no
+record within15seconds. Offline decoding later found **two valid DLQ records**
+at offsets0/1 and terminal source state. Thus physical data loss is not proven;
+consumer visibility and duplicate/retry behavior require investigation. Do not
+turn the local append witness into a successful consumer-read assertion.
