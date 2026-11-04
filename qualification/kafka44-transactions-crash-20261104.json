@@ -4,7 +4,9 @@
   "scoped_pass": true,
   "candidate": {
     "source_revision": "f392992a452aa623c184f2041b38ca68fc5101f0",
-    "sha256": "a0045c991818fdd6dcd06bdc25099813e91fd281eafc520522f23439b16c1a43"
+    "sha256": "ba71f549a44474c626bb88b1ec55bee1b6ae9cac27e8e356674e0875cc2f5071",
+    "path": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-broker",
+    "source_identity_basis": "Fresh cargo build/test compilation on f392, unchanged Rust source thereafter; successful corrective runtime/proc executable observations below."
   },
   "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
   "repeatable_oracle_command": "aspect kafka44 --revision FULL_SHA --protocol-scenarios --transaction-scenarios --oracle-crash-recovery --output NEW_DIRECTORY",
@@ -216,6 +218,10 @@
     "task-owned-oracle": {
       "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/crash-oracle-collection/evidence.json",
       "sha256": "4a2b48dbc27e02798cb46b554f92206838015501b42f31d80fdb4ab0e5d7768b"
+    },
+    "runtime-observed": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/runtime-observed-20261104.json",
+      "sha256": "67ffeeeecd52d0f723dba7fab8b9269b084a271912895716e1f24f94ffc67c46"
     }
   },
   "limits": [
@@ -227,5 +233,10 @@
     "Task-owned oracle mode now repeatable; private paired SIGKILL execution also pins exact retained data/process",
     "Native multibroker tests do not establish released-oracle replication parity",
     "Restart-after-SIGKILL is not host power-loss durability or crash while a pending transaction is undecided"
-  ]
+  ],
+  "superseded_failed_start_capture": {
+    "source_revision": "f392992a452aa623c184f2041b38ca68fc5101f0",
+    "sha256": "a0045c991818fdd6dcd06bdc25099813e91fd281eafc520522f23439b16c1a43"
+  },
+  "runtime_provenance_correction": "First binary capture was before archive-directory startup correction and the Cargo test binary relink. That first process failed before readiness. Accepted corrective paired launch and later SIGKILL recovery use ba71f5, witnessed directly by surviving default PID831188 and enabled restart PID838458 /proc/exe. Earlier a004 capture is retained only as failed-start provenance, not accepted runtime identity."
 }

@@ -65,6 +65,10 @@ def _command(ctx, argv, seconds = 90):
         "stderr": result.stderr,
     }
 
+def command_receipt(ctx, argv, seconds = 90):
+    """Bounded command record shared by isolated qualification fixtures."""
+    return _command(ctx, argv, seconds)
+
 def _tool(ctx, probe, bootstrap, container = "", seconds = 90):
     argv = ["docker", "exec", container] if container else ["docker", "run", "--rm", "--network", "host", IMAGE]
     return _command(ctx, argv + [BIN + probe[0], "--bootstrap-server", bootstrap] + probe[1:], seconds)

@@ -1,0 +1,12 @@
+"""Reject missing/ambiguous source identities before upgrade writes."""
+
+load("./kafka44_upgrade.axl", "upgrade_identity")
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+def _test_identity(_ctx):
+    for raw in ["", "IDENTITY\tuuid", "IDENTITY\t\tfeatures", "IDENTITY\tuuid\tfeatures\nIDENTITY\tother\tfeatures"]:
+        check_eq("missing or ambiguous identity", upgrade_identity(raw), [])
+    check_eq("retain finalized features exactly", upgrade_identity("noise\nIDENTITY\tuuid\t{metadata.version=30, share.version=1}"), ["uuid", "{metadata.version=30, share.version=1}"])
+
+kafka44_upgrade_tests = suite("kafka44-upgrade", [_test_identity])
+test_kafka44_upgrade = suite_task(kafka44_upgrade_tests)

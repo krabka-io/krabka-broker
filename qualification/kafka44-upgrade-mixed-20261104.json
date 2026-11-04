@@ -1,0 +1,282 @@
+{
+  "date": "2026-11-04",
+  "qualification_pass": false,
+  "scoped_pass": true,
+  "candidate": {
+    "source_revision": "f392992a452aa623c184f2041b38ca68fc5101f0",
+    "sha256": "ba71f549a44474c626bb88b1ec55bee1b6ae9cac27e8e356674e0875cc2f5071",
+    "path": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-broker",
+    "source_identity_basis": "Fresh cargo build/test compilation on f392, unchanged Rust source thereafter; successful corrective runtime/proc executable observations below."
+  },
+  "previous_image": "ghcr.io/krabka-io/krabka-broker@sha256:577a686c1b24a5a655ec8a2a82c877e119e3dd3f07b5fa617e91d05851714e1e",
+  "client_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "single_node_repeatable_task": {
+    "status": "scoped-pass",
+    "duration": "5.0s",
+    "command": "aspect kafka44-upgrade --revision BUILD_SHA --candidate-binary ABSOLUTE_BINARY --output FRESH_PRIVATE_DIRECTORY",
+    "executions": {
+      "candidate_hash": {
+        "command": [
+          "timeout",
+          "90",
+          "sha256sum",
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-broker"
+        ],
+        "returncode": 0,
+        "stdout": "ba71f549a44474c626bb88b1ec55bee1b6ae9cac27e8e356674e0875cc2f5071  /home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-broker\n",
+        "stderr": ""
+      },
+      "config_hash": {
+        "command": [
+          "timeout",
+          "90",
+          "sha256sum",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-upgrade-task-verified/effective.toml"
+        ],
+        "returncode": 0,
+        "stdout": "6b0116290c19c94e43c42833db0bd668546341c990d1258010d0d006d6d9f7c7  /home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-upgrade-task-verified/effective.toml\n",
+        "stderr": ""
+      },
+      "fixture_hash": {
+        "command": [
+          "timeout",
+          "90",
+          "sha256sum",
+          "tools/kafka44/UpgradeProbe.java"
+        ],
+        "returncode": 0,
+        "stdout": "69b5e7a9fa8bdc2a9fbc02788def0e1393d7c829bdc6181f885d299e55392671  tools/kafka44/UpgradeProbe.java\n",
+        "stderr": ""
+      },
+      "seed": {
+        "command": [
+          "timeout",
+          "120",
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-upgrade-task-verified/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-upgrade-task-verified/classes",
+          "UpgradeProbe",
+          "127.0.0.1:65392",
+          "seed",
+          "kafka44-upgrade-probe"
+        ],
+        "returncode": 0,
+        "stdout": "IDENTITY\tMQZRY_rYQMWjfa7By_4bhA\t{eligible.leader.replicas.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], group.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], kraft.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], metadata.version=FinalizedVersionRange[min_version_level:30, max_version_level:30], share.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], streams.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], transaction.version=FinalizedVersionRange[min_version_level:2, max_version_level:2]}\nSCENARIO\texact-records-readable\tPASS\n",
+        "stderr": ""
+      },
+      "upgrade": {
+        "command": [
+          "timeout",
+          "120",
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-upgrade-task-verified/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-upgrade-task-verified/classes",
+          "UpgradeProbe",
+          "127.0.0.1:65392",
+          "upgrade",
+          "kafka44-upgrade-probe",
+          "MQZRY_rYQMWjfa7By_4bhA",
+          "{eligible.leader.replicas.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], group.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], kraft.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], metadata.version=FinalizedVersionRange[min_version_level:30, max_version_level:30], share.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], streams.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], transaction.version=FinalizedVersionRange[min_version_level:2, max_version_level:2]}"
+        ],
+        "returncode": 0,
+        "stdout": "IDENTITY\tMQZRY_rYQMWjfa7By_4bhA\t{eligible.leader.replicas.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], group.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], kraft.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], metadata.version=FinalizedVersionRange[min_version_level:30, max_version_level:30], share.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], streams.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], transaction.version=FinalizedVersionRange[min_version_level:2, max_version_level:2]}\nSCENARIO\tidentity-features-offset-preserved\tPASS\nSCENARIO\tunsupported-finalization-refused-without-mutation\tPASS\nSCENARIO\texact-records-readable\tPASS\n",
+        "stderr": ""
+      },
+      "rollback": {
+        "command": [
+          "timeout",
+          "120",
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-upgrade-task-verified/libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-upgrade-task-verified/classes",
+          "UpgradeProbe",
+          "127.0.0.1:65392",
+          "rollback",
+          "kafka44-upgrade-probe",
+          "MQZRY_rYQMWjfa7By_4bhA",
+          "{eligible.leader.replicas.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], group.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], kraft.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], metadata.version=FinalizedVersionRange[min_version_level:30, max_version_level:30], share.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], streams.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], transaction.version=FinalizedVersionRange[min_version_level:2, max_version_level:2]}"
+        ],
+        "returncode": 0,
+        "stdout": "IDENTITY\tMQZRY_rYQMWjfa7By_4bhA\t{eligible.leader.replicas.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], group.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], kraft.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], metadata.version=FinalizedVersionRange[min_version_level:30, max_version_level:30], share.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], streams.version=FinalizedVersionRange[min_version_level:1, max_version_level:1], transaction.version=FinalizedVersionRange[min_version_level:2, max_version_level:2]}\nSCENARIO\tidentity-features-offset-preserved\tPASS\nSCENARIO\texact-records-readable\tPASS\n",
+        "stderr": ""
+      },
+      "candidate_stop": {
+        "command": [
+          "timeout",
+          "90",
+          "kill",
+          "-TERM",
+          "921226"
+        ],
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "rollback_stop": {
+        "command": [
+          "timeout",
+          "60",
+          "docker",
+          "stop",
+          "--timeout",
+          "30",
+          "kafka44-upgrade-tion-20261104-upgrade-task-verified"
+        ],
+        "returncode": 0,
+        "stdout": "kafka44-upgrade-tion-20261104-upgrade-task-verified\n",
+        "stderr": ""
+      }
+    },
+    "candidate_exit": 0
+  },
+  "mixed_three_node_cases": {
+    "nodes": "two immutable released v1.1.5 processes plus freshly built candidate, rolling to three candidate processes",
+    "replication_factor": 3,
+    "min_isr": 2,
+    "topic_uuid_all_six_stages": "cjGZNTMrSCS8hB76oL3f9A",
+    "observations": {
+      "mixed-corrected-old2-candidate1.log": "BEFORE\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:30, max_version_level:30]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:38, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:30]), (share.version -> SupportedVersionRange[min_version:0, max_version:1]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSCENARIO\tthree-nodes-preserve-metadata-level\tPASS\nAFTER\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:30, max_version_level:30]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:38, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:30]), (share.version -> SupportedVersionRange[min_version:0, max_version:1]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSCENARIO\texplicit-feature-update-result\tPASS\nTOPIC_UUID\tcjGZNTMrSCS8hB76oL3f9A\nSCENARIO\texact-rf3-record-readable\tPASS\n",
+      "mixed-old1-candidate2.log": "BEFORE\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:30, max_version_level:30]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:111, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:30]), (share.version -> SupportedVersionRange[min_version:0, max_version:1]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSCENARIO\tthree-nodes-preserve-metadata-level\tPASS\nREJECTED\torg.apache.kafka.common.errors.InvalidUpdateVersionException: The update failed for all features since the following feature had an error: Invalid update version 33 for feature metadata.version. Local controller 2 only supports versions 7-30\nAFTER\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:30, max_version_level:30]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:111, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:30]), (share.version -> SupportedVersionRange[min_version:0, max_version:1]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSCENARIO\texplicit-feature-update-result\tPASS\nTOPIC_UUID\tcjGZNTMrSCS8hB76oL3f9A\nSCENARIO\texact-rf3-record-readable\tPASS\n",
+      "mixed-candidate-controller-reject.log": "CONTROLLER\t127.0.0.1:65402 (id: 1 rack: null isFenced: false)\nBEFORE\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:30, max_version_level:30]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:294, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:34]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSCENARIO\tthree-nodes-preserve-metadata-level\tPASS\nREJECTED\torg.apache.kafka.common.errors.InvalidUpdateVersionException: The update failed for all features since the following feature had an error: Invalid update version 33 for feature metadata.version. Broker 2 only supports versions 7-30\nAFTER\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:30, max_version_level:30]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:294, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:34]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSCENARIO\texplicit-feature-update-result\tPASS\nTOPIC_UUID\tcjGZNTMrSCS8hB76oL3f9A\nSCENARIO\texact-rf3-record-readable\tPASS\n",
+      "read": "CONTROLLER\t127.0.0.1:65422 (id: 3 rack: null isFenced: false)\nBEFORE\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:30, max_version_level:30]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:433, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:34]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSCENARIO\tthree-nodes-preserve-metadata-level\tPASS\nTOPIC_UUID\tcjGZNTMrSCS8hB76oL3f9A\nSCENARIO\texact-rf3-record-readable\tPASS\n",
+      "finalize": "CONTROLLER\t127.0.0.1:65402 (id: 1 rack: null isFenced: false)\nBEFORE\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:30, max_version_level:30]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:437, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:34]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSCENARIO\tthree-nodes-preserve-metadata-level\tPASS\nAFTER\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:33, max_version_level:33]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:438, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:34]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSCENARIO\texplicit-feature-update-result\tPASS\nTOPIC_UUID\tcjGZNTMrSCS8hB76oL3f9A\nSCENARIO\texact-rf3-record-readable\tPASS\n",
+      "restored-read": "CONTROLLER\t127.0.0.1:65402 (id: 1 rack: null isFenced: false)\nBEFORE\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:33, max_version_level:33]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:626, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:34]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSCENARIO\tthree-nodes-preserve-metadata-level\tPASS\nTOPIC_UUID\tcjGZNTMrSCS8hB76oL3f9A\nSCENARIO\texact-rf3-record-readable\tPASS\n"
+    },
+    "rejected_rollback": {
+      "old-default-rollback": {
+        "command": [
+          "docker",
+          "run",
+          "--name",
+          "qualification-mixed-rejected-rollback-2-20261104",
+          "--network",
+          "host",
+          "--user",
+          "1001:1001",
+          "-v",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed",
+          "ghcr.io/krabka-io/krabka-broker@sha256:577a686c1b24a5a655ec8a2a82c877e119e3dd3f07b5fa617e91d05851714e1e",
+          "--config-file",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed/2/rollback-default.toml",
+          "--controller-listen-addr",
+          "127.0.0.1:65413",
+          "--metrics-listen-addr",
+          "none",
+          "--health-listen-addr",
+          "none"
+        ],
+        "returncode": 1,
+        "stdout": "{\"from\":1024,\"message\":\"raised the open-file limit to the hard limit\",\"severity\":\"INFO\",\"target\":\"krabka_broker::startup\",\"timestamp\":\"2026-11-04T08:17:19.662525Z\",\"to\":524288}\n{\"bootstrap_mode\":\"Rejoin\",\"directory_id\":\"9d48e5f4-64a8-4216-ba17-2f8d1c6d3997\",\"log_dir\":\"/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed/2/data\",\"message\":\"selected bootstrap mode\",\"metadata_log_dir\":\"/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed/2/data\",\"severity\":\"INFO\",\"target\":\"krabka_broker::startup\",\"timestamp\":\"2026-11-04T08:17:19.662997Z\"}\n{\"message\":\"controller listener is PLAINTEXT: every peer is ANONYMOUS, and each controller RPC is authorized for that principal\",\"severity\":\"WARNING\",\"target\":\"krabka_broker::broker::metadata_phase\",\"timestamp\":\"2026-11-04T08:17:19.663306Z\"}\n{\"message\":\"deriving static KIP-595 voters from controller_quorum_voters\",\"mode\":\"Rejoin\",\"node_id\":2,\"severity\":\"INFO\",\"target\":\"krabka_broker::broker::metadata_phase\",\"timestamp\":\"2026-11-04T08:17:19.663348Z\",\"voter_count\":3}\n{\"message\":\"loaded the bootstrap records of the bootstrap checkpoint\",\"records\":6,\"severity\":\"INFO\",\"target\":\"krabka_raft::kraft::controller::startup\",\"timestamp\":\"2026-11-04T08:17:19.672464Z\"}\n{\"error\":\"Encountered fatal fault: Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=33), but this controller only supports versions 7-30\",\"severity\":\"ERROR\",\"target\":\"krabka_raft::kraft::controller::startup\",\"timestamp\":\"2026-11-04T08:17:19.673379Z\"}\n{\"error\":\"Encountered fatal fault: Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=33), but this controller only supports versions 7-30\",\"severity\":\"ERROR\",\"target\":\"krabka_raft::controller::startup\",\"timestamp\":\"2026-11-04T08:17:19.673510Z\"}\n{\"error\":\"Encountered fatal fault: Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=33), but this controller only supports versions 7-30\",\"message\":\"halting: the metadata controller met a fatal fault\",\"severity\":\"ERROR\",\"target\":\"krabka_broker::startup\",\"timestamp\":\"2026-11-04T08:17:19.673633Z\"}\n",
+        "stderr": "Error: Encountered fatal fault: Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=33), but this controller only supports versions 7-30\n"
+      },
+      "restored-candidate2": {
+        "command": [
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/target/debug/krabka-broker",
+          "--config-file",
+          "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed/2/effective.toml",
+          "--controller-listen-addr",
+          "127.0.0.1:65413",
+          "--metrics-listen-addr",
+          "none",
+          "--health-listen-addr",
+          "none"
+        ],
+        "pid": 928130
+      },
+      "local-restored": {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-fixture-libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-upgrade/classes",
+          "MixedFeatureProbe",
+          "127.0.0.1:65412",
+          "local",
+          "33",
+          "kafka44-mixed-20261104"
+        ],
+        "returncode": 0,
+        "stdout": "LOCAL_FEATURES\t[FinalizedFeatureKey(name='eligible.leader.replicas.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='group.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='kraft.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='metadata.version', maxVersionLevel=33, minVersionLevel=33), FinalizedFeatureKey(name='share.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='streams.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='transaction.version', maxVersionLevel=2, minVersionLevel=2)]\nSCENARIO\tlocal-finalized-metadata-level\tPASS\n",
+        "stderr": ""
+      },
+      "read-restored": {
+        "command": [
+          "java",
+          "-cp",
+          "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-fixture-libs/*:/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-upgrade/classes",
+          "MixedFeatureProbe",
+          "127.0.0.1:65422",
+          "read",
+          "33",
+          "kafka44-mixed-20261104"
+        ],
+        "returncode": 0,
+        "stdout": "CONTROLLER\t127.0.0.1:65402 (id: 1 rack: null isFenced: false)\nBEFORE\tFeatureMetadata{finalizedFeatures:{(group.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (kraft.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (metadata.version -> FinalizedVersionRange[min_version_level:33, max_version_level:33]), (share.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (streams.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1]), (transaction.version -> FinalizedVersionRange[min_version_level:2, max_version_level:2]), (eligible.leader.replicas.version -> FinalizedVersionRange[min_version_level:1, max_version_level:1])}, finalizedFeaturesEpoch:626, supportedFeatures:{(group.version -> SupportedVersionRange[min_version:0, max_version:1]), (kraft.version -> SupportedVersionRange[min_version:0, max_version:1]), (metadata.version -> SupportedVersionRange[min_version:7, max_version:34]), (share.version -> SupportedVersionRange[min_version:0, max_version:2]), (streams.version -> SupportedVersionRange[min_version:0, max_version:1]), (transaction.version -> SupportedVersionRange[min_version:0, max_version:2]), (krabka.version -> SupportedVersionRange[min_version:0, max_version:2]), (eligible.leader.replicas.version -> SupportedVersionRange[min_version:0, max_version:1])}}\nSCENARIO\tthree-nodes-preserve-metadata-level\tPASS\nTOPIC_UUID\tcjGZNTMrSCS8hB76oL3f9A\nSCENARIO\texact-rf3-record-readable\tPASS\n",
+        "stderr": ""
+      }
+    },
+    "local_node2_finalized": "LOCAL_FEATURES\t[FinalizedFeatureKey(name='eligible.leader.replicas.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='group.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='kraft.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='metadata.version', maxVersionLevel=33, minVersionLevel=33), FinalizedFeatureKey(name='share.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='streams.version', maxVersionLevel=1, minVersionLevel=1), FinalizedFeatureKey(name='transaction.version', maxVersionLevel=2, minVersionLevel=2)]\nSCENARIO\tlocal-finalized-metadata-level\tPASS\n"
+  },
+  "limits": [
+    "Candidate source f392 predates final DLQ integration; not final-head qualification",
+    "Single-node task tests clean native replacement and reversible rollback without new finalization; exact keys/values/offsets and group offset1 preserved",
+    "Mixed run retains failed initial missing controller_quorum_voters setup; corrected shared three-voter config is the accepted run, no data reformatted",
+    "Metadata stays30 across replacements; explicit UpdateFeatures33 succeeds after all three are candidates; local API33 and RF3 record survive restart",
+    "Old released binary rollback under default cap30 exits1 on persisted33; this proves configured support guard, not absence of an old experimental reader or universal irreversibility",
+    "Earlier mixed stages used fixture before local/controller diagnostic additions; end-state source hashes are not retroactively exact earlier class identities",
+    "No share.version2 finalization, power-loss, remote-storage migration or complete six-surface qualification/default graduation claim"
+  ],
+  "artifacts": {
+    "0": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-upgrade-task-verified/evidence.json",
+      "sha256": "7ea919ad6c4a1defb82d40961a2ba63c3a8f82a3c3de95d94021087b24251857"
+    },
+    "1": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-upgrade-task-verified-20261104.log",
+      "sha256": "aea6798e2ec0674fcda4c3e7b0416dec3a01bbf13a9a18951d70ac617d4df860"
+    },
+    "2": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed/provision.json",
+      "sha256": "0d7645254f4bf1691acf7fde7d1a1bf5c360a1cfd0bef29b50b8eab00aefd9e5"
+    },
+    "3": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed/provision-corrected.json",
+      "sha256": "d16e1995b0829691280205011aedecc61de193fe3b351aac3f6004f0b7b1e3d6"
+    },
+    "4": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed/roll1.json",
+      "sha256": "3fb3382ea6084ce6dec30af4617fb3956d96990f90f47a51212a57b9f24004fb"
+    },
+    "5": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed/roll2.json",
+      "sha256": "deae247aadbe443a8da29066b43963d4a777ec37046844c6e82a65375adcd127"
+    },
+    "6": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed/rejected-rollback.json",
+      "sha256": "032fb4bed60655c6c115ba99a487fad13b3b1265351bef0eaae1790e06a06362"
+    },
+    "7": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/tools/kafka44/UpgradeProbe.java",
+      "sha256": "69b5e7a9fa8bdc2a9fbc02788def0e1393d7c829bdc6181f885d299e55392671"
+    },
+    "8": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/tools/kafka44/MixedFeatureProbe.java",
+      "sha256": "93a015760cbb0ffa04ce195108cbf8bc23cecf91dd0cf2f3f1571cfe6b11d940"
+    },
+    "9": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-1969/.aspect/kafka44_upgrade.axl",
+      "sha256": "3bdbc1ea5ef195d9526570c5f1c06ab723a4dc377f5368b0a35ed11000fb7bd2"
+    },
+    "10": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed/1/effective.toml",
+      "sha256": "dd5d48abbd9db05ef656327f39362a094b42a62dd31fe2127f33901e0306c99e"
+    },
+    "11": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed/2/effective.toml",
+      "sha256": "cb3097566bb4ecb30540aee20b12a956e568daa927dc5ec79032c0f4d6f5e7ca"
+    },
+    "12": {
+      "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-mixed/3/effective.toml",
+      "sha256": "2ab4623f33c6bb1749031484bba40983833f6390b17fff2e521548ffc00af988"
+    }
+  }
+}

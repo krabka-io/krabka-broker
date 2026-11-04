@@ -1,0 +1,91 @@
+"""Previous released image -> supplied native candidate -> released rollback, fresh isolated data only."""
+
+load("@std//time.axl", "sleep")
+load("./kafka44.axl", "IMAGE", "command_receipt", "input_problems")
+
+PREVIOUS = "ghcr.io/krabka-io/krabka-broker@sha256:577a686c1b24a5a655ec8a2a82c877e119e3dd3f07b5fa617e91d05851714e1e"
+
+def upgrade_identity(stdout):
+    rows = [line.split("\t")[1:] for line in stdout.splitlines() if line.startswith("IDENTITY\t")]
+    return rows[0] if len(rows) == 1 and len(rows[0]) == 2 and all(rows[0]) else []
+
+def _kill_candidate(child):
+    if child.try_wait() == None:
+        child.kill()
+        child.wait()
+
+def _finish(ctx, path, evidence, name):
+    evidence["old_logs"] = command_receipt(ctx, ["docker", "logs", name])
+    evidence["old_stop"] = command_receipt(ctx, ["docker", "stop", "--timeout", "30", name], 60)
+    ctx.std.fs.write(path, json.encode(evidence) + "\n")
+
+def _impl(ctx: TaskContext) -> int:
+    a = ctx.args
+    problems = input_problems(a.revision, [])
+    if not a.output or not a.candidate_binary.startswith("/"):
+        problems.append("new output directory and absolute candidate binary path required")
+    if a.port < 1024 or a.port > 65534:
+        problems.append("loopback broker port must be 1024..65534")
+    if problems:
+        fail("; ".join(problems))
+    if command_receipt(ctx, ["mkdir", a.output])["returncode"]:
+        fail("output must be a fresh directory")
+    root = command_receipt(ctx, ["realpath", a.output])["stdout"].strip()
+    path = root + "/evidence.json"
+    name = "kafka44-upgrade-" + root.replace("/", "-")[-35:]
+    owner = command_receipt(ctx, ["id", "-u"])["stdout"].strip() + ":" + command_receipt(ctx, ["id", "-g"])["stdout"].strip()
+    endpoint = "127.0.0.1:" + str(a.port)
+    controller = "127.0.0.1:" + str(a.port + 1)
+    config = root + "/effective.toml"
+    ctx.std.fs.write(config, 'broker_id = 1\nlog_dir = "' + root + '/data"\n[[listeners]]\nname = "PLAINTEXT"\nbind_addr = "' + endpoint + '"\nadvertised = "' + endpoint + '"\nprotocol = "Plaintext"\n[runtime]\noffsets_topic_replication_factor = 1\ntransaction_state_replication_factor = 1\ntransaction_state_min_isr = 1\ndefault_replication_factor = 1\ndefault_min_insync_replicas = 1\n')
+    evidence = {"qualification_pass": False, "status": "incomplete", "candidate_revision_supplied": a.revision, "previous_image": PREVIOUS, "client_image": IMAGE, "commands": {}}
+    ctx.defer(_finish, ctx, path, evidence, name)
+    commands = evidence["commands"]
+    commands["config_hash"] = command_receipt(ctx, ["sha256sum", config])
+    commands["fixture_hash"] = command_receipt(ctx, ["sha256sum", "tools/kafka44/UpgradeProbe.java"])
+    commands["candidate_hash"] = command_receipt(ctx, ["sha256sum", a.candidate_binary])
+    commands["mkdir"] = command_receipt(ctx, ["mkdir", root + "/data", root + "/classes", root + "/temp"])
+    mount = ["--user", owner, "--network", "host", "-v", root + ":" + root]
+    commands["format"] = command_receipt(ctx, ["docker", "run", "--name", name + "-format"] + mount + ["--entrypoint", "/usr/bin/krabka-format", PREVIOUS, "--log-dir", root + "/data", "--standalone", "--node-id", "1", "--controller-listener", controller])
+    commands["tools"] = command_receipt(ctx, ["docker", "create", "--name", name + "-tools", IMAGE])
+    commands["libs"] = command_receipt(ctx, ["docker", "cp", name + "-tools:/opt/kafka/libs", root + "/libs"])
+    commands["compile"] = command_receipt(ctx, ["javac", "-cp", root + "/libs/*", "-d", root + "/classes", "tools/kafka44/UpgradeProbe.java"])
+    args = ["--config-file", config, "--controller-listen-addr", controller, "--metrics-listen-addr", "none", "--health-listen-addr", "none"]
+    commands["old_start"] = command_receipt(ctx, ["docker", "run", "-d", "--name", name] + mount + [PREVIOUS] + args)
+    if any([v["returncode"] for v in commands.values()]):
+        return 1
+    probe = ["java", "-cp", root + "/libs/*:" + root + "/classes", "UpgradeProbe", endpoint]
+    topic = "kafka44-upgrade-probe"
+    commands["seed"] = command_receipt(ctx, probe + ["seed", topic], 120)
+    identity = upgrade_identity(commands["seed"]["stdout"])
+    if commands["seed"]["returncode"] or not identity:
+        return 1
+    commands["old_stop"] = command_receipt(ctx, ["docker", "stop", "--timeout", "30", name], 60)
+    if commands["old_stop"]["returncode"]:
+        return 1
+    child = (ctx.std.process.command(a.candidate_binary).args(args).env("TMPDIR", root + "/temp")
+        .stdout(ctx.std.fs.create(root + "/candidate.stdout")).stderr(ctx.std.fs.create(root + "/candidate.stderr")).spawn())
+    ctx.defer(_kill_candidate, child)
+    commands["upgrade"] = command_receipt(ctx, probe + ["upgrade", topic] + identity, 120)
+    commands["candidate_stop"] = command_receipt(ctx, ["kill", "-TERM", str(child.id)])
+    for _ in range(300):
+        if child.try_wait() != None:
+            break
+        sleep(100)
+    if child.try_wait() == None:
+        evidence["status"] = "candidate-shutdown-timeout"
+        return 1
+    evidence["candidate_exit"] = child.wait().code
+    commands["rollback_start"] = command_receipt(ctx, ["docker", "start", name])
+    commands["rollback"] = command_receipt(ctx, probe + ["rollback", topic] + identity, 120)
+    commands["rollback_stop"] = command_receipt(ctx, ["docker", "stop", "--timeout", "30", name], 60)
+    passed = evidence["candidate_exit"] == 0 and not any([v["returncode"] for v in commands.values()])
+    evidence["status"] = "scoped-pass" if passed else "failure"
+    evidence["limits"] = ["Single-node RF1 clean replacement, not a rolling mixed-version quorum", "No feature finalization: preserved metadata30/share1 only", "No rollback after irreversible metadata change or power-loss claim", "Caller supplies candidate revision; executable digest retained separately"]
+    return 0 if passed else 1
+
+kafka44_upgrade = task(
+    summary = "Qualify fresh released-data upgrade/rollback without implicit feature finalization",
+    implementation = _impl,
+    args = {"revision": args.string(default = "", description = "Supplied full candidate source SHA."), "candidate_binary": args.string(default = "", description = "Absolute prebuilt candidate executable."), "output": args.string(default = "", description = "Fresh private evidence/data directory, never existing cluster data."), "port": args.int(default = 65392, description = "Unused loopback broker port; controller uses next port.")},
+)
