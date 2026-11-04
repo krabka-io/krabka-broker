@@ -107,6 +107,7 @@ impl SharePartitionLeaderManager {
                             _ = mgr.persist_if_dirty(&group, topic_id, partition, Some(&cell), &mut st) => {}
                         }
                     }
+                    drop(st);
                 }
             }
         });
