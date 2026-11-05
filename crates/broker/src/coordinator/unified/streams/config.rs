@@ -358,13 +358,9 @@ pub struct StreamsGroupConfig {
     /// share state.
     #[default(ShareAutoOffsetReset::Latest)]
     pub share_auto_offset_reset: ShareAutoOffsetReset,
-    /// Kafka's internal `unstable.api.versions.enable`. While it is
-    /// [`Disabled`][UnstableApiVersions::Disabled], the default, the group
-    /// answers as Kafka 4.3.1 does: a heartbeat response leaves
-    /// `TaskOffsetIntervalMs` at 0, `partitionsByUserEndpoint` follows 4.3.1's
-    /// `EndpointToPartitionsManager`, and a join at a full group is refused even
-    /// for a member already in it. [`Enabled`][UnstableApiVersions::Enabled]
-    /// serves Kafka trunk's behavior for those.
+    /// Kafka's internal `unstable.api.versions.enable`. Released 4.4
+    /// heartbeat intervals, endpoint mappings and known-member capacity
+    /// exemptions apply independently of this flag.
     #[default(UnstableApiVersions::Disabled)]
     pub unstable_api_versions: UnstableApiVersions,
     /// Kafka trunk's `group.streams.topology.description.plugin.class`

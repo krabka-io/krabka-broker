@@ -446,14 +446,14 @@ async fn streams_group_heartbeat_takes_32767_byte_ids_and_refuses_32768() {
             length,
         )
         .await;
-        // Kafka 4.3.1 refuses a streams member with an instance id (static
-        // membership) as `INVALID_REQUEST`, so that request creates no group.
+        // Released 4.4 accepts valid static instance IDs. The Kafka string
+        // bound still refuses oversize input before creating a group.
         assert!(
             env.broker
                 .group_coordinator
                 .find_streams(&ids.group)
                 .is_some()
-                == (length <= LIMIT && long != Long::Instance),
+                == (length <= LIMIT),
             "{label}: the group exists only when a join was taken: {response:?}"
         );
     }

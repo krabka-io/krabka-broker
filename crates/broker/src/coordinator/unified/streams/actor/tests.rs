@@ -179,17 +179,12 @@ async fn member_limit_rejects_only_new_members() {
     .await;
 }
 
-/// Kafka 4.3.1's `throwIfStreamsGroupIsFull(group)` runs on every join and
-/// counts a member that is already in the group, so a rejoin at epoch 0 to a
-/// full group is refused. Trunk exempts the known member.
+/// Released 4.4 exempts known members from capacity checks without opt-in.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_known_member_that_rejoins_a_full_group_is_refused_by_4_3_1_only() {
+async fn released_4_4_allows_a_known_member_to_rejoin_a_full_group() {
     use crate::api_catalog::UnstableApiVersions::{Disabled, Enabled};
 
-    for (unstable, expected) in [
-        (Disabled, codes::GROUP_MAX_SIZE_REACHED),
-        (Enabled, codes::NONE),
-    ] {
+    for (unstable, expected) in [(Disabled, codes::NONE), (Enabled, codes::NONE)] {
         let coord = coordinator_with_log(
             StreamsGroupConfig {
                 max_size: 1,
@@ -1612,8 +1607,8 @@ fn heartbeat_response_carries_the_recovery_lag_at_version_1_only() {
         heartbeat_interval_ms: 5_000,
         acceptable_recovery_lag_legacy: 0,
         acceptable_recovery_lag: 10_000,
-        // Kafka 4.3.1 never sets the field.
-        task_offset_interval_ms: 0,
+        // Released 4.4 sets the configured interval without opt-in.
+        task_offset_interval_ms: 60_000,
         ..Default::default()
     };
     assert!(response == expected);
@@ -1632,16 +1627,12 @@ fn heartbeat_response_carries_the_recovery_lag_at_version_1_only() {
     }
 }
 
-/// Kafka 4.3.1 never sets `TaskOffsetIntervalMs`, so a heartbeat response
-/// carries 0 on the wire. Kafka trunk sets it from
-/// `streams.task.offset.interval.ms`, whose default is one minute, and the
-/// group config answers the same only while `unstable.api.versions.enable` is
-/// on.
+/// Released 4.4 sends the configured task offset interval without opt-in.
 #[test]
-fn the_task_offset_interval_of_a_heartbeat_response_is_trunks_alone() {
+fn released_4_4_sets_task_offset_interval_without_opt_in() {
     use crate::api_catalog::UnstableApiVersions::{Disabled, Enabled};
 
-    for (unstable, expected) in [(Disabled, 0), (Enabled, 60_000)] {
+    for (unstable, expected) in [(Disabled, 60_000), (Enabled, 60_000)] {
         let config = StreamsGroupConfig {
             unstable_api_versions: unstable,
             ..undelayed()
@@ -1653,12 +1644,8 @@ fn the_task_offset_interval_of_a_heartbeat_response_is_trunks_alone() {
     }
 }
 
-/// `partitionsByUserEndpoint` follows the `EndpointToPartitionsManager` of the
-/// release. Kafka 4.3.1 lists the standby tasks alone, cuts a task's
-/// partitions to the partition count of a topic that has fewer partitions than
-/// the task has (and does nothing else), and keeps an entry that is left
-/// empty. Kafka trunk lists standby and warmup tasks together, leaves out the
-/// task partitions a topic does not have, and drops an entry with no partition.
+/// Released 4.4 endpoint mapping includes warmups and filters by actual topic
+/// partition indices even with unstable APIs disabled.
 #[test]
 fn endpoint_partitions_follow_the_endpoint_to_partitions_manager_of_each_release() {
     use {
@@ -1738,7 +1725,7 @@ fn endpoint_partitions_follow_the_endpoint_to_partitions_manager_of_each_release
             entry(&[], &[]),
         ),
     ];
-    for (name, active, (standby, warmup), released, trunk) in rows {
+    for (name, active, (standby, warmup), _old_release, released) in rows {
         let mut member = StreamsMemberState::joining("m1", "c", "h");
         member.user_endpoint = Some(("localhost".into(), 1));
         let tasks = |partitions: Vec<i32>| {
@@ -1754,7 +1741,7 @@ fn endpoint_partitions_follow_the_endpoint_to_partitions_manager_of_each_release
         let mut state = StreamsGroupState::new("g");
         state.members.insert("m1".into(), member);
 
-        for (unstable, expected) in [(Disabled, released), (Enabled, trunk)] {
+        for (unstable, expected) in [(Disabled, released.clone()), (Enabled, released)] {
             let listed = response::endpoint_to_partitions(
                 &state,
                 "m1",

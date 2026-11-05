@@ -113,8 +113,8 @@ pub fn require_feature(image: &MetadataImage, name: &str, required_level: i16) -
 ///
 /// Unlike [`require_feature`], an unfinalized `metadata.version` is treated
 /// as [`LATEST_PRODUCTION_METADATA_VERSION`], the level a cluster bootstraps
-/// at, not as an unconditional pass: CIDR hosts are Kafka trunk's, and a
-/// cluster reaches them only by finalizing 4.4-IV1 (#784).
+/// at, not as an unconditional pass: CIDR hosts require finalized 4.4-IV1.
+/// Fresh 4.4 clusters support them; explicitly older images remain gated.
 pub fn cidr_hosts_supported(image: &MetadataImage) -> bool {
     image
         .finalized_features()

@@ -18,9 +18,8 @@ use {
 /// Returns the error code and message of the first check that the request
 /// fails.
 ///
-/// Kafka 4.3.1 refuses static membership, task offsets and warmup tasks, and
-/// Kafka trunk drops those three checks, so they hold only while
-/// `unstable.api.versions.enable` is off. Both refuse source topic regexes.
+/// Kafka 4.4 supports static membership, task offsets and warmup tasks
+/// without unstable APIs. Source topic regexes remain unsupported.
 /// The error code and message that a refused request is answered with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RequestError {
@@ -30,7 +29,7 @@ pub(super) struct RequestError {
 
 pub(super) fn request_error(
     req: &StreamsGroupHeartbeatRequest,
-    unstable: UnstableApiVersions,
+    _unstable: UnstableApiVersions,
 ) -> Option<RequestError> {
     let invalid = |message: &str| {
         Some(RequestError {
@@ -39,24 +38,6 @@ pub(super) fn request_error(
         })
     };
 
-    if unstable == UnstableApiVersions::Disabled {
-        if req.instance_id.is_some() {
-            return invalid("Static membership is not yet supported.");
-        }
-        if req.task_offsets.is_some() {
-            return invalid("TaskOffsets are not supported yet.");
-        }
-        if req.task_end_offsets.is_some() {
-            return invalid("TaskEndOffsets are not supported yet.");
-        }
-        if req
-            .warmup_tasks
-            .as_ref()
-            .is_some_and(|tasks| !tasks.is_empty())
-        {
-            return invalid("WarmupTasks are not supported yet.");
-        }
-    }
     if req
         .topology
         .iter()
@@ -298,12 +279,10 @@ mod tests {
     }
     rstest_bdd_macros::scenarios!("tests/features/handler_streams_request_validation.feature", fixtures = [streams_validation: StreamsRequestValidation]);
 
-    /// Kafka 4.3.1's `throwIfStreamsGroupHeartbeatRequestIsUsingUnsupportedFeatures`
-    /// refuses, in this order, an instance id, task offsets, task end offsets,
-    /// non-empty warmup tasks and a source topic regex, before it checks
-    /// anything else. Kafka trunk keeps only the regex check.
+    /// Released 4.4 accepts static membership, offsets and warmup tasks
+    /// under both flag settings, but retains ordinary validation and regex rejection.
     #[test]
-    fn version_4_3_1_refuses_static_membership_offsets_and_warmup_tasks() {
+    fn released_4_4_accepts_static_membership_offsets_and_warmup_tasks() {
         use krabka_protocol::owned::common::streams_group_heartbeat_request::task_offset::TaskOffset;
 
         let regex_topology = Topology {
@@ -466,13 +445,13 @@ mod tests {
                 )),
             ),
         ];
-        for (name, request, released, trunk) in rows {
+        for (name, request, _old_release, released) in rows {
             check!(
                 request_error(&request, UnstableApiVersions::Disabled) == released,
-                "{name}: 4.3.1"
+                "{name}: released 4.4 without opt-in"
             );
             check!(
-                request_error(&request, UnstableApiVersions::Enabled) == trunk,
+                request_error(&request, UnstableApiVersions::Enabled) == released,
                 "{name}: trunk"
             );
         }

@@ -1,14 +1,4 @@
-//! Static membership (`instance_id`) in a streams group, as Kafka 4.3.1 serves
-//! it: not at all.
-//!
-//! Kafka 4.3.1's `GroupCoordinatorService.streamsGroupHeartbeat` runs
-//! `throwIfStreamsGroupHeartbeatRequestIsUsingUnsupportedFeatures` before it
-//! schedules the write, and that check refuses any request with an instance id
-//! with `INVALID_REQUEST` and "Static membership is not yet supported.". The
-//! coordinator never sees the request, so it writes no record, creates no
-//! group and changes no member. Its own static paths (`streamsGroupLeave` and
-//! `streamsGroupHeartbeat`) throw `UnsupportedOperationException` and are
-//! unreachable. The broker's default configuration serves 4.3.1.
+//! Empty static instance ids are rejected before coordinator mutation in Kafka 4.4.
 
 use {
     crate::streams_harness::{
@@ -56,7 +46,7 @@ async fn record_static_streams_group(
         Some(describe(streams_group.client(), &streams_group.group).await);
 }
 
-#[when("the broker receives these instance-1 streams requests")]
+#[when("the broker receives these empty-instance streams requests")]
 async fn request_static_streams_membership(
     streams_group: &StreamsGroupScenario,
     static_streams_requests: &mut StaticStreamsRequests,
@@ -104,7 +94,7 @@ async fn request_static_streams_membership(
             streams_group
                 .client()
                 .send(StreamsGroupHeartbeatRequest {
-                    instance_id: Some("instance-1".into()),
+                    instance_id: Some(String::new()),
                     ..request
                 })
                 .await
@@ -113,12 +103,12 @@ async fn request_static_streams_membership(
     }
 }
 
-#[then("all seven static requests return the complete unsupported-static-membership refusal")]
+#[then("all seven static requests return the complete empty-instance refusal")]
 fn unsupported_static_streams_membership(static_streams_requests: &StaticStreamsRequests) {
     check!(static_streams_requests.answers.len() == 7);
     let refusal = StreamsGroupHeartbeatResponse {
         error_code: INVALID_REQUEST,
-        error_message: Some("Static membership is not yet supported.".into()),
+        error_message: Some("InstanceId can't be empty.".into()),
         ..Default::default()
     };
     for answer in &static_streams_requests.answers {

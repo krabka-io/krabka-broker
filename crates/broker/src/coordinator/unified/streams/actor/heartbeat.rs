@@ -18,7 +18,6 @@ use {
         response::{ResponseDelta, build_assignment_resp, endpoint_to_partitions, error_resp},
     },
     crate::{
-        api_catalog::UnstableApiVersions,
         codes,
         coordinator::unified::{
             ClientIdentity,
@@ -152,14 +151,10 @@ async fn handle_heartbeat_inner(
     }
 
     // ─── Group size ──────────────────────────────────────────────
-    // Kafka's `throwIfStreamsGroupIsFull` runs on every join. Kafka trunk does
-    // not count a member that is already in the group, and 4.3.1 does: a
-    // known member that rejoins a full group is refused too.
+    // Kafka 4.4 exempts a member already in the group from the capacity
+    // check. Static replacements have already replaced their previous id.
     let known_member = actor.state.members.contains_key(&req.member_id);
-    if req.member_epoch == 0
-        && actor.state.members.len() >= config.max_size
-        && (!known_member || config.unstable_api_versions == UnstableApiVersions::Disabled)
-    {
+    if req.member_epoch == 0 && actor.state.members.len() >= config.max_size && !known_member {
         return Ok(error_resp(
             codes::GROUP_MAX_SIZE_REACHED,
             Some(format!(
