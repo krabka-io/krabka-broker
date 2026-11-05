@@ -1,11 +1,10 @@
-//! Kafka trunk's `max.decompressed.message.bytes` on a by-timestamp
+//! Kafka 4.4's `max.decompressed.message.bytes` on a by-timestamp
 //! `ListOffsets`.
 //!
 //! `UnifiedLog.fetchOffsetByTimestamp` decompresses the batch a timestamp or
 //! `MAX_TIMESTAMP` lookup lands in, and a record above the topic's limit throws
 //! `InvalidRecordException`, which `Errors.forException` answers as
-//! `INVALID_RECORD`. Kafka 4.3.1 has no such key, so a broker that does not
-//! serve trunk's keys answers every lookup as it always did.
+//! `INVALID_RECORD`. This released key applies with unstable APIs disabled.
 //!
 //! The records go straight into the partition's log, past `Produce`'s own
 //! check, the way a record that predates a lowered limit is already there.
@@ -178,11 +177,10 @@ async fn a_trunk_broker_refuses_a_lookup_that_reads_an_oversized_record() {
     broker.shutdown().await;
 }
 
-/// Kafka 4.3.1 has no `max.decompressed.message.bytes`: a broker that does not
-/// serve trunk's keys stores the broker config as an unknown key and reads none
-/// of it, so a lookup answers as it always did.
+/// Released 4.4 enforces the configured decompressed-record bound during
+/// timestamp lookup, even with unstable APIs disabled.
 #[tokio::test]
-async fn a_default_broker_ignores_the_limit_on_a_lookup() {
+async fn a_default_broker_enforces_the_limit_on_a_lookup() {
     let ClientBroker {
         broker,
         client,
@@ -191,14 +189,12 @@ async fn a_default_broker_ignores_the_limit_on_a_lookup() {
 
     set_cluster_limit(&broker, "100", 1).await;
 
+    for timestamp in [1_500, MAX_TIMESTAMP] {
+        assert!(list_one(&client, TOPIC, timestamp).await == refused());
+    }
+    // An exact record-body bound admits the same stored record.
+    set_cluster_limit(&broker, "1007", 2).await;
     check_large_record_lookups(&client).await;
-    assert!(
-        broker
-            .partition_log_config_for_test(TOPIC, 0)
-            .expect("the partition is local")
-            .max_decompressed_record
-            == None
-    );
 
     drop(client);
     broker.shutdown().await;
