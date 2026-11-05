@@ -12,7 +12,7 @@ those labels are not a current claim that executed scenarios never ran.
 | --- | --- | --- |
 | DLQ | Eight size/header/payload boundaries plus restart; historical three-node ARCHIVING crash/destination failover and lost-confirmation duplicate witnesses | Coupled share-state-owner/DLQ-follower loss now passes with the measured watermark fix; single-node denied inter-broker destination WRITE measured (zero destination records, source lag0); RF3 denied destination remains unmeasured; minimum measured1→2 |
 | Delayed uploads | Age/byte/dynamic/retention-derived delay and failure checks; pending-delay crash, natural eviction and48 exact remote reads | Mid-upload interruption remains unmeasured; RF3 leader-loss/new-leader remote reads now pass |
-| Routing | Six identity cases plus auth/preauth;40 explicit two-node before/after crash/restart assertions | Cluster replacement is not established by node-preserving restart; pipelined mutation behavior measured below |
+| Routing | Six identity cases plus auth/preauth;40 explicit two-node before/after crash/restart assertions | Explicit same-endpoint cluster replacement and pipelined mutation behavior now measured below; automatic client-cache invalidation remains outside these fixtures |
 | Controller removal | Positive register/remove/retry, voter rejection, metadata32/33 boundary and same-data crash durability; native forwarding regression | Further released/native forwarding/failure/authorization-race permutations |
 | Topic-ID transactions | Modern16/legacy15 positive cases, pending single-node crash and RF3 coordinator/offsets-owner movement with commit/abort | Deterministic mid-marker cut and power-loss durability are not claimed |
 | Streams | Positive lifecycle9; durable backend13 strict set/get/delete failure/repair cases and exact-source restart, with measured legacy DeleteGroups correction | RF3 shared-backend owner movement passes; additional authorization/concurrent-write permutations unmeasured |
@@ -455,3 +455,17 @@ connection-wide mutation fence. No incompatible native fence is added.
 The candidate is the explicitly hashed retained intermediate watermark-fix
 binary, not the final frozen1991 build. Cluster replacement, default graduation
 and SASL/controller permutations are not inferred; qualification remains false.
+
+## Same-endpoint replacement with a different cluster (2026-11-05)
+
+[`kafka44-routing-replacement-20261105.json`](../../qualification/kafka44-routing-replacement-20261105.json)
+retains actual sequential replacement, not a wrong-string simulation. Each
+endpoint first serves one cluster; after that process stops, the same host/port
+serves different persistent cluster data. Metadata12 confirms the changed
+cluster ID. Released and enabled native both accept the current identity and
+reject the previous cluster identity with REBOOTSTRAP_REQUIRED129: six strict
+assertions across the two before/after sequences. Both generations retain node1.
+The client explicitly sends its stale identity; automatic client cache
+invalidation/rebootstrap behavior is not tested. Native source/binary identity
+is the intermediate pinned watermark-fix build, not final1991; no default or
+full qualification claim follows. Owned replacement processes are stopped.

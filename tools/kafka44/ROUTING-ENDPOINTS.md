@@ -57,3 +57,22 @@ the pipelined mutation; the handshake does not fence other requests. The paired
 the same behavior on enabled native code. Raw config rows differ and are not
 claimed identical. This does not actually replace a cluster or test a stale
 client after replacement.
+
+## Actual cluster replacement on the same endpoint
+
+Compile `RoutingReplacement.java` alongside `ProtocolScenarios.java` and
+`RoutingEndpoints.java` using the pinned4.4 classpath. With the first dedicated
+cluster running, invoke:
+
+```
+java -cp "CLASSES:RELEASED_LIBS/*" RoutingReplacement HOST:PORT NODE -
+```
+
+Save its `CLUSTER` row, stop only that owned cluster, then start a **different**
+cluster on the identical broker host/port and node ID. Do not reuse or reformat
+the original data. Invoke the same class with the saved ID instead of `-`. It
+requires Metadata12 to report a different cluster, accepts its current identity
+and rejects the stale one with129. The paired
+[receipt](../../qualification/kafka44-routing-replacement-20261105.json) retains
+actual commands, configuration, distinct identities and six assertions. This is
+not a client-library cache-invalidation or automatic rebootstrap test.
