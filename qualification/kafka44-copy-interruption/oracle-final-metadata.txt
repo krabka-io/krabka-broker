@@ -1,0 +1,118 @@
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-30/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-40/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-22/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-18/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-45/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-7/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-27/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-4/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-31/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-48/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-36/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-41/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-28/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-19/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-6/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-32/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-37/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-8/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-38/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-23/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-33/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-43/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-35/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-0/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-47/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-3/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-20/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-12/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-24/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-2/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-1/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-17/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-14/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-13/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-29/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-26/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-49/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-10/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-21/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-39/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-34/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-46/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-15/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-44/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-5/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-11/00000000000000000000.log
+Log starting offset: 0
+baseOffset: 0 lastOffset: 0 count: 1 baseSequence: 0 lastSequence: 0 producerId: 0 producerEpoch: 0 partitionLeaderEpoch: 0 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 0 CreateTime: 1793837132038 size: 204 magic: 2 compresscodec: none crc: 3726306017 isvalid: true
+| offset: 0 CreateTime: 1793837132038 keySize: -1 valueSize: 134 sequence: 0 headerKeys: [] payload: RemoteLogSegmentMetadata{remoteLogSegmentId=RemoteLogSegmentId{topicIdPartition=9HqafFeQQg69VixUXmNbfg:copy-interrupted-oracle-20261105-0, id=SnMvoGHFRACxJL3l0QvwcA}, startOffset=0, endOffset=14, brokerId=1, maxTimestampMs=1793837101683, eventTimestampMs=1793837132029, segmentLeaderEpochs={0=0}, segmentSizeInBytes=984135, customMetadata=Optional.empty, state=COPY_SEGMENT_STARTED, txnIdxEmpty=true}
+baseOffset: 1 lastOffset: 1 count: 1 baseSequence: 0 lastSequence: 0 producerId: 1000 producerEpoch: 0 partitionLeaderEpoch: 2 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 204 CreateTime: 1793837197088 size: 204 magic: 2 compresscodec: none crc: 1534863897 isvalid: true
+| offset: 1 CreateTime: 1793837197088 keySize: -1 valueSize: 134 sequence: 0 headerKeys: [] payload: RemoteLogSegmentMetadata{remoteLogSegmentId=RemoteLogSegmentId{topicIdPartition=9HqafFeQQg69VixUXmNbfg:copy-interrupted-oracle-20261105-0, id=S8JzZa5VSv2xulqxU9worQ}, startOffset=0, endOffset=14, brokerId=1, maxTimestampMs=1793837101683, eventTimestampMs=1793837197084, segmentLeaderEpochs={0=0}, segmentSizeInBytes=984135, customMetadata=Optional.empty, state=COPY_SEGMENT_STARTED, txnIdxEmpty=true}
+baseOffset: 2 lastOffset: 2 count: 1 baseSequence: 1 lastSequence: 1 producerId: 1000 producerEpoch: 0 partitionLeaderEpoch: 2 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 408 CreateTime: 1793837197168 size: 159 magic: 2 compresscodec: none crc: 3028456755 isvalid: true
+| offset: 2 CreateTime: 1793837197168 keySize: -1 valueSize: 89 sequence: 1 headerKeys: [] payload: RemoteLogSegmentMetadataUpdate{remoteLogSegmentId=RemoteLogSegmentId{topicIdPartition=9HqafFeQQg69VixUXmNbfg:copy-interrupted-oracle-20261105-0, id=S8JzZa5VSv2xulqxU9worQ}, customMetadata=Optional.empty, state=COPY_SEGMENT_FINISHED, eventTimestampMs=1793837197168, brokerId=1}
+baseOffset: 3 lastOffset: 3 count: 1 baseSequence: 2 lastSequence: 2 producerId: 1000 producerEpoch: 0 partitionLeaderEpoch: 2 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 567 CreateTime: 1793837197227 size: 204 magic: 2 compresscodec: none crc: 1903452644 isvalid: true
+| offset: 3 CreateTime: 1793837197227 keySize: -1 valueSize: 134 sequence: 2 headerKeys: [] payload: RemoteLogSegmentMetadata{remoteLogSegmentId=RemoteLogSegmentId{topicIdPartition=9HqafFeQQg69VixUXmNbfg:copy-interrupted-oracle-20261105-0, id=edvmmF9IQQS9OyVYGgSCWw}, startOffset=15, endOffset=29, brokerId=1, maxTimestampMs=1793837101785, eventTimestampMs=1793837197226, segmentLeaderEpochs={0=15}, segmentSizeInBytes=984135, customMetadata=Optional.empty, state=COPY_SEGMENT_STARTED, txnIdxEmpty=true}
+baseOffset: 4 lastOffset: 4 count: 1 baseSequence: 3 lastSequence: 3 producerId: 1000 producerEpoch: 0 partitionLeaderEpoch: 2 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 771 CreateTime: 1793837197287 size: 159 magic: 2 compresscodec: none crc: 3749096234 isvalid: true
+| offset: 4 CreateTime: 1793837197287 keySize: -1 valueSize: 89 sequence: 3 headerKeys: [] payload: RemoteLogSegmentMetadataUpdate{remoteLogSegmentId=RemoteLogSegmentId{topicIdPartition=9HqafFeQQg69VixUXmNbfg:copy-interrupted-oracle-20261105-0, id=edvmmF9IQQS9OyVYGgSCWw}, customMetadata=Optional.empty, state=COPY_SEGMENT_FINISHED, eventTimestampMs=1793837197287, brokerId=1}
+baseOffset: 5 lastOffset: 5 count: 1 baseSequence: 4 lastSequence: 4 producerId: 1000 producerEpoch: 0 partitionLeaderEpoch: 2 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 930 CreateTime: 1793837197344 size: 204 magic: 2 compresscodec: none crc: 1801250258 isvalid: true
+| offset: 5 CreateTime: 1793837197344 keySize: -1 valueSize: 134 sequence: 4 headerKeys: [] payload: RemoteLogSegmentMetadata{remoteLogSegmentId=RemoteLogSegmentId{topicIdPartition=9HqafFeQQg69VixUXmNbfg:copy-interrupted-oracle-20261105-0, id=Jdv8dq_ETFmcEQ5E_qxd7w}, startOffset=30, endOffset=44, brokerId=1, maxTimestampMs=1793837101888, eventTimestampMs=1793837197344, segmentLeaderEpochs={0=30}, segmentSizeInBytes=984135, customMetadata=Optional.empty, state=COPY_SEGMENT_STARTED, txnIdxEmpty=true}
+baseOffset: 6 lastOffset: 6 count: 1 baseSequence: 5 lastSequence: 5 producerId: 1000 producerEpoch: 0 partitionLeaderEpoch: 2 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 1134 CreateTime: 1793837197404 size: 159 magic: 2 compresscodec: none crc: 2324369068 isvalid: true
+| offset: 6 CreateTime: 1793837197404 keySize: -1 valueSize: 89 sequence: 5 headerKeys: [] payload: RemoteLogSegmentMetadataUpdate{remoteLogSegmentId=RemoteLogSegmentId{topicIdPartition=9HqafFeQQg69VixUXmNbfg:copy-interrupted-oracle-20261105-0, id=Jdv8dq_ETFmcEQ5E_qxd7w}, customMetadata=Optional.empty, state=COPY_SEGMENT_FINISHED, eventTimestampMs=1793837197404, brokerId=1}
+baseOffset: 7 lastOffset: 7 count: 1 baseSequence: 6 lastSequence: 6 producerId: 1000 producerEpoch: 0 partitionLeaderEpoch: 2 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 1293 CreateTime: 1793837216977 size: 204 magic: 2 compresscodec: none crc: 573304514 isvalid: true
+| offset: 7 CreateTime: 1793837216977 keySize: -1 valueSize: 134 sequence: 6 headerKeys: [] payload: RemoteLogSegmentMetadata{remoteLogSegmentId=RemoteLogSegmentId{topicIdPartition=9HqafFeQQg69VixUXmNbfg:copy-interrupted-oracle-20261105-0, id=L303biOdTHGwy0hDWvabRA}, startOffset=45, endOffset=47, brokerId=1, maxTimestampMs=1793837101907, eventTimestampMs=1793837216977, segmentLeaderEpochs={0=45}, segmentSizeInBytes=196827, customMetadata=Optional.empty, state=COPY_SEGMENT_STARTED, txnIdxEmpty=true}
+baseOffset: 8 lastOffset: 8 count: 1 baseSequence: 7 lastSequence: 7 producerId: 1000 producerEpoch: 0 partitionLeaderEpoch: 2 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 1497 CreateTime: 1793837217037 size: 159 magic: 2 compresscodec: none crc: 2636137694 isvalid: true
+| offset: 8 CreateTime: 1793837217037 keySize: -1 valueSize: 89 sequence: 7 headerKeys: [] payload: RemoteLogSegmentMetadataUpdate{remoteLogSegmentId=RemoteLogSegmentId{topicIdPartition=9HqafFeQQg69VixUXmNbfg:copy-interrupted-oracle-20261105-0, id=L303biOdTHGwy0hDWvabRA}, customMetadata=Optional.empty, state=COPY_SEGMENT_FINISHED, eventTimestampMs=1793837217037, brokerId=1}
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-9/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-25/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-42/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/oracle-data/__remote_log_metadata-16/00000000000000000000.log
+Log starting offset: 0

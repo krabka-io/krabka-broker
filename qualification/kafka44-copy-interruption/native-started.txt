@@ -1,0 +1,102 @@
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-30/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-40/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-22/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-18/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-45/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-7/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-27/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-4/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-31/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-48/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-36/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-41/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-28/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-19/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-6/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-32/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-37/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-8/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-38/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-23/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-33/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-43/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-35/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-0/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-47/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-3/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-20/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-12/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-24/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-2/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-1/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-17/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-14/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-13/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-29/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-26/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-49/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-10/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-21/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-39/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-34/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-46/00000000000000000000.log
+Log starting offset: 0
+baseOffset: 0 lastOffset: 0 count: 1 baseSequence: 0 lastSequence: 0 producerId: 1 producerEpoch: 0 partitionLeaderEpoch: 0 isTransactional: false isControl: false deleteHorizonMs: OptionalLong.empty position: 0 CreateTime: 1793837317401 size: 203 magic: 2 compresscodec: none crc: 1861846336 isvalid: true
+| offset: 0 CreateTime: 1793837317401 keySize: -1 valueSize: 133 sequence: 0 headerKeys: [] payload: RemoteLogSegmentMetadata{remoteLogSegmentId=RemoteLogSegmentId{topicIdPartition=GRALXKsPQ3SME--k4G3xhA:copy-interrupted-fixed-20261105-0, id=csNxkNhiTSeHNUvBpUij4A}, startOffset=0, endOffset=14, brokerId=1, maxTimestampMs=1793837258295, eventTimestampMs=1793837317400, segmentLeaderEpochs={0=0}, segmentSizeInBytes=984135, customMetadata=Optional.empty, state=COPY_SEGMENT_STARTED, txnIdxEmpty=true}
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-15/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-44/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-5/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-11/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-9/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-25/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-42/00000000000000000000.log
+Log starting offset: 0
+Dumping .private/copy-interruption-runtime/fixed/data/__remote_log_metadata-16/00000000000000000000.log
+Log starting offset: 0

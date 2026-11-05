@@ -1,0 +1,2 @@
+WITNESS	local-offset0-absent	/home/matt/.openclaw/workspace/coordinator/.private/copy-interruption-runtime/oracle-data/copy-interrupted-oracle-20261105-0/00000000000000000000.log
+SCENARIO	post-eviction-restart-read-exact-48	PASS

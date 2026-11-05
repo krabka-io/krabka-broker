@@ -12,6 +12,10 @@ public class RecordingStorage implements RemoteStorageManager {
         try {
             Path target=dir(m); Files.createDirectories(target);
             Files.copy(d.logSegment(),target.resolve("log"),StandardCopyOption.REPLACE_EXISTING);
+            if(Files.exists(root.resolve("gate-enabled"))) {
+                Files.writeString(root.resolve("gate-entered"),target.resolve("log").toString(),StandardOpenOption.CREATE_NEW);
+                while(Files.exists(root.resolve("gate-enabled"))) Thread.sleep(100);
+            }
             Files.copy(d.offsetIndex(),target.resolve("OFFSET"),StandardCopyOption.REPLACE_EXISTING);
             Files.copy(d.timeIndex(),target.resolve("TIMESTAMP"),StandardCopyOption.REPLACE_EXISTING);
             Files.copy(d.producerSnapshotIndex(),target.resolve("PRODUCER_SNAPSHOT"),StandardCopyOption.REPLACE_EXISTING);

@@ -276,3 +276,11 @@ optional indexes with the SPI's `RemoteResourceNotFoundException`; a generic
 storage failure incorrectly makes the released remote reader retry indefinitely.
 These checks cover restart while copying is **delayed**, not interruption inside
 an upload, leader movement, power-loss durability or production storage backends.
+
+### Inside-copy interruption
+
+See [COPY-INTERRUPTION.md](COPY-INTERRUPTION.md) for process-scoped native and
+released payload-close gates, actual STARTED-only metadata witnesses, owned
+SIGKILL/reopen steps and exact post-eviction reads. The retained receipt records
+a released4.4/retained-native8eab7ff8 paired recovery pass, plus the incomplete
+earlier baseline and temporary startup readiness warnings. The gate is inactive without explicit owned fixture configuration.
