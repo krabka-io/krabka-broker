@@ -44,10 +44,10 @@ use {
 
 /// The Kafka release this suite compares krabka against.
 ///
-/// 4.3.1 is the newest image //bazel/images pins, and the newest release is the
+/// 4.4.0 is the newest image //bazel/images pins, and the newest release is the
 /// right oracle for a table that is meant to be current: an older one would
 /// report an absent key for every API Kafka has added since.
-pub const ORACLE_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";
+pub const ORACLE_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.4.0";
 
 /// The tool, at its path inside the `apache/kafka` image.
 const TOOL: &str = "/opt/kafka/bin/kafka-broker-api-versions.sh";

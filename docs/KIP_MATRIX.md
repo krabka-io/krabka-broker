@@ -183,7 +183,7 @@ asserts krabka's against
 which is where these two version columns come from. A range that moves, or a key
 that appears on one side only, changes that file and so changes this table.
 
-The oracle is `mirror.gcr.io/apache/kafka:4.3.1@sha256:ccd1314e47ec76909e01f86308b4dcf2064f19f7c89759234322314b0e319e26`.
+The oracle is `mirror.gcr.io/apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b`.
 
 It is a stock single-node KRaft broker, read on its PLAINTEXT *broker* listener.
 krabka is read the same way: one client listener, no client-telemetry receiver,
@@ -222,7 +222,7 @@ empty.
 | DescribeGroups | 15 | 0-6 | 0-6 | match | -- |
 | ListGroups | 16 | 0-5 | 0-5 | match | -- |
 | SaslHandshake | 17 | 0-1 | 0-1 | match | -- |
-| ApiVersions | 18 | 0-4 | 0-4 | match | -- |
+| ApiVersions | 18 | 0-5 | 0-5 | match | -- |
 | CreateTopics | 19 | 2-7 | 2-7 | match | -- |
 | DeleteTopics | 20 | 1-6 | 1-6 | match | -- |
 | DeleteRecords | 21 | 0-2 | 0-2 | match | -- |
@@ -232,7 +232,7 @@ empty.
 | AddOffsetsToTxn | 25 | 0-4 | 0-4 | match | -- |
 | EndTxn | 26 | 0-5 | 0-5 | match | -- |
 | WriteTxnMarkers | 27 | 1-2 | 1-2 | match | -- |
-| TxnOffsetCommit | 28 | 0-5 | 0-5 | match | -- |
+| TxnOffsetCommit | 28 | 0-6 | 0-6 | match | -- |
 | DescribeAcls | 29 | 1-3 | 1-3 | match | -- |
 | CreateAcls | 30 | 1-3 | 1-3 | match | -- |
 | DeleteAcls | 31 | 1-3 | 1-3 | match | -- |
@@ -246,7 +246,7 @@ empty.
 | RenewDelegationToken | 39 | 1-2 | 1-2 | match | -- |
 | ExpireDelegationToken | 40 | 1-2 | 1-2 | match | -- |
 | DescribeDelegationToken | 41 | 1-3 | 1-3 | match | -- |
-| DeleteGroups | 42 | 0-2 | 0-2 | match | -- |
+| DeleteGroups | 42 | 0-3 | 0-3 | match | -- |
 | ElectLeaders | 43 | 0-2 | 0-2 | match | -- |
 | IncrementalAlterConfigs | 44 | 0-1 | 0-1 | match | -- |
 | AlterPartitionReassignments | 45 | 0-1 | 0-1 | match | -- |
@@ -278,11 +278,13 @@ empty.
 | WriteShareGroupState | 85 | 0-1 | 0-1 | match | -- |
 | DeleteShareGroupState | 86 | 0-0 | 0-0 | match | -- |
 | ReadShareGroupStateSummary | 87 | 0-1 | 0-1 | match | -- |
-| StreamsGroupHeartbeat | 88 | 0-0 | 0-0 | match | -- |
-| StreamsGroupDescribe | 89 | 0-0 | 0-0 | match | -- |
+| StreamsGroupHeartbeat | 88 | 0-1 | 0-1 | match | -- |
+| StreamsGroupDescribe | 89 | 0-1 | 0-1 | match | -- |
 | DescribeShareGroupOffsets | 90 | 0-1 | 0-1 | match | -- |
 | AlterShareGroupOffsets | 91 | 0-0 | 0-0 | match | -- |
 | DeleteShareGroupOffsets | 92 | 0-0 | 0-0 | match | -- |
+| StreamsGroupTopologyDescriptionUpdate | 93 | 0-0 | 0-0 | match | -- |
+| UnregisterController | 94 | 0-0 | 0-0 | match | -- |
 
 The Bazel Docker lane supplies each image from a digest-pinned OCI repository.
 CI regenerates this page and fails when the test names, lane, image tag, digest,

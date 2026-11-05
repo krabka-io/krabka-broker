@@ -80,7 +80,7 @@ pub struct ApiRow {
 ///
 /// It is empty (#784): with `unstable.api.versions.enable` and
 /// `legacy_request_versions_enable` at their defaults, which is how the suite
-/// starts krabka, every listener advertises exactly Kafka 4.3.1's table. The
+/// starts krabka, every listener advertises exactly Kafka 4.4.0's table. The
 /// Kafka trunk versions krabka implements (`ApiVersions` v5, `TxnOffsetCommit`
 /// v6, the streams v1 pair, api keys 93 and 94) and the pre-4.0 versions it
 /// still decodes (`Fetch` v0-v3, `ListOffsets` v0) are opt-ins, recorded in
@@ -165,7 +165,7 @@ pub struct DivergenceReport {
 struct DivergenceSetup<'a> {
     #[default(RECORDED)]
     intents: Intents<'a>,
-    #[default("mirror.gcr.io/apache/kafka:4.3.1")]
+    #[default("mirror.gcr.io/apache/kafka:4.4.0")]
     oracle_image: &'a str,
 }
 
@@ -186,7 +186,7 @@ impl DivergenceReport {
         krabka: &[ApiVersion],
         kafka: &[ApiVersion],
         #[builder(default = RECORDED)] intents: Intents<'_>,
-        #[builder(default = "mirror.gcr.io/apache/kafka:4.3.1")] oracle_image: &'_ str,
+        #[builder(default = "mirror.gcr.io/apache/kafka:4.4.0")] oracle_image: &'_ str,
     ) -> Self {
         let setup = DivergenceSetup {
             intents,

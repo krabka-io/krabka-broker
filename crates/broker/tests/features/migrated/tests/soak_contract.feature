@@ -9,5 +9,5 @@ Feature: Declared sustained-load and lifecycle objectives hold against running b
 
   Scenario: an unsupported rollback is refused before it damages data
     Given bench/soak/lifecycle.yaml declares the source release for an unsupported rollback
-    When the candidate finalizes metadata.version 4.4-IV2, the source release attempts rollback and the candidate reopens its record
+    When the candidate finalizes metadata.version 4.5-IV0, the source release attempts rollback and the candidate reopens its record
     Then the refused rollback changes no durable file and the candidate reads the original record back

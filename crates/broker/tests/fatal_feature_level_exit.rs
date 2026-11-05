@@ -6,7 +6,7 @@
 //! Kafka's `QuorumController` gives a failed activation to its
 //! `fatalFaultHandler`. In both cases the `ProcessTerminatingFaultHandler`
 //! that the controller server installs halts the process with status 1. One
-//! case formats a node at `4.4-IV2`, an unstable `metadata.version` in Kafka
+//! case formats a node at `4.5-IV0`, an unstable `metadata.version` in Kafka
 //! 4.3, and boots the binary without `unstable.feature.versions.enable`. The
 //! formatted bootstrap records finalize the unstable level as soon as the node
 //! leads its own quorum. The other case formats bootstrap records that create
@@ -92,14 +92,14 @@ fn fatal_startup() -> FatalControllerStartup {
         stdout: String::new(),
     }
 }
-#[rstest_bdd_macros::given("standalone node 1 is formatted at unstable metadata release 4.4-IV2")]
+#[rstest_bdd_macros::given("standalone node 1 is formatted at unstable metadata release 4.5-IV0")]
 fn unsupported_controller_bootstrap(fatal_startup: &mut FatalControllerStartup) {
     format_standalone(
         &fatal_startup.directory.path().join("data"),
         fatal_startup.controller_port,
         &[
             "--release-version",
-            "4.4-IV2",
+            "4.5-IV0",
             "--unstable-feature-versions-enable",
         ],
         Vec::new(),

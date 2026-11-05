@@ -466,11 +466,11 @@ mod tests {
         tokio_util::sync::CancellationToken,
     };
 
-    // Kafka 4.3 supports `metadata.version` up to 30, and 33 (`4.4-IV2`) is one
+    // Kafka 4.3 supports `metadata.version` up to 33, and 34 (`4.5-IV0`) is one
     // of trunk's unstable levels.
     const FAULT: &str = "Tried to apply FeatureLevelRecord \
-        FeatureLevelRecord(name='metadata.version', featureLevel=33), \
-        but this controller only supports versions 7-30";
+        FeatureLevelRecord(name='metadata.version', featureLevel=34), \
+        but this controller only supports versions 7-33";
 
     const CLEAN_SHUTDOWN_PROOF: &str = ".kafka_cleanshutdown";
 
@@ -487,7 +487,7 @@ mod tests {
             .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1FeatureLevel(
                 krabka_metadata::FeatureLevelRecord {
                     name: "metadata.version".into(),
-                    level: 33,
+                    level: 34,
                 },
             ))
             .await

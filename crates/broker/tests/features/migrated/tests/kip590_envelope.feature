@@ -85,7 +85,7 @@ Feature: Controller envelopes preserve embedded client identity protocol and aut
     When the valid CreateTopics frame for envelope-after-refusals is forwarded with 2 trailing bytes removed
     Then the envelope returns error code 35 with response data absent
     When embedded API key 93 version 0 with an empty body is forwarded
-    Then the envelope returns error code 35 with response data absent
+    Then the envelope returns error code 42 with response data absent
     When embedded API key 5 version 0 with an empty body is forwarded
     Then the envelope returns error code 35 with response data absent
     When embedded API key 0 version 9 with an empty body is forwarded
@@ -94,7 +94,7 @@ Feature: Controller envelopes preserve embedded client identity protocol and aut
     Then the envelope returns error code 0 with response data present
     And controller metadata contains topic envelope-after-refusals with 1 partitions
 
-  Scenario Outline: Unstable API configuration controls forwarding of a trunk API
+  Scenario Outline: Released controller API forwarding works with either unstable setting
     Given unstable API versions are enabled <enabled>
     And the controller uses the compatibility authorizer on its plaintext listener
     And the forwarded User principal is alice with delegation token flag false
@@ -102,7 +102,7 @@ Feature: Controller envelopes preserve embedded client identity protocol and aut
     Then the envelope returns error code <code> with response data <presence>
     Examples:
       | enabled | code | presence |
-      | false | 35 | absent |
+      | false | 0 | present |
       | true | 0 | present |
 
   Scenario: Delegation token minting follows the embedded client token authentication flag

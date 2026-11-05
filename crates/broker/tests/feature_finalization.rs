@@ -163,7 +163,7 @@ fn feature_update_failed(finalization: &FeatureFinalization, feature: String) {
     );
 }
 #[rstest_bdd_macros::then(
-    "the metadata refusal exactly names the requested trunk level and controller supported range 7-30"
+    "the metadata refusal exactly names the requested trunk level and controller supported range 7-33"
 )]
 fn unstable_metadata_refusal(finalization: &FeatureFinalization) {
     let resp = finalization
@@ -171,16 +171,16 @@ fn unstable_metadata_refusal(finalization: &FeatureFinalization) {
         .as_ref()
         .expect("feature update requested");
     assert!(resp.error_message.as_deref() == Some(format!(
-        "The update failed for all features since the following feature had an error: Invalid update version {METADATA_VERSION_MAX} for feature metadata.version. Local controller 1 only supports versions 7-30").as_str()), "{resp:?}");
+        "The update failed for all features since the following feature had an error: Invalid update version {METADATA_VERSION_MAX} for feature metadata.version. Local controller 1 only supports versions 7-33").as_str()), "{resp:?}");
 }
-#[rstest_bdd_macros::then("the share refusal names level 2 and controller supported range 0-1")]
+#[rstest_bdd_macros::then("the share refusal names level 3 and controller supported range 0-2")]
 fn unstable_share_refusal(finalization: &FeatureFinalization) {
     let resp = finalization
         .update
         .as_ref()
         .expect("feature update requested");
     assert!(resp.error_message.as_deref().is_some_and(|message| message.ends_with(
-        "Invalid update version 2 for feature share.version. Local controller 1 only supports versions 0-1")), "{resp:?}");
+        "Invalid update version 3 for feature share.version. Local controller 1 only supports versions 0-2")), "{resp:?}");
 }
 #[rstest_bdd_macros::when("the client reads API versions and feature levels")]
 async fn read_finalized_features(finalization: &mut FeatureFinalization) {
@@ -302,19 +302,19 @@ async fn finalizes_metadata_version_and_surfaces_in_api_versions(
 
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/feature_finalization.feature",
-    name = "share version two is refused by default"
+    name = "share version three is refused by default"
 )]
 #[tokio::test]
-async fn share_version_two_is_refused_by_default(finalization: FeatureFinalization) {
+async fn share_version_three_is_refused_by_default(finalization: FeatureFinalization) {
     finalization.shutdown().await;
 }
 
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/feature_finalization.feature",
-    name = "share version two is finalizable under unstable feature versions"
+    name = "share version two is released under either feature policy"
 )]
 #[tokio::test]
-async fn share_version_two_is_finalizable_under_unstable_feature_versions(
+async fn share_version_two_is_released_under_either_feature_policy(
     finalization: FeatureFinalization,
 ) {
     finalization.shutdown().await;

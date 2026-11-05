@@ -282,7 +282,7 @@ fn binary_ordered_directories(format_binary: &FormatBinaryScenario, datatable: V
         .iter()
         .map(|(directory, voter)| {
             format!(
-                "Formatting {} {} with metadata.version 4.3-IV0.",
+                "Formatting {} {} with metadata.version 4.4-IV2.",
                 if *voter {
                     "dynamic metadata voter directory"
                 } else {
@@ -400,7 +400,7 @@ fn mixed_directory_format(format_binary: &FormatBinaryScenario) {
     );
     assert2::assert!(b_ids.directory_id != a_ids.directory_id);
     assert2::assert!(stdout(output).contains(&format!(
-        "Formatting data directory {} with metadata.version 4.3-IV0.",
+        "Formatting data directory {} with metadata.version 4.4-IV2.",
         b.display()
     )));
 }

@@ -1043,7 +1043,7 @@ async fn an_embedded_request_the_controller_cannot_parse_is_answered_in_the_enve
 
 #[scenario(
     path = "tests/features/migrated/tests/kip590_envelope.feature",
-    name = "Unstable API configuration controls forwarding of a trunk API"
+    name = "Released controller API forwarding works with either unstable setting"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_embedded_trunk_api_key_is_refused_unless_unstable_api_versions_are_enabled(

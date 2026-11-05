@@ -200,7 +200,7 @@ crate_tests(
     docker = {
         # One image, used twice: as the client that reads krabka's advertised
         # table and as the Kafka broker that table is compared against.
-        "api_versions_differential": ["apache_kafka_4_3_1"],
+        "api_versions_differential": ["apache_kafka_4_4_0"],
         # The JVM console consumer that reads the acknowledged ledger back at
         # the end of the fault schedule, for the byte differential against a
         # client this project does not write.

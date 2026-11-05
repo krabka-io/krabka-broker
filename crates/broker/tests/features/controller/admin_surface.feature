@@ -30,12 +30,12 @@ Feature: Kafka controller listener Admin API surface and operations
       | 64 | 0 | 0 |
       | 67 | 0 | 0 |
       | 73 | 0 | 0 |
-      | 94 | absent | absent |
+      | 94 | 0 | 0 |
 
   Scenario: Released controller listener advertises exactly Kafka controller keys
     Given a combined broker has an open plaintext controller connection with trunk APIs enabled false
     When the client requests ApiVersions from the controller listener
-    Then the complete controller API key set is 1,17,18,19,20,29,30,31,32,33,36,37,38,39,40,41,43,44,45,46,49,50,51,52,53,54,55,56,57,58,59,60,62,63,64,67,70,73,80,81,82
+    Then the complete controller API key set is 1,17,18,19,20,29,30,31,32,33,36,37,38,39,40,41,43,44,45,46,49,50,51,52,53,54,55,56,57,58,59,60,62,63,64,67,70,73,80,81,82,94
 
   Scenario: Trunk controller Admin version ranges match Kafka
     Given a combined broker has an open plaintext controller connection with trunk APIs enabled true

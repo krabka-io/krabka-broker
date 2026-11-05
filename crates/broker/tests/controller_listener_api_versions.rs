@@ -198,11 +198,11 @@ async fn sasl_controller_source(discovery: &mut ControllerDiscovery) {
     );
     discovery.node = Some(node);
 }
-#[rstest_bdd_macros::when("the client sends unsupported API versions v5 with an invalid body")]
+#[rstest_bdd_macros::when("the client sends unsupported API versions v6 with an invalid body")]
 async fn unsupported_controller_versions(discovery: &mut ControllerDiscovery) {
     let response = round_trip(
         discovery.stream.as_mut().expect("controller connection"),
-        frame(18, 5, 1, true, &[0xff]),
+        frame(18, 6, 1, true, &[0xff]),
         1,
     )
     .await;
@@ -210,17 +210,17 @@ async fn unsupported_controller_versions(discovery: &mut ControllerDiscovery) {
         Some(ApiVersionsResponse::decode(&mut &response[..], 0).expect("decode refusal"));
 }
 #[rstest_bdd_macros::then(
-    "the controller returns the exact v0 refusal advertising API versions 0 through 4"
+    "the controller returns the exact v0 refusal advertising API versions 0 through 5"
 )]
 fn controller_version_refusal(discovery: &ControllerDiscovery) {
     check!(
-        discovery.refusal.as_ref().expect("v5 requested")
+        discovery.refusal.as_ref().expect("v6 requested")
             == &ApiVersionsResponse {
                 error_code: 35,
                 api_keys: vec![ApiVersion {
                     api_key: 18,
                     min_version: 0,
-                    max_version: 4,
+                    max_version: 5,
                     ..Default::default()
                 }],
                 ..Default::default()

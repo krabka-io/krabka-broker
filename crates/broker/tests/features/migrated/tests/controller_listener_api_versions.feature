@@ -1,8 +1,8 @@
 Feature: Controller listeners preserve authentication independent discovery and socket limits
   Scenario Outline: sasl controller listener answers api versions before authentication
     Given an unauthenticated PLAIN connection to a SASL controller listener
-    When the client sends unsupported API versions v5 with an invalid body
-    Then the controller returns the exact v0 refusal advertising API versions 0 through 4
+    When the client sends unsupported API versions v6 with an invalid body
+    Then the controller returns the exact v0 refusal advertising API versions 0 through 5
     When the unauthenticated client requests API versions v<version>
     And the client authenticates as broker with PLAIN
     Then both PLAIN handshake and authentication return success

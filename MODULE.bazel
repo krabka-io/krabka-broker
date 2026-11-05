@@ -104,6 +104,7 @@ pull_image = use_repo_rule("@rules_img//img:pull.bzl", "pull")
         ("apache_kafka_4_0_0", "mirror.gcr.io", "apache/kafka", "4.0.0", "sha256:01b9a4030e54c6068e66eb3ba4cb82c0d89238629ef1c30d79b86036bf89b1b7"),
         ("apache_kafka_4_1_0", "mirror.gcr.io", "apache/kafka", "4.1.0", "sha256:bce21a1a56707320ce239d743143bf4359ba45da27d31a5236f2169001eec751"),
         ("apache_kafka_4_3_1", "mirror.gcr.io", "apache/kafka", "4.3.1", "sha256:ccd1314e47ec76909e01f86308b4dcf2064f19f7c89759234322314b0e319e26"),
+        ("apache_kafka_4_4_0", "mirror.gcr.io", "apache/kafka", "4.4.0", "sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"),
         ("cp_kafka_3_1_2", "mirror.gcr.io", "confluentinc/cp-kafka", "3.1.2", "sha256:f49a936269d36434ee29ca2c53876d891aee9a4ff7750147ded38db2b31c2c9a"),
         ("cp_kafka_6_1_1", "mirror.gcr.io", "confluentinc/cp-kafka", "6.1.1", "sha256:537c303f182ff6ba665f324520105c44970c97d7ef94b306709a5d68b8c1aed7"),
         ("cp_kafka_7_4_0", "mirror.gcr.io", "confluentinc/cp-kafka", "7.4.0", "sha256:9080235b1e58a57ca16d480cba6c9cbde72619f2bd43b77d70bada5aecf7811a"),

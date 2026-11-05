@@ -835,7 +835,7 @@ fn unsupported_rollback_contract(rollback_scenario: &mut RollbackScenario) {
 }
 
 #[rstest_bdd_macros::when(
-    "the candidate finalizes metadata.version 4.4-IV2, the source release attempts rollback and the candidate reopens its record"
+    "the candidate finalizes metadata.version 4.5-IV0, the source release attempts rollback and the candidate reopens its record"
 )]
 async fn attempt_unsupported_rollback(rollback_scenario: &mut RollbackScenario) {
     rollback_scenario.outcome = Some(

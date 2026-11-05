@@ -378,6 +378,16 @@ async fn configure_dead_letters(
 ) {
     if matches!(version, DeadLetterShareVersion::Two) {
         finalize_share_version_two(client).await;
+    } else {
+        // Fresh 4.4 clusters use share2; explicitly exercise the legacy level.
+        let response = client
+            .send(UpdateFeaturesRequest {
+                feature_updates: vec![feature_update("share.version", 1, 2)],
+                ..Default::default()
+            })
+            .await
+            .expect("legacy share finalization");
+        assert!(response.error_code == 0, "{response:?}");
     }
     create_dead_letter_topic_with(broker, client, topic_configs).await;
     point_group_at_dead_letter_topic(client).await;

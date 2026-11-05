@@ -22,6 +22,7 @@ IMAGES = {
     "apache_kafka_4_0_0": "mirror.gcr.io/apache/kafka:4.0.0",
     "apache_kafka_4_1_0": "mirror.gcr.io/apache/kafka:4.1.0",
     "apache_kafka_4_3_1": "mirror.gcr.io/apache/kafka:4.3.1",
+    "apache_kafka_4_4_0": "mirror.gcr.io/apache/kafka:4.4.0",
     "cp_kafka_3_1_2": "mirror.gcr.io/confluentinc/cp-kafka:3.1.2",
     "cp_kafka_6_1_1": "mirror.gcr.io/confluentinc/cp-kafka:6.1.1",
     "cp_kafka_7_4_0": "mirror.gcr.io/confluentinc/cp-kafka:7.4.0",

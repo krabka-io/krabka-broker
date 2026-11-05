@@ -3,7 +3,7 @@ Feature: Finalize supported feature levels and validate updates without persisti
     Given unstable feature versions are enabled false
     When metadata.version is upgraded to the trunk maximum with validate only false
     Then the update fails with error 95 no result rows and a message naming feature metadata.version
-    And the metadata refusal exactly names the requested trunk level and controller supported range 7-30
+    And the metadata refusal exactly names the requested trunk level and controller supported range 7-33
     When the client reads API versions and feature levels
     Then metadata supported levels remain 7 through the latest production version
 
@@ -14,22 +14,22 @@ Feature: Finalize supported feature levels and validate updates without persisti
     When the client reads API versions and feature levels
     Then the finalized metadata level is the trunk maximum with a nonnegative epoch
 
-  Scenario: share version two is refused by default
+  Scenario: share version three is refused by default
     Given unstable feature versions are enabled false
     When the client reads API versions and feature levels
-    Then share.version supported maximum is 1 and finalized level is 1
-    When feature share.version is upgraded to level 2 with validate only false
+    Then share.version supported maximum is 2 and finalized level is 2
+    When feature share.version is upgraded to level 3 with validate only false
     Then the update fails with error 95 no result rows and a message naming feature share.version
-    And the share refusal names level 2 and controller supported range 0-1
+    And the share refusal names level 3 and controller supported range 0-2
 
-  Scenario: share version two is finalizable under unstable feature versions
+  Scenario: share version two is released under either feature policy
     Given unstable feature versions are enabled true
     When the client reads API versions and feature levels
-    Then share.version supported maximum is 2 and finalized level is 1
+    Then share.version supported maximum is 2 and finalized level is 2
     When feature share.version is upgraded to level 2 with validate only true
     Then the update succeeds for feature share.version
     When the client reads API versions and feature levels
-    Then share.version supported maximum is 2 and finalized level is 1
+    Then share.version supported maximum is 2 and finalized level is 2
     When feature share.version is upgraded to level 2 with validate only false
     Then the update succeeds for feature share.version
     When the client reads API versions and feature levels

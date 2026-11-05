@@ -3,7 +3,7 @@
 //!
 //! The rule in `docs/persisted_formats.md` lets a cluster roll back only while
 //! every finalized feature level is one the source supports. Here the
-//! candidate formats one node at `4.4-IV2`, a `metadata.version` above the
+//! candidate formats one node at `4.5-IV0`, a `metadata.version` above the
 //! source's range that only `unstable.feature.versions.enable` reaches, runs
 //! it with that switch on, and writes a record. The node is then started on
 //! the source release with the switch off, as an operator's rollback would
@@ -45,11 +45,11 @@ use {
     tokio::time,
 };
 
-/// The `metadata.version` the candidate finalizes: Kafka trunk's `4.4-IV2`.
-const UNSTABLE_RELEASE: &str = "4.4-IV2";
+/// The `metadata.version` the candidate finalizes: Kafka trunk's `4.5-IV0`.
+const UNSTABLE_RELEASE: &str = "4.5-IV0";
 
 /// Its level.
-const UNSTABLE_LEVEL: i16 = 33;
+const UNSTABLE_LEVEL: i16 = 34;
 
 /// The candidate's node configuration addition that supports it.
 const UNSTABLE_TOML: &str =

@@ -1,5 +1,5 @@
 {
-  "oracle_image": "mirror.gcr.io/apache/kafka:4.3.1",
+  "oracle_image": "mirror.gcr.io/apache/kafka:4.4.0",
   "apis": [
     {
       "api_key": 0,
@@ -202,11 +202,11 @@
       "name": "ApiVersions",
       "krabka": {
         "min": 0,
-        "max": 4
+        "max": 5
       },
       "kafka": {
         "min": 0,
-        "max": 4
+        "max": 5
       },
       "verdict": "same",
       "intent": null
@@ -342,11 +342,11 @@
       "name": "TxnOffsetCommit",
       "krabka": {
         "min": 0,
-        "max": 5
+        "max": 6
       },
       "kafka": {
         "min": 0,
-        "max": 5
+        "max": 6
       },
       "verdict": "same",
       "intent": null
@@ -538,11 +538,11 @@
       "name": "DeleteGroups",
       "krabka": {
         "min": 0,
-        "max": 2
+        "max": 3
       },
       "kafka": {
         "min": 0,
-        "max": 2
+        "max": 3
       },
       "verdict": "same",
       "intent": null
@@ -986,11 +986,11 @@
       "name": "StreamsGroupHeartbeat",
       "krabka": {
         "min": 0,
-        "max": 0
+        "max": 1
       },
       "kafka": {
         "min": 0,
-        "max": 0
+        "max": 1
       },
       "verdict": "same",
       "intent": null
@@ -1000,11 +1000,11 @@
       "name": "StreamsGroupDescribe",
       "krabka": {
         "min": 0,
-        "max": 0
+        "max": 1
       },
       "kafka": {
         "min": 0,
-        "max": 0
+        "max": 1
       },
       "verdict": "same",
       "intent": null
@@ -1040,6 +1040,34 @@
     {
       "api_key": 92,
       "name": "DeleteShareGroupOffsets",
+      "krabka": {
+        "min": 0,
+        "max": 0
+      },
+      "kafka": {
+        "min": 0,
+        "max": 0
+      },
+      "verdict": "same",
+      "intent": null
+    },
+    {
+      "api_key": 93,
+      "name": "StreamsGroupTopologyDescriptionUpdate",
+      "krabka": {
+        "min": 0,
+        "max": 0
+      },
+      "kafka": {
+        "min": 0,
+        "max": 0
+      },
+      "verdict": "same",
+      "intent": null
+    },
+    {
+      "api_key": 94,
+      "name": "UnregisterController",
       "krabka": {
         "min": 0,
         "max": 0

@@ -4,7 +4,7 @@
 //! record's level lies outside the controller's supported range, so a node
 //! started with `unstable.feature.versions.enable` off never serves a log that
 //! was finalized at an unstable `metadata.version`. The tests finalize
-//! `4.4-IV2` (level 33), which is unstable in Kafka 4.3.
+//! `4.5-IV0` (level 34), which is unstable in Kafka 4.4.
 #![cfg(test)]
 
 use {
@@ -32,11 +32,11 @@ const FAST_ELECTION_TIMEOUT: Time = millis(200);
 
 krabka_macros::topic_record_fixture!(single_partition_topic);
 
-const UNSTABLE_METADATA_VERSION: i16 = 33;
+const UNSTABLE_METADATA_VERSION: i16 = 34;
 
 const REFUSAL: &str = "Tried to apply FeatureLevelRecord \
-    FeatureLevelRecord(name='metadata.version', featureLevel=33), \
-    but this controller only supports versions 7-30";
+    FeatureLevelRecord(name='metadata.version', featureLevel=34), \
+    but this controller only supports versions 7-33";
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct FeatureControllerSetup {
@@ -162,15 +162,14 @@ enum HighWatermarkFile {
     AtLogStart,
     /// The file is gone, so the restart starts from the log start.
     Missing,
-    /// The file records the level as committed, and an uncommitted record
-    /// that lowers it to a supported level follows. The engine starts from
+    /// The file records the level as committed, and an uncommitted supported share-feature record follows. The engine starts from
     /// the committed image, so that record must not hide the level from the
     /// guard.
-    BelowASupersedingLevel,
+    BelowAFollowingRecord,
 }
 
-/// A `share.version` record at `level`. Kafka 4.3's latest production level
-/// is 1, and 2 is unstable. A `metadata.version` downgrade would not do here:
+/// A supported share-feature record following the unsupported metadata level.
+/// A metadata downgrade would not do here:
 /// it commits with a KIP-1155 checkpoint, which a restart reads first.
 fn share_version(level: i16) -> MetadataRecord {
     MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
@@ -178,10 +177,6 @@ fn share_version(level: i16) -> MetadataRecord {
         level,
     })
 }
-
-const SHARE_VERSION_REFUSAL: &str = "Tried to apply FeatureLevelRecord \
-    FeatureLevelRecord(name='share.version', featureLevel=2), \
-    but this controller only supports versions 0-1";
 
 /// The high-watermark file is a cache, and a restart can recover a high
 /// watermark below the finalized level. The refusal must still come before
@@ -215,7 +210,7 @@ fn recovery() -> FeatureRecovery {
         rejected_change: None,
     }
 }
-#[given("a stopped controller log finalized at unstable metadata version 33")]
+#[given("a stopped controller log finalized at unstable metadata version 34")]
 async fn unstable_log(recovery: &mut FeatureRecovery) {
     finalize_unstable_level(
         &recovery.dir,
@@ -231,17 +226,17 @@ async fn watermark_log(recovery: &mut FeatureRecovery, watermark: String) {
     let watermark = match watermark.as_str() {
         "at-log-start" => HighWatermarkFile::AtLogStart,
         "missing" => HighWatermarkFile::Missing,
-        "below-superseding-level" => HighWatermarkFile::BelowASupersedingLevel,
+        "below-following-record" => HighWatermarkFile::BelowAFollowingRecord,
         _ => panic!("unknown high watermark condition"),
     };
     let (level, after, refusal) = match watermark {
         HighWatermarkFile::AtLogStart | HighWatermarkFile::Missing => {
             (finalize_unstable_metadata_version(), vec![], REFUSAL)
         }
-        HighWatermarkFile::BelowASupersedingLevel => (
-            vec![share_version(2)],
+        HighWatermarkFile::BelowAFollowingRecord => (
+            finalize_unstable_metadata_version(),
             vec![share_version(1)],
-            SHARE_VERSION_REFUSAL,
+            REFUSAL,
         ),
     };
     let at_level = finalize_unstable_level(&recovery.dir, recovery.cluster, level, after).await;
@@ -249,7 +244,7 @@ async fn watermark_log(recovery: &mut FeatureRecovery, watermark: String) {
     match watermark {
         HighWatermarkFile::AtLogStart => fs::write(path, "0\n0\n").expect("cache log start"),
         HighWatermarkFile::Missing => fs::remove_file(path).expect("remove watermark cache"),
-        HighWatermarkFile::BelowASupersedingLevel => {
+        HighWatermarkFile::BelowAFollowingRecord => {
             fs::write(path, at_level).expect("cache committed level");
         }
     }
@@ -291,7 +286,7 @@ async fn restart_unstable_enabled(recovery: &mut FeatureRecovery) {
     wait_for_leader(&controller).await;
     recovery.controller = Some(controller);
 }
-#[then("the recovered controller publishes finalized metadata version 33")]
+#[then("the recovered controller publishes finalized metadata version 34")]
 fn recovered_unstable_version(recovery: &FeatureRecovery) {
     check!(
         recovery
@@ -300,7 +295,7 @@ fn recovered_unstable_version(recovery: &FeatureRecovery) {
             .expect("controller restarted")
             .current_image()
             .finalized_metadata_version()
-            == Some(33)
+            == Some(34)
     );
 }
 #[given("a running controller with unstable features enabled {enabled}")]
@@ -334,7 +329,7 @@ fn no_initial_fault(recovery: &FeatureRecovery) {
             .is_none()
     );
 }
-#[when("metadata version 33 commits and subsequent submissions observe the controller stopping")]
+#[when("metadata version 34 commits and subsequent submissions observe the controller stopping")]
 async fn commit_unsupported_live(recovery: &mut FeatureRecovery) {
     let controller = recovery.controller.as_ref().expect("controller running");
     let fatal = controller.watch_fatal();
@@ -376,7 +371,7 @@ fn stopped_feature_fault(recovery: &FeatureRecovery) {
     ));
     check!(recovery.fault.as_deref() == Some(REFUSAL));
 }
-#[when("metadata version 33 commits and the supported controller shuts down normally")]
+#[when("metadata version 34 commits and the supported controller shuts down normally")]
 async fn normal_feature_shutdown(recovery: &mut FeatureRecovery) {
     let controller = recovery.controller.take().expect("controller running");
     controller
