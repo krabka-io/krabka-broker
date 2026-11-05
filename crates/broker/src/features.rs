@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn share_version_is_supported() {
-        // Kafka 4.4 advertises SV_2 on default nodes.
+        // Kafka 4.4 advertises `SV_2` on default nodes.
         let expected = SupportedFeature {
             name: SHARE_VERSION,
             min_version: 0,
@@ -291,7 +291,7 @@ mod tests {
         );
     }
 
-    /// KIP-1191: Kafka 4.4 advertises SV_2 without an unstable opt-in.
+    /// KIP-1191: Kafka 4.4 advertises `SV_2` without an unstable opt-in.
     #[test]
     fn share_version_two_is_advertised_without_unstable_feature_versions() {
         let advertised = |unstable| {

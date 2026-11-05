@@ -38,8 +38,8 @@ public class UpgradeProbe {
             }
             if (mode.equals("upgrade")) {
                 try {
-                    admin.updateFeatures(Map.of("metadata.version", new FeatureUpdate((short) 33, FeatureUpdate.UpgradeType.UPGRADE)), new UpdateFeaturesOptions()).all().get();
-                    throw new IllegalStateException("unqualified metadata33 unexpectedly finalized without unstable gates");
+                    admin.updateFeatures(Map.of("metadata.version", new FeatureUpdate((short) 34, FeatureUpdate.UpgradeType.UPGRADE)), new UpdateFeaturesOptions()).all().get();
+                    throw new IllegalStateException("unreleased metadata34 unexpectedly finalized without unstable gates");
                 } catch (java.util.concurrent.ExecutionException error) {
                     require(error.getCause() instanceof InvalidUpdateVersionException, error.getCause());
                 }

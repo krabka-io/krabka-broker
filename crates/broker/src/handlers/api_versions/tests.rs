@@ -118,7 +118,7 @@ async fn api_version_wire(broker: &Broker, context: &RequestContext<'_>) -> ApiV
 ///   whichever minimum it serves.
 /// - Fetch and `ListOffsets`: Kafka 4.x's 4 and 1 by default, 0 under
 ///   `legacy_request_versions_enable` for pre-4.0 clients (#784).
-/// - ApiVersions v5 is released in Kafka 4.4. InitProducerId v6 remains
+/// - `ApiVersions` v5 is released in Kafka 4.4. `InitProducerId` v6 remains
 ///   advertised only under `unstable.api.versions.enable`.
 #[yare::parameterized(
     stable = { false, false, 4, 1, 5, 5 },

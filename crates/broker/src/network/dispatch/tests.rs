@@ -435,7 +435,7 @@ async fn assert_gated_version(case: GatedVersion) {
 }
 
 /// Released Kafka 4.4 APIs dispatch without unstable opt-in, while
-/// InitProducerId v6 and pre-4.0 request versions retain their gates.
+/// `InitProducerId` v6 and pre-4.0 request versions retain their gates.
 /// Empty dispatched bodies also close connections, so the unsupported-request
 /// metric distinguishes refusal before dispatch from body decoding failures.
 #[yare::parameterized(
@@ -507,8 +507,8 @@ async fn a_gated_version_is_refused_unless_its_switch_is_on(
     .await;
 }
 
-/// An ApiVersions request above Kafka 4.4's released v5 range receives
-/// UNSUPPORTED_VERSION in a v0 body naming the released range.
+/// An `ApiVersions` request above Kafka 4.4's released v5 range receives
+/// `UNSUPPORTED_VERSION` in a v0 body naming the released range.
 #[tokio::test]
 async fn api_versions_above_v5_are_unsupported() {
     use krabka_protocol::owned::api_versions_response::{ApiVersion, ApiVersionsResponse};
