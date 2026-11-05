@@ -2,7 +2,7 @@
 resolver = "2"
 members = ["crates/*"]
 # The cargo-mutants pin that Bazel builds //tools/mutants from is not a member.
-exclude = ["tools/mutants"]
+exclude = ["tools/mutants", "vendor/async-dnssd"]
 
 [workspace.package]
 version = "1.1.5"
@@ -325,6 +325,10 @@ krabka-units = "0.8.0"
 # against crates.io above and in the member manifests; the patch below is
 # the single place a sibling revision is bumped.
 [patch.crates-io]
+# Maintenance-only advisory remediation; retain exact reviewed upstream revisions.
+testcontainers = { git = "https://github.com/testcontainers/testcontainers-rs", rev = "dba4383d9bdbaed68d499f6e3ba933a289ba0a4a" }
+loom = { git = "https://github.com/tokio-rs/loom", rev = "acaa24a94cdd7c182e87d1ca05ffcab830cceb60" }
+async-dnssd = { path = "vendor/async-dnssd" }
 # `fs::sync_file_range` is in rustix only through the open upstream PR
 # bytecodealliance/rustix#1718, from this fork at its head. The broker's
 # `log_write_back` uses it, and the broker is not published. A published crate
