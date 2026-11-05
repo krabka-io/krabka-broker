@@ -348,3 +348,30 @@ library+share-consumer Clippy passed; CPD0clones and script accounting passed.
 Wider all-integration-target Clippy found one test-doc backtick omission (fixed);
 its rerun exhausted host disk writing compiler caches. Do not report that
 infrastructure failure as a passing wider check.
+
+## Terminal-prefix ordering follow-up (2026-11-05)
+
+The historical receipts above are unchanged. The production phase-2 owner now
+persists ARCHIVED before pruning the live terminal prefix. This follows
+[released SharePartition.initiateDLQAndArchive](https://github.com/apache/kafka/blob/4.4.0/core/src/main/java/kafka/server/share/SharePartition.java#L3403):
+archive and increment deliveryCompleteCount, writeShareGroupState, then
+maybeUpdateCachedStateAndOffsets after either persistence success or failure.
+The retrieved release source SHA-256 is
+`06441b270d9fe9b3fa0f88b61fdd612af5a62042b4f9340dd70f7c1ccfe9d34b`.
+
+The regression `archived_prefix_is_persisted_before_live_cache_pruning` checks
+the production acquisition machine's projected durable row (state4, start0,
+count1), live cache pruning without a redundant dirty write, and reload with no
+second DLQ enqueue. The manager invokes these operations around its actual
+persistence attempt. No encoding or feature level changes. A failed persistence
+attempt still leaves dirty state for retry; its live terminal prefix advances,
+as in the release. This is a source-aligned ordering fix with a state-machine
+regression, not a new paired live oracle execution or RF3 denial receipt.
+
+Verification: `cargo test -p krabka-broker --test share_consume --features
+test-helpers dead_letter_queue` passed all 12 end-to-end cases, including the
+registered manager's successful delegation and terminal-refusal variants.
+Both variants assert the actual coordinator summary remains start0/count3
+after rejecting three source records. BDD cases observe completed progress as
+SPSO plus the delivery-complete count, allowing either a retained terminal
+prefix or an already-pruned prefix, including the share.version1 control.

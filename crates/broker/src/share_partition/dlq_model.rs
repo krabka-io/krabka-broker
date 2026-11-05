@@ -116,6 +116,7 @@ impl Model for DlqModel {
             }
             Action::Finish if s.settled && s.live.start_offset == Offset(0) => {
                 s.live.finish_archiving(Offset(0), Offset(0));
+                s.live.prune_terminal_prefix();
             }
             Action::Confirm
                 if s.live.start_offset == Offset(1) && s.durable.start_offset == Offset(0) =>
@@ -174,6 +175,7 @@ impl Model for DlqModel {
                 if s.settled {
                     let mut sm = s.live.clone();
                     sm.finish_archiving(Offset(0), Offset(0));
+                    sm.prune_terminal_prefix();
                     sm.start_offset == Offset(1)
                 } else {
                     true
