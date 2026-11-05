@@ -64,14 +64,14 @@ impl ShareCoordinator {
     ///
     /// The checks run in Kafka's order (`maybeGetInitializeStateError`): a
     /// negative partition, a stored state epoch above the request, and a
-    /// topic partition that `image` does not hold. A state epoch of `-1` is
-    /// "not supplied" and skips the fence, as in Kafka 4.3.1. Any request
+    /// topic partition that `image` does not hold. Negative state epochs are
+    /// invalid in released 4.4. An accepted request
     /// writes a `ShareSnapshot` with the next snapshot epoch (`0` for a new
     /// key), leader epoch `0`, no batches, and a delivery complete count of
     /// `-1` for an uninitialized start offset and `0` otherwise.
     ///
-    /// With `ShareCoordinatorConfig::trunk_rules`, a negative state epoch is
-    /// `INVALID_REQUEST`, and a request that repeats the stored state epoch
+    /// Negative state epochs are `INVALID_REQUEST` in released 4.4.
+    /// With `ShareCoordinatorConfig::unstable_repeat_initialize_noop`, a request repeating the stored state epoch
     /// and start offset is a no-op.
     ///
     /// # Errors
@@ -110,10 +110,8 @@ impl ShareCoordinator {
     /// The checks run in Kafka's order (`maybeGetWriteStateError`): a
     /// negative partition, an uninitialized key, a recorded leader epoch or
     /// state epoch above the request, and a topic partition that `image` does
-    /// not hold. A leader epoch or state epoch of `-1` is "not supplied" and
-    /// skips its fence, as in Kafka 4.3.1; with
-    /// `ShareCoordinatorConfig::trunk_rules`, a negative one is
-    /// `INVALID_REQUEST`. The record is the one `generateShareStateRecord`
+    /// not hold. Released 4.4 rejects negative leader/state epochs before
+    /// checking whether the key exists. The record is the one `generateShareStateRecord`
     /// picks: see [`ShareCoordinator::share_state_record`].
     ///
     /// # Errors
@@ -141,10 +139,8 @@ impl ShareCoordinator {
     /// The checks run in Kafka's order (`maybeGetReadStateError`): a negative
     /// partition, an uninitialized key, a recorded leader epoch above the
     /// request, and a topic partition that `image` does not hold. A leader
-    /// epoch of `-1` is "not supplied": it skips the fence and answers the
-    /// stored state with no record, as in Kafka 4.3.1. With
-    /// `ShareCoordinatorConfig::trunk_rules`, a negative leader epoch is
-    /// `INVALID_REQUEST`. When `leader_epoch` differs from the recorded
+    /// epoch below zero is `INVALID_REQUEST` in released 4.4, independently
+    /// of unstable APIs. When `leader_epoch` differs from the recorded
     /// leader epoch, the method appends the record of a write with the new
     /// leader epoch and the stored progress before it answers. A later write
     /// from a share-partition leader with an older epoch is then fenced.
@@ -234,11 +230,11 @@ impl ShareCoordinator {
         state_epoch: StateEpoch,
         start_offset: Offset,
     ) -> Result<(), ShareStateError> {
-        let trunk = self.config.trunk_rules;
+        let trunk = self.config.unstable_repeat_initialize_noop;
         if partition < 0 {
             return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
         }
-        if trunk && state_epoch < 0 {
+        if state_epoch < 0 {
             return Err(invalid_request(message::NEGATIVE_STATE_EPOCH));
         }
         let Some(entry) = self.entry(group, topic_id, partition) else {
@@ -274,7 +270,7 @@ impl ShareCoordinator {
             });
         }
         check_topic_partition(image, topic_id, partition)?;
-        // Trunk only: Kafka 4.3.1 always writes a new snapshot.
+        // Trunk only: released Kafka 4.4 always writes a new snapshot.
         if trunk && st.fence_state_epoch == state_epoch && st.start_offset == start_offset {
             return Ok(());
         }
@@ -332,13 +328,11 @@ impl ShareCoordinator {
         if partition < 0 {
             return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
         }
-        if self.config.trunk_rules {
-            if request.leader_epoch < 0 {
-                return Err(invalid_request(message::NEGATIVE_LEADER_EPOCH));
-            }
-            if request.state_epoch < 0 {
-                return Err(invalid_request(message::NEGATIVE_STATE_EPOCH));
-            }
+        if request.leader_epoch < 0 {
+            return Err(invalid_request(message::NEGATIVE_LEADER_EPOCH));
+        }
+        if request.state_epoch < 0 {
+            return Err(invalid_request(message::NEGATIVE_STATE_EPOCH));
         }
         let Some(entry) = self.entry(group, topic_id, partition) else {
             return Err(invalid_request(
@@ -388,7 +382,7 @@ impl ShareCoordinator {
         if partition < 0 {
             return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
         }
-        if self.config.trunk_rules && leader_epoch < 0 {
+        if leader_epoch < 0 {
             return Err(invalid_request(message::NEGATIVE_LEADER_EPOCH));
         }
         let Some(entry) = self.entry(group, topic_id, partition) else {
@@ -429,31 +423,15 @@ impl ShareCoordinator {
     /// Otherwise it is a `ShareUpdate` that holds only the written batches,
     /// combined among themselves and clipped at the start offset.
     ///
-    /// As in Kafka 4.3.1, the record carries the request as sent: the start
-    /// offset of a snapshot is the request's, or the stored one when the
-    /// request says `-1`, an update takes the request's start offset as it
-    /// is, and the delivery complete count is the request's. A write with a
-    /// lower start offset therefore lowers the stored one. With
-    /// `ShareCoordinatorConfig::trunk_rules`, the start offset never goes
-    /// back, and the delivery complete count is picked by
-    /// [`delivery_complete_count`].
+    /// Released Kafka 4.4 keeps the start offset monotonic and selects the
+    /// delivery complete count according to the request's start offset.
+    /// This fills the existing snapshot/update fields without changing schema.
     fn share_state_record(&self, st: &SharePartitionState, progress: &Progress<'_>) -> StateRecord {
         let requested = progress.start_offset;
-        let (snapshot_start, update_start, delivery_complete_count) = if self.config.trunk_rules {
-            let start = requested.max(st.start_offset);
-            (
-                start,
-                start,
-                delivery_complete_count(st, requested, progress.delivery_complete_count),
-            )
-        } else {
-            let snapshot_start = if requested.0 == -1 {
-                st.start_offset
-            } else {
-                requested
-            };
-            (snapshot_start, requested, progress.delivery_complete_count)
-        };
+        let snapshot_start = requested.max(st.start_offset);
+        let update_start = snapshot_start;
+        let delivery_complete_count =
+            delivery_complete_count(st, requested, progress.delivery_complete_count);
         if st.updates_since_snapshot >= self.config.snapshot_update_records_per_snapshot {
             let now = self.now_ms();
             StateRecord::Snapshot(ShareSnapshotValue {

@@ -60,15 +60,12 @@ pub struct ShareCoordinatorConfig {
     /// keeps no buffer for reuse.
     #[default(bytes(CACHED_BUFFER_MAX_BYTES_DEFAULT))]
     pub cached_buffer_max_bytes: ByteSize,
-    /// Whether the state machine applies the rules that Kafka trunk has added
-    /// to `ShareCoordinatorShard` since 4.3.1: a negative leader or state
-    /// epoch is `INVALID_REQUEST`, a write never lowers the stored start
-    /// offset, the stored delivery complete count follows the start offset of
-    /// the write, and an initialize that repeats the stored state epoch and
-    /// start offset is a no-op. Kafka 4.3.1 reads `-1` as "not supplied" and
-    /// stores a write as sent. The broker sets this from
-    /// `unstable.api.versions.enable`; it is not a `[runtime]` key.
-    pub trunk_rules: bool,
+    /// Opt into trunk's no-op for InitializeShareGroupState repeating the
+    /// stored state epoch and start offset. Released Kafka 4.4 still appends
+    /// a new snapshot. Negative-epoch validation and monotonic write progress
+    /// are released 4.4 behavior and do not depend on this flag.
+    /// The broker sets this from `unstable.api.versions.enable`.
+    pub unstable_repeat_initialize_noop: bool,
 }
 
 /// Kafka's `share.coordinator.cached.buffer.max.bytes` default: 1 MiB plus
@@ -127,7 +124,7 @@ mod tests {
             threads: 1,
             append_linger: None,
             cached_buffer_max_bytes: bytes(1_048_588),
-            trunk_rules: false,
+            unstable_repeat_initialize_noop: false,
         };
         assert!(share_coordinator_defaults.selected.as_ref() == Some(&expected));
     }

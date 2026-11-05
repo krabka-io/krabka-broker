@@ -111,9 +111,9 @@ pub(super) async fn start_coordinators(
     let txn_coordinator = Arc::new(txn_coordinator);
     let mut share_coordinator_config = (*config.share_coordinator).clone();
     share_coordinator_config.load_buffer_size = config.share_coordinator_load_buffer_size;
-    // Kafka trunk's newer `ShareCoordinatorShard` rules are what
-    // `unstable.api.versions.enable` unlocks; 4.3.1 has none of them.
-    share_coordinator_config.trunk_rules = matches!(
+    // Only trunk's repeated-initialize no-op remains unstable. Released 4.4
+    // validation and write progress rules apply without this opt-in.
+    share_coordinator_config.unstable_repeat_initialize_noop = matches!(
         config.features.unstable_api_versions,
         UnstableApiVersions::Enabled
     );

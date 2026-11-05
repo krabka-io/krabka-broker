@@ -54,11 +54,9 @@ struct ReadRequest {
     leader_epoch: i32,
 }
 
-/// One read row: the request, and what Kafka 4.3.1 and Kafka trunk leave
-/// behind.
+/// One read row: the request and released 4.4 persisted result.
 struct ReadRow {
     request: ReadRequest,
-    kafka_4_3_1: ReadResult,
     trunk: ReadResult,
 }
 
@@ -66,16 +64,15 @@ impl ReadRow {
     fn same(request: ReadRequest, result: ReadResult) -> Self {
         Self {
             request,
-            kafka_4_3_1: result,
             trunk: result,
         }
     }
 }
 
-/// A coordinator with Kafka trunk's rules on or off.
+/// A coordinator with only the unstable repeat-initialize no-op on or off.
 fn rules(trunk: bool) -> ShareCoordinatorConfig {
     ShareCoordinatorConfig {
-        trunk_rules: trunk,
+        unstable_repeat_initialize_noop: trunk,
         ..ShareCoordinatorConfig::default()
     }
 }
@@ -333,20 +330,11 @@ async fn read_fences_and_persists_the_leader_epoch() {
                 reloaded_leader_epoch: 3,
             },
         ),
-        // `-1` is "not supplied" in 4.3.1: a plain read that skips the fence
-        // and updates no leader epoch. Trunk refuses a negative epoch.
+        // Released 4.4 rejects a negative leader epoch under both flag settings.
         ReadRow {
             request: ReadRequest {
                 partition: 0,
                 leader_epoch: -1,
-            },
-            kafka_4_3_1: ReadResult {
-                read: Ok(ReadSummary {
-                    state_epoch: 2,
-                    start_offset: 10,
-                }),
-                write: Some(Ok(())),
-                reloaded_leader_epoch: 3,
             },
             trunk: ReadResult {
                 read: Err(refused(
@@ -383,7 +371,7 @@ async fn read_fences_and_persists_the_leader_epoch() {
                 read: expected,
                 write,
                 reloaded_leader_epoch,
-            } = if trunk { row.trunk } else { row.kafka_4_3_1 };
+            } = row.trunk;
             let dir = tempdir().unwrap();
             let Seeded { coord, image } = seeded(dir.path(), trunk).await;
             let read = coord
