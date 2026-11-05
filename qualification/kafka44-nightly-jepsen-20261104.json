@@ -1,0 +1,504 @@
+{
+  "date": "2026-11-05",
+  "scope": "subsequent scheduled full36-workload recovery regression, not historical exact schedule replay",
+  "run_url": "https://github.com/krabka-io/krabka-broker/actions/runs/41831737160",
+  "job_url": "https://github.com/krabka-io/krabka-broker/actions/runs/41831737160/job/126580361165",
+  "source_revision": "a6d375763a787f91a447bffe874188b2d7ee818b",
+  "ancestor_of_main_7bda61e": true,
+  "artifact": {
+    "id": 13332510707,
+    "name": "jepsen-report",
+    "zip_sha256": "2472784e89bb1647c73316fffeb894dd631ed2e653c2195465c6158ce60a0764",
+    "results_json_sha256": "242f68e51e324ba3ed97cc0a0ac38371eaede3a016b08bd4f430404962058ad1"
+  },
+  "results": {
+    "jepsen_version": "0.3.15",
+    "results": [
+      {
+        "name": "assign-none",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [],
+        "store": "store/krabka assign acks=all idem=true iso=read_committed no-faults/2026-11-04T12:47:15.274386542Z"
+      },
+      {
+        "name": "assign-partition",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [],
+        "store": "store/krabka assign acks=all idem=true iso=read_committed partition/2026-11-04T12:49:51.813271078Z"
+      },
+      {
+        "name": "assign-kill",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [],
+        "store": "store/krabka assign acks=all idem=true iso=read_committed kill/2026-11-04T12:52:28.197635951Z"
+      },
+      {
+        "name": "assign-pause",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [],
+        "store": "store/krabka assign acks=all idem=true iso=read_committed pause/2026-11-04T12:54:57.680087813Z"
+      },
+      {
+        "name": "assign-mixed",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [],
+        "store": "store/krabka assign acks=all idem=true iso=read_committed kill,partition,pause/2026-11-04T12:57:31.251940092Z"
+      },
+      {
+        "name": "assign-packet",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [],
+        "store": "store/krabka assign acks=all idem=true iso=read_committed packet/2026-11-04T12:59:58.412611096Z"
+      },
+      {
+        "name": "assign-clock",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [],
+        "store": "store/krabka assign acks=all idem=true iso=read_committed clock/2026-11-04T13:02:30.54949067Z"
+      },
+      {
+        "name": "assign-all",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [],
+        "store": "store/krabka assign acks=all idem=true iso=read_committed clock,kill,packet,partition,pause/2026-11-04T13:05:01.316738155Z"
+      },
+      {
+        "name": "assign-txn-none",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "strong-PL-1-cycle-exists",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka assign txn acks=all idem=true iso=read_committed no-faults/2026-11-04T13:07:24.980963357Z"
+      },
+      {
+        "name": "assign-txn-partition",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "strong-PL-1-cycle-exists",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka assign txn acks=all idem=true iso=read_committed partition/2026-11-04T13:10:19.59045336Z"
+      },
+      {
+        "name": "assign-txn-kill",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "strong-PL-1-cycle-exists",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka assign txn acks=all idem=true iso=read_committed kill/2026-11-04T13:12:56.936767333Z"
+      },
+      {
+        "name": "assign-txn-pause",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "strong-PL-1-cycle-exists",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka assign txn acks=all idem=true iso=read_committed pause/2026-11-04T13:16:12.601903089Z"
+      },
+      {
+        "name": "assign-txn-mixed",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "strong-PL-1-cycle-exists",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka assign txn acks=all idem=true iso=read_committed kill,partition,pause/2026-11-04T13:19:07.036156366Z"
+      },
+      {
+        "name": "assign-txn-packet",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "strong-PL-1-cycle-exists",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka assign txn acks=all idem=true iso=read_committed packet/2026-11-04T13:22:03.544970816Z"
+      },
+      {
+        "name": "assign-txn-clock",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "strong-PL-1-cycle-exists",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka assign txn acks=all idem=true iso=read_committed clock/2026-11-04T13:24:41.8177234Z"
+      },
+      {
+        "name": "assign-txn-all",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "PL-1-cycle-exists",
+          "int-send-skip"
+        ],
+        "store": "store/krabka assign txn acks=all idem=true iso=read_committed clock,kill,packet,partition,pause/2026-11-04T13:27:29.343066951Z"
+      },
+      {
+        "name": "subscribe-none",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "poll-skip"
+        ],
+        "store": "store/krabka subscribe acks=all idem=true iso=read_committed no-faults/2026-11-04T13:30:59.196682468Z"
+      },
+      {
+        "name": "subscribe-partition",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "poll-skip"
+        ],
+        "store": "store/krabka subscribe acks=all idem=true iso=read_committed partition/2026-11-04T13:33:30.644953504Z"
+      },
+      {
+        "name": "subscribe-kill",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "poll-skip"
+        ],
+        "store": "store/krabka subscribe acks=all idem=true iso=read_committed kill/2026-11-04T13:36:03.568721963Z"
+      },
+      {
+        "name": "subscribe-pause",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "poll-skip"
+        ],
+        "store": "store/krabka subscribe acks=all idem=true iso=read_committed pause/2026-11-04T13:38:30.325619317Z"
+      },
+      {
+        "name": "subscribe-mixed",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "nonmonotonic-poll",
+          "poll-skip"
+        ],
+        "store": "store/krabka subscribe acks=all idem=true iso=read_committed kill,partition,pause/2026-11-04T13:41:00.114532533Z"
+      },
+      {
+        "name": "subscribe-packet",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "poll-skip"
+        ],
+        "store": "store/krabka subscribe acks=all idem=true iso=read_committed packet/2026-11-04T13:43:35.754574135Z"
+      },
+      {
+        "name": "subscribe-clock",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "poll-skip"
+        ],
+        "store": "store/krabka subscribe acks=all idem=true iso=read_committed clock/2026-11-04T13:46:08.500855659Z"
+      },
+      {
+        "name": "subscribe-all",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [],
+        "store": "store/krabka subscribe acks=all idem=true iso=read_committed clock,kill,packet,partition,pause/2026-11-04T13:48:36.366104922Z"
+      },
+      {
+        "name": "subscribe-txn-none",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "nonmonotonic-poll",
+          "poll-skip",
+          "strong-PL-1-cycle-exists",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka subscribe txn acks=all idem=true iso=read_committed no-faults/2026-11-04T13:51:23.345321517Z"
+      },
+      {
+        "name": "subscribe-txn-partition",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "nonmonotonic-poll",
+          "poll-skip",
+          "strong-PL-1-cycle-exists",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka subscribe txn acks=all idem=true iso=read_committed partition/2026-11-04T13:54:10.378617975Z"
+      },
+      {
+        "name": "subscribe-txn-kill",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "nonmonotonic-poll",
+          "poll-skip",
+          "strong-PL-1-cycle-exists",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka subscribe txn acks=all idem=true iso=read_committed kill/2026-11-04T13:58:18.144451721Z"
+      },
+      {
+        "name": "subscribe-txn-pause",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "nonmonotonic-poll",
+          "poll-skip",
+          "strong-PL-1-cycle-exists",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka subscribe txn acks=all idem=true iso=read_committed pause/2026-11-04T14:01:05.479836129Z"
+      },
+      {
+        "name": "subscribe-txn-mixed",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "PL-1-cycle-exists",
+          "int-send-skip"
+        ],
+        "store": "store/krabka subscribe txn acks=all idem=true iso=read_committed kill,partition,pause/2026-11-04T14:03:38.073866223Z"
+      },
+      {
+        "name": "subscribe-txn-packet",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "nonmonotonic-poll",
+          "poll-skip",
+          "strong-PL-1-cycle-exists",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka subscribe txn acks=all idem=true iso=read_committed packet/2026-11-04T14:07:54.048045671Z"
+      },
+      {
+        "name": "subscribe-txn-clock",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "nonmonotonic-poll",
+          "poll-skip",
+          "strong-PL-1-cycle-exists",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka subscribe txn acks=all idem=true iso=read_committed clock/2026-11-04T14:10:29.515112214Z"
+      },
+      {
+        "name": "subscribe-txn-all",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "PL-1-cycle-exists",
+          "int-send-skip"
+        ],
+        "store": "store/krabka subscribe txn acks=all idem=true iso=read_committed clock,kill,packet,partition,pause/2026-11-04T14:13:17.19476545Z"
+      },
+      {
+        "name": "assign-txn-mixed-crash-clients",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G1c",
+          "G1c-realtime",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "strong-PL-2-cycle-exists"
+        ],
+        "store": "store/krabka assign txn crash-clients acks=all idem=true iso=read_committed kill,partition,pause/2026-11-04T14:16:05.092663702Z"
+      },
+      {
+        "name": "subscribe-txn-mixed-crash-clients",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G0-realtime",
+          "G1c",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip",
+          "poll-skip",
+          "strong-PL-1-cycle-exists"
+        ],
+        "store": "store/krabka subscribe txn crash-clients acks=all idem=true iso=read_committed kill,partition,pause/2026-11-04T14:20:16.600658183Z"
+      },
+      {
+        "name": "subscribe-kip848-mixed",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [],
+        "store": "store/krabka subscribe group=consumer acks=all idem=true iso=read_committed kill,partition,pause/2026-11-04T14:23:00.704384144Z"
+      },
+      {
+        "name": "subscribe-kip848-txn-mixed",
+        "status": "valid",
+        "detail": "",
+        "bad_error_types": [],
+        "error_types": [
+          "G0",
+          "G1c",
+          "PL-1-cycle-exists",
+          "PL-2-cycle-exists",
+          "int-send-skip"
+        ],
+        "store": "store/krabka subscribe txn group=consumer acks=all idem=true iso=read_committed kill,partition,pause/2026-11-04T14:25:33.608425854Z"
+      }
+    ]
+  },
+  "report_markdown": "# Jepsen Kafka workload against krabka\n\nJepsen `0.3.15`, `jepsen.tests.kafka`: 36 tests, 36 passed, 0 known failures, 0 regressions, 0 fixed, 0 skipped.\n\n| Test | Arguments | Result | Verdict | Detail |\n| :--- | :--- | :--- | :--- | :--- |\n| `assign-none` | `--sub-via assign` | valid | pass |  |\n| `assign-partition` | `--sub-via assign --nemesis partition` | valid | pass |  |\n| `assign-kill` | `--sub-via assign --nemesis kill` | valid | pass |  |\n| `assign-pause` | `--sub-via assign --nemesis pause` | valid | pass |  |\n| `assign-mixed` | `--sub-via assign --nemesis partition,kill,pause` | valid | pass |  |\n| `assign-packet` | `--sub-via assign --nemesis packet` | valid | pass |  |\n| `assign-clock` | `--sub-via assign --nemesis clock` | valid | pass |  |\n| `assign-all` | `--sub-via assign --nemesis all` | valid | pass |  |\n| `assign-txn-none` | `--sub-via assign --txn` | valid | pass |  |\n| `assign-txn-partition` | `--sub-via assign --txn --nemesis partition` | valid | pass |  |\n| `assign-txn-kill` | `--sub-via assign --txn --nemesis kill` | valid | pass |  |\n| `assign-txn-pause` | `--sub-via assign --txn --nemesis pause` | valid | pass |  |\n| `assign-txn-mixed` | `--sub-via assign --txn --nemesis partition,kill,pause` | valid | pass |  |\n| `assign-txn-packet` | `--sub-via assign --txn --nemesis packet` | valid | pass |  |\n| `assign-txn-clock` | `--sub-via assign --txn --nemesis clock` | valid | pass |  |\n| `assign-txn-all` | `--sub-via assign --txn --nemesis all` | valid | pass |  |\n| `subscribe-none` | `--sub-via subscribe` | valid | pass |  |\n| `subscribe-partition` | `--sub-via subscribe --nemesis partition` | valid | pass |  |\n| `subscribe-kill` | `--sub-via subscribe --nemesis kill` | valid | pass |  |\n| `subscribe-pause` | `--sub-via subscribe --nemesis pause` | valid | pass |  |\n| `subscribe-mixed` | `--sub-via subscribe --nemesis partition,kill,pause` | valid | pass |  |\n| `subscribe-packet` | `--sub-via subscribe --nemesis packet` | valid | pass |  |\n| `subscribe-clock` | `--sub-via subscribe --nemesis clock` | valid | pass |  |\n| `subscribe-all` | `--sub-via subscribe --nemesis all` | valid | pass |  |\n| `subscribe-txn-none` | `--sub-via subscribe --txn` | valid | pass |  |\n| `subscribe-txn-partition` | `--sub-via subscribe --txn --nemesis partition` | valid | pass |  |\n| `subscribe-txn-kill` | `--sub-via subscribe --txn --nemesis kill` | valid | pass |  |\n| `subscribe-txn-pause` | `--sub-via subscribe --txn --nemesis pause` | valid | pass |  |\n| `subscribe-txn-mixed` | `--sub-via subscribe --txn --nemesis partition,kill,pause` | valid | pass |  |\n| `subscribe-txn-packet` | `--sub-via subscribe --txn --nemesis packet` | valid | pass |  |\n| `subscribe-txn-clock` | `--sub-via subscribe --txn --nemesis clock` | valid | pass |  |\n| `subscribe-txn-all` | `--sub-via subscribe --txn --nemesis all` | valid | pass |  |\n| `assign-txn-mixed-crash-clients` | `--sub-via assign --txn --nemesis partition,kill,pause --crash-clients` | valid | pass |  |\n| `subscribe-txn-mixed-crash-clients` | `--sub-via subscribe --txn --nemesis partition,kill,pause --crash-clients` | valid | pass |  |\n| `subscribe-kip848-mixed` | `--sub-via subscribe --group-protocol consumer --nemesis partition,kill,pause` | valid | pass |  |\n| `subscribe-kip848-txn-mixed` | `--sub-via subscribe --group-protocol consumer --txn --nemesis partition,kill,pause` | valid | pass |  |\n",
+  "limits": [
+    "Prior counterexample remains retained; stochastic rerun is not replay of the same schedule",
+    "Does not independently qualify the six feature surfaces or new default-policy execution"
+  ]
+}

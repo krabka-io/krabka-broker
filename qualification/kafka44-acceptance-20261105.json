@@ -1,0 +1,39 @@
+{
+  "date": "2026-11-05",
+  "qualification_pass": true,
+  "status": "bounded-released44-oracle-interoperability-suite-accepted",
+  "scope": "Reproducible six-surface suite across explicitly pinned candidate revisions and scenarios, qualifying released4.4 functionality before coordinated default-policy graduation. Historical default-gate refusals are expected prior-target policy observations, not new default execution.",
+  "issue": "https://github.com/krabka-io/krabka-broker/issues/1969",
+  "baseline_integrated_revision": "7bda61e11bfb3049a2ef26f67d405924f1c7a16c",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "acceptance_map": "tools/kafka44/COVERAGE.md#acceptance-review-and-graduation-handoff-2026-11-05",
+  "receipts": {
+    "kafka44-final-integrated-20261104.json": "77fe72b309571da61ba860e619f6d49a1ea5001508747198fbc939723b8d6ec2",
+    "kafka44-share-state-movement-fixed-20261104.json": "610dd4af6a65e0ef2cc0562e37912ce2bd9a8c80b6f6247e79c1d6c7c2626631",
+    "kafka44-dlq-minimum-20261104.json": "4c82eb72d37b27840ae975df8cf267b2b38ca91d766f5abd8152b3b55f3925f1",
+    "kafka44-dlq-config-20261105.json": "5892d70f28c2d98298618c1dc861bd29a9f39ecf3987cadeaa90cb845faa0def",
+    "kafka44-copy-leader-movement-20261104.json": "35313199966f5edcc4083c331701be62b18239eb2af2827f3e74a5a53c805066",
+    "kafka44-routing-endpoints-20261104.json": "abf4590cee984e36bce13492fddee706240792383135168493e5b554986ceb87",
+    "kafka44-routing-pipeline-20261105.json": "74a9db7a6f5e8be4764e670bee2a83f5fada811c911ab994c2363e02428487a5",
+    "kafka44-routing-replacement-20261105.json": "34f7f31f850bdddf6b4c8fb327cf120122d332ecb5b751faeba14700c9667fc7",
+    "kafka44-controller-boundary-e201a1d.json": "85de0abd7471325c6c610ba70b600508ed233108e1fe06511633e951341095ca",
+    "kafka44-controller-removal-restart.json": "9a82dec8c21469c4491392ee34d2580c380297d819dfebc56417436897fb15e8",
+    "kafka44-transactions-crash-20261104.json": "6cf8f7319dd1eee7b48153ad58e20c91339359fd3926fa59fa7ab3c66c8f1cf6",
+    "kafka44-streams-durable-20261104.json": "da7a94341f7335282913bd33d46fdc423f4a42d4b3db84b08a9950d0f3970dd3",
+    "kafka44-streams-minimum-20261104.json": "99c1d4fa7f41af4430f8c9e6526f4ffce50145a3d6a4b84278a4180dbb8f358f",
+    "kafka44-streams-movement-20261104.json": "9dac37f403f74ca2baf7baac519df28ff4a6a8cb93bd843eb0d757b07e7451c5",
+    "kafka44-released-ceilings-20261105.json": "cfb2ab041b3a66a7ea13ab562170bd10917ee4f179ae6412c62e0c573e212672",
+    "kafka44-released-config-keys-20261105.json": "7f53803235dd749823a03b369809ef6f196d57dad327da406fb1484ebaa93678",
+    "kafka44-nightly-jepsen-20261104.json": "34378a06e1a370f109f2b05338d9c311ef898725a92c4544f079d9609a0d484b",
+    "kafka44-copy-interruption/receipt.json": "144b738225482f3603a4035f792bcb8a71428cd767d43c8c35385bb89cf2495a",
+    "kafka44-dlq-denied/receipt.json": "a794604d32d8bbf50d43268909e4236ffea6044595fec25fc8c79d6ff1460e51"
+  },
+  "historical_blocker_resolution": "Production leaderless reconciliation and five-node valid recovery check were followed by full Nov4 scheduled Jepsen36/36 valid, including assign-mixed. Counterexample retained; this is subsequent regression evidence, not exact schedule replay.",
+  "review": "Independent read-only acceptance review checked issue criteria, six-surface ledger, late receipts,36 valid nightly results and source ancestry; recommended bounded suite acceptance.",
+  "limits": [
+    "No relabeling of historical executable/source revisions as latest-head runtime evidence",
+    "No universal fault/ACL Cartesian coverage, arbitrary schedule or power-loss/fsync proof",
+    "No production-default parity or activation claim; issue1970 requires independent changed-policy execution",
+    "Historical failure receipts remain unchanged"
+  ]
+}

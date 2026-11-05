@@ -1,6 +1,21 @@
 # Released Kafka 4.4 qualification ledger
 
-This ledger maps acceptance obligations to evidence, not feature inventory. A source file, passing expected-failure test, bounded model, or green CI gate does not establish runtime parity. `qualification_pass` remains false. Paths below are repository-relative unless labeled private. Evidence baseline: `e201a1dfafd26f4ddae193a3cd1f0b340c819aa6`.
+This ledger maps acceptance obligations to retained evidence, not feature inventory.
+The [bounded-suite acceptance](../../qualification/kafka44-acceptance-20261105.json)
+sets `qualification_pass=true` for issue1969's reproducible released4.4 suite
+across its explicitly pinned candidate revisions and scenarios. It does not
+relabel historical runs as latest-head execution, prove every schedule or
+activate production defaults. Historical `qualification_pass=false` receipts
+below remain unchanged; later evidence supersedes their pending labels.
+Evidence baseline: `e201a1dfafd26f4ddae193a3cd1f0b340c819aa6`.
+
+The former Jepsen recovery blocker is resolved by the production leaderless
+reconciliation fix, its valid five-node regression, and the subsequent full
+[Nov4 scheduled nightly](../../qualification/kafka44-nightly-jepsen-20261104.json):
+36/36 valid, including assign-mixed and transactional/client-crash workloads.
+The historical counterexample is retained. Subsequent stochastic checks are not
+an exact replay or arbitrary-schedule proof. Issue1970's changed default policy
+still requires its own fresh/upgrade/mixed/recovery/finalization checks.
 
 ## Current bounded evidence index (2026-11-05)
 
@@ -105,7 +120,7 @@ The oracle-only transaction CI variant also restarts its own isolated container 
 
 The new stateful model drives the real async deletion handler, tombstone encoding and fake offsets-log append across legacy/old/new commits, pending names, delayed incarnation deletion and append failure. Pending reservations are deliberately name-bound: they may select a key even when its committed offset belongs to a different incarnation, so the model does not falsely claim UUID protection on that path. Real storage, high-watermark delay, raft and restart are outside this model.
 
-## Current Jepsen recovery blocker
+## Historical Jepsen recovery blocker (superseded by acceptance above)
 
 The actual nightly [41302675028](https://github.com/krabka-io/krabka-broker/actions/runs/41302675028) assign-mixed partition/kill/pause report has ten acknowledged unseen values. Private audit `../kafka44-jepsen-audit/DIAGNOSIS.md` maps their exact history indices and offsets. All three replica logs for each affected partition are byte-identical and retain the acknowledged missing values (released 4.4 DumpLogSegments independently decodes t2-1). After final heal/resume/all-running, all five nodes report those partitions with leader=nil, and final reads remain empty. This establishes a recovery/availability blocker, not demonstrated data loss; log bytes alone do not establish high-watermark recovery. Dead-leader sweep/unfence notification/retry paths are investigation leads, not a proved root cause or fix. Expected-failure model annotations and 10 “fixed” manifest statuses are not substituted for passing this actual history.
 

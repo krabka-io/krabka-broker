@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-05",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "command": "java -cp PINNED_LIBS/* tools/kafka44/ReleasedConfigKeys.java",
+  "type": "released-library-config-roster-not-runtime-qualification",
+  "output": "GROUP\tconsumer.assignment.interval.ms\nGROUP\tconsumer.assignor.offload.enable\nGROUP\tconsumer.heartbeat.interval.ms\nGROUP\tconsumer.session.timeout.ms\nGROUP\terrors.deadletterqueue.copy.record.enable\nGROUP\terrors.deadletterqueue.topic.name\nGROUP\tshare.assignment.interval.ms\nGROUP\tshare.assignor.offload.enable\nGROUP\tshare.auto.offset.reset\nGROUP\tshare.delivery.count.limit\nGROUP\tshare.heartbeat.interval.ms\nGROUP\tshare.isolation.level\nGROUP\tshare.partition.max.record.locks\nGROUP\tshare.record.lock.duration.ms\nGROUP\tshare.renew.acknowledge.enable\nGROUP\tshare.session.timeout.ms\nGROUP\tstreams.acceptable.recovery.lag\nGROUP\tstreams.assignment.interval.ms\nGROUP\tstreams.assignor.name\nGROUP\tstreams.assignor.offload.enable\nGROUP\tstreams.heartbeat.interval.ms\nGROUP\tstreams.initial.rebalance.delay.ms\nGROUP\tstreams.num.standby.replicas\nGROUP\tstreams.num.warmup.replicas\nGROUP\tstreams.rack.aware.assignment.tags\nGROUP\tstreams.session.timeout.ms\nGROUP\tstreams.task.offset.interval.ms\nTOPIC\tcleanup.policy\nTOPIC\tcompression.gzip.level\nTOPIC\tcompression.lz4.level\nTOPIC\tcompression.type\nTOPIC\tcompression.zstd.level\nTOPIC\tdelete.retention.ms\nTOPIC\terrors.deadletterqueue.group.enable\nTOPIC\tfile.delete.delay.ms\nTOPIC\tflush.messages\nTOPIC\tflush.ms\nTOPIC\tfollower.replication.throttled.replicas\nTOPIC\tindex.interval.bytes\nTOPIC\tinternal.segment.bytes\nTOPIC\tleader.replication.throttled.replicas\nTOPIC\tlocal.retention.bytes\nTOPIC\tlocal.retention.ms\nTOPIC\tmax.compaction.lag.ms\nTOPIC\tmax.decompressed.message.bytes\nTOPIC\tmax.message.bytes\nTOPIC\tmessage.timestamp.after.max.ms\nTOPIC\tmessage.timestamp.before.max.ms\nTOPIC\tmessage.timestamp.type\nTOPIC\tmin.cleanable.dirty.ratio\nTOPIC\tmin.compaction.lag.ms\nTOPIC\tmin.insync.replicas\nTOPIC\tpreallocate\nTOPIC\tremote.copy.lag.bytes\nTOPIC\tremote.copy.lag.ms\nTOPIC\tremote.log.copy.disable\nTOPIC\tremote.log.delete.on.disable\nTOPIC\tremote.storage.enable\nTOPIC\tretention.bytes\nTOPIC\tretention.ms\nTOPIC\tsegment.bytes\nTOPIC\tsegment.index.bytes\nTOPIC\tsegment.jitter.ms\nTOPIC\tsegment.ms\nTOPIC\tunclean.leader.election.enable\n",
+  "source_sha256": "66be787a87c5b97cb41c118d7fa67584a9c781cbe3f6e368cbddfe218f475dd6",
+  "jars": {
+    "kafka-clients-4.4.0.jar": "9e4514622675f9b24c83373d0d5b35dd7a4dba34bad69762fe90a9e54cfb71de",
+    "kafka-storage-4.4.0.jar": "7186226265e8aee59a0871c1303ccb5872bffe6030dfd78154785be806157c37",
+    "kafka-group-coordinator-4.4.0.jar": "28957c8b6b47e06e3612438027fa2117818e48ac7befeb4808d9b4b415b82f9d",
+    "kafka-group-coordinator-api-4.4.0.jar": "506c1bd3cf56b3dc3b39319eecfd0c8168062cb17bb0b7f45ce9f97ca36698e2",
+    "kafka-storage-api-4.4.0.jar": "4ef3480e039832b898e4b6a15090dc3fd25fc12c1571dbdf426db3ceda134e3c"
+  },
+  "limits": [
+    "configNames includes internal keys omitted by HTML docs",
+    "This extracts definitions, not broker visibility/runtime validation, authorization or default activation proof"
+  ]
+}
