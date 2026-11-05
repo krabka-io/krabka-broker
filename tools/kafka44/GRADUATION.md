@@ -1,4 +1,4 @@
-# Released4.4 graduation inputs (not activation)
+# Released4.4 supported defaults
 
 `ReleasedCeilings.java` executes the immutable4.4 `ApiKeys`, `Feature` and
 `MetadataVersion` bytecode with unstable versions disabled. The
@@ -29,11 +29,13 @@ are retained raw in the receipt; these are supported/default policy inputs,
 
 ## Coordinated activation boundary
 
-Issue[1970](https://github.com/krabka-io/krabka-broker/issues/1970) explicitly
-requires accepted qualification before activating new production defaults.
-This derivation does not satisfy that prerequisite. No runtime gate changes
-are included here. After acceptance, implementation must keep these surfaces
-consistent:
+The [bounded qualification suite](../../qualification/kafka44-acceptance-20261105.json)
+accepts issue1969's pinned executions and explicitly bounded scenarios. This
+policy uses its released ceilings, not the maximum implemented trunk schemas.
+The [default-policy receipt](../../qualification/kafka44-defaults-20261105.json)
+records fresh operation without unstable switches, preserved finalized features
+on existing data, explicit finalization, restart and rollback boundaries.
+These surfaces share the released policy:
 
 | Surface | Existing source owner |
 | --- | --- |
@@ -44,11 +46,24 @@ consistent:
 | Fresh format versus persisted existing levels | `crates/format/src/format/features.rs`, controller activation/replay |
 | Released configuration discovery/validation | broker `config_keys`, `handlers/describe_configs` |
 
-Retest fresh defaults without unstable flags, previous-release rolling
-upgrade/mixed-node intersection, explicit finalization, same-data recovery and
-rollback refusal limits. Existing enabled-policy upgrade receipts are valuable
-inputs, not execution of a changed default policy. Keep genuinely unreleased
-APIs/configuration gated. Do not silently finalize persisted levels.
+Fresh formatting chooses metadata33 (`4.4-IV2`), share2 and the other released
+feature defaults above. Supporting these levels does not rewrite a running
+cluster's finalized feature image: prior-release data retains metadata30/share1
+until an operator explicitly upgrades it. Mixed nodes must all support a
+requested level before the controller admits that update.
+
+The prior binary can reopen unchanged metadata30 data after a new binary has
+read and written it. Once metadata33 is explicitly finalized, that prior binary
+refuses startup because its supported ceiling is30. This is an enforced rollback
+limit, not evidence that every feature downgrade is reversible. Metadata34 and
+`InitProducerId`6 remain unstable. Intentional legacy-version acceptance keeps
+its existing independent setting.
+
+The retained fixture's former metadata33-refusal expectation is historical:
+33 is now released and supported. `UpgradeProbe` rejects genuinely unreleased34
+without mutation, then checks the safe unchanged-feature rollback. The first
+old-fixture run's successful explicit33 finalization and old-binary refusal are
+retained separately, rather than erased or counted as a passing whole task.
 
 ## Reproduce the release extraction
 
