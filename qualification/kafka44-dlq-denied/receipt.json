@@ -1,0 +1,91 @@
+{
+  "qualification_pass": false,
+  "scope": "single-node RF1 denied inter-broker destination WRITE, share.version2",
+  "native_binary": {
+    "source_revision": "d4890ecde31f111c21f17de6e67e866b1c04d2cb",
+    "sha256": "7c4e3aa7fd46b8c32a0ea076c30cd095c6476e070bd57d37a54292fcbcf78c5c",
+    "path": "/home/matt/.openclaw/workspace/coordinator/.private/qualification-20261104-final/final-runtime/krabka-broker",
+    "source_trees": {
+      "crates/broker": "787adc2e68c1e5d5e1e0b7af2ac4d6a75fd06213",
+      "crates/verified": "45d6fefe1af5d6e89db7cac9685848be2aed55c9",
+      "crates/raft": "823abe060b84580397e8c8cef5469845b80102e0"
+    },
+    "production_build": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo build -p krabka-broker --bin krabka-broker",
+    "build_complete_before_copy": true,
+    "copy_after_all_native_test_linking": true
+  },
+  "oracle_provision": [
+    {
+      "command": [
+        "docker",
+        "run",
+        "-d",
+        "--network",
+        "host",
+        "--name",
+        "dlq-denial-owned-20261104",
+        "-e",
+        "KAFKA_NODE_ID=1",
+        "-e",
+        "KAFKA_PROCESS_ROLES=broker,controller",
+        "-e",
+        "KAFKA_LISTENERS=PLAINTEXT://:64902,CONTROLLER://:64903,AUTH://:64904",
+        "-e",
+        "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:64902,AUTH://127.0.0.1:64904",
+        "-e",
+        "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+        "-e",
+        "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+        "-e",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,AUTH:SASL_PLAINTEXT",
+        "-e",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:64903",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR=1",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR=1",
+        "-e",
+        "KAFKA_SHARE_COORDINATOR_STATE_TOPIC_NUM_PARTITIONS=1",
+        "-e",
+        "KAFKA_SASL_ENABLED_MECHANISMS=PLAIN",
+        "-e",
+        "KAFKA_LISTENER_NAME_AUTH_PLAIN_SASL_JAAS_CONFIG=org.apache.kafka.common.security.plain.PlainLoginModule required user_admin=\"fixture-password\";",
+        "-e",
+        "KAFKA_AUTHORIZER_CLASS_NAME=org.apache.kafka.metadata.authorizer.StandardAuthorizer",
+        "-e",
+        "KAFKA_SUPER_USERS=User:admin",
+        "-e",
+        "KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND=true",
+        "-e",
+        "KAFKA_HEAP_OPTS=-Xms128m -Xmx384m",
+        "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b"
+      ],
+      "returncode": 0,
+      "stdout": "d17f7a8b34b18e1a5ab7c2ddb5e08029fe24f5948bada1c3f1caabb8b877d82e\n",
+      "stderr": ""
+    }
+  ],
+  "fixture_sha256": "b0699ad028a53d9ae7241665d9a0ca3b240b9208a01afc1a35bad72091dca990",
+  "commands": [
+    "javac -cp PINNED_LIBS/* -d CLASSES tools/kafka44/DlqDeniedDestination.java",
+    "java -cp CLASSES:PINNED_LIBS/* DlqDeniedDestination AUTH_ENDPOINT PLAINTEXT_ENDPOINT [prepare]"
+  ],
+  "result": "both: client denial positive control; share REJECT succeeds; destination count0; source lag0; internal DLQ terminal authorization failure",
+  "raw_evidence": "/home/matt/.openclaw/workspace/coordinator/.private/dlq-denial-runtime",
+  "native_setup": "fresh formatted metadata33/share2 data; bootstrap super users admin and ANONYMOUS; prepare installs ACLs, clean restart with only admin super user; --controller-listen-addr127.0.0.1:64913 (TOML root field ignored, failed attempts retained)",
+  "shutdown": {
+    "native_SIGINT_pid": 2379413,
+    "oracle_stop_returncode": 0
+  },
+  "limitations": [
+    "No denied auto-creation, cross-principal SASL interbroker, RF3 denial or recovery-after-ACL-repair coverage",
+    "Native binary d4890ecd, not latest documentation head; hash retained",
+    "source start offset differs: released0/native1, both lag0; no exact state parity"
+  ]
+}

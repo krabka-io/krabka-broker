@@ -284,3 +284,31 @@ released payload-close gates, actual STARTED-only metadata witnesses, owned
 SIGKILL/reopen steps and exact post-eviction reads. The retained receipt records
 a released4.4/retained-native8eab7ff8 paired recovery pass, plus the incomplete
 earlier baseline and temporary startup readiness warnings. The gate is inactive without explicit owned fixture configuration.
+### Denied DLQ destination write
+
+`DlqDeniedDestination AUTH_ENDPOINT PLAINTEXT_ENDPOINT` requires caller-owned
+fresh single-node fixtures finalized at `share.version=2`, SASL/PLAIN synthetic
+`admin` with password `fixture-password` as the only super-user, and PLAINTEXT
+inter-broker principal `User:ANONYMOUS`. Never target a production endpoint.
+The fixture creates unique topics/group, configures DLQ, installs broad anonymous
+fixture-only grants plus an exact destination WRITE DENY, and proves that DENY
+with a real rejected produce before rejecting the source record. It requires
+successful share acknowledgement, zero destination records and zero source lag.
+
+For native bootstrap only, temporarily include ANONYMOUS as a super-user; invoke
+with final argument `prepare` to install ACLs, stop that owned process cleanly,
+remove ANONYMOUS from super-users, and reopen identical data/configuration before
+the actual invocation. The oracle can bootstrap using
+`allow.everyone.if.no.acl.found=true`; explicit DENY still takes precedence.
+Grant visibility and the negative produce control are checked on each actual run.
+The native executable requires `--controller-listen-addr` to match formatted
+controller identity; a root TOML `controller_listen_addr` does not configure it.
+Compile with the pinned exported released4.4 jars like the other Java fixtures.
+
+The measured released/native receipt and raw result rows live in
+`qualification/kafka44-dlq-denied/`. **Released4.4 terminal authorization failure
+archives the source despite no durable destination write**; native matches that
+behavior. This is not a durable-delivery guarantee and must not be described as
+source-acknowledgement-only-after-destination-durability for all failure classes.
+The receipt retains the released/native terminal-prefix difference (0 vs1) while
+both have lag0. No default feature levels or production configuration changed.
