@@ -155,10 +155,10 @@ fn unchanged_static_streams_membership(static_streams_requests: &StaticStreamsRe
 
 #[scenario(
     path = "tests/features/migrated/tests/streams_groups/streams_static_membership.feature",
-    name = "every static member request is refused and changes nothing"
+    name = "every empty-instance request is refused and changes nothing"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn every_static_member_request_is_refused_and_changes_nothing(
+async fn every_empty_instance_request_is_refused_and_changes_nothing(
     streams_group: StreamsGroupScenario,
     static_streams_requests: StaticStreamsRequests,
 ) {

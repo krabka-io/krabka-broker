@@ -60,7 +60,7 @@ pub struct ShareCoordinatorConfig {
     /// keeps no buffer for reuse.
     #[default(bytes(CACHED_BUFFER_MAX_BYTES_DEFAULT))]
     pub cached_buffer_max_bytes: ByteSize,
-    /// Opt into trunk's no-op for InitializeShareGroupState repeating the
+    /// Opt into trunk's no-op for `InitializeShareGroupState` repeating the
     /// stored state epoch and start offset. Released Kafka 4.4 still appends
     /// a new snapshot. Negative-epoch validation and monotonic write progress
     /// are released 4.4 behavior and do not depend on this flag.

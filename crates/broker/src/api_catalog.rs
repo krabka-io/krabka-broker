@@ -347,9 +347,9 @@ pub enum ClientMetricsReceiver {
 /// still reach the handlers.
 ///
 /// `GetReplicaLogInfo` (1020) is the ninth. It is krabka-private: Kafka trunk
-/// gives 93, the key it used to hold, to `StreamsGroupTopologyDescriptionUpdate`,
-/// and no released Kafka advertises either -- `mirror.gcr.io/apache/kafka:4.4`
-/// stops at api key 92. The only caller in this tree is the KIP-966 unclean
+/// gives 93, the key it used to hold, to `StreamsGroupTopologyDescriptionUpdate`.
+/// Released 4.4 includes keys93 and94, but never krabka-private1020.
+/// The only caller in this tree is the KIP-966 unclean
 /// recovery manager, which dials a replica's inter-broker endpoint. It
 /// therefore belongs on the same side of the split as the other eight.
 ///
@@ -540,8 +540,7 @@ fn admin_apis() -> Vec<CatalogApi> {
         catalog_request::<AddOffsetsToTxnRequest>(),
         catalog_request::<EndTxnRequest>(),
         catalog_request::<WriteTxnMarkersRequest>(),
-        // Version 6 (KIP-1319, topic ids) is Kafka trunk's; 4.4 stops at 5,
-        // so v6 is served only under `unstable.api.versions.enable`.
+        // Version 6 (KIP-1319, topic ids) is released in Kafka4.4.
         catalog_request::<TxnOffsetCommitRequest>(),
         catalog_request::<DescribeConfigsRequest>(),
         catalog_request::<AlterReplicaLogDirsRequest>(),
@@ -561,11 +560,9 @@ fn admin_apis() -> Vec<CatalogApi> {
         // UnregisterBroker (KIP-919) — admin RPC to permanently drop a
         // broker registration from the cluster's metadata image.
         catalog_request::<UnregisterBrokerRequest>(),
-        // UnregisterController (KIP-1312, Kafka trunk) — drops a controller
-        // registration. Tagged `broker` and `controller`: a broker listener
-        // forwards it to the active controller. Kafka 4.4 has no api key 94,
-        // so it is advertised and accepted only under
-        // `unstable.api.versions.enable`.
+        // UnregisterController (KIP-1312, released4.4) drops a controller
+        // registration. Both listener roles serve it; a broker forwards it
+        // to the active controller.
         catalog_request::<UnregisterControllerRequest>(),
         catalog_request::<AlterUserScramCredentialsRequest>(),
         // UpdateFeatures (api_key 57, KIP-584) — `kafka-features` admin tool
@@ -626,17 +623,13 @@ fn admin_apis() -> Vec<CatalogApi> {
         // KIP-932 share-group membership protocol.
         catalog_request::<ShareGroupHeartbeatRequest>(),
         catalog_request::<ShareGroupDescribeRequest>(),
-        // KIP-1071 streams-group rebalance protocol. Version 1 of both
-        // (KIP-1331, KIP-1357) is Kafka trunk's and is served only under
-        // `unstable.api.versions.enable`.
+        // KIP-1071 streams-group rebalance protocol. Version1 of both
+        // (KIP-1331, KIP-1357) is released in Kafka4.4.
         catalog_request::<StreamsGroupHeartbeatRequest>(),
         catalog_request::<StreamsGroupDescribeRequest>(),
-        // KIP-1331 topology description push (Kafka trunk). krabka stores it
-        // in Kafka's in-memory plugin when
-        // `group.streams.topology.description.plugin.class` names it, and
-        // answers as a trunk broker without a plugin otherwise. Kafka 4.4
-        // has no api key 93, so it is advertised and accepted only under
-        // `unstable.api.versions.enable`.
+        // KIP-1331 topology description push (released4.4). The configured
+        // native plugin stores descriptions; without one, the handler returns
+        // the released no-plugin outcome.
         catalog_request::<StreamsGroupTopologyDescriptionUpdateRequest>(),
         // KIP-932 ShareFetch / ShareAcknowledge data-plane RPCs.
         catalog_request::<ShareFetchRequest>(),
