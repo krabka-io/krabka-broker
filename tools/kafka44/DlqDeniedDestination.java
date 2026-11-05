@@ -14,6 +14,8 @@ public class DlqDeniedDestination {
  static void require(boolean ok,Object detail) { if(!ok)throw new AssertionError(detail); }
  static void pass(String name) { System.out.println("SCENARIO\t"+name+"\tPASS"); }
  public static void main(String[] args)throws Exception {
+  if(args.length<2 || args.length>3 || (args.length==3 && !args[2].equals("prepare")))
+   throw new IllegalArgumentException("usage: DlqDeniedDestination AUTH_ENDPOINT PLAINTEXT_ENDPOINT [prepare]");
   String endpoint=args[0];
   try(Admin admin=Admin.create(props(endpoint))) {
    var features=admin.describeFeatures().featureMetadata().get();System.out.println("FEATURES\t"+features);
