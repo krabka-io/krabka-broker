@@ -545,8 +545,7 @@ struct V6Case {
     /// The response topics in order: who the topic is and its rows.
     expected: Vec<ExpectedTopic>,
     /// The `(topic, partition)` rows the log holds after the request, each
-    /// with the topic id its offset records: the id the image holds at v6, and
-    /// none below it, as Kafka 4.3.1 records.
+    /// with the topic id the image holds, at every request version.
     logged: Vec<RowKey<'static>>,
 }
 
@@ -557,8 +556,7 @@ struct V6Case {
 /// the image does not hold, and the zero id, answer `UNKNOWN_TOPIC_ID` ahead
 /// of the `Read` gate. The v6 response carries the topic ids, and the rows the
 /// topic sweep settled lead the rows that reached the coordinator. v5 still
-/// names the topic, and its offset records no id, as Kafka 4.3.1 records the
-/// zero id for the versions it has.
+/// names the topic, and released 4.4 resolves and records its id too.
 #[tokio::test]
 async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
     use krabka_protocol::{
@@ -588,7 +586,7 @@ async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
 
     let cases = [
         V6Case {
-            name: "v5_names_the_topic_and_logs_no_id",
+            name: "v5_names_the_topic_and_logs_its_resolved_id",
             version: 5,
             topics: vec![req_topic(TopicRef::Name("a"), &[0])],
             expected: vec![exp(TopicRef::Name("a"), vec![rc(0, codes::NONE)])],
@@ -754,7 +752,7 @@ async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
             .map(|&RowKey { topic, partition }| LoggedValue {
                 topic,
                 partition,
-                topic_id: (case.version >= 6).then(|| id_of(topic)),
+                topic_id: Some(id_of(topic)),
             })
             .collect();
         check!(logged == want, "{}: logged offsets", case.name);
@@ -1217,13 +1215,12 @@ async fn a_v5_commit_adds_the_offsets_partition_on_a_transaction_version_1_clust
     handle.shutdown().await;
 }
 
-/// Kafka trunk records the topic id of a transactional commit at every
-/// version, and 4.3.1 records none. The topic id follows the request version
-/// and `unstable.api.versions.enable`, and a v5 request names its topic.
+/// Released 4.4 resolves and persists topic IDs even for name-based v5,
+/// independently of unstable APIs. Read the actual offsets log after dispatch.
 #[tokio::test]
-async fn a_v5_commit_records_the_topic_id_only_under_unstable_api_versions() {
+async fn released_4_4_v5_commit_records_topic_ids_without_unstable_opt_in() {
     // (unstable api versions on, the topic id the offset records)
-    for (unstable, recorded) in [(false, false), (true, true)] {
+    for (unstable, recorded) in [(false, true), (true, true)] {
         let StartedBroker {
             broker: handle,
             dir: _dir,

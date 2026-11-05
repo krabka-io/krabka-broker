@@ -148,9 +148,8 @@ pub(super) async fn append_txn_batch(
                 // version, so a transactional commit always takes the
                 // broker-wide retention.
                 expire_timestamp_ms: None,
-                // The id the handler resolved the topic to, as Kafka trunk's
-                // `OffsetAndMetadata.fromRequest` keeps it (KIP-1319). 4.3.1
-                // keeps the zero id, which is no id.
+                // The resolved id, as released Kafka 4.4 records at every
+                // request version. The existing value schema is unchanged.
                 topic_id: Some(uuid::Uuid::from_bytes(topic.topic_id.0))
                     .filter(|id| record_topic_ids && !id.is_nil()),
             };

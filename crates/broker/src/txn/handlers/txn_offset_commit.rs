@@ -13,9 +13,9 @@
 //! does not hold, or the zero id, answers `UNKNOWN_TOPIC_ID (100)` on every
 //! row of that topic before the topic `Read` gate, and an id it holds is
 //! authorized and checked for existence under the topic's name. The committed
-//! offset records the topic's id from v6 on, and at every version under
-//! `unstable.api.versions.enable`, as Kafka trunk's `KafkaApis` hands it to the
-//! coordinator. Kafka 4.3.1 records the zero id for the versions it has, 0 to
+//! offset records the topic's id at every version, as released Kafka 4.4's
+//! `KafkaApis` resolves name-based topics before passing them to the coordinator.
+//! Kafka 4.3.1 recorded the zero id for its versions 0 to
 //! 5. v6 also answers a missing group `GROUP_ID_NOT_FOUND` and a refused member
 //! epoch `STALE_MEMBER_EPOCH`, which older versions answer `ILLEGAL_GENERATION`.
 //!
@@ -98,7 +98,6 @@ use {
         response::{build_response, error_response},
     },
     crate::{
-        api_catalog::UnstableApiVersions,
         authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
         broker::Broker,
         codes,
@@ -206,11 +205,10 @@ async fn commit_rows(
         verification::verify_producer(broker, req, version, offsets_partition, txnv).await?;
     let group = resolve_group_actors(broker, req, version)?;
     fence_commit(req, version, &group, &reserved).await?;
-    // Kafka trunk's `OffsetAndMetadata.fromRequest(topic.topicId(), ...)` keeps
-    // the topic id of every commit. 4.3.1 keeps the zero id, and its versions
-    // stop at 5, so only a v6 request and trunk mode record an id.
-    let record_topic_ids = version >= FIRST_TOPIC_ID_VERSION
-        || broker.config.features.unstable_api_versions == UnstableApiVersions::Enabled;
+    // Released 4.4 keeps the resolved topic id even for name-based requests.
+    // This fills the existing version-4 tagged field; it changes no record
+    // format selection or feature-version gate.
+    let record_topic_ids = true;
     let append = TxnAppend {
         offsets_partition,
         sweep: sweep.rows(),
@@ -554,9 +552,8 @@ const FIRST_TOPIC_ID_VERSION: i16 = 6;
 /// does not know, or the zero id, leaves the name empty for the sweep to
 /// answer `UNKNOWN_TOPIC_ID`. Below v6 each topic gets the id the image holds
 /// for its name, or the zero id. Either way the id is what the per-partition
-/// validator sees, and what the committed offset records where trunk's
-/// `OffsetAndMetadata.fromRequest` does: from v6, and under
-/// `unstable.api.versions.enable`.
+/// validator sees, and what the committed offset records at every version
+/// as released Kafka 4.4's `OffsetAndMetadata.fromRequest` does.
 fn resolve_topics(
     req: &mut TxnOffsetCommitRequest,
     version: i16,
