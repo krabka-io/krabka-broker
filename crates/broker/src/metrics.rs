@@ -44,6 +44,8 @@ mod replication;
 mod request;
 mod schema_validation;
 mod share_dlq;
+mod streams_storage;
+pub use streams_storage::{TopologyStorageLabel, TopologyStorageOperation};
 #[cfg(test)]
 pub(crate) mod test_support;
 mod traffic;
@@ -96,6 +98,14 @@ const REGISTRY_PREFIX: &str = "krabka_broker";
 pub struct BrokerMetrics {
     #[metric(skip, new = Arc::new(Mutex::new(Registry::with_prefix(REGISTRY_PREFIX))))]
     pub registry: SharedRegistry,
+    /// Completed native topology storage callbacks, not protocol requests.
+    #[metric(
+        help = "Completed native Streams topology storage callbacks by operation and result."
+    )]
+    pub streams_topology_storage_operations: Family<TopologyStorageLabel, Counter>,
+    /// Native callback wall time, including backend IO but excluding log appends.
+    #[metric(help = "Native Streams topology storage callback latency in seconds.", buckets = registration::REQUEST_DURATION_BUCKETS)]
+    pub streams_topology_storage_duration_seconds: Family<TopologyStorageLabel, Histogram>,
     #[metric(help = "Bytes received from producers, per topic (cumulative). \
         Operators compute throughput via rate(...).")]
     pub topic_bytes_in: Family<TopicLabel, Counter>,

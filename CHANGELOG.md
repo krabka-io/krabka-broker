@@ -25,6 +25,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Added
 
+- Native Streams topology storage callbacks expose bounded operation/result counters and duration histograms for set, get and delete. See [native storage telemetry](docs/streams-topology-description-storage.md#native-callback-telemetry).
+
 - Embedded brokers can register a native share DLQ manager factory. Shutdown cancels pending enqueue futures, retains replayable ARCHIVING ranges and stops owned workers. Oversized copied records retain their payload and fail the destination write rather than silently becoming headers-only. Recovery can duplicate a completed append; a terminal destination error can archive without a DLQ copy. See [native DLQ managers](docs/compatibility/kafka-4.4-native-dlq-manager.md).
 - Brokers with unstable API versions enabled expose and validate Kafka 4.4 share DLQ auto-creation and topic-prefix settings through dynamic configuration and DescribeConfigs. Per-broker overrides, cluster defaults and resets retain their precedence; the default 4.3.1 compatibility baseline is unchanged. See [DLQ configuration compatibility](docs/compatibility/kafka-4.4-dlq-config.md).
 - Embedded brokers can register ordered native Rust Streams task assignors, select them per group and report the selected implementation. Invalid output or a failed callback leaves the prior assignment intact and returns an error without persisting partial membership changes. This is an in-process embedding API, not Java plugin loading; [native assignor compatibility](docs/streams-task-assignors.md) records the limits.

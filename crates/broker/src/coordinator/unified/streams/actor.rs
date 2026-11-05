@@ -1043,7 +1043,7 @@ async fn handle_message(
                 actor.topology.as_ref(),
                 actor.ready_topology(),
             );
-            match description::stored_description(actor, turn.config).await {
+            match description::stored_description(actor, turn).await {
                 Ok(description) => view.topology_description = description,
                 Err(_) => view.topology_description_error = true,
             }

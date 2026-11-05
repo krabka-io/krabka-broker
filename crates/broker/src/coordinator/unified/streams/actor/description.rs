@@ -33,6 +33,7 @@ use {
             },
         },
         error::BrokerError,
+        metrics::TopologyStorageOperation,
         task_util::ask,
     },
     dashmap::mapref::entry::Entry,
@@ -42,7 +43,7 @@ use {
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     },
     krabka_verified::streams_cleanup::{finish_store, may_reclaim},
-    std::{sync::Arc, time::Instant},
+    std::{future::Future, sync::Arc, time::Instant},
 };
 
 /// A `StreamsGroupTopologyDescriptionUpdate` that the handler passed to the
@@ -169,7 +170,12 @@ pub(super) async fn handle_push(
     actor.description_epochs.stored = DescriptionEpochs::UNCERTAIN;
     persist_epochs(actor, turn).await?;
     let result = if let Some(backend) = &turn.config.topology_description_backend {
-        backend.set(&group_id, topology_epoch, &description).await
+        observe_native(
+            turn.coordinator,
+            TopologyStorageOperation::Set,
+            backend.set(&group_id, topology_epoch, &description),
+        )
+        .await
     } else {
         actor.description_runtime.store(topology_epoch, description);
         Ok(())
@@ -215,8 +221,9 @@ pub(super) async fn handle_push(
 /// answers.
 pub(super) async fn stored_description(
     actor: &ActorState,
-    config: &StreamsGroupConfig,
+    turn: StreamsTurn<'_>,
 ) -> Result<Option<TopologyDescription>, StorageFailure> {
+    let config = turn.config;
     if !config.description_plugin_configured() {
         return Ok(None);
     }
@@ -228,7 +235,12 @@ pub(super) async fn stored_description(
         return Ok(None);
     }
     if let Some(backend) = &config.topology_description_backend {
-        return backend.get(&actor.state.group_id, topology_epoch).await;
+        return observe_native(
+            turn.coordinator,
+            TopologyStorageOperation::Get,
+            backend.get(&actor.state.group_id, topology_epoch),
+        )
+        .await;
     }
     Ok(actor.description_runtime.get(topology_epoch))
 }
@@ -274,7 +286,13 @@ pub(super) async fn cleanup(
     actor.description_epochs.stored = DescriptionEpochs::UNCERTAIN;
     persist_epochs(actor, turn).await?;
     if let Some(backend) = &turn.config.topology_description_backend
-        && backend.delete(&actor.state.group_id).await.is_err()
+        && observe_native(
+            turn.coordinator,
+            TopologyStorageOperation::Delete,
+            backend.delete(&actor.state.group_id),
+        )
+        .await
+        .is_err()
     {
         return Ok(false);
     }
@@ -463,4 +481,19 @@ pub(super) fn retire_runtime(actor: &ActorState, coordinator: &GroupCoordinator)
         .remove_if(&actor.state.group_id, |_, runtime| {
             Arc::ptr_eq(runtime, &actor.description_runtime)
         });
+}
+
+/// Observe completed callbacks only. Dropped/panicking futures are not reported
+/// as successes; log persistence and in-memory reference storage are excluded.
+async fn observe_native<T>(
+    coordinator: &GroupCoordinator,
+    operation: TopologyStorageOperation,
+    future: impl Future<Output = Result<T, StorageFailure>>,
+) -> Result<T, StorageFailure> {
+    let started = Instant::now();
+    let result = future.await;
+    if let Some(metrics) = coordinator.metrics.get() {
+        metrics.record_topology_storage(operation, result.is_ok(), started.elapsed());
+    }
+    result
 }

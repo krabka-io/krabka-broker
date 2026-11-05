@@ -79,9 +79,10 @@ shared-backend movement runs are indexed in
 [the qualification ledger](../tools/kafka44/COVERAGE.md). They retain their
 actual historical source/binary identities, not fresh execution at every head.
 Cleanup uses the existing offset-retention sweep. Kafka's broker-wide cleanup
-worker uses the same offsets-retention-check interval; equivalent scheduling
-under coordinator movement remains unqualified. Native plugin metrics remain
-unqualified.
+worker uses the same offsets-retention-check interval. The native periodic-runner
+regression below covers a graceful handoff and retry schedule; distributed
+scheduling equivalence under coordinator movement remains unqualified. Native callback counters and duration histograms are documented below;
+Kafka JMX name/aggregation equivalence remains unqualified.
 Classic-protocol conversion deletes storage first; failures retain the Streams
 group, throttle repeated cleanup calls, and answer `REBALANCE_IN_PROGRESS`.
 
@@ -138,3 +139,30 @@ These supersede the original source-audit findings and 2,801-history model above
 They do not establish arbitrary distributed interleavings or plugin IO safety;
 the separate wire/restart/shared-backend movement receipts retain those runs'
 actual bounds and revisions.
+
+## Native callback telemetry
+
+Native backend callbacks export broker-wide Prometheus metrics:
+
+- `krabka_broker_streams_topology_storage_operations_total`
+- `krabka_broker_streams_topology_storage_duration_seconds`
+
+Both have bounded `operation="set|get|delete"` and
+`result="success|failure"` labels: at most six combinations, with no group IDs,
+backend messages or plugin class strings. Duration spans awaiting the returned callback future, including its IO, and uses
+seconds. Synchronous future construction and metadata-log appends are excluded. A successful missing `get` is a success,
+not a backend failure. Counters and histogram observations record completed
+callbacks only; cancelled or panicking futures do not falsely increment success.
+Rejected pushes and the reference in-memory store do not count as native IO.
+These are native broker metrics, not a claim of Kafka JMX naming or aggregation
+parity; use Prometheus `rate()` for callback and failure rates.
+
+Bounded handoff regressions additionally cover an admitted `set` blocked during
+queued shutdown, active-member heartbeat resumption on the replacement owner,
+non-owner cleanup exclusion, and a failed delete retried by the actual periodic
+retention runner on its next configured tick. The runner test uses real controller
+ownership metadata and virtual Tokio time, not a distributed-clock/fairness proof.
+Graceful shutdown drains admitted writes before replacement replay; arbitrary
+concurrent owners and stale backend writes still require host fencing. These
+native regressions do not replace an RF3 released-broker concurrent-write
+wire differential or establish filesystem power-loss guarantees.

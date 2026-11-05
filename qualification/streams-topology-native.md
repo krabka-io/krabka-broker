@@ -165,3 +165,13 @@ ownership tokens, not persisted group identities.
   refused-first-heartbeat runtime cleanup and old-owner/newer-closed-mailbox cases.
 - Frozen-source full-workspace all-target strict Clippy: **passed** (7m28s).
 - Changed-file nightly rustfmt, `git diff --check`, and CPD: passed; zero clones.
+
+## Native observability and active-member handoff follow-up
+
+[The November 5 native follow-up](streams-storage-native-followup-20261105.md)
+adds bounded set/get/delete counter and latency telemetry, active-member replay
+after an admitted-write/drained-shutdown schedule, ownership/member-gated cleanup,
+and retry through the actual periodic retention runner. The Streams suite passes
+418 tests. This does not extend the earlier RF3 receipt to active concurrent
+writes or claim native/Kafka JMX equivalence; those limits remain explicit in the
+follow-up.
