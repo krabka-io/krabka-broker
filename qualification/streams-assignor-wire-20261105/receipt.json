@@ -1,0 +1,50 @@
+{
+  "qualification_pass": true,
+  "scope": "bounded single-broker custom callback wire differential, not full assignor qualification",
+  "baseline_revision": "86d5ebfd2ca6537c70af0cd94ec5e861bb43eebe",
+  "source_sha256": {
+    "tools/kafka44/StreamsAssignorWire.java": "8c6c26deee1e876a77222e07711cc8156fa135486d35073f8196337e35b2f11a",
+    "tools/kafka44/AssignorPlugin.java": "16fe10551064fc80803fa172e2f54d95a3a89b16f31d94f03874498b4e706f53",
+    "tools/kafka44/StreamsPositive.java": "d84434d9ba57781879bcf1d91fb1858ef739c643a7083a4250947d4e94e643a9",
+    "tools/kafka44/ProtocolScenarios.java": "182f4eae3728475289b0255614af76a61f0f501c784afaf938ef6ead7f964dbe",
+    "crates/broker/examples/streams_fault_broker.rs": "d8fd0973da360344f234fab3491134c4e3554e6b8d855d21b4b765c52705e09f",
+    "crates/broker/examples/fixtures/streams_assignors.rs": "f88bf84f5d6510d37f256150a572941654cecaa69f7948ab8d31eac94f6600a5"
+  },
+  "binary_path": "/home/matt/.openclaw/workspace/coordinator/.private/streams-delete-legacy-target/debug/examples/streams_fault_broker",
+  "binary_sha256": "3726cb0d8d137c59bff43e01acef2055277689fd1b7ab4375d12e60fa37ace46",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "scenarios": {
+    "native": [
+      "SCENARIO\ttarget-first-a\tPASS",
+      "SCENARIO\ttarget-last-b\tPASS",
+      "SCENARIO\tcooperative-owner-b\tPASS",
+      "SCENARIO\tcallback-error-no-member\tPASS",
+      "SCENARIO\ttarget-first-a\tPASS",
+      "SCENARIO\tcooperative-owner-a\tPASS",
+      "SCENARIO\trepair-retry\tPASS"
+    ],
+    "oracle": [
+      "SCENARIO\ttarget-first-a\tPASS",
+      "SCENARIO\ttarget-last-b\tPASS",
+      "SCENARIO\tcooperative-owner-b\tPASS",
+      "SCENARIO\tcallback-error-no-member\tPASS",
+      "SCENARIO\ttarget-first-a\tPASS",
+      "SCENARIO\tcooperative-owner-a\tPASS",
+      "SCENARIO\trepair-retry\tPASS"
+    ]
+  },
+  "artifact_sha256": {
+    "qualification/streams-assignor-wire-20261105/broker.properties": "6a7d62f4fb4a2d2c7e67340b21b0c141208a12a1609ab66066060d3197e03d77",
+    "qualification/streams-assignor-wire-20261105/native-callbacks.log": "fa5e3de7d1d0a4199aff68c73b233966173e8200b480533afaa69d0a25d597ee",
+    "qualification/streams-assignor-wire-20261105/native.log": "ed8d092c02e5514df5ea55a45335b675341e90edaa505e88e909e0dc531c66e3",
+    "qualification/streams-assignor-wire-20261105/oracle-callbacks.log": "c2b32b8a258b72bdc595c5183e4de0c4376cc1b6367ff719eac1b0af4f8a82ce",
+    "qualification/streams-assignor-wire-20261105/oracle.log": "3b929a7fdc1bc0c693268a6cbbca82e408055c2f940fb21c52ef400889c5a2c9"
+  },
+  "unmeasured": [
+    "RF3 coordinator movement with these custom implementations",
+    "authorization failures combined with custom assignment",
+    "invalid plugin output at broker-wire boundary",
+    "unavailable persisted plugin override after broker restart",
+    "arbitrary JVM plugin ABI/lifecycle (not a native support claim)"
+  ]
+}
