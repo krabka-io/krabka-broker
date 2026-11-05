@@ -11,7 +11,7 @@ a release publication, or a production deployment.
 | --- | --- |
 | Released differential/interoperability suite (#1969) | [Acceptance receipt](../../qualification/kafka44-acceptance-20261105.json), [six-surface ledger](COVERAGE.md); #1994. Historical runtime source/binary identities remain pinned. |
 | Released defaults (#1970) | [Default-policy receipt](../../qualification/kafka44-defaults-20261105.json), [ceilings and rollback boundary](GRADUATION.md); #1995. Fresh metadata33/share2; existing finalized levels unchanged until explicit operator action. |
-| Native Streams assignors (#1971) | #1978; [native evidence and released-component probe](../../qualification/streams-assignor-native.md), [embedding contract](../../docs/streams-task-assignors.md). Distinct callbacks, selection, reassignment, invalid output and failure recovery are covered by native behavioral tests/models. The released registry probe executes actual 4.4 JAR callbacks, not a full custom-plugin broker-wire differential. |
+| Native Streams assignors (#1971) | #1978; [native evidence and released-component probe](../../qualification/streams-assignor-native.md), [embedding contract](../../docs/streams-task-assignors.md). Distinct callbacks, selection, reassignment, invalid output and failure recovery are covered by native behavioral tests/models. The released registry probe executes actual 4.4 JAR callbacks; the [bounded wire follow-up](STREAMS_ASSIGNOR_WIRE.md) additionally records seven matching custom-callback selection/reassignment/error/retry results per broker. |
 | Topology storage/lifecycle (#1972) | #1977 and #1989; [native evidence](../../qualification/streams-topology-native.md), [durable backend receipt](../../qualification/kafka44-streams-durable-20261104.json), [minimum feature](../../qualification/kafka44-streams-minimum-20261104.json), [RF3 owner movement](../../qualification/kafka44-streams-movement-20261104.json). |
 | DLQ discovery/validation (#1973) | #1976; [released config receipt](../../qualification/kafka44-dlq-config-20261105.json). |
 | DLQ boundaries, crash semantics and native manager (#1974/#1982) | #1979; [boundary/metrics/state/crash evidence](../../qualification/kafka44-dlq/README.md), [native manager contract and lifecycle tests](../../docs/compatibility/kafka-4.4-native-dlq-manager.md). |
@@ -22,15 +22,16 @@ a release publication, or a production deployment.
 - Native extensions are Rust embedding APIs, not JVM class/JAR loading, a stable
   shared-library ABI, or executable plugin hot-loading. Callback IO, cancellation
   cooperation and panic isolation are not proved by pure kernels or actor models.
-- A full released-broker custom-assignor wire/reassignment/error/authorization and
-  coordinator-movement differential is not retained. Released-component execution
-  and native actor/model coverage must not be described as that missing run.
+- Custom-assignor single-broker callback wire selection, reassignment, error and
+  retry now have a paired receipt. RF3 movement, combined ACL failures, invalid
+  output at the wire boundary and unavailable-name restart remain unmeasured.
 - Topology storage movement covers the measured shared-backend empty-member case,
-  not every active-member/concurrent-write schedule. Cleanup scheduling and native
-  plugin metrics remain unqualified. A local filesystem is not automatically
+  not every active-member/concurrent-write schedule. [Native callback telemetry and bounded periodic cleanup/handoff tests](../../qualification/streams-storage-native-followup-20261105.md)
+  now cover local behavior, not distributed scheduling or arbitrary owner overlap. A local filesystem is not automatically
   shared across hosts; fsync/power-loss guarantees are not established.
-- DLQ terminal-prefix persistence differs: Kafka retains state4/start0/count1,
-  while Krabka prunes to start1/count0. Terminal errors can archive without a DLQ
+- Historical DLQ receipts measured a terminal-prefix persistence difference.
+  The [ordering fix](../../qualification/kafka44-dlq/README.md#terminal-prefix-ordering-follow-up-2026-11-05) now persists ARCHIVED before live-cache pruning, with
+  state-machine and actual-manager regressions, not a new paired oracle run. Terminal errors can archive without a DLQ
   copy; lost confirmations can create duplicates. No exactly-once archive claim.
 - RF3 destination authorization denial and every Cartesian-product fault/ACL
   permutation remain unmeasured. Bounded model/proof results do not establish
@@ -42,5 +43,5 @@ a release publication, or a production deployment.
   metadata33; no blanket downgrade reversibility is promised.
 
 Java-client-only, Streams-library-only, Connect and shell-tool changes are not
-broker obligations. No new runtime execution is implied by this documentation
-reconciliation; follow each linked receipt for its commands, identities and bounds.
+broker obligations. The original documentation closeout implied no new runtime execution; subsequent
+implementation follow-ups retain their separate verification scope. Follow each linked receipt for its commands, identities and bounds.

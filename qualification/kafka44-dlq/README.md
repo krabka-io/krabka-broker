@@ -3,7 +3,8 @@
 This records released/candidate handler, real share-consumer exact-boundary,
 JMX-counter, restart and three-node crash comparisons. Both pre-append failure
 and append-before-confirmation schedules are measured. It is not exhaustive
-network-fault qualification; the terminal-prefix deviation remains explicit.
+network-fault qualification. Historical terminal-prefix differences remain below;
+see the terminal-prefix ordering follow-up for the subsequent implementation fix.
 
 ## Reproduction
 
