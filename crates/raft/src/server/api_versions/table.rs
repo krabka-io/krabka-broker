@@ -200,16 +200,15 @@ mod tests {
     /// a `krabka-protocol` bump that widens a generated range without widening
     /// the handler shows up here.
     #[yare::parameterized(
-        stable = { UnstableApiVersions::Disabled, 4 },
+        stable = { UnstableApiVersions::Disabled, 5 },
         trunk = { UnstableApiVersions::Enabled, api_versions_request::MAX_VERSION },
     )]
     fn advertised_versions_are_the_versions_the_listener_decodes_with(
         unstable: UnstableApiVersions,
         api_versions_max: i16,
     ) {
-        // Every key this listener answers itself is one Kafka 4.3.1 has at
-        // the vendored range, except `ApiVersions`, whose KIP-1242 v5 is
-        // trunk's.
+        // Every key this listener answers itself has a released Kafka 4.4
+        // range, including ApiVersions KIP-1242 v5.
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let body = api_versions_response_body(4, ApiVersionsView {
             image: &image,

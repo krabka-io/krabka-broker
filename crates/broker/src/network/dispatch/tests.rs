@@ -434,33 +434,26 @@ async fn assert_gated_version(case: GatedVersion) {
     );
 }
 
-/// #646, #784: under Kafka's `unstable.api.versions.enable` and krabka's
-/// `legacy_request_versions_enable`, both off by default, the broker closes a
-/// connection that sends a version or an api key Kafka 4.3.1 does not serve,
-/// as `Processor.parseRequestHeader` does (`InvalidRequestException`, no
-/// response): `InitProducerId` v6, trunk's `TxnOffsetCommit` v6, streams v1,
-/// api keys 93 and 94, and the pre-4.0 `Produce`, `Fetch` and `ListOffsets`
-/// versions. `ApiVersions` v5 is answered `UNSUPPORTED_VERSION` with the v0-v4
-/// range instead. Turning the matching switch on dispatches the request. A
-/// dispatched request with an empty body fails to decode and closes as well,
-/// so the rows tell "refused before dispatch" from "dispatched" by the
-/// unsupported-request metric.
+/// Released Kafka 4.4 APIs dispatch without unstable opt-in, while
+/// InitProducerId v6 and pre-4.0 request versions retain their gates.
+/// Empty dispatched bodies also close connections, so the unsupported-request
+/// metric distinguishes refusal before dispatch from body decoding failures.
 #[yare::parameterized(
     init_pid_unstable_refused = { 22, "InitProducerId", 6, Strict, NoLegacy, true },
     init_pid_legacy_range = { 22, "InitProducerId", 5, Strict, NoLegacy, false },
     init_pid_unstable_enabled = { 22, "InitProducerId", 6, Trunk, NoLegacy, false },
-    txn_offset_unstable_refused = { 28, "TxnOffsetCommit", 6, Strict, NoLegacy, true },
+    txn_offset_released = { 28, "TxnOffsetCommit", 6, Strict, NoLegacy, false },
     txn_offset_unstable_enabled = { 28, "TxnOffsetCommit", 6, Trunk, NoLegacy, false },
-    streams_heartbeat_unstable_refused = { 88, "StreamsGroupHeartbeat", 1, Strict, NoLegacy, true },
+    streams_heartbeat_released = { 88, "StreamsGroupHeartbeat", 1, Strict, NoLegacy, false },
     streams_heartbeat_unstable_enabled = { 88, "StreamsGroupHeartbeat", 1, Trunk, NoLegacy, false },
-    streams_describe_unstable_refused = { 89, "StreamsGroupDescribe", 1, Strict, NoLegacy, true },
-    streams_topology_unstable_refused = {
+    streams_describe_released = { 89, "StreamsGroupDescribe", 1, Strict, NoLegacy, false },
+    streams_topology_released = {
         93,
         "StreamsGroupTopologyDescriptionUpdate",
         0,
         Strict,
         NoLegacy,
-        true,
+        false,
     },
     streams_topology_unstable_enabled = {
         93,
@@ -470,13 +463,13 @@ async fn assert_gated_version(case: GatedVersion) {
         NoLegacy,
         false,
     },
-    unregister_controller_unstable_refused = {
+    unregister_controller_released = {
         94,
         "UnregisterController",
         0,
         Strict,
         NoLegacy,
-        true,
+        false,
     },
     unregister_controller_unstable_enabled = {
         94,
@@ -514,18 +507,16 @@ async fn a_gated_version_is_refused_unless_its_switch_is_on(
     .await;
 }
 
-/// #784: `ApiVersions` v5 is Kafka trunk's KIP-1242 version. With
-/// `unstable.api.versions.enable` off the broker answers it as Kafka 4.3.1
-/// answers a version it does not know: `UNSUPPORTED_VERSION` in a v0 body
-/// naming v0-v4.
+/// An ApiVersions request above Kafka 4.4's released v5 range receives
+/// UNSUPPORTED_VERSION in a v0 body naming the released range.
 #[tokio::test]
-async fn api_versions_v5_is_unsupported_unless_unstable_api_versions_are_enabled() {
+async fn api_versions_above_v5_are_unsupported() {
     use krabka_protocol::owned::api_versions_response::{ApiVersion, ApiVersionsResponse};
 
     let (_dir, cfg) = broker_config();
     let DrivenFrames { outcomes, .. } = drive_one_frame_per_connection(cfg, &[FrameRequest {
         api_key: API_VERSIONS_KEY,
-        version: 5,
+        version: 6,
     }])
     .await;
     check!(
@@ -535,7 +526,7 @@ async fn api_versions_v5_is_unsupported_unless_unstable_api_versions_are_enabled
                 api_keys: vec![ApiVersion {
                     api_key: API_VERSIONS_KEY,
                     min_version: 0,
-                    max_version: 4,
+                    max_version: 5,
                     ..Default::default()
                 }],
                 ..Default::default()

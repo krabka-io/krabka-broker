@@ -268,35 +268,35 @@ rstest_bdd_macros::scenarios!("tests/features/handler_feature_planning",fixtures
 /// A version 0 row carries `AllowDowngrade` rather than `UpgradeType`, and
 /// Kafka reads the `UpgradeType` default, UPGRADE, so the flag never
 /// authorizes a downgrade.
-/// #784: a Kafka trunk `metadata.version` (31-33) is past what the local
+/// A Kafka trunk `metadata.version` (34) is past what the local
 /// controller supports unless `unstable.feature.versions.enable` is set, and
-/// is refused with `QuorumFeatures.reasonNotSupported`'s text, as a 4.3.1
-/// controller refuses it. With the flag set, trunk's levels are accepted.
+/// is refused with `QuorumFeatures.reasonNotSupported`'s text. With the flag
+/// set, the unstable level is accepted.
 #[yare::parameterized(
-    latest_stable_level = {
+    released_44_iv0 = {
         LOCAL,
-        30,
-        Ok(plan(vec![feature_record("metadata.version", 30)], &["metadata.version"])),
-    },
-    first_unstable_level_is_refused = {
-        LOCAL,
-        31,
-        Err(invalid("metadata.version", 31, "Local controller 1 only supports versions 7-30")),
-    },
-    higher_unstable_level_is_refused = {
-        LOCAL,
-        33,
-        Err(invalid("metadata.version", 33, "Local controller 1 only supports versions 7-30")),
-    },
-    enabled_unstable_level = {
-        LocalController { unstable_features: UnstableFeatureVersions::Enabled, ..LOCAL },
         31,
         Ok(plan(vec![feature_record("metadata.version", 31)], &["metadata.version"])),
     },
-    enabled_higher_unstable_level = {
-        LocalController { unstable_features: UnstableFeatureVersions::Enabled, ..LOCAL },
+    released_44_iv1 = {
+        LOCAL,
+        32,
+        Ok(plan(vec![feature_record("metadata.version", 32)], &["metadata.version"])),
+    },
+    latest_stable_level = {
+        LOCAL,
         33,
         Ok(plan(vec![feature_record("metadata.version", 33)], &["metadata.version"])),
+    },
+    first_unstable_level_is_refused = {
+        LOCAL,
+        34,
+        Err(invalid("metadata.version", 34, "Local controller 1 only supports versions 7-33")),
+    },
+    enabled_unstable_level = {
+        LocalController { unstable_features: UnstableFeatureVersions::Enabled, ..LOCAL },
+        34,
+        Ok(plan(vec![feature_record("metadata.version", 34)], &["metadata.version"])),
     },
 )]
 fn an_unstable_metadata_version_needs_unstable_feature_versions(
@@ -421,7 +421,7 @@ fn metadata_version_downgrades_follow_did_metadata_change() {
             Err(invalid(
                 "metadata.version",
                 6,
-                "Local controller 1 only supports versions 7-30",
+                "Local controller 1 only supports versions 7-33",
             )),
         ),
     ];

@@ -4,7 +4,7 @@ Feature: Trunk topic keys require opt-in on both individual and whole-map paths
   Scenario Outline: Trunk topic keys require opt-in on both individual and whole-map paths
     Given a topic alteration supplies key <key> and quoted value <value>
     When the supplied key is validated individually and as a map in released and unstable modes
-    Then released mode refuses the unknown key and unstable mode stores quoted value <canonical> exactly
+    Then both released and unstable modes store quoted value <canonical> exactly
 
     Examples:
       | key | value | canonical |

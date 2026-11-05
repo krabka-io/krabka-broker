@@ -21,7 +21,7 @@ Feature: DescribeConfigs identifies resources and reports Kafka configuration me
   Scenario: Stable group configuration exposes exactly Kafka 4.3.1 keys
     Given group streams-1 has no configuration overrides and unstable API versions are disabled
     When the group configuration is described with stable API versions
-    Then stable group configuration lists exactly the seventeen Kafka 4.3.1 keys
+    Then stable group configuration lists exactly the twenty seven Kafka 4.4.0 keys
 
   Scenario: Stored keys preserve type sensitivity and mutability across broker scopes: key=num.io.threads, stored=8, value=8 (1)
     Given both default and named broker configuration resources store key num.io.threads value 8

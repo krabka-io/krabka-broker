@@ -12,18 +12,15 @@ Feature: Formatter feature-level resolution follows Kafka validation order
       | default | transaction.version=3 | false | No feature:transaction.version with feature level 3 |
       | default | transaction.version=9 | false | No feature:transaction.version with feature level 9 |
       | default | group.version=-1 | false | No feature:group.version with feature level -1 |
-      | default | metadata.version=6 | false | No MetadataVersion with feature level 6. Valid feature levels are from 7 to 31. |
-      | default | metadata.version=1 | false | No MetadataVersion with feature level 1. Valid feature levels are from 7 to 31. |
-      | default | metadata.version=32 | false | No MetadataVersion with feature level 32. Valid feature levels are from 7 to 31. |
-      | default | metadata.version=33 | false | No MetadataVersion with feature level 33. Valid feature levels are from 7 to 31. |
-      | default | metadata.version=34 | false | No MetadataVersion with feature level 34. Valid feature levels are from 7 to 31. |
-      | default | metadata.version=99 | false | No MetadataVersion with feature level 99. Valid feature levels are from 7 to 31. |
-      | default | metadata.version=31 | false | metadata.version 4.4-IV0 is not yet stable. |
+      | default | metadata.version=6 | false | No MetadataVersion with feature level 6. Valid feature levels are from 7 to 34. |
+      | default | metadata.version=1 | false | No MetadataVersion with feature level 1. Valid feature levels are from 7 to 34. |
+      | default | metadata.version=34 | false | metadata.version 4.5-IV0 is not yet stable. |
+      | default | metadata.version=99 | false | No MetadataVersion with feature level 99. Valid feature levels are from 7 to 34. |
       | default | metadata.version=6 | true | No MetadataVersion with feature level 6. Valid feature levels are from 7 to 34. |
       | default | metadata.version=35 | true | No MetadataVersion with feature level 35. Valid feature levels are from 7 to 34. |
       | 4.0-IV0 | metadata.version=24 | false | Use --release-version instead of --feature metadata.version=X to avoid ambiguity. |
       | 4.0-IV0 | metadata.version=99 | false | Use --release-version instead of --feature metadata.version=X to avoid ambiguity. |
-      | default | bogus.version=1,metadata.version=99 | false | No MetadataVersion with feature level 99. Valid feature levels are from 7 to 31. |
+      | default | bogus.version=1,metadata.version=99 | false | No MetadataVersion with feature level 99. Valid feature levels are from 7 to 34. |
       | default | krabka.version=3 | false | No feature:krabka.version with feature level 3 |
 
   Scenario Outline: Unsupported feature names precede invalid known feature levels

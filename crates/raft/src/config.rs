@@ -33,7 +33,7 @@ mod metadata_log;
 mod routing;
 
 pub use self::{
-    kafka_release::{KAFKA_4_3_1_APIS, ReleasedApi, kafka_4_3_1_api, kafka_4_3_1_max},
+    kafka_release::{KAFKA_4_4_APIS, ReleasedApi, kafka_4_4_api, kafka_4_4_max},
     limits::{ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax},
     metadata_log::{
         DEFAULT_METADATA_LOG_SEGMENT_ROLL_INTERVAL, DEFAULT_METADATA_LOG_SEGMENT_SIZE,

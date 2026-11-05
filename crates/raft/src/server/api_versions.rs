@@ -10,7 +10,7 @@ use {
     self::table::CONTROLLER_LISTENER_APIS,
     crate::{
         ControllerAdminRouter, ControllerApiVersion, UnstableApiVersions, UnstableFeatureVersions,
-        error::RaftError, kafka_4_3_1_max,
+        error::RaftError, kafka_4_4_max,
     },
     bytes::{Bytes, BytesMut},
     krabka_protocol::{
@@ -40,14 +40,14 @@ const API_VERSIONS_MAX_VERSION: i16 = api_versions_request::MAX_VERSION;
 
 /// Highest `ApiVersions` version a listener serves under `unstable`.
 ///
-/// It is the same maximum its `api_keys` table advertises for API 18: Kafka 4.3.1's v4 by
-/// default, and trunk's KIP-1242 v5 under `unstable.api.versions.enable`.
+/// It is the same maximum its `api_keys` table advertises for API 18: Kafka 4.4's released v5 by
+/// default, including KIP-1242.
 #[must_use]
 pub fn api_versions_max_version(unstable: UnstableApiVersions) -> i16 {
     match unstable {
         UnstableApiVersions::Enabled => API_VERSIONS_MAX_VERSION,
         UnstableApiVersions::Disabled => {
-            kafka_4_3_1_max(API_KEY_API_VERSIONS).unwrap_or(API_VERSIONS_MAX_VERSION)
+            kafka_4_4_max(API_KEY_API_VERSIONS).unwrap_or(API_VERSIONS_MAX_VERSION)
         }
     }
 }
@@ -175,7 +175,7 @@ fn encode_body(response: &ApiVersionsResponse, version: i16) -> Bytes {
 /// The controller listener's advertised table under `unstable`, sorted by API
 /// key: its own APIs and the Admin router's, each capped at the version
 /// `unstable` enables, as Kafka's `ApiKeys.toApiVersion` caps it. An api key
-/// the enabled table does not have -- one Kafka 4.3.1 lacks, while unstable
+/// the enabled table does not have -- one Kafka 4.4 lacks, while unstable
 /// api versions are disabled -- is left out.
 pub(super) fn advertised_api_keys(
     admin_router: Option<&dyn ControllerAdminRouter>,
@@ -453,9 +453,6 @@ mod tests {
         assert2::check!(!is_disabled_version(22, 6, None, unstable));
     }
 
-    /// A router api Kafka 4.3.1 does not have -- `UnregisterController` (94),
-    /// a trunk key -- is neither advertised nor accepted while unstable api
-    /// versions are disabled, and is served whole when they are enabled.
     /// The controller listener's table is strictly ascending by api key, the
     /// router's rows merged in, as Kafka's `apisForListener` `EnumSet` orders
     /// it.
@@ -778,7 +775,7 @@ mod tests {
             LATEST_PRODUCTION_METADATA_VERSION,
         );
         let expected = if modern {
-            modern_supported(metadata, 1)
+            modern_supported(metadata, 2)
         } else {
             vec![metadata]
         };

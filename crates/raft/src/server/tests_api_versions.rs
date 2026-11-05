@@ -90,8 +90,8 @@ fn api_version_cases(version_five: ApiVersionCase) -> [ApiVersionCase; 7] {
 #[yare::parameterized(
     stable = {
         UnstableApiVersions::Disabled,
-        4,
-        api_version_case(5, request_body(5, "krabka"), 0, 35, false)
+        5,
+        api_version_case(5, request_body(5, "krabka"), 5, 0, true)
     },
     unstable = {
         UnstableApiVersions::Enabled,
@@ -105,8 +105,8 @@ async fn controller_listener_answers_api_versions_refusals_and_keeps_the_connect
     served_max: i16,
     version_five: ApiVersionCase,
 ) {
-    // With unstable api versions disabled the listener serves Kafka 4.3.1's
-    // v0-v4, so v5 is answered the way that release answers it.
+    // With unstable api versions disabled the listener serves Kafka 4.4's
+    // v0-v5, including the released KIP-1242 request shape.
     let rows = api_version_cases(version_five);
     let unstable = Unstable { api_versions };
     let (engine, _dir) = single_voter_engine();

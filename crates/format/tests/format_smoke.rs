@@ -79,7 +79,7 @@ fn format_with_add_scram_writes_credential_record() {
     assert2::assert!(bin_meta.len() > 0);
     let records = bootstrap_records(&dir);
     // Static format seeds every registered feature whose default at Kafka
-    // 4.3's latest production release, 4.3-IV0, is > 0 (features at 0 are
+    // 4.4's latest production release, 4.4-IV2, is > 0 (features at 0 are
     // omitted per KIP-1022), plus the SCRAM credential.
     let features: BTreeMap<&str, i16> = records
         .iter()
@@ -93,8 +93,8 @@ fn format_with_add_scram_writes_credential_record() {
             == BTreeMap::from([
                 ("eligible.leader.replicas.version", 1),
                 ("group.version", 1),
-                ("metadata.version", 30),
-                ("share.version", 1),
+                ("metadata.version", 33),
+                ("share.version", 2),
                 ("streams.version", 1),
                 ("transaction.version", 2),
             ])

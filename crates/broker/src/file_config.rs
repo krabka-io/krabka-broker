@@ -304,20 +304,17 @@ pub struct FileConfig {
     /// `org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin`.
     /// krabka builds in that plugin, which keeps the latest topology
     /// description of each streams group in memory until the broker stops.
-    /// `unstable.api.versions.enable`
-    /// (default `false`) advertises and serves what krabka implements from
-    /// Kafka trunk beyond 4.3.1: `ApiVersions` v5 (KIP-1242),
-    /// `TxnOffsetCommit` v6 (KIP-1319), `StreamsGroupHeartbeat` and
-    /// `StreamsGroupDescribe` v1 (KIP-1331, KIP-1357),
-    /// `StreamsGroupTopologyDescriptionUpdate` (93) and `UnregisterController`
-    /// (94), `InitProducerId` v6 and with 2PC the KIP-939 `keepPreparedTxn`
-    /// recovery, and trunk's group config keys; while it is `false` every
-    /// listener serves exactly Kafka 4.3.1's API versions.
+    /// `unstable.api.versions.enable` (default `false`) opts in to implemented
+    /// Kafka trunk APIs beyond released 4.4, including `InitProducerId` v6
+    /// and the KIP-939 `keepPreparedTxn` recovery. Released 4.4 APIs and
+    /// configuration keys require no unstable switch. Both listeners cap
+    /// their default API surface at the pinned released 4.4 versions.
     /// `unstable.feature.versions.enable` (default `false`) lets this node
-    /// support `metadata.version` past 4.3.1's `4.3-IV0` (30), up to trunk's
-    /// `4.5-IV0` (34), which the CIDR ACL hosts of KIP-1276 and the controller
-    /// unregistration of KIP-1312 need. Any other entry is accepted and
-    /// ignored.
+    /// support `metadata.version` past released 4.4's `4.4-IV2` (33), up to
+    /// trunk's `4.5-IV0` (34). Share level 2 is released and supported by
+    /// default. Existing finalized cluster levels are not changed at startup;
+    /// an operator must explicitly finalize an upgrade. Any other entry is
+    /// accepted and ignored.
     /// A key set here loses to the equivalent dedicated key, which is applied
     /// first.
     #[serde(default)]

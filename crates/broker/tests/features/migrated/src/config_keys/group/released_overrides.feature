@@ -1,5 +1,5 @@
 Feature: Kafka released group overrides honor broker bounds and types
-  Group administrators receive the same validation outcomes as Kafka 4.3.1.
+  Group administrators receive the same validation outcomes as Kafka 4.4.0.
 
   Scenario: Validate consumer.session.timeout.ms=50000
     Given the broker uses default group configuration bounds
@@ -77,13 +77,13 @@ Feature: Kafka released group overrides honor broker bounds and types
     Given the broker uses default group configuration bounds
     And group override consumer.session.timeout.ms is 1000
     When the group alteration is validated with released API rules
-    Then the group alteration is refused with consumer.session.timeout.ms must be greater than or equal to group.consumer.min.session.timeout.ms
+    Then the group alteration is refused with consumer.session.timeout.ms must be in the range 45000 to 60000 inclusive.
 
   Scenario: Validate consumer.heartbeat.interval.ms=20000
     Given the broker uses default group configuration bounds
     And group override consumer.heartbeat.interval.ms is 20000
     When the group alteration is validated with released API rules
-    Then the group alteration is refused with consumer.heartbeat.interval.ms must be less than or equal to group.consumer.max.heartbeat.interval.ms
+    Then the group alteration is refused with consumer.heartbeat.interval.ms must be in the range 5000 to 15000 inclusive.
 
   Scenario: Validate share.record.lock.duration.ms=500
     Given the broker uses default group configuration bounds
@@ -95,7 +95,7 @@ Feature: Kafka released group overrides honor broker bounds and types
     Given the broker uses default group configuration bounds
     And group override share.record.lock.duration.ms is 3600000
     When the group alteration is validated with released API rules
-    Then the group alteration is refused with share.record.lock.duration.ms must be less than or equal to group.share.max.record.lock.duration.ms
+    Then the group alteration is refused with share.record.lock.duration.ms must be in the range 15000 to 60000 inclusive.
 
   Scenario: Validate share.delivery.count.limit=1
     Given the broker uses default group configuration bounds
@@ -119,16 +119,16 @@ Feature: Kafka released group overrides honor broker bounds and types
     Given the broker uses default group configuration bounds
     And group override streams.session.timeout.ms is 90000
     When the group alteration is validated with released API rules
-    Then the group alteration is refused with streams.session.timeout.ms must be less than or equal to group.streams.max.session.timeout.ms
+    Then the group alteration is refused with streams.session.timeout.ms must be in the range 45000 to 60000 inclusive.
 
   Scenario: Validate streams.num.standby.replicas=3
     Given the broker uses default group configuration bounds
     And group override streams.num.standby.replicas is 3
     When the group alteration is validated with released API rules
-    Then the group alteration is refused with streams.num.standby.replicas must be less than or equal to group.streams.max.standby.replicas
+    Then the group alteration is refused with streams.num.standby.replicas must be less than or equal to 2
 
   Scenario: Validate streams.assignment.interval.ms=20000
     Given the broker uses default group configuration bounds
     And group override streams.assignment.interval.ms is 20000
     When the group alteration is validated with released API rules
-    Then the group alteration is refused with streams.assignment.interval.ms must be less than or equal to group.streams.max.assignment.interval.ms
+    Then the group alteration is refused with streams.assignment.interval.ms must be in the range 0 to 15000 inclusive.

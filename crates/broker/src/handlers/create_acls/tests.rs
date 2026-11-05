@@ -459,18 +459,18 @@ async fn handle_bounds_a_request_to_ten_thousand_new_acls() {
     }
 }
 
-/// A freshly bootstrapped cluster finalizes Kafka 4.3's `4.3-IV0`, below the
-/// `4.4-IV1` CIDR host patterns need, so it refuses a CIDR host until an
-/// operator opts into 4.4-IV1. (An image with no `metadata.version` at all is
-/// judged against 4.3-IV0 too; `features::tests` pins that.)
+/// A freshly bootstrapped Kafka 4.4 cluster admits and persists CIDR hosts.
 #[tokio::test]
-async fn handle_rejects_cidr_host_on_a_freshly_bootstrapped_cluster() {
+async fn handle_accepts_cidr_host_on_a_freshly_bootstrapped_cluster() {
     let TrunkBroker {
         handle: broker_handle,
         dir: _dir,
     } = start_trunk_broker().await;
-    let _broker = broker_handle.broker_arc_for_test();
-    check_cidr_refusal(&broker_handle).await;
+    let broker = broker_handle.broker_arc_for_test();
+    assert!(drive_cidr_request(&broker).await == response(vec![committed()]));
+    let acls = all_acls(&broker_handle);
+    assert!(acls.len() == 1);
+    assert!(acls[0].host == "10.0.0.0/8");
     broker_handle.shutdown().await;
 }
 

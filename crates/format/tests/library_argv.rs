@@ -71,7 +71,7 @@ async fn progress_lines_go_to_the_callers_sink() {
         progress
             == format!(
                 "Formatting dynamic metadata voter directory {dir} with metadata.version \
-                 4.3-IV0.\nFormatted 1 log directory with cluster-id ii9OHAAAQACAAAAAAADB0A (6 \
+                 4.4-IV2.\nFormatted 1 log directory with cluster-id ii9OHAAAQACAAAAAAADB0A (6 \
                  seed record(s))\n"
             )
     );

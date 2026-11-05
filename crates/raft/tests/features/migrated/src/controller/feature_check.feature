@@ -6,7 +6,7 @@ Feature: Recovered controller feature compatibility
     Given unstable feature versions are enabled: false
     And the recovered metadata image finalizes these feature levels:
       | name | level |
-      | metadata.version | 30 |
+      | metadata.version | 33 |
     When the controller checks recovered feature compatibility
     Then every recovered feature level is supported
 
@@ -14,9 +14,9 @@ Feature: Recovered controller feature compatibility
     Given unstable feature versions are enabled: false
     And the recovered metadata image finalizes these feature levels:
       | name | level |
-      | metadata.version | 33 |
+      | metadata.version | 34 |
     When the controller checks recovered feature compatibility
-    Then feature metadata.version at level 33 is refused with Kafka supported range 7-30
+    Then feature metadata.version at level 34 is refused with Kafka supported range 7-33
 
   Scenario: An unstable metadata level starts with its flag enabled
     Given unstable feature versions are enabled: true
@@ -46,10 +46,10 @@ Feature: Recovered controller feature compatibility
     Given unstable feature versions are enabled: false
     And the recovered metadata image finalizes these feature levels:
       | name | level |
-      | metadata.version | 33 |
+      | metadata.version | 34 |
       | share.version | 5 |
     When the controller checks recovered feature compatibility
-    Then feature metadata.version at level 33 is refused with Kafka supported range 7-30
+    Then feature metadata.version at level 34 is refused with Kafka supported range 7-33
 
   Scenario: An unknown feature supports only disabled level zero
     Given unstable feature versions are enabled: false
@@ -71,7 +71,7 @@ Feature: Recovered controller feature compatibility
     Given unstable feature versions are enabled: false
     And the recovered metadata image finalizes these feature levels:
       | name | level |
-      | metadata.version | 30 |
+      | metadata.version | 33 |
       | some.future.feature | 2 |
     When the controller checks recovered feature compatibility
     Then feature some.future.feature at level 2 is refused with Kafka supported range 0

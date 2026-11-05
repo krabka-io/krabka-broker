@@ -561,16 +561,14 @@ fn accepted_trunk_topic_keys(topic_parity: &TopicParityScenario) {
     assert!(topic_parity.opt_in_map == Some(Ok(())));
 }
 
-#[rstest_bdd_macros::then(
-    "the release-only validator refuses an alteration containing trunk properties"
-)]
+#[rstest_bdd_macros::then("the release validator accepts the complete released 4.4 alteration")]
 fn release_only_refuses_trunk_properties(topic_parity: &TopicParityScenario) {
     assert!(
         topic_parity
             .released_map
             .as_ref()
             .expect("the released validator ran")
-            .is_err()
+            .is_ok()
     );
 }
 

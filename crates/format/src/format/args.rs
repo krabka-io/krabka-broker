@@ -49,7 +49,7 @@ pub struct FormatArgs {
     /// Bootstrap `metadata.version` (KIP-778), e.g. `4.0` or `4.0-IV3`. A
     /// string with more than two dot-separated segments keeps the first two,
     /// as Kafka's `MetadataVersion.fromVersionString` does, so `4.3.1` is
-    /// `4.3`. Defaults to Kafka 4.3's latest production level, `4.3-IV0`, when
+    /// `4.3`. Defaults to Kafka 4.4's latest production level, `4.4-IV2`, when
     /// omitted.
     #[arg(long)]
     pub(super) release_version: Option<String>,
@@ -60,7 +60,7 @@ pub struct FormatArgs {
     #[arg(long = "feature", value_parser = parse_feature_spec)]
     pub(super) feature: Vec<FeatureLevelRecord>,
     /// Accept feature levels past the latest production ones: Kafka trunk's
-    /// `metadata.version` `4.4-IV0` to `4.4-IV2`, which a stock Kafka 4.3.1
+    /// `metadata.version` `4.5-IV0`, which a stock Kafka 4.4
     /// does not know. It is Kafka's internal `unstable.feature.versions.enable`,
     /// which `kafka-storage format` reads from its `--config` file; without it
     /// such a release is refused as Kafka refuses it. A node formatted at one

@@ -45,7 +45,7 @@ Feature: Kafka embedded request admission
   Scenario: An API key above the released range is unknown
     Given the embedded forwarded frame is:
       | api | version | body | unstable |
-      | 93 | 0 | empty | false |
+      | 95 | 0 | empty | false |
     When the controller unwraps the embedded request after cluster authorization succeeds
     Then the embedded request is rejected as UnsupportedVersion
 
@@ -56,14 +56,14 @@ Feature: Kafka embedded request admission
     When the controller unwraps the embedded request after cluster authorization succeeds
     Then the embedded request is rejected as UnsupportedVersion
 
-  Scenario: Released mode refuses trunk-only UnregisterController
+  Scenario: Released mode admits UnregisterController
     Given the embedded forwarded frame is:
       | api | version | body | unstable |
       | 94 | 0 | UnregisterController-v0 | false |
     When the controller unwraps the embedded request after cluster authorization succeeds
-    Then the embedded request is rejected as UnsupportedVersion
+    Then the embedded request is admitted for controller dispatch
 
-  Scenario: Unstable mode admits trunk-only UnregisterController
+  Scenario: Unstable mode also admits UnregisterController
     Given the embedded forwarded frame is:
       | api | version | body | unstable |
       | 94 | 0 | UnregisterController-v0 | true |

@@ -244,42 +244,37 @@ pub const REMOTE_LOG_DELETE_ON_DISABLE: &str = "remote.log.delete.on.disable";
 pub const LOCAL_RETENTION_MS: &str = "local.retention.ms";
 /// KIP-405: per-topic local-retention size budget for tiered partitions.
 pub const LOCAL_RETENTION_BYTES: &str = "local.retention.bytes";
-/// Kafka trunk's `remote.copy.lag.ms`: how old a sealed segment may get before
+/// Kafka 4.4's `remote.copy.lag.ms`: how old a sealed segment may get before
 /// it is copied to the remote tier. The copy pass holds a segment back for it,
-/// and it is served only under `unstable.api.versions.enable`.
+/// and it is served by default.
 pub const REMOTE_COPY_LAG_MS: &str = "remote.copy.lag.ms";
-/// Kafka trunk's `remote.copy.lag.bytes`: how many newer local bytes a sealed
+/// Kafka 4.4's `remote.copy.lag.bytes`: how many newer local bytes a sealed
 /// segment may sit behind before it is copied. The copy pass holds a segment
-/// back for it, and it is served only under `unstable.api.versions.enable`.
+/// back for it, and it is served by default.
 pub const REMOTE_COPY_LAG_BYTES: &str = "remote.copy.lag.bytes";
-/// Kafka trunk's `max.decompressed.message.bytes`: the cap on one record's
+/// Kafka 4.4's `max.decompressed.message.bytes`: the cap on one record's
 /// decompressed size. Produce enforces it on a compressed batch, the log
 /// enforces it in compaction and in by-timestamp lookups (through
-/// `LogConfig::max_decompressed_record`), and it is served only under
-/// `unstable.api.versions.enable`.
+/// `LogConfig::max_decompressed_record`), and it is served by default.
 pub const MAX_DECOMPRESSED_MESSAGE_BYTES: &str = "max.decompressed.message.bytes";
-/// Kafka trunk's `errors.deadletterqueue.group.enable` (KIP-1191): whether
+/// Kafka 4.4's `errors.deadletterqueue.group.enable` (KIP-1191): whether
 /// share groups may write undeliverable records to this topic. A share
 /// partition at `share.version` 2 writes a group's dead-letter records only
-/// to a topic that has it on. It is served only under
-/// `unstable.api.versions.enable`.
+/// to a topic that has it on. It is served by default.
 pub const ERRORS_DEADLETTERQUEUE_GROUP_ENABLE: &str = "errors.deadletterqueue.group.enable";
-/// The topic keys Kafka trunk's `LogConfig` defines and Kafka 4.3.1's does
-/// not. A broker serves them only under `unstable.api.versions.enable`;
-/// otherwise its topic resource is 4.3.1's, and an alter or create that names
-/// one is refused as `LogConfig.validateNames` refuses an unknown key.
-pub const KAFKA_TRUNK_TOPIC_KEYS: &[&str] = &[
+/// Released Kafka 4.4 topic keys added since the previous compatibility target.
+/// All are served without an unstable API flag.
+#[cfg(test)]
+pub const KAFKA_44_TOPIC_KEYS: &[&str] = &[
     ERRORS_DEADLETTERQUEUE_GROUP_ENABLE,
     MAX_DECOMPRESSED_MESSAGE_BYTES,
     REMOTE_COPY_LAG_BYTES,
     REMOTE_COPY_LAG_MS,
 ];
 
-/// Whether a broker serving `unstable` has the topic key `name`: every key
-/// under trunk, and every key but [`KAFKA_TRUNK_TOPIC_KEYS`] otherwise.
-pub fn serves_topic_key(name: &str, unstable: UnstableApiVersions) -> bool {
-    unstable == UnstableApiVersions::Enabled || !KAFKA_TRUNK_TOPIC_KEYS.contains(&name)
-}
+/// All currently registered topic keys are released or intentional extensions.
+/// The API-version opt-in does not hide released configuration.
+pub fn serves_topic_key(_name: &str, _unstable: UnstableApiVersions) -> bool { true }
 
 /// Kafka's `Records.SOFT_MAX_ARRAY_LENGTH`, `Integer.MAX_VALUE - 8`: the
 /// default and the ceiling of `max.decompressed.message.bytes`.

@@ -20,7 +20,7 @@ use {
         codes::INVALID_REQUEST,
         config::BrokerConfig,
         config_keys::{
-            KAFKA_TRUNK_TOPIC_KEYS,
+            KAFKA_44_TOPIC_KEYS,
             broker_dynamic::TOPIC_DEFAULT_SYNONYMS,
             group::KAFKA_GROUP_KEYS,
             kafka_broker::{KAFKA_BROKER_CONFIGS, lookup},
@@ -1367,7 +1367,7 @@ fn check_stored_broker_key(
 }
 
 #[rstest_bdd_macros::then(
-    "stable group configuration lists exactly the seventeen Kafka 4.3.1 keys"
+    "stable group configuration lists exactly the twenty seven Kafka 4.4.0 keys"
 )]
 fn verify_a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled(
     config_description: &ConfigDescriptionScenario,
@@ -1378,9 +1378,13 @@ fn verify_a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabl
         reported
             == vec![
                 "consumer.assignment.interval.ms",
+                "consumer.assignor.offload.enable",
                 "consumer.heartbeat.interval.ms",
                 "consumer.session.timeout.ms",
+                "errors.deadletterqueue.copy.record.enable",
+                "errors.deadletterqueue.topic.name",
                 "share.assignment.interval.ms",
+                "share.assignor.offload.enable",
                 "share.auto.offset.reset",
                 "share.delivery.count.limit",
                 "share.heartbeat.interval.ms",
@@ -1389,11 +1393,17 @@ fn verify_a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabl
                 "share.record.lock.duration.ms",
                 "share.renew.acknowledge.enable",
                 "share.session.timeout.ms",
+                "streams.acceptable.recovery.lag",
                 "streams.assignment.interval.ms",
+                "streams.assignor.name",
+                "streams.assignor.offload.enable",
                 "streams.heartbeat.interval.ms",
                 "streams.initial.rebalance.delay.ms",
                 "streams.num.standby.replicas",
+                "streams.num.warmup.replicas",
+                "streams.rack.aware.assignment.tags",
                 "streams.session.timeout.ms",
+                "streams.task.offset.interval.ms",
             ]
     );
 }
@@ -1688,7 +1698,7 @@ fn the_streams_assignor_is_described_only_under_unstable_api_versions() {
             UnstableApiVersions::Disabled,
             RESOURCE_TYPE_GROUP,
             "g",
-            vec![],
+            vec![group_entry.clone()],
         ),
         (
             UnstableApiVersions::Enabled,
@@ -1739,14 +1749,14 @@ fn trunk_topic_keys_are_described_only_under_unstable_api_versions() {
         .map(|entry| entry.name)
         .collect()
     };
-    let trunk_topic_keys = KAFKA_TRUNK_TOPIC_KEYS;
+    let trunk_topic_keys = KAFKA_44_TOPIC_KEYS;
     let trunk_broker_keys = [
         "log.remote.copy.lag.bytes",
         "log.remote.copy.lag.ms",
         "max.decompressed.message.bytes",
     ];
     for (unstable, served) in [
-        (UnstableApiVersions::Disabled, false),
+        (UnstableApiVersions::Disabled, true),
         (UnstableApiVersions::Enabled, true),
     ] {
         let topic = names(RESOURCE_TYPE_TOPIC, "orders", unstable);
@@ -1766,7 +1776,7 @@ fn trunk_topic_keys_are_described_only_under_unstable_api_versions() {
     }
     let strict = names(RESOURCE_TYPE_TOPIC, "orders", UnstableApiVersions::Disabled);
     let trunk = names(RESOURCE_TYPE_TOPIC, "orders", UnstableApiVersions::Enabled);
-    check!(trunk.len() == strict.len() + trunk_topic_keys.len());
+    check!(trunk == strict);
 }
 
 #[test]

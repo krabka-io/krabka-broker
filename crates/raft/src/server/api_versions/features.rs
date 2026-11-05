@@ -150,7 +150,7 @@ mod tests {
         share: i16,
     ) {
         let maximum = match maximum.as_str() {
-            "stable" => 30,
+            "stable" => 33,
             "trunk" => METADATA_VERSION_MAX,
             _ => panic!("unknown metadata version ceiling"),
         };

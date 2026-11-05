@@ -32,9 +32,14 @@ const NEITHER: EntryOptions = EntryOptions {
 };
 
 #[test]
-fn trunk_only_streams_assignors_are_hidden_from_default_static_settings() {
+fn released_streams_assignors_are_present_in_default_static_settings() {
     let mut config = BrokerConfig::default();
-    check!(!static_settings(&config).contains_key("group.streams.assignors"));
+    check!(
+        static_settings(&config)
+            .get("group.streams.assignors")
+            .map(String::as_str)
+            == Some("auto")
+    );
 
     config.features.unstable_api_versions = UnstableApiVersions::Enabled;
     check!(

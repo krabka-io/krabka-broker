@@ -202,11 +202,11 @@ mod tests {
     }
 
     /// KIP-1276's gate: an image with no `metadata.version` is judged against
-    /// the bootstrap level, 4.3-IV0, which refuses CIDR hosts; a finalized
+    /// the bootstrap level, 4.4-IV2, which admits CIDR hosts; a finalized
     /// level admits them only from 4.4-IV1.
     #[yare::parameterized(
-        unfinalized = { None, false },
-        bootstrap_level = { Some(LATEST_PRODUCTION_METADATA_VERSION), false },
+        unfinalized = { None, true },
+        bootstrap_level = { Some(LATEST_PRODUCTION_METADATA_VERSION), true },
         below_minimum = { Some(CIDR_ACL_HOST_MIN_LEVEL - 1), false },
         at_minimum = { Some(CIDR_ACL_HOST_MIN_LEVEL), true },
     )]
@@ -276,8 +276,7 @@ mod tests {
 
     #[test]
     fn share_version_is_supported() {
-        // The registry lists trunk's `SV_2`; a default node advertises 4.3.1's
-        // range, 0-1, below.
+        // Kafka 4.4 advertises SV_2 on default nodes.
         let expected = SupportedFeature {
             name: SHARE_VERSION,
             min_version: 0,
@@ -288,14 +287,13 @@ mod tests {
         assert!(
             supported_features(krabka_raft::UnstableFeatureVersions::Disabled)
                 .iter()
-                .any(|f| f.name == SHARE_VERSION && f.min_version == 0 && f.max_version == 1)
+                .any(|f| f.name == SHARE_VERSION && f.min_version == 0 && f.max_version == 2)
         );
     }
 
-    /// KIP-1191: level 2 is trunk's `SV_2`, so `ApiVersions` advertises it
-    /// only under `unstable.feature.versions.enable`.
+    /// KIP-1191: Kafka 4.4 advertises SV_2 without an unstable opt-in.
     #[test]
-    fn share_version_two_is_advertised_only_under_unstable_feature_versions() {
+    fn share_version_two_is_advertised_without_unstable_feature_versions() {
         let advertised = |unstable| {
             supported_features(unstable)
                 .into_iter()
@@ -306,7 +304,7 @@ mod tests {
             (
                 advertised(krabka_raft::UnstableFeatureVersions::Disabled),
                 advertised(krabka_raft::UnstableFeatureVersions::Enabled),
-            ) == (Some((0, 1)), Some((0, 2)))
+            ) == (Some((0, 2)), Some((0, 2)))
         );
     }
 
@@ -330,7 +328,7 @@ mod tests {
                     ),
                     feature("group.version", 0, 1),
                     feature("transaction.version", 0, 2),
-                    feature(SHARE_VERSION, 0, 1),
+                    feature(SHARE_VERSION, 0, 2),
                     feature(STREAMS_VERSION, 0, 1),
                     feature(ELR_VERSION, 0, 1),
                     feature("kraft.version", 0, 1),

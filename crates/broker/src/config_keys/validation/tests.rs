@@ -923,12 +923,11 @@ fn rejected_trunk_topic_value(topic_value: &TopicValueScenario) {
 }
 
 #[rstest_bdd_macros::then(
-    "released mode refuses the unknown key and unstable mode stores quoted value {canonical} exactly"
+    "both released and unstable modes store quoted value {canonical} exactly"
 )]
 fn admitted_trunk_topic_value(topic_value: &TopicValueScenario, canonical: String) {
     let canonical: String =
         serde_json::from_str(&canonical).expect("the canonical value is quoted");
-    let unknown = format!("Unknown topic config name: {}", topic_value.key);
     let released = topic_value
         .released
         .as_ref()
@@ -937,8 +936,14 @@ fn admitted_trunk_topic_value(topic_value: &TopicValueScenario, canonical: Strin
         .trunk
         .as_ref()
         .expect("unstable mode was evaluated");
-    check!(released.single == Err(unknown.clone()));
-    check!(released.map.as_ref().map(|_| ()) == Err(&unknown));
+    check!(released.single == Ok(canonical.clone()));
+    check!(
+        released.map
+            == Ok(BTreeMap::from([(
+                topic_value.key.clone(),
+                canonical.clone()
+            )]))
+    );
     check!(trunk.single == Ok(canonical.clone()));
     check!(trunk.map == Ok(BTreeMap::from([(topic_value.key.clone(), canonical)])));
 }
@@ -1034,11 +1039,9 @@ fn refused_topic_combination(topic_map: &TopicMapScenario, message: String) {
     check!(topic_map.combination == Some(Err(message)));
 }
 
-#[rstest_bdd_macros::then(
-    "released mode inherits no trunk default and unstable mode inherits {expected}"
-)]
+#[rstest_bdd_macros::then("both released and unstable modes inherit {expected}")]
 fn inherited_trunk_topic_default(topic_map: &TopicMapScenario, expected: String) {
-    check!(topic_map.released_default.get() == Some(None));
+    check!(topic_map.released_default.get() == Some(Some(expected.clone())));
     check!(topic_map.trunk_default.get() == Some(Some(expected)));
 }
 

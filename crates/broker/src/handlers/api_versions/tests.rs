@@ -118,13 +118,12 @@ async fn api_version_wire(broker: &Broker, context: &RequestContext<'_>) -> ApiV
 ///   whichever minimum it serves.
 /// - Fetch and `ListOffsets`: Kafka 4.x's 4 and 1 by default, 0 under
 ///   `legacy_request_versions_enable` for pre-4.0 clients (#784).
-/// - `InitProducerId`: v6 is `latestVersionUnstable`, and `ApiVersions` v5 is
-///   Kafka trunk's, so both are advertised only under
-///   `unstable.api.versions.enable` (#646, #784).
+/// - ApiVersions v5 is released in Kafka 4.4. InitProducerId v6 remains
+///   advertised only under `unstable.api.versions.enable`.
 #[yare::parameterized(
-    stable = { false, false, 4, 1, 4, 5 },
+    stable = { false, false, 4, 1, 5, 5 },
     unstable = { true, false, 4, 1, 5, 6 },
-    legacy = { false, true, 0, 0, 4, 5 },
+    legacy = { false, true, 0, 0, 5, 5 },
 )]
 fn api_versions_advertises_the_deliberate_ranges(
     unstable_enabled: bool,
@@ -199,7 +198,7 @@ async fn api_versions_answers_every_version_on_every_listener_shape(
         api_keys: vec![ApiVersion {
             api_key: 18,
             min_version: 0,
-            max_version: 4,
+            max_version: 5,
             ..Default::default()
         }],
         ..Default::default()
@@ -251,9 +250,8 @@ async fn api_versions_answers_every_version_on_every_listener_shape(
         "{listener} telemetry={telemetry}"
     );
 
-    // The dispatch loop answers v5 `UNSUPPORTED_VERSION` before the
-    // handler sees it while unstable api versions are off.
-    for version in 0..=4 {
+    // All released ApiVersions versions are served without unstable opt-in.
+    for version in 0..=5 {
         let req = ApiVersionsRequest {
             client_software_name: "krabka-test".into(),
             client_software_version: "1.0.0".into(),
@@ -274,7 +272,7 @@ async fn api_versions_answers_every_version_on_every_listener_shape(
         unsupported_version_response(UnstableApiVersions::Disabled).expect("unsupported answer");
     check!(
         decode_response(0, &body) == unsupported,
-        "{listener} telemetry={telemetry} v5"
+        "{listener} telemetry={telemetry} unsupported"
     );
 
     broker_handle.shutdown().await;

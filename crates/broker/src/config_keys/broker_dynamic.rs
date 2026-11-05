@@ -185,11 +185,9 @@ pub fn topic_broker_synonyms(topic_key: &str) -> Vec<BrokerSynonym> {
 
 /// KIP-1191 broker settings defined by released Kafka 4.4, not 4.3.1.
 pub fn served_dlq_configs(
-    unstable: UnstableApiVersions,
+    _unstable: UnstableApiVersions,
 ) -> impl Iterator<Item = &'static kafka_broker::KafkaBrokerConfig> {
-    kafka_broker::KAFKA_44_DLQ_CONFIGS
-        .iter()
-        .filter(move |_| unstable == UnstableApiVersions::Enabled)
+    kafka_broker::KAFKA_44_DLQ_CONFIGS.iter()
 }
 
 fn dlq_config(
@@ -558,7 +556,7 @@ mod tests {
     };
 
     #[test]
-    fn released_44_dlq_configs_are_typed_validated_and_gated() {
+    fn released_44_dlq_configs_are_typed_and_validated_by_default() {
         use UnstableApiVersions::{Disabled, Enabled};
         let boolean = "errors.deadletterqueue.auto.create.topics.enable";
         let prefix = "errors.deadletterqueue.topic.name.prefix";
@@ -573,10 +571,10 @@ mod tests {
                 validate_dynamic_broker_configs(&map(&[(boolean, "yes")]), per_broker, Enabled)
                     .is_err()
             );
-            // Unknown keys remain storable on the released-4.3.1 baseline.
+            // Released settings are validated even without unstable opt-in.
             check!(
                 validate_dynamic_broker_configs(&map(&[(boolean, "yes")]), per_broker, Disabled)
-                    .is_ok()
+                    .is_err()
             );
             for value in ["", "dlq.", " arbitrary prefix ", "__"] {
                 check!(
@@ -587,8 +585,8 @@ mod tests {
         }
         for key in [boolean, prefix] {
             check!(broker_key_kind(key, Enabled) == BrokerKeyKind::Scalar);
-            check!(broker_key_kind(key, Disabled) == BrokerKeyKind::Unknown);
-            check!(broker_key_row(key, Disabled).is_none());
+            check!(broker_key_kind(key, Disabled) == BrokerKeyKind::Scalar);
+            check!(broker_key_row(key, Disabled).is_some());
             let row = broker_key_row(key, Enabled).expect("4.4 config row");
             check!(!row.read_only && !row.sensitive && !row.internal);
         }
@@ -719,7 +717,8 @@ mod tests {
     fn trunk_topic_keys_broker_synonyms_need_unstable_api_versions() {
         let props = map(&[("log.remote.copy.lag.ms", "-2")]);
         check!(
-            validate_dynamic_broker_configs(&props, false, UnstableApiVersions::Disabled) == Ok(())
+            validate_dynamic_broker_configs(&props, false, UnstableApiVersions::Disabled)
+                == validate_dynamic_broker_configs(&props, false, UnstableApiVersions::Enabled)
         );
         check!(
             validate_dynamic_broker_configs(&props, false, UnstableApiVersions::Enabled)
@@ -733,14 +732,14 @@ mod tests {
         let strict: Vec<&str> =
             served_topic_default_synonyms(UnstableApiVersions::Disabled).collect();
         let check_synonym = |broker: &str| {
-            check!(!strict.contains(&broker), "{broker}");
+            check!(strict.contains(&broker), "{broker}");
             check!(
                 served_topic_default_synonyms(UnstableApiVersions::Enabled)
                     .any(|name| name == broker),
                 "{broker}"
             );
             check!(
-                broker_key_kind(broker, UnstableApiVersions::Disabled) == BrokerKeyKind::Unknown,
+                broker_key_kind(broker, UnstableApiVersions::Disabled) == BrokerKeyKind::Scalar,
                 "{broker}"
             );
         };

@@ -258,15 +258,14 @@ async fn handle_unregisters_a_registered_controller_as_trunk_does() {
         broker: handle,
         dir: _dir,
     } = start_broker_with(|cfg| {
-        // Trunk's 4.4-IV2 is past 4.3.1's latest production level, so the
-        // node has to support unstable feature levels to finalize it.
+        // Exercise the feature gate from an explicitly older finalized image.
         cfg.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
         cfg.authorizer = Arc::new(ControllerPeerAllowed(GrantsInPrincipalName));
     })
     .await;
     let broker = handle.broker_arc_for_test();
     let operator = "Cluster:Alter";
-    submit(&broker, vec![registration(7)]).await;
+    submit(&broker, vec![metadata_version(31), registration(7)]).await;
     finalize_metadata_version(&broker, 32).await;
 
     let cases = [

@@ -383,12 +383,12 @@ fn self_controller_registration_uses_quorum_endpoint_and_feature_ranges() {
 
     assert!(registration.node_id == krabka_metadata::NodeId(7));
     assert!(registration.incarnation_id == uuid::Uuid::from_u128(0xCAFE));
-    // #784: `metadata.version` and `share.version` capped at 4.3.1's latest
+    // Kafka 4.4 metadata and share production ranges are advertised with
     // production levels, the node's default
     // `unstable.feature.versions.enable=false`.
     let mut expected = krabka_metadata::supported_feature_ranges();
-    expected.insert("metadata.version".into(), (METADATA_VERSION_MIN, 30));
-    expected.insert("share.version".into(), (0, 1));
+    expected.insert("metadata.version".into(), (METADATA_VERSION_MIN, 33));
+    expected.insert("share.version".into(), (0, 2));
     assert!(registration.features == expected);
     assert!(
         registration.endpoints

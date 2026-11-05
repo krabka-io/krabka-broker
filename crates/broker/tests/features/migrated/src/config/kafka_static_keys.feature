@@ -18,21 +18,23 @@ Feature: Truthful static Kafka configuration descriptions
     When the catalog's runtime field names are resolved against the runtime configuration schema
     Then every referenced runtime configuration field exists
 
-  Scenario: An untouched broker discloses only its three intentional default differences
+  Scenario: An untouched broker discloses only its four intentional default differences
     Given the broker has no operator-supplied static configuration overrides
     When the broker describes the selected static Kafka settings
     Then the ordered stated static settings are:
       | key                         | value   |
+      | group.streams.assignors      | auto   |
       | socket.send.buffer.bytes    | 1048576 |
       | socket.receive.buffer.bytes | 1048576 |
       | broker.heartbeat.interval.ms | 3000   |
 
-  Scenario: Released mode does not disclose a trunk-only streams assignor
+  Scenario: Released mode discloses the running streams assignor
     Given the broker has no operator-supplied static configuration overrides
     And the static-config query selects the streams assignor list
     When the broker describes the selected static Kafka settings
     Then the ordered stated static settings are:
       | key | value |
+      | group.streams.assignors | auto |
 
   Scenario: Unstable mode discloses the running streams assignor
     Given the broker has no operator-supplied static configuration overrides

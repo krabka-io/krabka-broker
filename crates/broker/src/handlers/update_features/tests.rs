@@ -144,7 +144,7 @@ fn check_feature_update_response(
             accepted(&names)
         }
         "atomically refused" => refused(
-            "Invalid update version 9 for feature share.version. Local controller 1 only supports versions 0-1",
+            "Invalid update version 9 for feature share.version. Local controller 1 only supports versions 0-2",
         ),
         _ => panic!("unknown feature outcome: {outcome}"),
     };

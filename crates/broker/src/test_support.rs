@@ -1234,20 +1234,20 @@ pub async fn finalize_elr_version_on(broker: &Broker) {
     .expect("eligible.leader.replicas.version visible");
 }
 
-/// The record that finalizes `metadata.version` 33 (`4.4-IV2`), one of trunk's
-/// unstable levels. Kafka 4.3 supports levels up to 30, so a controller with
+/// The record that finalizes unstable `metadata.version` 34 (`4.5-IV0`).
+/// Kafka 4.4 supports levels up to 33, so a controller with
 /// the unstable flag off that replays this record stops over a fatal fault.
 pub fn finalize_unstable_metadata_version() -> MetadataRecord {
     MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
         name: "metadata.version".into(),
-        level: 33,
+        level: 34,
     })
 }
 
 /// The fault that replaying [`finalize_unstable_metadata_version`] raises.
 pub const UNSUPPORTED_LEVEL_FAULT: &str = "Tried to apply FeatureLevelRecord \
-    FeatureLevelRecord(name='metadata.version', featureLevel=33), \
-    but this controller only supports versions 7-30";
+    FeatureLevelRecord(name='metadata.version', featureLevel=34), \
+    but this controller only supports versions 7-33";
 
 /// Writes `records` as the length-prefixed frames of `bootstrap.records.bin`,
 /// the file `krabka format` leaves for the first start to submit.

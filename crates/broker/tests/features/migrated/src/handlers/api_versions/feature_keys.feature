@@ -22,7 +22,7 @@ Feature: Kafka feature negotiation compatibility
       | metadata.version                | minimum-metadata | production-metadata |
       | group.version                   | 0                | 1                   |
       | transaction.version             | 0                | 2                   |
-      | share.version                   | 0                | 1                   |
+      | share.version                   | 0                | 2                   |
       | streams.version                 | 0                | 1                   |
       | eligible.leader.replicas.version | 0                | 1                   |
       | kraft.version                   | 0                | 1                   |

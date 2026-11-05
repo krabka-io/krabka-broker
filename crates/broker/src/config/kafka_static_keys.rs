@@ -19,14 +19,11 @@
 
 use {
     super::BrokerConfig,
-    crate::{
-        api_catalog::UnstableApiVersions,
-        config_keys::{
-            broker_dynamic::{TOPIC_DEFAULT_SYNONYMS, topic_broker_synonyms},
-            group::KAFKA_GROUP_KEYS,
-            in_topic_unit,
-            kafka_broker::lookup,
-        },
+    crate::config_keys::{
+        broker_dynamic::{TOPIC_DEFAULT_SYNONYMS, topic_broker_synonyms},
+        group::KAFKA_GROUP_KEYS,
+        in_topic_unit,
+        kafka_broker::lookup,
     },
     krabka_units::{
         ByteSize, Time,
@@ -660,14 +657,6 @@ impl KafkaStaticKey {
     /// operator named the key, or the node runs another value than Kafka's
     /// default. `None` is a key `DescribeConfigs` reports at its default.
     pub(crate) fn static_value(&self, config: &BrokerConfig) -> Option<String> {
-        // Kafka 4.3.1 has no `group.streams.assignors` broker key. Krabka's
-        // Streams assignor setting is part of trunk's GroupConfig surface and
-        // is only visible when Kafka's unstable API versions are enabled.
-        if self.name == "group.streams.assignors"
-            && config.features.unstable_api_versions == UnstableApiVersions::Disabled
-        {
-            return None;
-        }
         let value = (self.value)(config);
         let supplied = config
             .static_config_origins

@@ -26,7 +26,7 @@ pub(super) struct ResolvedFeatures {
 }
 
 /// The highest `metadata.version` this format accepts under `unstable`:
-/// Kafka 4.3's latest production level, or with unstable feature versions the
+/// Kafka 4.4's latest production level, or with unstable feature versions the
 /// highest level krabka knows (Kafka's `MetadataVersion.latestTesting()`).
 fn metadata_version_ceiling(unstable: UnstableFeatureVersions) -> i16 {
     krabka_metadata::feature(metadata_version::METADATA_VERSION_FEATURE)
@@ -37,7 +37,7 @@ fn metadata_version_ceiling(unstable: UnstableFeatureVersions) -> i16 {
 
 /// The highest `metadata.version` level the table of the emulated Kafka knows:
 /// Kafka's `MetadataVersion.latestTesting()`. It is one past the latest
-/// production level in 4.3.1's table (`4.4-IV0`, 31), and the highest level
+/// production level in 4.4's table (`4.5-IV0`, 34), and the highest level
 /// krabka knows under `unstable`. A level above it does not exist. A level
 /// between [`metadata_version_ceiling`] and it exists but is not yet stable.
 fn metadata_version_latest_testing(unstable: UnstableFeatureVersions) -> i16 {
@@ -109,14 +109,11 @@ pub(super) fn parse_feature_spec(s: &str) -> Result<FeatureLevelRecord, String> 
 }
 
 /// The `metadata.version` a cluster formats at when neither `--release-version`
-/// nor `--feature metadata.version` names one: Kafka 4.3's
-/// `MetadataVersion.LATEST_PRODUCTION`, `4.3-IV0`.
+/// nor `--feature metadata.version` names one: Kafka 4.4's
+/// `MetadataVersion.LATEST_PRODUCTION`, `4.4-IV2`.
 ///
-/// The levels above it that the feature table carries, `4.4-IV0` to
-/// `4.5-IV0`, are Kafka trunk's unstable versions. A stock 4.3 node or tool
-/// does not know them, so a format names one only under
-/// `--unstable-feature-versions-enable`, Kafka's
-/// `unstable.feature.versions.enable`.
+/// The next level, `4.5-IV0`, remains unstable and requires
+/// `--unstable-feature-versions-enable`.
 pub const LATEST_PRODUCTION_METADATA_VERSION: i16 = krabka_raft::LATEST_PRODUCTION_METADATA_VERSION;
 
 /// Kafka's message for a `--feature` name its formatter does not support. The
@@ -360,7 +357,7 @@ mod tests {
     #[test]
     fn resolve_features_defaults_bootstrap_mv_to_latest_production() {
         // No --release-version, no metadata.version override → bootstrap at
-        // 4.3-IV0, not at trunk's unstable levels; an explicit non-metadata
+        // 4.4-IV2, not at trunk's unstable levels; an explicit non-metadata
         // feature becomes an override.
         let ResolvedFeatures {
             metadata_version: mv,
@@ -415,7 +412,7 @@ mod tests {
     const STRICT_RELEASES: &str = "3.3-IV3, 3.4-IV0, 3.5-IV0, 3.5-IV1, 3.5-IV2, 3.6-IV0, \
                                    3.6-IV1, 3.6-IV2, 3.7-IV0, 3.7-IV1, 3.7-IV2, 3.7-IV3, \
                                    3.7-IV4, 3.8-IV0, 3.9-IV0, 4.0-IV0, 4.0-IV1, 4.0-IV2, \
-                                   4.0-IV3, 4.1-IV0, 4.1-IV1, 4.2-IV0, 4.2-IV1, 4.3-IV0";
+                                   4.0-IV3, 4.1-IV0, 4.1-IV1, 4.2-IV0, 4.2-IV1, 4.3-IV0, 4.4-IV0, 4.4-IV1, 4.4-IV2";
 
     fn unknown_release(release: &str) -> String {
         format!(
@@ -437,8 +434,8 @@ mod tests {
         iv_suffix_and_extra = { "4.3-IV0.9", STRICT, Some(30) },
         old_iv_suffix_and_extra = { "3.7-IV4.1", STRICT, Some(19) },
         trunk_release_enabled = { "4.4.1", UnstableFeatureVersions::Enabled, Some(33) },
-        trunk_release_disabled = { "4.4.1", STRICT, None },
-        trunk_iv_disabled = { "4.4-IV0.1", STRICT, None },
+        released_four_four = { "4.4.1", STRICT, Some(33) },
+        released_four_four_iv = { "4.4-IV0.1", STRICT, Some(31) },
         pre_minimum_release = { "2.8.1", STRICT, None },
         trailing_extra_segment = { "4.3.1.", STRICT, Some(30) },
         trailing_empty_segment = { "4.3.", STRICT, None },
@@ -580,7 +577,7 @@ mod tests {
             ("metadata.version", LATEST_PRODUCTION_METADATA_VERSION),
             ("group.version", 1),
             ("transaction.version", 2),
-            ("share.version", 1),
+            ("share.version", 2),
             ("streams.version", 1),
             ("eligible.leader.replicas.version", 1),
         ]
@@ -628,14 +625,12 @@ mod tests {
         );
     }
 
-    /// #784: a Kafka trunk `metadata.version` (4.4-IV0 to 4.5-IV0) is
-    /// refused with Kafka 4.3.1's `kafka-storage format` messages unless
-    /// unstable feature versions are enabled, and the default release is
-    /// `latestTesting` when they are.
+    /// Released 4.4 levels work without opt-ins; 4.5 remains unstable.
+    /// The default release is `latestTesting` only with the explicit opt-in.
     #[yare::parameterized(
-        default_stable = { None, None, STRICT, Ok(30) },
+        default_stable = { None, None, STRICT, Ok(33) },
         default_trunk = { None, None, UnstableFeatureVersions::Enabled, Ok(34) },
-        unknown_iv_stable = { Some("4.4"), None, STRICT, Err(unknown_release("4.4")) },
+        released_iv_stable = { Some("4.4"), None, STRICT, Ok(33) },
         first_trunk_iv = { Some("4.4-IV0"), None, UnstableFeatureVersions::Enabled, Ok(31) },
         trunk_release = { Some("4.4"), None, UnstableFeatureVersions::Enabled, Ok(33) },
         next_trunk_iv = { Some("4.5-IV0"), None, UnstableFeatureVersions::Enabled, Ok(34) },
@@ -646,23 +641,14 @@ mod tests {
             STRICT,
             Err(unknown_release("4.5-IV0")),
         },
-        explicit_unstable_level_refused = {
-            None,
-            Some(31),
-            STRICT,
-            Err("metadata.version 4.4-IV0 is not yet stable.".to_owned()),
-        },
-        unknown_level_33_stable = {
-            None,
-            Some(33),
-            STRICT,
-            Err("No MetadataVersion with feature level 33. Valid feature levels are from 7 to 31.".to_owned()),
-        },
-        unknown_level_34_stable = {
+        explicit_released_level = { None, Some(31), STRICT, Ok(31) },
+        released_level_32_stable = { None, Some(32), STRICT, Ok(32) },
+        released_level_33_stable = { None, Some(33), STRICT, Ok(33) },
+        unstable_level_34_stable = {
             None,
             Some(34),
             STRICT,
-            Err("No MetadataVersion with feature level 34. Valid feature levels are from 7 to 31.".to_owned()),
+            Err("metadata.version 4.5-IV0 is not yet stable.".to_owned()),
         },
         explicit_stable_level = { None, Some(30), STRICT, Ok(30) },
         explicit_trunk_level_31 = { None, Some(31), UnstableFeatureVersions::Enabled, Ok(31) },
@@ -685,19 +671,13 @@ mod tests {
         );
     }
 
-    /// KIP-1191: `share.version` 2 is Kafka trunk's `SV_2`. Kafka 4.3.1 stops
-    /// at 1, so a default format refuses 2 and seeds 1; with unstable feature
-    /// versions the level is accepted, and a format at `4.4-IV0` or later
-    /// seeds it as trunk's default, from the registry's `default_level`.
+    /// KIP-1191: released 4.4 accepts and defaults to `share.version` 2.
+    /// Formatting explicitly at 4.3 preserves that release's level 1.
     #[yare::parameterized(
-        default_stable = { None, None, STRICT, Ok(Some(1)) },
+        default_stable = { None, None, STRICT, Ok(Some(2)) },
         explicit_one_stable = { None, Some(1), STRICT, Ok(Some(1)) },
-        explicit_two_stable_refused = {
-            None,
-            Some(2),
-            STRICT,
-            Err("No feature:share.version with feature level 2".to_owned()),
-        },
+        explicit_two_stable = { None, Some(2), STRICT, Ok(Some(2)) },
+        release_4_3_stable = { Some("4.3"), None, STRICT, Ok(Some(1)) },
         explicit_two_trunk = { None, Some(2), UnstableFeatureVersions::Enabled, Ok(Some(2)) },
         explicit_one_trunk = { None, Some(1), UnstableFeatureVersions::Enabled, Ok(Some(1)) },
         default_trunk = { None, None, UnstableFeatureVersions::Enabled, Ok(Some(2)) },
@@ -710,7 +690,7 @@ mod tests {
         release_4_3_trunk = { Some("4.3"), None, UnstableFeatureVersions::Enabled, Ok(Some(1)) },
         release_4_1_trunk = { Some("4.1"), None, UnstableFeatureVersions::Enabled, Ok(None) },
     )]
-    fn share_version_two_is_trunks_level(
+    fn share_version_two_is_released(
         release: Option<&str>,
         level: Option<i16>,
         unstable: UnstableFeatureVersions,

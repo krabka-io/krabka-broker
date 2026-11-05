@@ -1,11 +1,8 @@
 //! Kafka's `GroupConfig`: the keys a `GROUP` resource carries, their types,
 //! defaults and broker synonyms, and `GroupConfig.validate`.
 //!
-//! Kafka trunk defines 27 group keys, ten of which Kafka 4.3.1 does not
-//! have ([`KAFKA_TRUNK_GROUP_KEYS`]). Those ten are reported and accepted
-//! only under `unstable.api.versions.enable`; otherwise the group resource is
-//! 4.3.1's 17, and naming one in an alter is refused as 4.3.1 refuses an
-//! unknown key.
+//! Released Kafka 4.4 defines 27 group keys, including the ten additions
+//! since 4.3.1. All are reported and accepted without an unstable API flag.
 //!
 //! An alter accepts and validates every key the broker serves, as Kafka's
 //! `ControllerConfigurationValidator` does: it has no filter for the keys a
@@ -66,7 +63,7 @@ const fn group_key(
     }
 }
 
-/// Every key of Kafka trunk's `GroupConfig.CONFIG_DEF`, in the order
+/// Every key of released Kafka 4.4's `GroupConfig.CONFIG_DEF`, in the order
 /// `DescribeConfigs` lists them (by name).
 pub const KAFKA_GROUP_KEYS: &[GroupKey] = {
     use super::registry::ConfigType::{Boolean, Int, List, Long, String};
@@ -226,11 +223,10 @@ pub const KAFKA_GROUP_KEYS: &[GroupKey] = {
     ]
 };
 
-/// The group keys Kafka trunk's `GroupConfig` defines and Kafka 4.3.1's does
-/// not. Kafka 4.3.1 declares the constants of the three
-/// `*.assignor.offload.enable` keys and never `define`s them, so it too
-/// answers `Unknown group config name` for them.
-pub const KAFKA_TRUNK_GROUP_KEYS: &[&str] = &[
+/// Released Kafka 4.4 group keys added since the previous compatibility target.
+/// Internal keys are included in released `configNames`, even when HTML omits them.
+#[cfg(test)]
+pub const KAFKA_44_GROUP_KEYS: &[&str] = &[
     "consumer.assignor.offload.enable",
     "errors.deadletterqueue.copy.record.enable",
     "errors.deadletterqueue.topic.name",
@@ -243,12 +239,11 @@ pub const KAFKA_TRUNK_GROUP_KEYS: &[&str] = &[
     "streams.task.offset.interval.ms",
 ];
 
-/// The group keys a broker serves under `unstable`: Kafka 4.3.1's
-/// `GroupConfig` by default, trunk's with unstable api versions enabled.
-pub fn served_group_keys(unstable: UnstableApiVersions) -> impl Iterator<Item = &'static GroupKey> {
-    KAFKA_GROUP_KEYS.iter().filter(move |key| {
-        unstable == UnstableApiVersions::Enabled || !KAFKA_TRUNK_GROUP_KEYS.contains(&key.name)
-    })
+/// Released group keys are served with either API-version policy.
+pub fn served_group_keys(
+    _unstable: UnstableApiVersions,
+) -> impl Iterator<Item = &'static GroupKey> {
+    KAFKA_GROUP_KEYS.iter()
 }
 
 /// The row for one group key served under `unstable`.
@@ -456,61 +451,43 @@ fn parse_value(key: &GroupKey, value: &str) -> Result<(), String> {
     }
 }
 
-/// A bound of a group config, with the key whose config states it.
-struct Bound<'a> {
+/// One numeric bound of a group config.
+struct Bound {
     value: i32,
-    key: &'a str,
 }
 
 /// `GroupConfig.validateValues`' broker-bound checks, over the override map.
 ///
-/// Kafka 4.3.1 refuses a value outside `[group.<protocol>.min.<key>,
-/// group.<protocol>.max.<key>]` naming the broker key it broke, as
-/// `<key> must be greater than or equal to <min key>` or `... less than or
-/// equal to <max key>`. Trunk states the range instead, as `<key> must be in
-/// the range <min> to <max> inclusive.`, so that is what a broker serving
-/// `unstable.api.versions.enable` answers.
+/// Released Kafka 4.4 reports both bounds in range-validation errors.
 fn check_bounds(
     overrides: &BTreeMap<String, String>,
     bounds: &GroupBounds,
-    unstable: UnstableApiVersions,
+    _unstable: UnstableApiVersions,
 ) -> Result<(), String> {
-    let trunk = unstable == UnstableApiVersions::Enabled;
     let int = |name: &str| {
         let value = overrides.get(name)?;
         int_value(value)
     };
-    let range = |name: &str, min: Bound<'_>, max: Bound<'_>| -> Result<(), String> {
+    let range = |name: &str, min: Bound, max: Bound| -> Result<(), String> {
         let Some(value) = int(name) else {
             return Ok(());
         };
-        if trunk && (value < min.value || value > max.value) {
+        if value < min.value || value > max.value {
             return Err(format!(
                 "{name} must be in the range {} to {} inclusive.",
                 min.value, max.value
             ));
         }
-        if value < min.value {
-            return Err(format!(
-                "{name} must be greater than or equal to {}",
-                min.key
-            ));
-        }
-        if value > max.value {
-            return Err(format!("{name} must be less than or equal to {}", max.key));
-        }
         Ok(())
     };
-    let assignment = |name: &str, protocol: &str| {
+    let assignment = |name: &str, _protocol: &str| {
         range(
             name,
             Bound {
                 value: MIN_ASSIGNMENT_INTERVAL_MS,
-                key: format!("group.{protocol}.min.assignment.interval.ms").as_str(),
             },
             Bound {
                 value: MAX_ASSIGNMENT_INTERVAL_MS,
-                key: format!("group.{protocol}.max.assignment.interval.ms").as_str(),
             },
         )
     };
@@ -519,22 +496,18 @@ fn check_bounds(
         "consumer.heartbeat.interval.ms",
         Bound {
             value: millis(consumer.min_heartbeat_interval),
-            key: "group.consumer.min.heartbeat.interval.ms",
         },
         Bound {
             value: millis(consumer.max_heartbeat_interval),
-            key: "group.consumer.max.heartbeat.interval.ms",
         },
     )?;
     range(
         "consumer.session.timeout.ms",
         Bound {
             value: millis(consumer.min_session_timeout),
-            key: "group.consumer.min.session.timeout.ms",
         },
         Bound {
             value: millis(consumer.max_session_timeout),
-            key: "group.consumer.max.session.timeout.ms",
         },
     )?;
     assignment("consumer.assignment.interval.ms", "consumer")?;
@@ -542,55 +515,45 @@ fn check_bounds(
         "share.heartbeat.interval.ms",
         Bound {
             value: millis(share.min_heartbeat_interval),
-            key: "group.share.min.heartbeat.interval.ms",
         },
         Bound {
             value: millis(share.max_heartbeat_interval),
-            key: "group.share.max.heartbeat.interval.ms",
         },
     )?;
     range(
         "share.session.timeout.ms",
         Bound {
             value: millis(share.min_session_timeout),
-            key: "group.share.min.session.timeout.ms",
         },
         Bound {
             value: millis(share.max_session_timeout),
-            key: "group.share.max.session.timeout.ms",
         },
     )?;
     range(
         "share.record.lock.duration.ms",
         Bound {
             value: millis(share.min_record_lock_duration),
-            key: "group.share.min.record.lock.duration.ms",
         },
         Bound {
             value: millis(share.max_record_lock_duration),
-            key: "group.share.max.record.lock.duration.ms",
         },
     )?;
     range(
         "share.delivery.count.limit",
         Bound {
             value: i32::from(share.min_delivery_count_limit),
-            key: "group.share.min.delivery.count.limit",
         },
         Bound {
             value: i32::from(share.max_delivery_count_limit),
-            key: "group.share.max.delivery.count.limit",
         },
     )?;
     range(
         "share.partition.max.record.locks",
         Bound {
             value: share.min_partition_max_record_locks,
-            key: "group.share.min.partition.max.record.locks",
         },
         Bound {
             value: share.max_partition_max_record_locks,
-            key: "group.share.max.partition.max.record.locks",
         },
     )?;
     assignment("share.assignment.interval.ms", "share")?;
@@ -598,38 +561,27 @@ fn check_bounds(
         KEY_HEARTBEAT_INTERVAL_MS,
         Bound {
             value: millis(streams.min_heartbeat_interval),
-            key: "group.streams.min.heartbeat.interval.ms",
         },
         Bound {
             value: millis(streams.max_heartbeat_interval),
-            key: "group.streams.max.heartbeat.interval.ms",
         },
     )?;
     range(
         KEY_SESSION_TIMEOUT_MS,
         Bound {
             value: millis(streams.min_session_timeout),
-            key: "group.streams.min.session.timeout.ms",
         },
         Bound {
             value: millis(streams.max_session_timeout),
-            key: "group.streams.max.session.timeout.ms",
         },
     )?;
     if int(KEY_NUM_STANDBY_REPLICAS).is_some_and(|value| value > MAX_STANDBY_REPLICAS) {
         return Err(format!(
-            "{KEY_NUM_STANDBY_REPLICAS} must be less than or equal to {}",
-            if trunk {
-                MAX_STANDBY_REPLICAS.to_string()
-            } else {
-                "group.streams.max.standby.replicas".to_owned()
-            }
+            "{KEY_NUM_STANDBY_REPLICAS} must be less than or equal to {MAX_STANDBY_REPLICAS}"
         ));
     }
     assignment("streams.assignment.interval.ms", "streams")?;
-    if trunk {
-        check_trunk_streams_bounds(overrides, streams)?;
-    }
+    check_trunk_streams_bounds(overrides, streams)?;
     for (session, heartbeat, default_session, default_heartbeat) in [
         (
             "consumer.session.timeout.ms",
@@ -658,10 +610,9 @@ fn check_bounds(
         }
     }
     // Trunk keeps the reserved `__` prefix for internal topics.
-    if trunk
-        && overrides
-            .get("errors.deadletterqueue.topic.name")
-            .is_some_and(|name| java_trim(name).starts_with("__"))
+    if overrides
+        .get("errors.deadletterqueue.topic.name")
+        .is_some_and(|name| java_trim(name).starts_with("__"))
     {
         return Err(
             "errors.deadletterqueue.topic.name: DLQ topic name must not start with '__'".to_owned(),
@@ -670,7 +621,7 @@ fn check_bounds(
     Ok(())
 }
 
-/// The trunk-only bounds of `GroupConfig.validateValues`: the task offset
+/// The released 4.4 additional bounds of `GroupConfig.validateValues`: the task offset
 /// interval floor, the warmup replica ceiling, and the registered assignor.
 fn check_trunk_streams_bounds(
     overrides: &BTreeMap<String, String>,
@@ -857,12 +808,10 @@ mod tests {
         );
     }
 
-    /// #784: with `unstable.api.versions.enable` off a group resource is
-    /// Kafka 4.3.1's, so each Kafka trunk group key is refused with 4.3.1's
-    /// `GroupConfig.validateNames` text, and accepted when it is on.
+    /// Every released addition is accepted under either API policy.
     #[test]
-    fn trunk_group_keys_need_unstable_api_versions() {
-        for key in KAFKA_TRUNK_GROUP_KEYS {
+    fn released_group_keys_require_no_unstable_api_versions() {
+        for key in KAFKA_44_GROUP_KEYS {
             let value = match *key {
                 KEY_TASK_OFFSET_INTERVAL_MS => "15000",
                 KEY_ASSIGNOR_NAME => "sticky",
@@ -874,20 +823,12 @@ mod tests {
                 "errors.deadletterqueue.topic.name" => "orders-dlq",
                 _ => "2",
             };
-            check!(
-                validate(&[(key, value)], Disabled)
-                    == Err(format!("Unknown group config name: {key}")),
-                "{key}"
-            );
+            check!(validate(&[(key, value)], Disabled) == Ok(()), "{key}");
             check!(validate(&[(key, value)], Enabled) == Ok(()), "{key}");
         }
         let strict: Vec<&str> = served_group_keys(Disabled).map(|key| key.name).collect();
-        check!(strict.len() == 17);
-        check!(
-            !strict
-                .iter()
-                .any(|name| KAFKA_TRUNK_GROUP_KEYS.contains(name))
-        );
+        check!(strict.len() == 27);
+        check!(KAFKA_44_GROUP_KEYS.iter().all(|name| strict.contains(name)));
     }
 
     /// Trunk's `validateValues` refuses a dead-letter-queue topic that is

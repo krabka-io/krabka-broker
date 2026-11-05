@@ -296,11 +296,9 @@ mod tests {
 
     rstest_bdd_macros::scenarios!("tests/features/migrated/src/handlers/update_features/preconditions.feature", fixtures = [feature_compatibility: FeatureCompatibilityContract]);
 
-    /// KIP-1191: `share.version` 2 is Kafka trunk's `SV_2`, so a controller
-    /// supports it only with `unstable.feature.versions.enable`, and answers
-    /// as a 4.3.1 controller does without it.
+    /// Kafka 4.4 supports share.version 2 regardless of unstable opt-in.
     #[test]
-    fn share_version_two_needs_unstable_feature_versions() {
+    fn share_version_two_needs_no_unstable_feature_versions() {
         let local = |unstable| LocalController {
             node_id: NodeId(1),
             unstable_features: unstable,
@@ -308,11 +306,7 @@ mod tests {
         let image = MetadataImage::new(uuid::Uuid::nil());
         let rows = [
             (1, krabka_raft::UnstableFeatureVersions::Disabled, None),
-            (
-                2,
-                krabka_raft::UnstableFeatureVersions::Disabled,
-                Some("Local controller 1 only supports versions 0-1"),
-            ),
+            (2, krabka_raft::UnstableFeatureVersions::Disabled, None),
             (2, krabka_raft::UnstableFeatureVersions::Enabled, None),
             (
                 3,

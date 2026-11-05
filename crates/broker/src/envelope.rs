@@ -131,7 +131,7 @@ pub fn is_forwardable(api_key: ApiKeyCode) -> bool { FORWARDABLE_API_KEYS.contai
 /// `unstable.api.versions.enable` is on.
 fn is_known_api_key(api_key: ApiKeyCode, unstable: UnstableApiVersions) -> bool {
     match unstable {
-        UnstableApiVersions::Disabled => krabka_raft::kafka_4_3_1_api(api_key).is_some(),
+        UnstableApiVersions::Disabled => krabka_raft::kafka_4_4_api(api_key).is_some(),
         UnstableApiVersions::Enabled => api_key::ApiKey::from_i16(api_key).is_some(),
     }
 }

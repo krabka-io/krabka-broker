@@ -5,8 +5,8 @@
 //! handler in `handlers::api_versions` calls [`supported_apis`] with the kind
 //! of listener the request arrived on, the broker's KIP-714 setting and its
 //! [`VersionGates`], so a listener a client reaches advertises what a Kafka
-//! broker advertises. Under the default gates that is exactly Kafka 4.3.1's
-//! table: [`CatalogApi::released`], from [`krabka_raft::KAFKA_4_3_1_APIS`], is
+//! broker advertises. Under the default gates that is exactly Kafka 4.4's
+//! table: [`CatalogApi::released`], from [`krabka_raft::KAFKA_4_4_APIS`], is
 //! the one per-API record of what that release serves, and both the
 //! advertised range and the receive-side refusal ([`is_disabled_version`])
 //! are derived from it. The dispatch registry calls [`dispatched_apis`] instead, because what the broker
@@ -122,15 +122,15 @@ const fn catalog_request<R: ProtocolRequest>() -> CatalogApi {
 /// krabka-only; Kafka has no switch for it. The `[runtime]` key
 /// `legacy_request_versions_enable` reads it. While it is
 /// [`Disabled`][Self::Disabled], the default, every listener advertises and
-/// accepts exactly Kafka 4.3.1's minimum versions: `Fetch` from v4 and
+/// accepts exactly Kafka 4.4's minimum versions: `Fetch` from v4 and
 /// `ListOffsets` from v1, and `Produce` from v3, though `Produce` is still
 /// advertised from v0 as Kafka advertises it (KAFKA-18659). A request below
-/// the minimum closes the connection, as it does against a 4.3.1 broker.
+/// the minimum closes the connection, as it does against a 4.4 broker.
 /// [`Enabled`][Self::Enabled] serves `Fetch` v0-v3, `ListOffsets` v0 and
 /// `Produce` v0-v2 as well.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LegacyRequestVersions {
-    /// Serve Kafka 4.3.1's minimum versions only.
+    /// Serve Kafka 4.4's minimum versions only.
     #[default]
     Disabled,
     /// Also serve the pre-4.0 request versions krabka still decodes.
@@ -157,16 +157,16 @@ pub struct VersionGates {
 }
 
 /// One API the broker dispatches, with the version range it decodes and the
-/// range Kafka 4.3.1 serves.
+/// range Kafka 4.4 serves.
 ///
 /// `min_version..=max_version` is what the handler decodes and answers.
-/// `released` is the Kafka 4.3.1 row for the key, from
-/// [`krabka_raft::KAFKA_4_3_1_APIS`], or `None` when that release has no such
+/// `released` is the Kafka 4.4 row for the key, from
+/// [`krabka_raft::KAFKA_4_4_APIS`], or `None` when that release has no such
 /// api key; it is the single table the default gates read.
 ///
 /// Under the defaults a listener advertises and accepts `released` exactly.
 /// [`UnstableApiVersions::Enabled`] lifts the maximum to `max_version` and
-/// admits the api keys 4.3.1 lacks, as Kafka's `unstable.api.versions.enable`
+/// admits the api keys 4.4 lacks, as Kafka's `unstable.api.versions.enable`
 /// does for a `latestVersionUnstable` version; [`LegacyRequestVersions::Enabled`]
 /// lowers the minimum to `min_version`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,7 +179,7 @@ pub struct CatalogApi {
 
 impl CatalogApi {
     /// The catalog row for `api_key` decoded over `min_version..=max_version`,
-    /// with its Kafka 4.3.1 row looked up.
+    /// with its Kafka 4.4 row looked up.
     ///
     /// A krabka-private api key -- `GetReplicaLogInfo` (1020), at or above
     /// `KRABKA_PRIVATE_API_KEY_FLOOR` -- has no Kafka counterpart for either
@@ -193,7 +193,7 @@ impl CatalogApi {
                 max_version,
             })
         } else {
-            krabka_raft::kafka_4_3_1_api(api_key)
+            krabka_raft::kafka_4_4_api(api_key)
         };
         Self {
             api_key,
@@ -203,7 +203,7 @@ impl CatalogApi {
         }
     }
 
-    /// Kafka 4.3.1's highest version of this api, or `None` when that
+    /// Kafka 4.4's highest version of this api, or `None` when that
     /// release does not have it.
     #[must_use]
     pub const fn released_max(self) -> Option<i16> {
@@ -348,7 +348,7 @@ pub enum ClientMetricsReceiver {
 ///
 /// `GetReplicaLogInfo` (1020) is the ninth. It is krabka-private: Kafka trunk
 /// gives 93, the key it used to hold, to `StreamsGroupTopologyDescriptionUpdate`,
-/// and no released Kafka advertises either -- `mirror.gcr.io/apache/kafka:4.3.1`
+/// and no released Kafka advertises either -- `mirror.gcr.io/apache/kafka:4.4`
 /// stops at api key 92. The only caller in this tree is the KIP-966 unclean
 /// recovery manager, which dials a replica's inter-broker endpoint. It
 /// therefore belongs on the same side of the split as the other eight.
@@ -401,7 +401,7 @@ pub fn catalog_apis() -> Vec<CatalogApi> {
 ///
 /// This is what the dispatch registry takes its per-key version bounds from.
 /// It is not what any listener advertises; that is [`supported_apis`]. A
-/// version outside Kafka 4.3.1's range, or any version of a key that release
+/// version outside Kafka 4.4's range, or any version of a key that release
 /// lacks, is inside this range, and [`is_disabled_version`] is what refuses it
 /// under the default [`VersionGates`].
 #[must_use]
@@ -427,7 +427,7 @@ static CATALOG_BY_KEY: LazyLock<BTreeMap<i16, CatalogApi>> = LazyLock::new(|| {
 });
 
 /// Whether `version` of `api_key` is a decodable version that `gates`
-/// disables: above Kafka 4.3.1's maximum, below its minimum, or any version of
+/// disables: above Kafka 4.4's maximum, below its minimum, or any version of
 /// an api key that release does not have.
 ///
 /// Kafka's `Processor.parseRequestHeader` asks `ApiKeys.isVersionEnabled`,
@@ -465,7 +465,7 @@ pub fn is_disabled_version(api_key: i16, version: i16, gates: VersionGates) -> b
 /// [`ListenerKind::ClientAndInterBroker`] alike -- and kept only on
 /// [`ListenerKind::InterBroker`], the dedicated listener no client dials
 /// (#843). Dispatch is a separate, wider gate: see [`INTER_BROKER_ONLY_APIS`].
-/// `gates` picks each row's range, and leaves out a key Kafka 4.3.1 lacks
+/// `gates` picks each row's range, and leaves out a key Kafka 4.4 lacks
 /// unless unstable api versions are enabled.
 #[must_use]
 pub fn supported_apis(
@@ -496,7 +496,7 @@ fn client_facing_apis() -> Vec<CatalogApi> {
         // v0. krabka still decodes them -- `Produce` up-converts the legacy
         // `MessageSet`, `Fetch` answers from the `kafka_3_6_2` flavor and
         // `ListOffsets` v0 from its own module -- and serves them only under
-        // `LegacyRequestVersions::Enabled`. The row's Kafka 4.3.1 range is what
+        // `LegacyRequestVersions::Enabled`. The row's Kafka 4.4 range is what
         // the default gate reads.
         CatalogApi::new(
             owned::produce_request::API_KEY,
@@ -540,7 +540,7 @@ fn admin_apis() -> Vec<CatalogApi> {
         catalog_request::<AddOffsetsToTxnRequest>(),
         catalog_request::<EndTxnRequest>(),
         catalog_request::<WriteTxnMarkersRequest>(),
-        // Version 6 (KIP-1319, topic ids) is Kafka trunk's; 4.3.1 stops at 5,
+        // Version 6 (KIP-1319, topic ids) is Kafka trunk's; 4.4 stops at 5,
         // so v6 is served only under `unstable.api.versions.enable`.
         catalog_request::<TxnOffsetCommitRequest>(),
         catalog_request::<DescribeConfigsRequest>(),
@@ -563,7 +563,7 @@ fn admin_apis() -> Vec<CatalogApi> {
         catalog_request::<UnregisterBrokerRequest>(),
         // UnregisterController (KIP-1312, Kafka trunk) — drops a controller
         // registration. Tagged `broker` and `controller`: a broker listener
-        // forwards it to the active controller. Kafka 4.3.1 has no api key 94,
+        // forwards it to the active controller. Kafka 4.4 has no api key 94,
         // so it is advertised and accepted only under
         // `unstable.api.versions.enable`.
         catalog_request::<UnregisterControllerRequest>(),
@@ -634,7 +634,7 @@ fn admin_apis() -> Vec<CatalogApi> {
         // KIP-1331 topology description push (Kafka trunk). krabka stores it
         // in Kafka's in-memory plugin when
         // `group.streams.topology.description.plugin.class` names it, and
-        // answers as a trunk broker without a plugin otherwise. Kafka 4.3.1
+        // answers as a trunk broker without a plugin otherwise. Kafka 4.4
         // has no api key 93, so it is advertised and accepted only under
         // `unstable.api.versions.enable`.
         catalog_request::<StreamsGroupTopologyDescriptionUpdateRequest>(),
@@ -668,7 +668,7 @@ fn admin_apis() -> Vec<CatalogApi> {
 mod tests {
     use {super::*, crate::handlers, assert2::assert, std::collections::BTreeSet};
 
-    /// The default gates: Kafka 4.3.1's table exactly.
+    /// The default gates: Kafka 4.4's table exactly.
     const STRICT: VersionGates = VersionGates {
         unstable: UnstableApiVersions::Disabled,
         legacy: LegacyRequestVersions::Disabled,
@@ -728,12 +728,12 @@ mod tests {
     fn streams_group_apis_are_advertised() {
         let apis = client_apis();
         let keys: Vec<i16> = apis.iter().map(|a| a.api_key).collect();
-        // StreamsGroupHeartbeat(88), StreamsGroupDescribe(89), at Kafka
-        // 4.3.1's v0; trunk's v1 is behind `unstable.api.versions.enable`.
+        // Kafka 4.4 serves StreamsGroupHeartbeat(88) and
+        // StreamsGroupDescribe(89) v1 by default.
         assert!(keys.contains(&88));
         assert!(keys.contains(&89));
         let hb = apis.iter().find(|a| a.api_key == 88).unwrap();
-        assert!((hb.min_version, hb.max_version) == (0, 0));
+        assert!((hb.min_version, hb.max_version) == (0, 1));
     }
 
     #[test]
@@ -915,9 +915,9 @@ mod tests {
         ReleasedApiCatalog::default()
     }
 
-    #[rstest_bdd_macros::given("Kafka 4.3.1's released API version ranges")]
+    #[rstest_bdd_macros::given("Kafka 4.4's released API version ranges")]
     fn released_versions(api_catalog: &mut ReleasedApiCatalog) {
-        api_catalog.released = krabka_raft::KAFKA_4_3_1_APIS
+        api_catalog.released = krabka_raft::KAFKA_4_4_APIS
             .iter()
             .map(|api| (api.api_key, range(api.min_version, api.max_version)))
             .collect();
@@ -951,7 +951,7 @@ mod tests {
                 (key, Some(&want)) => assert!(advertised == want, "api_key {key}"),
                 (key, None) => assert!(
                     key >= handlers::KRABKA_PRIVATE_API_KEY_FLOOR,
-                    "api_key {key} is not in Kafka 4.3.1"
+                    "api_key {key} is not in Kafka 4.4"
                 ),
             }
         }
@@ -992,49 +992,11 @@ mod tests {
                 .filter(|row| row.before != row.after)
                 .collect()
         };
-        let unstable: Moved = vec![
-            MovedRange {
-                api_key: 18,
-                before: Some(range(0, 4)),
-                after: Some(range(0, 5)),
-            },
-            MovedRange {
-                api_key: 22,
-                before: Some(range(0, 5)),
-                after: Some(range(0, 6)),
-            },
-            MovedRange {
-                api_key: 28,
-                before: Some(range(0, 5)),
-                after: Some(range(0, 6)),
-            },
-            // KIP-1331's per-group `ErrorMessage`.
-            MovedRange {
-                api_key: 42,
-                before: Some(range(0, 2)),
-                after: Some(range(0, 3)),
-            },
-            MovedRange {
-                api_key: 88,
-                before: Some(range(0, 0)),
-                after: Some(range(0, 1)),
-            },
-            MovedRange {
-                api_key: 89,
-                before: Some(range(0, 0)),
-                after: Some(range(0, 1)),
-            },
-            MovedRange {
-                api_key: 93,
-                before: None,
-                after: Some(range(0, 0)),
-            },
-            MovedRange {
-                api_key: 94,
-                before: None,
-                after: Some(range(0, 0)),
-            },
-        ];
+        let unstable: Moved = vec![MovedRange {
+            api_key: 22,
+            before: Some(range(0, 5)),
+            after: Some(range(0, 6)),
+        }];
         let legacy: Moved = vec![
             MovedRange {
                 api_key: 1,
@@ -1065,7 +1027,7 @@ mod tests {
     /// #784: a version is refused on receive exactly when it is not
     /// accepted, table-driven over the gated rows of every switch
     /// combination. `Produce` v0-v2 is refused by default although it is
-    /// advertised, as Kafka 4.3.1 refuses it; `ApiVersions` is never refused
+    /// advertised, as Kafka 4.4 refuses it; `ApiVersions` is never refused
     /// here, since its handler answers `UNSUPPORTED_VERSION`.
     #[yare::parameterized(
         produce_v0 = { 0, 0, [true, true, false, false] },
@@ -1076,13 +1038,13 @@ mod tests {
         list_offsets_v0 = { 2, 0, [true, true, false, false] },
         list_offsets_v1 = { 2, 1, [false, false, false, false] },
         api_versions_v5 = { 18, 5, [false, false, false, false] },
-        heartbeat_v6 = { 22, 6, [true, false, true, false] },
-        offset_commit_v6 = { 28, 6, [true, false, true, false] },
+        init_producer_id_v6 = { 22, 6, [true, false, true, false] },
+        offset_commit_v6 = { 28, 6, [false, false, false, false] },
         offset_commit_v5 = { 28, 5, [false, false, false, false] },
-        describe_topic_partitions_v1 = { 88, 1, [true, false, true, false] },
-        share_fetch_v1 = { 89, 1, [true, false, true, false] },
-        share_group_heartbeat_v0 = { 93, 0, [true, false, true, false] },
-        share_group_describe_v0 = { 94, 0, [true, false, true, false] },
+        streams_group_heartbeat_v1 = { 88, 1, [false, false, false, false] },
+        streams_group_describe_v1 = { 89, 1, [false, false, false, false] },
+        streams_topology_update_v0 = { 93, 0, [false, false, false, false] },
+        unregister_controller_v0 = { 94, 0, [false, false, false, false] },
         private_api_v0 = { 1020, 0, [false, false, false, false] },
     )]
     fn a_gated_version_is_refused_exactly_when_it_is_not_accepted(
@@ -1104,7 +1066,7 @@ mod tests {
     /// (`ApiVersionsResponse.toApiVersion(API_VERSIONS)`) is the same
     /// `ApiVersions` row every listener advertises.
     #[yare::parameterized(
-        stable = { STRICT, 4 },
+        stable = { STRICT, 5 },
         unstable = { ALL, 5 },
     )]
     fn the_unsupported_version_row_is_the_advertised_api_versions_row(
