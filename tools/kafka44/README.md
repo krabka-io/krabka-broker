@@ -312,3 +312,19 @@ behavior. This is not a durable-delivery guarantee and must not be described as
 source-acknowledgement-only-after-destination-durability for all failure classes.
 The receipt retains the released/native terminal-prefix difference (0 vs1) while
 both have lag0. No default feature levels or production configuration changed.
+
+## DLQ configuration discovery and validation
+
+`--dlq-scenarios` also executes `DlqConfigScenarios.java` against the owned
+released oracle and optional enabled candidate. Twenty strict rows cover
+`errors.deadletterqueue.group.enable`, group copy-record/name settings, defaults,
+valid booleans, malformed booleans, reserved `__` names, and unchanged state
+after validate-only requests. The existing DLQ oracle CI matrix runs this path.
+Default-gated candidates are not mistaken for enabled config parity.
+
+For a separately provisioned fixture, compile with the pinned4.4 classpath and
+invoke `DlqConfigScenarios ISOLATED_ENDPOINT`. This mutates only newly generated
+fixture resources; do not target production. Released4.4 accepts `bad name` and
+`..` as the group DLQ setting during configuration validation; actual destination
+use has separate checks. The paired [receipt](../../qualification/kafka44-dlq-config-20261105.json)
+retains all forty executed assertion rows, raw errors, and binary/config hashes.

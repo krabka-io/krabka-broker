@@ -97,7 +97,7 @@ def _protocol_setup(ctx, name, output):
     # javac is local; the only linked client codecs come from the pinned oracle.
     results = [_command(ctx, ["mkdir", output + "/libs", output + "/classes"])]
     results.append(_command(ctx, ["docker", "cp", name + ":/opt/kafka/libs/.", output + "/libs/"]))
-    results.append(_command(ctx, ["javac", "--release", "17", "-cp", output + "/libs/*", "-d", output + "/classes", "tools/kafka44/ProtocolScenarios.java", "tools/kafka44/AuthorizationScenarios.java", "tools/kafka44/TransactionScenarios.java", "tools/kafka44/PendingTransactionRecovery.java", "tools/kafka44/ConfigScenarios.java", "tools/kafka44/ControllerRecovery.java", "tools/kafka44/StreamsPositive.java", "qualification/kafka44-dlq/ShareBoundary.java"]))
+    results.append(_command(ctx, ["javac", "--release", "17", "-cp", output + "/libs/*", "-d", output + "/classes", "tools/kafka44/ProtocolScenarios.java", "tools/kafka44/AuthorizationScenarios.java", "tools/kafka44/TransactionScenarios.java", "tools/kafka44/PendingTransactionRecovery.java", "tools/kafka44/ConfigScenarios.java", "tools/kafka44/DlqConfigScenarios.java", "tools/kafka44/ControllerRecovery.java", "tools/kafka44/StreamsPositive.java", "qualification/kafka44-dlq/ShareBoundary.java"]))
     results.append(_command(ctx, ["docker", "cp", output + "/classes", name + ":/opt/kafka/kafka44classes"]))
     return results
 
@@ -107,9 +107,9 @@ def _protocol(ctx, name, bootstrap, controller, classes):
         argv.append("java")
     return _command(ctx, argv + ["-cp", "/opt/kafka/libs/*:/opt/kafka/kafka44classes", "ProtocolScenarios", bootstrap, controller], 120)
 
-def _config_scenarios(ctx, name, bootstrap, classes):
+def _config_scenarios(ctx, name, bootstrap, classes, fixture = "ConfigScenarios"):
     argv = ["docker", "exec", name, "java"] if name else ["docker", "run", "--rm", "--network", "host", "-v", classes + ":/opt/kafka/kafka44classes:ro", "--entrypoint", "java", IMAGE]
-    return _command(ctx, argv + ["-cp", "/opt/kafka/libs/*:/opt/kafka/kafka44classes", "ConfigScenarios", bootstrap], 180)
+    return _command(ctx, argv + ["-cp", "/opt/kafka/libs/*:/opt/kafka/kafka44classes", fixture, bootstrap], 180)
 
 def _streams(ctx, name, bootstrap, classes):
     argv = ["docker", "exec", name, "java"] if name else ["docker", "run", "--rm", "--network", "host", "-v", classes + ":/opt/kafka/kafka44classes:ro", "--entrypoint", "java", IMAGE]
@@ -288,6 +288,16 @@ def _impl(ctx: TaskContext) -> int:
             if side != "oracle"
         }
     if a.dlq_scenarios:
+        evidence["dlq_config_fixture_sha256"] = text_sha256(ctx.std.fs.read_to_string("tools/kafka44/DlqConfigScenarios.java"))
+        evidence["dlq_config_scenarios"] = {"oracle": _config_scenarios(ctx, name, "localhost:9092", absolute, "DlqConfigScenarios")}
+        if a.enabled_bootstrap:
+            evidence["dlq_config_scenarios"]["enabled"] = _config_scenarios(ctx, "", a.enabled_bootstrap, absolute, "DlqConfigScenarios")
+        evidence["dlq_config_differences"] = {
+            side: scenario_differences(evidence["dlq_config_scenarios"]["oracle"]["stdout"], result["stdout"], 20)
+            for side, result in evidence["dlq_config_scenarios"].items()
+            if side != "oracle"
+        }
+    if a.dlq_scenarios:
         evidence["dlq_fixture_sha256"] = text_sha256(ctx.std.fs.read_to_string("qualification/kafka44-dlq/ShareBoundary.java"))
         run = text_sha256(a.output)[7:17]
         evidence["dlq_run"] = run
@@ -384,6 +394,8 @@ def _impl(ctx: TaskContext) -> int:
         failed = failed or any([r["returncode"] for r in evidence["protocol_scenarios"].values()]) or any(evidence["protocol_differences"].values()) or len(scenario_results(evidence["protocol_scenarios"]["oracle"]["stdout"])) != 17 or "TRANSPORT:" in evidence["protocol_scenarios"]["oracle"]["stdout"]
     if a.protocol_scenarios:
         failed = failed or any([r["returncode"] for r in evidence["config_scenarios"].values()]) or any(evidence["config_differences"].values()) or len(scenario_results(evidence["config_scenarios"]["oracle"]["stdout"])) != 13
+    if a.dlq_scenarios:
+        failed = failed or any([r["returncode"] for r in evidence["dlq_config_scenarios"].values()]) or any(evidence["dlq_config_differences"].values()) or len(scenario_results(evidence["dlq_config_scenarios"]["oracle"]["stdout"])) != 20
     if a.authorization_scenarios:
         failed = failed or any([r["returncode"] for r in evidence["authorization_scenarios"].values()]) or any(evidence["authorization_differences"].values()) or len(scenario_results(evidence["authorization_scenarios"]["oracle"]["stdout"])) != 10 or "TRANSPORT:" in evidence["authorization_scenarios"]["oracle"]["stdout"]
     if a.transaction_scenarios:

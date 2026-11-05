@@ -1,0 +1,112 @@
+{
+  "qualification_pass": false,
+  "scope": "DLQ topic/group configuration discovery and validate-only boundaries; real released4.4/enabled-native endpoints",
+  "baseline": "88150b4efdf5da1822e5dc27ca6b7745273ef176",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "client_jar_sha256": "9e4514622675f9b24c83373d0d5b35dd7a4dba34bad69762fe90a9e54cfb71de",
+  "fixture_sha256": "5bf016f2e063db4dbadcfac70e4410e927c548dfe2e9ae7e05d081984b1e13f4",
+  "candidate_proc_exe_sha256": "8eab7ff8f79ee0066189f67a3d30073c015e5a30fd5503f7bded58d3f7f0c6c3",
+  "candidate_identity_note": "Retained intermediate watermark-fix8eab7ff binary; not final1991 integration build",
+  "candidate_config": {
+    "path": "/home/matt/.openclaw/workspace/coordinator/.private/routing-pipeline-runtime/replacement-native-1/config.toml",
+    "text": "broker_id=1\nlog_dir=\"/home/matt/.openclaw/workspace/coordinator/.private/routing-pipeline-runtime/replacement-native-1/data\"\n[[listeners]]\nname=\"PLAINTEXT\"\nbind_addr=\"127.0.0.1:63620\"\nadvertised=\"127.0.0.1:63620\"\nprotocol=\"Plaintext\"\n[server_properties]\n\"unstable.api.versions.enable\"=\"true\"\n\"unstable.feature.versions.enable\"=\"true\"\n",
+    "sha256": "a9b9312e2e57b36591f12d9bdebc5e7e1465b1d0e8c971e8944cd71ab2c850bd"
+  },
+  "commands": [],
+  "cases": [
+    {
+      "side": "oracle",
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/routing-pipeline-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-fixture-libs/*",
+        "DlqConfigScenarios",
+        "127.0.0.1:39745"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tdiscover-errors.deadletterqueue.group.enable\tfalse\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=false\tNONE\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=true\tNONE\nDETAIL\terrors.deadletterqueue.group.enable=yes\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value yes for configuration errors.deadletterqueue.group.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=yes\tINVALID_CONFIG\nDETAIL\terrors.deadletterqueue.group.enable=1\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value 1 for configuration errors.deadletterqueue.group.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=1\tINVALID_CONFIG\nDETAIL\terrors.deadletterqueue.group.enable=\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value  for configuration errors.deadletterqueue.group.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=\tINVALID_CONFIG\nSCENARIO\tvalidate-only-preserves-TOPIC\tPASS\nSCENARIO\tdiscover-errors.deadletterqueue.copy.record.enable\tfalse\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=false\tNONE\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=true\tNONE\nDETAIL\terrors.deadletterqueue.copy.record.enable=yes\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value yes for configuration errors.deadletterqueue.copy.record.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=yes\tINVALID_CONFIG\nDETAIL\terrors.deadletterqueue.copy.record.enable=1\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value 1 for configuration errors.deadletterqueue.copy.record.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=1\tINVALID_CONFIG\nDETAIL\terrors.deadletterqueue.copy.record.enable=\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value  for configuration errors.deadletterqueue.copy.record.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=\tINVALID_CONFIG\nSCENARIO\tdiscover-errors.deadletterqueue.topic.name\t\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=\tNONE\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=orders-dlq\tNONE\nDETAIL\terrors.deadletterqueue.topic.name=__internal\torg.apache.kafka.common.errors.InvalidConfigurationException: errors.deadletterqueue.topic.name: DLQ topic name must not start with '__'\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=__internal\tINVALID_CONFIG\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=bad name\tNONE\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=..\tNONE\nSCENARIO\tvalidate-only-preserves-GROUP\tPASS\n",
+      "log_sha256": "a4ef094f816cfd09b14e3d2f1b6545aae38bc7164a7fc954da7bc5bbfb808179",
+      "strict_rows": 20
+    },
+    {
+      "side": "native",
+      "command": [
+        "java",
+        "-cp",
+        "/home/matt/.openclaw/workspace/coordinator/.private/routing-pipeline-runtime/classes:/home/matt/.openclaw/workspace/coordinator/.private/kafka44-fixture-libs/*",
+        "DlqConfigScenarios",
+        "127.0.0.1:63620"
+      ],
+      "returncode": 0,
+      "stdout": "SCENARIO\tdiscover-errors.deadletterqueue.group.enable\tfalse\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=false\tNONE\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=true\tNONE\nDETAIL\terrors.deadletterqueue.group.enable=yes\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value yes for configuration errors.deadletterqueue.group.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=yes\tINVALID_CONFIG\nDETAIL\terrors.deadletterqueue.group.enable=1\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value 1 for configuration errors.deadletterqueue.group.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=1\tINVALID_CONFIG\nDETAIL\terrors.deadletterqueue.group.enable=\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value  for configuration errors.deadletterqueue.group.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=\tINVALID_CONFIG\nSCENARIO\tvalidate-only-preserves-TOPIC\tPASS\nSCENARIO\tdiscover-errors.deadletterqueue.copy.record.enable\tfalse\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=false\tNONE\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=true\tNONE\nDETAIL\terrors.deadletterqueue.copy.record.enable=yes\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value yes for configuration errors.deadletterqueue.copy.record.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=yes\tINVALID_CONFIG\nDETAIL\terrors.deadletterqueue.copy.record.enable=1\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value 1 for configuration errors.deadletterqueue.copy.record.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=1\tINVALID_CONFIG\nDETAIL\terrors.deadletterqueue.copy.record.enable=\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value  for configuration errors.deadletterqueue.copy.record.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=\tINVALID_CONFIG\nSCENARIO\tdiscover-errors.deadletterqueue.topic.name\t\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=\tNONE\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=orders-dlq\tNONE\nDETAIL\terrors.deadletterqueue.topic.name=__internal\torg.apache.kafka.common.errors.InvalidConfigurationException: errors.deadletterqueue.topic.name: DLQ topic name must not start with '__'\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=__internal\tINVALID_CONFIG\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=bad name\tNONE\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=..\tNONE\nSCENARIO\tvalidate-only-preserves-GROUP\tPASS\n",
+      "log_sha256": "a4ef094f816cfd09b14e3d2f1b6545aae38bc7164a7fc954da7bc5bbfb808179",
+      "strict_rows": 20
+    }
+  ],
+  "limits": [
+    "Fresh RF1 fixture resources only; no ACL or crash fault in this scenario",
+    "Validate-only accepts bad name and .. for group DLQ topic name on release; actual destination-use validation is separate",
+    "No defaults changed or broad qualification inferred"
+  ],
+  "paired_rows_equal": true,
+  "strict_assertions": 40,
+  "cleanup": "Only own copied-data native process SIGTERM; original oracle left running; fixture resources retained",
+  "actual_oracle_task": {
+    "command": [
+      "aspect",
+      "kafka44",
+      "--protocol-scenarios",
+      "--dlq-scenarios",
+      "--revision",
+      "88150b4efdf5da1822e5dc27ca6b7745273ef176",
+      "--output",
+      "/home/matt/.openclaw/workspace/coordinator/.private/dlq-config-axl-20261105"
+    ],
+    "returncode": 0,
+    "seconds": 83,
+    "evidence_sha256": "0c09e982140d6275f950bb26c9ca836274bb29836ac2d45f44be4d5d98add20a",
+    "status": "collected-not-qualified",
+    "config_scenarios": {
+      "oracle": {
+        "command": [
+          "timeout",
+          "180",
+          "docker",
+          "exec",
+          "krabka-kafka44-dinator--private-dlq-config-axl-20261105",
+          "java",
+          "-cp",
+          "/opt/kafka/libs/*:/opt/kafka/kafka44classes",
+          "DlqConfigScenarios",
+          "localhost:9092"
+        ],
+        "returncode": 0,
+        "stdout": "SCENARIO\tdiscover-errors.deadletterqueue.group.enable\tfalse\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=false\tNONE\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=true\tNONE\nDETAIL\terrors.deadletterqueue.group.enable=yes\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value yes for configuration errors.deadletterqueue.group.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=yes\tINVALID_CONFIG\nDETAIL\terrors.deadletterqueue.group.enable=1\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value 1 for configuration errors.deadletterqueue.group.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=1\tINVALID_CONFIG\nDETAIL\terrors.deadletterqueue.group.enable=\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value  for configuration errors.deadletterqueue.group.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.group.enable=\tINVALID_CONFIG\nSCENARIO\tvalidate-only-preserves-TOPIC\tPASS\nSCENARIO\tdiscover-errors.deadletterqueue.copy.record.enable\tfalse\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=false\tNONE\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=true\tNONE\nDETAIL\terrors.deadletterqueue.copy.record.enable=yes\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value yes for configuration errors.deadletterqueue.copy.record.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=yes\tINVALID_CONFIG\nDETAIL\terrors.deadletterqueue.copy.record.enable=1\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value 1 for configuration errors.deadletterqueue.copy.record.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=1\tINVALID_CONFIG\nDETAIL\terrors.deadletterqueue.copy.record.enable=\torg.apache.kafka.common.errors.InvalidConfigurationException: Invalid value  for configuration errors.deadletterqueue.copy.record.enable: Expected value to be either true or false\nSCENARIO\tvalidate-errors.deadletterqueue.copy.record.enable=\tINVALID_CONFIG\nSCENARIO\tdiscover-errors.deadletterqueue.topic.name\t\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=\tNONE\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=orders-dlq\tNONE\nDETAIL\terrors.deadletterqueue.topic.name=__internal\torg.apache.kafka.common.errors.InvalidConfigurationException: errors.deadletterqueue.topic.name: DLQ topic name must not start with '__'\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=__internal\tINVALID_CONFIG\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=bad name\tNONE\nSCENARIO\tvalidate-errors.deadletterqueue.topic.name=..\tNONE\nSCENARIO\tvalidate-only-preserves-GROUP\tPASS\n",
+        "stderr": ""
+      }
+    },
+    "cleanup": {
+      "command": [
+        "timeout",
+        "90",
+        "docker",
+        "rm",
+        "-f",
+        "krabka-kafka44-dinator--private-dlq-config-axl-20261105"
+      ],
+      "returncode": 0,
+      "stdout": "krabka-kafka44-dinator--private-dlq-config-axl-20261105\n",
+      "stderr": ""
+    },
+    "revision_note": "Supplied baseline revision plus fixture/task changes pinned separately by source hashes; not a clean-head production-binary claim"
+  },
+  "checks": {
+    "javac17": "PASS",
+    "actual_paired_config_assertions": "40PASS",
+    "actual_oracle_task": "PASS83s",
+    "axl_tests": "573PASS/36suites",
+    "check_scripts": "PASS27",
+    "cpd": "PASS0clones",
+    "diff_check": "PASS"
+  }
+}

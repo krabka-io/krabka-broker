@@ -469,3 +469,16 @@ The client explicitly sends its stale identity; automatic client cache
 invalidation/rebootstrap behavior is not tested. Native source/binary identity
 is the intermediate pinned watermark-fix build, not final1991; no default or
 full qualification claim follows. Owned replacement processes are stopped.
+
+## DLQ configuration boundaries (2026-11-05)
+
+[`kafka44-dlq-config-20261105.json`](../../qualification/kafka44-dlq-config-20261105.json)
+retains twenty strict released/enabled-native rows per peer (forty total), with
+identical discovery defaults and validation error maps for the topic enable and
+group copy/name settings. Validate-only requests leave all tested settings
+unchanged. Reserved `__` names and nonboolean strings reject; `bad name` and
+`..` remain valid group config values in the release at this stage. The
+`--dlq-scenarios` task and its existing oracle CI variant now run this fixture.
+This is config admission, not runtime acceptance of an invalid destination,
+ACL/recovery or default graduation. Native binary identity is explicitly pinned
+to the retained intermediate watermark-fix build, not final1991.

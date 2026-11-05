@@ -49,6 +49,9 @@ def _test_config_results(_ctx):
     rows = "\n".join(["SCENARIO\tconfig-" + str(i) + "\tNONE" for i in range(13)])
     check_eq("thirteen config cases", scenario_differences(rows, rows, 13), [])
     check_eq("truncated config output fails", len(scenario_differences(rows, rows.splitlines()[0], 13)), 1)
+    dlq_rows = "\n".join(["SCENARIO\tdlq-config-" + str(i) + "\tNONE" for i in range(20)])
+    check_eq("twenty DLQ config cases", scenario_differences(dlq_rows, dlq_rows, 20), [])
+    check_eq("truncated DLQ config fails", len(scenario_differences(dlq_rows, dlq_rows.splitlines()[0], 20)), 1)
 
 def _test_streams_results(_ctx):
     rows = "\n".join(["SCENARIO\tstreams-" + str(i) + "\tPASS" for i in range(9)])
