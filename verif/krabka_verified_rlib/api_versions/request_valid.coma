@@ -1,0 +1,45 @@
+(* #"/workspace/crates/verified/src/api_versions.rs" 36 0 41 9 *)
+
+let%span sapi_versions = "/workspace/crates/verified/src/api_versions.rs" 42 15 42 16
+let%span sapi_versions'0 = "/workspace/crates/verified/src/api_versions.rs" 42 53 42 54
+let%span sapi_versions'1 = "/workspace/crates/verified/src/api_versions.rs" 42 42 42 93
+let%span sapi_versions'2 = "/workspace/crates/verified/src/api_versions.rs" 42 89 42 91
+let%span sapi_versions'3 = "/workspace/crates/verified/src/api_versions.rs" 42 4 42 93
+let%span sapi_versions'4 = "/workspace/crates/verified/src/api_versions.rs" 32 28 34 61
+
+use creusot.int.Int16
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let request_valid [#"/workspace/crates/verified/src/api_versions.rs" 36 0 41 9] (version: Int16.t)
+  (client_info_valid: bool) (cluster_present: bool) (node_id: Int32.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_10 <- Int16.lt version ([%#sapi_versions] (3: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb2) | br1 -> {_10} (! bb3) ] ]
+  | bb2 = any [ br0 -> {client_info_valid = false} (! bb4) | br1 -> {client_info_valid} (! bb3) ]
+  | bb3 = s0
+    [ s0 = [ &_13 <- Int16.lt version ([%#sapi_versions'0] (5: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb6) | br1 -> {_13} (! bb5) ] ]
+  | bb5 = s0 [ s0 = [ &_ret <- [%#sapi_versions'1] true ] s1 | s1 = return {_ret} ]
+  | bb6 = s0
+    [ s0 = [ &_16 <- node_id <> ([%#sapi_versions'2] (-1: Int32.t)) ] s1
+    | s1 = [ &_ret <- cluster_present = _16 ] s2
+    | s2 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- [%#sapi_versions'3] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & version: Int16.t = version
+  | & client_info_valid: bool = client_info_valid
+  | & cluster_present: bool = cluster_present
+  | & node_id: Int32.t = node_id
+  | & _10: bool = Any.any_l ()
+  | & _13: bool = Any.any_l ()
+  | & _16: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:request_valid ensures] [%#sapi_versions'4] result
+    = ((Int16.to_int version < 3 \/ client_info_valid)
+    /\ (Int16.to_int version < 5 \/ cluster_present = (Int32.to_int node_id <> - 1)))}
+    (! return {result}) ]

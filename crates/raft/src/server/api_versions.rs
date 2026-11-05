@@ -20,6 +20,7 @@ use {
             api_versions_response::{ApiVersion as ApiVersionEntry, ApiVersionsResponse},
         },
     },
+    krabka_verified::api_versions::{AdmissionFacts, IdentityComparison, admission_error},
 };
 
 mod client_software;
@@ -53,9 +54,6 @@ pub fn api_versions_max_version(unstable: UnstableApiVersions) -> i16 {
 /// First `ApiVersions` version that carries the KIP-511 client software name
 /// and version.
 const API_VERSIONS_CLIENT_SOFTWARE_MIN_VERSION: i16 = 3;
-/// First `ApiVersions` version that carries the KIP-1242 cluster id and node
-/// id.
-const API_VERSIONS_ROUTING_MIN_VERSION: i16 = 5;
 const API_VERSIONS_UNSUPPORTED_VERSION: i16 = 35;
 const API_VERSIONS_INVALID_REQUEST: i16 = 42;
 
@@ -151,14 +149,19 @@ pub fn unsupported_version_response(unstable: UnstableApiVersions) -> ApiVersion
 /// Kafka's `ApiVersionsRequest.isValid`.
 #[must_use]
 pub fn is_valid_api_versions_request(request: &ApiVersionsRequest, version: i16) -> bool {
-    if version >= API_VERSIONS_ROUTING_MIN_VERSION
-        && (request.cluster_id.is_none() != (request.node_id == -1))
-    {
-        return false;
-    }
-    version < API_VERSIONS_CLIENT_SOFTWARE_MIN_VERSION
-        || (is_valid_client_info(&request.client_software_name)
-            && is_valid_client_info(&request.client_software_version))
+    admission_error(AdmissionFacts {
+        version,
+        client_info_valid: version < API_VERSIONS_CLIENT_SOFTWARE_MIN_VERSION
+            || (is_valid_client_info(&request.client_software_name)
+                && is_valid_client_info(&request.client_software_version)),
+        cluster_present: request.cluster_id.is_some(),
+        node_id: request.node_id,
+        expected_node_id: None,
+        cluster_matches: false,
+        // ControllerApis and SaslServerAuthenticator validate the pair but
+        // deliberately never compare a complete identity against this node.
+        comparison: IdentityComparison::Skip,
+    }) == 0
 }
 
 fn encode_body(response: &ApiVersionsResponse, version: i16) -> Bytes {

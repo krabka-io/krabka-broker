@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/api_versions.rs" 12 0 12 28 *)
+
+(* <api_versions::IdentityComparison as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_IdentityComparison = Skip | Compare
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_IdentityComparison [#"/workspace/crates/verified/src/api_versions.rs" 12 0 12 28] (self: t_IdentityComparison)
+  (return (x: t_IdentityComparison)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_IdentityComparison = Any.any_l () | & self: t_IdentityComparison = self ])
+  [ return (result: t_IdentityComparison) -> (! return {result}) ]

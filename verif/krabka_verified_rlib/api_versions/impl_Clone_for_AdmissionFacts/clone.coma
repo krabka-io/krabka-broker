@@ -1,0 +1,30 @@
+(* #"/workspace/crates/verified/src/api_versions.rs" 19 0 19 28 *)
+
+(* <api_versions::AdmissionFacts as std::clone::Clone> *)
+
+use creusot.int.Int16
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_Option_i32 = None | Some Int32.t
+
+type t_IdentityComparison = Skip | Compare
+
+type t_AdmissionFacts = {
+  version: Int16.t;
+  client_info_valid: bool;
+  cluster_present: bool;
+  node_id: Int32.t;
+  expected_node_id: t_Option_i32;
+  cluster_matches: bool;
+  comparison: t_IdentityComparison }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_AdmissionFacts [#"/workspace/crates/verified/src/api_versions.rs" 19 0 19 28] (self: t_AdmissionFacts)
+  (return (x: t_AdmissionFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_AdmissionFacts = Any.any_l () | & self: t_AdmissionFacts = self ])
+  [ return (result: t_AdmissionFacts) -> (! return {result}) ]

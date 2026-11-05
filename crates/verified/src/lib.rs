@@ -19,6 +19,7 @@ macro_rules! creusot_open_spec {
 }
 pub(crate) use creusot_open_spec;
 
+pub mod api_versions;
 pub mod audit;
 pub mod authz;
 pub mod barrier;

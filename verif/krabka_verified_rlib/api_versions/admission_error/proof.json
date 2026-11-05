@@ -1,0 +1,10 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_admission_error": { "prover": "alt-ergo", "time": 0.025 },
+      "vc_ne_Option_i32": { "prover": "alt-ergo", "time": 0.013 },
+      "vc_request_valid": { "prover": "alt-ergo", "time": 0.014 }
+    }
+  }
+}

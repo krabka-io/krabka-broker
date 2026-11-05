@@ -1,0 +1,119 @@
+(* #"/workspace/crates/verified/src/api_versions.rs" 59 0 59 52 *)
+
+let%span sapi_versions = "/workspace/crates/verified/src/api_versions.rs" 60 8 65 5
+let%span sapi_versions'0 = "/workspace/crates/verified/src/api_versions.rs" 67 31 67 32
+let%span sapi_versions'1 = "/workspace/crates/verified/src/api_versions.rs" 70 38 70 83
+let%span sapi_versions'2 = "/workspace/crates/verified/src/api_versions.rs" 72 8 72 11
+let%span sapi_versions'3 = "/workspace/crates/verified/src/api_versions.rs" 74 8 74 9
+let%span sapi_versions'4 = "/workspace/crates/verified/src/api_versions.rs" 66 8 66 10
+let%span sapi_versions'5 = "/workspace/crates/verified/src/api_versions.rs" 49 28 51 80
+let%span sapi_versions'6 = "/workspace/crates/verified/src/api_versions.rs" 52 28 56 81
+let%span sapi_versions'7 = "/workspace/crates/verified/src/api_versions.rs" 57 28 57 75
+let%span sapi_versions'8 = "/workspace/crates/verified/src/api_versions.rs" 32 28 34 61
+let%span smod = "/rustc/11177f2235f0c842b00f82c558ad9480c0c3a895/library/core/src/macros/mod.rs" 436 17 436 22
+let%span smod'0 = "/rustc/11177f2235f0c842b00f82c558ad9480c0c3a895/library/core/src/macros/mod.rs" 435 38 435 42
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/std/cmp.rs" 17 26 17 75
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/logic/ord.rs" 34 8 34 21
+let%span smodel = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/model.rs" 37 8 37 28
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/std/option.rs" 15 8 18 9
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/std/num.rs" 32 28 32 33
+
+use creusot.int.Int16
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i32 = None | Some Int32.t
+
+type t_IdentityComparison = Skip | Compare
+
+type t_AdmissionFacts = {
+  version: Int16.t;
+  client_info_valid: bool;
+  cluster_present: bool;
+  node_id: Int32.t;
+  expected_node_id: t_Option_i32;
+  cluster_matches: bool;
+  comparison: t_IdentityComparison }
+
+let request_valid (version'0: Int16.t) (client_info_valid'0: bool) (cluster_present'0: bool) (node_id'0: Int32.t)
+  (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:request_valid ensures] [%#sapi_versions'8] result
+    = ((Int16.to_int version'0 < 3 \/ client_info_valid'0)
+    /\ (Int16.to_int version'0 < 5 \/ cluster_present'0 = (Int32.to_int node_id'0 <> - 1)))}
+    (! return {result}) ]
+
+type t_Option_Int = None'0 | Some'0 int
+
+function deep_model_i32 [@inline:trivial] (self: Int32.t) : int = [%#snum] Int32.to_int self
+
+meta "rewrite_def" function deep_model_i32
+
+function deep_model_Option_i32 [@inline:trivial] (self: t_Option_i32) : t_Option_Int = [%#soption] match self with
+    | Some t -> Some'0 (deep_model_i32 t)
+    | None -> None'0
+    end
+
+meta "rewrite_def" function deep_model_Option_i32
+
+function deep_model_ref_Option_i32 [@inline:trivial] (self: t_Option_i32) : t_Option_Int =
+  [%#smodel] deep_model_Option_i32 self
+
+meta "rewrite_def" function deep_model_ref_Option_i32
+
+let ne_Option_i32 (self: t_Option_i32) (other: t_Option_i32) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:ne ensures] [%#scmp] result
+    = (deep_model_ref_Option_i32 self <> deep_model_ref_Option_i32 other)}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let admission_error [#"/workspace/crates/verified/src/api_versions.rs" 59 0 59 52] (facts: t_AdmissionFacts)
+  (return (x: Int16.t)) = (! bb0
+  [ bb0 = s0
+    [ s0 = request_valid [%#sapi_versions] {facts.version} {facts.client_info_valid} {facts.cluster_present}
+        {facts.node_id} (fun (_x: bool) -> [ &_16 <- _x ] s1)
+    | s1 = any [ br0 -> {_16 = false} (! bb3) | br1 -> {_16} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = [ &_21 <- Int16.ge facts.version ([%#sapi_versions'0] (5: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_21 = false} (! bb17) | br1 -> {_21} (! bb4) ] ]
+  | bb4 = any [ br0 -> {facts.comparison = Skip} (! bb6) | br1 -> {facts.comparison = Compare} (! bb8) ]
+  | bb6 = s0 [ s0 = [ &_23 <- [%#smod] false ] s1 | s1 = bb9 ]
+  | bb8 = s0 [ s0 = [ &_23 <- [%#smod'0] true ] s1 | s1 = bb9 ]
+  | bb9 = any [ br0 -> {_23 = false} (! bb17) | br1 -> {_23} (! bb10) ]
+  | bb10 = any [ br0 -> {facts.cluster_present = false} (! bb17) | br1 -> {facts.cluster_present} (! bb11) ]
+  | bb11 = any [ br0 -> {facts.cluster_matches = false} (! bb15) | br1 -> {facts.cluster_matches} (! bb12) ]
+  | bb12 = s0
+    [ s0 = [ &_29 <- Some (facts.node_id) ] s1
+    | s1 = ne_Option_i32 [%#sapi_versions'1] {_29} {facts.expected_node_id} (fun (_x: bool) -> [ &_27 <- _x ] s2)
+    | s2 = any [ br0 -> {_27 = false} (! bb17) | br1 -> {_27} (! bb15) ] ]
+  | bb15 = s0 [ s0 = [ &_ret <- [%#sapi_versions'2] (129: Int16.t) ] s1 | s1 = return {_ret} ]
+  | bb17 = s0 [ s0 = [ &_ret <- [%#sapi_versions'3] (0: Int16.t) ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- [%#sapi_versions'4] (42: Int16.t) ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: Int16.t = Any.any_l ()
+  | & facts: t_AdmissionFacts = facts
+  | & _16: bool = Any.any_l ()
+  | & _21: bool = Any.any_l ()
+  | & _23: bool = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _29: t_Option_i32 = Any.any_l () ])
+  [ return (result: Int16.t) ->
+  {[@stop_split] [@expl:admission_error ensures] ([@stop_split] [@expl:admission_error ensures #0] [%#sapi_versions'5] (Int16.to_int result
+        = 42)
+      = (ge_log_Int (Int16.to_int facts.version) 3 /\ not facts.client_info_valid
+      \/ ge_log_Int (Int16.to_int facts.version) 5 /\ facts.cluster_present <> (Int32.to_int facts.node_id <> - 1)))
+    /\ ([@stop_split] [@expl:admission_error ensures #1] [%#sapi_versions'6] (Int16.to_int result = 129)
+      = ((Int16.to_int facts.version < 3 \/ facts.client_info_valid)
+      /\ (Int16.to_int facts.version < 5 \/ facts.cluster_present = (Int32.to_int facts.node_id <> - 1))
+      /\ ge_log_Int (Int16.to_int facts.version) 5
+      /\ facts.comparison = Compare
+      /\ facts.cluster_present /\ (not facts.cluster_matches \/ Some (facts.node_id) <> facts.expected_node_id)))
+    /\ ([@stop_split] [@expl:admission_error ensures #2] [%#sapi_versions'7] Int16.to_int result = 0
+    \/ Int16.to_int result = 42 \/ Int16.to_int result = 129)}
+    (! return {result}) ]

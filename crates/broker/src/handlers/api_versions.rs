@@ -53,20 +53,17 @@ use {
         api_catalog::{UnstableApiVersions, supported_apis},
         broker::Broker,
         cluster_id::matches,
-        codes,
         error::BrokerError,
         handlers::{RequestContext, decode_request, encode_response},
     },
     krabka_protocol::api_key::ApiKey,
+    krabka_verified::api_versions::{AdmissionFacts, IdentityComparison, admission_error},
     std::time::Instant,
 };
 
 /// First `ApiVersions` request version that carries the KIP-511
 /// `client_software_name` and `client_software_version` fields.
 const CLIENT_INFO_MIN_VERSION: i16 = 3;
-
-/// First `ApiVersions` version that carries the KIP-1242 routing identity.
-const ROUTING_IDENTITY_MIN_VERSION: i16 = 5;
 
 /// The v0 body that answers an `ApiVersions` request at a version this broker
 /// does not serve.
@@ -107,17 +104,24 @@ pub fn handle<'a>(
         // (that is `KafkaApis`, which runs after authentication), and answers
         // with throttle 0 without charging a quota.
         let pre_authentication = context.pre_authentication;
-        let error_code = if !krabka_raft::is_valid_api_versions_request(&req, version) {
-            Some(codes::INVALID_REQUEST)
-        } else if version >= ROUTING_IDENTITY_MIN_VERSION
-            && !pre_authentication
-            && let Some(cluster_id) = &req.cluster_id
-            && (!matches(cluster_id, expected_cluster_id) || Some(req.node_id) != expected_node_id)
-        {
-            Some(codes::REBOOTSTRAP_REQUIRED)
-        } else {
-            None
-        };
+        let error_code = admission_error(AdmissionFacts {
+            version,
+            client_info_valid: version < CLIENT_INFO_MIN_VERSION
+                || (is_valid_client_info(&req.client_software_name)
+                    && is_valid_client_info(&req.client_software_version)),
+            cluster_present: req.cluster_id.is_some(),
+            node_id: req.node_id,
+            expected_node_id,
+            cluster_matches: req
+                .cluster_id
+                .as_ref()
+                .is_some_and(|id| matches(id, expected_cluster_id)),
+            comparison: if pre_authentication {
+                IdentityComparison::Skip
+            } else {
+                IdentityComparison::Compare
+            },
+        });
         let throttle_time_ms = || {
             if pre_authentication {
                 0
@@ -139,7 +143,7 @@ pub fn handle<'a>(
         // Invalid client information or an incomplete KIP-1242 identity is
         // INVALID_REQUEST. A complete but stale identity asks the client to
         // rebootstrap. Both use the normal v5 response shape with no API list.
-        if let Some(error_code) = error_code {
+        if error_code != 0 {
             let resp = ApiVersionsResponse {
                 error_code,
                 throttle_time_ms: throttle_time_ms(),

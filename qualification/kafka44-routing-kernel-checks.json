@@ -1,0 +1,113 @@
+{
+  "status": "passed-pure-handshake-admission-only",
+  "base_revision": "88150b4efdf5da1822e5dc27ca6b7745273ef176",
+  "source_sha256": {
+    "crates/verified/src/api_versions.rs": "15f8ba1ff68cef323728f52a5c2ac25fb3c453e09325948594fdbea3d27674c6",
+    "crates/verified/src/lib.rs": "8d0e0d284bf66389cbbbe6d654254f2ea12e677fb1e16cce8729c073946e6ada",
+    "crates/broker/src/handlers/api_versions.rs": "afcddbd414a09cc0caf690c8c3aaca2f30ac1e29ff23ab1ea859e17d27afc131",
+    "crates/raft/src/server/api_versions.rs": "18e19636daa2e13f3c7b04bf1b7d2fd93522bc8f14289ad1c1b9fa57dd68b3a1"
+  },
+  "proof": {
+    "image": "ghcr.io/krabka-io/creusot@sha256:992bd1a7a51c58e188dc2b31a6eef36be106217dcf24450f9a4a52cfdeee561b",
+    "version": "cargo-creusot 0.14.0; nightly-2026-08-03; Why3 1.8.2+git; why3find 1.3.0+dev; alt-ergo 2.6.4",
+    "command": "cargo creusot --package krabka-verified \"api_versions::*\" --why3find-arg=-j --why3find-arg=2 -- --ignore-rust-version",
+    "result": "Proved (4 files)",
+    "obligations": {
+      "verif/krabka_verified_rlib/api_versions/request_valid/proof.json": {
+        "vc_request_valid": {
+          "prover": "alt-ergo",
+          "time": 0.014
+        }
+      },
+      "verif/krabka_verified_rlib/api_versions/admission_error/proof.json": {
+        "vc_admission_error": {
+          "prover": "alt-ergo",
+          "time": 0.025
+        },
+        "vc_ne_Option_i32": {
+          "prover": "alt-ergo",
+          "time": 0.013
+        },
+        "vc_request_valid": {
+          "prover": "alt-ergo",
+          "time": 0.014
+        }
+      },
+      "verif/krabka_verified_rlib/api_versions/impl_Clone_for_IdentityComparison/clone/proof.json": {
+        "vc_clone_IdentityComparison": {
+          "prover": "alt-ergo",
+          "time": 0.008
+        }
+      },
+      "verif/krabka_verified_rlib/api_versions/impl_Clone_for_AdmissionFacts/clone/proof.json": {
+        "vc_clone_AdmissionFacts": {
+          "prover": "alt-ergo",
+          "time": 0.009
+        }
+      }
+    },
+    "preconditions": [],
+    "trusted_helpers": [],
+    "named_obligations": 6,
+    "file_count": 4
+  },
+  "runtime_commands": [
+    "CARGO_INCREMENTAL=0 cargo test -p krabka-verified -p krabka-raft -p krabka-broker --lib api_versions",
+    "CARGO_INCREMENTAL=0 cargo test -p krabka-verified --lib identity_presence_listener_and_version_boundaries"
+  ],
+  "checks": [
+    {
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "result": "passed"
+    },
+    {
+      "command": "cargo +nightly fmt --all",
+      "result": "passed"
+    },
+    {
+      "command": "aspect check-creusot-packages",
+      "result": "passed"
+    },
+    {
+      "command": "aspect check-cpd --output ../routing-proof-cpd",
+      "result": "passed"
+    },
+    {
+      "command": "aspect check-scripts",
+      "result": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    },
+    {
+      "command": "aspect check-creusot-skip",
+      "result": "passed"
+    }
+  ],
+  "boundaries": [
+    "Only pure decoded-request admission is proved.",
+    "Name/version string validation and cluster identifier parsing/equality remain host obligations.",
+    "Socket endpoint correctness, authentication-state capture, live metadata freshness, restart/incarnation recovery, IO and protocol decoding remain host obligations.",
+    "Broker comparisons after authentication reject complete mismatches; controller and preauthentication callers skip identity comparison but reject incomplete pairs.",
+    "Unsupported-version dispatch and feature/default ceilings are unchanged.",
+    "Handshake error selection is not a connection-wide side-effect fence: no claim is made about subsequent already-pipelined requests."
+  ],
+  "execution_logs": [
+    "../routing-proof-creusot-final.log",
+    "../routing-proof-tests-final.log",
+    "../routing-proof-kernel-final.log",
+    "../routing-proof-clippy.log",
+    "../routing-proof-packages.log",
+    "../routing-proof-cpd.log",
+    "../routing-proof-scripts.log"
+  ],
+  "runtime_results": {
+    "broker_listener_tests_passed": 41,
+    "raft_controller_tests_passed": 86,
+    "kernel_test_passed": 1,
+    "kernel_explicit_boundary_cases": 18
+  },
+  "executed_utc_date": "2026-11-05",
+  "does_not_qualify_release": true
+}
