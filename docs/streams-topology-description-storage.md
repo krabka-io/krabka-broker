@@ -1,6 +1,6 @@
 # Streams topology-description storage
 
-Krabka serves KIP-1331 behind `unstable.api.versions.enable`. No plugin is
+Krabka serves released Kafka 4.4 KIP-1331 without unstable flags. No plugin is
 configured by default: heartbeats never request a description, updates return
 `UNSUPPORTED_VERSION`, and included descriptions report `NOT_STORED`.
 
@@ -64,7 +64,8 @@ routes through the Streams membership actor: live members and unexpired or
 pending transactional offsets prevent cleanup. After all offsets expire, cleanup
 retries every sweep, including when the stored epoch equals the current epoch. Failed deletes retain uncertainty; an
 explicit DeleteGroups failure preserves the group and reports
-`GROUP_DELETION_FAILED` with a generic per-group message. Backend error details
+`GROUP_DELETION_FAILED` with a generic per-group message on DeleteGroups v3;
+legacy versions 0–2 return `UNKNOWN_SERVER_ERROR`. Backend error details
 are not disclosed to clients.
 
 Released baseline:
@@ -73,7 +74,10 @@ Released baseline:
 
 Regression evidence lives in `streams/actor/description/tests.rs`,
 `streams/description/file_backend.rs`, and the existing no-plugin wire tests.
-This is not a claim that a released Kafka 4.4 interoperability suite has run.
+The bounded released Kafka 4.4 durable-backend, minimum-feature and RF3
+shared-backend movement runs are indexed in
+[the qualification ledger](../tools/kafka44/COVERAGE.md). They retain their
+actual historical source/binary identities, not fresh execution at every head.
 Cleanup uses the existing offset-retention sweep. Kafka's broker-wide cleanup
 worker uses the same offsets-retention-check interval; equivalent scheduling
 under coordinator movement remains unqualified. Native plugin metrics remain
@@ -116,15 +120,21 @@ block topology cleanup and release permits later progress. It does not claim
 transaction-marker replication or LSO recovery has been qualified.
 
 
-## Remaining lifecycle audit
+## Explicit lifecycle follow-through
 
-The natural-cleanup path holds the Streams actor turn until metadata tombstones
-are appended. Explicit DeleteGroups and classic conversion still perform part
-of their transition outside that actor turn. Their empty check, backend cleanup,
-metadata append and handle retirement require a common ownership barrier before
-concurrent join/delete/recreate parity can be claimed. Explicit Streams deletion
-also needs committed and pending offset tombstones in the same durable transition;
-removing the offset-home registry alone is not replay-safe deletion. These are
-source-audit findings, not an executed distributed counterexample or a passed
-acceptance criterion. The present bounded cleanup model does not cover those
-operations. No completion claim is made for #1972.
+Explicit DeleteGroups and classic conversion now serialize empty-group
+validation, backend cleanup, durable append and retirement in the Streams actor
+turn. Explicit deletion includes committed and pending offset tombstones;
+conversion preserves offsets. Retired mailboxes reject queued joins and replay
+retirement follows successful durable append, not uncertain failure. Coordinator
+runtime survives actor replacement and is cleared only for the retiring actor's
+owned instance.
+
+The expanded actual-actor model executes 7,381 bounded histories including
+explicit deletion and conversion; blocked-backend join/delete/conversion and
+committed-replay regressions are retained in
+[the native qualification record](../qualification/streams-topology-native.md).
+These supersede the original source-audit findings and 2,801-history model above.
+They do not establish arbitrary distributed interleavings or plugin IO safety;
+the separate wire/restart/shared-backend movement receipts retain those runs'
+actual bounds and revisions.

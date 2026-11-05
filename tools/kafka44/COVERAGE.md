@@ -14,8 +14,9 @@ reconciliation fix, its valid five-node regression, and the subsequent full
 [Nov4 scheduled nightly](../../qualification/kafka44-nightly-jepsen-20261104.json):
 36/36 valid, including assign-mixed and transactional/client-crash workloads.
 The historical counterexample is retained. Subsequent stochastic checks are not
-an exact replay or arbitrary-schedule proof. Issue1970's changed default policy
-still requires its own fresh/upgrade/mixed/recovery/finalization checks.
+an exact replay or arbitrary-schedule proof. Issue1970's separate changed-policy
+checks are retained in the [default-policy receipt](../../qualification/kafka44-defaults-20261105.json)
+and [graduation documentation](GRADUATION.md).
 
 ## Current bounded evidence index (2026-11-05)
 
@@ -34,10 +35,14 @@ those labels are not a current claim that executed scenarios never ran.
 
 All candidate identities are pinned in their respective receipts, not silently
 relabelled final-head runs. This index is not a production/default graduation.
-`qualification_pass=false`; #1969 remains open until its acceptance matrix is
-complete or remaining failures are explicitly resolved as linked blockers.
+The accepted bounded result is `qualification_pass=true` in the acceptance
+receipt above; #1969 is closed. Historical negative receipts remain unchanged.
 
-## Six-surface matrix
+## Historical baseline six-surface matrix
+
+The following matrix records the initial baseline, not the current acceptance
+status. Its pending/default-gate entries are superseded by the dated receipts
+and acceptance review below.
 
 | Surface and invariants | Production-linked model coverage | Implementation regressions to execute | Released 4.4 oracle execution | Fault / recovery / multi-broker obligations | Actual execution receipt |
 | --- | --- | --- | --- | --- | --- |
@@ -515,13 +520,13 @@ following concrete coverage of issue1969's six requested acceptance criteria:
 | Repeatable coverage and evidence | Existing path-filtered oracle CI; native behavioral/model/proof lanes; AXL collectors and caller-owned Java/C protocols with exact reproduction commands. Not every privately provisioned RF3 scenario is claimed automated in CI. |
 | Tool-only vs broker obligations | Released schema extraction, fixture compilation and parser checks never count as runtime parity; standalone models never substitute for actual broker/client execution. |
 
-This is not yet an unconditional full released-default compatibility claim.
-Enabled historical discovery includes InitProducerId6 while released4.4's
-production maximum is5; [graduation](GRADUATION.md) must preserve this distinction
-and reconcile advertisement, acceptance and feature policy together. Existing
-production defaults deliberately remain4.3.1 until issue1970 is implemented and
-verified. The historical Jepsen availability failure remains separately described
-above; none of these bounded receipts disproves it. Arbitrary network schedules,
-power loss and every Cartesian-product ACL/fault permutation are outside the
-claimed executions, not silently reported passes. `qualification_pass=false`
-remains unchanged by this evidence integration.
+The bounded suite is accepted by
+[`kafka44-acceptance-20261105.json`](../../qualification/kafka44-acceptance-20261105.json).
+Default graduation subsequently landed in #1995; its separate
+[default-policy receipt](../../qualification/kafka44-defaults-20261105.json)
+and [policy/rollback documentation](GRADUATION.md) supersede the former pending
+#1970 handoff. Released InitProducerId remains maximum5; metadata34 and
+InitProducerId6 remain unstable. Existing finalized levels are not rewritten.
+Historical failures, candidate identities and unmeasured schedules remain intact.
+See [parent closeout](CLOSEOUT.md) for the exact completion scope and retained
+limitations; neither acceptance nor graduation claims universal parity.
