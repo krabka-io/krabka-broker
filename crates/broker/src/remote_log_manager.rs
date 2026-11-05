@@ -636,25 +636,21 @@ struct CopyScope<'a> {
     topic: &'a str,
 }
 
-/// The delay Kafka trunk's `remote.copy.lag.ms` and `remote.copy.lag.bytes`
+/// The delay Kafka 4.4's `remote.copy.lag.ms` and `remote.copy.lag.bytes`
 /// (KIP-1241) put on the copy pass over `topic`, resolved against the image as
-/// broker `node` sees it. Kafka 4.3.1 has neither key, so a broker not serving
-/// trunk's keys (`unstable`) copies a segment as soon as it is sealed.
+/// broker `node` sees it, independently of the unstable API switch.
 ///
 /// `local_log_size` is the whole local log and `sealed` its sealed segments, so
 /// what they leave is the active segment.
 fn copy_delay(
     CopyScope { image, node, topic }: CopyScope<'_>,
     log_config: &krabka_log::LogConfig,
-    unstable: UnstableApiVersions,
+    _unstable: UnstableApiVersions,
     LocalLogFootprint {
         sealed,
         size: local_log_size,
     }: LocalLogFootprint<'_>,
 ) -> CopyDelay {
-    if unstable != UnstableApiVersions::Enabled {
-        return CopyDelay::IMMEDIATE;
-    }
     let sealed_bytes: u64 = sealed.iter().map(|ex| ex.size.bytes_u64()).sum();
     CopyDelay::resolve(
         resolve_remote_copy_lag(image, node, topic),
@@ -1236,7 +1232,7 @@ mod tests {
     }
 
     /// [`segments_copied_by_one_sweep`] against a chosen metadata image, on a
-    /// broker serving `unstable`.
+    /// broker with the chosen unstable API switch.
     async fn segments_copied_by_one_sweep_of(
         partition: Arc<Partition>,
         image: MetadataImage,
@@ -1261,13 +1257,13 @@ mod tests {
         rlmm.list_remote_log_segments(&tp()).unwrap().len()
     }
 
-    /// Kafka trunk's `remote.copy.lag.ms` and `remote.copy.lag.bytes` on a
+    /// Kafka 4.4's `remote.copy.lag.ms` and `remote.copy.lag.bytes` on a
     /// topic keep the sweep from copying a sealed segment that is neither old
-    /// enough nor far enough behind, and a broker that does not serve trunk's
-    /// keys never reads them. Either key can come from the cluster-wide
+    /// enough nor far enough behind, without enabling unstable APIs.
+    /// Either key can come from the cluster-wide
     /// `log.remote.copy.lag.*` broker default too.
     #[tokio::test]
-    async fn tick_all_honours_the_remote_copy_lag_on_a_trunk_broker() {
+    async fn tick_all_honours_the_remote_copy_lag_without_unstable_apis() {
         use {
             crate::api_catalog::UnstableApiVersions::{Disabled, Enabled},
             krabka_metadata::{BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID},
@@ -1307,7 +1303,7 @@ mod tests {
             (
                 "no lag configured",
                 image_with_orders_topic(),
-                Enabled,
+                Disabled,
                 sealed,
             ),
             (
@@ -1317,27 +1313,27 @@ mod tests {
                 0,
             ),
             (
-                "the same lag on a broker that does not serve the keys",
+                "the same lag with unstable APIs disabled",
                 topic_lag("9223372036854775807", "1000000000"),
                 Disabled,
-                sealed,
+                0,
             ),
             (
                 "a zero time lag copies at once",
                 topic_lag("0", "1000000000"),
-                Enabled,
+                Disabled,
                 sealed,
             ),
             (
                 "a zero size lag copies at once",
                 topic_lag("9223372036854775807", "0"),
-                Enabled,
+                Disabled,
                 sealed,
             ),
             (
                 "a cluster-wide default holds the copy",
                 cluster_lag("log.remote.copy.lag.ms", "9223372036854775807"),
-                Enabled,
+                Disabled,
                 0,
             ),
         ] {

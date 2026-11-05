@@ -1,4 +1,4 @@
-//! Kafka trunk's `max.decompressed.message.bytes` on the Produce path.
+//! Kafka 4.4's `max.decompressed.message.bytes` on the Produce path.
 //!
 //! `LogValidator` hands the topic's limit to the batch iterator that
 //! decompresses a produced batch, and `DefaultRecord.readFrom` refuses a
@@ -22,20 +22,15 @@ use {
 };
 
 /// The topic's `max.decompressed.message.bytes`, which `(image, node, topic)`
-/// resolve, or `None` when nothing limits a record. Kafka 4.3.1 has no such
-/// limit, so a broker not serving trunk's keys (`unstable`) never refuses on
-/// it and skips the lookup.
+/// resolve, or `None` when nothing limits a record. This released key is
+/// independent of the unstable API switch.
 pub(super) fn decompressed_record_limit(
     image: &MetadataImage,
     node: NodeId,
     topic: &str,
-    unstable: UnstableApiVersions,
+    _unstable: UnstableApiVersions,
 ) -> Option<usize> {
-    if unstable == UnstableApiVersions::Enabled {
-        resolve_max_decompressed_record_bytes(image, node, topic)
-    } else {
-        None
-    }
+    resolve_max_decompressed_record_bytes(image, node, topic)
 }
 
 /// Whether a record whose body is `body_len` bytes breaks `limit`: Kafka

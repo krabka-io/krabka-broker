@@ -54,6 +54,7 @@ pub struct CopyDelay {
 
 impl CopyDelay {
     /// No delay: every sealed segment is eligible.
+    #[cfg(test)]
     pub(crate) const IMMEDIATE: Self = Self {
         lag_ms: 0,
         lag_bytes: 0,

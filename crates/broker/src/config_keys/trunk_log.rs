@@ -1,9 +1,8 @@
-//! The resolution of the Kafka trunk topic keys that the data path enforces.
+//! The resolution of Kafka 4.4 topic keys that the data path enforces.
 //!
 //! `max.decompressed.message.bytes` and `remote.copy.lag.ms` /
-//! `remote.copy.lag.bytes` (KIP-1241) exist only on Kafka trunk, so a broker
-//! serves them only under `unstable.api.versions.enable`. The callers decide
-//! that; this module answers what a served key resolves to. Each is a topic
+//! `remote.copy.lag.bytes` (KIP-1241) are released Kafka 4.4 keys.
+//! This module answers what each key resolves to. Each is a topic
 //! key with a broker-wide default under another name
 //! ([`super::broker_dynamic::TOPIC_DEFAULT_SYNONYMS`]) that is a dynamic
 //! broker config, so `KafkaConfigSchema.resolveEffectiveTopicConfig` walks the
@@ -49,10 +48,8 @@ pub fn resolve_max_decompressed_record_bytes(
     usize::try_from(limit).ok()
 }
 
-/// The `LogConfig::max_decompressed_record` that `topic` runs with on a broker
-/// serving `unstable`: [`resolve_max_decompressed_record_bytes`] under trunk's
-/// keys, and no limit under Kafka 4.3.1, which has no such key and reads none
-/// of what an operator stores under the name.
+/// The `LogConfig::max_decompressed_record` that `topic` runs with,
+/// resolved independently of the unstable API switch.
 ///
 /// This is the limit of the log's own decompressing reads, compaction and the
 /// by-timestamp lookups. `Produce` resolves the same value for its own check.
@@ -61,11 +58,9 @@ pub fn log_max_decompressed_record(
     image: &MetadataImage,
     node: NodeId,
     topic: &str,
-    unstable: UnstableApiVersions,
+    _unstable: UnstableApiVersions,
 ) -> Option<ByteSize> {
-    (unstable == UnstableApiVersions::Enabled)
-        .then(|| resolve_max_decompressed_record_bytes(image, node, topic))
-        .flatten()
+    resolve_max_decompressed_record_bytes(image, node, topic)
         .map(|limit| ByteSize::from_bytes(limit as u64))
 }
 

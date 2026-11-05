@@ -171,13 +171,12 @@ mod tests {
         assert!(snap.segment_size == krabka_units::mebibytes(1));
     }
 
-    /// Kafka trunk's `max.decompressed.message.bytes` reaches the log a
+    /// Kafka 4.4's `max.decompressed.message.bytes` reaches the log a
     /// partition runs with, so the cleaner and the by-timestamp lookups read it,
-    /// only on a broker serving trunk's topic keys. Under Kafka 4.3.1 the key is
-    /// an unknown one whose stored value nothing reads, and the log has no limit.
+    /// regardless of the unstable API switch.
     /// The limit is the topic's own, else the node's, else the cluster's.
     #[tokio::test]
-    async fn push_topic_configs_carries_the_decompressed_record_limit_only_under_trunk() {
+    async fn push_topic_configs_carries_the_decompressed_record_limit_without_unstable_apis() {
         const KEY: &str = "max.decompressed.message.bytes";
         let cluster = DEFAULT_BROKER_CONFIG_NODE_ID;
         let node = NodeId(1);
@@ -213,18 +212,18 @@ mod tests {
                 None,
             ),
             (
-                "Kafka 4.3.1 ignores the topic's",
+                "default broker, topic override",
                 UnstableApiVersions::Disabled,
                 Some("4096"),
                 vec![],
-                None,
+                Some(krabka_units::bytes(4096)),
             ),
             (
-                "Kafka 4.3.1 ignores the cluster's",
+                "default broker, cluster default",
                 UnstableApiVersions::Disabled,
                 None,
                 vec![(cluster, "512")],
-                None,
+                Some(krabka_units::bytes(512)),
             ),
         ] {
             let mut img = single_partition_image("t", Uuid::new_v4(), krabka_raft::NodeId(1));

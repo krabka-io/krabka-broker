@@ -13,7 +13,6 @@
 use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
-        api_catalog::UnstableApiVersions,
         authorizer::AllowAllAuthorizer,
         broker::BrokerHandle,
         codes,
@@ -135,7 +134,7 @@ async fn a_dynamic_message_max_bytes_governs_a_topic_that_sets_no_cap() {
     broker.shutdown().await;
 }
 
-/// Kafka trunk's `max.decompressed.message.bytes` refuses a compressed record
+/// Kafka 4.4's `max.decompressed.message.bytes` refuses a compressed record
 /// whose decompressed body is over it, as `INVALID_RECORD`, and only a
 /// compressed one: an uncompressed record of the same size is bounded by
 /// `max.message.bytes` alone. The limit is a dynamic broker config too, so a
@@ -145,7 +144,6 @@ async fn a_dynamic_message_max_bytes_governs_a_topic_that_sets_no_cap() {
 async fn a_dynamic_max_decompressed_message_bytes_refuses_an_oversized_compressed_record() {
     let HandlerStartedBroker { broker, dir: _dir } = start_broker_no_audit_with(|config| {
         config.authorizer = Arc::new(AllowAllAuthorizer);
-        config.features.unstable_api_versions = UnstableApiVersions::Enabled;
     })
     .await;
     create_topic(&broker, "orders").await;
@@ -184,10 +182,9 @@ async fn a_dynamic_max_decompressed_message_bytes_refuses_an_oversized_compresse
     broker.shutdown().await;
 }
 
-/// Kafka 4.3.1 has no `max.decompressed.message.bytes`, so a broker that does
-/// not serve trunk's keys ignores a stored value.
+/// The released record limit applies without enabling unstable APIs.
 #[tokio::test]
-async fn a_default_broker_ignores_max_decompressed_message_bytes() {
+async fn a_default_broker_enforces_max_decompressed_message_bytes() {
     let HandlerStartedBroker { broker, dir: _dir } =
         start_broker_with_authorizer_no_audit(Arc::new(AllowAllAuthorizer)).await;
     create_topic(&broker, "orders").await;
@@ -200,6 +197,6 @@ async fn a_default_broker_ignores_max_decompressed_message_bytes() {
 
     let code = produce_error_code_compressed(&broker, "orders", 4_096, CompressionType::Gzip).await;
 
-    assert!(code == codes::NONE);
+    assert!(code == codes::INVALID_RECORD);
     broker.shutdown().await;
 }
