@@ -1,0 +1,610 @@
+{
+  "qualification_pass": false,
+  "status": "policy-inputs-derived-not-activated",
+  "source": "Pinned released4.4 bytecode; no moving trunk or schema-source inference",
+  "oracle_image": "apache/kafka:4.4.0@sha256:76af3d0116abbb33b4cd964af410d4921c33d1f663e7a95d5453a9c35a84869b",
+  "sha256": {
+    "tools/kafka44/ReleasedCeilings.java": "a2368e274d257dcb4fb765627b3fbcbe590627d1c1a91a809b6c19b2ea596d1d",
+    "../kafka44-fixture-libs/kafka-clients-4.4.0.jar": "9e4514622675f9b24c83373d0d5b35dd7a4dba34bad69762fe90a9e54cfb71de",
+    "../kafka44-fixture-libs/kafka-server-common-4.4.0.jar": "987786824a52518d63f532e7460cce551149a9e97654efa7aaf7a0a34e4004cc"
+  },
+  "command": [
+    "javac --release17 -cp PINNED_LIBS/* -d CLASSES tools/kafka44/ReleasedCeilings.java",
+    "java -cp CLASSES:PINNED_LIBS/* ReleasedCeilings"
+  ],
+  "returncode": 0,
+  "metadata_latest_production": {
+    "version": "4.4-IV2",
+    "level": 33
+  },
+  "request_catalogue": {
+    "0": {
+      "name": "Produce",
+      "min": 3,
+      "max": 13
+    },
+    "1": {
+      "name": "Fetch",
+      "min": 4,
+      "max": 18
+    },
+    "2": {
+      "name": "ListOffsets",
+      "min": 1,
+      "max": 11
+    },
+    "3": {
+      "name": "Metadata",
+      "min": 0,
+      "max": 13
+    },
+    "8": {
+      "name": "OffsetCommit",
+      "min": 2,
+      "max": 10
+    },
+    "9": {
+      "name": "OffsetFetch",
+      "min": 1,
+      "max": 10
+    },
+    "10": {
+      "name": "FindCoordinator",
+      "min": 0,
+      "max": 6
+    },
+    "11": {
+      "name": "JoinGroup",
+      "min": 0,
+      "max": 9
+    },
+    "12": {
+      "name": "Heartbeat",
+      "min": 0,
+      "max": 4
+    },
+    "13": {
+      "name": "LeaveGroup",
+      "min": 0,
+      "max": 5
+    },
+    "14": {
+      "name": "SyncGroup",
+      "min": 0,
+      "max": 5
+    },
+    "15": {
+      "name": "DescribeGroups",
+      "min": 0,
+      "max": 6
+    },
+    "16": {
+      "name": "ListGroups",
+      "min": 0,
+      "max": 5
+    },
+    "17": {
+      "name": "SaslHandshake",
+      "min": 0,
+      "max": 1
+    },
+    "18": {
+      "name": "ApiVersions",
+      "min": 0,
+      "max": 5
+    },
+    "19": {
+      "name": "CreateTopics",
+      "min": 2,
+      "max": 7
+    },
+    "20": {
+      "name": "DeleteTopics",
+      "min": 1,
+      "max": 6
+    },
+    "21": {
+      "name": "DeleteRecords",
+      "min": 0,
+      "max": 2
+    },
+    "22": {
+      "name": "InitProducerId",
+      "min": 0,
+      "max": 5
+    },
+    "23": {
+      "name": "OffsetForLeaderEpoch",
+      "min": 2,
+      "max": 4
+    },
+    "24": {
+      "name": "AddPartitionsToTxn",
+      "min": 0,
+      "max": 5
+    },
+    "25": {
+      "name": "AddOffsetsToTxn",
+      "min": 0,
+      "max": 4
+    },
+    "26": {
+      "name": "EndTxn",
+      "min": 0,
+      "max": 5
+    },
+    "27": {
+      "name": "WriteTxnMarkers",
+      "min": 1,
+      "max": 2
+    },
+    "28": {
+      "name": "TxnOffsetCommit",
+      "min": 0,
+      "max": 6
+    },
+    "29": {
+      "name": "DescribeAcls",
+      "min": 1,
+      "max": 3
+    },
+    "30": {
+      "name": "CreateAcls",
+      "min": 1,
+      "max": 3
+    },
+    "31": {
+      "name": "DeleteAcls",
+      "min": 1,
+      "max": 3
+    },
+    "32": {
+      "name": "DescribeConfigs",
+      "min": 1,
+      "max": 4
+    },
+    "33": {
+      "name": "AlterConfigs",
+      "min": 0,
+      "max": 2
+    },
+    "34": {
+      "name": "AlterReplicaLogDirs",
+      "min": 1,
+      "max": 2
+    },
+    "35": {
+      "name": "DescribeLogDirs",
+      "min": 1,
+      "max": 5
+    },
+    "36": {
+      "name": "SaslAuthenticate",
+      "min": 0,
+      "max": 2
+    },
+    "37": {
+      "name": "CreatePartitions",
+      "min": 0,
+      "max": 3
+    },
+    "38": {
+      "name": "CreateDelegationToken",
+      "min": 1,
+      "max": 3
+    },
+    "39": {
+      "name": "RenewDelegationToken",
+      "min": 1,
+      "max": 2
+    },
+    "40": {
+      "name": "ExpireDelegationToken",
+      "min": 1,
+      "max": 2
+    },
+    "41": {
+      "name": "DescribeDelegationToken",
+      "min": 1,
+      "max": 3
+    },
+    "42": {
+      "name": "DeleteGroups",
+      "min": 0,
+      "max": 3
+    },
+    "43": {
+      "name": "ElectLeaders",
+      "min": 0,
+      "max": 2
+    },
+    "44": {
+      "name": "IncrementalAlterConfigs",
+      "min": 0,
+      "max": 1
+    },
+    "45": {
+      "name": "AlterPartitionReassignments",
+      "min": 0,
+      "max": 1
+    },
+    "46": {
+      "name": "ListPartitionReassignments",
+      "min": 0,
+      "max": 0
+    },
+    "47": {
+      "name": "OffsetDelete",
+      "min": 0,
+      "max": 0
+    },
+    "48": {
+      "name": "DescribeClientQuotas",
+      "min": 0,
+      "max": 1
+    },
+    "49": {
+      "name": "AlterClientQuotas",
+      "min": 0,
+      "max": 1
+    },
+    "50": {
+      "name": "DescribeUserScramCredentials",
+      "min": 0,
+      "max": 0
+    },
+    "51": {
+      "name": "AlterUserScramCredentials",
+      "min": 0,
+      "max": 0
+    },
+    "52": {
+      "name": "Vote",
+      "min": 0,
+      "max": 2
+    },
+    "53": {
+      "name": "BeginQuorumEpoch",
+      "min": 0,
+      "max": 1
+    },
+    "54": {
+      "name": "EndQuorumEpoch",
+      "min": 0,
+      "max": 1
+    },
+    "55": {
+      "name": "DescribeQuorum",
+      "min": 0,
+      "max": 2
+    },
+    "56": {
+      "name": "AlterPartition",
+      "min": 2,
+      "max": 3
+    },
+    "57": {
+      "name": "UpdateFeatures",
+      "min": 0,
+      "max": 2
+    },
+    "58": {
+      "name": "Envelope",
+      "min": 0,
+      "max": 0
+    },
+    "59": {
+      "name": "FetchSnapshot",
+      "min": 0,
+      "max": 1
+    },
+    "60": {
+      "name": "DescribeCluster",
+      "min": 0,
+      "max": 2
+    },
+    "61": {
+      "name": "DescribeProducers",
+      "min": 0,
+      "max": 0
+    },
+    "62": {
+      "name": "BrokerRegistration",
+      "min": 0,
+      "max": 4
+    },
+    "63": {
+      "name": "BrokerHeartbeat",
+      "min": 0,
+      "max": 2
+    },
+    "64": {
+      "name": "UnregisterBroker",
+      "min": 0,
+      "max": 0
+    },
+    "65": {
+      "name": "DescribeTransactions",
+      "min": 0,
+      "max": 0
+    },
+    "66": {
+      "name": "ListTransactions",
+      "min": 0,
+      "max": 2
+    },
+    "67": {
+      "name": "AllocateProducerIds",
+      "min": 0,
+      "max": 0
+    },
+    "68": {
+      "name": "ConsumerGroupHeartbeat",
+      "min": 0,
+      "max": 1
+    },
+    "69": {
+      "name": "ConsumerGroupDescribe",
+      "min": 0,
+      "max": 1
+    },
+    "70": {
+      "name": "ControllerRegistration",
+      "min": 0,
+      "max": 0
+    },
+    "71": {
+      "name": "GetTelemetrySubscriptions",
+      "min": 0,
+      "max": 0
+    },
+    "72": {
+      "name": "PushTelemetry",
+      "min": 0,
+      "max": 0
+    },
+    "73": {
+      "name": "AssignReplicasToDirs",
+      "min": 0,
+      "max": 0
+    },
+    "74": {
+      "name": "ListConfigResources",
+      "min": 0,
+      "max": 1
+    },
+    "75": {
+      "name": "DescribeTopicPartitions",
+      "min": 0,
+      "max": 0
+    },
+    "76": {
+      "name": "ShareGroupHeartbeat",
+      "min": 1,
+      "max": 1
+    },
+    "77": {
+      "name": "ShareGroupDescribe",
+      "min": 1,
+      "max": 1
+    },
+    "78": {
+      "name": "ShareFetch",
+      "min": 1,
+      "max": 2
+    },
+    "79": {
+      "name": "ShareAcknowledge",
+      "min": 1,
+      "max": 2
+    },
+    "80": {
+      "name": "AddRaftVoter",
+      "min": 0,
+      "max": 1
+    },
+    "81": {
+      "name": "RemoveRaftVoter",
+      "min": 0,
+      "max": 0
+    },
+    "82": {
+      "name": "UpdateRaftVoter",
+      "min": 0,
+      "max": 0
+    },
+    "83": {
+      "name": "InitializeShareGroupState",
+      "min": 0,
+      "max": 0
+    },
+    "84": {
+      "name": "ReadShareGroupState",
+      "min": 0,
+      "max": 0
+    },
+    "85": {
+      "name": "WriteShareGroupState",
+      "min": 0,
+      "max": 1
+    },
+    "86": {
+      "name": "DeleteShareGroupState",
+      "min": 0,
+      "max": 0
+    },
+    "87": {
+      "name": "ReadShareGroupStateSummary",
+      "min": 0,
+      "max": 1
+    },
+    "88": {
+      "name": "StreamsGroupHeartbeat",
+      "min": 0,
+      "max": 1
+    },
+    "89": {
+      "name": "StreamsGroupDescribe",
+      "min": 0,
+      "max": 1
+    },
+    "90": {
+      "name": "DescribeShareGroupOffsets",
+      "min": 0,
+      "max": 1
+    },
+    "91": {
+      "name": "AlterShareGroupOffsets",
+      "min": 0,
+      "max": 0
+    },
+    "92": {
+      "name": "DeleteShareGroupOffsets",
+      "min": 0,
+      "max": 0
+    },
+    "93": {
+      "name": "StreamsGroupTopologyDescriptionUpdate",
+      "min": 0,
+      "max": 0
+    },
+    "94": {
+      "name": "UnregisterController",
+      "min": 0,
+      "max": 0
+    }
+  },
+  "changes_from_existing43_table": [
+    {
+      "api_key": 18,
+      "name": "ApiVersions",
+      "existing43": [
+        0,
+        4
+      ],
+      "released44": {
+        "name": "ApiVersions",
+        "min": 0,
+        "max": 5
+      }
+    },
+    {
+      "api_key": 28,
+      "name": "TxnOffsetCommit",
+      "existing43": [
+        0,
+        5
+      ],
+      "released44": {
+        "name": "TxnOffsetCommit",
+        "min": 0,
+        "max": 6
+      }
+    },
+    {
+      "api_key": 42,
+      "name": "DeleteGroups",
+      "existing43": [
+        0,
+        2
+      ],
+      "released44": {
+        "name": "DeleteGroups",
+        "min": 0,
+        "max": 3
+      }
+    },
+    {
+      "api_key": 88,
+      "name": "StreamsGroupHeartbeat",
+      "existing43": [
+        0,
+        0
+      ],
+      "released44": {
+        "name": "StreamsGroupHeartbeat",
+        "min": 0,
+        "max": 1
+      }
+    },
+    {
+      "api_key": 89,
+      "name": "StreamsGroupDescribe",
+      "existing43": [
+        0,
+        0
+      ],
+      "released44": {
+        "name": "StreamsGroupDescribe",
+        "min": 0,
+        "max": 1
+      }
+    },
+    {
+      "api_key": 93,
+      "name": "StreamsGroupTopologyDescriptionUpdate",
+      "existing43": null,
+      "released44": {
+        "name": "StreamsGroupTopologyDescriptionUpdate",
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "api_key": 94,
+      "name": "UnregisterController",
+      "existing43": null,
+      "released44": {
+        "name": "UnregisterController",
+        "min": 0,
+        "max": 0
+      }
+    }
+  ],
+  "raw_stdout": "METADATA\t4.4-IV2\t33\nREQUEST\t0\tProduce\t3\t13\nADVERTISED\tBROKER\t0\tProduce\t0\t13\nREQUEST\t1\tFetch\t4\t18\nADVERTISED\tBROKER\t1\tFetch\t4\t18\nADVERTISED\tCONTROLLER\t1\tFetch\t4\t18\nREQUEST\t2\tListOffsets\t1\t11\nADVERTISED\tBROKER\t2\tListOffsets\t1\t11\nREQUEST\t3\tMetadata\t0\t13\nADVERTISED\tBROKER\t3\tMetadata\t0\t13\nREQUEST\t8\tOffsetCommit\t2\t10\nADVERTISED\tBROKER\t8\tOffsetCommit\t2\t10\nREQUEST\t9\tOffsetFetch\t1\t10\nADVERTISED\tBROKER\t9\tOffsetFetch\t1\t10\nREQUEST\t10\tFindCoordinator\t0\t6\nADVERTISED\tBROKER\t10\tFindCoordinator\t0\t6\nREQUEST\t11\tJoinGroup\t0\t9\nADVERTISED\tBROKER\t11\tJoinGroup\t0\t9\nREQUEST\t12\tHeartbeat\t0\t4\nADVERTISED\tBROKER\t12\tHeartbeat\t0\t4\nREQUEST\t13\tLeaveGroup\t0\t5\nADVERTISED\tBROKER\t13\tLeaveGroup\t0\t5\nREQUEST\t14\tSyncGroup\t0\t5\nADVERTISED\tBROKER\t14\tSyncGroup\t0\t5\nREQUEST\t15\tDescribeGroups\t0\t6\nADVERTISED\tBROKER\t15\tDescribeGroups\t0\t6\nREQUEST\t16\tListGroups\t0\t5\nADVERTISED\tBROKER\t16\tListGroups\t0\t5\nREQUEST\t17\tSaslHandshake\t0\t1\nADVERTISED\tBROKER\t17\tSaslHandshake\t0\t1\nADVERTISED\tCONTROLLER\t17\tSaslHandshake\t0\t1\nREQUEST\t18\tApiVersions\t0\t5\nADVERTISED\tBROKER\t18\tApiVersions\t0\t5\nADVERTISED\tCONTROLLER\t18\tApiVersions\t0\t5\nREQUEST\t19\tCreateTopics\t2\t7\nADVERTISED\tBROKER\t19\tCreateTopics\t2\t7\nADVERTISED\tCONTROLLER\t19\tCreateTopics\t2\t7\nREQUEST\t20\tDeleteTopics\t1\t6\nADVERTISED\tBROKER\t20\tDeleteTopics\t1\t6\nADVERTISED\tCONTROLLER\t20\tDeleteTopics\t1\t6\nREQUEST\t21\tDeleteRecords\t0\t2\nADVERTISED\tBROKER\t21\tDeleteRecords\t0\t2\nREQUEST\t22\tInitProducerId\t0\t5\nADVERTISED\tBROKER\t22\tInitProducerId\t0\t5\nREQUEST\t23\tOffsetForLeaderEpoch\t2\t4\nADVERTISED\tBROKER\t23\tOffsetForLeaderEpoch\t2\t4\nREQUEST\t24\tAddPartitionsToTxn\t0\t5\nADVERTISED\tBROKER\t24\tAddPartitionsToTxn\t0\t5\nREQUEST\t25\tAddOffsetsToTxn\t0\t4\nADVERTISED\tBROKER\t25\tAddOffsetsToTxn\t0\t4\nREQUEST\t26\tEndTxn\t0\t5\nADVERTISED\tBROKER\t26\tEndTxn\t0\t5\nREQUEST\t27\tWriteTxnMarkers\t1\t2\nADVERTISED\tBROKER\t27\tWriteTxnMarkers\t1\t2\nREQUEST\t28\tTxnOffsetCommit\t0\t6\nADVERTISED\tBROKER\t28\tTxnOffsetCommit\t0\t6\nREQUEST\t29\tDescribeAcls\t1\t3\nADVERTISED\tBROKER\t29\tDescribeAcls\t1\t3\nADVERTISED\tCONTROLLER\t29\tDescribeAcls\t1\t3\nREQUEST\t30\tCreateAcls\t1\t3\nADVERTISED\tBROKER\t30\tCreateAcls\t1\t3\nADVERTISED\tCONTROLLER\t30\tCreateAcls\t1\t3\nREQUEST\t31\tDeleteAcls\t1\t3\nADVERTISED\tBROKER\t31\tDeleteAcls\t1\t3\nADVERTISED\tCONTROLLER\t31\tDeleteAcls\t1\t3\nREQUEST\t32\tDescribeConfigs\t1\t4\nADVERTISED\tBROKER\t32\tDescribeConfigs\t1\t4\nADVERTISED\tCONTROLLER\t32\tDescribeConfigs\t1\t4\nREQUEST\t33\tAlterConfigs\t0\t2\nADVERTISED\tBROKER\t33\tAlterConfigs\t0\t2\nADVERTISED\tCONTROLLER\t33\tAlterConfigs\t0\t2\nREQUEST\t34\tAlterReplicaLogDirs\t1\t2\nADVERTISED\tBROKER\t34\tAlterReplicaLogDirs\t1\t2\nREQUEST\t35\tDescribeLogDirs\t1\t5\nADVERTISED\tBROKER\t35\tDescribeLogDirs\t1\t5\nREQUEST\t36\tSaslAuthenticate\t0\t2\nADVERTISED\tBROKER\t36\tSaslAuthenticate\t0\t2\nADVERTISED\tCONTROLLER\t36\tSaslAuthenticate\t0\t2\nREQUEST\t37\tCreatePartitions\t0\t3\nADVERTISED\tBROKER\t37\tCreatePartitions\t0\t3\nADVERTISED\tCONTROLLER\t37\tCreatePartitions\t0\t3\nREQUEST\t38\tCreateDelegationToken\t1\t3\nADVERTISED\tBROKER\t38\tCreateDelegationToken\t1\t3\nADVERTISED\tCONTROLLER\t38\tCreateDelegationToken\t1\t3\nREQUEST\t39\tRenewDelegationToken\t1\t2\nADVERTISED\tBROKER\t39\tRenewDelegationToken\t1\t2\nADVERTISED\tCONTROLLER\t39\tRenewDelegationToken\t1\t2\nREQUEST\t40\tExpireDelegationToken\t1\t2\nADVERTISED\tBROKER\t40\tExpireDelegationToken\t1\t2\nADVERTISED\tCONTROLLER\t40\tExpireDelegationToken\t1\t2\nREQUEST\t41\tDescribeDelegationToken\t1\t3\nADVERTISED\tBROKER\t41\tDescribeDelegationToken\t1\t3\nADVERTISED\tCONTROLLER\t41\tDescribeDelegationToken\t1\t3\nREQUEST\t42\tDeleteGroups\t0\t3\nADVERTISED\tBROKER\t42\tDeleteGroups\t0\t3\nREQUEST\t43\tElectLeaders\t0\t2\nADVERTISED\tBROKER\t43\tElectLeaders\t0\t2\nADVERTISED\tCONTROLLER\t43\tElectLeaders\t0\t2\nREQUEST\t44\tIncrementalAlterConfigs\t0\t1\nADVERTISED\tBROKER\t44\tIncrementalAlterConfigs\t0\t1\nADVERTISED\tCONTROLLER\t44\tIncrementalAlterConfigs\t0\t1\nREQUEST\t45\tAlterPartitionReassignments\t0\t1\nADVERTISED\tBROKER\t45\tAlterPartitionReassignments\t0\t1\nADVERTISED\tCONTROLLER\t45\tAlterPartitionReassignments\t0\t1\nREQUEST\t46\tListPartitionReassignments\t0\t0\nADVERTISED\tBROKER\t46\tListPartitionReassignments\t0\t0\nADVERTISED\tCONTROLLER\t46\tListPartitionReassignments\t0\t0\nREQUEST\t47\tOffsetDelete\t0\t0\nADVERTISED\tBROKER\t47\tOffsetDelete\t0\t0\nREQUEST\t48\tDescribeClientQuotas\t0\t1\nADVERTISED\tBROKER\t48\tDescribeClientQuotas\t0\t1\nREQUEST\t49\tAlterClientQuotas\t0\t1\nADVERTISED\tBROKER\t49\tAlterClientQuotas\t0\t1\nADVERTISED\tCONTROLLER\t49\tAlterClientQuotas\t0\t1\nREQUEST\t50\tDescribeUserScramCredentials\t0\t0\nADVERTISED\tBROKER\t50\tDescribeUserScramCredentials\t0\t0\nADVERTISED\tCONTROLLER\t50\tDescribeUserScramCredentials\t0\t0\nREQUEST\t51\tAlterUserScramCredentials\t0\t0\nADVERTISED\tBROKER\t51\tAlterUserScramCredentials\t0\t0\nADVERTISED\tCONTROLLER\t51\tAlterUserScramCredentials\t0\t0\nREQUEST\t52\tVote\t0\t2\nADVERTISED\tCONTROLLER\t52\tVote\t0\t2\nREQUEST\t53\tBeginQuorumEpoch\t0\t1\nADVERTISED\tCONTROLLER\t53\tBeginQuorumEpoch\t0\t1\nREQUEST\t54\tEndQuorumEpoch\t0\t1\nADVERTISED\tCONTROLLER\t54\tEndQuorumEpoch\t0\t1\nREQUEST\t55\tDescribeQuorum\t0\t2\nADVERTISED\tBROKER\t55\tDescribeQuorum\t0\t2\nADVERTISED\tCONTROLLER\t55\tDescribeQuorum\t0\t2\nREQUEST\t56\tAlterPartition\t2\t3\nADVERTISED\tCONTROLLER\t56\tAlterPartition\t2\t3\nREQUEST\t57\tUpdateFeatures\t0\t2\nADVERTISED\tBROKER\t57\tUpdateFeatures\t0\t2\nADVERTISED\tCONTROLLER\t57\tUpdateFeatures\t0\t2\nREQUEST\t58\tEnvelope\t0\t0\nADVERTISED\tCONTROLLER\t58\tEnvelope\t0\t0\nREQUEST\t59\tFetchSnapshot\t0\t1\nADVERTISED\tCONTROLLER\t59\tFetchSnapshot\t0\t1\nREQUEST\t60\tDescribeCluster\t0\t2\nADVERTISED\tBROKER\t60\tDescribeCluster\t0\t2\nADVERTISED\tCONTROLLER\t60\tDescribeCluster\t0\t2\nREQUEST\t61\tDescribeProducers\t0\t0\nADVERTISED\tBROKER\t61\tDescribeProducers\t0\t0\nREQUEST\t62\tBrokerRegistration\t0\t4\nADVERTISED\tCONTROLLER\t62\tBrokerRegistration\t0\t4\nREQUEST\t63\tBrokerHeartbeat\t0\t2\nADVERTISED\tCONTROLLER\t63\tBrokerHeartbeat\t0\t2\nREQUEST\t64\tUnregisterBroker\t0\t0\nADVERTISED\tBROKER\t64\tUnregisterBroker\t0\t0\nADVERTISED\tCONTROLLER\t64\tUnregisterBroker\t0\t0\nREQUEST\t65\tDescribeTransactions\t0\t0\nADVERTISED\tBROKER\t65\tDescribeTransactions\t0\t0\nREQUEST\t66\tListTransactions\t0\t2\nADVERTISED\tBROKER\t66\tListTransactions\t0\t2\nREQUEST\t67\tAllocateProducerIds\t0\t0\nADVERTISED\tCONTROLLER\t67\tAllocateProducerIds\t0\t0\nREQUEST\t68\tConsumerGroupHeartbeat\t0\t1\nADVERTISED\tBROKER\t68\tConsumerGroupHeartbeat\t0\t1\nREQUEST\t69\tConsumerGroupDescribe\t0\t1\nADVERTISED\tBROKER\t69\tConsumerGroupDescribe\t0\t1\nREQUEST\t70\tControllerRegistration\t0\t0\nADVERTISED\tCONTROLLER\t70\tControllerRegistration\t0\t0\nREQUEST\t71\tGetTelemetrySubscriptions\t0\t0\nADVERTISED\tBROKER\t71\tGetTelemetrySubscriptions\t0\t0\nREQUEST\t72\tPushTelemetry\t0\t0\nADVERTISED\tBROKER\t72\tPushTelemetry\t0\t0\nREQUEST\t73\tAssignReplicasToDirs\t0\t0\nADVERTISED\tCONTROLLER\t73\tAssignReplicasToDirs\t0\t0\nREQUEST\t74\tListConfigResources\t0\t1\nADVERTISED\tBROKER\t74\tListConfigResources\t0\t1\nREQUEST\t75\tDescribeTopicPartitions\t0\t0\nADVERTISED\tBROKER\t75\tDescribeTopicPartitions\t0\t0\nREQUEST\t76\tShareGroupHeartbeat\t1\t1\nADVERTISED\tBROKER\t76\tShareGroupHeartbeat\t1\t1\nREQUEST\t77\tShareGroupDescribe\t1\t1\nADVERTISED\tBROKER\t77\tShareGroupDescribe\t1\t1\nREQUEST\t78\tShareFetch\t1\t2\nADVERTISED\tBROKER\t78\tShareFetch\t1\t2\nREQUEST\t79\tShareAcknowledge\t1\t2\nADVERTISED\tBROKER\t79\tShareAcknowledge\t1\t2\nREQUEST\t80\tAddRaftVoter\t0\t1\nADVERTISED\tBROKER\t80\tAddRaftVoter\t0\t1\nADVERTISED\tCONTROLLER\t80\tAddRaftVoter\t0\t1\nREQUEST\t81\tRemoveRaftVoter\t0\t0\nADVERTISED\tBROKER\t81\tRemoveRaftVoter\t0\t0\nADVERTISED\tCONTROLLER\t81\tRemoveRaftVoter\t0\t0\nREQUEST\t82\tUpdateRaftVoter\t0\t0\nADVERTISED\tCONTROLLER\t82\tUpdateRaftVoter\t0\t0\nREQUEST\t83\tInitializeShareGroupState\t0\t0\nADVERTISED\tBROKER\t83\tInitializeShareGroupState\t0\t0\nREQUEST\t84\tReadShareGroupState\t0\t0\nADVERTISED\tBROKER\t84\tReadShareGroupState\t0\t0\nREQUEST\t85\tWriteShareGroupState\t0\t1\nADVERTISED\tBROKER\t85\tWriteShareGroupState\t0\t1\nREQUEST\t86\tDeleteShareGroupState\t0\t0\nADVERTISED\tBROKER\t86\tDeleteShareGroupState\t0\t0\nREQUEST\t87\tReadShareGroupStateSummary\t0\t1\nADVERTISED\tBROKER\t87\tReadShareGroupStateSummary\t0\t1\nREQUEST\t88\tStreamsGroupHeartbeat\t0\t1\nADVERTISED\tBROKER\t88\tStreamsGroupHeartbeat\t0\t1\nREQUEST\t89\tStreamsGroupDescribe\t0\t1\nADVERTISED\tBROKER\t89\tStreamsGroupDescribe\t0\t1\nREQUEST\t90\tDescribeShareGroupOffsets\t0\t1\nADVERTISED\tBROKER\t90\tDescribeShareGroupOffsets\t0\t1\nREQUEST\t91\tAlterShareGroupOffsets\t0\t0\nADVERTISED\tBROKER\t91\tAlterShareGroupOffsets\t0\t0\nREQUEST\t92\tDeleteShareGroupOffsets\t0\t0\nADVERTISED\tBROKER\t92\tDeleteShareGroupOffsets\t0\t0\nREQUEST\t93\tStreamsGroupTopologyDescriptionUpdate\t0\t0\nADVERTISED\tBROKER\t93\tStreamsGroupTopologyDescriptionUpdate\t0\t0\nREQUEST\t94\tUnregisterController\t0\t0\nADVERTISED\tBROKER\t94\tUnregisterController\t0\t0\nADVERTISED\tCONTROLLER\t94\tUnregisterController\t0\t0\nFEATURE\tkraft.version\t0\t1\t1\nDEPENDENCIES\tkraft.version\t0\t7\t{}\nDEPENDENCIES\tkraft.version\t1\t21\t{}\nFEATURE\ttransaction.version\t0\t2\t2\nDEPENDENCIES\ttransaction.version\t0\t7\t{}\nDEPENDENCIES\ttransaction.version\t1\t24\t{}\nDEPENDENCIES\ttransaction.version\t2\t24\t{}\nFEATURE\tgroup.version\t0\t1\t1\nDEPENDENCIES\tgroup.version\t0\t7\t{}\nDEPENDENCIES\tgroup.version\t1\t22\t{}\nFEATURE\teligible.leader.replicas.version\t0\t1\t1\nDEPENDENCIES\teligible.leader.replicas.version\t0\t7\t{}\nDEPENDENCIES\teligible.leader.replicas.version\t1\t26\t{metadata.version=23}\nFEATURE\tshare.version\t0\t2\t2\nDEPENDENCIES\tshare.version\t0\t7\t{}\nDEPENDENCIES\tshare.version\t1\t28\t{}\nDEPENDENCIES\tshare.version\t2\t31\t{}\nFEATURE\tstreams.version\t0\t1\t1\nDEPENDENCIES\tstreams.version\t0\t7\t{}\nDEPENDENCIES\tstreams.version\t1\t29\t{}\n",
+  "feature_levels": [
+    {
+      "name": "kraft.version",
+      "min": 0,
+      "max": 1,
+      "fresh_default_at_mv33": 1
+    },
+    {
+      "name": "transaction.version",
+      "min": 0,
+      "max": 2,
+      "fresh_default_at_mv33": 2
+    },
+    {
+      "name": "group.version",
+      "min": 0,
+      "max": 1,
+      "fresh_default_at_mv33": 1
+    },
+    {
+      "name": "eligible.leader.replicas.version",
+      "min": 0,
+      "max": 1,
+      "fresh_default_at_mv33": 1
+    },
+    {
+      "name": "share.version",
+      "min": 0,
+      "max": 2,
+      "fresh_default_at_mv33": 2
+    },
+    {
+      "name": "streams.version",
+      "min": 0,
+      "max": 1,
+      "fresh_default_at_mv33": 1
+    }
+  ],
+  "limits": [
+    "Library descriptors are policy inputs, not actual live runtime advertisement or acceptance receipt",
+    "ADVERTISED rows are schema listener scope with toApiVersionForApiResponse transformation; live auth/listener-role/feature policy can further filter",
+    "Produce request minimum3 versus broker advertisement minimum0 is intentional released behavior",
+    "No default, formatter, persisted-level, registration or UpdateFeatures changes made",
+    "1970 activation remains blocked on accepted1969 suite and coordinated runtime migration verification"
+  ]
+}
