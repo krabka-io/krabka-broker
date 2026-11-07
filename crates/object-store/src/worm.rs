@@ -3,7 +3,7 @@
 use {
     crate::{
         GcsConfig, ObjectStoreError, S3Config,
-        build::{build_gcs_store, build_s3_store},
+        build::{build_gcs_store, build_s3_store_resolved},
         control_plane::{backend, read_ok_body, s3_bucket_url, s3_http_client, signed_s3_get_xml},
     },
     object_store::RetryConfig,
@@ -193,11 +193,18 @@ async fn get_bucket_xml<T: DeserializeOwned>(
         "object-lock" => "GetObjectLockConfiguration",
         _ => "GetBucketConfiguration",
     };
-    let store = build_s3_store(cfg)?;
+    let (store, resolved) = build_s3_store_resolved(cfg)?;
     let credential = store.credentials().get_credential().await?;
-    let mut url = s3_bucket_url(cfg)?;
+    let mut url = s3_bucket_url(&resolved)?;
     url.query_pairs_mut().append_pair(api, "");
-    signed_s3_get_xml(&s3_http_client(cfg)?, &credential, cfg, url, operation).await
+    signed_s3_get_xml(
+        &s3_http_client(&resolved)?,
+        &credential,
+        &resolved,
+        url,
+        operation,
+    )
+    .await
 }
 
 #[cfg(test)]

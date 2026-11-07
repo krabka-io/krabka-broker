@@ -47,9 +47,25 @@ pub enum ObjectStoreConfig {
 
 /// Connection and bucket parameters for an S3-compatible backend.
 ///
-/// The credentials come either from `access_key_id` and `secret_access_key` or
-/// from the standard AWS credential chain. When both fields are `None`,
-/// `object_store` falls back to the environment-variable chain.
+/// The store is built from the `AWS_*` environment with this config applied on
+/// top: a value set here wins, and an environment variable fills only what is
+/// left unset. An empty `region` counts as unset. [`crate::S3Settings`] lists
+/// which variable fills which setting.
+///
+/// The credentials are the first of these that is present:
+///
+/// 1. `access_key_id` and `secret_access_key`.
+/// 2. `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, with
+///    `AWS_SESSION_TOKEN` if it is set.
+/// 3. Web identity, as IRSA on EKS sets it: `AWS_WEB_IDENTITY_TOKEN_FILE` and
+///    `AWS_ROLE_ARN`, with `AWS_ROLE_SESSION_NAME` and `AWS_ENDPOINT_URL_STS`
+///    if they are set.
+/// 4. An ECS task role: `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`.
+/// 5. EKS Pod Identity: `AWS_CONTAINER_CREDENTIALS_FULL_URI` and
+///    `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`.
+/// 6. The EC2 instance metadata service.
+///
+/// The shared `~/.aws` config and credentials files are not read.
 ///
 /// `Debug` redacts the credential fields, so a stray `{:?}` call or tracing
 /// call never leaks them.
@@ -62,8 +78,8 @@ pub struct S3Config {
     /// Optional key prefix inside the bucket. No leading slash and no trailing
     /// slash.
     pub prefix: Option<String>,
-    /// AWS region. AWS S3 requires it. Use the placeholder `"us-east-1"` for
-    /// `MinIO` and R2.
+    /// AWS region. Empty leaves it to `AWS_REGION`, then `AWS_DEFAULT_REGION`,
+    /// then `us-east-1`, which `MinIO` and R2 accept as a placeholder.
     pub region: String,
     /// Allow plaintext HTTP. `MinIO` without TLS requires it.
     pub allow_http: bool,

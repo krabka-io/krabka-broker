@@ -1,14 +1,18 @@
 //! Scenarios for `tests/features/store_configuration`: which backend
 //! configurations build an archive store, which are refused, what an operator
-//! gets by default, and that a printed configuration hides its credentials.
+//! gets by default, that a printed configuration hides its credentials, and
+//! what the broker's AWS environment adds to an S3 configuration.
+//!
+//! The environment is a map the scenario owns, never the process
+//! environment, so the scenarios run in parallel and need no `unsafe`.
 #![cfg(test)]
 
 use {
     krabka_bdd::Given,
     krabka_object_store::{
-        GcsConfig, ObjectStoreConfig, ObjectStoreError, S3Config, build_object_store,
+        GcsConfig, ObjectStoreConfig, ObjectStoreError, S3Config, S3Settings, build_object_store,
     },
-    std::fs,
+    std::{fs, path::PathBuf},
     tempfile::TempDir,
 };
 
@@ -16,6 +20,8 @@ const CONFIGURED: &str = "Given an operator has configured the <backend> backend
 const BUILD: &str = "When the broker attempts to build the archive store";
 const PRINT: &str = "When the broker prints the backend configuration";
 const RESOLVE: &str = "When the broker resolves the backend configuration";
+const SETTINGS: &str = "When the broker resolves the S3 store's settings";
+const CREDENTIAL_REQUEST: &str = "When the broker asks the S3 store for a credential";
 
 /// The credential value every credential setting carries, so a `Then` can
 /// look for it in printed output.
@@ -70,6 +76,85 @@ enum Setting {
     InlineServiceAccountKey,
     #[step_param("an application credentials file")]
     ApplicationCredentialsFile,
+    #[step_param("no region")]
+    NoRegion,
+    #[step_param("an endpoint")]
+    Endpoint,
+    #[step_param("a static access key")]
+    StaticAccessKey,
+}
+
+/// The endpoint an operator configures, for a `MinIO` without TLS.
+const CONFIGURED_ENDPOINT: &str = "http://minio:9000";
+
+/// A setting of the S3 store, once the environment has filled what the
+/// configuration left unset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+enum StoreProperty {
+    #[step_param("region")]
+    Region,
+    #[step_param("endpoint")]
+    Endpoint,
+    #[step_param("access key id")]
+    AccessKeyId,
+    #[step_param("session token")]
+    SessionToken,
+    #[step_param("web identity token file")]
+    WebIdentityTokenFile,
+    #[step_param("role ARN")]
+    RoleArn,
+    #[step_param("container credentials path")]
+    ContainerCredentialsPath,
+}
+
+impl StoreProperty {
+    /// The value of this property in `settings`, `None` when nothing set it.
+    fn value_in(self, settings: &S3Settings) -> Option<String> {
+        match self {
+            Self::Region => Some(settings.region()),
+            Self::Endpoint => settings.endpoint(),
+            Self::AccessKeyId => settings.value("aws_access_key_id"),
+            Self::SessionToken => settings.value("aws_session_token"),
+            Self::WebIdentityTokenFile => settings.value("aws_web_identity_token_file"),
+            Self::RoleArn => settings.value("aws_role_arn"),
+            Self::ContainerCredentialsPath => {
+                settings.value("aws_container_credentials_relative_uri")
+            }
+        }
+    }
+}
+
+/// A credential provider the AWS environment selects by naming a token file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+enum TokenProvider {
+    #[step_param("web identity")]
+    WebIdentity,
+    #[step_param("EKS Pod Identity")]
+    EksPodIdentity,
+}
+
+impl TokenProvider {
+    /// The variables that select this provider, with its token file at
+    /// `token_file`.
+    fn environment(self, token_file: &str) -> Vec<(String, String)> {
+        let variables = match self {
+            Self::WebIdentity => [
+                ("AWS_WEB_IDENTITY_TOKEN_FILE", token_file),
+                ("AWS_ROLE_ARN", "arn:aws:iam::123456789012:role/krabka-tier"),
+            ],
+            Self::EksPodIdentity => [
+                ("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", token_file),
+                (
+                    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+                    "http://169.254.170.23/v1/credentials",
+                ),
+            ],
+        };
+        variables
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect()
+    }
 }
 
 /// An S3 connection setting whose default an operator relies on.
@@ -156,6 +241,18 @@ impl OperatorConfiguration {
         configuration
     }
 
+    /// The S3 settings this configuration names.
+    fn s3(&self) -> &S3Config {
+        let ObjectStoreConfig::S3(s3) = &self.config else {
+            panic!("the {} backend has no S3 settings", self.backend);
+        };
+        s3
+    }
+
+    /// A token file path inside the scenario's directory that was never
+    /// written.
+    fn missing_token_file(&self) -> PathBuf { self.root.path().join("missing-token") }
+
     fn apply(&mut self, setting: Setting) {
         let credential = Some(CREDENTIAL.to_owned());
         match (&mut self.config, setting) {
@@ -177,6 +274,14 @@ impl OperatorConfiguration {
             (ObjectStoreConfig::Gcs(gcs), Setting::ApplicationCredentialsFile) => {
                 gcs.application_credentials_path = credential;
             }
+            (ObjectStoreConfig::S3(s3), Setting::NoRegion) => s3.region = String::new(),
+            (ObjectStoreConfig::S3(s3), Setting::Endpoint) => {
+                s3.endpoint = Some(CONFIGURED_ENDPOINT.to_owned());
+            }
+            (ObjectStoreConfig::S3(s3), Setting::StaticAccessKey) => {
+                s3.access_key_id = credential.clone();
+                s3.secret_access_key = credential;
+            }
             (_, setting) => panic!("the {} backend has no {setting} setting", self.backend),
         }
     }
@@ -184,11 +289,20 @@ impl OperatorConfiguration {
 
 type Build = Result<(), ObjectStoreError>;
 
+/// What a credential request returned: the access key id it signs with, or
+/// the error it failed with.
+type CredentialRequest = Result<String, String>;
+
 struct StoreConfigurationScenario {
     configuration: Given<OperatorConfiguration>,
+    /// The broker's environment variables, in the order the scenario set
+    /// them. Empty until a step sets one.
+    environment: Vec<(String, String)>,
     build: Given<Build>,
     printed: Given<String>,
     resolved: Given<S3Config>,
+    settings: Given<S3Settings>,
+    credential: Given<CredentialRequest>,
 }
 
 #[rstest::fixture]
@@ -198,6 +312,9 @@ fn store_configuration_scenario() -> StoreConfigurationScenario {
         build: Given::new("build", BUILD),
         printed: Given::new("printed", PRINT),
         resolved: Given::new("resolved", RESOLVE),
+        environment: Vec::new(),
+        settings: Given::new("settings", SETTINGS),
+        credential: Given::new("credential", CREDENTIAL_REQUEST),
     }
 }
 
@@ -234,6 +351,57 @@ fn also_configured(
         .apply(setting);
 }
 
+#[rstest_bdd_macros::given("the broker's environment sets {variable} to {value}")]
+fn environment_sets(
+    store_configuration_scenario: &mut StoreConfigurationScenario,
+    variable: String,
+    value: String,
+) {
+    store_configuration_scenario
+        .environment
+        .push((variable, value));
+}
+
+#[rstest_bdd_macros::given(
+    "the broker's environment names a {provider} credential whose token file is missing"
+)]
+fn environment_names_token_provider(
+    store_configuration_scenario: &mut StoreConfigurationScenario,
+    provider: TokenProvider,
+) {
+    let token_file = store_configuration_scenario
+        .configuration
+        .get()
+        .missing_token_file();
+    let variables = provider.environment(&token_file.display().to_string());
+    store_configuration_scenario.environment.extend(variables);
+}
+
+#[rstest_bdd_macros::when("the broker resolves the S3 store's settings")]
+fn resolve_settings(store_configuration_scenario: &mut StoreConfigurationScenario) {
+    let settings = S3Settings::new(
+        store_configuration_scenario.configuration.get().s3(),
+        store_configuration_scenario.environment.clone(),
+    );
+    store_configuration_scenario.settings.set(settings);
+}
+
+#[rstest_bdd_macros::when("the broker asks the S3 store for a credential")]
+fn request_credential(store_configuration_scenario: &mut StoreConfigurationScenario) {
+    let store = S3Settings::new(
+        store_configuration_scenario.configuration.get().s3(),
+        store_configuration_scenario.environment.clone(),
+    )
+    .build()
+    .unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let credential = runtime
+        .block_on(store.credentials().get_credential())
+        .map(|credential| credential.key_id.clone())
+        .map_err(|error| error.to_string());
+    store_configuration_scenario.credential.set(credential);
+}
+
 #[rstest_bdd_macros::when("the broker attempts to build the archive store")]
 fn attempt_build(store_configuration_scenario: &mut StoreConfigurationScenario) {
     let build = build_object_store(&store_configuration_scenario.configuration.get().config)
@@ -252,11 +420,7 @@ fn print_configuration(store_configuration_scenario: &mut StoreConfigurationScen
 
 #[rstest_bdd_macros::when("the broker resolves the backend configuration")]
 fn resolve_configuration(store_configuration_scenario: &mut StoreConfigurationScenario) {
-    let configuration = store_configuration_scenario.configuration.get();
-    let ObjectStoreConfig::S3(s3) = &configuration.config else {
-        panic!("the {} backend has no S3 settings", configuration.backend);
-    };
-    let resolved = s3.clone();
+    let resolved = store_configuration_scenario.configuration.get().s3().clone();
     store_configuration_scenario.resolved.set(resolved);
 }
 
@@ -287,6 +451,42 @@ fn setting_is(
 ) {
     let resolved = store_configuration_scenario.resolved.get();
     assert2::assert!(setting.value_in(resolved) == value);
+}
+
+#[rstest_bdd_macros::then("the store's {property} is {value}")]
+fn store_property_is(
+    store_configuration_scenario: &StoreConfigurationScenario,
+    property: StoreProperty,
+    value: String,
+) {
+    let settings = store_configuration_scenario.settings.get();
+    assert2::assert!(property.value_in(settings) == Some(value));
+}
+
+#[rstest_bdd_macros::then("the store has no {property}")]
+fn store_property_unset(
+    store_configuration_scenario: &StoreConfigurationScenario,
+    property: StoreProperty,
+) {
+    let settings = store_configuration_scenario.settings.get();
+    assert2::assert!(property.value_in(settings) == None);
+}
+
+#[rstest_bdd_macros::then("the store signs with the configured access key")]
+fn signs_with_configured_key(store_configuration_scenario: &StoreConfigurationScenario) {
+    let credential = store_configuration_scenario.credential.get();
+    assert2::assert!(credential.as_deref() == Ok(CREDENTIAL));
+}
+
+#[rstest_bdd_macros::then("the credential request fails on the missing token file")]
+fn fails_on_missing_token_file(store_configuration_scenario: &StoreConfigurationScenario) {
+    let token_file = store_configuration_scenario
+        .configuration
+        .get()
+        .missing_token_file();
+    let credential = store_configuration_scenario.credential.get();
+    assert2::assert!(let Err(error) = credential);
+    assert2::assert!(error.contains(&token_file.display().to_string()), "{error}");
 }
 
 // `@inprogress` scenarios document known defects. `krabka_bdd::scenarios!`

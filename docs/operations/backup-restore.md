@@ -144,8 +144,14 @@ set to the metadata log directory to take the checkpoint.
 
 Credentials work the way they do for the broker's own tiered storage. Leave
 `--archive-s3-access-key-id` and `--archive-s3-secret-access-key` off and the
-AWS credential chain applies, so a capture under an instance role or under
-Workload Identity puts no secret on a command line.
+AWS credential chain applies, so a capture under IRSA, EKS Pod Identity, an ECS
+task role, an instance role or Workload Identity puts no secret on a command
+line. A flag that is given wins over its `AWS_*` variable, and a variable fills
+only what the flags leave out: `AWS_REGION` for a missing
+`--archive-s3-region`, and `AWS_ENDPOINT_URL_S3` for a missing
+`--archive-s3-endpoint`. The order is listed under
+[`[remote_storage.s3]`](../config-reference.md#remote_storages3) in the
+configuration reference.
 
 ### Secured clusters
 
