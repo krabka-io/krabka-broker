@@ -1,12 +1,31 @@
-//! A fault-injecting [`ObjectStore`] wrapper, for drills against a store that
-//! misbehaves.
+//! A fault-injecting [`ObjectStore`] wrapper, for drills that test how a caller
+//! handles a store that fails or stalls.
 //!
-//! Every production bound in this crate -- the retry budget, the retry
-//! deadline, the request and connect timeouts -- exists because a real object
-//! store throttles, stalls, and fails. None of that is reachable from a test
-//! that only ever meets a store which answers. [`FaultInjectingStore`] wraps
-//! any other store and, per operation, delays the call and then fails it with
-//! the error the backend would have produced.
+//! [`FaultInjectingStore`] wraps any other store. Per operation class it
+//! delays each call, then either fails the call or passes it to the inner
+//! store. A failed call never reaches the inner store. Faults reach the start
+//! of a multipart upload, each of its parts and its completion, but never its
+//! abort, so the cleanup a caller runs after a failed upload still takes
+//! effect.
+//!
+//! The faults sit in front of the inner store, at the [`ObjectStore`] trait.
+//! A drill therefore tests the caller: how it reports a failure, and the
+//! retries and deadlines it applies itself. It does not test the retry budget,
+//! the retry deadline, or the request and connect timeouts that
+//! [`build_object_store`](crate::build_object_store) gives an S3 or GCS
+//! client. Those apply inside `object_store`'s HTTP client, below the trait,
+//! and an injected fault never passes through that client:
+//!
+//! - An injected error reaches the caller on the first attempt, as the final
+//!   answer. A real client would retry a `503` before it gave the caller the
+//!   same answer.
+//! - An injected stall happens before the inner store is called, so no request
+//!   timeout cuts it short.
+//!
+//! The errors resemble a backend's errors but are not identical to them. A
+//! transport fault is an `object_store::Error::Generic` whose source is the
+//! text of the S3 status line, such as `503 SlowDown`, with no HTTP status
+//! behind it. A lost object is an `object_store::Error::NotFound`.
 //!
 //! The failure schedule is deterministic, not random: a rate of 500 per
 //! thousand fails every second call to that operation, always the same ones,
@@ -26,7 +45,8 @@ use {
     },
     object_store::{
         CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-        PutMultipartOptions, PutOptions, PutPayload, PutResult, memory::InMemory, path::Path,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult, UploadPart, memory::InMemory,
+        path::Path,
     },
     std::{
         collections::BTreeMap,
@@ -44,7 +64,9 @@ use {
 ///
 /// The granularity is the one an operator's incident is described in -- "puts
 /// are being throttled", "listing is slow" -- rather than one variant per
-/// trait method, so a policy written for `Put` covers the multipart path too.
+/// trait method. A multipart upload is the exception: `Put` covers only its
+/// start, and its parts and its completion are classes of their own, so a
+/// drill can fail an upload after it has begun.
 ///
 /// `ALL` lists every variant, so a policy can be applied across the board and
 /// a table test can walk them. `label` is the `store` field of the errors an
@@ -52,9 +74,16 @@ use {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, krabka_macros::EnumStr)]
 #[enum_str(as_str = label, all)]
 pub enum StoreOp {
-    /// `put_opts` and `put_multipart_opts`.
+    /// `put_opts`, and the start of a multipart upload in
+    /// `put_multipart_opts`.
     #[enum_str(name = "FaultInjectingStore::put")]
     Put,
+    /// `put_part` on an upload that `put_multipart_opts` started.
+    #[enum_str(name = "FaultInjectingStore::put_part")]
+    PutPart,
+    /// `complete` on an upload that `put_multipart_opts` started.
+    #[enum_str(name = "FaultInjectingStore::complete")]
+    Complete,
     /// `get_opts` and everything layered on it, `head` included.
     #[enum_str(name = "FaultInjectingStore::get")]
     Get,
@@ -72,9 +101,10 @@ pub enum StoreOp {
 /// What a failing call fails with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FaultKind {
-    /// `503 SlowDown`, the answer S3 gives a client it is rate-limiting. This
-    /// is the one that matters: it is retryable, so it is the shape that turns
-    /// into a long hang rather than a fast failure.
+    /// `503 SlowDown`, the answer S3 gives a client it is rate-limiting. A
+    /// real S3 client retries it inside `object_store` until its retry budget
+    /// or deadline runs out. Injected here, it reaches the caller at once, as
+    /// the answer the caller would get after that client gave up.
     Throttled,
     /// `500 Internal Error`.
     ServerError,
@@ -114,7 +144,9 @@ pub struct OpFault {
     pub fail_per_thousand: u32,
     /// How long every call to this operation sleeps before it is answered or
     /// failed. This is the stall: the call still completes, eventually, which
-    /// is exactly what makes an unbounded caller hang on it.
+    /// is exactly what makes an unbounded caller hang on it. The sleep happens
+    /// before the inner store is called, so only a deadline of the caller's
+    /// own ends it early.
     pub latency: Duration,
 }
 
@@ -203,6 +235,8 @@ impl FaultPolicy {
 #[derive(Debug, Default)]
 struct Counters {
     put: AtomicU64,
+    put_part: AtomicU64,
+    complete: AtomicU64,
     get: AtomicU64,
     delete: AtomicU64,
     list: AtomicU64,
@@ -213,6 +247,8 @@ impl Counters {
     fn slot(&self, op: StoreOp) -> &AtomicU64 {
         match op {
             StoreOp::Put => &self.put,
+            StoreOp::PutPart => &self.put_part,
+            StoreOp::Complete => &self.complete,
             StoreOp::Get => &self.get,
             StoreOp::Delete => &self.delete,
             StoreOp::List => &self.list,
@@ -221,14 +257,91 @@ impl Counters {
     }
 }
 
+/// The policy and the call counters, shared by a store and the multipart
+/// uploads it starts.
+#[derive(Debug)]
+struct Faults {
+    policy: FaultPolicy,
+    counters: Counters,
+}
+
+/// The outcome of one counted call: how long it stalls, and the error it
+/// fails with, if any.
+struct Admission {
+    latency: Duration,
+    error: Option<object_store::Error>,
+}
+
+impl Faults {
+    /// Count a call of class `op` and decide its fault, without sleeping.
+    fn admit(&self, op: StoreOp, location: &Path) -> Admission {
+        let n = self.counters.slot(op).fetch_add(1, Ordering::SeqCst);
+        let Some(fault) = self.policy.fault(op) else {
+            return Admission {
+                latency: Duration::ZERO,
+                error: None,
+            };
+        };
+        Admission {
+            latency: fault.latency,
+            error: fault
+                .fails_call(n)
+                .then(|| fault.kind.error(op.label(), location)),
+        }
+    }
+
+    /// Count the call, sleep out any injected latency, and report whether the
+    /// caller should be failed.
+    async fn enter(&self, op: StoreOp, location: &Path) -> Result<(), object_store::Error> {
+        let Admission { latency, error } = self.admit(op, location);
+        if !latency.is_zero() {
+            time::sleep(latency).await;
+        }
+        error.map_or(Ok(()), Err)
+    }
+}
+
 /// An [`ObjectStore`] that delays and fails calls according to a
 /// [`FaultPolicy`], delegating everything it does not fail to an inner store.
 #[derive(Debug)]
 pub struct FaultInjectingStore {
     inner: Arc<dyn ObjectStore>,
-    policy: FaultPolicy,
-    counters: Counters,
+    faults: Arc<Faults>,
     get_replacement: Option<Bytes>,
+}
+
+/// A multipart upload whose parts and completion fail by the policy of the
+/// store that started it. Its abort always reaches the inner upload.
+#[derive(Debug)]
+struct FaultInjectingUpload {
+    inner: Box<dyn MultipartUpload>,
+    faults: Arc<Faults>,
+    location: Path,
+}
+
+#[async_trait::async_trait]
+impl MultipartUpload for FaultInjectingUpload {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        let Admission { latency, error } = self.faults.admit(StoreOp::PutPart, &self.location);
+        // A failing part is decided here, so it never reaches the inner upload.
+        let part = match error {
+            Some(error) => Err(error),
+            None => Ok(self.inner.put_part(data)),
+        };
+        Box::pin(async move {
+            if !latency.is_zero() {
+                time::sleep(latency).await;
+            }
+            part?.await
+        })
+    }
+
+    async fn complete(&mut self) -> object_store::Result<PutResult> {
+        self.faults.enter(StoreOp::Complete, &self.location).await?;
+        self.inner.complete().await
+    }
+
+    async fn abort(&mut self) -> object_store::Result<()> { self.inner.abort().await }
 }
 
 fn failed_stream<T: Send + 'static>(
@@ -250,8 +363,10 @@ impl FaultInjectingStore {
     pub fn new(inner: Arc<dyn ObjectStore>, policy: FaultPolicy) -> Self {
         Self {
             inner,
-            policy,
-            counters: Counters::default(),
+            faults: Arc::new(Faults {
+                policy,
+                counters: Counters::default(),
+            }),
             get_replacement: None,
         }
     }
@@ -270,22 +385,12 @@ impl FaultInjectingStore {
     /// How many calls of class `op` have reached this store, failed ones
     /// included.
     #[must_use]
-    pub fn attempts(&self, op: StoreOp) -> u64 { self.counters.slot(op).load(Ordering::SeqCst) }
+    pub fn attempts(&self, op: StoreOp) -> u64 {
+        self.faults.counters.slot(op).load(Ordering::SeqCst)
+    }
 
-    /// Count the call, sleep out any injected latency, and report whether the
-    /// caller should be failed.
     async fn enter(&self, op: StoreOp, location: &Path) -> Result<(), object_store::Error> {
-        let n = self.counters.slot(op).fetch_add(1, Ordering::SeqCst);
-        let Some(fault) = self.policy.fault(op) else {
-            return Ok(());
-        };
-        if !fault.latency.is_zero() {
-            time::sleep(fault.latency).await;
-        }
-        if fault.fails_call(n) {
-            return Err(fault.kind.error(op.label(), location));
-        }
-        Ok(())
+        self.faults.enter(op, location).await
     }
 }
 
@@ -317,7 +422,12 @@ impl ObjectStore for FaultInjectingStore {
         opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
         self.enter(StoreOp::Put, location).await?;
-        self.inner.put_multipart_opts(location, opts).await
+        let inner = self.inner.put_multipart_opts(location, opts).await?;
+        Ok(Box::new(FaultInjectingUpload {
+            inner,
+            faults: Arc::clone(&self.faults),
+            location: location.clone(),
+        }))
     }
 
     async fn get_opts(
@@ -345,10 +455,11 @@ impl ObjectStore for FaultInjectingStore {
         locations: BoxStream<'static, object_store::Result<Path>>,
     ) -> BoxStream<'static, object_store::Result<Path>> {
         let n = self
+            .faults
             .counters
             .slot(StoreOp::Delete)
             .fetch_add(1, Ordering::SeqCst);
-        match self.policy.fault(StoreOp::Delete) {
+        match self.faults.policy.fault(StoreOp::Delete) {
             // The delete stream is built synchronously, so an injected
             // latency here is applied per yielded path rather than once.
             Some(fault) if fault.fails_call(n) => failed_stream(fault.kind, StoreOp::Delete),
@@ -367,10 +478,11 @@ impl ObjectStore for FaultInjectingStore {
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
         let n = self
+            .faults
             .counters
             .slot(StoreOp::List)
             .fetch_add(1, Ordering::SeqCst);
-        match self.policy.fault(StoreOp::List) {
+        match self.faults.policy.fault(StoreOp::List) {
             Some(fault) if fault.fails_call(n) => failed_stream(fault.kind, StoreOp::List),
             Some(fault) if !fault.latency.is_zero() => {
                 let stream = self.inner.list(prefix);
@@ -401,6 +513,10 @@ impl ObjectStore for FaultInjectingStore {
 }
 
 /// Build the store `cfg` selects and wrap it in `policy`.
+///
+/// The faults sit in front of the built store. For an S3 or GCS `cfg`, the
+/// client's own retries and timeouts apply only to the calls that `policy`
+/// passes through.
 ///
 /// **Testing seam.** This exists so a fault drill can hand a misbehaving store
 /// to code whose only entry point takes an `Arc<dyn ObjectStore>`. The broker's
