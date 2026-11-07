@@ -13,10 +13,7 @@ use {
         heartbeat::{MemberUpdateRecords, member_update_records, replace_static_member},
         member_state::{MemberChange, after_member_update, update_subscription},
         pending_records::PendingRecords,
-        persistence::{
-            Recorder, flush_classic_metadata, leave_written_classic_group,
-            leave_written_consumer_group, written_classic_state,
-        },
+        persistence::{Recorder, leave_written_consumer_group, persist_classic_or_revert},
         regex_resolution::{RegexResolution, maybe_update_regular_expressions},
         waiters::{
             complete_classic_rebalance, drain_followers_with, fence_replaced_classic_member,
@@ -158,31 +155,26 @@ pub(super) async fn handle_classic_join_message(
                 let _ = reply.send(result);
             }
             classic_ops::JoinAction::PersistThenReply(result) => {
-                if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
+                if let Err(failure) =
+                    persist_classic_or_revert(state, &previous, services.offsets_log).await
+                {
                     // Kafka reverts the replacement and answers with the
                     // append error, under the unknown member id and the
                     // leader from before the join. A write that is in the
                     // log may still commit the replacement, so the actor then
                     // stops and leaves the next one the group that a reload
                     // of the log builds, the replacement included.
-                    let written = written_classic_state(state, &error);
-                    let leader = previous.leader_id.clone().unwrap_or_default();
-                    *state = previous;
-                    tracing::warn!(group_id = %state.group_id, %error,
+                    tracing::warn!(group_id = %state.group_id, error = %failure.error,
                         "classic static rejoin log write failed");
                     let _ = reply.send(JoinResult {
-                        error_code: append_error_code(&error),
+                        error_code: append_error_code(&failure.error),
                         generation_id: state.generation_id,
                         protocol_type: state.protocol_type.clone(),
                         protocol_name: state.protocol_name.clone(),
-                        leader,
+                        leader: state.leader_id.clone().unwrap_or_default(),
                         ..JoinResult::default()
                     });
-                    let Some(written) = written else {
-                        return true;
-                    };
-                    leave_written_classic_group(group, written, services.coordinator);
-                    return false;
+                    return failure.keep_running(group, services.coordinator);
                 }
                 let _ = reply.send(result);
             }

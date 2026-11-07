@@ -13,8 +13,7 @@ use {
         ActorServices, ParkedWaiters,
         downgrade::{FenceFailure, FenceOutcome, fence_or_downgrade},
         persistence::{
-            flush_classic_metadata, leave_written_classic_group, leave_written_consumer_group,
-            written_classic_state,
+            EmptyGenerationFailure, leave_written_consumer_group, persist_empty_generation,
         },
         waiters::settle_removed_classic_waiters,
     },
@@ -23,7 +22,6 @@ use {
             classic_state::ClassicGroup as ClassicState, group::CoordinatorGroup,
         },
         error::BrokerError,
-        metadata_epoch::next_i32,
     },
     std::time::Instant,
 };
@@ -112,25 +110,23 @@ async fn settle_classic_removal(
         return true;
     };
     if state.members.is_empty() && !removed.is_empty() {
-        let Some(generation_id) = next_i32(state.generation_id) else {
-            *state = previous;
-            tracing::warn!(group = %state.group_id,
-                "classic expiration stopped because the generation is exhausted");
-            return false;
-        };
-        state.generation_id = generation_id;
-        if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
-            let written = written_classic_state(state, &error);
-            *state = previous;
-            let Some(written) = written else {
-                tracing::warn!(group = %state.group_id, %error,
-                    "classic expiration log write failed; retrying on the next tick");
-                return true;
-            };
-            tracing::warn!(group = %state.group_id, %error,
-                "classic expiration log write may still commit; stopping the actor");
-            leave_written_classic_group(group, written, services.coordinator);
-            return false;
+        match persist_empty_generation(state, &previous, services.offsets_log).await {
+            Ok(()) => {}
+            Err(EmptyGenerationFailure::Exhausted) => {
+                tracing::warn!(group = %state.group_id,
+                    "classic expiration stopped because the generation is exhausted");
+                return false;
+            }
+            Err(EmptyGenerationFailure::Write(failure)) => {
+                if failure.may_commit() {
+                    tracing::warn!(group = %state.group_id, error = %failure.error,
+                        "classic expiration log write may still commit; stopping the actor");
+                } else {
+                    tracing::warn!(group = %state.group_id, error = %failure.error,
+                        "classic expiration log write failed; retrying on the next tick");
+                }
+                return failure.keep_running(group, services.coordinator);
+            }
         }
     }
     settle_removed_classic_waiters(state, previous.state, removed, parked);

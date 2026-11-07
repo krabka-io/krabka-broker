@@ -10,7 +10,7 @@ use {
     super::{
         ActorServices, ErrorCode, ParkedWaiters, chrono_now_ms,
         downgrade::{FenceFailure, fence_or_downgrade},
-        persistence::{flush_classic_metadata, leave_written_classic_group, written_classic_state},
+        persistence::{EmptyGenerationFailure, persist_empty_generation},
         retention::append_tombstones,
         waiters::settle_removed_classic_waiters,
     },
@@ -26,7 +26,6 @@ use {
             },
         },
         error::BrokerError,
-        metadata_epoch::next_i32,
     },
     krabka_protocol::{
         owned::{leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse},
@@ -77,30 +76,22 @@ pub(super) async fn handle_classic_leave_message(
             .filter(|member_id| !state.members.contains_key(member_id))
             .collect();
         if !removed.is_empty() && state.members.is_empty() {
-            let Some(generation_id) = next_i32(state.generation_id) else {
-                *state = previous;
-                tracing::warn!(group_id = %state.group_id,
-                    "classic LeaveGroup refused because the generation is exhausted");
-                return LeaveTurn::running(Err(codes::INVALID_REQUEST));
-            };
-            state.generation_id = generation_id;
-            if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
-                // A write that never reached the log restores the group. One
-                // that may still commit stops the actor, which leaves the
-                // group a reload of the log builds to its replacement.
-                let written = written_classic_state(state, &error);
-                *state = previous;
-                tracing::warn!(group_id = %state.group_id, %error,
-                    "classic LeaveGroup log write failed");
-                let result = Err(write_failure_code(&error));
-                let Some(written) = written else {
-                    return LeaveTurn::running(result);
-                };
-                leave_written_classic_group(group, written, services.coordinator);
-                return LeaveTurn {
-                    result,
-                    keep_running: false,
-                };
+            match persist_empty_generation(state, &previous, services.offsets_log).await {
+                Ok(()) => {}
+                Err(EmptyGenerationFailure::Exhausted) => {
+                    tracing::warn!(group_id = %state.group_id,
+                        "classic LeaveGroup refused because the generation is exhausted");
+                    return LeaveTurn::running(Err(codes::INVALID_REQUEST));
+                }
+                Err(EmptyGenerationFailure::Write(failure)) => {
+                    tracing::warn!(group_id = %state.group_id, error = %failure.error,
+                        "classic LeaveGroup log write failed");
+                    let result = Err(write_failure_code(&failure.error));
+                    return LeaveTurn {
+                        result,
+                        keep_running: failure.keep_running(group, services.coordinator),
+                    };
+                }
             }
         }
         settle_removed_classic_waiters(state, previous.state, &removed, parked);

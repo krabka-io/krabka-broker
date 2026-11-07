@@ -8,8 +8,7 @@
 
 use {
     super::{
-        ActorServices, ParkedWaiters, SyncResult,
-        persistence::{flush_classic_metadata, leave_written_classic_group, written_classic_state},
+        ActorServices, ParkedWaiters, SyncResult, persistence::persist_classic_or_revert,
         waiters::drain_parked_followers,
     },
     crate::{
@@ -62,31 +61,26 @@ pub(super) async fn handle_classic_sync_message(
             parked.followers.insert(request.member_id, reply);
         }
         classic_ops::SyncAction::LeaderInstalled(result) => {
-            if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
-                // A write that never reached the log restores the group. One
-                // that may still commit stops the actor, which leaves the
-                // group a reload of the log builds, the assignment installed,
-                // to its replacement.
-                let written = written_classic_state(state, &error);
-                *state = previous;
-                tracing::warn!(group_id = %state.group_id, %error,
+            if let Err(failure) =
+                persist_classic_or_revert(state, &previous, services.offsets_log).await
+            {
+                tracing::warn!(group_id = %state.group_id, error = %failure.error,
                     "classic SyncGroup log write failed");
                 // Kafka's `propagateAssignment` leaves the protocol type and
                 // name null when it propagates an error.
-                let error_code = write_failure_code(&error);
-                let failure = || SyncResult {
+                let error_code = write_failure_code(&failure.error);
+                let answer = || SyncResult {
                     error_code,
                     ..SyncResult::default()
                 };
-                let _ = reply.send(failure());
+                let _ = reply.send(answer());
                 for (_, follower) in parked.followers.drain() {
-                    let _ = follower.send(failure());
+                    let _ = follower.send(answer());
                 }
-                let Some(written) = written else {
-                    return true;
-                };
-                leave_written_classic_group(group, written, services.coordinator);
-                return false;
+                // A write that may still commit stops the actor, and its
+                // replacement serves the group a reload of the log builds,
+                // the assignment installed.
+                return failure.keep_running(group, services.coordinator);
             }
             let _ = reply.send(result);
             drain_parked_followers(state, &mut parked.followers);
