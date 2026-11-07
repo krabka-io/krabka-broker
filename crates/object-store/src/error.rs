@@ -51,6 +51,21 @@ pub enum ObjectStoreError {
     Backend(String),
 }
 
+impl ObjectStoreError {
+    /// Convert a backend error from a write to `key`, naming `key` itself when
+    /// the object already exists.
+    ///
+    /// A backend reports the location it refused in its own terms: the local
+    /// filesystem names the absolute host path of the file, not the object key.
+    /// A caller that learns a key is taken needs the key it asked for.
+    pub(crate) fn from_write(key: &ObjectPath, err: object_store::Error) -> Self {
+        match err {
+            object_store::Error::AlreadyExists { .. } => Self::AlreadyExists(key.clone()),
+            other => Self::from(other),
+        }
+    }
+}
+
 impl From<object_store::Error> for ObjectStoreError {
     fn from(err: object_store::Error) -> Self {
         match err {
