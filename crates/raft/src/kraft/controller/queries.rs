@@ -174,18 +174,8 @@ impl Engine {
             leader_epoch: qs.leader_epoch,
             high_watermark: self.log.hwm().0,
             last_applied_record_timestamp_ms: self.last_applied_record_timestamp_ms,
-            pending_record_processing_time_us_avg: if self.pending_record_processing_time_samples
-                == 0
-            {
-                0
-            } else {
-                u64::try_from(
-                    self.pending_record_processing_time_us_total
-                        / u128::from(self.pending_record_processing_time_samples),
-                )
-                .unwrap_or(u64::MAX)
-            },
-            pending_record_processing_time_us_max: self.pending_record_processing_time_us_max,
+            pending_record_processing_time_us_avg: self.record_processing.avg_us(),
+            pending_record_processing_time_us_max: self.record_processing.max_us(),
             quorum_high_watermark: self.quorum_high_watermark(),
             log_end_offset: self.log.log_end_offset().0,
             log_start_offset: self.log.log_start_offset().0,

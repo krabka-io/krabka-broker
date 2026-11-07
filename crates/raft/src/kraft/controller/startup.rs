@@ -13,6 +13,7 @@ use {
             load_latest_checkpoint,
         },
         quorum_state_file::load_quorum_state,
+        record_processing::RecordProcessingStats,
         records::features_epoch_after_snapshot,
         recovery::{
             CommittedReplay, control_state_at, holds_metadata_version_downgrade,
@@ -244,9 +245,7 @@ impl KraftController {
             last_snapshot_end_offset,
             last_snapshot_timestamp_ms,
             last_applied_record_timestamp_ms,
-            pending_record_processing_time_us_total: 0,
-            pending_record_processing_time_samples: 0,
-            pending_record_processing_time_us_max: 0,
+            record_processing: RecordProcessingStats::default(),
             last_snapshot_at_ms: 0,
             bytes_since_snapshot: 0,
             snapshot_job: None,

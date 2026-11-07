@@ -177,22 +177,18 @@ fn publish_leader_updates_leader_and_quorum_watchers() {
 
 /// KIP-835's pending-record processing time reads as the whole-microsecond
 /// mean of the recorded passes, rounded down, and their maximum. With no pass
-/// recorded both read zero; a mean beyond `u64` saturates.
+/// recorded both read zero.
 #[yare::parameterized(
-    no_pass = { 0, 0, 0, (0, 0) },
-    rounds_down = { 13, 2, 10, (6, 10) },
-    saturates = { u128::MAX, 1, u64::MAX, (u64::MAX, u64::MAX) },
+    no_pass = { &[], (0, 0) },
+    rounds_down = { &[10, 3], (6, 10) },
+    largest = { &[u64::MAX], (u64::MAX, u64::MAX) },
+    saturates = { &[u64::MAX, u64::MAX], (u64::MAX, u64::MAX) },
 )]
-fn quorum_snapshot_reports_pending_record_processing_time(
-    total_us: u128,
-    samples: u64,
-    max_us: u64,
-    expected: (u64, u64),
-) {
+fn quorum_snapshot_reports_pending_record_processing_time(passes_us: &[u64], expected: (u64, u64)) {
     let (mut engine, _dir) = build_engine_only().ids(&[NodeId(1)]).call();
-    engine.pending_record_processing_time_us_total = total_us;
-    engine.pending_record_processing_time_samples = samples;
-    engine.pending_record_processing_time_us_max = max_us;
+    for &elapsed_us in passes_us {
+        engine.record_processing.record(elapsed_us);
+    }
 
     let snapshot = engine.quorum_state_snapshot();
     check!(
@@ -226,7 +222,7 @@ fn quorum_snapshot_timestamp_tracks_applied_not_newer_committed_records() {
 
     let snapshot = engine.quorum_state_snapshot();
     assert2::assert!(snapshot.last_applied_record_timestamp_ms == 1_700_000_000_123);
-    assert2::assert!(engine.pending_record_processing_time_samples == 1);
+    assert2::assert!(engine.record_processing.samples() == 1);
 }
 
 #[test]

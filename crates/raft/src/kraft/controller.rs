@@ -79,6 +79,7 @@ use {
         fmt::Human as _,
         prelude::{self, ByteSize, Time, TimeExt as _},
     },
+    record_processing::RecordProcessingStats,
     std::{
         collections::BTreeMap,
         path::PathBuf,
@@ -116,6 +117,7 @@ mod queries;
 mod quorum_requests;
 mod quorum_state_file;
 mod reconfiguration;
+mod record_processing;
 mod records;
 mod recovery;
 mod replication;
@@ -296,9 +298,7 @@ struct Engine {
     last_applied_record_timestamp_ms: i64,
     /// Aggregate durations of completed applies that consumed newly
     /// committed records. The average/max are lifetime values for this process.
-    pending_record_processing_time_us_total: u128,
-    pending_record_processing_time_samples: u64,
-    pending_record_processing_time_us_max: u64,
+    record_processing: RecordProcessingStats,
     /// `self.now()` (ms) at which the last checkpoint was written. Seeded to
     /// `0` on construction, which is `clock_base`'s own instant, so a
     /// restarted node measures the time-based cap from its own start rather
