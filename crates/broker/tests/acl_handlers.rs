@@ -24,6 +24,8 @@ mod acl_admin;
 mod client_api;
 #[path = "acl_handlers/framing.rs"]
 mod framing;
+#[path = "acl_handlers/harness_checks.rs"]
+mod harness_checks;
 #[path = "acl_handlers/implications.rs"]
 mod implications;
 mod kafka_wire;

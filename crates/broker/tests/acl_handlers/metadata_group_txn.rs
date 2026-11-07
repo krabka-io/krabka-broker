@@ -19,8 +19,7 @@ use {
         framing::CLIENT_ID,
         kafka_wire::PlainAuthenticationSetup,
         polling::{
-            named_metadata_as_alice, retry_join_group_until_allowed,
-            retry_metadata_until_topic_visible,
+            named_metadata_as_alice, retry_join_group_until_allowed, retry_metadata_until_topic_row,
         },
         sasl_cluster::start_admin_alice,
         support::{
@@ -91,7 +90,7 @@ async fn alice_metadata_0(authorization: &mut ResourceAuthorization) {
         .as_ref()
         .expect("broker started")
         .listen_addr();
-    let resp = retry_metadata_until_topic_visible(addr, "alice", b"wonderland", "t1", None)
+    let resp = retry_metadata_until_topic_row(addr, "alice", b"wonderland", "t1", None, 0)
         .await
         .expect("Metadata must round-trip");
     authorization.metadata = Some(resp);
@@ -120,7 +119,7 @@ async fn alice_metadata_1(authorization: &mut ResourceAuthorization) {
         .as_ref()
         .expect("broker started")
         .listen_addr();
-    let resp = named_metadata_as_alice(addr, "t2").await;
+    let resp = named_metadata_as_alice(addr, "t2", ERR_TOPIC_AUTHORIZATION_FAILED).await;
     authorization.metadata = Some(resp);
 }
 #[rstest_bdd_macros::then("named Metadata includes only t2 with topic authorization error 29")]

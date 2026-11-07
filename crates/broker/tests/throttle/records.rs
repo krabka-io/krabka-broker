@@ -14,13 +14,13 @@ use {
             produce::{SinglePartitionProduceSetup, single_partition_produce},
             records::{batch_from_records, value_record},
             wire::{
-                HeaderEncoding as RequestHeaderEncoding, read_frame, request_body_capacity,
-                request_frame, write_frame,
+                HeaderEncoding as RequestHeaderEncoding, decode_response_frame, read_frame,
+                request_body_capacity, request_frame, write_frame,
             },
         },
     },
     assert2::assert,
-    bytes::{Buf, BytesMut},
+    bytes::BytesMut,
     krabka_protocol::{Decode, Encode},
     std::{net::SocketAddr, time::Duration},
     tokio::{net::TcpStream, time},
@@ -101,6 +101,7 @@ pub async fn produce_plaintext(addr: SocketAddr, topic: &str, record_bytes: usiz
 /// length.
 pub async fn fetch_plaintext_replica(addr: SocketAddr, topic: &str, replica_id: i32) -> usize {
     const VERSION: i16 = 12; // flexible
+    const CORRELATION: i32 = 3;
 
     use krabka_protocol::owned::{fetch_request::FetchRequest, fetch_response::FetchResponse};
 
@@ -118,6 +119,7 @@ pub async fn fetch_plaintext_replica(addr: SocketAddr, topic: &str, replica_id: 
     let frame = request_frame()
         .api_key(1)
         .version(VERSION)
+        .correlation(CORRELATION)
         .header(RequestHeaderEncoding::Flexible)
         .client_id("krabka-throttle-test")
         .body(&body)
@@ -129,9 +131,9 @@ pub async fn fetch_plaintext_replica(addr: SocketAddr, topic: &str, replica_id: 
     let resp = read_frame(&mut stream).await.unwrap();
 
     // Decode to assert no transport error and no partition error.
-    let mut cur: &[u8] = &resp[4..]; // skip corr_id
-    let _tagged = cur.get_u8(); // v1 header tagged-fields
-    let decoded = FetchResponse::decode(&mut cur, VERSION).expect("decode FetchResponse");
+    let decoded: FetchResponse =
+        decode_response_frame(&resp, CORRELATION, VERSION, true, "decode FetchResponse")
+            .expect("decode FetchResponse");
     // A refused row is small too, so a throttle check on the size alone would
     // pass for a fetch the leader never served.
     assert!(

@@ -28,14 +28,14 @@ use {
         },
         client::{connect_owned, create_topic},
         discovery::named_topic_metadata,
-        wire::{HeaderEncoding, request_body_capacity, request_frame},
+        wire::{HeaderEncoding, decode_response_frame, request_body_capacity, request_frame},
     },
     assert2::assert,
-    bytes::{Buf, BytesMut},
+    bytes::BytesMut,
     krabka_broker::{Broker, BrokerConfig, authorizer::SimpleAclAuthorizer},
     krabka_client_core::Client,
     krabka_protocol::{
-        Decode, Encode,
+        Encode,
         owned::{
             describe_cluster_request::DescribeClusterRequest,
             describe_groups_request::DescribeGroupsRequest,
@@ -288,11 +288,9 @@ async fn v9_cluster_operations_request(operations: &mut AuthorizedOperations) {
     let mut resp = vec![0u8; resp_len as usize];
     stream.read_exact(&mut resp).await.expect("read body");
 
-    // Strip response header v1 (flexible): i32 correlation_id + 1 tagged byte.
-    let mut cur: &[u8] = &resp;
-    let _corr = cur.get_i32();
-    let _hdr_tagged = cur.get_u8();
-    let resp = MetadataResponse::decode(&mut cur, version).expect("Metadata decode");
+    // Response header v1 (flexible): i32 correlation_id + 1 tagged byte.
+    let resp: MetadataResponse =
+        decode_response_frame(&resp, 7, version, true, "Metadata decode").expect("Metadata decode");
 
     operations.metadata = Some(resp);
 }
