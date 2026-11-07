@@ -126,7 +126,11 @@ pub fn expansion(
 }
 
 /// The modules of the feature files, with the scenarios `driver` runs.
-fn feature_modules(arguments: &Arguments, plans: &[Plan], driver: Option<&str>) -> Vec<TokenStream> {
+fn feature_modules(
+    arguments: &Arguments,
+    plans: &[Plan],
+    driver: Option<&str>,
+) -> Vec<TokenStream> {
     plans
         .iter()
         .map(|plan| Plan {
@@ -146,11 +150,13 @@ fn feature_modules(arguments: &Arguments, plans: &[Plan], driver: Option<&str>) 
 /// Whether a scenario with `tags` runs against `driver`: a scenario tagged
 /// `@only_<driver>` runs against that driver alone.
 pub fn runs_on(tags: &[String], driver: Option<&str>) -> bool {
-    let mut only = tags.iter().filter_map(|tag| tag.strip_prefix("only_")).peekable();
-    match driver {
-        None => true,
-        Some(driver) => only.peek().is_none() || only.any(|name| name == driver),
-    }
+    driver.is_none_or(|driver| {
+        let mut only = tags
+            .iter()
+            .filter_map(|tag| tag.strip_prefix("only_"))
+            .peekable();
+        only.peek().is_none() || only.any(|name| name == driver)
+    })
 }
 
 /// The module of one feature file, with a module per rule and per outline.

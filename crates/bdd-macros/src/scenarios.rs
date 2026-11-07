@@ -327,7 +327,8 @@ fn driver(argument: &Argument) -> Result<Fixture, ParseError> {
 
 /// The identifiers of `name = [a, b, ..]`.
 fn idents(argument: &Argument, what: &str) -> Result<Vec<String>, ParseError> {
-    let malformed = || ParseError::new(first_span(argument), format!("{what} must be `[name, ..]`"));
+    let malformed =
+        || ParseError::new(first_span(argument), format!("{what} must be `[name, ..]`"));
     let [TokenTree::Group(group)] = value_tokens(argument) else {
         return Err(malformed());
     };

@@ -25,6 +25,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
+bon = { workspace = true }
 rstest = { workspace = true }
 rstest-bdd-macros = { workspace = true }
 rust-embed = { workspace = true }

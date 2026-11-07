@@ -3764,6 +3764,7 @@ name = "krabka-bdd"
 version = "1.1.5"
 dependencies = [
  "assert2",
+ "bon",
  "futures-util",
  "inventory",
  "krabka-bdd-macros",

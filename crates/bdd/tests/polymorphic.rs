@@ -3,10 +3,7 @@
 //! keeps a scenario to one of them: run against the in-process driver, the
 //! wire-only scenario's Then would fail.
 
-use {
-    assert2::assert,
-    krabka_bdd::Given,
-};
+use {assert2::assert, krabka_bdd::Given};
 
 /// What a step asks of the system under test, in domain terms.
 trait TopicDriver {
@@ -54,10 +51,16 @@ impl TopicDriver for Wire {
 }
 
 #[rstest::fixture]
-fn in_process() -> Box<dyn TopicDriver> { Box::new(InProcess::default()) }
+fn in_process() -> Box<dyn TopicDriver> {
+    // The in-process driver: calls into the broker's own types.
+    Box::new(InProcess::default())
+}
 
 #[rstest::fixture]
-fn wire() -> Box<dyn TopicDriver> { Box::new(Wire::default()) }
+fn wire() -> Box<dyn TopicDriver> {
+    // The wire driver: a client speaking the Kafka protocol.
+    Box::new(Wire::default())
+}
 
 struct World {
     listing: Given<Listing>,
