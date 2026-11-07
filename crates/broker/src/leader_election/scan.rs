@@ -135,13 +135,42 @@ fn record_recovery(
     mark_leaderless(publisher, pr, gone);
 }
 
-/// Validate a scan's epoch change, preserving its exhaustion diagnostic.
-fn checked_epochs(
+/// The epochs an election of a new leader for `pr` writes: the partition
+/// epoch and the leader epoch both advance. `None`, after a warning that says
+/// `exhausted_message`, when either cannot.
+fn epochs_for_election(
     pr: &PartitionRecord,
-    leader_changes: bool,
     exhausted_message: &str,
 ) -> Option<(i32, krabka_metadata::LeaderEpoch)> {
-    next_partition_change(pr.partition_epoch, pr.leader_epoch, leader_changes).or_else(|| {
+    warn_if_exhausted(
+        pr,
+        next_partition_change(pr.partition_epoch, pr.leader_epoch, true),
+        exhausted_message,
+    )
+}
+
+/// The epochs an ISR change that keeps `pr`'s leader writes: only the
+/// partition epoch advances. `None`, after a warning that says
+/// `exhausted_message`, when it cannot.
+fn epochs_for_isr_change(
+    pr: &PartitionRecord,
+    exhausted_message: &str,
+) -> Option<(i32, krabka_metadata::LeaderEpoch)> {
+    warn_if_exhausted(
+        pr,
+        next_partition_change(pr.partition_epoch, pr.leader_epoch, false),
+        exhausted_message,
+    )
+}
+
+/// Pass `epochs` through, warning with `exhausted_message` when an epoch of
+/// `pr` could not advance.
+fn warn_if_exhausted<T>(
+    pr: &PartitionRecord,
+    epochs: Option<T>,
+    exhausted_message: &str,
+) -> Option<T> {
+    epochs.or_else(|| {
         warn!(topic = %pr.topic, partition = pr.partition, "{exhausted_message}");
         None
     })
@@ -153,7 +182,7 @@ fn checked_election_epochs(
     pr: &PartitionRecord,
     exhausted_message: &str,
 ) -> Option<(i32, krabka_metadata::LeaderEpoch)> {
-    let epochs = checked_epochs(pr, true, exhausted_message);
+    let epochs = epochs_for_election(pr, exhausted_message);
     if epochs.is_none() {
         unavailable.push((pr.topic.clone(), pr.partition));
     }
@@ -168,7 +197,7 @@ fn push_checked_isr_shrink(
     exhausted_message: &str,
     applied: impl FnOnce(&[NodeId]),
 ) -> bool {
-    let Some((partition_epoch, leader_epoch)) = checked_epochs(pr, false, exhausted_message) else {
+    let Some((partition_epoch, leader_epoch)) = epochs_for_isr_change(pr, exhausted_message) else {
         return false;
     };
     applied(&isr);
@@ -352,9 +381,8 @@ pub async fn compute_offline_dir_failover_changes(
                 isr,
                 unclean,
             } => {
-                let Some((partition_epoch, leader_epoch)) = checked_epochs(
+                let Some((partition_epoch, leader_epoch)) = epochs_for_election(
                     pr,
-                    true,
                     "offline-dir failover skipped because a metadata epoch is exhausted",
                 ) else {
                     continue;
@@ -664,9 +692,8 @@ fn compute_leaderless_changes_with_alive(
         else {
             continue;
         };
-        let Some((partition_epoch, leader_epoch)) = checked_epochs(
+        let Some((partition_epoch, leader_epoch)) = epochs_for_election(
             pr,
-            true,
             "election of a leaderless partition skipped because a metadata epoch is exhausted",
         ) else {
             continue;
