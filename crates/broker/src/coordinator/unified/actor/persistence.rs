@@ -360,7 +360,7 @@ pub(super) struct ClassicWriteFailure {
     pub(super) error: BrokerError,
     /// The group that a reload of the log builds when the write may still
     /// commit, from [`written_classic_state`].
-    written: Option<Result<ClassicGroup, BrokerError>>,
+    written: Option<Box<Result<ClassicGroup, BrokerError>>>,
 }
 
 impl ClassicWriteFailure {
@@ -381,7 +381,7 @@ impl ClassicWriteFailure {
         let Some(written) = self.written else {
             return true;
         };
-        leave_written_classic_group(group, written, coordinator);
+        leave_written_classic_group(group, *written, coordinator);
         false
     }
 }
@@ -400,7 +400,7 @@ pub(super) async fn persist_classic_or_revert(
     let Err(error) = flush_classic_metadata(state, offsets_log).await else {
         return Ok(());
     };
-    let written = written_classic_state(state, &error);
+    let written = written_classic_state(state, &error).map(Box::new);
     state.clone_from(previous);
     Err(ClassicWriteFailure { error, written })
 }

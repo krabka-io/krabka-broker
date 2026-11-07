@@ -27,6 +27,7 @@ use {
     },
     tokio::{
         sync::{mpsc, oneshot},
+        task,
         time::timeout,
     },
 };
@@ -232,7 +233,7 @@ async fn a_rebalance_deadline_whose_empty_generation_write_fails_keeps_the_actor
             if view.state == ClassicGroupState::Empty {
                 return view;
             }
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
