@@ -101,7 +101,7 @@ mod tests {
         super::*,
         crate::coordinator::unified::{
             actor::{
-                DescribeMember, GroupActorMessage, JoinResult,
+                ClassicView, DescribeMember, GroupActorMessage, JoinResult,
                 test_support::{
                     RejoinedClassic, actor_stops, decode_assignment, last_classic_metadata,
                     live_actor, make_coordinator, make_coordinator_with_topic_policy,
@@ -443,9 +443,14 @@ mod tests {
             "the actor stops after the uncertain write"
         );
         log.release_commits();
-        let reloaded = reloaded_classic_view(&log).await;
+        // A view lists the members in hash-map order.
+        let by_id = |mut view: ClassicView| {
+            view.members.sort_by(|a, b| a.member_id.cmp(&b.member_id));
+            view
+        };
+        let reloaded = by_id(reloaded_classic_view(&log).await);
         check!(reloaded.state == ClassicGroupState::Stable);
         let live = live_actor(&coord).await;
-        check!(rpc::classic_inspect(&live).await == reloaded);
+        check!(by_id(rpc::classic_inspect(&live).await) == reloaded);
     }
 }
