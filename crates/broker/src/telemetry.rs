@@ -66,7 +66,7 @@ pub fn request_span(
 /// Map a Kafka request `api_key` to its canonical protocol name, used as
 /// the `OTel` span name.
 ///
-/// The name comes from [`handlers::api_name`], the lookup the request metrics
+/// The name comes from `handlers::api_name`, the lookup the request metrics
 /// label from: the generated [`krabka_protocol::ApiKey`] registry for Kafka
 /// keys, and the krabka-private name table for the private RPCs. A key that
 /// neither knows renders as `"Unknown"`, so the broker still emits a span.
