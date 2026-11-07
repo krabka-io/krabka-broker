@@ -180,11 +180,6 @@ pub struct ReplicationQuota {
 }
 
 impl ReplicationQuota {
-    /// An unbounded quota on the system's monotonic clock, with Kafka's
-    /// default window of 11 samples of 1 second.
-    #[must_use]
-    pub fn new() -> Self { Self::with_clock(Arc::new(StdMonotonicClock::new())) }
-
     /// An unbounded quota on a caller-supplied clock, with Kafka's default
     /// window. Tests pass a [`qubit_clock::ManualMonotonicClock`].
     #[must_use]
@@ -198,6 +193,11 @@ impl ReplicationQuota {
             clock,
         }
     }
+
+    /// An unbounded quota on the system's monotonic clock, with Kafka's
+    /// default window of 11 samples of 1 second.
+    #[must_use]
+    pub fn new() -> Self { Self::with_clock(Arc::new(StdMonotonicClock::new())) }
 
     /// Kafka's `ReplicationQuotaManager.updateQuota`: sets the bound, or
     /// removes it with `None`, and keeps the traffic already measured.
