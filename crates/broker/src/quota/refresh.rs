@@ -81,7 +81,7 @@ where
     let names = buckets.ip_names();
     loop {
         let image = Arc::clone(&images.borrow());
-        let due = names.claim(names.update(&image), Instant::now());
+        let due = names.claim_due(&image, Instant::now());
         if !due.is_empty() {
             names.resolve(&due, lookup).await;
             let image = Arc::clone(&images.borrow());
@@ -305,7 +305,7 @@ mod tests {
             .value(3.0)
             .call();
 
-        let _ = buckets.ip_names().update(&img);
+        buckets.ip_names().update(&img);
         refresh_buckets(&img, &buckets);
 
         assert!(b.byte_rate() == bucket_rate(3.0));

@@ -990,7 +990,7 @@ mod tests {
         for (label, entity, peer, matches) in cases {
             let img = img_with_ip(vec![rec_ip().maybe_ip(Some(entity)).value(7.0).call()]);
             let names = IpNames::default();
-            let _ = names.update(&img);
+            names.update(&img);
             let peer: IpAddr = peer.parse().unwrap();
 
             let got = lookup_ip_quota_with_key(&img, &names, peer, QuotaType::ConnectionCreation);
@@ -1022,7 +1022,7 @@ mod tests {
 
         let before = rate(&names, db);
         names.insert_host("db", db);
-        let _ = names.update(&img);
+        names.update(&img);
 
         check!(
             (before, rate(&names, db), rate(&names, other)) == (Some(2.0), Some(9.0), Some(2.0))
