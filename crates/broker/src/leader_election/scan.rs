@@ -184,26 +184,6 @@ fn push_checked_isr_shrink(
     true
 }
 
-fn push_election_change(
-    changes: &mut Vec<MetadataRecord>,
-    pr: &PartitionRecord,
-    leader: NodeId,
-    isr: Vec<NodeId>,
-    partition_epoch: i32,
-    leader_epoch: krabka_metadata::LeaderEpoch,
-    unclean: bool,
-) {
-    push_partition_change(
-        changes,
-        pr,
-        leader,
-        isr,
-        partition_epoch,
-        leader_epoch,
-        unclean,
-    );
-}
-
 fn shrink_or_mark_unavailable(
     changes: &mut Vec<MetadataRecord>,
     unavailable: &mut Vec<(String, i32)>,
@@ -282,7 +262,7 @@ pub async fn compute_failover_changes(
                     unclean,
                     "failover: re-electing partition leader (triggered by dead broker)"
                 );
-                push_election_change(
+                push_partition_change(
                     &mut changes,
                     pr,
                     leader,
@@ -386,7 +366,7 @@ pub async fn compute_offline_dir_failover_changes(
                     );
                     metrics.record_unclean_leader_election();
                 }
-                push_election_change(
+                push_partition_change(
                     &mut changes,
                     pr,
                     leader,
