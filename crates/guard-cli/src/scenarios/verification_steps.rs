@@ -10,7 +10,6 @@ use {
     },
     crate::{code_name, exit_for_code},
     assert2::assert,
-    krabka_bdd::TokioMultiThreadContext,
     rstest_bdd_macros::{given, then, when},
 };
 
@@ -47,25 +46,17 @@ fn freezes_in(entries: RegistryContents) -> Vec<(Operator, &'static str, Signing
 }
 
 #[given("the registry holds {entries}")]
-fn registry_holds(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    entries: RegistryContents,
-) {
-    let cluster = guard.cluster(runtime);
+async fn registry_holds(guard: &mut GuardScenario, entries: RegistryContents) {
+    let cluster = guard.cluster().await;
     for (operator, scope, signing) in freezes_in(entries) {
         let scope: Scope = scope.parse().expect("a scope the driver names");
-        assert!(runtime.block_on(cluster.freeze(operator, &scope, signing)) == Outcome::Success);
+        assert!(cluster.freeze(operator, &scope, signing).await == Outcome::Success);
     }
 }
 
 #[given("the operator's machine holds {keys}")]
-fn machine_holds(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    keys: LocalKeys,
-) {
-    let trust_file = guard.cluster(runtime).trust_file(keys);
+async fn machine_holds(guard: &mut GuardScenario, keys: LocalKeys) {
+    let trust_file = guard.cluster().await.trust_file(keys);
     guard.trust_file.set(trust_file);
 }
 
@@ -73,13 +64,10 @@ fn machine_holds(
 fn no_broker_listens(guard: &mut GuardScenario) { guard.unreachable = true; }
 
 #[when("the operator verifies the registry")]
-fn operator_verifies(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
+async fn operator_verifies(guard: &mut GuardScenario) {
     let trust_file = guard.trust_file.get().clone();
-    let cluster = guard.cluster(runtime);
-    let outcome = runtime.block_on(cluster.verify(Operator::Alice, &trust_file));
+    let cluster = guard.cluster().await;
+    let outcome = cluster.verify(Operator::Alice, &trust_file).await;
     guard.outcome.set(outcome);
 }
 
