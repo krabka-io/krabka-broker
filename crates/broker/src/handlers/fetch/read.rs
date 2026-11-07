@@ -37,8 +37,7 @@ use {
 /// The read fills `out` in place with a `RecordsPayload::Raw`. It returns the
 /// byte-size estimate of the records it put in `out`, or 0 when it put none.
 ///
-/// For a `read_committed` consumer, a consumer fetch with
-/// `isolation_level=1`:
+/// For a `read_committed` consumer (`isolation_level=1`):
 /// - the raw bytes are clamped at `min(lso, hw)`, so
 ///   `base_offset < min(lso, hw)`
 /// - there is NO server-side batch filtering. Aborted batches and control

@@ -233,7 +233,7 @@ fn group_cached_into_effective_topics(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {super::*, assert2::assert, krabka_verified::Isolation};
 
     fn key(id: u8, name: &str, partition: i32) -> FetchSessionKey {
         FetchSessionKey {
@@ -375,5 +375,31 @@ mod tests {
             })
             .collect();
         assert2::assert!(shape == expected);
+    }
+
+    /// The reader `prepare_fetch` gives a fetch, from whether `replica_id`
+    /// names a replica and whether `isolation_level` is 1. A follower has no
+    /// isolation level, so a follower that sends `isolation_level=1` still
+    /// reads as a follower, to the log end.
+    #[test]
+    fn a_fetch_reads_as_a_follower_or_under_its_isolation_level() {
+        let cases = [
+            (
+                (false, false),
+                FetchReader::Consumer(Isolation::ReadUncommitted),
+            ),
+            (
+                (false, true),
+                FetchReader::Consumer(Isolation::ReadCommitted),
+            ),
+            ((true, false), FetchReader::Follower),
+            ((true, true), FetchReader::Follower),
+        ];
+        for ((is_follower, read_committed), want) in cases {
+            assert!(
+                fetch_reader(is_follower, read_committed) == want,
+                "is_follower={is_follower}, read_committed={read_committed}"
+            );
+        }
     }
 }
