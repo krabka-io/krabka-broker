@@ -14,5 +14,6 @@ Krabka writes prose in plain, direct technical English. The [prose style guide](
 | [README](readme_style_guide.md) | Per-crate `README.md` structure and content. |
 | [Design Docs](design_doc_style_guide.md) | Architectural design documents: the "why". |
 | [Coverage Reports](coverage_report_style_guide.md) | Per-crate `test_coverage_report.md`: what is tested, how, and what remains. |
+| [Gherkin](gherkin_style_guide.md) | `.feature` files and step definitions: the BDD loop, BRIEF formulation, rules, outlines, tags, journeys, and rstest-bdd gaps. |
 
 See also [`CONTRIBUTING.md`](../../CONTRIBUTING.md) for build and test commands. See [`CLAUDE.md`](../../CLAUDE.md) for project-specific guidance: the on-disk compatibility rules, the Kafka compatibility constraints, and the execution workflow.
