@@ -199,6 +199,16 @@ pub struct Transcript {
 /// One row of a cut: a topic, a partition, and the offset the cut names.
 pub type CutRow = (String, i32, i64);
 
+/// One offset a verify found the log does not back, and why.
+pub type MismatchRow = (String, i32, i64, String);
+
+/// The lines of `text` that hold exactly `N` tab-separated fields.
+fn tab_rows<const N: usize>(text: &str) -> Vec<[&str; N]> {
+    text.lines()
+        .filter_map(|line| <[&str; N]>::try_from(line.split('\t').collect::<Vec<_>>()).ok())
+        .collect()
+}
+
 impl Transcript {
     /// The epoch line of a trigger.
     pub fn epoch(&self) -> i64 {
@@ -212,19 +222,29 @@ impl Transcript {
 
     /// The cut rows a trigger printed, in the order it printed them.
     pub fn cut_rows(&self) -> Vec<CutRow> {
-        self.stdout
-            .lines()
-            .filter_map(|line| {
-                let mut fields = line.split('\t');
-                let (Some(topic), Some(partition), Some(offset), None) =
-                    (fields.next(), fields.next(), fields.next(), fields.next())
-                else {
-                    return None;
-                };
+        tab_rows::<3>(&self.stdout)
+            .into_iter()
+            .filter_map(|[topic, partition, offset]| {
                 Some((
                     topic.to_owned(),
                     partition.parse().ok()?,
                     offset.parse().ok()?,
+                ))
+            })
+            .collect()
+    }
+
+    /// The rows a verify wrote for offsets the log does not back: topic,
+    /// partition, offset and reason.
+    pub fn mismatch_rows(&self) -> Vec<MismatchRow> {
+        tab_rows::<4>(&self.stderr)
+            .into_iter()
+            .filter_map(|[topic, partition, offset, reason]| {
+                Some((
+                    topic.to_owned(),
+                    partition.parse().ok()?,
+                    offset.parse().ok()?,
+                    reason.to_owned(),
                 ))
             })
             .collect()

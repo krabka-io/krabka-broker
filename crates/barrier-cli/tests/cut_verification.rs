@@ -10,7 +10,7 @@ use {
     krabka_bdd::TokioMultiThreadContext,
     rstest_bdd_macros::{given, then, when},
     steps::{BarrierScenario, barrier},
-    support::{GROUP, Transcript},
+    support::GROUP,
 };
 
 /// The offset the first cut's marker took in `partition` of `topic`.
@@ -35,28 +35,6 @@ fn delete_through_marker(
     let offset = marker_offset(barrier, topic, partition);
     let cluster = barrier.cluster.get(runtime);
     runtime.block_on(cluster.delete_records_below(topic, partition, offset + 1));
-}
-
-/// The mismatch rows a verify wrote: topic, partition, offset and reason.
-fn mismatch_rows(transcript: &Transcript) -> Vec<(String, i32, i64, String)> {
-    transcript
-        .stderr
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.splitn(4, '\t');
-            let (Some(topic), Some(partition), Some(offset), Some(reason)) =
-                (fields.next(), fields.next(), fields.next(), fields.next())
-            else {
-                return None;
-            };
-            Some((
-                topic.to_owned(),
-                partition.parse().ok()?,
-                offset.parse().ok()?,
-                reason.to_owned(),
-            ))
-        })
-        .collect()
 }
 
 #[given("the records of {topic} partition {partition} up to the marker have been deleted")]
@@ -155,7 +133,7 @@ fn marker_gone(barrier: &BarrierScenario, topic: String, partition: i32) {
     check!(transcript.exit == 3, "{transcript:?}");
     let offset = marker_offset(barrier, &topic, partition);
     check!(
-        mismatch_rows(transcript)
+        transcript.mismatch_rows()
             == vec![(
                 topic,
                 partition,
@@ -179,7 +157,7 @@ fn reports_wrong(barrier: &BarrierScenario, wrong: usize, total: usize) {
         }),
         "{transcript:?}"
     );
-    check!(mismatch_rows(transcript).len() == wrong, "{transcript:?}");
+    check!(transcript.mismatch_rows().len() == wrong, "{transcript:?}");
 }
 
 #[then("the cut does not match the log because the marker carries epoch {carried}")]
@@ -188,7 +166,7 @@ fn mismatch_by_epoch(barrier: &BarrierScenario, carried: i64) {
     let verified = barrier.cuts.first().expect("a Given took a cut").epoch();
     check!(transcript.exit == 3, "{transcript:?}");
     check!(
-        mismatch_rows(transcript).iter().any(|(.., reason)| {
+        transcript.mismatch_rows().iter().any(|(.., reason)| {
             reason.contains(&format!("carries epoch {carried}, not {verified}"))
         }),
         "{transcript:?}"

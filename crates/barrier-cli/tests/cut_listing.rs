@@ -6,7 +6,7 @@ mod steps;
 mod support;
 
 use {
-    assert2::{assert, check},
+    assert2::assert,
     krabka_bdd::TokioMultiThreadContext,
     rstest_bdd_macros::{given, then, when},
     steps::{BarrierScenario, barrier},
@@ -74,7 +74,7 @@ fn list_from_epoch(
 fn listed_epochs_are(barrier: &BarrierScenario, epochs: String) {
     let transcript = barrier.transcript.get();
     assert!(transcript.exit == 0, "{transcript:?}");
-    check!(
+    assert!(
         transcript.listed_epochs() == english_epochs(&epochs),
         "{transcript:?}"
     );
@@ -84,7 +84,7 @@ fn listed_epochs_are(barrier: &BarrierScenario, epochs: String) {
 fn only_listed_epoch(barrier: &BarrierScenario, epoch: i64) {
     let transcript = barrier.transcript.get();
     assert!(transcript.exit == 0, "{transcript:?}");
-    check!(transcript.listed_epochs() == vec![epoch], "{transcript:?}");
+    assert!(transcript.listed_epochs() == vec![epoch], "{transcript:?}");
 }
 
 krabka_bdd::scenarios!(

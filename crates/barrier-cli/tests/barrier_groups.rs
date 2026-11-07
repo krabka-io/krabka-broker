@@ -168,20 +168,23 @@ fn define_retaining(
     #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
     retained: i32,
 ) {
-    attempt(
-        barrier,
-        runtime,
-        GroupDefinition::builder()
-            .topics(vec![TOPIC.to_owned()])
-            .retained_cuts(retained)
-            .build(),
-    );
+    define_with_retention(barrier, runtime, retained);
 }
 
 #[when("an operator tries to define a barrier group that retains {retained} cuts")]
 fn try_define_retaining(
     barrier: &mut BarrierScenario,
     #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
+    retained: i32,
+) {
+    define_with_retention(barrier, runtime, retained);
+}
+
+/// Define the group over the orders topic with `retained` cuts, keeping the
+/// transcript whether or not the broker accepts it.
+fn define_with_retention(
+    barrier: &mut BarrierScenario,
+    runtime: &TokioMultiThreadContext,
     retained: i32,
 ) {
     attempt(
