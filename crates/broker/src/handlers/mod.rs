@@ -195,6 +195,8 @@ pub mod list_offsets;
 pub mod list_partition_reassignments;
 // KIP-664 transaction-summary admin RPC (api_key 66).
 pub mod list_transactions;
+// The settling of a failed local log read, shared by Fetch and ShareFetch.
+pub(crate) mod log_read_failure;
 pub mod metadata;
 pub mod offline_replicas;
 pub mod offset_commit;
