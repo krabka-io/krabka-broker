@@ -162,6 +162,7 @@ pub fn handle<'a>(
         ) in destinations
         {
             let code = match future_log::start_move()
+                .move_lock(&broker.move_lock)
                 .partitions(&partitions)
                 .future_logs(&future_logs)
                 .all_log_dirs(&all_log_dirs)

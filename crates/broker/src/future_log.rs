@@ -33,7 +33,7 @@ use {
         path::{self, Path, PathBuf},
         sync::{Arc, Mutex},
     },
-    tokio::task::JoinHandle,
+    tokio::{sync as async_sync, task::JoinHandle},
     tokio_util::sync::CancellationToken,
 };
 
@@ -78,6 +78,18 @@ pub struct FutureLogState {
     /// replicator task.
     pub task: Mutex<Option<JoinHandle<()>>>,
 }
+
+/// Serializes the log-directory moves a broker starts, as Kafka's
+/// `ReplicaManager.alterReplicaLogDirs` does under `replicaStateChangeLock`.
+///
+/// [`start_move`] checks the registry for a move in flight, then opens the
+/// future log and registers a new move. Two concurrent `AlterReplicaLogDirs`
+/// requests for one partition could otherwise both find no move: both would
+/// open the same future directory, and the registry would keep only the
+/// second move, so the first replicator task would run on where no cancel or
+/// shutdown could stop it.
+#[derive(Debug, Default)]
+pub struct MoveLock(async_sync::Mutex<()>);
 
 /// Why a [`start_move`] or [`resume_move`] call could not be honoured.
 /// The handler translates these to the wire error codes

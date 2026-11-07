@@ -7,7 +7,7 @@
 
 use {
     super::{
-        FutureLogState, MoveError, MovePolicy, canonicalize_or_self,
+        FutureLogState, MoveError, MoveLock, MovePolicy, canonicalize_or_self,
         cleanup::cancel_move,
         configured_log_dir, future_dir_name_too_long,
         replicator::{ReplicatorTask, replicator_loop},
@@ -34,8 +34,12 @@ use {
 /// Idempotency: if a move with the same target is already in flight,
 /// returns `Ok(())` without spawning a second task. If its target differs,
 /// the old task and future log are removed before the replacement starts.
+///
+/// The call holds `move_lock` throughout, so no other move can start between
+/// the check for a move in flight and the registration of a new one.
 #[bon::builder]
 pub async fn start_move(
+    move_lock: &MoveLock,
     partitions: &Arc<PartitionRegistry>,
     future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
     all_log_dirs: &[PathBuf],
@@ -46,6 +50,7 @@ pub async fn start_move(
     target_log_dir: &Path,
     policy: MovePolicy,
 ) -> Result<(), MoveError> {
+    let _serialized = move_lock.0.lock().await;
     let (topic, partition) = topic_partition;
     // (0) Kafka refuses a move whose future directory name would pass 255
     //     characters before it looks at the destination.
@@ -221,12 +226,15 @@ fn spawn_move(task: MoveTask) {
 mod tests {
     use {
         super::*,
-        crate::future_log::test_support::{
-            PlantedFutureLog, fixture_partition, plant_future_log, registered_source_fixture,
-            test_policy,
+        crate::future_log::{
+            shutdown_moves,
+            test_support::{
+                PlantedFutureLog, fixture_partition, plant_future_log, registered_source_fixture,
+                test_policy,
+            },
         },
         assert2::assert,
-        std::time::Duration,
+        std::{iter, time::Duration},
         tempfile::tempdir,
         tokio::{task, time},
     };
@@ -243,6 +251,7 @@ mod tests {
     ) -> Result<(), MoveError> {
         // The existing start_move API takes one topic/partition pair.
         start_move()
+            .move_lock(&MoveLock::default())
             .partitions(partitions)
             .future_logs(future_logs)
             .all_log_dirs(dirs)
@@ -504,6 +513,62 @@ mod tests {
         .await
         .expect("same-target alter must be idempotent");
         assert!(future_logs.len() == 1);
+    }
+
+    /// A policy whose throttle never grants a chunk, so a move task runs
+    /// until something stops it.
+    fn stalled_policy() -> MovePolicy {
+        let policy = test_policy();
+        policy
+            .throttle
+            .set_byte_rate_with_burst(krabka_units::bytes_per_sec(1), krabka_units::bytes(0));
+        policy
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_moves_of_one_partition_leave_no_orphaned_task() {
+        for _ in 0..200 {
+            let primary = tempdir().unwrap();
+            let target = tempdir().unwrap();
+            let source = registered_source_fixture().primary(primary.path()).call();
+            let move_lock = Arc::new(MoveLock::default());
+            let log_dirs = Arc::new(vec![
+                primary.path().to_path_buf(),
+                target.path().to_path_buf(),
+            ]);
+            let requests: Vec<_> = iter::repeat_with(|| {
+                let partitions = Arc::clone(&source.partitions);
+                let future_logs = Arc::clone(&source.future_logs);
+                let log_dirs = Arc::clone(&log_dirs);
+                let move_lock = Arc::clone(&move_lock);
+                tokio::spawn(async move {
+                    start_move()
+                        .move_lock(&move_lock)
+                        .partitions(&partitions)
+                        .future_logs(&future_logs)
+                        .all_log_dirs(&log_dirs)
+                        .log_dir_status(&LogDirRegistry::default())
+                        .log_config(&LogConfig::default())
+                        .topic_partition(("t", PartitionIndex(0)))
+                        .topic_id(None)
+                        .target_log_dir(&log_dirs[1])
+                        .policy(stalled_policy())
+                        .call()
+                        .await
+                })
+            })
+            .take(2)
+            .collect();
+            for request in requests {
+                request.await.unwrap().expect("both requests succeed");
+            }
+
+            shutdown_moves(&source.future_logs).await;
+
+            // Every move task holds the partition registry. Once shutdown
+            // has stopped the registered moves, no task may still hold it.
+            assert!(Arc::strong_count(&source.partitions) == 1);
+        }
     }
 
     #[tokio::test]
