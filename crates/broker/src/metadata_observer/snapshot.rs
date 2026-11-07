@@ -216,10 +216,11 @@ mod tests {
         },
         assert2::assert,
         krabka_metadata::MetadataRecord,
-        krabka_protocol::owned::api_versions_request,
-        krabka_raft::kraft::{
-            snapshot_fetch::MetadataSnapshotFetchMax, transport::wire::decode_fetch_snapshot,
+        krabka_protocol::{
+            Decode as _,
+            owned::{api_versions_request, fetch_snapshot_request::FetchSnapshotRequest},
         },
+        krabka_raft::kraft::snapshot_fetch::MetadataSnapshotFetchMax,
         std::{
             net::SocketAddr,
             sync::atomic::{AtomicUsize, Ordering},
@@ -307,6 +308,19 @@ mod tests {
         out
     }
 
+    /// The snapshot, position and byte budget a `FetchSnapshot` request body
+    /// asks for.
+    fn requested_range(body: &[u8]) -> Option<(SnapshotId, i64, i32)> {
+        let mut cur = body;
+        let request = FetchSnapshotRequest::decode(&mut cur, FETCH_SNAPSHOT_VERSION).ok()?;
+        let partition = request.topics.first()?.partitions.first()?;
+        let snapshot_id = (
+            partition.snapshot_id.end_offset,
+            partition.snapshot_id.epoch,
+        );
+        Some((snapshot_id, partition.position, request.max_bytes))
+    }
+
     /// The request body itself.
     ///
     /// `MockBroker` splits each frame after the fixed
@@ -362,15 +376,7 @@ mod tests {
         let chunks = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&chunks);
         let mock = snapshot_broker(snapshot_id, move |body| {
-            let Some(PeerRequest::FetchSnapshot {
-                snapshot_id: wanted,
-                position,
-                max_bytes,
-                ..
-            }) = decode_fetch_snapshot(request_body(body))
-            else {
-                return None;
-            };
+            let (wanted, position, max_bytes) = requested_range(request_body(body))?;
             counted.fetch_add(1, Ordering::SeqCst);
             let start = usize::try_from(position).unwrap().min(served.len());
             let end = start
