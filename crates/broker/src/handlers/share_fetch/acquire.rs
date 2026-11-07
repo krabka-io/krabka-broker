@@ -767,11 +767,6 @@ fn append_records(out: &mut PartitionData, fresh: PartitionData) -> Result<i64, 
     Ok(added_len)
 }
 
-/// Fails one partition row with a share-partition error, and leaves it out of
-/// any later acquire pass.
-///
-/// The fetch error goes on a row of the share session, and the acknowledge
-/// error on a row that carried acknowledgements.
 /// The share key of `p` in `group`.
 fn share_key<'a>(group: &'a str, p: &PendingPartition) -> ShareKeyRef<'a> {
     ShareKeyRef {
@@ -781,6 +776,11 @@ fn share_key<'a>(group: &'a str, p: &PendingPartition) -> ShareKeyRef<'a> {
     }
 }
 
+/// Fails one partition row with a share-partition error, and leaves it out of
+/// any later acquire pass.
+///
+/// The fetch error goes on a row of the share session, and the acknowledge
+/// error on a row that carried acknowledgements.
 fn fail_partition(p: &mut PendingPartition, has_acks: bool, code: i16) {
     p.out.records = None;
     p.out.acquired_records.clear();

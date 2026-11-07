@@ -334,8 +334,9 @@ mod tests {
 
     /// Golden bytes of the `ShareSnapshotKey` and `ShareUpdateKey` records:
     /// the record type, the group id with an `INT16` length, the topic id and
-    /// the partition. 1.x brokers wrote these bytes, and a 1.x broker must read
-    /// them back to the same key and write them again unchanged.
+    /// the partition. The bytes follow Kafka's key schemas, which every 1.x
+    /// broker writes, so a 1.x broker must read them back to the same key and
+    /// write them again unchanged.
     #[yare::parameterized(
         snapshot = {
             KEY_SHARE_SNAPSHOT, "g1", [7; 16], 3,
