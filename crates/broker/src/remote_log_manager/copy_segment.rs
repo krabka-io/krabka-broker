@@ -2,8 +2,6 @@
 //! upload, then `CopySegmentFinished`, together with the rollback that runs
 //! when any step of it fails.
 
-#[cfg(test)]
-use krabka_remote_storage::LogSegmentData;
 use {
     super::{
         RemoteTier,
@@ -16,8 +14,8 @@ use {
     crate::{blocking::spawn_blocking, metrics::RemoteTierPath, time_util::now_ms},
     krabka_log::{Offset, SegmentExport},
     krabka_remote_storage::{
-        ChainStamp, RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState,
-        RemoteStorageError, TopicIdPartition, WormChainRecord,
+        ChainStamp, CustomMetadata, LogSegmentData, RemoteLogSegmentId, RemoteLogSegmentMetadata,
+        RemoteLogSegmentState, RemoteStorageError, TopicIdPartition, WormChainRecord,
     },
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
     std::{
@@ -190,7 +188,7 @@ async fn copy_one_inner(
     ex: &SegmentExport,
     chain: ChainPosition,
 ) -> CopyOutcome {
-    let (rsm, rlmm) = (tier.rsm, tier.rlmm);
+    let rlmm = tier.rlmm;
     let chain = match chain {
         ChainPosition::Unchained => Chain::Unchained,
         ChainPosition::At(stamp) => Chain::At(stamp),
@@ -227,64 +225,9 @@ async fn copy_one_inner(
         leader_epoch_index_bytes(&epochs)
     });
 
-    // The RSM is a blocking SPI — run the copy on the blocking pool.
-    //
-    // Bounded, because the pass is serial: an object store that accepts the
-    // upload and then answers nothing would otherwise hold this partition,
-    // and every partition queued behind it, for as long as the store cares
-    // to stall. `spawn_blocking` cannot be cancelled, so past the deadline
-    // the upload is abandoned rather than stopped — it keeps running on the
-    // blocking pool against a segment id no metadata will ever finish, and
-    // its objects are what the next tick's fresh id copies again.
-    //
-    // The upload is tracked from here until it returns, past any deadline, so
-    // remote retention leaves its `CopySegmentStarted` segment alone.
-    let rsm_copy = Arc::clone(rsm);
-    let md_copy = metadata.clone();
-    let in_flight = tier.copies_in_flight.track(id.id);
-    let copy_result = time::timeout(
-        tier.copy_timeout.to_std(),
-        spawn_blocking(move || {
-            let returned = rsm_copy.copy_log_segment_data(&md_copy, &data);
-            drop(in_flight);
-            returned
-        }),
-    )
-    .await;
-
-    // Copy failed (or the blocking task panicked): clean up so the segment
-    // is retried next tick.
-    let returned = match copy_result {
-        Ok(Ok(Ok(returned))) => returned,
-        // The deadline expired. Nothing is rolled back: the abandoned upload
-        // is still writing under this metadata's segment id, and a delete
-        // racing it could remove an object the upload then re-creates,
-        // leaving the tier holding a partial segment that no metadata
-        // records. The segment stays in `CopySegmentStarted` instead, which
-        // is what makes local retention refuse to drop its local copy and
-        // the next tick re-copy it under a fresh id.
-        Err(_) => {
-            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                  timeout_ms = tier.copy_timeout.millis_i64(),
-                  "remote-log-manager: segment copy exceeded its deadline; abandoning it and \
-                   moving on to the next partition");
-            chain.record_seal_failure(tier);
-            return CopyOutcome::Failed;
-        }
-        Ok(Ok(Err(e))) => {
-            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                  error = %e, "remote-log-manager: segment copy failed");
-            chain.record_seal_failure(tier);
-            rollback(tier, &metadata, broker_id).await;
-            return CopyOutcome::Failed;
-        }
-        Ok(Err(e)) => {
-            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                  error = %e, "remote-log-manager: segment copy task panicked");
-            chain.record_seal_failure(tier);
-            rollback(tier, &metadata, broker_id).await;
-            return CopyOutcome::Failed;
-        }
+    let Some(returned) = upload_with_deadline(tier, ex, chain, &metadata, broker_id, data).await
+    else {
+        return CopyOutcome::Failed;
     };
 
     // The upload may have outlived this broker's leadership. On a mutable
@@ -381,6 +324,83 @@ async fn copy_one_inner(
         }
         _ => CopyOutcome::Copied { next },
     }
+}
+
+/// Upload `data` under `metadata` on the blocking pool, bounded by the tier's
+/// copy timeout, and return the custom metadata the backend hands back.
+/// `None`, after a warning, a seal failure for a chained copy and, unless
+/// the deadline expired, a rollback, when the upload did not succeed.
+async fn upload_with_deadline(
+    tier: &RemoteTier<'_>,
+    ex: &SegmentExport,
+    chain: Chain,
+    metadata: &RemoteLogSegmentMetadata,
+    broker_id: i32,
+    data: LogSegmentData,
+) -> Option<Option<CustomMetadata>> {
+    let tp = &metadata.remote_log_segment_id().topic_id_partition;
+    // The RSM is a blocking SPI — run the copy on the blocking pool.
+    //
+    // Bounded, because the pass is serial: an object store that accepts the
+    // upload and then answers nothing would otherwise hold this partition,
+    // and every partition queued behind it, for as long as the store cares
+    // to stall. `spawn_blocking` cannot be cancelled, so past the deadline
+    // the upload is abandoned rather than stopped — it keeps running on the
+    // blocking pool against a segment id no metadata will ever finish, and
+    // its objects are what the next tick's fresh id copies again.
+    //
+    // The upload is tracked from here until it returns, past any deadline, so
+    // remote retention leaves its `CopySegmentStarted` segment alone.
+    let rsm_copy = Arc::clone(tier.rsm);
+    let md_copy = metadata.clone();
+    let in_flight = tier
+        .copies_in_flight
+        .track(metadata.remote_log_segment_id().id);
+    let copy_result = time::timeout(
+        tier.copy_timeout.to_std(),
+        spawn_blocking(move || {
+            let returned = rsm_copy.copy_log_segment_data(&md_copy, &data);
+            drop(in_flight);
+            returned
+        }),
+    )
+    .await;
+
+    // Copy failed (or the blocking task panicked): clean up so the segment
+    // is retried next tick.
+    let returned = match copy_result {
+        Ok(Ok(Ok(returned))) => returned,
+        // The deadline expired. Nothing is rolled back: the abandoned upload
+        // is still writing under this metadata's segment id, and a delete
+        // racing it could remove an object the upload then re-creates,
+        // leaving the tier holding a partial segment that no metadata
+        // records. The segment stays in `CopySegmentStarted` instead, which
+        // is what makes local retention refuse to drop its local copy and
+        // the next tick re-copy it under a fresh id.
+        Err(_) => {
+            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                  timeout_ms = tier.copy_timeout.millis_i64(),
+                  "remote-log-manager: segment copy exceeded its deadline; abandoning it and \
+                   moving on to the next partition");
+            chain.record_seal_failure(tier);
+            return None;
+        }
+        Ok(Ok(Err(e))) => {
+            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                  error = %e, "remote-log-manager: segment copy failed");
+            chain.record_seal_failure(tier);
+            rollback(tier, metadata, broker_id).await;
+            return None;
+        }
+        Ok(Err(e)) => {
+            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                  error = %e, "remote-log-manager: segment copy task panicked");
+            chain.record_seal_failure(tier);
+            rollback(tier, metadata, broker_id).await;
+            return None;
+        }
+    };
+    Some(returned)
 }
 
 /// The `CopySegmentStarted` metadata for copying `ex`, stamped for `chain`,
