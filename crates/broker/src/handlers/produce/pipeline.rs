@@ -9,7 +9,7 @@ use {
         delivery::DeliveryGate,
         framing::{FramedPartition, PartitionPayload},
         leadership::{
-            BrokerProducePolicy, PartitionGateError, current_leader_hint, diskless_role_ready,
+            BrokerProducePolicy, PartitionGateError, diskless_role_ready,
             replica_state_matches_image, replication_target_matches_image, validate_partition_gate,
         },
         prepare::{DecodeEnv, PreparedBatch, prepare_batch_within},
@@ -27,6 +27,7 @@ use {
         codes,
         error::BrokerError,
         freeze::resolve::{FreezeMutationResolution, FreezeVerdict},
+        handlers::LeaderHint,
         log_dir_status::LogDirRegistry,
         metrics::{BrokerMetrics, RequestPhases},
         partition::{Partition, ReplicationTarget},
@@ -761,7 +762,9 @@ async fn leader_partition(
     if !local_replica_is_ready(&part, image, topic_name, idx).await {
         return Err(PartitionGateError {
             code: codes::NOT_LEADER_OR_FOLLOWER,
-            current_leader: image.partition(topic_name, idx).map(current_leader_hint),
+            current_leader: image
+                .partition(topic_name, idx)
+                .map(|record| LeaderHint::of(record).into()),
         });
     }
     Ok(part)
@@ -840,7 +843,7 @@ pub(super) async fn complete_partition(
     let Some(transition) = ready_transition(&part, image, topic_name, idx).await else {
         out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
         if let Some(record) = image.partition(topic_name, idx) {
-            out.current_leader = current_leader_hint(record);
+            out.current_leader = LeaderHint::of(record).into();
         }
         return Ok(PartitionOutcome::Done(out));
     };

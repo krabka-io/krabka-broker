@@ -42,6 +42,7 @@ mod partition_transition;
 mod delegation_token_test_support;
 #[cfg(test)]
 mod group_heartbeat_test_support;
+mod leader_hint;
 mod node_endpoints;
 mod partition_materialization;
 mod private_api_keys;
@@ -115,6 +116,7 @@ macro_rules! raw_request_handler {
     };
 }
 pub(crate) use raw_request_handler;
+pub use self::leader_hint::LeaderHint;
 
 pub mod context;
 pub use context::{RequestContext, TelemetryContext};

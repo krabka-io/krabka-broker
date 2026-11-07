@@ -50,7 +50,7 @@ use {
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
         share_fetch_request::{FetchPartition, ShareFetchRequest},
-        share_fetch_response::{LeaderIdAndEpoch, ShareFetchResponse},
+        share_fetch_response::ShareFetchResponse,
     },
     std::{
         collections::{HashMap, HashSet},
@@ -134,7 +134,7 @@ pub use self::{
     acknowledge::{
         AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
     },
-    leader_hint::{current_leader, names_the_leader},
+    leader_hint::names_the_leader,
     request::{ShareRequestIdentity, resolve_share_identity},
 };
 use {
@@ -279,12 +279,7 @@ pub async fn handle(
     // leader carries the current leader and its endpoint.
     for p in &mut pending {
         if names_the_leader(p.out.error_code) {
-            let (leader_id, leader_epoch) = current_leader(&mgr, p.topic_id, p.partition_index);
-            p.out.current_leader = LeaderIdAndEpoch {
-                leader_id,
-                leader_epoch,
-                ..Default::default()
-            };
+            p.out.current_leader = mgr.current_leader_of(p.topic_id, p.partition_index).into();
         }
     }
     let node_endpoints = leader_endpoints(
