@@ -1130,6 +1130,47 @@ mod tests {
         }
     }
 
+    /// A copy handed an exhausted chain uploads nothing, records nothing and
+    /// counts no seal attempt: it fails before it touches the tier.
+    #[tokio::test]
+    async fn copy_one_refuses_an_exhausted_chain_before_touching_the_tier() {
+        let rsm_impl = Arc::new(CapturingRsm::default());
+        let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
+        let fixtures::OwnedTierResources {
+            rlmm,
+            metrics,
+            index_cache,
+        } = fixtures::owned_tier_resources();
+        let tier = fixtures::configured_tier()
+            .rsm(&rsm)
+            .rlmm(&rlmm)
+            .archive(ArchiveMode::WriteOnce)
+            .metrics(&metrics)
+            .index_cache(&index_cache)
+            .call();
+
+        let outcome = copy_one(
+            &tier,
+            &tp(),
+            CopyIdentity::unfenced(1, LeaderEpoch(0)),
+            &synth_export().call(),
+            ChainPosition::Exhausted,
+        )
+        .await;
+
+        check!(outcome == CopyOutcome::Failed);
+        check!(
+            rsm_impl
+                .seen
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty()
+        );
+        check!(rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
+        check!(metrics.worm_manifests_sealed_total.get() == 0);
+        check!(metrics.worm_manifest_seal_failures_total.get() == 0);
+    }
+
     #[tokio::test]
     async fn copy_one_rejects_unattested_or_mismatched_chain_receipts() {
         let requested = ChainStamp {
