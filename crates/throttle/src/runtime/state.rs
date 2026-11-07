@@ -19,9 +19,6 @@ pub struct ThrottleState {
 }
 
 impl ThrottleState {
-    #[must_use]
-    pub fn new() -> Self { Self::with_clock(Arc::new(StdMonotonicClock::new())) }
-
     /// Builds the three buckets, unthrottled, on one caller-supplied clock.
     ///
     /// Production uses [`ThrottleState::new`], which supplies a
@@ -36,6 +33,9 @@ impl ThrottleState {
             alter_log_dirs: Arc::new(TokenBucket::with_clock(clock)),
         }
     }
+
+    #[must_use]
+    pub fn new() -> Self { Self::with_clock(Arc::new(StdMonotonicClock::new())) }
 }
 
 impl Default for ThrottleState {
