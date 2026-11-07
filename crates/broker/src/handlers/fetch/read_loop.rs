@@ -759,8 +759,8 @@ async fn read_and_account(
 /// Kafka's `DelayedFetch.onComplete` reads every partition again on expiry,
 /// and `readFromLog` asks the replication quota again, so records the quota
 /// allows by then go out with this response and not with the follower's next
-/// fetch. The refill wakes nothing, so expiry is where a parked fetch sees the
-/// quota recover.
+/// fetch. The measured rate falls as time passes without waking anything, so
+/// expiry is where a parked fetch sees the quota recover.
 async fn reread_withheld(
     broker: &Broker,
     pending: &mut [PendingRead],

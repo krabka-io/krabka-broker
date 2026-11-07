@@ -2,31 +2,39 @@
 //! partition's current log.
 //!
 //! The pass is synchronous and holds each log mutex only for a short time, so
-//! the replicator task can repeat it between cancellation checks. It also
-//! charges the copied bytes against the broker-wide log-directory move budget,
-//! and it re-bases the future log when retention advances the source start.
+//! the replicator task can repeat it between cancellation checks. It meters
+//! the copy with the broker-wide KIP-113 log-directory move quota, as Kafka's
+//! `LocalLeaderEndPoint.buildFetch` and
+//! `ReplicaAlterLogDirsThread.processPartitionData` do. While the measured
+//! rate is above the bound, the pass reads nothing. Otherwise it reads a whole
+//! `read_chunk`, appends it, and records the bytes it read. A future log that
+//! is already caught up costs no quota. The pass also re-bases the future log
+//! when retention advances the source start.
 
 use {
-    crate::{error::BrokerError, partition::Partition, throttle::TokenBucket},
+    crate::{error::BrokerError, partition::Partition, throttle::ReplicationQuota},
     krabka_log::{Log, Offset},
-    krabka_units::{ByteSize, convert::ByteSizeExt as _},
+    krabka_protocol::records::RecordBatch,
+    krabka_units::ByteSize,
     std::sync::{Arc, Mutex, PoisonError},
 };
 
-/// One catch-up iteration. It reads whatever the future log is missing,
-/// up to `read_chunk`, and appends it. Returns `true` if the
-/// future log was caught up at the end of the iteration, that is, if it read
-/// nothing AND `future.LEO >= source.LEO`.
+/// What one catch-up iteration did. `caught_up` is `true` if the future log
+/// was caught up at the end of the iteration, that is, if it read nothing AND
+/// `future.LEO >= source.LEO`. `throttled` is `true` if the move quota was
+/// exceeded, so the iteration read nothing.
 pub(super) struct CatchUpProgress {
     pub(super) caught_up: bool,
     pub(super) throttled: bool,
 }
 
+/// One catch-up iteration. It reads whatever the future log is missing, up to
+/// `read_chunk`, appends it, and records the bytes it read against `throttle`.
 pub(super) fn catch_up(
     part: &Arc<Partition>,
     future_log: &Arc<Mutex<Log>>,
     read_chunk: ByteSize,
-    throttle: &TokenBucket,
+    throttle: &ReplicationQuota,
 ) -> Result<CatchUpProgress, BrokerError> {
     // Snapshot both source bounds under one lock so a retention update cannot
     // produce an internally inconsistent start/end pair.
@@ -51,8 +59,9 @@ pub(super) fn catch_up(
         });
     }
 
-    let granted = throttle.try_consume(read_chunk.bytes_u64());
-    if granted == 0 {
+    // Kafka builds no fetch for the partition this round while the quota is
+    // exceeded (`LocalLeaderEndPoint.buildFetch`).
+    if throttle.quota_exceeded() {
         return Ok(CatchUpProgress {
             caught_up: false,
             throttled: true,
@@ -71,7 +80,7 @@ pub(super) fn catch_up(
     };
     let read = {
         let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
-        log.read(fetch_offset, ByteSize::from_bytes(granted))?
+        log.read(fetch_offset, read_chunk)?
     };
     if read.batches.is_empty() {
         if reset_for_retention {
@@ -86,6 +95,14 @@ pub(super) fn catch_up(
         });
     }
 
+    // `ReplicaAlterLogDirsThread.processPartitionData` records
+    // `records.sizeInBytes`, the bytes read, whatever the bound. `Log::read`
+    // measures what it returns the same way.
+    let read_bytes: usize = read
+        .batches
+        .iter()
+        .map(RecordBatch::encoded_batch_len)
+        .sum();
     let mut future = future_log.lock().unwrap_or_else(PoisonError::into_inner);
     if reset_for_retention {
         future.reset_to(read.start_offset)?;
@@ -100,6 +117,7 @@ pub(super) fn catch_up(
         future.set_log_start_offset(current_start)?;
     }
     drop(future);
+    throttle.record(u64::try_from(read_bytes).unwrap_or(u64::MAX));
     Ok(CatchUpProgress {
         caught_up: false,
         throttled: false,
@@ -112,13 +130,16 @@ mod tests {
         super::*,
         crate::{
             future_log::test_support::{
-                OpenedFutureLog, fixture_partition, open_future_log, source_fixture,
+                OpenedFutureLog, append_records, fixture_partition, open_future_log,
+                source_fixture,
             },
-            throttle::TokenBucket,
+            test_support::PartitionRecordsSetup,
+            throttle::ReplicationQuota,
         },
         assert2::assert,
         krabka_ids::PartitionIndex,
-        krabka_units::mebibytes,
+        krabka_units::{ByteRate, bytes, bytes_per_sec, convert::ByteRateExt as _, mebibytes},
+        qubit_clock::ManualMonotonicClock,
         std::{path::Path, sync::PoisonError},
         tempfile::tempdir,
     };
@@ -126,7 +147,7 @@ mod tests {
     fn first_catch_up(part: &Arc<Partition>, target: &Path) -> FirstCatchUp {
         let OpenedFutureLog { log: future, .. } = open_future_log(target);
         let progress =
-            catch_up(part, &future, mebibytes(1), &TokenBucket::new()).expect("catch up");
+            catch_up(part, &future, mebibytes(1), &ReplicationQuota::new()).expect("catch up");
         FirstCatchUp { future, progress }
     }
 
@@ -134,6 +155,33 @@ mod tests {
     struct FirstCatchUp {
         future: Arc<Mutex<Log>>,
         progress: CatchUpProgress,
+    }
+
+    /// A source partition of two one-record batches, at offsets 0 and 1.
+    fn two_batch_fixture() -> (Arc<Partition>, tempfile::TempDir, tempfile::TempDir) {
+        let fixture = source_fixture().count(1).call();
+        append_records(&fixture.partition, PartitionRecordsSetup {
+            count: 1.into(),
+            ..Default::default()
+        });
+        (fixture.partition, fixture.primary, fixture.target)
+    }
+
+    /// A move quota on a clock that does not advance, so its measured rate is
+    /// the recorded bytes over Kafka's one-window minimum.
+    fn frozen_quota() -> ReplicationQuota {
+        ReplicationQuota::with_clock(ManualMonotonicClock::new_shared())
+    }
+
+    fn future_leo(future: &Arc<Mutex<Log>>) -> Offset {
+        future
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .log_end_offset()
+    }
+
+    fn progress_flags(progress: &CatchUpProgress) -> (bool, bool) {
+        (progress.caught_up, progress.throttled)
     }
 
     #[tokio::test]
@@ -186,20 +234,66 @@ mod tests {
         let target = fixture.target;
         let part = fixture.partition;
         let OpenedFutureLog { log: future, .. } = open_future_log(target.path());
-        let throttle = TokenBucket::new();
-        throttle
-            .set_byte_rate_with_burst(krabka_units::bytes_per_sec(1024), krabka_units::bytes(0));
+        let throttle = frozen_quota();
+        throttle.set_bound(Some(bytes_per_sec(1024)));
+        throttle.record(10 * 1024);
 
         let progress = catch_up(&part, &future, mebibytes(1), &throttle).expect("catch up");
 
-        assert!(progress.throttled);
-        assert!(!progress.caught_up);
         assert!(
-            future
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .log_end_offset()
-                == Offset(0)
+            (progress_flags(&progress), future_leo(&future), throttle.measured_rate())
+                == ((false, true), Offset(0), bytes_per_sec(10 * 1024))
+        );
+    }
+
+    #[tokio::test]
+    async fn catch_up_within_quota_copies_whole_chunk_and_records_it() {
+        let (part, _primary, target) = two_batch_fixture();
+        let OpenedFutureLog { log: future, .. } = open_future_log(target.path());
+        let throttle = frozen_quota();
+        // A bound far below the chunk: a grant-based meter would copy one
+        // batch at most, Kafka's quota copies the whole fetch.
+        throttle.set_bound(Some(bytes_per_sec(1)));
+
+        let progress = catch_up(&part, &future, mebibytes(1), &throttle).expect("catch up");
+
+        let copied: usize = future
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .read(Offset(0), mebibytes(1))
+            .expect("read future")
+            .batches
+            .iter()
+            .map(RecordBatch::encoded_batch_len)
+            .sum();
+        let copied = i64::try_from(copied).expect("copied bytes");
+        assert!(
+            (progress_flags(&progress), future_leo(&future), throttle.measured_rate())
+                == ((false, false), Offset(2), ByteRate::from_bytes_per_sec(copied))
+        );
+        assert!(throttle.quota_exceeded());
+    }
+
+    #[tokio::test]
+    async fn catch_up_with_zero_bound_copies_one_chunk_then_waits() {
+        let (part, _primary, target) = two_batch_fixture();
+        let OpenedFutureLog { log: future, .. } = open_future_log(target.path());
+        let throttle = frozen_quota();
+        // Kafka accepts a measured rate of 0 under a bound of 0, so the first
+        // fetch goes through and only the bytes it records close the quota.
+        throttle.set_bound(Some(bytes_per_sec(0)));
+
+        let first = catch_up(&part, &future, bytes(1), &throttle).expect("first pass");
+        let after_first = future_leo(&future);
+        let second = catch_up(&part, &future, bytes(1), &throttle).expect("second pass");
+
+        assert!(
+            (
+                progress_flags(&first),
+                after_first,
+                progress_flags(&second),
+                future_leo(&future),
+            ) == ((false, false), Offset(1), (false, true), Offset(1))
         );
     }
 }

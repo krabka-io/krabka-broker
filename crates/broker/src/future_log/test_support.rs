@@ -12,7 +12,7 @@ use {
             PartitionRecordsSetup, RecordCount, open_partition, partition_records_batch,
         },
         testing::single_value_batch,
-        throttle::TokenBucket,
+        throttle::ReplicationQuota,
     },
     bytes::Bytes,
     krabka_ids::PartitionIndex,
@@ -39,7 +39,7 @@ pub(super) fn test_policy() -> MovePolicy {
     MovePolicy {
         retry_backoff: millis(5),
         read_chunk: mebibytes(1),
-        throttle: Arc::new(TokenBucket::new()),
+        throttle: Arc::new(ReplicationQuota::new()),
     }
 }
 

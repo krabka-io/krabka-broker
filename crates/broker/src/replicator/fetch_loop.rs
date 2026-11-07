@@ -521,7 +521,7 @@ mod tests {
         assert2::{assert, check},
         krabka_protocol::primitives::uuid::Uuid as WireUuid,
         krabka_raft::NodeId,
-        krabka_units::{bytes, millis},
+        krabka_units::{bytes, bytes_per_sec, millis},
         std::{collections::BTreeSet, iter, slice, time::Duration},
         tokio::{time, time::Instant},
         tokio_util::sync::CancellationToken,
@@ -538,13 +538,13 @@ mod tests {
         }
     }
 
-    /// A throttled fetcher whose follower-in bucket is empty, so every
+    /// A throttled fetcher whose follower-in quota is exceeded, so every
     /// partition it follows wants a fetch this round and none may have one.
     fn throttled_out() -> ConfigWithDir {
         let (cfg, log_dir) = test_config(image_with_follower_throttle("*"));
-        cfg.throttle_state
-            .follower_in
-            .set_byte_rate_with_burst(krabka_units::bytes_per_sec(1024), bytes(0));
+        let quota = &cfg.throttle_state.follower_in;
+        quota.set_bound(Some(bytes_per_sec(1024)));
+        quota.record(10_240);
         ConfigWithDir { cfg, dir: log_dir }
     }
 
