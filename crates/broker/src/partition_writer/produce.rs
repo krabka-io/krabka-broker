@@ -312,13 +312,19 @@ fn fail_group<T>(acks: Vec<Ack>, error: &BrokerError) -> Option<T> {
 
 /// One job's copy of its group's failure. `BrokerError` is not `Clone`. A
 /// group fails with a storage error or a [`RaftError::NotLeader`], and both
-/// copy exactly: the same variant, I/O kind and text.
+/// copy with the same variant, I/O kind and text. Any other error becomes a
+/// storage failure that carries its text.
 fn repeat_failure(error: &BrokerError) -> BrokerError {
     match error {
         BrokerError::Log(LogError::Io(io)) => {
             BrokerError::Log(LogError::Io(io::Error::new(io.kind(), io.to_string())))
         }
-        other => reservation_failure(other),
+        BrokerError::Raft(RaftError::NotLeader { current_leader }) => {
+            BrokerError::Raft(RaftError::NotLeader {
+                current_leader: *current_leader,
+            })
+        }
+        other => storage_failure_error("produce group failed", other),
     }
 }
 
@@ -377,9 +383,8 @@ mod tests {
         std::iter,
     };
 
-    /// Every job of a failed group gets the group's own failure, so the
-    /// detail of a storage error, such as the panic message of an append
-    /// task, reaches each caller.
+    /// Each job's copy of a group's failure keeps the failure's variant and
+    /// text, so the detail of a storage error reaches every caller.
     #[test]
     fn each_job_of_a_failed_group_gets_a_copy_of_its_failure() {
         let storage = storage_failure_error("append task panicked", "task 7 panicked: boom");
@@ -398,6 +403,15 @@ mod tests {
                 current_leader: Some(NodeId(3))
             })
         ));
+
+        let other = BrokerError::UnsupportedApi {
+            api_key: 123,
+            version: 0,
+        };
+        check!(
+            repeat_failure(&other).to_string()
+                == "log: I/O: produce group failed: unsupported api_key=123 version=0"
+        );
     }
 
     #[tokio::test]
