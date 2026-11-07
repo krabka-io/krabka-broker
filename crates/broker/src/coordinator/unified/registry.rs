@@ -8,7 +8,7 @@
 
 use {
     super::{
-        actor::{self, GroupActorHandle, GroupActorMessage, GroupKindTag},
+        actor::{GroupActorHandle, GroupActorMessage, GroupKindTag},
         group::CoordinatorGroup,
         group_coordinator::{GroupCoordinator, GroupType},
         seeds::{GroupSeed, ShareGroupSeed, StreamsGroupSeed},
@@ -16,7 +16,7 @@ use {
         streams::actor::{StreamsGroupActorHandle, StreamsGroupActorMessage},
     },
     dashmap::{DashMap, Entry},
-    std::{hash::BuildHasher, sync::Arc},
+    std::{convert::identity, hash::BuildHasher, sync::Arc},
     tokio::sync::mpsc::error::TrySendError,
 };
 
@@ -44,11 +44,12 @@ fn undelivered<T>(error: &TrySendError<T>) -> TrySendError<()> {
     }
 }
 
-/// What hydrates a respawned group actor: the cached state of a consumer
-/// group, or the respawn seed that the stopped actor left, which the fresh
-/// actor takes itself.
+/// What hydrates a group actor: the cached or replayed state of a consumer
+/// group, a classic group replayed at bootstrap, or the respawn seed that the
+/// stopped actor left, which the fresh actor takes itself.
 enum GroupActorSeed {
     Consumer(Box<GroupSeed>),
+    Classic(Box<CoordinatorGroup>),
     Respawn,
 }
 
@@ -61,6 +62,7 @@ impl RegisteredActor for GroupActorHandle {
         self.tx
             .try_send(match seed {
                 GroupActorSeed::Consumer(seed) => GroupActorMessage::Seed(*seed),
+                GroupActorSeed::Classic(group) => GroupActorMessage::ClassicSeed(group),
                 GroupActorSeed::Respawn => GroupActorMessage::Respawn,
             })
             .map_err(|error| undelivered(&error))
@@ -427,30 +429,40 @@ impl GroupCoordinator {
     /// bootstrap.
     pub fn seed_classic(self: &Arc<Self>, group_id: &str, group: Box<CoordinatorGroup>) {
         let handle = self.get_or_create_classic(group_id);
-        let _ = handle.tx.try_send(GroupActorMessage::ClassicSeed(group));
+        let _ = handle.try_seed(GroupActorSeed::Classic(group));
     }
 
     pub fn finalize_bootstrap(self: &Arc<Self>) {
-        let group_ids: Vec<String> = self.seeds.iter().map(|e| e.key().clone()).collect();
-        for gid in group_ids {
-            if let Some((_, seed)) = self.seeds.remove(&gid) {
-                let handle = self.get_or_create_consumer(&gid);
-                let _ = handle.tx.try_send(actor::GroupActorMessage::Seed(seed));
-            }
-        }
-        let share_ids: Vec<String> = self.share_seeds.iter().map(|e| e.key().clone()).collect();
-        for gid in share_ids {
-            if let Some((_, seed)) = self.share_seeds.remove(&gid) {
-                let handle = self.get_or_create_share(&gid);
-                let _ = handle.tx.try_send(ShareGroupActorMessage::Seed(seed));
-            }
-        }
-        let streams_ids: Vec<String> = self.streams_seeds.iter().map(|e| e.key().clone()).collect();
-        for gid in streams_ids {
-            if let Some((_, seed)) = self.streams_seeds.remove(&gid) {
-                let handle = self.get_or_create_streams(&gid);
-                let _ = handle.tx.try_send(StreamsGroupActorMessage::Seed(seed));
-            }
+        drain_seeds(
+            &self.seeds,
+            |group_id| self.get_or_create_consumer(group_id),
+            |seed| GroupActorSeed::Consumer(Box::new(seed)),
+        );
+        drain_seeds(
+            &self.share_seeds,
+            |group_id| self.get_or_create_share(group_id),
+            identity,
+        );
+        drain_seeds(
+            &self.streams_seeds,
+            |group_id| self.get_or_create_streams(group_id),
+            identity,
+        );
+    }
+}
+
+/// Removes each seed that `seeds` holds and hands it, as `into_seed` wraps
+/// it, to the actor that `get_or_create` returns for its group.
+fn drain_seeds<T, H: RegisteredActor>(
+    seeds: &DashMap<String, T>,
+    get_or_create: impl Fn(&str) -> Arc<H>,
+    into_seed: impl Fn(T) -> H::Seed,
+) {
+    let group_ids: Vec<String> = seeds.iter().map(|e| e.key().clone()).collect();
+    for group_id in group_ids {
+        if let Some((_, seed)) = seeds.remove(&group_id) {
+            let handle = get_or_create(&group_id);
+            let _ = handle.try_seed(into_seed(seed));
         }
     }
 }
