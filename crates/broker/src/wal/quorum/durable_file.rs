@@ -94,15 +94,43 @@ mod tests {
         backup: PathBuf,
     }
 
-    fn sidecar() -> Sidecar {
+    impl Sidecar {
+        /// Replaces the sidecar with `b"new"` through `rename`.
+        fn replace_new(
+            &self,
+            rename: impl FnMut(&Path, &Path) -> io::Result<()>,
+        ) -> io::Result<()> {
+            replace_file_durably_with(&self.path, &self.temporary, &self.backup, b"new", rename)
+        }
+
+        fn on_disk(&self) -> OnDisk {
+            let read = |path: &Path| fs::read(path).ok();
+            OnDisk {
+                path: read(&self.path),
+                temporary: read(&self.temporary),
+                backup: read(&self.backup),
+            }
+        }
+    }
+
+    /// A sidecar whose primary and backup start with the given bytes, or
+    /// absent where none are given.
+    #[bon::builder]
+    fn sidecar(primary: Option<&[u8]>, backup: Option<&[u8]>) -> Sidecar {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("sidecar");
-        Sidecar {
+        let sidecar = Sidecar {
+            path: dir.path().join("sidecar"),
             temporary: dir.path().join("sidecar.tmp"),
             backup: dir.path().join("sidecar.bak"),
-            path,
             _dir: dir,
+        };
+        if let Some(primary) = primary {
+            fs::write(&sidecar.path, primary).unwrap();
         }
+        if let Some(backup) = backup {
+            fs::write(&sidecar.backup, backup).unwrap();
+        }
+        sidecar
     }
 
     /// What each of the three paths holds, `None` where there is no file.
@@ -113,15 +141,6 @@ mod tests {
         backup: Option<Vec<u8>>,
     }
 
-    fn on_disk(sidecar: &Sidecar) -> OnDisk {
-        let read = |path: &Path| fs::read(path).ok();
-        OnDisk {
-            path: read(&sidecar.path),
-            temporary: read(&sidecar.temporary),
-            backup: read(&sidecar.backup),
-        }
-    }
-
     #[yare::parameterized(
         first_write = { None, None },
         replaces_the_primary = { Some(b"old".as_slice()), None },
@@ -129,19 +148,13 @@ mod tests {
         promotes_a_lone_backup = { None, Some(b"backup".as_slice()) },
     )]
     fn replace_leaves_only_the_new_primary(primary: Option<&[u8]>, backup: Option<&[u8]>) {
-        let sidecar = sidecar();
-        if let Some(primary) = primary {
-            fs::write(&sidecar.path, primary).unwrap();
-        }
-        if let Some(backup) = backup {
-            fs::write(&sidecar.backup, backup).unwrap();
-        }
+        let sidecar = sidecar().maybe_primary(primary).maybe_backup(backup).call();
         fs::write(&sidecar.temporary, b"incomplete").unwrap();
 
         replace_file_durably(&sidecar.path, &sidecar.temporary, &sidecar.backup, b"new").unwrap();
 
         assert2::assert!(
-            on_disk(&sidecar)
+            sidecar.on_disk()
                 == OnDisk {
                     path: Some(b"new".to_vec()),
                     temporary: None,
@@ -162,60 +175,41 @@ mod tests {
         primary: Option<&[u8]>,
         backup: Option<&[u8]>,
     ) {
-        let sidecar = sidecar();
-        if let Some(primary) = primary {
-            fs::write(&sidecar.path, primary).unwrap();
-        }
-        if let Some(backup) = backup {
-            fs::write(&sidecar.backup, backup).unwrap();
-        }
+        let sidecar = sidecar().maybe_primary(primary).maybe_backup(backup).call();
         let previous = primary.or(backup).unwrap().to_vec();
         let mut renames = 0;
         let mut readable_at_crash = None;
 
-        let result = replace_file_durably_with(
-            &sidecar.path,
-            &sidecar.temporary,
-            &sidecar.backup,
-            b"new",
-            |from, to| {
-                if renames == crash_at {
-                    let disk = on_disk(&sidecar);
-                    readable_at_crash = Some(disk.path.or(disk.backup));
-                    return Err(io::Error::other("crash"));
-                }
-                renames += 1;
-                fs::rename(from, to)
-            },
-        );
+        let result = sidecar.replace_new(|from, to| {
+            if renames == crash_at {
+                let disk = sidecar.on_disk();
+                readable_at_crash = Some(disk.path.or(disk.backup));
+                return Err(io::Error::other("crash"));
+            }
+            renames += 1;
+            fs::rename(from, to)
+        });
 
         assert2::assert!(result.unwrap_err().to_string() == "crash");
         assert2::assert!(readable_at_crash == Some(Some(previous.clone())));
-        let disk = on_disk(&sidecar);
+        let disk = sidecar.on_disk();
         assert2::assert!(disk.path.or(disk.backup) == Some(previous));
     }
 
     #[test]
     fn a_failed_final_rename_puts_the_backup_back() {
-        let sidecar = sidecar();
-        fs::write(&sidecar.path, b"old").unwrap();
+        let sidecar = sidecar().primary(b"old").call();
 
-        let result = replace_file_durably_with(
-            &sidecar.path,
-            &sidecar.temporary,
-            &sidecar.backup,
-            b"new",
-            |from, to| {
-                if from == sidecar.temporary {
-                    return Err(io::Error::other("final rename failed"));
-                }
-                fs::rename(from, to)
-            },
-        );
+        let result = sidecar.replace_new(|from, to| {
+            if from == sidecar.temporary {
+                return Err(io::Error::other("final rename failed"));
+            }
+            fs::rename(from, to)
+        });
 
         assert!(result.unwrap_err().to_string() == "final rename failed");
         assert!(
-            on_disk(&sidecar)
+            sidecar.on_disk()
                 == OnDisk {
                     path: Some(b"old".to_vec()),
                     temporary: Some(b"new".to_vec()),
@@ -226,26 +220,19 @@ mod tests {
 
     #[test]
     fn a_failed_final_rename_keeps_a_primary_that_landed() {
-        let sidecar = sidecar();
-        fs::write(&sidecar.path, b"old").unwrap();
+        let sidecar = sidecar().primary(b"old").call();
 
-        let result = replace_file_durably_with(
-            &sidecar.path,
-            &sidecar.temporary,
-            &sidecar.backup,
-            b"new",
-            |from, to| {
-                fs::rename(from, to)?;
-                if to == sidecar.path {
-                    return Err(io::Error::other("rename reported failure after landing"));
-                }
-                Ok(())
-            },
-        );
+        let result = sidecar.replace_new(|from, to| {
+            fs::rename(from, to)?;
+            if to == sidecar.path {
+                return Err(io::Error::other("rename reported failure after landing"));
+            }
+            Ok(())
+        });
 
         assert!(result.is_err());
         assert!(
-            on_disk(&sidecar)
+            sidecar.on_disk()
                 == OnDisk {
                     path: Some(b"new".to_vec()),
                     temporary: None,
