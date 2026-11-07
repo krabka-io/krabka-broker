@@ -206,9 +206,8 @@ pub(super) async fn run_loop(
             &config.bootstrap_servers,
         );
         let Some((target, addr)) = cursor.pick(&targets).cloned() else {
-            tokio::select! {
-                () = shutdown.cancelled() => return,
-                held = park(&config) => if !held { return; },
+            if !park_or_stop(&config, &shutdown).await {
+                return;
             }
             continue;
         };
@@ -282,9 +281,8 @@ pub(super) async fn run_loop(
                 );
             }
             if new_offset == fetch_offset {
-                tokio::select! {
-                    () = shutdown.cancelled() => return,
-                    held = park(&config) => if !held { return; },
+                if !park_or_stop(&config, &shutdown).await {
+                    return;
                 }
             } else {
                 fetch_offset = new_offset;
