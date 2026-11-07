@@ -3,8 +3,11 @@
 //! table on the table's columns, and one failure reports every differing,
 //! missing and extra row.
 
+mod datatable;
+
 use {
     assert2::assert,
+    datatable::table,
     krabka_bdd::{
         Given, TableRow,
         table::{self, RowDiff, TableMismatch},
@@ -21,21 +24,25 @@ struct Partition {
     leader_epoch: Option<i32>,
 }
 
-fn table(text: &str) -> Vec<Vec<String>> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            let inner = line.strip_prefix('|').unwrap().strip_suffix('|').unwrap();
-            inner
-                .split('|')
-                .map(|cell| cell.trim().to_owned())
-                .collect()
-        })
-        .collect()
+fn cells(row: &[&str]) -> Vec<String> { row.iter().map(ToString::to_string).collect() }
+
+/// A mismatch over the topic and partition columns, rows in their own order.
+fn mismatch(rows: Vec<RowDiff>) -> TableMismatch {
+    TableMismatch {
+        columns: cells(&["topic", "partition"]),
+        rows,
+        reordered: false,
+        unknown_columns: vec![],
+    }
 }
 
-fn cells(row: &[&str]) -> Vec<String> { row.iter().map(ToString::to_string).collect() }
+/// A row that matches, with its two cells.
+fn same(row: usize, two: [&str; 2]) -> RowDiff {
+    RowDiff::Same {
+        row,
+        cells: cells(&two),
+    }
+}
 
 fn partition(topic: &str, number: u32, leader_epoch: Option<i32>) -> Partition {
     Partition {
@@ -87,20 +94,15 @@ fn compare_accepts_no_rows_against_a_header_only_table() {
      | orders   | 0         |
      | orders   | 2         |
      | payments | 0         |",
-    TableMismatch {
-        columns: cells(&["topic", "partition"]),
-        rows: vec![
-            RowDiff::Same { row: 2, cells: cells(&["orders", "0"]) },
+    mismatch(vec![
+            same(2, ["orders", "0"]),
             RowDiff::Differs {
                 row: 3,
                 expected: cells(&["orders", "2"]),
                 actual: cells(&["orders", "1"]),
             },
-            RowDiff::Same { row: 4, cells: cells(&["payments", "0"]) },
-        ],
-        reordered: false,
-        unknown_columns: vec![],
-    },
+            same(4, ["payments", "0"]),
+    ]),
 )]
 #[case::missing_row(
     "| topic    | partition |
@@ -108,32 +110,22 @@ fn compare_accepts_no_rows_against_a_header_only_table() {
      | orders   | 1         |
      | payments | 0         |
      | payments | 1         |",
-    TableMismatch {
-        columns: cells(&["topic", "partition"]),
-        rows: vec![
-            RowDiff::Same { row: 2, cells: cells(&["orders", "0"]) },
-            RowDiff::Same { row: 3, cells: cells(&["orders", "1"]) },
-            RowDiff::Same { row: 4, cells: cells(&["payments", "0"]) },
+    mismatch(vec![
+            same(2, ["orders", "0"]),
+            same(3, ["orders", "1"]),
+            same(4, ["payments", "0"]),
             RowDiff::Missing { row: 5, expected: cells(&["payments", "1"]) },
-        ],
-        reordered: false,
-        unknown_columns: vec![],
-    },
+    ]),
 )]
 #[case::extra_row(
     "| topic  | partition |
      | orders | 0         |
      | orders | 1         |",
-    TableMismatch {
-        columns: cells(&["topic", "partition"]),
-        rows: vec![
-            RowDiff::Same { row: 2, cells: cells(&["orders", "0"]) },
-            RowDiff::Same { row: 3, cells: cells(&["orders", "1"]) },
+    mismatch(vec![
+            same(2, ["orders", "0"]),
+            same(3, ["orders", "1"]),
             RowDiff::Extra { row: 4, actual: cells(&["payments", "0"]) },
-        ],
-        reordered: false,
-        unknown_columns: vec![],
-    },
+    ]),
 )]
 #[case::reordered(
     "| topic    | partition |
@@ -141,8 +133,8 @@ fn compare_accepts_no_rows_against_a_header_only_table() {
      | orders   | 0         |
      | orders   | 1         |",
     TableMismatch {
-        columns: cells(&["topic", "partition"]),
-        rows: vec![
+        reordered: true,
+        ..mismatch(vec![
             RowDiff::Differs {
                 row: 2,
                 expected: cells(&["payments", "0"]),
@@ -158,9 +150,7 @@ fn compare_accepts_no_rows_against_a_header_only_table() {
                 expected: cells(&["orders", "1"]),
                 actual: cells(&["payments", "0"]),
             },
-        ],
-        reordered: true,
-        unknown_columns: vec![],
+        ])
     },
 )]
 #[case::unknown_column(

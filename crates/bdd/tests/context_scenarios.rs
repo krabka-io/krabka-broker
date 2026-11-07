@@ -6,12 +6,13 @@
 //! record counts. If they shared state, whichever ran second would count the
 //! other's records too.
 
+mod panics;
+
 use {
     assert2::assert,
     krabka_bdd::{Given, Ref, ScenarioContext},
+    panics::panic_of,
     rstest::rstest,
-    rstest_bdd::panic_message,
-    std::panic::{AssertUnwindSafe, catch_unwind},
 };
 
 #[derive(ScenarioContext)]
@@ -95,11 +96,6 @@ fn set_then_the_returns_the_value() {
     scenario.set_appended(2);
     *scenario.the_appended_mut() += 1;
     assert!((*scenario.the_partitions(), *scenario.the_appended()) == (3, 3));
-}
-
-fn panic_of(read: impl FnOnce()) -> String {
-    let payload = catch_unwind(AssertUnwindSafe(read)).expect_err("the read panics");
-    panic_message(payload.as_ref())
 }
 
 #[rstest]

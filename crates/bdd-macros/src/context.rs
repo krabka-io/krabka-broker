@@ -236,8 +236,9 @@ pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
 mod tests {
     use {
         super::{expand, names_given, starts_with_keyword},
+        crate::table_row::expanded,
         assert2::assert,
-        moxy::{ast::ItemStruct, token::TokenStream},
+        moxy::token::TokenStream,
         rstest::rstest,
     };
 
@@ -265,10 +266,7 @@ mod tests {
         assert!(names_given(&tokens) == expected);
     }
 
-    fn expand_source(source: &str) -> Result<TokenStream, String> {
-        let item: ItemStruct = moxy::parse!({ source }).map_err(|error| error.to_string())?;
-        expand(item).map_err(|error| error.to_string())
-    }
+    fn expand_source(source: &str) -> Result<TokenStream, String> { expanded(expand, source) }
 
     #[rstest]
     #[case::slots("struct Ctx { #[introduced_by(\"Given a topic\")] topic: Given<u32> }")]

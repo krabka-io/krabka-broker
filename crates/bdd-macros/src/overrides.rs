@@ -5,7 +5,7 @@
 //! [`columns`]. `-` sets an `Option` field to `None`.
 
 use {
-    crate::table_row::columns,
+    crate::table_row::{Column, derive_impls},
     moxy::{
         ast::{ItemStruct, ParseError},
         token::TokenStream,
@@ -14,16 +14,19 @@ use {
 
 /// Expands `#[derive(Overrides)]` on `item`.
 pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
-    let fields = columns(&item, "Overrides")?;
-    let ItemStruct {
-        ident, generics, ..
-    } = item;
-    let (impl_generics, type_generics, where_clause) = generics.split();
-    Ok(moxy::template! {
-        #[automatically_derived]
-        impl {{ impl_generics }} ::krabka_bdd::Overrides for {{ ident }} {{ type_generics }} {{ where_clause }} {
+    derive_impls(item, "Overrides", |fields| {
+        vec![(
+            moxy::template! { ::krabka_bdd::Overrides },
+            overrides_body(fields),
+        )]
+    })
+}
+
+/// The items of `impl Overrides`.
+fn overrides_body(fields: &[Column]) -> TokenStream {
+    moxy::template! {
             const FIELDS: &'static [&'static str] = &[
-                @for field in &fields { {{ field.name }}, }
+                @for field in fields { {{ field.name }}, }
             ];
 
             fn apply(
@@ -32,7 +35,7 @@ pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
                 value: &str,
             ) -> ::core::result::Result<(), ::krabka_bdd::TableError> {
                 match field {
-                    @for field in &fields {
+                    @for field in fields {
                         {{ field.name }} => {
                             self.{{ field.ident }} = @if field.optional {
                                 ::krabka_bdd::__private::optional_field({{ field.name }}, value)?
@@ -49,23 +52,17 @@ pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
                 }
                 ::core::result::Result::Ok(())
             }
-        }
-    })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use {
-        super::expand,
-        assert2::assert,
-        moxy::{ast::ItemStruct, token::TokenStream},
+        super::expand, crate::table_row::expanded, assert2::assert, moxy::token::TokenStream,
         rstest::rstest,
     };
 
-    fn expand_source(source: &str) -> Result<TokenStream, String> {
-        let item: ItemStruct = moxy::parse!({ source }).map_err(|error| error.to_string())?;
-        expand(item).map_err(|error| error.to_string())
-    }
+    fn expand_source(source: &str) -> Result<TokenStream, String> { expanded(expand, source) }
 
     #[rstest]
     #[case::plain("struct Request { name: String, partitions: u32 }")]

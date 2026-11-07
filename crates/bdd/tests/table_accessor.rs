@@ -3,8 +3,11 @@
 //! tables into typed rows, and refuses a table that does not fit with a
 //! message naming the row, the column and the value.
 
+mod datatable;
+
 use {
     assert2::assert,
+    datatable::table,
     krabka_bdd::{
         Attempt, Given, TableError, TableRow,
         table::{self, TableCells},
@@ -30,20 +33,6 @@ struct Topic {
 
 const PARTITION_COLUMNS: &[&str] = &["topic", "partition", "leader epoch"];
 const TOPIC_COLUMNS: &[&str] = &["name", "partitions", "replication factor"];
-
-fn table(text: &str) -> Vec<Vec<String>> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            let inner = line.strip_prefix('|').unwrap().strip_suffix('|').unwrap();
-            inner
-                .split('|')
-                .map(|cell| cell.trim().to_owned())
-                .collect()
-        })
-        .collect()
-}
 
 fn partition(topic: &str, number: u32, leader_epoch: Option<i32>) -> Partition {
     Partition {

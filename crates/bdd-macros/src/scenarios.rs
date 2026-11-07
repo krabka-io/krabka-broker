@@ -288,52 +288,51 @@ fn fixtures(argument: &Argument) -> Result<Vec<Fixture>, ParseError> {
             "`fixtures` must be `[name: Type, ..]`",
         )
     };
-    let [TokenTree::Group(group)] = value_tokens(argument) else {
-        return Err(malformed());
-    };
-    split_top_level(group.tokens.clone().into_iter())
-        .into_iter()
-        .map(|entry| match entry.as_slice() {
-            [TokenTree::Ident(name), TokenTree::Punct(colon), ty @ ..]
-                if colon.as_str() == ":" && !ty.is_empty() =>
-            {
-                Ok(Fixture {
-                    name: name.text().to_owned(),
-                    ty: ty.iter().cloned().collect(),
-                })
-            }
-            _ => Err(malformed()),
-        })
+    list_entries(argument, malformed)?
+        .iter()
+        .map(|entry| fixture_entry(entry).ok_or_else(malformed))
         .collect()
 }
 
 /// The entry of `driver = name: Type`.
 fn driver(argument: &Argument) -> Result<Fixture, ParseError> {
-    match value_tokens(argument) {
+    fixture_entry(value_tokens(argument))
+        .ok_or_else(|| ParseError::new(first_span(argument), "`driver` must be `name: Type`"))
+}
+
+/// `name: Type` as a fixture, if `tokens` has that shape.
+fn fixture_entry(tokens: &[TokenTree]) -> Option<Fixture> {
+    match tokens {
         [TokenTree::Ident(name), TokenTree::Punct(colon), ty @ ..]
             if colon.as_str() == ":" && !ty.is_empty() =>
         {
-            Ok(Fixture {
+            Some(Fixture {
                 name: name.text().to_owned(),
                 ty: ty.iter().cloned().collect(),
             })
         }
-        _ => Err(ParseError::new(
-            first_span(argument),
-            "`driver` must be `name: Type`",
-        )),
+        _ => None,
     }
+}
+
+/// The comma-separated entries of a bracketed argument value, or
+/// `malformed()` when the value is not one bracketed group.
+fn list_entries(
+    argument: &Argument,
+    malformed: impl Fn() -> ParseError,
+) -> Result<Vec<Vec<TokenTree>>, ParseError> {
+    let [TokenTree::Group(group)] = value_tokens(argument) else {
+        return Err(malformed());
+    };
+    Ok(split_top_level(group.tokens.clone().into_iter()))
 }
 
 /// The identifiers of `name = [a, b, ..]`.
 fn idents(argument: &Argument, what: &str) -> Result<Vec<String>, ParseError> {
     let malformed =
         || ParseError::new(first_span(argument), format!("{what} must be `[name, ..]`"));
-    let [TokenTree::Group(group)] = value_tokens(argument) else {
-        return Err(malformed());
-    };
-    split_top_level(group.tokens.clone().into_iter())
-        .into_iter()
+    list_entries(argument, malformed)?
+        .iter()
         .map(|entry| match entry.as_slice() {
             [TokenTree::Ident(name)] => Ok(name.text().to_owned()),
             _ => Err(malformed()),

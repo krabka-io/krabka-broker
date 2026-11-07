@@ -7,10 +7,11 @@
 //! way, through [`columns`].
 
 use {
+    crate::step_param::string_literals,
     moxy::{
         ast::{
-            Attributed, FromMeta, GenericArgument, ItemStruct, List, Meta, MetaContent, ParseError,
-            Parser, PathArguments, Token, Type,
+            Attributed, FromMeta, GenericArgument, ItemStruct, Meta, ParseError, PathArguments,
+            Type,
         },
         token::{Ident, LitStr, Spanner, TokenStream},
     },
@@ -31,14 +32,8 @@ impl FromMeta for ColumnName {
                 "expected `#[column(\"name\")]`: one string literal",
             )
         };
-        let MetaContent::List(group) = &meta.content else {
-            return Err(malformed());
-        };
-        let parser = Parser::from_tokens(&group.tokens);
-        let list = List::<LitStr, Token![,]>::parse_all(&parser).map_err(|_| malformed())?;
-        let mut names = list.iter().cloned();
-        match (names.next(), names.next()) {
-            (Some(name), None) => Ok(Self(name)),
+        match string_literals(meta, malformed)?.as_slice() {
+            [name] => Ok(Self(name.clone())),
             _ => Err(malformed()),
         }
     }
@@ -137,16 +132,55 @@ pub fn columns(item: &ItemStruct, derive: &str) -> Result<Vec<Column>, ParseErro
 
 /// Expands `#[derive(TableRow)]` on `item`.
 pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
-    let columns = columns(&item, "TableRow")?;
+    derive_impls(item, "TableRow", |columns| {
+        vec![
+            (
+                moxy::template! { ::krabka_bdd::TableRow },
+                table_row_body(columns),
+            ),
+            (
+                moxy::template! { ::krabka_bdd::table::TableCells },
+                table_cells_body(columns),
+            ),
+        ]
+    })
+}
+
+/// One `#[automatically_derived] impl Trait for Item` per `(Trait, body)`
+/// that `impls` builds from the struct's columns, with the struct's generics.
+///
+/// # Errors
+///
+/// Returns what [`columns`] rejects.
+pub fn derive_impls(
+    item: ItemStruct,
+    derive: &str,
+    impls: impl FnOnce(&[Column]) -> Vec<(TokenStream, TokenStream)>,
+) -> Result<TokenStream, ParseError> {
+    let columns = columns(&item, derive)?;
     let ItemStruct {
         ident, generics, ..
     } = item;
     let (impl_generics, type_generics, where_clause) = generics.split();
-    Ok(moxy::template! {
-        #[automatically_derived]
-        impl {{ impl_generics }} ::krabka_bdd::TableRow for {{ ident }} {{ type_generics }} {{ where_clause }} {
+    let impls: Vec<TokenStream> = impls(&columns)
+        .into_iter()
+        .map(|(trait_path, body)| {
+            moxy::template! {
+                #[automatically_derived]
+                impl {{ impl_generics }} {{ trait_path }} for {{ ident }} {{ type_generics }} {{ where_clause }} {
+                    {{ body }}
+                }
+            }
+        })
+        .collect();
+    Ok(moxy::template! { @for derived in &impls { {{ derived }} } })
+}
+
+/// The items of `impl TableRow`.
+fn table_row_body(columns: &[Column]) -> TokenStream {
+    moxy::template! {
             const COLUMNS: &'static [&'static str] = &[
-                @for column in &columns { {{ column.name }}, }
+                @for column in columns { {{ column.name }}, }
             ];
 
             fn from_row(
@@ -155,7 +189,7 @@ pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
             ) -> ::core::result::Result<Self, ::krabka_bdd::TableError> {
                 let row = ::krabka_bdd::__private::RowCells::new(headers, cells, Self::COLUMNS)?;
                 ::core::result::Result::Ok(Self {
-                    @for column in &columns {
+                    @for column in columns {
                         {{ column.ident }}: @if column.optional {
                             row.optional({{ column.name }})?
                         } @else {
@@ -164,13 +198,15 @@ pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
                     }
                 })
             }
-        }
+    }
+}
 
-        #[automatically_derived]
-        impl {{ impl_generics }} ::krabka_bdd::table::TableCells for {{ ident }} {{ type_generics }} {{ where_clause }} {
+/// The items of `impl TableCells`.
+fn table_cells_body(columns: &[Column]) -> TokenStream {
+    moxy::template! {
             fn cell(&self, column: &str) -> ::core::option::Option<::std::string::String> {
                 match column {
-                    @for column in &columns {
+                    @for column in columns {
                         {{ column.name }} => ::core::option::Option::Some(
                             @if column.optional {
                                 ::krabka_bdd::__private::optional_cell(&self.{{ column.ident }})
@@ -182,16 +218,26 @@ pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
                     _ => ::core::option::Option::None,
                 }
             }
-        }
-    })
+    }
+}
+
+/// What `expand` makes of `source`, with any error as text, for the derive
+/// tests.
+#[cfg(test)]
+pub fn expanded(
+    expand: impl FnOnce(ItemStruct) -> Result<TokenStream, ParseError>,
+    source: &str,
+) -> Result<TokenStream, String> {
+    let item: ItemStruct = moxy::parse!({ source }).map_err(|error| error.to_string())?;
+    expand(item).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use {
-        super::{column_name, expand},
+        super::{column_name, expand, expanded},
         assert2::assert,
-        moxy::{ast::ItemStruct, token::TokenStream},
+        moxy::token::TokenStream,
         rstest::rstest,
     };
 
@@ -205,10 +251,7 @@ mod tests {
         assert!(column_name(ident) == expected);
     }
 
-    fn expand_source(source: &str) -> Result<TokenStream, String> {
-        let item: ItemStruct = moxy::parse!({ source }).map_err(|error| error.to_string())?;
-        expand(item).map_err(|error| error.to_string())
-    }
+    fn expand_source(source: &str) -> Result<TokenStream, String> { expanded(expand, source) }
 
     #[rstest]
     #[case::plain("struct Row { name: String, partitions: u32 }")]

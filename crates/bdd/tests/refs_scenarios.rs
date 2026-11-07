@@ -3,12 +3,13 @@
 //! one introduced last, "the topic orders" finds one by name, and "the oldest
 //! segment" applies a registered selector.
 
+mod panics;
+
 use {
     assert2::assert,
     krabka_bdd::{Given, Ref, ScenarioContext},
+    panics::panic_of,
     rstest::rstest,
-    rstest_bdd::panic_message,
-    std::panic::{AssertUnwindSafe, catch_unwind},
 };
 
 #[derive(ScenarioContext)]
@@ -89,11 +90,6 @@ krabka_bdd::scenarios!(
     "tests/features/refs_scenarios",
     fixtures = [cluster: ClusterScenario],
 );
-
-fn panic_of(step: impl FnOnce()) -> String {
-    let payload = catch_unwind(AssertUnwindSafe(step)).expect_err("the step panics");
-    panic_message(payload.as_ref())
-}
 
 #[rstest]
 #[case::the_topic_without_a_topic(

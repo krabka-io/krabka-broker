@@ -33,19 +33,18 @@ impl TopicDriver for InProcess {
     }
 }
 
-/// Stands in for a client speaking the Kafka protocol to a broker.
+/// Stands in for a client speaking the Kafka protocol to a broker. It keeps
+/// the same registry, so only how a listing arrives differs.
 #[derive(Default)]
-struct Wire {
-    topics: Vec<String>,
-}
+struct Wire(InProcess);
 
 impl TopicDriver for Wire {
-    fn create(&mut self, name: &str) { self.topics.push(name.to_owned()); }
+    fn create(&mut self, name: &str) { self.0.create(name); }
 
     fn list(&mut self) -> Listing {
         Listing {
-            topics: self.topics.clone(),
             over_wire: true,
+            ..self.0.list()
         }
     }
 }

@@ -7,8 +7,11 @@
 //! defaults, and named Object Mothers on top of it. A step overrides only
 //! what its scenario's rule needs.
 
+mod datatable;
+
 use {
     assert2::assert,
+    datatable::table,
     krabka_bdd::{
         Given, Overrides, TableError,
         overrides::{self, apply_table},
@@ -103,20 +106,6 @@ fn validate(request: &TopicRequest) -> Result<(), Invalid> {
         }
         _ => Ok(()),
     }
-}
-
-fn table(text: &str) -> Vec<Vec<String>> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            let inner = line.strip_prefix('|').unwrap().strip_suffix('|').unwrap();
-            inner
-                .split('|')
-                .map(|cell| cell.trim().to_owned())
-                .collect()
-        })
-        .collect()
 }
 
 #[test]
