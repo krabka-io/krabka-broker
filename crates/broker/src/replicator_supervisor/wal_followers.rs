@@ -8,7 +8,7 @@ use {
     super::{
         LeaderEndpoint, ReplicatorSupervisor, WalFollowerSpec, WalFollowerTask,
         resolve_leader_endpoint,
-        task_stop::{TASK_STOP_TIMEOUT, stop_tasks},
+        task_stop::{StoppingTask, TASK_STOP_TIMEOUT, stop_tasks},
     },
     crate::{
         config_keys::resolve_diskless,
@@ -86,7 +86,7 @@ impl ReplicatorSupervisor {
                 .wal_task_targets
                 .remove(&shard)
                 .map(|(_, target)| target);
-            stop_tasks([(task.shutdown, task.handle)], TASK_STOP_TIMEOUT).await;
+            stop_tasks([StoppingTask::wal_follower(shard, task)], TASK_STOP_TIMEOUT).await;
             if !self.wal_shards.local_is_voter(shard)
                 && let Some(target) = target
             {

@@ -2,6 +2,8 @@
 //! diskless WAL followers.
 
 use {
+    super::{FetcherKey, FetcherTask, WalFollowerTask},
+    crate::wal::quorum::registry::ShardId,
     std::time::Duration,
     tokio::{task::JoinHandle, time},
     tokio_util::sync::CancellationToken,
@@ -12,25 +14,55 @@ use {
 /// before it aborts the ones still running.
 pub(super) const TASK_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// A replica task to stop: the name its log lines carry, the token that asks
+/// it to stop, and its handle.
+pub(super) struct StoppingTask {
+    pub(super) label: String,
+    pub(super) shutdown: CancellationToken,
+    pub(super) handle: JoinHandle<()>,
+}
+
+impl StoppingTask {
+    pub(super) fn fetcher(key: FetcherKey, task: FetcherTask) -> Self {
+        Self {
+            label: format!("fetcher {} for leader {}", key.fetcher_id, key.leader.0),
+            shutdown: task.shutdown,
+            handle: task.handle,
+        }
+    }
+
+    pub(super) fn wal_follower(shard: ShardId, task: WalFollowerTask) -> Self {
+        Self {
+            label: format!(
+                "WAL follower for topic {} partition {}",
+                shard.topic_id, shard.partition.0
+            ),
+            shutdown: task.shutdown,
+            handle: task.handle,
+        }
+    }
+}
+
 /// Stops replica tasks the way Kafka's
 /// `AbstractFetcherManager.closeAllFetchers` does: it signals every task
 /// first, then waits for each one, so a fetcher can close its session and
 /// finish a writer round trip. A task still running when `timeout` has passed
 /// since the signal is aborted. A task that panicked is logged at error.
-pub(super) async fn stop_tasks(
-    tasks: impl IntoIterator<Item = (CancellationToken, JoinHandle<()>)>,
-    timeout: Duration,
-) {
+pub(super) async fn stop_tasks(tasks: impl IntoIterator<Item = StoppingTask>, timeout: Duration) {
     let tasks = tasks.into_iter().collect::<Vec<_>>();
-    for (shutdown, _) in &tasks {
-        shutdown.cancel();
+    for task in &tasks {
+        task.shutdown.cancel();
     }
     let deadline = time::Instant::now() + timeout;
-    for (_, mut handle) in tasks {
+    for StoppingTask {
+        label, mut handle, ..
+    } in tasks
+    {
         let joined = match time::timeout_at(deadline, &mut handle).await {
             Ok(joined) => joined,
             Err(_elapsed) => {
                 warn!(
+                    task = %label,
                     timeout = ?timeout,
                     "replica task did not stop after cancellation; aborting it"
                 );
@@ -41,7 +73,7 @@ pub(super) async fn stop_tasks(
         if let Err(join_error) = joined
             && join_error.is_panic()
         {
-            error!(error = %join_error, "replica task panicked");
+            error!(task = %label, error = %join_error, "replica task panicked");
         }
     }
 }
@@ -63,6 +95,14 @@ mod tests {
         tracing::{Instrument, Level, dispatcher},
     };
 
+    fn stopping(shutdown: CancellationToken, handle: JoinHandle<()>) -> StoppingTask {
+        StoppingTask {
+            label: "test task".to_owned(),
+            shutdown,
+            handle,
+        }
+    }
+
     /// A task that stops on its signal runs to its end: it is not aborted
     /// before it can finish what it does after the signal.
     #[tokio::test]
@@ -79,7 +119,7 @@ mod tests {
             }
         });
 
-        stop_tasks([(shutdown, handle)], TASK_STOP_TIMEOUT).await;
+        stop_tasks([stopping(shutdown, handle)], TASK_STOP_TIMEOUT).await;
 
         check!(finished.load(Ordering::SeqCst));
     }
@@ -95,8 +135,8 @@ mod tests {
 
         stop_tasks(
             [
-                (CancellationToken::new(), panicked),
-                (CancellationToken::new(), stuck),
+                stopping(CancellationToken::new(), panicked),
+                stopping(CancellationToken::new(), stuck),
             ],
             Duration::from_secs(1),
         )

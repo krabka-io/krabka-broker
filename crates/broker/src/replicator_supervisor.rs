@@ -56,7 +56,7 @@ pub use self::{
 use {
     self::{
         dir_assignments::{AssignDirsReporter, NetworkAssignDirsReporter},
-        task_stop::{TASK_STOP_TIMEOUT, stop_tasks},
+        task_stop::{StoppingTask, TASK_STOP_TIMEOUT, stop_tasks},
     },
     crate::{
         api_catalog::UnstableApiVersions,
@@ -122,12 +122,11 @@ struct WalFollowerTask {
     handle: JoinHandle<()>,
 }
 
-/// Removes every entry of `map` and returns the values.
-fn drain<K: Copy + Eq + Hash, V>(map: &DashMap<K, V>) -> Vec<V> {
+/// Removes every entry of `map` and returns them.
+fn drain<K: Copy + Eq + Hash, V>(map: &DashMap<K, V>) -> Vec<(K, V)> {
     let keys = map.iter().map(|entry| *entry.key()).collect::<Vec<_>>();
     keys.into_iter()
         .filter_map(|key| map.remove(&key))
-        .map(|(_, value)| value)
         .collect()
 }
 
@@ -362,10 +361,10 @@ impl ReplicatorSupervisor {
         }
         let fetchers = drain(&self.tasks)
             .into_iter()
-            .map(|task| (task.shutdown, task.handle));
+            .map(|(key, task)| StoppingTask::fetcher(key, task));
         let wal_followers = drain(&self.wal_tasks)
             .into_iter()
-            .map(|task| (task.shutdown, task.handle));
+            .map(|(shard, task)| StoppingTask::wal_follower(shard, task));
         stop_tasks(fetchers.chain(wal_followers), TASK_STOP_TIMEOUT).await;
     }
 
