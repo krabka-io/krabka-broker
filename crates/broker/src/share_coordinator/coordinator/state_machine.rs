@@ -17,6 +17,7 @@ use {
     crate::{
         codes,
         share_coordinator::{
+            key::ShareKeyRef,
             persistence::{
                 KEY_SHARE_SNAPSHOT, KEY_SHARE_UPDATE, ShareSnapshotValue, ShareStateKey,
                 ShareUpdateValue, StateBatch, UNKNOWN_DELIVERY_COMPLETE_COUNT,
@@ -49,13 +50,6 @@ struct Progress<'a> {
     start_offset: Offset,
     delivery_complete_count: i32,
     batches: &'a [StateBatch],
-}
-
-/// The key of one share-partition state.
-struct StateKeyRef<'a> {
-    group: &'a str,
-    topic_id: uuid::Uuid,
-    partition: i32,
 }
 
 impl ShareCoordinator {
@@ -93,7 +87,7 @@ impl ShareCoordinator {
         self.initialize_in_term(
             active.term,
             image,
-            StateKeyRef {
+            ShareKeyRef {
                 group,
                 topic_id,
                 partition,
@@ -129,8 +123,12 @@ impl ShareCoordinator {
         partition: i32,
         request: ShareWrite,
     ) -> Result<(), ShareStateError> {
-        self.write_in_term(active.term, image, group, topic_id, partition, request)
-            .await
+        let key = ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        };
+        self.write_in_term(active.term, image, key, request).await
     }
 
     /// Serves a `ReadShareGroupState` partition, as Kafka's
@@ -157,7 +155,12 @@ impl ShareCoordinator {
         partition: i32,
         leader_epoch: LeaderEpoch,
     ) -> Result<SharePartitionState, ShareStateError> {
-        self.read_in_term(active.term, image, group, topic_id, partition, leader_epoch)
+        let key = ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        };
+        self.read_in_term(active.term, image, key, leader_epoch)
             .await
     }
 
@@ -186,7 +189,13 @@ impl ShareCoordinator {
             Err(invalid_request(message::NEGATIVE_PARTITION_ID))
         } else {
             match check_topic_partition(image, topic_id, partition) {
-                Ok(()) => Ok(self.summary(group, topic_id, partition).await),
+                Ok(()) => Ok(self
+                    .summary(ShareKeyRef {
+                        group,
+                        topic_id,
+                        partition,
+                    })
+                    .await),
                 Err(error) => Err(error),
             }
         }
@@ -212,8 +221,12 @@ impl ShareCoordinator {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<(), ShareStateError> {
-        self.delete_in_term(active.term, image, group, topic_id, partition)
-            .await
+        let key = ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        };
+        self.delete_in_term(active.term, image, key).await
     }
 
     /// The body of [`ShareCoordinator::initialize`], under the read guard of
@@ -222,14 +235,15 @@ impl ShareCoordinator {
         &self,
         term: Term,
         image: &MetadataImage,
-        StateKeyRef {
-            group,
-            topic_id,
-            partition,
-        }: StateKeyRef<'_>,
+        key: ShareKeyRef<'_>,
         state_epoch: StateEpoch,
         start_offset: Offset,
     ) -> Result<(), ShareStateError> {
+        let ShareKeyRef {
+            topic_id,
+            partition,
+            ..
+        } = key;
         let trunk = self.config.unstable_repeat_initialize_noop;
         if partition < 0 {
             return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
@@ -237,22 +251,22 @@ impl ShareCoordinator {
         if state_epoch < 0 {
             return Err(invalid_request(message::NEGATIVE_STATE_EPOCH));
         }
-        let Some(entry) = self.entry(group, topic_id, partition) else {
+        let Some(entry) = self.entry(key) else {
             check_topic_partition(image, topic_id, partition)?;
             let snapshot = self.initial_snapshot(0, state_epoch, start_offset);
-            let key = state_key(KEY_SHARE_SNAPSHOT, group, topic_id, partition);
+            let record_key = state_key(KEY_SHARE_SNAPSHOT, key);
             let value = snapshot
                 .encode()
                 .map_err(|e| AppendError::Failed(e).share_error())?;
             let offset = self
-                .persist_record(term, key, Some(value))
+                .persist_record(term, record_key, Some(value))
                 .await
                 .map_err(|e| {
                     warn!(error = %e, "share initialize persist failed");
                     e.share_error()
                 })?;
             self.state.insert(
-                (group.to_owned(), topic_id, partition),
+                key.to_key(),
                 Arc::new(Mutex::new(SharePartitionState::from_snapshot(
                     &snapshot, offset,
                 ))),
@@ -277,14 +291,7 @@ impl ShareCoordinator {
         let snapshot =
             self.initial_snapshot(st.snapshot_epoch.wrapping_add(1), state_epoch, start_offset);
         let appended = self
-            .append_state_record(
-                term,
-                &mut st,
-                group,
-                topic_id,
-                partition,
-                StateRecord::Snapshot(snapshot),
-            )
+            .append_state_record(term, &mut st, key, StateRecord::Snapshot(snapshot))
             .await;
         drop(st);
         appended
@@ -320,11 +327,14 @@ impl ShareCoordinator {
         &self,
         term: Term,
         image: &MetadataImage,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
         request: ShareWrite,
     ) -> Result<(), ShareStateError> {
+        let ShareKeyRef {
+            topic_id,
+            partition,
+            ..
+        } = key;
         if partition < 0 {
             return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
         }
@@ -334,7 +344,7 @@ impl ShareCoordinator {
         if request.state_epoch < 0 {
             return Err(invalid_request(message::NEGATIVE_STATE_EPOCH));
         }
-        let Some(entry) = self.entry(group, topic_id, partition) else {
+        let Some(entry) = self.entry(key) else {
             return Err(invalid_request(
                 message::WRITE_UNINITIALIZED_SHARE_PARTITION,
             ));
@@ -361,9 +371,7 @@ impl ShareCoordinator {
             delivery_complete_count: request.delivery_complete_count,
             batches: &request.batches,
         });
-        let appended = self
-            .append_state_record(term, &mut st, group, topic_id, partition, record)
-            .await;
+        let appended = self.append_state_record(term, &mut st, key, record).await;
         drop(st);
         appended
     }
@@ -374,18 +382,21 @@ impl ShareCoordinator {
         &self,
         term: Term,
         image: &MetadataImage,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
         leader_epoch: LeaderEpoch,
     ) -> Result<SharePartitionState, ShareStateError> {
+        let ShareKeyRef {
+            topic_id,
+            partition,
+            ..
+        } = key;
         if partition < 0 {
             return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
         }
         if leader_epoch < 0 {
             return Err(invalid_request(message::NEGATIVE_LEADER_EPOCH));
         }
-        let Some(entry) = self.entry(group, topic_id, partition) else {
+        let Some(entry) = self.entry(key) else {
             return Err(invalid_request(message::READ_UNINITIALIZED_SHARE_PARTITION));
         };
         let mut st = entry.lock().await;
@@ -407,9 +418,7 @@ impl ShareCoordinator {
             delivery_complete_count: st.delivery_complete_count,
             batches: &[],
         });
-        let appended = self
-            .append_state_record(term, &mut st, group, topic_id, partition, record)
-            .await;
+        let appended = self.append_state_record(term, &mut st, key, record).await;
         drop(st);
         appended.map(|()| current)
     }
@@ -471,9 +480,7 @@ impl ShareCoordinator {
         &self,
         term: Term,
         st: &mut MutexGuard<'_, SharePartitionState>,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
         record: StateRecord,
     ) -> Result<(), ShareStateError> {
         let (record_type, value) = match &record {
@@ -481,9 +488,8 @@ impl ShareCoordinator {
             StateRecord::Update(update) => (KEY_SHARE_UPDATE, update.encode()),
         };
         let value = value.map_err(|e| AppendError::Failed(e).share_error())?;
-        let key = state_key(record_type, group, topic_id, partition);
         let offset = self
-            .persist_record(term, key, Some(value))
+            .persist_record(term, state_key(record_type, key), Some(value))
             .await
             .map_err(|e| {
                 warn!(error = %e, "share state persist failed");
@@ -542,16 +548,10 @@ impl ShareCoordinator {
         result
     }
 
-    /// The state cell of `(group, topic_id, partition)`, when the key has
-    /// state.
-    pub(super) fn entry(
-        &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-    ) -> Option<Arc<Mutex<SharePartitionState>>> {
+    /// The state cell of `key`, when the key has state.
+    pub(super) fn entry(&self, key: ShareKeyRef<'_>) -> Option<Arc<Mutex<SharePartitionState>>> {
         self.state
-            .get(&(group.to_owned(), topic_id, partition))
+            .get(key.lookup())
             .map(|entry| Arc::clone(entry.value()))
     }
 
@@ -564,7 +564,11 @@ impl ShareCoordinator {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Option<SharePartitionState> {
-        let entry = self.entry(group, topic_id, partition)?;
+        let entry = self.entry(ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        })?;
         let st = entry.lock().await;
         Some(st.clone())
     }
@@ -581,18 +585,18 @@ impl ShareCoordinator {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Option<ShareStateSummary> {
-        self.summary(group, topic_id, partition).await
+        self.summary(ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        })
+        .await
     }
 
     /// The summary of the stored state of the key, or `None` when the key
     /// has no state.
-    async fn summary(
-        &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-    ) -> Option<ShareStateSummary> {
-        let handle = self.entry(group, topic_id, partition)?;
+    async fn summary(&self, key: ShareKeyRef<'_>) -> Option<ShareStateSummary> {
+        let handle = self.entry(key)?;
         let st = handle.lock().await;
         Some(ShareStateSummary {
             state_epoch: st.state_epoch,
@@ -608,19 +612,17 @@ impl ShareCoordinator {
         &self,
         term: Term,
         image: &MetadataImage,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
     ) -> Result<(), ShareStateError> {
-        if partition < 0 {
+        if key.partition < 0 {
             return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
         }
-        check_topic_partition(image, topic_id, partition)?;
-        let Some(entry) = self.entry(group, topic_id, partition) else {
+        check_topic_partition(image, key.topic_id, key.partition)?;
+        let Some(entry) = self.entry(key) else {
             return Ok(());
         };
         let _st = entry.lock().await;
-        self.tombstone(term, group, topic_id, partition).await
+        self.tombstone(term, key).await
     }
 
     /// Appends the tombstone of a key in `term` and drops its in-memory
@@ -628,33 +630,28 @@ impl ShareCoordinator {
     pub(super) async fn tombstone(
         &self,
         term: Term,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
     ) -> Result<(), ShareStateError> {
-        let key = state_key(KEY_SHARE_SNAPSHOT, group, topic_id, partition);
-        self.persist_record(term, key, None).await.map_err(|e| {
-            warn!(error = %e, "share delete persist failed");
-            e.share_error()
-        })?;
-        if self
-            .state
-            .remove(&(group.to_owned(), topic_id, partition))
-            .is_some()
-        {
+        self.persist_record(term, state_key(KEY_SHARE_SNAPSHOT, key), None)
+            .await
+            .map_err(|e| {
+                warn!(error = %e, "share delete persist failed");
+                e.share_error()
+            })?;
+        if self.state.remove(key.lookup()).is_some() {
             self.note_state_key_change(term.partition);
         }
         Ok(())
     }
 }
 
-/// The key of a record of `record_type` for `(group, topic_id, partition)`.
-fn state_key(record_type: i16, group: &str, topic_id: uuid::Uuid, partition: i32) -> ShareStateKey {
+/// The key of a record of `record_type` for `key`.
+fn state_key(record_type: i16, key: ShareKeyRef<'_>) -> ShareStateKey {
     ShareStateKey {
         record_type,
-        group_id: group.to_owned(),
-        topic_id,
-        partition,
+        group_id: key.group.to_owned(),
+        topic_id: key.topic_id,
+        partition: key.partition,
     }
 }
 

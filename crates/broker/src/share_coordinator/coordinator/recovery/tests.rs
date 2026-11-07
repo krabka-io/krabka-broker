@@ -1027,7 +1027,7 @@ fn update_then_snapshot(snap_key: bytes::Bytes, upd_key: bytes::Bytes) -> Record
 }
 
 /// What a successful replay of a state partition loads.
-type Loaded = HashMap<ShareStateKey3, SharePartitionState>;
+type Loaded = HashMap<ShareKey, SharePartitionState>;
 
 /// The share-state load skips and fails the records that Kafka's
 /// `CoordinatorLoaderImpl` does with a `ShareCoordinatorRecordSerde`: an
@@ -1086,11 +1086,19 @@ async fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
     let truncated_update = update.encode().unwrap().slice(..10);
     let both_snapshots = HashMap::from([
         (
-            ("g".to_owned(), topic_id, 0),
+            ShareKey {
+                group: "g".to_owned(),
+                topic_id,
+                partition: 0,
+            },
             SharePartitionState::from_snapshot(&snapshot(0), Offset(0)),
         ),
         (
-            ("g".to_owned(), topic_id, 1),
+            ShareKey {
+                group: "g".to_owned(),
+                topic_id,
+                partition: 1,
+            },
             SharePartitionState::from_snapshot(&snapshot(10), Offset(2)),
         ),
     ]);

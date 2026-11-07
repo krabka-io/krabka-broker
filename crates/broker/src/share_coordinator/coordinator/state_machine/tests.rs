@@ -147,7 +147,12 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
                 result = &mut first => panic!("paused append completed: {result:?}"),
                 () = yield_now() => {}
             }
-            assert!(coord.entry("g", TOPIC, 0).is_none());
+            let key = ShareKeyRef {
+                group: "g",
+                topic_id: TOPIC,
+                partition: 0,
+            };
+            assert!(coord.entry(key).is_none());
             tokio::select! {
                 biased;
                 result = &mut next => panic!("queued initialize completed: {result:?}"),
@@ -198,7 +203,7 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
             assert!(snapshots == expected_snapshots);
             coord.reload_all_partitions_for_test().await;
             assert!(coord.read_summary_checked(&image, "g", TOPIC, 0).await == Ok(Some(expected)));
-            let entry = coord.entry("g", TOPIC, 0).expect("state replayed");
+            let entry = coord.entry(key).expect("state replayed");
             assert!(entry.lock().await.fence_state_epoch == expected.state_epoch);
         }
     }
@@ -989,7 +994,11 @@ async fn write_seeded_share_state(share_state_write: &mut ShareStateWrite) {
     // The stored state itself: rows also cover partition 2, which the image
     // does not hold, and partition -1, which a summary read refuses.
     share_state_write.summary = Some(observed_share_summary(Ok(coord
-        .summary("g", TOPIC, request.partition)
+        .summary(ShareKeyRef {
+            group: "g",
+            topic_id: TOPIC,
+            partition: request.partition,
+        })
         .await)));
 }
 

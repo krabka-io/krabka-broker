@@ -37,6 +37,7 @@ use {
                 LoadStatus, ShareCoordinator, ShareStateSummary, ShareWrite,
                 UNINITIALIZED_START_OFFSET,
             },
+            key::ShareKeyRef,
             persistence::StateBatch,
             state::SharePartitionState,
         },
@@ -158,7 +159,13 @@ impl SharePersister {
         let RoutedPartition {
             state_partition,
             local,
-        } = self.route(group, topic_id, partition).await?;
+        } = self
+            .route(ShareKeyRef {
+                group,
+                topic_id,
+                partition,
+            })
+            .await?;
         if local {
             return self
                 .share_coordinator
@@ -212,7 +219,13 @@ impl SharePersister {
         let RoutedPartition {
             state_partition,
             local,
-        } = self.route(group, topic_id, partition).await?;
+        } = self
+            .route(ShareKeyRef {
+                group,
+                topic_id,
+                partition,
+            })
+            .await?;
         let result = if local {
             self.share_coordinator
                 .delete(&self.controller.current_image(), group, topic_id, partition)
@@ -258,12 +271,12 @@ impl SharePersister {
     }
 
     /// Refresh leadership before choosing the local coordinator or its remote leader.
-    async fn route(
-        &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-    ) -> Result<RoutedPartition, BrokerError> {
+    async fn route(&self, key: ShareKeyRef<'_>) -> Result<RoutedPartition, BrokerError> {
+        let ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        } = key;
         let state_partition = self
             .share_coordinator
             .state_partition_for(group, &topic_id, partition)
@@ -380,7 +393,13 @@ impl SharePersister {
         let RoutedPartition {
             state_partition,
             local,
-        } = self.route(group, topic_id, partition).await?;
+        } = self
+            .route(ShareKeyRef {
+                group,
+                topic_id,
+                partition,
+            })
+            .await?;
         if local {
             return self
                 .share_coordinator
@@ -454,7 +473,13 @@ impl SharePersister {
         let RoutedPartition {
             state_partition,
             local,
-        } = self.route(group, topic_id, partition).await?;
+        } = self
+            .route(ShareKeyRef {
+                group,
+                topic_id,
+                partition,
+            })
+            .await?;
         if local {
             return self
                 .share_coordinator
@@ -530,7 +555,13 @@ impl SharePersister {
         let RoutedPartition {
             state_partition,
             local,
-        } = self.route(group, topic_id, partition).await?;
+        } = self
+            .route(ShareKeyRef {
+                group,
+                topic_id,
+                partition,
+            })
+            .await?;
         if local {
             let request = ShareWrite {
                 state_epoch,
