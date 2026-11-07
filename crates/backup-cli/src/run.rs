@@ -1138,6 +1138,9 @@ mod tests {
         metadata_checkpoint = { METADATA_CHECKPOINT, 512 * 1024 * 1024 },
         rlmm_snapshot = { RLMM_SNAPSHOT, 512 * 1024 * 1024 },
         diskless_wal_index = { DISKLESS_WAL_INDEX, 256 * 1024 * 1024 },
+        // A newer manifest can name an artifact this build does not know.
+        // `verify` reads it under the diskless index's limit.
+        unknown = { "a-newer-artifact.json", 256 * 1024 * 1024 },
     )]
     fn capture_size_limits_match_readers_at_the_boundary(name: &str, expected: u64) {
         let limit = artifact_byte_limit(name);
@@ -1145,6 +1148,110 @@ mod tests {
         check!(check_capture_size(name, limit, limit).is_ok());
         check!(check_capture_size(name, limit + 1, limit).is_err());
         check!(check_capture_size(name, u64::MAX, limit).is_err());
+    }
+
+    /// The exact `manifest.json` a capture that took every artifact writes.
+    /// A change here is a change to the 1.x capture format.
+    const GOLDEN_CAPTURE_MANIFEST: &str = r#"{
+  "version": 0,
+  "capture_id": "0001700000000000",
+  "captured_at_ms": 1700000000000,
+  "log_dir": "/var/lib/krabka",
+  "bootstrap_server": "broker-1:9092",
+  "artifacts": [
+    {
+      "name": "rlmm-snapshot",
+      "source": "/var/lib/krabka/remote-log-metadata/snapshot",
+      "size_bytes": 19,
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "name": "cluster-metadata.checkpoint",
+      "source": "/var/lib/krabka/__cluster_metadata-0/00000000000000000042-0000000001.checkpoint",
+      "size_bytes": 32,
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+      "name": "group-offsets.json",
+      "source": "broker-1:9092",
+      "size_bytes": 120,
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    {
+      "name": "diskless-wal-index.json",
+      "source": "broker-1:9092",
+      "size_bytes": 4096,
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+    }
+  ]
+}"#;
+
+    fn golden_capture_artifacts() -> Vec<Artifact> {
+        [
+            (
+                RLMM_SNAPSHOT,
+                "/var/lib/krabka/remote-log-metadata/snapshot",
+                19,
+                '1',
+            ),
+            (
+                METADATA_CHECKPOINT,
+                "/var/lib/krabka/__cluster_metadata-0/00000000000000000042-0000000001.checkpoint",
+                32,
+                '2',
+            ),
+            (GROUP_OFFSETS, "broker-1:9092", 120, '3'),
+            (DISKLESS_WAL_INDEX, "broker-1:9092", 4096, '4'),
+        ]
+        .into_iter()
+        .map(|(name, source, size_bytes, digit)| Artifact {
+            name: name.to_owned(),
+            source: source.to_owned(),
+            size_bytes,
+            sha256: digit.to_string().repeat(64),
+        })
+        .collect()
+    }
+
+    #[tokio::test]
+    async fn a_capture_writes_the_golden_manifest_and_decodes_it_back() {
+        let ArchiveFixture {
+            root: _root,
+            args,
+            store,
+        } = archive_fixture();
+        let id = "0001700000000000";
+        let signing = super::CaptureSigningArgs::default();
+        let request = super::CaptureRequest {
+            log_dir: Some(Path::new("/var/lib/krabka")),
+            bootstrap_server: Some("broker-1:9092"),
+            security: None,
+            signing: &signing,
+            archive: &args,
+            captured_at_ms: 1_700_000_000_000,
+        };
+        let expected = Manifest {
+            version: MANIFEST_VERSION,
+            capture_id: id.to_owned(),
+            captured_at_ms: 1_700_000_000_000,
+            log_dir: Some("/var/lib/krabka".to_owned()),
+            bootstrap_server: Some("broker-1:9092".to_owned()),
+            artifacts: golden_capture_artifacts(),
+        };
+
+        let written = super::write_manifest(&store, id, &request, golden_capture_artifacts())
+            .await
+            .expect("write the manifest");
+
+        check!(written == expected);
+        let bytes = store
+            .get(&capture_key(id, MANIFEST))
+            .await
+            .expect("read the manifest");
+        check!(String::from_utf8(bytes).expect("UTF-8 manifest") == GOLDEN_CAPTURE_MANIFEST);
+        let decoded = Manifest::from_slice(GOLDEN_CAPTURE_MANIFEST.as_bytes(), MANIFEST)
+            .expect("decode the golden manifest");
+        check!(decoded == expected);
     }
 
     #[yare::parameterized(
