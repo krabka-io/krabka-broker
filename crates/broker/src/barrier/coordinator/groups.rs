@@ -19,8 +19,14 @@ use {
         time_util::now_ms,
     },
     krabka_units::{Time, convert::TimeExt as _},
-    std::{sync::Arc, time::Instant},
-    tokio::{sync::OwnedMutexGuard, time},
+    std::{
+        sync::{Arc, PoisonError},
+        time::Instant,
+    },
+    tokio::{
+        sync::{Mutex, OwnedMutexGuard},
+        time,
+    },
 };
 
 /// How long `create_group` waits for the state topic's partition to take a
@@ -130,16 +136,7 @@ impl BarrierCoordinator {
         // to. A broker that loses the race finds the topic already there.
         self.ensure_state_topic(group).await?;
         self.require_coordinator(group).await?;
-        // The cap is checked before the group has an entry, so a refusal
-        // leaves the group count where it was. A name that is already live
-        // falls through to the GroupExists refusal below.
-        if !self.groups.contains_key(group) && self.groups.len() >= self.config.max_groups {
-            return Err(BarrierError::InvalidDefinition(format!(
-                "barrier groups limit reached ({})",
-                self.config.max_groups
-            )));
-        }
-        let handle = self.entry_handle(group);
+        let handle = self.reserve_entry(group)?;
         let mut entry = handle.lock().await;
         if entry.is_defined() {
             return Err(BarrierError::GroupExists {
@@ -153,6 +150,27 @@ impl BarrierCoordinator {
         drop(entry);
         self.report_group_count();
         Ok(definition)
+    }
+
+    /// The entry of `group`, inserted if it is new and the cap allows it.
+    ///
+    /// The cap is checked before the group has an entry, so a refusal leaves
+    /// the group count where it was, and the check and the insertion hold one
+    /// lock, so two concurrent creates cannot both take the last slot. A name
+    /// that is already live gets its entry, and the caller refuses it as a
+    /// duplicate.
+    fn reserve_entry(&self, group: &str) -> Result<Arc<Mutex<GroupEntry>>, BarrierError> {
+        let _slot = self
+            .create_slot
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !self.groups.contains_key(group) && self.groups.len() >= self.config.max_groups {
+            return Err(BarrierError::InvalidDefinition(format!(
+                "barrier groups limit reached ({})",
+                self.config.max_groups
+            )));
+        }
+        Ok(self.entry_handle(group))
     }
 
     /// Replace the definition of a live group.
@@ -539,6 +557,39 @@ mod tests {
                 .collect::<Vec<_>>()
                 == vec!["g1"]
         );
+    }
+
+    /// Creates of different names that race for the last slot under the cap
+    /// do not both take it: exactly one is created, and the rest are refused.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_creates_for_the_last_slot_under_the_group_cap_admit_one() {
+        let fixture = Fixture::new();
+        let mut coordinator = fixture.coordinator().await;
+        coordinator.config.max_groups = 1;
+        let coordinator = Arc::new(coordinator);
+
+        let creates: Vec<_> = (0..8)
+            .map(|n| {
+                let coordinator = Arc::clone(&coordinator);
+                tokio::spawn(async move {
+                    coordinator
+                        .create_group(&format!("g{n}"), spec().call())
+                        .await
+                })
+            })
+            .collect();
+        let mut admitted = 0;
+        for create in creates {
+            match create.await.expect("the create task finishes") {
+                Ok(_) => admitted += 1,
+                Err(error) => {
+                    assert!(let BarrierError::InvalidDefinition(_) = error);
+                }
+            }
+        }
+
+        assert!(admitted == 1);
+        assert!(coordinator.groups.len() == 1);
     }
 
     /// At the cap, a create of a name that is already live is still answered

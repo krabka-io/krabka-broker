@@ -34,7 +34,10 @@ use {
     krabka_metadata::{MetadataImage, NodeId},
     krabka_protocol::records::{Record, RecordBatch},
     krabka_units::{Time, convert::TimeExt as _},
-    std::{collections::HashSet, sync::Arc},
+    std::{
+        collections::HashSet,
+        sync::{Arc, Mutex as StdMutex},
+    },
     tokio::sync::{Mutex, RwLock},
 };
 
@@ -194,6 +197,9 @@ pub struct BarrierCoordinator {
     remote: Option<Arc<dyn RemoteMarkerWriter>>,
     /// Live groups: name to locked entry.
     groups: DashMap<String, Arc<Mutex<GroupEntry>>>,
+    /// Held across the group-cap check and the insertion of a new entry, so
+    /// two creates of different names cannot both take the last slot.
+    create_slot: StdMutex<()>,
     /// The `__barrier_state` partition indices this broker leads.
     leader_partitions: RwLock<HashSet<PartitionIndex>>,
 }
@@ -216,6 +222,7 @@ impl BarrierCoordinator {
             metrics,
             remote: None,
             groups: DashMap::new(),
+            create_slot: StdMutex::new(()),
             leader_partitions: RwLock::new(HashSet::new()),
         }
     }
