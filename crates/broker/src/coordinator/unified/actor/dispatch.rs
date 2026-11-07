@@ -39,11 +39,9 @@ use {
 
 fn reply_classic_inspect(
     group: &CoordinatorGroup,
-    reply: oneshot::Sender<super::ClassicView>,
+    reply: oneshot::Sender<Option<super::ClassicView>>,
 ) -> bool {
-    if let Some(state) = group.as_classic() {
-        let _ = reply.send(build_classic_view(state));
-    }
+    let _ = reply.send(group.as_classic().map(build_classic_view));
     true
 }
 
@@ -108,9 +106,7 @@ pub(super) async fn handle_actor_message(
             true
         }
         GroupActorMessage::Describe { reply } => {
-            if let Some(state) = group.as_consumer() {
-                let _ = reply.send(build_describe(state));
-            }
+            let _ = reply.send(group.as_consumer().map(build_describe));
             true
         }
         GroupActorMessage::ClassicJoin {

@@ -1277,6 +1277,7 @@ mod tests {
                 let members: Vec<String> = rx
                     .await
                     .unwrap()
+                    .unwrap()
                     .members
                     .into_iter()
                     .map(|member| member.member_id)

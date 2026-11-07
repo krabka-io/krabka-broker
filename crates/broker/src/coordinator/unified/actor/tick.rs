@@ -648,6 +648,7 @@ mod tests {
             let members: Vec<String> = view
                 .await
                 .unwrap()
+                .unwrap()
                 .members
                 .into_iter()
                 .map(|member| member.member_id)

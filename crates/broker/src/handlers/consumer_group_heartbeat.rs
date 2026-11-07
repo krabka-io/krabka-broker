@@ -120,6 +120,7 @@ pub async fn handle(
     // arm (replying `GROUP_ID_NOT_FOUND`), which is where the per-group kind
     // lock now lives.
     let handle = coordinator.get_or_create_group(&req.group_id, GroupKindTag::Consumer);
+    let group_id = req.group_id.clone();
     let asked = ask(&handle.tx, |reply| GroupActorMessage::Heartbeat {
         request: req,
         client_id: ctx.client_id.unwrap_or_default().to_owned(),
@@ -128,7 +129,7 @@ pub async fn handle(
         reply,
     })
     .await;
-    Ok(asked.unwrap_or_else(|error| reply(group_actor_error_code(error), None)))
+    Ok(asked.unwrap_or_else(|error| reply(group_actor_error_code(broker, &group_id, error), None)))
 }
 
 /// The early refusal: `code` carrying `message`.
@@ -637,7 +638,8 @@ mod tests {
             .get_or_create_group("identity-group", GroupKindTag::Consumer);
         let view = ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
             .await
-            .expect("consumer group view");
+            .expect("consumer group view")
+            .expect("a consumer group");
 
         assert!(view.members.len() == 1);
         assert!(view.members[0].client_id == "consumer-group-heartbeat-test");
@@ -656,7 +658,8 @@ mod tests {
 
         let view = ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
             .await
-            .expect("refreshed consumer group view");
+            .expect("refreshed consumer group view")
+            .expect("a consumer group");
         assert!(view.members[0].client_id == "consumer-client-b");
         assert!(view.members[0].client_host == "/127.0.0.2");
 
@@ -699,7 +702,8 @@ mod tests {
             .get_or_create_group("g", GroupKindTag::Consumer);
         let view = ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
             .await
-            .expect("consumer group view");
+            .expect("consumer group view")
+            .expect("a consumer group");
         assert!(view.members.is_empty(), "{view:?}");
 
         broker_handle.shutdown().await;

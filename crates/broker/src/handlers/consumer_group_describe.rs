@@ -36,9 +36,10 @@ use {
         handlers::{
             ApiVersion, RequestContext,
             authorized_operations::{DescribedGroupRow, fill_group_authorized_operations},
-            denied_topics, group_coordinator_error, group_describe_denied, group_version_disabled,
+            denied_topics, group_actor_error_code, group_coordinator_error, group_describe_denied,
+            group_version_disabled,
         },
-        task_util::{AskError, ask},
+        task_util::ask,
     },
     krabka_metadata::{AclOperation, MetadataImage},
     krabka_protocol::{
@@ -118,9 +119,8 @@ pub async fn handle(
             continue;
         }
         // The `Describe` arm dispatches on the actor's LIVE `group.kind`: it
-        // replies ONLY for a consumer-kind group and drops the sender
-        // otherwise, so an upgraded group is reachable and a classic group
-        // is not.
+        // gives a view only for a consumer-kind group and `None` otherwise, so
+        // an upgraded group is reachable and a classic group is not.
         // A share or streams group is another type's group, which Kafka's
         // `consumerGroup` lookup refuses whether or not an actor holds its
         // offsets.
@@ -134,11 +134,13 @@ pub async fn handle(
         };
         described.push(
             match ask(&handle.tx, |reply| GroupActorMessage::Describe { reply }).await {
-                Ok(view) => described_group(view, default_assignor, &image),
-                Err(AskError::Closed) => {
-                    DescribedGroup::error_row(group_id, codes::COORDINATOR_LOAD_IN_PROGRESS, None)
-                }
-                Err(AskError::Dropped) => not_found_row(group_id, "is not a consumer group"),
+                Ok(Some(view)) => described_group(view, default_assignor, &image),
+                Ok(None) => not_found_row(group_id, "is not a consumer group"),
+                Err(error) => DescribedGroup::error_row(
+                    group_id,
+                    group_actor_error_code(broker, group_id, error),
+                    None,
+                ),
             },
         );
     }

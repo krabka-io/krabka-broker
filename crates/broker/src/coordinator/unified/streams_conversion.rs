@@ -56,7 +56,7 @@ impl GroupCoordinator {
             None => {}
         }
         // A consumer group lives in the `groups` registry without a type lock.
-        // `ClassicInspect` answers only for a classic group, and an empty
+        // `ClassicInspect` gives a view only for a classic group, and an empty
         // classic group is free for a streams group.
         if let Some(handle) = self.find(group_id) {
             let (tx, rx) = oneshot::channel();
@@ -67,7 +67,7 @@ impl GroupCoordinator {
                 .await
                 .is_ok()
             {
-                rx.await.ok().map(|view| view.members.len())
+                rx.await.ok().flatten().map(|view| view.members.len())
             } else {
                 Some(0)
             };
@@ -115,7 +115,7 @@ impl GroupCoordinator {
                 .send(GroupActorMessage::ClassicInspect { reply: tx })
                 .await
                 .is_ok()
-                && let Ok(view) = rx.await
+                && let Ok(Some(view)) = rx.await
                 && !view.members.is_empty()
             {
                 return Ok(ConvertOutcome::RejectLiveMembers);

@@ -36,7 +36,8 @@ pub fn spawn_dropping_mailbox<M: Send + 'static>() -> (mpsc::Sender<M>, JoinHand
 pub enum AskError {
     /// The actor's mailbox is closed, so the request was never delivered.
     Closed,
-    /// The actor took the request but dropped the reply sender unanswered.
+    /// The actor took the request but dropped the reply sender unanswered:
+    /// the actor stopped with the request in its mailbox.
     Dropped,
 }
 
