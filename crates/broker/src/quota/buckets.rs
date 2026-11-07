@@ -29,6 +29,17 @@ pub struct BucketKey {
     pub entity_key: EntityKey,
 }
 
+/// A bucket that [`QuotaBuckets::expire_inactive`] dropped, with the labels the
+/// metric series it carried were published under. The user and the client id
+/// are the ones of the bucket's entity key, which are the labels a throttle
+/// charged to it published.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpiredBucket {
+    pub quota_type: QuotaType,
+    pub user: Option<String>,
+    pub client_id: Option<String>,
+}
+
 /// A live bucket and the key it is stored under.
 #[derive(Debug)]
 pub struct LiveBucket {
@@ -136,15 +147,10 @@ impl QuotaBuckets {
 
     /// Expire buckets unused for more than `max_age` (Kafka uses 1 hour).
     ///
-    /// Returns the `(quota_type, user, client_id)` of every bucket it dropped,
-    /// so the caller can unregister the metric series they carried. The user
-    /// and the client id are the ones of the bucket's entity key, which are
-    /// the labels a throttle charged to it published.
+    /// Returns every bucket it dropped, so the caller can unregister the metric
+    /// series they carried.
     #[must_use]
-    pub fn expire_inactive(
-        &self,
-        max_age: Duration,
-    ) -> Vec<(QuotaType, Option<String>, Option<String>)> {
+    pub fn expire_inactive(&self, max_age: Duration) -> Vec<ExpiredBucket> {
         let now = Instant::now();
         let mut expired = Vec::new();
         self.buckets.retain(
@@ -158,11 +164,11 @@ impl QuotaBuckets {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
                 if now.duration_since(last) > max_age {
-                    expired.push((
-                        *quota_type,
-                        entity_field(entity_key, "user"),
-                        entity_field(entity_key, "client-id"),
-                    ));
+                    expired.push(ExpiredBucket {
+                        quota_type: *quota_type,
+                        user: entity_field(entity_key, "user"),
+                        client_id: entity_field(entity_key, "client-id"),
+                    });
                     false
                 } else {
                     true

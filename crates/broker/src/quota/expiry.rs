@@ -19,7 +19,7 @@
 //! one it would have refilled to anyway.
 
 use {
-    super::buckets::QuotaBuckets,
+    super::buckets::{ExpiredBucket, QuotaBuckets},
     crate::metrics::BrokerMetrics,
     krabka_units::{Time, convert::TimeExt as _, minutes},
     std::sync::Arc,
@@ -53,7 +53,12 @@ pub async fn run(buckets: Arc<QuotaBuckets>, metrics: BrokerMetrics, shutdown: C
 
 /// One sweep: expire the idle buckets and release what they published.
 fn sweep(buckets: &QuotaBuckets, metrics: &BrokerMetrics, max_age: Time) {
-    for (quota_type, user, client_id) in buckets.expire_inactive(max_age.to_std()) {
+    for ExpiredBucket {
+        quota_type,
+        user,
+        client_id,
+    } in buckets.expire_inactive(max_age.to_std())
+    {
         metrics.evict_quota_entity_series(quota_type, user.clone(), client_id.clone());
         debug!(
             quota_key = quota_type.config_key(),
