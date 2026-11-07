@@ -7,4 +7,8 @@ exports_files(["Cargo.toml"])
 
 crate_proc_macro(name = "bdd-macros")
 
-crate_tests(lib = "bdd-macros")
+crate_tests(
+    # rstest's `#[case]` expansion reads the manifest to find its own crate.
+    compile_data = ["Cargo.toml"],
+    lib = "bdd-macros",
+)
