@@ -201,12 +201,12 @@ impl ObserverStore {
         }
     }
 
-    /// Empty the store. Best-effort: what cannot be removed is left behind, and
-    /// the next write supersedes it by offset anyway.
+    /// Empty the store, a directory under a checkpoint's name included.
     ///
-    /// A directory under a checkpoint's name goes too. Retention ranks entries
-    /// by name alone, so one left behind would outrank, and delete, every
-    /// older checkpoint written after it.
+    /// Best-effort: what cannot be removed is left behind. Retention ranks
+    /// entries by name alone, so a leftover still outranks, and deletes, every
+    /// lower-offset checkpoint written after it, until one with a higher
+    /// offset supersedes it.
     fn discard(&mut self) {
         self.persisted = None;
         let Ok(entries) = fs::read_dir(&self.dir) else {

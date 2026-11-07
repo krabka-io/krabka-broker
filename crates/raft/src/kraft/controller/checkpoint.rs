@@ -171,7 +171,8 @@ fn retain_checkpoints(dir: &Path, latest: SnapshotId, previous: SnapshotId) {
 }
 
 /// Read a specific checkpoint `<end_offset>-<epoch>.checkpoint` by id, or `None`
-/// if it is absent (the leader's `FetchSnapshot` serve path).
+/// if it is absent or cannot be read (the leader's `FetchSnapshot` serve path).
+/// [`read_checkpoint_by_id`] keeps the reason.
 #[must_use]
 pub fn load_checkpoint_by_id(dir: &Path, end_offset: i64, epoch: i32) -> Option<Vec<u8>> {
     read_checkpoint_by_id(dir, end_offset, epoch).ok()

@@ -646,9 +646,9 @@ mod tests {
         // The empty fetch left the observer caught up, so it must now be parked
         // on a timer armed for `poll_interval`. That park is the loop's only
         // registration on this clock, so confirming one waiter confirms the
-        // park. Parked on a manual timeline that we
-        // never advance, the observer cannot re-fetch, so the counts are
-        // deterministically frozen at their first-fetch values.
+        // park. Parked on a manual timeline that we never advance, the
+        // observer cannot re-fetch, so the counts are deterministically frozen
+        // at their first-fetch values.
         assert!(
             one_timer_armed_on(&clock).await,
             "observer should park on the poll-interval timer after an empty fetch",
