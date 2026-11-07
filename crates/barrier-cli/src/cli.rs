@@ -9,7 +9,7 @@
 
 use {
     clap::{Parser, Subcommand},
-    krabka_units::{Time, parse},
+    krabka_units::{Time, convert::TimeExt as _, parse},
 };
 
 /// The tool's command line.
@@ -65,8 +65,9 @@ pub enum Command {
         /// How long the coordinator retries a partition that has no marker
         /// yet. Takes any time unit, the same as `--interval`. The broker
         /// clamps this to its own configured ceiling. Omit to take the
-        /// broker's default.
-        #[arg(long, value_parser = parse_time)]
+        /// broker's default. A value below one millisecond, other than `0`, is
+        /// refused, since the broker counts this in whole milliseconds.
+        #[arg(long, value_parser = parse_timeout)]
         timeout: Option<Time>,
     },
     /// Print a group's retained cuts.
@@ -108,9 +109,25 @@ pub enum Command {
 /// meant milliseconds would otherwise wait thirty seconds without complaining.
 fn parse_time(raw: &str) -> Result<Time, String> { parse::time(raw).map_err(|e| e.to_string()) }
 
+/// Parse `trigger --timeout`: a time argument that is `0` or at least one
+/// millisecond.
+///
+/// The request carries whole milliseconds and `0` asks for the broker's
+/// default, so `250us` would otherwise reach the broker as that default
+/// rather than as a short timeout.
+fn parse_timeout(raw: &str) -> Result<Time, String> {
+    let timeout = parse_time(raw)?;
+    if timeout.nanos_i64() != 0 && timeout.millis_i64() == 0 {
+        return Err(format!(
+            "{raw} rounds to 0 ms, which asks for the broker's default; give at least 1ms"
+        ));
+    }
+    Ok(timeout)
+}
+
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check, krabka_units::convert::TimeExt as _};
+    use {super::*, assert2::check};
 
     krabka_macros::duration_parser_fixture!(
         {
@@ -133,6 +150,24 @@ mod tests {
             empty = { "", None },
         ]
     );
+
+    /// `--timeout` takes what `--interval` takes, except a value that rounds
+    /// to 0 ms and so would ask for the broker's default.
+    #[yare::parameterized(
+        one_millisecond = { "1ms", Some(1) },
+        five_seconds = { "5s", Some(5_000) },
+        rounds_up_to_one_millisecond = { "600us", Some(1) },
+        zero = { "0", Some(0) },
+        submillisecond = { "250us", None },
+        one_nanosecond = { "1ns", None },
+        missing_unit = { "90", None },
+    )]
+    fn parse_timeout_refuses_a_value_that_rounds_to_zero_milliseconds(
+        raw: &str,
+        expected_ms: Option<i64>,
+    ) {
+        check!(parse_timeout(raw).ok().map(Time::millis_i64) == expected_ms);
+    }
 
     krabka_macros::bootstrap_parser_fixture!(["krabka-barrier", "describe"], [
         "krabka-barrier",
