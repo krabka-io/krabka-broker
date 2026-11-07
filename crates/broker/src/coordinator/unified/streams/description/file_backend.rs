@@ -68,20 +68,28 @@ impl TopologyDescriptionBackend for FileTopologyDescriptionBackend {
             };
             let bytes = serde_json::to_vec(&value).map_err(|_| StorageFailure::Permanent)?;
             let path = self.path(group_id);
-            let staging = path.with_extension("pending");
-            let mut file = fs::File::create(&staging)
+            // Each attempt owns its inode. Reusing a fixed staging name lets
+            // a delayed writer mutate another attempt's published envelope.
+            // This prevents byte aliasing, not stale-owner writes: the host
+            // must still fence coordinators before admitting backend calls.
+            let staging = self.root.join(format!(".pending-{}", uuid::Uuid::new_v4()));
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&staging)
                 .await
                 .map_err(|_| StorageFailure::Transient)?;
-            file.write_all(&bytes)
-                .await
-                .map_err(|_| StorageFailure::Transient)?;
-            file.sync_all()
-                .await
-                .map_err(|_| StorageFailure::Transient)?;
-            drop(file);
-            fs::rename(staging, path)
-                .await
-                .map_err(|_| StorageFailure::Transient)
+            let result = async {
+                file.write_all(&bytes).await?;
+                file.sync_all().await?;
+                drop(file);
+                fs::rename(&staging, path).await
+            }
+            .await;
+            if result.is_err() {
+                let _ = fs::remove_file(staging).await;
+            }
+            result.map_err(|_| StorageFailure::Transient)
         })
     }
 
@@ -153,6 +161,84 @@ mod tests {
             .await
             .expect("idempotent delete");
         assert!(reopened.get("../../app", 7).await == Ok(None));
+    }
+
+    /// A delayed writer may retain an open inode across handoff. A later
+    /// successful set must never publish that inode under the group's name.
+    #[tokio::test]
+    async fn delayed_staging_writer_cannot_corrupt_a_published_description() {
+        let directory = tempfile::tempdir().expect("directory");
+        let backend = FileTopologyDescriptionBackend::new(directory.path())
+            .await
+            .expect("backend");
+        let mut old_writer = fs::File::create(backend.path("app").with_extension("pending"))
+            .await
+            .expect("old staging inode");
+        let description = TopologyDescription {
+            subtopologies: vec![],
+            global_stores: vec![],
+        };
+        backend
+            .set("app", 8, &description)
+            .await
+            .expect("new owner set");
+        // The old descriptor is still at offset zero. With a reused staging
+        // path, this overwrites the newly renamed final envelope.
+        old_writer
+            .write_all(b"corrupt")
+            .await
+            .expect("delayed write");
+        old_writer.sync_all().await.expect("delayed sync");
+        assert!(backend.get("app", 8).await == Ok(Some(description)));
+    }
+
+    /// Independent backend handles exercise real filesystem IO. Every set
+    /// succeeds and the final file is exactly one complete submitted envelope;
+    /// this intentionally makes no winner-order or ownership-fencing claim.
+    #[tokio::test]
+    async fn concurrent_backend_instances_publish_complete_envelopes() {
+        let directory = tempfile::tempdir().expect("directory");
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(16));
+        let mut writers = tokio::task::JoinSet::new();
+        for _ in 0..16 {
+            let backend = FileTopologyDescriptionBackend::new(directory.path())
+                .await
+                .expect("backend");
+            let start = std::sync::Arc::clone(&barrier);
+            writers.spawn(async move {
+                start.wait().await;
+                backend
+                    .set("app", 7, &TopologyDescription {
+                        subtopologies: vec![],
+                        global_stores: vec![],
+                    })
+                    .await
+            });
+        }
+        while let Some(result) = writers.join_next().await {
+            assert!(result.expect("writer task") == Ok(()));
+        }
+        let backend = FileTopologyDescriptionBackend::new(directory.path())
+            .await
+            .expect("reopen");
+        let value: FileDescription = serde_json::from_slice(
+            &fs::read(backend.path("app"))
+                .await
+                .expect("published envelope"),
+        )
+        .expect("complete versioned envelope");
+        assert!(value.format_version == 1);
+        assert!(value.stored.topology_epoch == 7);
+        assert!(
+            backend.get("app", value.stored.topology_epoch).await
+                == Ok(Some(value.stored.description))
+        );
+        let mut entries = fs::read_dir(directory.path()).await.expect("directory");
+        let mut count = 0;
+        while entries.next_entry().await.expect("entry").is_some() {
+            count += 1;
+        }
+        assert!(count == 1, "completed attempts remove their staging names");
     }
 
     #[tokio::test]
