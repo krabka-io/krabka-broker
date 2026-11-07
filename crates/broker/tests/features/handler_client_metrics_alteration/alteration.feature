@@ -18,3 +18,4 @@ Feature: IncrementalAlterConfigs validates the merged client metrics subscriptio
       | match       | 0         | client_id=(?P<n>x)          | 40   | Illegal client matching pattern: client_id=(?P<n>x)                                                    |
       | metrics     | 2         | b.                         | 40   | Can't APPEND to key metrics because its type is not LIST.                                              |
       | metrics     | 3         | a.                         | 40   | Can't SUBTRACT to key metrics because its type is not LIST.                                            |
+      | metrics     | 9         | a.                         | 40   | config_operation=9 not supported for client-metrics key `metrics`                                      |

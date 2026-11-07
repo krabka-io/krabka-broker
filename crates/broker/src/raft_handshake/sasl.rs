@@ -268,8 +268,7 @@ pub(super) async fn run_inbound_sasl(
                             &req,
                             &mut auth,
                             &cfg.oauthbearer_validator,
-                            &cfg.oauthbearer_jwks_cache_generation,
-                            &cfg.oauthbearer_jwks_last_successful_fetch_ms,
+                            &cfg.oauthbearer_jwks_snapshot,
                             now_ms,
                             CONTROLLER_MAX_REAUTH,
                         )
