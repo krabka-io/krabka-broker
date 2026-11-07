@@ -14,15 +14,15 @@ use {
         report::{report_alter, report_describe, report_list, report_trigger, report_verify},
         verify,
     },
-    clap::Parser,
     krabka_client_core::Client,
     krabka_protocol::krabka::barrier as api,
     krabka_units::{Time, convert::TimeExt as _},
     std::io,
 };
 
-krabka_macros::parsed_cli_entrypoint!({
+krabka_macros::bootstrap_cli_entrypoint!({
     /// Run the tool from an argv-style iterator, returning its exit code.
+    /// Without `--bootstrap-server`, it reads `KRABKA_BOOTSTRAP_SERVER`.
     ///
     /// `0` means the broker accepted the request. `1` means it refused one, and the
     /// reason is on stderr. `2` means the broker could not be reached, so nothing

@@ -135,3 +135,11 @@ fn refused_as_unknown(barrier: &BarrierScenario) {
     assert2::check!(transcript.stdout.is_empty(), "{transcript:?}");
     assert2::check!(transcript.stderr.starts_with("error 91"), "{transcript:?}");
 }
+
+#[then("the tool refuses the command line")]
+fn command_line_refused(barrier: &BarrierScenario) {
+    let transcript = barrier.transcript.get();
+    assert2::check!(transcript.command_line_refused, "{transcript:?}");
+    assert2::check!(transcript.exit != 0, "{transcript:?}");
+    assert2::check!(transcript.stdout.is_empty(), "{transcript:?}");
+}

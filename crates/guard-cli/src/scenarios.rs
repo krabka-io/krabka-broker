@@ -10,18 +10,22 @@
 //! bob and carol be three principals, which the two-person rule needs. The tool
 //! itself can only connect over a plaintext listener, as one anonymous
 //! principal, and `two_person_rule.feature` keeps that gap as an `@inprogress`
-//! scenario. The one path that does go through
-//! [`run_from_args`](crate::run_from_args) is the unreachable broker, because
-//! that outcome is decided by the connect step `dispatch` skips.
+//! scenario. Two paths do run the connect step `dispatch` skips, because it
+//! decides their outcome: the unreachable broker goes through
+//! [`run_from_args`](crate::run_from_args), and `broker_address` parses with
+//! the operator's own environment against a plaintext broker.
 //!
 //! - [`driver`] boots the cluster and runs the tool as a named operator.
 //! - [`params`] parses the step words into domain values, once.
 //! - [`world`] is the scenario state.
 //! - [`common_steps`] holds the steps every capability shares.
+//! - [`broker_address_steps`] runs the shipped tool with the operator's own
+//!   environment, against a plaintext broker it can reach.
 //! - [`freeze_steps`], [`break_glass_steps`] and [`verification_steps`] hold
 //!   the rest, grouped by domain area.
 
 mod break_glass_steps;
+mod broker_address_steps;
 mod common_steps;
 mod driver;
 mod freeze_steps;
@@ -63,6 +67,12 @@ krabka_bdd::scenarios!(
 );
 krabka_bdd::scenarios!(
     "tests/features/outcomes",
+    fixtures = [guard: GuardScenario],
+    runtime = "tokio-multi-thread",
+    workers = 4,
+);
+krabka_bdd::scenarios!(
+    "tests/features/broker_address",
     fixtures = [guard: GuardScenario],
     runtime = "tokio-multi-thread",
     workers = 4,

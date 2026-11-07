@@ -190,14 +190,6 @@ fn reported_defined(barrier: &BarrierScenario) {
     );
 }
 
-#[then("the tool refuses the command line")]
-fn command_line_refused(barrier: &BarrierScenario) {
-    let transcript = barrier.transcript.get();
-    check!(transcript.command_line_refused, "{transcript:?}");
-    check!(transcript.exit != 0, "{transcript:?}");
-    check!(transcript.stdout.is_empty(), "{transcript:?}");
-}
-
 #[then("the group is described as cut on demand only")]
 fn described_on_demand(barrier: &BarrierScenario) {
     let transcript = barrier.transcript.get();

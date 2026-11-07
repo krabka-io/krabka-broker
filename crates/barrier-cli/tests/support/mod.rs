@@ -198,6 +198,51 @@ pub struct Transcript {
     pub command_line_refused: bool,
 }
 
+/// The variables an operator's shell exports, as the tool reads them.
+///
+/// A scenario cannot set a variable in its own process, because that is
+/// `unsafe` in edition 2024, so it hands the tool this instead.
+#[derive(Debug, Clone, Default)]
+pub struct Environment {
+    /// Each exported variable's name and value.
+    pub variables: BTreeMap<String, String>,
+}
+
+impl Environment {
+    /// Export `name` with `value`.
+    pub fn export(&mut self, name: &str, value: &str) {
+        self.variables.insert(name.to_owned(), value.to_owned());
+    }
+
+    /// What `name` holds, if the shell exports it.
+    pub fn get(&self, name: &str) -> Option<String> { self.variables.get(name).cloned() }
+}
+
+/// Run the tool in process with `line` as its whole command line, reading
+/// its environment variables from `environment`.
+pub async fn run_line(line: Vec<String>, environment: &Environment) -> Transcript {
+    let cli = match krabka_barrier::Cli::try_parse_with_env(line, |name| environment.get(name)) {
+        Ok(cli) => cli,
+        Err(error) => {
+            return Transcript {
+                exit: error.exit_code(),
+                stdout: String::new(),
+                stderr: error.to_string(),
+                command_line_refused: true,
+            };
+        }
+    };
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let exit =
+        krabka_barrier::run_with(cli, &mut krabka_barrier::Console::new(&mut out, &mut err)).await;
+    Transcript {
+        exit,
+        stdout: String::from_utf8(out).expect("utf-8 stdout"),
+        stderr: String::from_utf8(err).expect("utf-8 stderr"),
+        command_line_refused: false,
+    }
+}
+
 /// One row of a cut: a topic, a partition, and the offset the cut names.
 pub type CutRow = (String, i32, i64);
 
@@ -315,29 +360,10 @@ impl Operator {
             self.bootstrap.clone(),
         ];
         line.extend_from_slice(args);
-        let cli = match <krabka_barrier::Cli as clap::Parser>::try_parse_from(line) {
-            Ok(cli) => cli,
-            Err(error) => {
-                return Transcript {
-                    exit: error.exit_code(),
-                    stdout: String::new(),
-                    stderr: error.to_string(),
-                    command_line_refused: true,
-                };
-            }
-        };
-        let (mut out, mut err) = (Vec::new(), Vec::new());
-        let exit =
-            krabka_barrier::run_with(cli, &mut krabka_barrier::Console::new(&mut out, &mut err))
-                .await;
-        Transcript {
-            exit,
-            stdout: String::from_utf8(out).expect("utf-8 stdout"),
-            stderr: String::from_utf8(err).expect("utf-8 stderr"),
-            command_line_refused: false,
-        }
+        run_line(line, &Environment::default()).await
     }
 
+    /// Define a group, or redefine one that is live.
     /// Define a group, or redefine one that is live.
     pub async fn define(&self, definition: GroupDefinition) -> Transcript {
         let mut args = vec!["define".to_owned(), "--group".to_owned(), definition.group];

@@ -141,15 +141,62 @@ pub fn bootstrap_cli_fields(
         ));
     }
     group.tokens = moxy::template! {
-        /// One or more `host:port` pairs to bootstrap against.
-        #[arg(long, short = 'b', env = "KRABKA_BOOTSTRAP_SERVER", required = true)]
+        /// One or more `host:port` pairs to bootstrap against. Without it the
+        /// tool reads `KRABKA_BOOTSTRAP_SERVER`.
+        #[arg(long, short = 'b', required = true)]
         pub bootstrap_server: String,
 
         /// What to do.
         #[command(subcommand)]
         pub command: Command,
     };
-    Ok(tokens.into())
+    let mut tokens: TokenStream = tokens.into();
+    tokens.extend(bootstrap_env_parser());
+    Ok(tokens)
+}
+
+/// `Cli::try_parse_with_env`, which `bootstrap_cli_fields` adds beside the
+/// struct.
+///
+/// The fallback to `KRABKA_BOOTSTRAP_SERVER` is resolved here rather than by a
+/// clap `env` attribute so a test can hand the parser its own environment:
+/// setting a variable in process is `unsafe` in edition 2024.
+fn bootstrap_env_parser() -> TokenStream {
+    moxy::template! {
+        impl Cli {
+            /// The environment variable `--bootstrap-server` falls back to.
+            pub const BOOTSTRAP_SERVER_ENV: &'static str = "KRABKA_BOOTSTRAP_SERVER";
+
+            /// Parse `argv`, taking `--bootstrap-server` from
+            /// [`Self::BOOTSTRAP_SERVER_ENV`] when `argv` leaves it out.
+            ///
+            /// `env` looks a variable up by name. The flag wins when both name a
+            /// broker, and an empty variable counts as unset.
+            ///
+            /// # Errors
+            ///
+            /// Returns clap's error for an `argv` that does not parse, including
+            /// one that names no broker while the variable is unset.
+            pub fn try_parse_with_env<I, T>(
+                argv: I,
+                env: impl FnOnce(&str) -> Option<String>,
+            ) -> Result<Self, ::clap::Error>
+            where
+                I: IntoIterator<Item = T>,
+                T: Into<::std::ffi::OsString> + Clone,
+            {
+                let mut command = <Self as ::clap::CommandFactory>::command();
+                if let Some(bootstrap) = env(Self::BOOTSTRAP_SERVER_ENV).filter(|value| !value.is_empty()) {
+                    command = command.mut_arg("bootstrap_server", |arg| {
+                        arg.required(false).default_value(bootstrap)
+                    });
+                }
+                let mut matches = command.try_get_matches_from(argv)?;
+                <Self as ::clap::FromArgMatches>::from_arg_matches_mut(&mut matches)
+                    .map_err(|error| error.format(&mut <Self as ::clap::CommandFactory>::command()))
+            }
+        }
+    }
 }
 
 pub fn duration_cases(input: TokenStream) -> Result<TokenStream, ParseError> {
@@ -233,6 +280,22 @@ pub fn parsed_cli_entrypoint(input: TokenStream) -> Result<TokenStream, ParseErr
             T: Into<::std::ffi::OsString> + Clone,
         {
             run(Cli::parse_from(argv)).await
+        }
+    })
+}
+
+pub fn bootstrap_cli_entrypoint(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let docs = documentation(input)?;
+    Ok(moxy::template! {
+        {{ docs }}
+        pub async fn run_from_args<I, T>(argv: I) -> i32
+        where
+            I: IntoIterator<Item = T>,
+            T: Into<::std::ffi::OsString> + Clone,
+        {
+            let cli = Cli::try_parse_with_env(argv, |name| ::std::env::var(name).ok())
+                .unwrap_or_else(|error| error.exit());
+            run(cli).await
         }
     })
 }

@@ -1458,7 +1458,9 @@ pub fn argv_entrypoint(meta: TokenStream, item: TokenStream) -> Result<TokenStre
     cli_support::argv_entrypoint(meta, item)
 }
 
-/// Add bootstrap-server and subcommand fields before deriving a CLI parser.
+/// Add bootstrap-server and subcommand fields before deriving a CLI parser,
+/// and `Cli::try_parse_with_env`, which falls back to `KRABKA_BOOTSTRAP_SERVER`
+/// through an environment lookup the caller passes.
 #[moxy::attribute(name = "bootstrap_cli_fields")]
 pub fn bootstrap_cli_fields(
     meta: TokenStream,
@@ -1495,6 +1497,18 @@ pub fn directory_tree_fixture(tokens: TokenStream) -> Result<TokenStream, ParseE
 #[cfg_attr(not(test), moxy::function)]
 pub fn parsed_cli_entrypoint(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     cli_support::parsed_cli_entrypoint(tokens)
+}
+
+/// Generate the `run_from_args` of a CLI whose `Cli` carries
+/// `#[bootstrap_cli_fields]`, reading `KRABKA_BOOTSTRAP_SERVER` from the process
+/// environment.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn bootstrap_cli_entrypoint(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::bootstrap_cli_entrypoint(tokens)
 }
 
 /// Generate a duration-parser test from explicit literal cases.
@@ -2149,7 +2163,7 @@ mod export_contract_tests {
         name: &'static str,
         expand: Expand,
     }
-    const FUNCTION_MACROS: [FunctionMacro; 84] = [
+    const FUNCTION_MACROS: [FunctionMacro; 85] = [
         FunctionMacro {
             name: "dispatch_table",
             expand: dispatch_table,
@@ -2345,6 +2359,10 @@ mod export_contract_tests {
         FunctionMacro {
             name: "parsed_cli_entrypoint",
             expand: parsed_cli_entrypoint,
+        },
+        FunctionMacro {
+            name: "bootstrap_cli_entrypoint",
+            expand: bootstrap_cli_entrypoint,
         },
         FunctionMacro {
             name: "duration_parser_fixture",

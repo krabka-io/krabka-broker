@@ -37,7 +37,7 @@
 //! JVM tools another way: `DescribeConfigs` reports a read-only `write.freeze`
 //! key for every topic, so `kafka-configs --describe` shows it.
 
-use {self::command::dispatch, clap::Parser};
+use self::command::dispatch;
 
 mod broker_codes;
 mod cli;
@@ -89,8 +89,9 @@ pub const EXIT_NO_APPROVAL: i32 = 4;
 /// answer is wrong". KFC-5's verifier draws the same distinction.
 pub const EXIT_BAD_SIGNATURE: i32 = 5;
 
-krabka_macros::parsed_cli_entrypoint!({
+krabka_macros::bootstrap_cli_entrypoint!({
     /// Run the tool from an argv-style iterator, returning its exit code.
+    /// Without `--bootstrap-server`, it reads `KRABKA_BOOTSTRAP_SERVER`.
     ///
     /// `0` means the broker accepted the request. `1` means it refused one, and the
     /// reason is on stderr. `2` means the broker could not be reached, so nothing
