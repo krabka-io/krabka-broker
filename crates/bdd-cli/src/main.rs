@@ -1,0 +1,2 @@
+//! Placeholder.
+fn main() {}

@@ -3780,6 +3780,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "krabka-bdd-cli"
+version = "1.1.5"
+dependencies = [
+ "assert2",
+ "clap",
+ "gherkin",
+ "krabka-bdd-model",
+ "rstest",
+]
+
+[[package]]
 name = "krabka-bdd-macros"
 version = "1.1.5"
 dependencies = [
