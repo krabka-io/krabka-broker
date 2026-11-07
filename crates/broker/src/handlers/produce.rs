@@ -36,7 +36,7 @@ use {
         throttle::finish_produce_response,
         topic_settings::{
             TimestampPolicy, broker_default_timestamp_policy, resolve_compacted_topic,
-            resolve_timestamp_policy, resolve_topic_compression,
+            resolve_timestamp_policy,
         },
     },
     crate::{
@@ -90,6 +90,8 @@ mod response;
 mod schema;
 mod throttle;
 mod topic_settings;
+
+pub use self::topic_settings::resolve_topic_compression;
 
 #[cfg(test)]
 pub mod test_support;
