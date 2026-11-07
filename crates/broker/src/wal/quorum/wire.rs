@@ -205,8 +205,13 @@ pub fn unknown_shard_fetch_response(group: QuorumGroup) -> FetchResponse {
 }
 
 pub fn encode_fetch_response_struct(response: &FetchResponse) -> Bytes {
+    encode_at_fetch_version(response)
+}
+
+/// Encodes a WAL Fetch message at [`KIP_595_FETCH_VERSION`].
+fn encode_at_fetch_version<T: Encode>(message: &T) -> Bytes {
     let mut out = bytes::BytesMut::new();
-    let _ = response.encode(&mut out, KIP_595_FETCH_VERSION);
+    let _ = message.encode(&mut out, KIP_595_FETCH_VERSION);
     out.freeze()
 }
 
@@ -267,9 +272,7 @@ pub fn encode_fetch_for_group(
         fetch_offset,
         ByteSize::from_bytes(u64::MAX),
     );
-    let mut out = bytes::BytesMut::new();
-    let _ = request.encode(&mut out, KIP_595_FETCH_VERSION);
-    out.freeze()
+    encode_at_fetch_version(&request)
 }
 
 #[cfg(test)]
