@@ -5,7 +5,7 @@
 //! features with no Kafka counterpart, so each one takes a number from this
 //! private range instead of a Kafka one.
 
-use super::wire_types::ApiKeyCode;
+use {super::wire_types::ApiKeyCode, krabka_protocol::api_key::ApiKey};
 
 /// Lowest `api_key` in the krabka-private range.
 ///
@@ -116,6 +116,23 @@ pub fn krabka_private_api_name(api_key: ApiKeyCode) -> Option<&'static str> {
         .iter()
         .find(|api| api.api_key == api_key)
         .map(|api| api.name)
+}
+
+/// The name of the RPC the broker knows at `api_key`, if any.
+///
+/// A key the generated [`ApiKey`] enum knows resolves to its variant name.
+/// That covers every Kafka key and `GetReplicaLogInfo` (1020), the one
+/// krabka-private key with a generated schema. Any other key at or above
+/// [`KRABKA_PRIVATE_API_KEY_FLOOR`] resolves through
+/// [`krabka_private_api_name`]. The request metrics and the request spans
+/// both name an api this way, so a dashboard and a trace agree.
+#[must_use]
+pub fn api_name(api_key: ApiKeyCode) -> Option<&'static str> {
+    match ApiKey::from_i16(api_key) {
+        Some(known) => Some(known.into()),
+        None if api_key >= KRABKA_PRIVATE_API_KEY_FLOOR => krabka_private_api_name(api_key),
+        None => None,
+    }
 }
 
 #[cfg(test)]
