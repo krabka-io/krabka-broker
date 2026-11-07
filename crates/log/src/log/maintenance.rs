@@ -79,6 +79,12 @@ impl DueDeletions {
     }
 }
 
+/// `time` as a [`Duration`], whole milliseconds, with a negative `time` read
+/// as zero.
+fn saturating_duration(time: Time) -> Duration {
+    Duration::from_millis(u64::try_from(time.millis_i64_trunc()).unwrap_or(0))
+}
+
 impl Log {
     /// Flush dirty data, write a log start retention moved once its
     /// checkpoint is due, and reclaim retired files whose deadlines have
@@ -154,7 +160,7 @@ impl Log {
             Some(Duration::ZERO)
         } else {
             config.flush_interval.map(|interval| {
-                Duration::from_millis(u64::try_from(interval.millis_i64_trunc()).unwrap_or(0))
+                saturating_duration(interval)
                     .saturating_sub(elapsed.saturating_duration_since(self.last_flush))
             })
         };
@@ -335,8 +341,8 @@ impl Log {
                     .flush_messages
                     .is_some_and(|limit| self.unflushed_messages >= limit)
                     || config.flush_interval.is_some_and(|interval| {
-                        now.saturating_duration_since(self.last_flush).as_millis()
-                            >= u128::try_from(interval.millis_i64_trunc()).unwrap_or(0)
+                        now.saturating_duration_since(self.last_flush)
+                            >= saturating_duration(interval)
                     }))
         };
         if due {
@@ -361,7 +367,7 @@ impl Log {
         sync: DirSync,
     ) -> Result<(), LogError> {
         let delay = self.config().file_delete_delay;
-        let delay = Duration::from_millis(u64::try_from(delay.millis_i64_trunc()).unwrap_or(0));
+        let delay = saturating_duration(delay);
         let deadline = now
             .checked_add(delay)
             .ok_or_else(|| LogError::InvalidArgument("file deletion deadline overflow".into()))?;
