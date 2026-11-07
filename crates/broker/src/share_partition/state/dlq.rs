@@ -125,24 +125,29 @@ impl AcquisitionState {
     /// then calls [`Self::finish_archiving`].
     pub fn take_pending_dlq(&mut self) -> Vec<DlqRange> { mem::take(&mut self.pending_dlq) }
 
-    /// The second phase: moves every `Archiving` record in `[first, last]` to
-    /// `Archived`, counts it as terminal, marks the state dirty and advances
-    /// the SPSO over the new terminal prefix.
-    ///
-    /// A record of the range that is no longer `Archiving` stays as it is.
+    /// Phase 2: archive the range without pruning its terminal prefix.
+    /// Kafka persists ARCHIVED with the old SPSO and completed count before
+    /// pruning the live cache. The owner must call `prune_terminal_prefix`
+    /// after the persistence attempt, including when that attempt fails.
     pub fn finish_archiving(&mut self, first: Offset, last: Offset) {
-        self.archive_range(
-            first,
-            last,
+        if !self.split_valid_range(first, last) {
+            return;
+        }
+        let changed = self.archive_matching(
             |batch| {
                 batch.state == RecordState::Archiving
                     && batch.first_offset >= first
                     && batch.last_offset <= last
             },
             false,
-            true,
         );
+        self.dirty |= changed;
+        self.coalesce();
     }
+
+    /// Prune the live cache after the phase-2 persistence attempt. This does
+    /// not itself dirty the state: a later operation persists the new SPSO.
+    pub(crate) fn prune_terminal_prefix(&mut self) { self.advance_spso(); }
 }
 
 #[cfg(test)]
@@ -320,10 +325,66 @@ mod tests {
         s.dirty = false;
 
         s.finish_archiving(Offset(0), Offset(1));
+        s.prune_terminal_prefix();
 
         assert!(
             (s.start_offset, s.dirty, s.record_states())
                 == (Offset(3), true, vec![(3, RecordState::Acquired)])
+        );
+    }
+
+    /// The coordinator snapshot must precede cache pruning, as in released
+    /// Kafka's initiateDLQAndArchive. A restart from that snapshot must not
+    /// enqueue the source a second time, whether DLQ append succeeded or was
+    /// a terminal failure (both use the same phase-2 transition).
+    #[test]
+    fn archived_prefix_is_persisted_before_live_cache_pruning() {
+        let mut s = state_with_dlq(Offset(1));
+        s.acknowledge("m1", Offset(0), Offset(0), AckType::Reject, 5)
+            .unwrap();
+        let _ = s.take_pending_dlq();
+        s.dirty = false;
+
+        s.finish_archiving(Offset(0), Offset(0));
+        let (start, completed, rows) = s.to_persist_batches();
+        assert!(
+            (start, completed, rows.clone(), s.dirty)
+                == (
+                    Offset(0),
+                    1,
+                    vec![
+                        batch()
+                            .bounds(Offset(0)..=Offset(0))
+                            .delivery(FixtureDeliveryState::Archived)
+                            .call()
+                    ],
+                    true
+                )
+        );
+
+        // A failed write still advances the cache, but remains dirty so a
+        // future operation retries persistence rather than re-enqueuing DLQ.
+        let mut failed = s.clone();
+        failed.prune_terminal_prefix();
+        assert!(
+            (failed.start_offset, failed.dirty, failed.take_pending_dlq())
+                == (Offset(1), true, Vec::new())
+        );
+
+        // A successful write clears dirty before the live cache moves. The
+        // cache-only move must not immediately overwrite the durable receipt.
+        s.dirty = false;
+        s.prune_terminal_prefix();
+        assert!((s.start_offset, s.delivery_complete_count(), s.dirty) == (Offset(1), 0, false));
+
+        let mut recovered = AcquisitionState::new(Offset(0));
+        recovered.load_from(start, 1, 1, &rows);
+        assert!(
+            (
+                recovered.start_offset,
+                recovered.take_pending_dlq(),
+                recovered.record_states()
+            ) == (Offset(1), Vec::new(), Vec::new())
         );
     }
 
@@ -382,6 +443,7 @@ mod tests {
         reloaded.load_from(start, 1, 1, &batches);
         let pending = reloaded.take_pending_dlq();
         reloaded.finish_archiving(Offset(0), Offset(1));
+        reloaded.prune_terminal_prefix();
         let (spso, _, after) = reloaded.to_persist_batches();
 
         assert!(

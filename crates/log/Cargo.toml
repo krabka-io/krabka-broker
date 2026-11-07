@@ -64,6 +64,9 @@ compio = { version = "0.19.2", default-features = false, features = ["runtime", 
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+# No `version`: `krabka-bdd` is not published, so cargo drops it from the
+# published manifest. See CLAUDE.md "Releases".
+krabka-bdd = { path = "../bdd" }
 rstest = { workspace = true }
 rstest-bdd = { workspace = true }
 rstest-bdd-macros = { workspace = true }

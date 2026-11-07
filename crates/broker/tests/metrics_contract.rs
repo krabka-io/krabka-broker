@@ -29,7 +29,8 @@ use {
         ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, MetadataPartitionLabel,
         PartitionLabel, QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel,
         ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupIdLabel,
-        ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
+        ShareGroupLabel, TopicLabel, TopologyStorageLabel, TopologyStorageOperation, WalShardLabel,
+        WalVoterLabel,
     },
     krabka_metadata::BreakGlassAction as GatedAction,
     prometheus_client::{
@@ -165,6 +166,8 @@ where
 fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
     let BrokerMetrics {
         registry: _registry,
+        streams_topology_storage_operations: _streams_topology_storage_operations,
+        streams_topology_storage_duration_seconds: _streams_topology_storage_duration_seconds,
         topic_bytes_in: _topic_bytes_in,
         topic_bytes_out: _topic_bytes_out,
         topic_messages_in: _topic_messages_in,
@@ -348,6 +351,11 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
 
 fn seed_grouped_families(metrics: &BrokerMetrics) {
     every_family_is_accounted_for(metrics);
+    let storage = TopologyStorageLabel::new(TopologyStorageOperation::Set, true);
+    seed(&storage, &[&metrics.streams_topology_storage_operations]);
+    seed(&storage, &[
+        &metrics.streams_topology_storage_duration_seconds
+    ]);
     let SeedLabels {
         topic,
         partition,

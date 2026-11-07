@@ -146,6 +146,9 @@ impl SharePartitionLeaderManager {
         if self.shutdown.is_cancelled() {
             return;
         }
+        // Kafka writes ARCHIVED using the old SPSO and completed count,
+        // then prunes its live cache in the persistence completion callback.
+        // Pruning first loses the terminal rows from the durable snapshot.
         state.finish_archiving(range.first, range.last);
         // Best-effort: a failed write keeps the state dirty, so a later write
         // carries the archived run to the coordinator. The state stays in
@@ -153,6 +156,7 @@ impl SharePartitionLeaderManager {
         let _ = self
             .persist_if_dirty(group, *topic_id, *partition, Some(cell), &mut state)
             .await;
+        state.prune_terminal_prefix();
         drop(state);
     }
 }

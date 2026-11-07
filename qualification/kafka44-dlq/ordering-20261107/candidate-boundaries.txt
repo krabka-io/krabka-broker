@@ -1,0 +1,16 @@
+copy=true limit=100000 encoded_bytes=356 dlq_count=1 value_bytes=100
+SCENARIO	dlq-boundary-true-0	PASS
+copy=true limit=355 encoded_bytes=356 dlq_count=0 value_bytes=-1
+SCENARIO	dlq-boundary-true-1	PASS
+copy=true limit=356 encoded_bytes=356 dlq_count=1 value_bytes=100
+SCENARIO	dlq-boundary-true-2	PASS
+copy=true limit=357 encoded_bytes=356 dlq_count=1 value_bytes=100
+SCENARIO	dlq-boundary-true-3	PASS
+copy=false limit=100000 encoded_bytes=254 dlq_count=1 value_bytes=-1
+SCENARIO	dlq-boundary-false-0	PASS
+copy=false limit=253 encoded_bytes=254 dlq_count=0 value_bytes=-1
+SCENARIO	dlq-boundary-false-1	PASS
+copy=false limit=254 encoded_bytes=254 dlq_count=1 value_bytes=-1
+SCENARIO	dlq-boundary-false-2	PASS
+copy=false limit=255 encoded_bytes=254 dlq_count=1 value_bytes=-1
+SCENARIO	dlq-boundary-false-3	PASS
