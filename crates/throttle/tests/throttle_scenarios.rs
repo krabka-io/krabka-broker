@@ -65,7 +65,7 @@ impl ThrottledBroker {
 
     fn pass(&self, millis: u64) {
         let advanced = self.clock.advance(Duration::from_millis(millis));
-        assert2::assert!(let Ok(_) = advanced, "manual time moves forward");
+        assert2::assert!(let Ok(()) = advanced, "manual time moves forward");
     }
 
     /// Asks for up to `requested` bytes, as a log directory copy step does.
