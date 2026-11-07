@@ -15,13 +15,11 @@ Feature: A legacy message set is a run of offset-framed messages
       When the broker decodes the message set
       Then the broker reads three records
 
-    @inprogress
     Scenario: A message set cut inside its last message yields the complete ones
       Given a message set of three magic 1 messages cut inside the third message
       When the broker decodes the message set
       Then the broker reads two records
 
-    @inprogress
     Scenario: A message set cut inside the offset and size of its last entry yields the complete ones
       Given a message set of three magic 1 messages cut inside the third entry header
       When the broker decodes the message set
