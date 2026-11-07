@@ -7305,7 +7305,7 @@ dependencies = [
 [[package]]
 name = "rstest-bdd-macros"
 version = "0.6.0"
-source = "git+https://github.com/krabka-io/krabka-broker?rev=94046ebfaab85ebceaea55e6a5ad5e16b183ad67#94046ebfaab85ebceaea55e6a5ad5e16b183ad67"
+source = "git+https://github.com/krabka-io/krabka-broker?rev=5704cfa6b1958c1b24e3c1f141ef8a99a145b813#5704cfa6b1958c1b24e3c1f141ef8a99a145b813"
 dependencies = [
  "camino",
  "cap-std",
