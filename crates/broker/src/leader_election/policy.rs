@@ -38,17 +38,55 @@ pub struct NextEpochs {
     pub leader: LeaderEpoch,
 }
 
-/// Push the `PartitionRecord` that moves `pr` to `leader` and `isr` at
-/// `epochs`, every other field carried over from `pr`. When `recovering`,
-/// a `PartitionRecoveryRecord` marking the new leader `RECOVERING` follows it,
-/// which is what an unclean election writes.
+/// Whether the leader a [`PartitionChange`] installs must recover its log
+/// before it serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaderRecovery {
+    /// The leader serves as soon as it is elected.
+    Recovered,
+    /// The leader is marked `RECOVERING`, which is what an unclean election
+    /// writes.
+    Recovering,
+}
+
+impl LeaderRecovery {
+    /// The recovery an election installs: an unclean election's leader
+    /// recovers, a clean one's does not.
+    pub fn of_election(unclean: bool) -> Self {
+        if unclean {
+            Self::Recovering
+        } else {
+            Self::Recovered
+        }
+    }
+}
+
+/// The new leadership a partition change writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartitionChange {
+    /// The leader the change installs.
+    pub leader: NodeId,
+    /// The ISR the change installs.
+    pub isr: Vec<NodeId>,
+    /// The epochs the change writes.
+    pub epochs: NextEpochs,
+    /// Whether `leader` must recover first.
+    pub recovery: LeaderRecovery,
+}
+
+/// Push the `PartitionRecord` that moves `pr` to `change`'s leader, ISR and
+/// epochs, every other field carried over from `pr`. When the change's leader
+/// is [`LeaderRecovery::Recovering`], a `PartitionRecoveryRecord` marking it
+/// `RECOVERING` follows.
 pub fn push_partition_change(
     changes: &mut Vec<MetadataRecord>,
     pr: &PartitionRecord,
-    leader: NodeId,
-    isr: Vec<NodeId>,
-    epochs: NextEpochs,
-    recovering: bool,
+    PartitionChange {
+        leader,
+        isr,
+        epochs,
+        recovery,
+    }: PartitionChange,
 ) {
     changes.push(MetadataRecord::V1Partition(PartitionRecord {
         leader,
@@ -57,7 +95,7 @@ pub fn push_partition_change(
         partition_epoch: epochs.partition,
         ..pr.clone()
     }));
-    if recovering {
+    if recovery == LeaderRecovery::Recovering {
         changes.push(MetadataRecord::V1PartitionRecovery(
             PartitionRecoveryRecord {
                 topic: pr.topic.clone(),

@@ -23,8 +23,8 @@ use krabka_metadata::{
 };
 use {
     super::policy::{
-        FailoverDecision, FailoverPlan, Ladder, NextEpochs, elect_leaderless_one, failover_one,
-        push_partition_change, unclean_restart_one,
+        FailoverDecision, FailoverPlan, Ladder, LeaderRecovery, NextEpochs, PartitionChange,
+        elect_leaderless_one, failover_one, push_partition_change, unclean_restart_one,
     },
     crate::{
         config_keys::{
@@ -197,7 +197,12 @@ fn push_checked_isr_shrink(
         return false;
     };
     applied(&isr);
-    push_partition_change(changes, pr, pr.leader, isr, epochs, false);
+    push_partition_change(changes, pr, PartitionChange {
+        leader: pr.leader,
+        isr,
+        epochs,
+        recovery: LeaderRecovery::Recovered,
+    });
     true
 }
 
@@ -279,7 +284,12 @@ pub async fn compute_failover_changes(
                     unclean,
                     "failover: re-electing partition leader (triggered by dead broker)"
                 );
-                push_partition_change(&mut changes, pr, leader, isr, epochs, unclean);
+                push_partition_change(&mut changes, pr, PartitionChange {
+                    leader,
+                    isr,
+                    epochs,
+                    recovery: LeaderRecovery::of_election(unclean),
+                });
             }
             FailoverDecision::ShrinkIsr { isr } => {
                 shrink_or_mark_unavailable(
@@ -374,7 +384,12 @@ pub async fn compute_offline_dir_failover_changes(
                     );
                     metrics.record_unclean_leader_election();
                 }
-                push_partition_change(&mut changes, pr, leader, isr, epochs, unclean);
+                push_partition_change(&mut changes, pr, PartitionChange {
+                    leader,
+                    isr,
+                    epochs,
+                    recovery: LeaderRecovery::of_election(unclean),
+                });
             }
             FailoverDecision::ShrinkIsr { isr } => {
                 push_checked_isr_shrink(
@@ -549,7 +564,12 @@ fn restart_plan(
                     unclean,
                     "unclean restart: re-electing partition leader"
                 );
-                push_partition_change(&mut changes, pr, leader, isr, epochs, unclean);
+                push_partition_change(&mut changes, pr, PartitionChange {
+                    leader,
+                    isr,
+                    epochs,
+                    recovery: LeaderRecovery::of_election(unclean),
+                });
             }
             FailoverDecision::ShrinkIsr { isr } => {
                 shrink_or_mark_unavailable(
@@ -678,7 +698,12 @@ fn compute_leaderless_changes_with_alive(
             unclean,
             "electing a leader for a partition with none"
         );
-        push_partition_change(&mut changes, pr, leader, isr, epochs, unclean);
+        push_partition_change(&mut changes, pr, PartitionChange {
+            leader,
+            isr,
+            epochs,
+            recovery: LeaderRecovery::of_election(unclean),
+        });
     }
     // A leader is what clears the last-known ELR, and the election it comes
     // from settles the eligible set.
