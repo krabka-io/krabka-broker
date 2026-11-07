@@ -60,6 +60,22 @@ impl QuotaType {
             .into_iter()
             .find(|quota_type| quota_type.config_key() == key)
     }
+
+    /// The token rate a bucket for this quota runs at, in the unit its consumer
+    /// meters: the same conversion the consumer used when it created the bucket.
+    ///
+    /// `request_percentage` meters microseconds of handler time per second. Every
+    /// other quota meters its own unit, and keeps its fractional part: Kafka
+    /// holds each quota as a double, and the bucket enforces a fractional rate as
+    /// configured.
+    pub(super) fn token_rate(self, rate: f64) -> f64 {
+        match self {
+            Self::Request => super::request::request_percentage_token_rate(rate),
+            Self::Produce | Self::Fetch | Self::ControllerMutation | Self::ConnectionCreation => {
+                rate
+            }
+        }
+    }
 }
 
 #[cfg(test)]

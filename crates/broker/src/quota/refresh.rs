@@ -97,20 +97,6 @@ where
     }
 }
 
-/// The token rate a bucket for `quota_type` runs at, in the unit its consumer
-/// meters: the same conversion the consumer used when it created the bucket.
-///
-/// `request_percentage` meters microseconds of handler time per second. Every
-/// other quota meters its own unit, and keeps its fractional part: Kafka
-/// holds each quota as a double, and the bucket enforces a fractional rate as
-/// configured.
-fn token_rate(quota_type: QuotaType, rate: f64) -> f64 {
-    match quota_type {
-        QuotaType::Request => super::request::request_percentage_token_rate(rate),
-        _ => rate,
-    }
-}
-
 fn refresh_buckets(image: &MetadataImage, buckets: &QuotaBuckets) {
     let window = buckets.quota_window();
     for LiveBucket {
@@ -122,7 +108,7 @@ fn refresh_buckets(image: &MetadataImage, buckets: &QuotaBuckets) {
     } in buckets.iter()
     {
         let new_rate = configured_rate(image, buckets.ip_names(), quota_type, &entity_key)
-            .map_or(0.0, |rate| token_rate(quota_type, rate));
+            .map_or(0.0, |rate| quota_type.token_rate(rate));
 
         let new_rate = super::bucket_rate(new_rate);
         // Compared as the bucket stores it, so a rate finer than the bucket
@@ -152,7 +138,7 @@ fn refresh_buckets(image: &MetadataImage, buckets: &QuotaBuckets) {
 /// nothing for it and would remove the `connection_creation_rate` limit at the
 /// next image change.
 ///
-/// The rate comes back in the unit the image configures it in; [`token_rate`]
+/// The rate comes back in the unit the image configures it in; [`QuotaType::token_rate`]
 /// converts it to the bucket's token unit.
 fn configured_rate(
     image: &MetadataImage,
