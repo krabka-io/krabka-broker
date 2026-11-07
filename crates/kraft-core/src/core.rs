@@ -334,18 +334,23 @@ impl QuorumStateMachine {
     /// epoch, `Unattached` otherwise. Kafka keeps both in one
     /// `UnattachedState`, with or without a voted key.
     fn await_election(&mut self, election_deadline: SimInstant) -> Vec<Action> {
-        self.role = if self.state.voted_key.is_some() {
+        let role = if self.state.voted_key.is_some() {
             Role::Voted { election_deadline }
         } else {
             Role::Unattached { election_deadline }
         };
-        vec![
+        self.enter_role(role, TimerKind::Election, election_deadline)
+            .into()
+    }
+
+    /// Take `role`, then persist the quorum state, report the transition and
+    /// arm the `kind` timer for `deadline`, in that order.
+    fn enter_role(&mut self, role: Role, kind: TimerKind, deadline: SimInstant) -> [Action; 3] {
+        self.role = role;
+        [
             Action::PersistQuorumState,
             Action::TransitionedTo(self.role.name()),
-            Action::ResetTimer {
-                kind: TimerKind::Election,
-                deadline: election_deadline,
-            },
+            Action::ResetTimer { kind, deadline },
         ]
     }
 
@@ -363,17 +368,15 @@ impl QuorumStateMachine {
         self.state.leader_epoch = epoch;
         self.state.leader_id = None;
         self.state.voted_key = None;
-        self.role = Role::Unattached {
-            election_deadline: deadline,
-        };
-        actions.push(Action::PersistQuorumState);
-        actions.push(Action::TransitionedTo("Unattached"));
         // Arm the election timer so a fenced/stepped-down node will eventually
         // re-elect if no leader emerges (without this it would deadlock).
-        actions.push(Action::ResetTimer {
-            kind: TimerKind::Election,
+        actions.extend(self.enter_role(
+            Role::Unattached {
+                election_deadline: deadline,
+            },
+            TimerKind::Election,
             deadline,
-        });
+        ));
     }
 }
 
