@@ -50,9 +50,11 @@ pub fn topic_log_config(
 /// topic keys: under Kafka 4.3.1 a stored value of it is an unknown key that
 /// nothing reads, so the log runs with no limit.
 ///
-/// A partition whose log cannot write the start checkpoint that enabling
-/// remote storage needs keeps its old config, and a storage failure takes its
-/// directory offline in `log_dir_status`; see
+/// A partition on a directory `log_dir_status` holds offline is left alone, as
+/// Kafka's `ReplicaManager.handleLogDirFailure` keeps it offline until the
+/// broker restarts. A partition whose log cannot write the start checkpoint
+/// that enabling remote storage needs keeps its old config, and a storage
+/// failure takes its directory offline; see
 /// [`Partition::apply_log_config_overrides`](crate::partition::Partition::apply_log_config_overrides).
 pub async fn push_topic_configs(
     desired: &HashSet<TopicPartition>,
@@ -69,6 +71,9 @@ pub async fn push_topic_configs(
         let Some(part) = partitions.get(topic, PartitionIndex(*partition)) else {
             continue;
         };
+        if log_dir_status.is_offline(&part.log_dir.load()) {
+            continue;
+        }
         let overrides = image.topic_config(topic).unwrap_or(&empty);
         // `apply_to_log_config` leaves the field alone, so the topic's own
         // limit travels in the base it merges over.
@@ -159,9 +164,9 @@ mod tests {
         part.log.lock().expect("log lock").config_snapshot()
     }
 
-    #[tokio::test]
-    async fn push_topic_configs_pushes_overrides_to_local_partition() {
-        // Build an image with a topic + partition record + V1TopicConfig.
+    /// An image with partition `t-0` led by node 1, whose topic overrides
+    /// `retention.ms` to a minute.
+    fn retention_minute_image() -> MetadataImage {
         let mut img = single_partition_image("t", Uuid::new_v4(), krabka_raft::NodeId(1));
         let mut overrides = BTreeMap::new();
         overrides.insert("retention.ms".to_owned(), "60000".to_owned());
@@ -171,6 +176,12 @@ mod tests {
                 overrides,
             },
         ));
+        img
+    }
+
+    #[tokio::test]
+    async fn push_topic_configs_pushes_overrides_to_local_partition() {
+        let img = retention_minute_image();
 
         let base = LogConfig {
             segment_size: krabka_units::mebibytes(1),
@@ -185,6 +196,32 @@ mod tests {
             .await;
         assert!(snap.retention == Some(krabka_units::minutes(1)));
         assert!(snap.segment_size == krabka_units::mebibytes(1));
+    }
+
+    /// A partition on an offline log directory stays as it was, as Kafka's
+    /// `handleLogDirFailure` keeps it until the broker restarts: the reconcile
+    /// does not write to a directory the broker has declared failed.
+    #[tokio::test]
+    async fn push_topic_configs_skips_a_partition_on_an_offline_dir() {
+        let base = LogConfig::default();
+        let (_dir, partitions) = materialized_partition_with_config(&base);
+        let part = partitions.get("t", PartitionIndex(0)).expect("partition");
+        let before = part.log.lock().expect("log lock").config_snapshot();
+        let registry = LogDirRegistry::default();
+        registry.mark_offline(&part.log_dir.load(), "test: disk failed");
+
+        push_topic_configs(
+            &HashSet::from([("t".to_owned(), 0)]),
+            &partitions,
+            &retention_minute_image(),
+            &base,
+            NodeId(1),
+            UnstableApiVersions::Disabled,
+            &registry,
+        )
+        .await;
+
+        assert!(part.log.lock().expect("log lock").config_snapshot() == before);
     }
 
     /// Kafka 4.4's `max.decompressed.message.bytes` reaches the log a

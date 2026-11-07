@@ -11,7 +11,7 @@ use {
         partition::{
             Partition, ProduceData, ProduceJob, ProducerAppendCheck, ReplicatedBatch, WriterMessage,
         },
-        partition_writer::flag_storage_failure,
+        partition_writer::{flag_storage_failure, storage_failure_error},
         task_util::{AskError, ask},
     },
     krabka_log::Offset,
@@ -106,8 +106,9 @@ impl Partition {
     /// # Errors
     /// Returns an error if the blocking task cannot complete, or if the log
     /// start checkpoint that must precede enabling remote storage cannot be
-    /// written. The log then keeps its old config, and a storage failure takes
-    /// the partition's log directory offline in `log_dir_status`.
+    /// written. The log then keeps its old config, and a storage failure, a
+    /// panic in the task included, takes the partition's log directory
+    /// offline in `log_dir_status` until the broker restarts.
     pub(crate) async fn apply_log_config_overrides(
         &self,
         overrides: &BTreeMap<String, String>,
@@ -128,8 +129,8 @@ impl Partition {
             // and has not yet written must reach the file before the log turns
             // tiered: a crash would otherwise reopen it at the older start and
             // send reads for offsets retention deleted to a tier that never
-            // held them. Until the write succeeds the log keeps its old
-            // config, and the next reconcile tries again.
+            // held them. A failed write leaves the log untiered on a
+            // directory that goes offline.
             if merged.remote_storage_enable && !current.remote_storage_enable {
                 log.flush_log_start_checkpoint()?;
             }
@@ -140,9 +141,7 @@ impl Partition {
             Ok(())
         })
         .await
-        .map_err(|error| {
-            BrokerError::Replication(format!("log configuration task failed: {error}"))
-        })
+        .map_err(|error| storage_failure_error("log configuration task failed", error))
         .and_then(|applied| applied.map_err(BrokerError::Log));
         if let Err(error) = &result {
             flag_storage_failure(error, &self.log_dir, log_dir_status);
@@ -441,11 +440,7 @@ mod tests {
             collections::BTreeMap,
             fs, io,
             path::{Path, PathBuf},
-            sync::{
-                Arc,
-                atomic::{AtomicBool, Ordering},
-                mpsc,
-            },
+            sync::{Arc, mpsc},
             thread,
             time::{Duration, SystemTime},
         },
@@ -497,14 +492,13 @@ mod tests {
         assert!(fs::read_to_string(&checkpoint).unwrap() == "0\n2\n");
     }
 
-    /// A disk that refuses to publish the log-start checkpoint once.
+    /// A disk that refuses to publish the log-start checkpoint.
     #[derive(Debug)]
-    struct StartCheckpointFailsOnce(AtomicBool);
+    struct StartCheckpointFails;
 
-    impl krabka_log::LogIo for StartCheckpointFailsOnce {
+    impl krabka_log::LogIo for StartCheckpointFails {
         fn rename(&self, target: IoTarget, from: &Path, to: &Path) -> io::Result<()> {
-            if target == IoTarget::LogStartOffsetCheckpoint && self.0.swap(false, Ordering::SeqCst)
-            {
+            if target == IoTarget::LogStartOffsetCheckpoint {
                 return Err(io::ErrorKind::StorageFull.into());
             }
             fs::rename(from, to)
@@ -514,14 +508,14 @@ mod tests {
     /// The log must not turn tiered while the checkpoint still holds the
     /// older start. A failed write keeps the old config, takes the log
     /// directory offline as every other partition write failure does, and
-    /// returns the error, so the next metadata reconcile tries again.
+    /// returns the error.
     #[tokio::test]
     async fn a_failed_start_checkpoint_keeps_remote_storage_off_and_takes_the_dir_offline() {
         let (part, dir, checkpoint, base) = partition_owing_a_retention_moved_start();
         part.log
             .lock()
             .unwrap()
-            .test_set_io(Arc::new(StartCheckpointFailsOnce(AtomicBool::new(true))));
+            .test_set_io(Arc::new(StartCheckpointFails));
         let registry = LogDirRegistry::default();
 
         let error = part
@@ -540,18 +534,6 @@ mod tests {
                 dir.path().to_path_buf()
             ])
         );
-
-        part.apply_log_config_overrides(&remote_storage_on(), &base, &registry)
-            .await
-            .unwrap();
-        assert!(
-            part.log
-                .lock()
-                .unwrap()
-                .config_snapshot()
-                .remote_storage_enable
-        );
-        assert!(fs::read_to_string(&checkpoint).unwrap() == "0\n2\n");
     }
 
     #[tokio::test]
