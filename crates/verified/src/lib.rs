@@ -125,8 +125,8 @@ pub use {
         BatchMeta, RecordMeta, RetainDecision, TxnDataState, compute_horizon, retain_decision,
     },
     consensus::{
-        election_has_quorum, election_jitter_ms, log_is_up_to_date, majority_size,
-        recompute_high_watermark,
+        LeaderVote, WatermarkInputs, election_has_quorum, election_jitter_ms, log_is_up_to_date,
+        majority_size, recompute_high_watermark,
     },
     delegation_token::{
         TokenCreateDecision, TokenDeadlines, TokenExpireDecision, TokenMutationDecision,

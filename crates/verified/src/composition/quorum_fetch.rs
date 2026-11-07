@@ -3,7 +3,7 @@ use {
         FetchReader, FetchWatermarks, Isolation, WalFetchSupport, fetch_visibility,
         wal_voter_set_valid,
     },
-    crate::consensus::{majority_size, recompute_high_watermark},
+    crate::consensus::{LeaderVote, WatermarkInputs, majority_size, recompute_high_watermark},
     creusot_std::prelude::*,
 };
 
@@ -31,12 +31,18 @@ pub(super) fn quorum_commit_bounds_fetch(
     w: FetchWatermarks,
 ) -> (i64, i64) {
     let hw = recompute_high_watermark(
-        w.log_end,
+        WatermarkInputs {
+            log_end: w.log_end,
+            epoch_start_offset: epoch_start,
+            current_hwm: current,
+        },
         followers,
         majority,
-        epoch_start,
-        current,
-        leader_counts,
+        if leader_counts {
+            LeaderVote::Counts
+        } else {
+            LeaderVote::Excluded
+        },
     );
     let limit = fetch_visibility(
         FetchReader::Consumer(Isolation::ReadCommitted),
