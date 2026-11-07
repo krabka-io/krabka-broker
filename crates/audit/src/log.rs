@@ -8,7 +8,7 @@ mod spool_mode;
 mod writer;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub use self::{
     handle::{AuditLog, AuditMode, AuditReceiver},
