@@ -4,8 +4,8 @@
 
 use {
     super::test_support::{
-        TopicRepresentation, expected_refused_partition, expected_single_topic, fetch_wire,
-        request_partition, sessionless_request, start_with_idle_follower,
+        FetchReplicaId, TopicRepresentation, expected_refused_partition, expected_single_topic,
+        fetch_wire, request_partition, sessionless_request, start_with_idle_follower,
     },
     crate::{
         codes::{NONE, UNSUPPORTED_COMPRESSION_TYPE},
@@ -151,15 +151,19 @@ async fn replicated_topic_holds_one_record(zstd_topic: &mut ZstdTopicScenario) {
     zstd_topic.broker.set(started);
 }
 
-#[when("a consumer fetches the topic with Fetch v{version}")]
-async fn consumer_fetches(zstd_topic: &mut ZstdTopicScenario, version: i16) {
+/// Fetch partition 0 of the topic from offset 0 as `replica`: -1 for a
+/// consumer, the follower's node id for a follower broker.
+async fn fetch_topic(zstd_topic: &mut ZstdTopicScenario, version: i16, replica: FetchReplicaId) {
     let request = FetchRequest {
         topics: vec![FetchTopic {
             topic: TOPIC.to_owned(),
             partitions: vec![request_partition(Offset(0))],
             ..Default::default()
         }],
-        ..sessionless_request().version(version).call()
+        ..sessionless_request()
+            .version(version)
+            .replica(replica)
+            .call()
     };
     let response = fetch_wire()
         .broker(&zstd_topic.broker.get().broker)
@@ -170,26 +174,15 @@ async fn consumer_fetches(zstd_topic: &mut ZstdTopicScenario, version: i16) {
     zstd_topic.response.set(response);
 }
 
+#[when("a consumer fetches the topic with Fetch v{version}")]
+async fn consumer_fetches(zstd_topic: &mut ZstdTopicScenario, version: i16) {
+    fetch_topic(zstd_topic, version, FetchReplicaId::default()).await;
+}
+
 #[when("the follower broker fetches the topic with Fetch v{version}")]
 async fn follower_fetches(zstd_topic: &mut ZstdTopicScenario, version: i16) {
-    let request = FetchRequest {
-        topics: vec![FetchTopic {
-            topic: TOPIC.to_owned(),
-            partitions: vec![request_partition(Offset(0))],
-            ..Default::default()
-        }],
-        ..sessionless_request()
-            .version(version)
-            .replica(i32::try_from(FOLLOWER.0).expect("small node id"))
-            .call()
-    };
-    let response = fetch_wire()
-        .broker(&zstd_topic.broker.get().broker)
-        .request(&request)
-        .version(ApiVersion(version))
-        .call()
-        .await;
-    zstd_topic.response.set(response);
+    let follower = i32::try_from(FOLLOWER.0).expect("small node id");
+    fetch_topic(zstd_topic, version, FetchReplicaId(follower)).await;
 }
 
 #[then("the partition answers UNSUPPORTED_COMPRESSION_TYPE with no records")]
@@ -238,27 +231,9 @@ impl ReadRow {
     }
 }
 
-#[then("the consumer receives the record")]
-fn consumer_receives_record(zstd_topic: &ZstdTopicScenario) {
-    let response = zstd_topic.response.get();
-    let rows: Vec<ReadRow> = response
-        .responses
-        .iter()
-        .flat_map(|topic| topic.partitions.iter().map(ReadRow::of))
-        .collect();
-    assert!(
-        rows == vec![ReadRow {
-            error_code: NONE,
-            high_watermark: 1,
-            values: vec![Some(Bytes::from_static(RECORD_VALUE))],
-        }]
-    );
-}
-
-/// A follower reads up to the log end; the row reports the high watermark
-/// from before the fetch, which is still 0.
-#[then("the follower receives the record")]
-fn follower_receives_record(zstd_topic: &ZstdTopicScenario) {
+/// Check that the one partition row read the one record without an error,
+/// and reported `high_watermark`.
+fn check_read_the_record(zstd_topic: &ZstdTopicScenario, high_watermark: i64) {
     let rows: Vec<ReadRow> = zstd_topic
         .response
         .get()
@@ -269,10 +244,23 @@ fn follower_receives_record(zstd_topic: &ZstdTopicScenario) {
     assert!(
         rows == vec![ReadRow {
             error_code: NONE,
-            high_watermark: 0,
+            high_watermark,
             values: vec![Some(Bytes::from_static(RECORD_VALUE))],
         }]
     );
+}
+
+/// A consumer reads up to the high watermark, which the record moved to 1.
+#[then("the consumer receives the record")]
+fn consumer_receives_record(zstd_topic: &ZstdTopicScenario) {
+    check_read_the_record(zstd_topic, 1);
+}
+
+/// A follower reads up to the log end; the row reports the high watermark
+/// from before the fetch, which is still 0.
+#[then("the follower receives the record")]
+fn follower_receives_record(zstd_topic: &ZstdTopicScenario) {
+    check_read_the_record(zstd_topic, 0);
 }
 
 krabka_bdd::scenarios!(
