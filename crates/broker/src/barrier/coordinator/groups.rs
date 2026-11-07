@@ -130,18 +130,21 @@ impl BarrierCoordinator {
         // to. A broker that loses the race finds the topic already there.
         self.ensure_state_topic(group).await?;
         self.require_coordinator(group).await?;
+        // The cap is checked before the group has an entry, so a refusal
+        // leaves the group count where it was. A name that is already live
+        // falls through to the GroupExists refusal below.
+        if !self.groups.contains_key(group) && self.groups.len() >= self.config.max_groups {
+            return Err(BarrierError::InvalidDefinition(format!(
+                "barrier groups limit reached ({})",
+                self.config.max_groups
+            )));
+        }
         let handle = self.entry_handle(group);
         let mut entry = handle.lock().await;
         if entry.is_defined() {
             return Err(BarrierError::GroupExists {
                 group: group.to_owned(),
             });
-        }
-        if self.groups.len() > self.config.max_groups {
-            return Err(BarrierError::InvalidDefinition(format!(
-                "barrier groups limit reached ({})",
-                self.config.max_groups
-            )));
         }
 
         let definition = self
@@ -505,18 +508,52 @@ mod tests {
         );
     }
 
+    /// A create past the cap is refused before the group has an entry, so the
+    /// group count, which bounds the per-group metric labels, stays at the
+    /// cap.
     #[tokio::test]
-    async fn creating_beyond_max_groups_is_refused() {
+    async fn a_create_refused_at_the_group_cap_leaves_the_group_count_unchanged() {
         let fixture = Fixture::new();
         let mut coordinator = fixture.coordinator().await;
-        // Limit max_groups to 1
         coordinator.config.max_groups = 1;
         coordinator
             .create_group("g1", spec().call())
             .await
             .expect("first group created");
-        let second = coordinator.create_group("g2", spec().call()).await;
-        assert!(let Err(BarrierError::InvalidDefinition(msg)) = second);
-        assert!(msg.contains("barrier groups limit reached"));
+
+        for attempt in 1..=2 {
+            let refused = coordinator.create_group("g2", spec().call()).await;
+            assert!(
+                let Err(BarrierError::InvalidDefinition(message)) = refused,
+                "attempt {attempt}"
+            );
+            assert!(message == "barrier groups limit reached (1)");
+            assert!(coordinator.groups.len() == 1, "attempt {attempt}");
+        }
+        assert!(
+            coordinator
+                .describe_groups(&[])
+                .await
+                .iter()
+                .map(|d| d.group.as_str())
+                .collect::<Vec<_>>()
+                == vec!["g1"]
+        );
+    }
+
+    /// At the cap, a create of a name that is already live is still answered
+    /// as a duplicate, not as a group past the cap.
+    #[tokio::test]
+    async fn a_second_create_of_a_live_name_at_the_group_cap_is_a_duplicate() {
+        let fixture = Fixture::new();
+        let mut coordinator = fixture.coordinator().await;
+        coordinator.config.max_groups = 1;
+        coordinator
+            .create_group(GROUP, spec().call())
+            .await
+            .expect("the group is created");
+
+        let again = coordinator.create_group(GROUP, spec().call()).await;
+        assert!(let Err(BarrierError::GroupExists { .. }) = again);
     }
 }

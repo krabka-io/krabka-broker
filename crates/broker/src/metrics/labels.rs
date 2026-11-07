@@ -180,9 +180,12 @@ pub struct ApiKeyLabel {
 
 /// Per-barrier-group label set, paired with the `barrier_*` families.
 ///
-/// `group` is the barrier group name. Cardinality is bounded by
-/// `BrokerConfig::barrier_max_groups`, because the coordinator rejects a new
-/// group past that cap.
+/// `group` is the barrier group name. The coordinator refuses a create that
+/// would take this broker past `BrokerConfig::barrier_max_groups` live groups,
+/// so the groups one broker holds at a time are bounded by that cap. The label
+/// sets are not bounded over the broker's lifetime: a deleted group's series
+/// stay until restart, and a broker that takes over another's state
+/// partitions recovers their groups whatever its own count is.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct BarrierGroupLabel {
     pub group: String,
