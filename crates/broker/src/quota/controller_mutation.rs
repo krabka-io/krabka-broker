@@ -14,7 +14,10 @@
 //! default.
 
 use {
-    super::buckets::{ControllerMutationBucket, QuotaBuckets},
+    super::{
+        QuotaType,
+        buckets::{ControllerMutationBucket, QuotaBuckets},
+    },
     krabka_metadata::MetadataImage,
     krabka_units::{Time, convert::TimeExt, secs},
     std::{
@@ -72,7 +75,7 @@ impl ControllerMutationQuota {
             request.image,
             request.principal,
             request.client_id,
-            "controller_mutation_rate",
+            QuotaType::ControllerMutation,
         )
         .and_then(|(entity_key, rate)| {
             let window_secs = request.window.secs_f64();

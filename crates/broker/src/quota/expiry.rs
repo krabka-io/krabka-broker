@@ -19,7 +19,7 @@
 //! one it would have refilled to anyway.
 
 use {
-    super::{QuotaType, buckets::QuotaBuckets},
+    super::buckets::QuotaBuckets,
     crate::metrics::BrokerMetrics,
     krabka_units::{Time, convert::TimeExt as _, minutes},
     std::sync::Arc,
@@ -53,16 +53,10 @@ pub async fn run(buckets: Arc<QuotaBuckets>, metrics: BrokerMetrics, shutdown: C
 
 /// One sweep: expire the idle buckets and release what they published.
 fn sweep(buckets: &QuotaBuckets, metrics: &BrokerMetrics, max_age: Time) {
-    for (quota_key, user, client_id) in buckets.expire_inactive(max_age.to_std()) {
-        // A quota key the metric has no `QuotaType` for published no series,
-        // so there is nothing to release. It cannot happen today -- every key
-        // a bucket is created under is one of the five -- and dropping the
-        // bucket is still right if it ever does.
-        if let Some(quota_type) = QuotaType::from_config_key(&quota_key) {
-            metrics.evict_quota_entity_series(quota_type, user.clone(), client_id.clone());
-        }
+    for (quota_type, user, client_id) in buckets.expire_inactive(max_age.to_std()) {
+        metrics.evict_quota_entity_series(quota_type, user.clone(), client_id.clone());
         debug!(
-            quota_key,
+            quota_key = quota_type.config_key(),
             ?user,
             ?client_id,
             "quota expiry: dropped an inactive bucket"

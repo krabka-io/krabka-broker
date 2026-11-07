@@ -3,7 +3,10 @@
 
 use {
     super::*,
-    crate::metrics::{QuotaEntityLabel, test_support::encode_metrics},
+    crate::{
+        metrics::{QuotaEntityLabel, test_support::encode_metrics},
+        quota::QuotaType,
+    },
     assert2::check,
     krabka_metadata::EntityKey,
     krabka_units::{millis, secs},
@@ -25,7 +28,7 @@ struct AliceFixture {
 fn alice_fixture() -> AliceFixture {
     let buckets = QuotaBuckets::new();
     let metrics = BrokerMetrics::new();
-    drop(buckets.get_or_create("producer_byte_rate", &key("alice", "app"), 1024.0));
+    drop(buckets.get_or_create(QuotaType::Produce, &key("alice", "app"), 1024.0));
     drop(
         metrics
             .quota_entity_throttle_seconds_total
@@ -86,7 +89,7 @@ fn a_user_bucket_releases_the_series_of_its_own_key() {
     let buckets = QuotaBuckets::new();
     let metrics = BrokerMetrics::new();
     let user: EntityKey = vec![("user".into(), Some("alice".into()))];
-    drop(buckets.get_or_create("producer_byte_rate", &user, 1024.0));
+    drop(buckets.get_or_create(QuotaType::Produce, &user, 1024.0));
     drop(
         metrics
             .quota_entity_throttle_seconds_total

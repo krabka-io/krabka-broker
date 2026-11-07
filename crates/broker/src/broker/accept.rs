@@ -26,11 +26,6 @@ use {
     tokio_util::sync::CancellationToken,
 };
 
-/// KIP-612 quota key for accept-rate throttling; matches the
-/// `connection_creation_rate` config name Kafka's `AlterClientQuotas` uses
-/// for `ip` entities.
-const CONNECTION_CREATION_RATE_QUOTA_KEY: &str = "connection_creation_rate";
-
 fn connection_creation_delay(rate: f64, maximum: Time) -> Time {
     let delay_micros = positive_f64_to_u64((1.0_f64 / rate) * 1_000_000.0);
     Time::from_micros(i64::try_from(delay_micros).unwrap_or(i64::MAX)).min(maximum)
@@ -49,7 +44,7 @@ fn connection_creation_throttle(broker: &Broker, peer_ip: IpAddr) -> Option<Time
         &image,
         broker.quota_buckets.ip_names(),
         peer_ip,
-        CONNECTION_CREATION_RATE_QUOTA_KEY,
+        QuotaType::ConnectionCreation,
     )?;
     if rate <= 0.0 {
         return None;
@@ -57,7 +52,7 @@ fn connection_creation_throttle(broker: &Broker, peer_ip: IpAddr) -> Option<Time
     let bucket =
         broker
             .quota_buckets
-            .get_or_create(CONNECTION_CREATION_RATE_QUOTA_KEY, &entity_key, rate);
+            .get_or_create(QuotaType::ConnectionCreation, &entity_key, rate);
     (bucket.try_consume(1) == 0)
         .then(|| connection_creation_delay(rate, broker.config.connection_creation_throttle_max))
 }

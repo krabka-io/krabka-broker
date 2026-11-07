@@ -90,7 +90,7 @@ struct QuotaConsumption<'a> {
     buckets: &'a QuotaBuckets,
     principal: &'a str,
     client_id: Option<&'a str>,
-    quota_key: &'a str,
+    quota_type: QuotaType,
     amount: u64,
     /// The most debt to keep, as the wait it takes the refill to repay it, for
     /// a quota whose throttle Kafka bounds, and `None` for one it does not.
@@ -125,7 +125,7 @@ fn consume_configured_quota(
         request.image,
         request.principal,
         request.client_id,
-        request.quota_key,
+        request.quota_type,
     ) else {
         return QuotaDelay::zero();
     };
@@ -138,7 +138,7 @@ fn consume_configured_quota(
 
     let bucket = request
         .buckets
-        .get_or_create(request.quota_key, &entity_key, token_rate);
+        .get_or_create(request.quota_type, &entity_key, token_rate);
     // Kafka holds the quota as a double, so the bucket keeps a part token in
     // its debt and the throttle is exact under a fractional rate. A quota
     // whose throttle is bounded keeps no more debt than the bound repays:
@@ -208,6 +208,7 @@ pub(crate) fn u64_to_f64(value: u64) -> f64 { NumCast::from(value).unwrap_or(f64
 #[cfg(test)]
 pub(crate) mod test_support {
     use {
+        super::QuotaType,
         krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity},
         krabka_units::{Time, convert::TimeExt, secs},
         std::sync::Arc,
@@ -396,22 +397,22 @@ pub(crate) mod test_support {
     }
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    pub struct UserBucketSetup<'a> {
-        #[default("producer_byte_rate")]
-        pub key: &'a str,
+    pub struct UserBucketSetup {
+        #[default(QuotaType::Produce)]
+        pub quota_type: QuotaType,
         #[default(QuotaValue(0.0))]
         pub rate: QuotaValue,
     }
 
     #[bon::builder]
     pub fn alice_bucket(
-        #[builder(default = "producer_byte_rate")] key: &'_ str,
+        #[builder(default = QuotaType::Produce)] quota_type: QuotaType,
         #[builder(into, default = QuotaValue (0.0))] rate: QuotaValue,
     ) -> AliceBucket {
-        let setup = UserBucketSetup { key, rate };
+        let setup = UserBucketSetup { quota_type, rate };
         let buckets = Arc::new(super::QuotaBuckets::new());
         let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
-        let bucket = buckets.get_or_create(setup.key, &key, setup.rate.0);
+        let bucket = buckets.get_or_create(setup.quota_type, &key, setup.rate.0);
         AliceBucket { buckets, bucket }
     }
 
@@ -525,12 +526,15 @@ mod tests {
     }
 
     #[yare::parameterized(
-        zero_amount = { "request_percentage", 100.0, 0 },
-        negative_rate = { "producer_byte_rate", -1.0, 1 },
-        zero_rate = { "producer_byte_rate", 0.0, 1 },
+        zero_amount = { QuotaType::Request, 100.0, 0 },
+        negative_rate = { QuotaType::Produce, -1.0, 1 },
+        zero_rate = { QuotaType::Produce, 0.0, 1 },
     )]
-    fn consume_configured_quota_ignores_noop_inputs(quota_key: &str, rate: f64, amount: u64) {
-        let image = image_with_quota().key(quota_key).value(rate).call();
+    fn consume_configured_quota_ignores_noop_inputs(quota_type: QuotaType, rate: f64, amount: u64) {
+        let image = image_with_quota()
+            .key(quota_type.config_key())
+            .value(rate)
+            .call();
         let buckets = QuotaBuckets::new();
         let initial_rate_called = Arc::new(AtomicBool::new(false));
         let delay_for_overage_called = Arc::new(AtomicBool::new(false));
@@ -541,7 +545,7 @@ mod tests {
                 buckets: &buckets,
                 principal: "alice",
                 client_id: Some(""),
-                quota_key,
+                quota_type,
                 amount,
                 max_debt_wait: None,
             },
@@ -580,7 +584,7 @@ mod tests {
                 buckets: &buckets,
                 principal: "alice",
                 client_id: Some(""),
-                quota_key: "producer_byte_rate",
+                quota_type: QuotaType::Produce,
                 amount: 10,
                 max_debt_wait: None,
             },
