@@ -833,7 +833,7 @@ mod tests {
         assert2::{assert, check},
         krabka_protocol::records::{Record, RecordBatch},
         krabka_raft::NodeId,
-        std::{cell::RefCell, future, net::TcpListener},
+        std::{cell::RefCell, future, net::TcpListener, sync::Arc},
     };
 
     #[test]
@@ -1358,22 +1358,16 @@ mod tests {
         log_end: i64,
     }
 
-    /// Recovers from an epoch fence on a replica whose log holds `batches`
-    /// (one single-record batch per entry, stamped with that epoch), whose
-    /// high watermark is `high_watermark` and whose metadata leader epoch is
-    /// 7, against a leader that answers `leader`.
-    async fn recover_fenced_replica(
-        batches: &[i32],
-        high_watermark: i64,
-        leader: Option<EpochEnd>,
-    ) -> FenceRecovery {
-        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+    /// A local replica whose log holds one single-record batch per entry of
+    /// `epochs`, stamped with that epoch.
+    fn replica_with_batches(epochs: &[i32]) -> (Config, tempfile::TempDir, Arc<Partition>) {
+        let (cfg, log_dir) = test_config(image_with_leader(LEADER_ID));
         ensure_local_partition(&cfg).expect("local replica");
         let partition = cfg
             .partitions
             .get(&cfg.topic, cfg.partition)
             .expect("partition");
-        for &epoch in batches {
+        for &epoch in epochs {
             let mut batch = RecordBatch {
                 partition_leader_epoch: epoch,
                 records: vec![Record::default()],
@@ -1386,6 +1380,19 @@ mod tests {
                 .append(&mut batch)
                 .expect("replica batch");
         }
+        (cfg, log_dir, partition)
+    }
+
+    /// Recovers from an epoch fence on a replica whose log holds `batches`
+    /// (one single-record batch per entry, stamped with that epoch), whose
+    /// high watermark is `high_watermark` and whose metadata leader epoch is
+    /// 7, against a leader that answers `leader`.
+    async fn recover_fenced_replica(
+        batches: &[i32],
+        high_watermark: i64,
+        leader: Option<EpochEnd>,
+    ) -> FenceRecovery {
+        let (cfg, _log_dir, partition) = replica_with_batches(batches);
         partition.set_follower_hw(Offset(high_watermark)).await;
         partition
             .current_leader_epoch
@@ -1439,24 +1446,7 @@ mod tests {
         #[case] rewind: Rewind,
         #[case] expected: Rewound,
     ) {
-        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-        ensure_local_partition(&cfg).expect("local replica");
-        let partition = cfg
-            .partitions
-            .get(&cfg.topic, cfg.partition)
-            .expect("partition");
-        for _ in 0..6 {
-            let mut batch = RecordBatch {
-                records: vec![Record::default()],
-                ..Default::default()
-            };
-            partition
-                .log
-                .lock()
-                .expect("replica log")
-                .append(&mut batch)
-                .expect("replica batch");
-        }
+        let (cfg, _log_dir, partition) = replica_with_batches(&[0; 6]);
         for (producer_id, offset) in [(1, 1), (2, 4)] {
             cfg.producer_state
                 .commit(
