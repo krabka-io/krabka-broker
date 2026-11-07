@@ -18,7 +18,7 @@ use {
     },
     assert2::assert,
     bytes::Bytes,
-    krabka_bdd::{Given, TokioMultiThreadContext},
+    krabka_bdd::{Given, given, then, when},
     krabka_ids::{ApiVersion, Offset, PartitionIndex},
     krabka_metadata::{MetadataRecord, NodeId, TopicConfigRecord},
     krabka_protocol::{
@@ -29,7 +29,6 @@ use {
         primitives::uuid::Uuid,
         records::RecordsPayload,
     },
-    rstest_bdd_macros::{given, then, when},
     std::{collections::BTreeMap, sync::atomic},
 };
 
@@ -81,96 +80,79 @@ fn zstd_topic() -> ZstdTopicScenario {
 }
 
 #[given("a topic with compression.type {codec} holds one record")]
-fn topic_holds_one_record(
-    zstd_topic: &mut ZstdTopicScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    codec: TopicCodec,
-) {
-    let started = runtime.block_on(async {
-        let started = start_broker_no_audit().await;
-        created_topic_response()
-            .broker(&started.broker)
-            .client_id("admin-client")
-            .request(|| {
-                configured_topic_request()
-                    .topic(TOPIC)
-                    .configs(&[(COMPRESSION_TYPE, codec.config_value())])
-                    .call()
-            })
-            .call()
-            .await;
-        started.broker.wait_until_partition_present(TOPIC, 0).await;
-        produce_records()
-            .broker(&started.broker)
-            .topic(TOPIC)
-            .count(1)
-            .call()
-            .await;
-        started
-    });
+async fn topic_holds_one_record(zstd_topic: &mut ZstdTopicScenario, codec: TopicCodec) {
+    let started = start_broker_no_audit().await;
+    created_topic_response()
+        .broker(&started.broker)
+        .client_id("admin-client")
+        .request(|| {
+            configured_topic_request()
+                .topic(TOPIC)
+                .configs(&[(COMPRESSION_TYPE, codec.config_value())])
+                .call()
+        })
+        .call()
+        .await;
+    started.broker.wait_until_partition_present(TOPIC, 0).await;
+    produce_records()
+        .broker(&started.broker)
+        .topic(TOPIC)
+        .count(1)
+        .call()
+        .await;
     zstd_topic.broker.set(started);
 }
 
 #[given("a replicated topic with compression.type zstd holds one record")]
-fn replicated_topic_holds_one_record(
-    zstd_topic: &mut ZstdTopicScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
-    let started = runtime.block_on(async {
-        let started = start_with_idle_follower().await;
-        seed_partition_replicas()
-            .broker(&started.broker)
-            .topic(TOPIC)
-            .leader(THIS_NODE)
-            .replicas(&[THIS_NODE, FOLLOWER])
-            .call()
-            .await;
-        started
-            .broker
-            .submit_metadata_record_for_test(MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                topic: TOPIC.to_owned(),
-                overrides: BTreeMap::from([(
-                    COMPRESSION_TYPE.to_owned(),
-                    TopicCodec::Zstd.config_value().to_owned(),
-                )]),
-            }))
-            .await
-            .expect("submit topic config record");
-        started
-            .broker
-            .wait_for_image(|image| {
-                image
-                    .topic_config(TOPIC)
-                    .is_some_and(|config| config.contains_key(COMPRESSION_TYPE))
-            })
-            .await;
-        let partition = wait_for_bound_partition(
-            &started.broker.broker_arc_for_test(),
-            TOPIC,
-            async |partition| {
-                partition.current_leader.load(atomic::Ordering::Acquire) == THIS_NODE.0
-                    && partition
-                        .replica_state
-                        .lock()
-                        .await
-                        .isr
-                        .contains(&krabka_raft::NodeId(FOLLOWER.0))
-            },
-            "the broker leads the partition with the follower in sync",
-        )
+async fn replicated_topic_holds_one_record(zstd_topic: &mut ZstdTopicScenario) {
+    let started = start_with_idle_follower().await;
+    seed_partition_replicas()
+        .broker(&started.broker)
+        .topic(TOPIC)
+        .leader(THIS_NODE)
+        .replicas(&[THIS_NODE, FOLLOWER])
+        .call()
         .await;
-        append_partition_batch(&partition, &mut record_batch(1));
-        started
-    });
+    started
+        .broker
+        .submit_metadata_record_for_test(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: TOPIC.to_owned(),
+            overrides: BTreeMap::from([(
+                COMPRESSION_TYPE.to_owned(),
+                TopicCodec::Zstd.config_value().to_owned(),
+            )]),
+        }))
+        .await
+        .expect("submit topic config record");
+    started
+        .broker
+        .wait_for_image(|image| {
+            image
+                .topic_config(TOPIC)
+                .is_some_and(|config| config.contains_key(COMPRESSION_TYPE))
+        })
+        .await;
+    let partition = wait_for_bound_partition(
+        &started.broker.broker_arc_for_test(),
+        TOPIC,
+        async |partition| {
+            partition.current_leader.load(atomic::Ordering::Acquire) == THIS_NODE.0
+                && partition
+                    .replica_state
+                    .lock()
+                    .await
+                    .isr
+                    .contains(&krabka_raft::NodeId(FOLLOWER.0))
+        },
+        "the broker leads the partition with the follower in sync",
+    )
+    .await;
+    append_partition_batch(&partition, &mut record_batch(1));
     zstd_topic.broker.set(started);
 }
 
 #[when("a consumer fetches the topic with Fetch v{version}")]
-fn consumer_fetches(
-    zstd_topic: &mut ZstdTopicScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    version: i16,
-) {
+async fn consumer_fetches(zstd_topic: &mut ZstdTopicScenario, version: i16) {
     let request = FetchRequest {
         topics: vec![FetchTopic {
             topic: TOPIC.to_owned(),
@@ -179,22 +161,17 @@ fn consumer_fetches(
         }],
         ..sessionless_request().version(version).call()
     };
-    let response = runtime.block_on(
-        fetch_wire()
-            .broker(&zstd_topic.broker.get().broker)
-            .request(&request)
-            .version(ApiVersion(version))
-            .call(),
-    );
+    let response = fetch_wire()
+        .broker(&zstd_topic.broker.get().broker)
+        .request(&request)
+        .version(ApiVersion(version))
+        .call()
+        .await;
     zstd_topic.response.set(response);
 }
 
 #[when("the follower broker fetches the topic with Fetch v{version}")]
-fn follower_fetches(
-    zstd_topic: &mut ZstdTopicScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    version: i16,
-) {
+async fn follower_fetches(zstd_topic: &mut ZstdTopicScenario, version: i16) {
     let request = FetchRequest {
         topics: vec![FetchTopic {
             topic: TOPIC.to_owned(),
@@ -206,13 +183,12 @@ fn follower_fetches(
             .replica(i32::try_from(FOLLOWER.0).expect("small node id"))
             .call()
     };
-    let response = runtime.block_on(
-        fetch_wire()
-            .broker(&zstd_topic.broker.get().broker)
-            .request(&request)
-            .version(ApiVersion(version))
-            .call(),
-    );
+    let response = fetch_wire()
+        .broker(&zstd_topic.broker.get().broker)
+        .request(&request)
+        .version(ApiVersion(version))
+        .call()
+        .await;
     zstd_topic.response.set(response);
 }
 

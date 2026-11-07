@@ -195,9 +195,7 @@ nix = { version = "0.31", default-features = false, features = ["zerocopy"] }
 # No `version`: `krabka-bdd` is not published. See CLAUDE.md "Releases".
 krabka-bdd = { path = "../bdd" }
 rstest = { workspace = true }
-krabka-bdd = { path = "../bdd" }
 rstest-bdd = { workspace = true }
-rstest-bdd-harness = { workspace = true }
 rstest-bdd-macros = { workspace = true }
 rust-embed = { workspace = true }
 # An independent CRC-32C oracle for the checksums the broker computes with
