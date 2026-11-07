@@ -1499,8 +1499,8 @@ mod tests {
         assert!(
             Rewound {
                 succeeded,
-                log_start: partition.log_start_offset().0,
-                log_end: partition.log_end_offset().0,
+                log_start: partition.log_start_offset().unwrap().0,
+                log_end: partition.log_end_offset().unwrap().0,
                 producers,
             } == expected
         );
