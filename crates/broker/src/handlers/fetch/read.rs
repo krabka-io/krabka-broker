@@ -112,7 +112,7 @@ pub(super) async fn do_read(
 ///     shape `plan_read` gives the same answer, so the cold-tier fallback
 ///     treats both alike;
 ///   * `CorruptRecordException` is `CORRUPT_MESSAGE`, and anything else is the
-///     generic row `Errors.forException` gives it. ShareFetch settles its
+///     generic row `Errors.forException` gives it. `ShareFetch` settles its
 ///     reads with the same [`local_read_failure`].
 fn settle_failed_read(
     part: &Partition,

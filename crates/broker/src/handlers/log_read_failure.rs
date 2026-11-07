@@ -1,5 +1,5 @@
 //! What a failed local log read does to the partition's log dir, and the
-//! error code its partition row answers. Fetch and ShareFetch both read the
+//! error code its partition row answers. Fetch and `ShareFetch` both read the
 //! local log, and both settle a failed read here.
 
 use {
@@ -20,8 +20,8 @@ use {
 ///   * anything else is the generic row that `Errors.forException` gives it.
 ///
 /// It does not map an offset below the log start: Fetch answers that with
-/// `OFFSET_OUT_OF_RANGE`, and ShareFetch moves its start offset instead.
-pub(crate) fn local_read_failure(
+/// `OFFSET_OUT_OF_RANGE`, and `ShareFetch` moves its start offset instead.
+pub(super) fn local_read_failure(
     part: &Partition,
     error: &BrokerError,
     log_dir_status: &LogDirRegistry,
