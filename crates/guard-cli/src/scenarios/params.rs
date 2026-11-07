@@ -119,7 +119,9 @@ impl FromStr for KeySource {
         words
             .strip_suffix("'s key")
             .ok_or_else(|| {
-                format!("{words:?} is not a key: write `<operator>'s key` or `a file that holds no key`")
+                format!(
+                    "{words:?} is not a key: write `<operator>'s key` or `a file that holds no key`"
+                )
             })?
             .parse::<Operator>()
             .map(Self::OperatorKey)

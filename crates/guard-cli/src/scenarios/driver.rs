@@ -56,7 +56,8 @@ pub struct OperatorKeyFiles {
 
 /// Mint a key pair for `key_id`, bound to `principal`, under `dir`.
 fn mint_key(dir: &Path, key_id: &str, principal: &str) -> OperatorKeyFiles {
-    let der = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("generate an Ed25519 key");
+    let der =
+        Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("generate an Ed25519 key");
     let pair = Ed25519KeyPair::from_pkcs8(der.as_ref()).expect("parse the generated key");
     let stem = dir.join(key_id);
     let pkcs8 = stem.with_extension("pk8");
@@ -206,9 +207,9 @@ impl Cluster {
     /// A command line the parser refuses never reaches a broker, which is the
     /// [`Outcome::CommandLineRefused`] outcome.
     pub async fn guard(&self, operator: Operator, args: &[&str]) -> Outcome {
-        let mut argv = vec!["krabka-guard", "--bootstrap-server", "scenario"];
-        argv.extend_from_slice(args);
-        let Ok(cli) = Cli::try_parse_from(argv) else {
+        let mut command_line = vec!["krabka-guard", "--bootstrap-server", "scenario"];
+        command_line.extend_from_slice(args);
+        let Ok(cli) = Cli::try_parse_from(command_line) else {
             return Outcome::CommandLineRefused;
         };
         let client = self.client(operator).await;
@@ -221,7 +222,14 @@ impl Cluster {
 
     /// `operator` freezes `scope`.
     pub async fn freeze(&self, operator: Operator, scope: &Scope, signing: Signing) -> Outcome {
-        let mut args = vec!["freeze", "set", scope.flag(), scope.name(), "--reason", REASON];
+        let mut args = vec![
+            "freeze",
+            "set",
+            scope.flag(),
+            scope.name(),
+            "--reason",
+            REASON,
+        ];
         let flags = self.signing_flags(operator, signing);
         args.extend(flags.iter().map(String::as_str));
         self.guard(operator, &args).await
@@ -311,7 +319,11 @@ impl Cluster {
             .proposals()
             .await
             .into_iter()
-            .find(|stored| !before.iter().any(|old| old.proposal_id == stored.proposal_id))
+            .find(|stored| {
+                !before
+                    .iter()
+                    .any(|old| old.proposal_id == stored.proposal_id)
+            })
             .map(|stored| uuid::Uuid::from_bytes(stored.proposal_id.0));
         (outcome, opened)
     }
@@ -327,12 +339,14 @@ impl Cluster {
         let mut args = vec!["break-glass", "approve", "--proposal", &proposal];
         let (path, key_id) = match key {
             None => (None, None),
-            Some(KeySource::OperatorKey(owner)) => {
-                (Some(self.key(owner).pkcs8.display().to_string()), Some(owner.key_id()))
-            }
-            Some(KeySource::NotAKey) => {
-                (Some(self.not_a_key().display().to_string()), Some(operator.key_id()))
-            }
+            Some(KeySource::OperatorKey(owner)) => (
+                Some(self.key(owner).pkcs8.display().to_string()),
+                Some(owner.key_id()),
+            ),
+            Some(KeySource::NotAKey) => (
+                Some(self.not_a_key().display().to_string()),
+                Some(operator.key_id()),
+            ),
         };
         if let (Some(path), Some(key_id)) = (&path, &key_id) {
             args.extend(["--sign-with", path, "--key-id", key_id]);
@@ -343,8 +357,13 @@ impl Cluster {
     /// `operator` withdraws `proposal`.
     pub async fn withdraw(&self, operator: Operator, proposal: uuid::Uuid) -> Outcome {
         let proposal = proposal.to_string();
-        self.guard(operator, &["break-glass", "withdraw", "--proposal", &proposal])
-            .await
+        self.guard(operator, &[
+            "break-glass",
+            "withdraw",
+            "--proposal",
+            &proposal,
+        ])
+        .await
     }
 
     /// `operator` verifies the registry against `trust_file`.
@@ -368,7 +387,12 @@ impl Cluster {
             LocalKeys::AnotherKeyUnderAlicesId => {
                 let other = self.dir.path().join("other");
                 fs::create_dir_all(&other).expect("a directory for the other key");
-                mint_key(&other, &Operator::Alice.key_id(), &Operator::Alice.principal()).trust_file
+                mint_key(
+                    &other,
+                    &Operator::Alice.key_id(),
+                    &Operator::Alice.principal(),
+                )
+                .trust_file
             }
             LocalKeys::NoOperatorKeys => {
                 let path = self.dir.path().join("no-operator-keys.toml");
@@ -428,7 +452,7 @@ impl Cluster {
 /// Run the shipped entry point against `bootstrap`, exactly as the binary
 /// runs it, connect step included.
 pub async fn run_binary(bootstrap: &str, args: &[&str]) -> Outcome {
-    let mut argv = vec!["krabka-guard", "--bootstrap-server", bootstrap];
-    argv.extend_from_slice(args);
-    Outcome::from_exit_code(crate::run_from_args(argv).await)
+    let mut command_line = vec!["krabka-guard", "--bootstrap-server", bootstrap];
+    command_line.extend_from_slice(args);
+    Outcome::from_exit_code(crate::run_from_args(command_line).await)
 }

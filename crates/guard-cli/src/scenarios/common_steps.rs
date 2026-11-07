@@ -20,7 +20,9 @@ fn has_frozen(
     scope: Scope,
 ) {
     let cluster = guard.cluster(runtime);
-    assert!(runtime.block_on(cluster.freeze(operator, &scope, Signing::Unsigned)) == Outcome::Success);
+    assert!(
+        runtime.block_on(cluster.freeze(operator, &scope, Signing::Unsigned)) == Outcome::Success
+    );
 }
 
 /// The proposer opens a thaw proposal and the other approvers, in order,
@@ -40,7 +42,9 @@ fn holds_thaw_proposal(
             .await;
         assert!(outcome == Outcome::Success);
         let proposal = proposal.expect("the propose opened a proposal");
-        let approvers = Operator::ALL.into_iter().filter(|approver| *approver != operator);
+        let approvers = Operator::ALL
+            .into_iter()
+            .filter(|approver| *approver != operator);
         for approver in approvers.take(approvals) {
             assert!(cluster.approve(approver, proposal, None).await == Outcome::Success);
         }
