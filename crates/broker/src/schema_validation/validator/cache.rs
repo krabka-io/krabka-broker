@@ -13,6 +13,7 @@ use {
         SchemaValidator, UNAVAILABLE_TTL_MS,
         compiled::CompiledSchema,
         references::{MAX_REFERENCE_BYTES, ReferenceSources, reference_sources_ordered},
+        registry::RegistryReads,
         reject::RejectReason,
     },
     crate::{metrics::BrokerMetrics, schema_validation::ValidationMode, time_util},
@@ -131,6 +132,19 @@ impl SchemaValidator {
         mode: ValidationMode,
         metrics: &BrokerMetrics,
     ) -> Result<Arc<SchemaEntry>, RejectReason> {
+        self.entry_from(&self.client, id, subject, mode, metrics)
+            .await
+    }
+
+    /// [`Self::entry`], reading a miss from `registry`.
+    async fn entry_from(
+        &self,
+        registry: &impl RegistryReads,
+        id: u32,
+        subject: &str,
+        mode: ValidationMode,
+        metrics: &BrokerMetrics,
+    ) -> Result<Arc<SchemaEntry>, RejectReason> {
         let now = time_util::epoch_millis(self.clock.now());
         // Expired entries are not evicted eagerly; the read just declines
         // them. Lazy eviction is good enough at LRU capacities in the tens of
@@ -166,15 +180,18 @@ impl SchemaValidator {
         }
 
         metrics.record_schema_cache_miss();
-        let fetched = time::timeout(self.operation_timeout, self.fetch(id, subject, mode))
-            .await
-            .unwrap_or_else(|_| {
-                Err(RejectReason::RegistryUnavailable(format!(
-                    "schema registry operation exceeded {:?}",
-                    self.operation_timeout
-                )))
-            })
-            .map(Arc::new);
+        let fetched = time::timeout(
+            self.operation_timeout,
+            Self::fetch(registry, id, subject, mode),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(RejectReason::RegistryUnavailable(format!(
+                "schema registry operation exceeded {:?}",
+                self.operation_timeout
+            )))
+        })
+        .map(Arc::new);
         // A registry that could not answer is remembered only briefly, so the
         // next produce re-asks instead of inheriting a stale outage. Bounded by
         // `expire_after` so a shorter configured TTL still wins.
@@ -196,13 +213,12 @@ impl SchemaValidator {
 
     /// Ask the registry about `id`.
     async fn fetch(
-        &self,
+        registry: &impl RegistryReads,
         id: u32,
         subject: &str,
         mode: ValidationMode,
     ) -> Result<SchemaEntry, RejectReason> {
-        let bindings = self
-            .client
+        let bindings = registry
             .subject_versions_for_id(id)
             .await
             .map_err(|e| Self::fetch_error(id, &e))?;
@@ -216,8 +232,7 @@ impl SchemaValidator {
         }
 
         let body = if mode == ValidationMode::Full {
-            let fetched = self
-                .client
+            let fetched = registry
                 .schema_by_id(id)
                 .await
                 .map_err(|e| Self::fetch_error(id, &e))?;
@@ -231,7 +246,7 @@ impl SchemaValidator {
                 sources: references,
                 order: reference_order,
             } = reference_sources_ordered(
-                &self.client,
+                registry,
                 &fetched.references,
                 MAX_REFERENCE_BYTES - fetched.schema.len(),
             )
