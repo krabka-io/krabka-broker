@@ -284,8 +284,19 @@ impl<'a> Lexer<'a> {
     }
 }
 
+/// The error for an expression with more than [`MAX_EXPANSIONS`] patterns.
+fn too_many(expression: &str) -> String {
+    format!(
+        "`{expression}` expands to more than {MAX_EXPANSIONS} patterns: split it into several \
+         expressions"
+    )
+}
+
 /// Every text `pieces` stands for, where `pieces` hold no space or slash.
-fn expand_run(pieces: &[Piece]) -> Vec<String> {
+///
+/// Fails as soon as the texts would pass [`MAX_EXPANSIONS`], before they are
+/// built: each optional group doubles them.
+fn expand_run(expression: &str, pieces: &[Piece]) -> Result<Vec<String>, String> {
     let mut texts = vec![String::new()];
     for piece in pieces {
         match piece {
@@ -295,6 +306,9 @@ fn expand_run(pieces: &[Piece]) -> Vec<String> {
                 }
             }
             Piece::Optional(text) => {
+                if texts.len().saturating_mul(2) > MAX_EXPANSIONS {
+                    return Err(too_many(expression));
+                }
                 texts = texts
                     .into_iter()
                     .flat_map(|existing| {
@@ -306,13 +320,13 @@ fn expand_run(pieces: &[Piece]) -> Vec<String> {
             Piece::Slash => {}
         }
     }
-    texts
+    Ok(texts)
 }
 
 /// Every text one whitespace-free word stands for, alternatives in order.
 fn expand_word(expression: &str, word: &[Piece]) -> Result<Vec<String>, String> {
     if !word.contains(&Piece::Slash) {
-        return Ok(expand_run(word));
+        return expand_run(expression, word);
     }
     let mut texts: Vec<String> = Vec::new();
     for alternative in word.split(|piece| *piece == Piece::Slash) {
@@ -330,10 +344,13 @@ fn expand_word(expression: &str, word: &[Piece]) -> Result<Vec<String>, String> 
                  literal text"
             ));
         }
-        for text in expand_run(alternative) {
+        for text in expand_run(expression, alternative)? {
             if !texts.contains(&text) {
                 texts.push(text);
             }
+        }
+        if texts.len() > MAX_EXPANSIONS {
+            return Err(too_many(expression));
         }
     }
     Ok(texts)
@@ -355,15 +372,12 @@ pub fn expand(expression: &str, params: &[ParamInfo]) -> Result<Vec<String>, Str
     let mut patterns = vec![String::new()];
     for (is_space, group) in chunk_words(&pieces) {
         let choices = if is_space {
-            expand_run(group)
+            expand_run(expression, group)?
         } else {
             expand_word(expression, group)?
         };
         if patterns.len().saturating_mul(choices.len()) > MAX_EXPANSIONS {
-            return Err(format!(
-                "`{expression}` expands to more than {MAX_EXPANSIONS} patterns: split it into \
-                 several expressions"
-            ));
+            return Err(too_many(expression));
         }
         patterns = patterns
             .iter()
@@ -553,11 +567,31 @@ mod tests {
         "`a/b c/d e/f g/h i(s)` expands to more than 16 patterns: split it into several \
          expressions"
     )]
+    #[case::too_many_optional_groups_in_one_word(
+        "item(s)(s)(s)(s)(s)",
+        &[],
+        "`item(s)(s)(s)(s)(s)` expands to more than 16 patterns: split it into several \
+         expressions"
+    )]
+    #[case::too_many_alternatives_in_one_word(
+        "a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q",
+        &[],
+        "`a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q` expands to more than 16 patterns: split it into \
+         several expressions"
+    )]
     fn rejects_malformed_expressions(
         #[case] expression: &str,
         #[case] declared: &[(&str, &str)],
         #[case] message: &str,
     ) {
         assert!(expand(&braced(expression), &params(declared)) == Err(braced(message)));
+    }
+
+    /// Thirty optional groups would be a billion texts; the limit stops the
+    /// expansion before it builds them.
+    #[test]
+    fn many_optional_groups_fail_before_they_expand() {
+        let expression = format!("item{}", "(s)".repeat(30));
+        assert!(expand(&expression, &[]) == Err(super::too_many(&expression)));
     }
 }

@@ -78,8 +78,9 @@ pub fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
         let source = fs::read_to_string(file)
             .map_err(|error| ParseError::new(dir.span(), format!("{}: {error}", file.display())))?;
         let shown = display_path(file, &manifest);
-        let feature_dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
-        let exists = |relative: &str| feature_dir.join(relative).is_file();
+        // The lint resolves a `Depends on:` path against the feature's
+        // directory and asks about the manifest-relative result.
+        let exists = |relative: &str| manifest.join(relative).is_file();
         let context = LintContext {
             glossary,
             file_exists: &exists,
