@@ -224,6 +224,30 @@ mod tests {
     }
     rstest_bdd_macros::scenarios!("tests/features/handler_group_config",fixtures=[group_config:GroupConfigScenario]);
 
+    /// The handler answers an unknown operation code before any record
+    /// builder runs, so none reaches this one through it. Called directly,
+    /// the builder reads an unknown code as SUBTRACT.
+    #[test]
+    fn an_unknown_operation_reaching_the_builder_reads_as_subtract() {
+        let resource = make_scoped_resource(RESOURCE_TYPE_GROUP, "g", vec![AlterableConfig {
+            name: KEY_SESSION_TIMEOUT_MS.into(),
+            config_operation: 9,
+            value: Some("1".into()),
+            ..Default::default()
+        }]);
+
+        assert!(
+            drive(&resource, UnstableApiVersions::Enabled)
+                == Err((
+                    codes::INVALID_CONFIG,
+                    format!(
+                        "Can't SUBTRACT to key {KEY_SESSION_TIMEOUT_MS} because its type is not \
+                         LIST."
+                    ),
+                ))
+        );
+    }
+
     #[test]
     fn group_config_set_validates_and_stages_authoritative_map() {
         let resource =

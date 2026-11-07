@@ -213,6 +213,51 @@ mod tests {
         check!(merge_list_op(operation, current, Some("delete"), value) == expected);
     }
 
+    /// The handler answers an unknown operation code before any record
+    /// builder runs, so none reaches this one through it. Called directly,
+    /// the builder reads an unknown code as SUBTRACT.
+    #[test]
+    fn an_unknown_operation_reaching_the_builder_reads_as_subtract() {
+        let img = image_with_topic_config("orders", &[StoredOverride::new(
+            config_keys::CLEANUP_POLICY,
+            "compact,delete",
+        )]);
+        let unknown = |name: &str, value: &str| AlterableConfig {
+            name: name.into(),
+            config_operation: 9,
+            value: Some(value.into()),
+            ..Default::default()
+        };
+
+        let list = topic_config_record(
+            &make_topic_resource("orders", vec![unknown(
+                config_keys::CLEANUP_POLICY,
+                "delete",
+            )]),
+            &img,
+        );
+        let scalar = topic_config_record(
+            &make_topic_resource("orders", vec![unknown(config_keys::RETENTION_MS, "1")]),
+            &img,
+        );
+
+        check!(
+            list == Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: "orders".into(),
+                overrides: maplit::btreemap! {
+                    config_keys::CLEANUP_POLICY.to_owned() => "compact".to_owned(),
+                },
+            }))
+        );
+        check!(
+            scalar
+                == Err((
+                    codes::INVALID_CONFIG,
+                    "Can't SUBTRACT to key retention.ms because its type is not LIST.".to_owned(),
+                ))
+        );
+    }
+
     #[test]
     fn topic_throttle_config_value_validated() {
         // Verify ThrottledReplicas::parse rejects malformed input that
