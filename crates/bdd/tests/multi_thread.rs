@@ -6,17 +6,18 @@
 //! task can fill. On a current-thread runtime nothing polls the task while the
 //! test thread blocks, so the When would time out.
 
-use std::{
-    sync::mpsc::{self, Receiver},
-    time::Duration,
-};
-
-use assert2::assert;
-use krabka_bdd::{Given, TokioMultiThreadContext};
-use rstest_bdd_macros::{given, then, when};
-use tokio::{
-    sync::oneshot::{self, Sender},
-    task::JoinHandle,
+use {
+    assert2::assert,
+    krabka_bdd::{Given, TokioMultiThreadContext},
+    rstest_bdd_macros::{given, then, when},
+    std::{
+        sync::mpsc::{self, Receiver},
+        time::Duration,
+    },
+    tokio::{
+        sync::oneshot::{self, Sender},
+        task::JoinHandle,
+    },
 };
 
 /// Long enough for any loaded runner, short enough to fail rather than hang.
