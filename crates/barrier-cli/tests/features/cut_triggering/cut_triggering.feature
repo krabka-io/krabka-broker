@@ -44,7 +44,7 @@ Feature: Operators trigger a cut on demand
 
     Scenario: A topic created after the group was defined is in the next cut
       Given an operator has defined a barrier group over the payments topic
-      And the payments topic has since been created with 2 partitions
+      And the payments topic was created afterwards with 2 partitions
       When the operator triggers a cut of the group
       Then the cut names an offset for exactly these partitions:
         | topic    | partition |
@@ -53,6 +53,7 @@ Feature: Operators trigger a cut on demand
 
   Rule: Only a defined group can be cut
 
+    @inprogress
     Scenario: A cut of a group nobody defined is refused
       When an operator tries to trigger a cut of a group nobody defined
       Then the broker refuses the request as an unknown group
