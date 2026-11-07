@@ -30,3 +30,34 @@ pub(super) struct ProducerStateManager {
     /// See [`VerificationGuard`](crate::VerificationGuard).
     pub(super) verifications: HashMap<ProducerId, VerificationState>,
 }
+
+impl ProducerStateManager {
+    /// Forget every producer, for a hard reset or a producer-state reload.
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
+        self.earlier_batches.clear();
+        self.verifications.clear();
+    }
+
+    /// Remove every producer that has no open transaction and whose last
+    /// timestamp is `expiration_ms` or more before `now_ms`, with its retained
+    /// batches, and every verification that is that old. Kafka's
+    /// `ProducerStateManager.removeExpiredProducers`.
+    pub(super) fn expire(&mut self, now_ms: i64, expiration_ms: i64) {
+        let expired: Vec<ProducerId> = self
+            .entries
+            .values()
+            .filter(|entry| {
+                entry.current_txn_first_offset.is_none()
+                    && now_ms.saturating_sub(entry.timestamp) >= expiration_ms
+            })
+            .map(|entry| entry.producer_id)
+            .collect();
+        for producer_id in expired {
+            self.entries.remove(&producer_id);
+            self.earlier_batches.remove(&producer_id);
+        }
+        self.verifications
+            .retain(|_, state| now_ms.saturating_sub(state.created_ms) < expiration_ms);
+    }
+}

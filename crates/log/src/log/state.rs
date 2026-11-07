@@ -59,11 +59,9 @@ impl Log {
     /// Empty the volatile state before a hard reset or a durable producer-state reload.
     pub(super) fn clear_producer_and_transaction_state(&mut self) {
         self.pending.clear();
-        self.producers.verifications.clear();
         self.unreplicated.clear();
         self.pending_stamp_ranges.clear();
-        self.producers.entries.clear();
-        self.producers.earlier_batches.clear();
+        self.producers.clear();
     }
 
     /// Directory this log was opened against. The broker's intra-broker

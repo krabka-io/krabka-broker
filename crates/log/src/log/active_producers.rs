@@ -100,23 +100,7 @@ impl Log {
     /// `isProducerExpired`, for `producer.id.expiration.ms`. The next
     /// producer-state snapshot does not hold a removed producer.
     pub fn remove_expired_producers(&mut self, now_ms: i64, expiration_ms: i64) {
-        let expired: Vec<ProducerId> = self
-            .producers
-            .entries
-            .values()
-            .filter(|entry| {
-                entry.current_txn_first_offset.is_none()
-                    && now_ms.saturating_sub(entry.timestamp) >= expiration_ms
-            })
-            .map(|entry| entry.producer_id)
-            .collect();
-        for producer_id in expired {
-            self.producers.entries.remove(&producer_id);
-            self.producers.earlier_batches.remove(&producer_id);
-        }
-        self.producers
-            .verifications
-            .retain(|_, state| now_ms.saturating_sub(state.created_ms) < expiration_ms);
+        self.producers.expire(now_ms, expiration_ms);
     }
 }
 
