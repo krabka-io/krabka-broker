@@ -16,8 +16,8 @@ use {
     crate::{blocking::spawn_blocking, metrics::RemoteTierPath, time_util::now_ms},
     krabka_log::{Offset, SegmentExport},
     krabka_remote_storage::{
-        RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
-        TopicIdPartition, WormChainRecord,
+        ChainStamp, RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState,
+        RemoteStorageError, TopicIdPartition, WormChainRecord,
     },
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
     std::{
@@ -157,6 +157,16 @@ pub(super) async fn copy_one(
     outcome
 }
 
+/// A copy's place in the chain once [`ChainPosition::Exhausted`] is ruled
+/// out: the two positions a copy can still go ahead from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Chain {
+    /// Mutable tier: the copy stamps nothing.
+    Unchained,
+    /// Write-once archive: the copy's manifest joins the chain here.
+    At(ChainStamp),
+}
+
 async fn copy_one_inner(
     tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
@@ -169,19 +179,23 @@ async fn copy_one_inner(
     chain: ChainPosition,
 ) -> CopyOutcome {
     let (rsm, rlmm) = (tier.rsm, tier.rlmm);
+    let chain = match chain {
+        ChainPosition::Unchained => Chain::Unchained,
+        ChainPosition::At(stamp) => Chain::At(stamp),
+        ChainPosition::Exhausted => {
+            error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                   "remote-log-manager: refusing a WORM copy after chain sequence exhaustion");
+            return CopyOutcome::Failed;
+        }
+    };
     // Only a chained copy is trying to seal a manifest, so only a chained copy
     // can fail to. An unchained copy failing on a mutable tier is an ordinary
     // copy failure and says nothing about the archive's attestation.
     let seal_failed = || {
-        if matches!(chain, ChainPosition::At(_)) {
+        if matches!(chain, Chain::At(_)) {
             tier.metrics.worm_manifest_seal_failures_total.inc();
         }
     };
-    if chain == ChainPosition::Exhausted {
-        error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-               "remote-log-manager: refusing a WORM copy after chain sequence exhaustion");
-        return CopyOutcome::Failed;
-    }
     let id = RemoteLogSegmentId::new(tp.clone(), Uuid::new_v4());
     // Unwrap the log-layer `Offset`s into the remote-storage metadata's `i64`
     // world at the seam; the epoch map keeps its `LeaderEpoch` keys, which
@@ -220,8 +234,8 @@ async fn copy_one_inner(
     // an unstamped manifest, and it refuses only *after* uploading every
     // object, which would leave orphans in a bucket that takes nothing back.
     let metadata = match chain {
-        ChainPosition::Unchained => metadata,
-        ChainPosition::At(stamp) => match WormChainRecord::request(stamp).to_custom_metadata() {
+        Chain::Unchained => metadata,
+        Chain::At(stamp) => match WormChainRecord::request(stamp).to_custom_metadata() {
             Ok(custom) => metadata.with_custom_metadata(custom),
             Err(e) => {
                 warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
@@ -229,7 +243,6 @@ async fn copy_one_inner(
                 return CopyOutcome::Failed;
             }
         },
-        ChainPosition::Exhausted => return CopyOutcome::Failed,
     };
 
     let md_started = metadata.clone();
@@ -319,7 +332,7 @@ async fn copy_one_inner(
     // write-once copy is past that point: the backend has sealed a manifest
     // over the objects, they cannot be deleted, and the chain the next copy
     // extends already runs through it, so it is published as usual.
-    if chain == ChainPosition::Unchained && !fence.holds() {
+    if chain == Chain::Unchained && !fence.holds() {
         fenced(tp, ex, "after the upload");
         rollback(tier, &metadata, broker_id).await;
         return CopyOutcome::Fenced;
@@ -332,8 +345,8 @@ async fn copy_one_inner(
     // be serving unattested data. Leaving it in `CopySegmentStarted` is what
     // makes the next tick retry it under a fresh segment id.
     let next = match chain {
-        ChainPosition::Unchained => ChainPosition::Unchained,
-        ChainPosition::At(requested) => {
+        Chain::Unchained => ChainPosition::Unchained,
+        Chain::At(requested) => {
             let Some(receipt) = returned
                 .as_ref()
                 .and_then(|custom| WormChainRecord::from_custom_metadata(custom).ok())
@@ -367,7 +380,6 @@ async fn copy_one_inner(
                 None => return CopyOutcome::Failed,
             }
         }
-        ChainPosition::Exhausted => return CopyOutcome::Failed,
     };
 
     // The backend's receipt is the chain position a restart reads back, so
