@@ -55,7 +55,13 @@ fn replace_file_durably_with(
         rename(path, backup)?;
     }
     if let Err(error) = rename(temporary, path) {
-        restore_backup(path, backup);
+        // Put the previous file back, but never over a primary that landed.
+        if matches!(
+            (path.try_exists(), backup.try_exists()),
+            (Ok(false), Ok(true))
+        ) {
+            let _ = fs::rename(backup, path);
+        }
         return Err(error);
     }
     if backup.exists() {
@@ -70,13 +76,6 @@ fn replace_file_durably_with(
         File::open(parent)?.sync_all()?;
     }
     Ok(())
-}
-
-fn restore_backup(path: &Path, backup: &Path) {
-    let (Ok(false), Ok(true)) = (path.try_exists(), backup.try_exists()) else {
-        return;
-    };
-    let _ = fs::rename(backup, path);
 }
 
 #[cfg(test)]
