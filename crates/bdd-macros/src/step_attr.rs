@@ -13,7 +13,7 @@
 //!
 //! - Every pattern compiles with `rstest_bdd_patterns`.
 //! - The placeholders of every pattern name the non-fixture parameters in
-//!   declaration order, because rstest-bdd binds captures by position.
+//!   declaration order, so a step function reads like its step text.
 //! - The function returns `()`, `Result<(), E>` or an `Attempt<T, E>`, and a
 //!   pattern that says "attempts to" or "tries to" returns an `Attempt`.
 
@@ -68,7 +68,7 @@ enum ParamKind {
     DocString,
     /// A `#[step_args]` struct that takes every placeholder.
     StepArgs,
-    /// A placeholder value, bound by position.
+    /// A placeholder value, bound to the placeholder of its name.
     Value,
 }
 
@@ -222,8 +222,8 @@ fn check_pattern(pattern: &str, values: &[ParamInfo]) -> Result<(), String> {
     }
     Err(format!(
         "step pattern `{pattern}` has placeholders {} but the step function's non-fixture \
-         parameters are {}: rstest-bdd binds them by position, so name them alike and in the \
-         same order, and take a fixture by reference or mark it `#[from]`",
+         parameters are {}: name each parameter after its placeholder, in the same order, and \
+         take a fixture by reference or mark it `#[from]`",
         name_list(&placeholders),
         name_list(&parameters),
     ))
@@ -527,8 +527,8 @@ mod tests {
         let pattern = braced(pattern);
         let message = format!(
             "step pattern `{pattern}` has placeholders {placeholders} but the step function's \
-             non-fixture parameters are {parameters}: rstest-bdd binds them by position, so \
-             name them alike and in the same order, and take a fixture by reference or mark it \
+             non-fixture parameters are {parameters}: name each parameter after its \
+             placeholder, in the same order, and take a fixture by reference or mark it \
              `#[from]`"
         );
         assert!(check_pattern(&pattern, &values(declared)) == Err(message));
@@ -739,9 +739,9 @@ mod tests {
         r#""‹count› items in ‹name›""#,
         "fn s(name: String, count: u32) {}",
         "step pattern `‹count:u32› items in ‹name›` has placeholders `count`, `name` but \
-         the step function's non-fixture parameters are `name`, `count`: rstest-bdd binds them \
-         by position, so name them alike and in the same order, and take a fixture by \
-         reference or mark it `#[from]`"
+         the step function's non-fixture parameters are `name`, `count`: name each parameter \
+         after its placeholder, in the same order, and take a fixture by reference or mark it \
+         `#[from]`"
     )]
     #[case::return_type(
         r#""a topic""#,

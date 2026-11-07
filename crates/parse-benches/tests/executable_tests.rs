@@ -5,7 +5,8 @@
 use {
     assert2::assert,
     krabka_parse_benches::{
-        Args, BenchmarkMetric, BenchmarkSummary, Command, ParseBenchesError, compare_summaries,
+        Args, BenchmarkMetric, BenchmarkSummary, Command, Outcome, ParseBenchesError,
+        compare_summaries,
         executables::{
             BenchExecutable, ExecutableManifest, file_digest, manifest_from_cargo_messages,
             ran_executables, verify_pass,
@@ -273,13 +274,13 @@ fn the_executables_command_and_a_summary_carry_the_identity_through() {
     )
     .unwrap();
     let manifest_path = work.path().join("executables.json");
-    let (recorded, _) = run_command(&Command::Executables {
+    let recorded = run_command(&Command::Executables {
         cargo_messages: messages,
         commit: "abc123".to_owned(),
         output: manifest_path.clone(),
     })
     .unwrap();
-    assert!(recorded);
+    assert!(recorded.outcome == Outcome::Passed);
     let run_dir = work.path().join("run-1");
     fs::create_dir_all(&run_dir).unwrap();
     fs::write(

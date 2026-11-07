@@ -139,13 +139,14 @@ These describe the plain `rstest_bdd_macros::scenarios!` and `#[scenario]`, at t
 - A `*` step after a `When` or `Then` continues that keyword.
 - A failing step's panic names the feature file and line, the rule, the scenario, the outline row and the step as written.
 - `ignore_tags = "<tag expression>"` marks matching scenarios `#[ignore]` instead of dropping them, so `--ignored` still runs them. Tags may contain `:` and `.`.
+- `expect_failure_tags = "<tag expression>"` runs matching scenarios as expected failures. The test passes while a step fails, and fails with "scenario tagged ... now passes: remove the tag" once every step passes, so a scenario cannot stay `@inprogress` after the work is done. A tag set that matches both `ignore_tags` and `expect_failure_tags` is a compile error.
+- Placeholder values bind to a step function's parameters by name, so the parameter order does not matter. Position is the fallback only where names cannot match, such as a `StepArgs` struct.
 
 What is still open there, and what `krabka_bdd::scenarios!` does instead:
 
 - Each `async` step runs on a throwaway current-thread runtime, so a task one step spawns dies before the next, and a harness polls an `async` step once. krabka-bdd runs every step on the scenario's one runtime.
 - The scenario body, and with it any teardown, runs only when every step passed, and a skipped step counts as a pass. krabka-bdd's after hooks always run, and a skip fails without `@allow_skipped`.
 - When several step definitions match a step, rstest-bdd runs the most specific one and breaks ties arbitrarily. krabka-bdd fails the scenario and lists them.
-- Placeholder values bind to a step function's parameters by position, not by name, so reordering the parameters still compiles and silently swaps the values. `#[krabka_bdd::given]` and its siblings reject a parameter order that differs from the placeholder order.
 - An unknown `<placeholder>` is not reported. krabka-bdd's lint rejects it (`unknown-placeholder`).
 - Cargo does not see a new `.feature` file in a directory that `scenarios!` reads until the Rust file that calls the macro changes. After you add a feature file, touch that file. Edits to an existing file are tracked. Bazel is not affected, because the `compile_data` glob is a build input. This one also holds for `krabka_bdd::scenarios!`.
 
@@ -211,7 +212,7 @@ Each scenario gets fresh fixtures, so scenarios do not depend on their order. Do
 Do not use alternation to hide inconsistent business terms: if two words mean the same thing, pick one and fix the features. At expansion time the attribute:
 
 - compiles every resulting pattern with `rstest-bdd-patterns`,
-- requires the placeholders to bind the non-fixture parameters in order, because rstest-bdd binds them by position,
+- requires the placeholders to name the non-fixture parameters in order, so a step function reads like its step text,
 - requires the return type to be `()`, `Result<(), E>` or an `Attempt<T, E>`, and an `Attempt` when the step says "attempts to" or "tries to".
 
 `krabka_bdd::Attempt<T, E>` is `NotExecuted`, `Succeeded(T)` or `Failed(E)`. `Attempt::of(|| ..)` captures a result; `succeeded()`, `failed()` and `assert_failed_with(..)` check it and name the state they found when they panic. Declare a fixture of the `Attempt` type so the runner can hand the returned value to the `Then`. Every other action stays destructive: it panics on an unexpected error.
