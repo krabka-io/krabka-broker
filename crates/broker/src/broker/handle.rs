@@ -484,10 +484,14 @@ impl BrokerHandle {
         self.stop_listeners().await;
         self.broker.share_partition_leaders.shutdown().await;
 
-        // The supervisor's cancellation epilogue aborts and joins its private
-        // ordinary and WAL follower tasks. Its run loop races every reconcile
-        // after startup against this token, so awaiting it is bounded even if
-        // a network-backed reconciliation was in flight.
+        // The supervisor's cancellation epilogue signals its private ordinary
+        // and WAL follower tasks and joins them, aborting a fetcher still
+        // running after `TASK_STOP_TIMEOUT` (5 s); a WAL follower, which owns
+        // its shard's files, is never aborted. A follower therefore stops at its
+        // next shutdown check rather than at an arbitrary await, which is
+        // still a point where a process can die. Its run loop races every
+        // reconcile after startup against this token, so awaiting it is
+        // bounded even if a network-backed reconciliation was in flight.
         let task = self.broker.supervisor_handle.lock().await.take();
         if let Some(task) = task {
             let _ = task.await;

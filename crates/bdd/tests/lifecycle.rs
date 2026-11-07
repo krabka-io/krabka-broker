@@ -1,9 +1,8 @@
-//! `scenarios!` keeps `@formulated` and `@inprogress` scenarios out of the
-//! gating run.
+//! `scenarios!` keeps an unfinished scenario from failing the gating run.
 //!
 //! The `@inprogress` scenario's Then always fails. The suite passes only
-//! because rstest-bdd marks that scenario `#[ignore]`, and
-//! `cargo test -- --ignored` still runs it and goes red.
+//! because the runner treats an `@inprogress` scenario as an expected
+//! failure, which would itself fail once the scenario passed.
 
 #![cfg(test)]
 

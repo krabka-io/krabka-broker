@@ -8,7 +8,6 @@ use {
         world::GuardScenario,
     },
     assert2::assert,
-    krabka_bdd::TokioMultiThreadContext,
     krabka_protocol::krabka::break_glass::BreakGlassApproval,
     krabka_units::{convert::TimeExt as _, parse},
     rstest_bdd_macros::{given, then, when},
@@ -59,11 +58,12 @@ impl From<&BreakGlassApproval> for Approval {
 }
 
 /// Every approval the scenario's proposal holds.
-fn approvals(guard: &mut GuardScenario, runtime: &TokioMultiThreadContext) -> Vec<Approval> {
+async fn approvals(guard: &mut GuardScenario) -> Vec<Approval> {
     let proposal = *guard.proposal.get();
-    let cluster = guard.cluster(runtime);
-    runtime
-        .block_on(cluster.proposal(proposal))
+    let cluster = guard.cluster().await;
+    cluster
+        .proposal(proposal)
+        .await
         .approvals
         .iter()
         .map(Approval::from)
@@ -73,14 +73,9 @@ fn approvals(guard: &mut GuardScenario, runtime: &TokioMultiThreadContext) -> Ve
 /// `operator` opens a proposal to delete the doomed topic, asking for
 /// `lifetime`, and the scenario remembers what the tool reported and the
 /// proposal it opened.
-fn propose(
-    guard: &mut GuardScenario,
-    runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    lifetime: &Lifetime,
-) {
-    let cluster = guard.cluster(runtime);
-    let (outcome, proposal) = runtime.block_on(cluster.propose(operator, ACTION, TARGET, lifetime));
+async fn propose(guard: &mut GuardScenario, operator: Operator, lifetime: &Lifetime) {
+    let cluster = guard.cluster().await;
+    let (outcome, proposal) = cluster.propose(operator, ACTION, TARGET, lifetime).await;
     guard.outcome.set(outcome);
     if let Some(proposal) = proposal {
         guard.proposal.set(proposal);
@@ -89,22 +84,19 @@ fn propose(
 
 /// `operator` approves the scenario's proposal without signing it, and the
 /// scenario remembers what the tool reported.
-fn try_approve(guard: &mut GuardScenario, runtime: &TokioMultiThreadContext, operator: Operator) {
+async fn try_approve(guard: &mut GuardScenario, operator: Operator) {
     let proposal = *guard.proposal.get();
-    let cluster = guard.cluster(runtime);
-    let outcome = runtime.block_on(cluster.approve(operator, proposal, None));
+    let cluster = guard.cluster().await;
+    let outcome = cluster.approve(operator, proposal, None).await;
     guard.outcome.set(outcome);
 }
 
 #[given("{operator} has proposed deleting the doomed topic")]
-fn has_proposed(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-) {
-    let cluster = guard.cluster(runtime);
-    let (outcome, proposal) =
-        runtime.block_on(cluster.propose(operator, ACTION, TARGET, &Lifetime::Default));
+async fn has_proposed(guard: &mut GuardScenario, operator: Operator) {
+    let cluster = guard.cluster().await;
+    let (outcome, proposal) = cluster
+        .propose(operator, ACTION, TARGET, &Lifetime::Default)
+        .await;
     assert!(outcome == Outcome::Success);
     guard
         .proposal
@@ -112,21 +104,13 @@ fn has_proposed(
 }
 
 #[given("{operator} has approved the proposal")]
-fn has_approved(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-) {
-    assert!(act_on_proposal(guard, runtime, operator, ProposalAct::Approve) == Outcome::Success);
+async fn has_approved(guard: &mut GuardScenario, operator: Operator) {
+    assert!(act_on_proposal(guard, operator, ProposalAct::Approve).await == Outcome::Success);
 }
 
 #[given("{operator} has withdrawn the proposal")]
-fn has_withdrawn(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-) {
-    assert!(act_on_proposal(guard, runtime, operator, ProposalAct::Withdraw) == Outcome::Success);
+async fn has_withdrawn(guard: &mut GuardScenario, operator: Operator) {
+    assert!(act_on_proposal(guard, operator, ProposalAct::Withdraw).await == Outcome::Success);
 }
 
 /// What an operator does to the scenario's proposal in a Given.
@@ -137,20 +121,20 @@ enum ProposalAct {
 }
 
 /// `operator` approves or withdraws the scenario's proposal, unsigned.
-fn act_on_proposal(
+async fn act_on_proposal(
     guard: &mut GuardScenario,
-    runtime: &TokioMultiThreadContext,
     operator: Operator,
     act: ProposalAct,
 ) -> Outcome {
     let proposal = *guard.proposal.get();
-    let cluster = guard.cluster(runtime);
-    runtime.block_on(async {
+    let cluster = guard.cluster().await;
+    async {
         match act {
             ProposalAct::Approve => cluster.approve(operator, proposal, None).await,
             ProposalAct::Withdraw => cluster.withdraw(operator, proposal).await,
         }
-    })
+    }
+    .await
 }
 
 #[given("the cluster caps a proposal's lifetime at {cap}")]
@@ -160,113 +144,75 @@ fn caps_proposal_lifetime(guard: &mut GuardScenario, cap: String) {
 }
 
 #[when("{operator} approves the proposal signed with {key}")]
-fn approves_signed(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    key: KeySource,
-) {
+async fn approves_signed(guard: &mut GuardScenario, operator: Operator, key: KeySource) {
     let proposal = *guard.proposal.get();
-    let cluster = guard.cluster(runtime);
-    let outcome = runtime.block_on(cluster.approve(operator, proposal, Some(key)));
+    let cluster = guard.cluster().await;
+    let outcome = cluster.approve(operator, proposal, Some(key)).await;
     guard.outcome.set(outcome);
 }
 
 #[when("{operator} tries to approve the proposal")]
-fn tries_to_approve(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-) {
-    try_approve(guard, runtime, operator);
+async fn tries_to_approve(guard: &mut GuardScenario, operator: Operator) {
+    try_approve(guard, operator).await;
 }
 
 #[when("{operator} tries to approve the proposal again")]
-fn tries_to_approve_again(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-) {
-    try_approve(guard, runtime, operator);
+async fn tries_to_approve_again(guard: &mut GuardScenario, operator: Operator) {
+    try_approve(guard, operator).await;
 }
 
 /// The approver runs the shipped entry point, connect step included, rather
 /// than the scenario's authenticated client.
 #[when("{operator} approves the proposal by running krabka-guard as himself")]
-fn approves_through_binary(
+async fn approves_through_binary(
     guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
     // The shipped tool has no way to say who is running it, which is the gap
     // the scenario keeps open.
     _operator: Operator,
 ) {
     let proposal = guard.proposal.get().to_string();
-    let bootstrap = guard.cluster(runtime).bootstrap();
-    let outcome = runtime.block_on(driver::run_binary(&bootstrap, &[
+    let bootstrap = guard.cluster().await.bootstrap();
+    let outcome = driver::run_binary(&bootstrap, &[
         "break-glass",
         "approve",
         "--proposal",
         &proposal,
-    ]));
+    ])
+    .await;
     guard.outcome.set(outcome);
 }
 
 #[when("{operator} proposes deleting the doomed topic for {lifetime}")]
-fn proposes_for(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    lifetime: Lifetime,
-) {
-    propose(guard, runtime, operator, &lifetime);
+async fn proposes_for(guard: &mut GuardScenario, operator: Operator, lifetime: Lifetime) {
+    propose(guard, operator, &lifetime).await;
 }
 
 #[when("{operator} tries to propose deleting the doomed topic for {lifetime}")]
-fn tries_to_propose_for(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    lifetime: Lifetime,
-) {
-    propose(guard, runtime, operator, &lifetime);
+async fn tries_to_propose_for(guard: &mut GuardScenario, operator: Operator, lifetime: Lifetime) {
+    propose(guard, operator, &lifetime).await;
 }
 
 #[then("the proposal holds 1 approval, signed by {operator}")]
-fn holds_one_signed_approval(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-) {
-    assert!(approvals(guard, runtime) == vec![Approval::signed_by(operator)]);
+async fn holds_one_signed_approval(guard: &mut GuardScenario, operator: Operator) {
+    assert!(approvals(guard).await == vec![Approval::signed_by(operator)]);
 }
 
 #[then("the proposal holds 1 approval, from {operator}")]
-fn holds_one_unsigned_approval(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-) {
-    assert!(approvals(guard, runtime) == vec![Approval::unsigned_from(operator)]);
+async fn holds_one_unsigned_approval(guard: &mut GuardScenario, operator: Operator) {
+    assert!(approvals(guard).await == vec![Approval::unsigned_from(operator)]);
 }
 
 #[then("the proposal holds no approval")]
-fn holds_no_approval(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
-    assert!(approvals(guard, runtime) == Vec::new());
+async fn holds_no_approval(guard: &mut GuardScenario) {
+    assert!(approvals(guard).await == Vec::new());
 }
 
 #[then("the proposal expires {expiry} after it opened")]
-fn expires_after(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    expiry: String,
-) {
+async fn expires_after(guard: &mut GuardScenario, expiry: String) {
     let expiry = parse::time(&expiry).expect("the expiry is a time with a unit");
     let proposal = *guard.proposal.get();
-    let cluster = guard.cluster(runtime);
-    let stored = runtime.block_on(cluster.proposal(proposal));
+    let cluster = guard.cluster().await;
+    let stored = cluster.proposal(proposal).await;
     assert!(stored.expires_at_ms - stored.created_at_ms == expiry.millis_i64());
 }
 
@@ -276,10 +222,7 @@ fn refuses_command_line(guard: &GuardScenario) {
 }
 
 #[then("the cluster holds no proposal")]
-fn holds_no_proposal(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
-    let cluster = guard.cluster(runtime);
-    assert!(runtime.block_on(cluster.proposals()) == Vec::new());
+async fn holds_no_proposal(guard: &mut GuardScenario) {
+    let cluster = guard.cluster().await;
+    assert!(cluster.proposals().await == Vec::new());
 }

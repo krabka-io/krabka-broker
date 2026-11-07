@@ -46,13 +46,59 @@ const MAX_GROUP_OFFSETS_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_DISKLESS_INDEX_BYTES: u64 = 256 * 1024 * 1024;
 
-fn artifact_byte_limit(name: &str) -> u64 {
-    match name {
-        MANIFEST => MAX_MANIFEST_BYTES,
-        GROUP_OFFSETS => MAX_GROUP_OFFSETS_BYTES,
-        METADATA_CHECKPOINT | RLMM_SNAPSHOT => MAX_SNAPSHOT_BYTES,
-        _ => MAX_DISKLESS_INDEX_BYTES,
+/// One object a capture writes, named by its file name inside the capture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArtifactKind {
+    Manifest,
+    GroupOffsets,
+    MetadataCheckpoint,
+    RlmmSnapshot,
+    DisklessWalIndex,
+}
+
+impl ArtifactKind {
+    const ALL: [Self; 5] = [
+        Self::Manifest,
+        Self::GroupOffsets,
+        Self::MetadataCheckpoint,
+        Self::RlmmSnapshot,
+        Self::DisklessWalIndex,
+    ];
+
+    /// The object name inside the capture, as `manifest.json` records it.
+    const fn file_name(self) -> &'static str {
+        match self {
+            Self::Manifest => MANIFEST,
+            Self::GroupOffsets => GROUP_OFFSETS,
+            Self::MetadataCheckpoint => METADATA_CHECKPOINT,
+            Self::RlmmSnapshot => RLMM_SNAPSHOT,
+            Self::DisklessWalIndex => DISKLESS_WAL_INDEX,
+        }
     }
+
+    /// The most bytes a capture writes, and a restore reads, for this object.
+    const fn byte_limit(self) -> u64 {
+        match self {
+            Self::Manifest => MAX_MANIFEST_BYTES,
+            Self::GroupOffsets => MAX_GROUP_OFFSETS_BYTES,
+            Self::MetadataCheckpoint | Self::RlmmSnapshot => MAX_SNAPSHOT_BYTES,
+            Self::DisklessWalIndex => MAX_DISKLESS_INDEX_BYTES,
+        }
+    }
+
+    /// The kind written under `name`, or `None` for a name this build does not
+    /// know.
+    fn from_file_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.file_name() == name)
+    }
+}
+
+/// The byte limit for the artifact `name`.
+///
+/// A name this build does not know, as a newer manifest can carry, deliberately
+/// keeps the diskless index's 256 MiB limit, so `verify` still reads it.
+fn artifact_byte_limit(name: &str) -> u64 {
+    ArtifactKind::from_file_name(name).map_or(MAX_DISKLESS_INDEX_BYTES, ArtifactKind::byte_limit)
 }
 
 fn check_capture_size(name: &str, size: u64, max_bytes: u64) -> Result<(), BackupError> {
@@ -91,38 +137,14 @@ fn now_ms() -> u64 {
     .unwrap_or(0)
 }
 
-/// Copy this node's restore inputs into the archive.
+/// Load command-config security and copy this node's restore inputs into the
+/// archive.
 ///
 /// # Errors
 ///
 /// The report result returns [`BackupError::Io`] when the capture found nothing to take or an
-/// artifact exceeds its restore size limit, and the archive's or the cluster's
-/// own error otherwise.
-pub async fn capture(
-    log_dir: Option<&Path>,
-    bootstrap_server: Option<&str>,
-    archive: &ArchiveArgs,
-) -> OperationReport<String> {
-    let mut events = Vec::new();
-    let signing = CaptureSigningArgs::default();
-    let request = CaptureRequest {
-        log_dir,
-        bootstrap_server,
-        security: None,
-        signing: &signing,
-        archive,
-        captured_at_ms: now_ms(),
-    };
-    let result = run_capture(request, &mut events).await;
-    OperationReport { result, events }
-}
-
-/// Load command-config security and capture this node's restore inputs.
-///
-/// # Errors
-///
-/// The report result returns the same errors as [`capture`], plus command-config read or parse
-/// failures.
+/// artifact exceeds its restore size limit, command-config read or parse failures, and the
+/// archive's or the cluster's own error otherwise.
 pub async fn capture_configured(
     log_dir: Option<&Path>,
     bootstrap_server: Option<&str>,
@@ -136,14 +158,13 @@ pub async fn capture_configured(
             Some(_) => security.load().await?,
             None => None,
         };
-        let request = CaptureRequest {
-            log_dir,
-            bootstrap_server,
-            security: client_security,
-            signing,
-            archive,
-            captured_at_ms: now_ms(),
-        };
+        let request = CaptureRequest::builder()
+            .maybe_log_dir(log_dir)
+            .maybe_bootstrap_server(bootstrap_server)
+            .maybe_security(client_security)
+            .signing(signing)
+            .archive(archive)
+            .build();
         run_capture(request, &mut events).await
     }
     .await;
@@ -152,35 +173,16 @@ pub async fn capture_configured(
 
 /// Everything one capture reads: where to take artifacts from, how to reach
 /// and sign for the cluster, where to put them, and the capture's timestamp.
+#[derive(bon::Builder)]
 struct CaptureRequest<'a> {
     log_dir: Option<&'a Path>,
     bootstrap_server: Option<&'a str>,
     security: Option<ClientSecurity>,
     signing: &'a CaptureSigningArgs,
     archive: &'a ArchiveArgs,
+    /// When the capture ran; now, unless a test pins it.
+    #[builder(default = now_ms())]
     captured_at_ms: u64,
-}
-
-#[cfg(test)]
-async fn capture_secured_at(
-    log_dir: Option<&Path>,
-    bootstrap_server: Option<&str>,
-    security: Option<ClientSecurity>,
-    signing: &CaptureSigningArgs,
-    archive: &ArchiveArgs,
-    captured_at_ms: u64,
-) -> OperationReport<String> {
-    let mut events = Vec::new();
-    let request = CaptureRequest {
-        log_dir,
-        bootstrap_server,
-        security,
-        signing,
-        archive,
-        captured_at_ms,
-    };
-    let result = run_capture(request, &mut events).await;
-    OperationReport { result, events }
 }
 
 async fn run_capture(
@@ -822,39 +824,15 @@ async fn verify_inner(
     )))
 }
 
-/// Commit a capture's group offsets into a restored cluster.
+/// Load command-config security and commit one capture's group offsets into a
+/// restored cluster.
 ///
 /// # Errors
 ///
 /// The report result returns [`BackupError::Integrity`] when the captured offsets do not match
-/// their recorded digest, [`BackupError::Cluster`] when the cluster refuses a
-/// commit, and the archive's own error when the capture cannot be read.
-pub async fn restore_offsets(
-    capture: &str,
-    bootstrap_server: &str,
-    dry_run: bool,
-    archive: &ArchiveArgs,
-) -> OperationReport<usize> {
-    let mut events = Vec::new();
-    let result = restore_offsets_secured_inner(
-        capture,
-        bootstrap_server,
-        None,
-        &CaptureTrustArgs::default(),
-        dry_run,
-        archive,
-        &mut events,
-    )
-    .await;
-    OperationReport { result, events }
-}
-
-/// Load command-config security and restore one capture's group offsets.
-///
-/// # Errors
-///
-/// The report result returns the same errors as [`restore_offsets`], plus command-config read or
-/// parse failures.
+/// their recorded digest, [`BackupError::Cluster`] when the cluster refuses a commit,
+/// command-config read or parse failures, and the archive's own error when the capture cannot
+/// be read.
 pub async fn restore_offsets_configured(
     capture: &str,
     bootstrap_server: &str,
@@ -897,12 +875,7 @@ async fn restore_offsets_secured_inner(
     let recorded = manifest.artifact(GROUP_OFFSETS).ok_or_else(|| {
         BackupError::NoSuchCapture(format!("capture {id} holds no {GROUP_OFFSETS}"))
     })?;
-    let bytes = store
-        .get_capped(&capture_key(&id, GROUP_OFFSETS), MAX_GROUP_OFFSETS_BYTES)
-        .await?;
-    if let Some(problem) = artifact_problem(recorded, &bytes) {
-        return Err(BackupError::Integrity(format!("capture {id}: {problem}")));
-    }
+    let bytes = read_verified_artifact(&store, &id, ArtifactKind::GroupOffsets, recorded).await?;
     verify_offsets_boundary(&store, &id, &manifest, &bytes, trust).await?;
     let offsets = GroupOffsetsFile::from_slice(&bytes, &capture_key(&id, GROUP_OFFSETS))?;
 
@@ -959,15 +932,7 @@ async fn verify_offsets_boundary(
         }
         return Ok(());
     };
-    let bytes = store
-        .get_capped(
-            &capture_key(id, DISKLESS_WAL_INDEX),
-            MAX_DISKLESS_INDEX_BYTES,
-        )
-        .await?;
-    if let Some(problem) = artifact_problem(recorded, &bytes) {
-        return Err(BackupError::Integrity(format!("capture {id}: {problem}")));
-    }
+    let bytes = read_verified_artifact(store, id, ArtifactKind::DisklessWalIndex, recorded).await?;
     let capture = DisklessWalCapture::from_slice(&bytes).map_err(BackupError::Integrity)?;
     if capture.authentication.is_none() && !configured {
         return Ok(());
@@ -992,6 +957,23 @@ async fn verify_offsets_boundary(
         ));
     }
     Ok(())
+}
+
+/// Read one artifact of a capture and refuse bytes that are not the bytes the
+/// manifest recorded for it.
+async fn read_verified_artifact(
+    store: &Archive,
+    id: &str,
+    kind: ArtifactKind,
+    recorded: &Artifact,
+) -> Result<Vec<u8>, BackupError> {
+    let bytes = store
+        .get_capped(&capture_key(id, kind.file_name()), kind.byte_limit())
+        .await?;
+    if let Some(problem) = artifact_problem(recorded, &bytes) {
+        return Err(BackupError::Integrity(format!("capture {id}: {problem}")));
+    }
+    Ok(bytes)
 }
 
 /// Read every group's committed offsets from a live cluster.
@@ -1090,19 +1072,21 @@ async fn read_manifest(store: &Archive, id: &str) -> Result<Manifest, BackupErro
 mod tests {
     use {
         super::{
-            BackupError, CAPTURE_ROOT, DISKLESS_WAL_INDEX, DisklessWalCapture, FileEd25519Signer,
-            GROUP_OFFSETS, MANIFEST, MAX_SNAPSHOT_BYTES, METADATA_CHECKPOINT, RLMM_SNAPSHOT,
-            RLMM_SNAPSHOT_RELATIVE, Sha256Digest, artifact_byte_limit, capture, check_capture_size,
-            checkpoint_note, list, newest_metadata_checkpoint, restore_offsets, upload_capped,
-            verify, verify_offsets_boundary,
+            ArtifactKind, BackupError, CAPTURE_ROOT, DISKLESS_WAL_INDEX, DisklessWalCapture,
+            FileEd25519Signer, GROUP_OFFSETS, MANIFEST, MAX_SNAPSHOT_BYTES, METADATA_CHECKPOINT,
+            RLMM_SNAPSHOT, RLMM_SNAPSHOT_RELATIVE, Sha256Digest, artifact_byte_limit,
+            capture_configured, check_capture_size, checkpoint_note, list,
+            newest_metadata_checkpoint, restore_offsets_configured, upload_capped, verify,
+            verify_offsets_boundary,
         },
         crate::{
             archive::{Archive, ArchiveArgs},
             capture::capture_key,
-            cli::CaptureTrustArgs,
+            cli::{CaptureSigningArgs, CaptureTrustArgs},
+            connection::SecurityArgs,
             manifest::{Artifact, MANIFEST_VERSION, Manifest, sha256_hex},
             offsets::{CommittedOffset, GROUP_OFFSETS_VERSION, GroupOffsets, GroupOffsetsFile},
-            report::BackupEvent,
+            report::{BackupEvent, OperationReport},
         },
         assert2::{assert, check},
         krabka_ids::PartitionIndex,
@@ -1132,12 +1116,49 @@ mod tests {
 
     krabka_macros::snapshot_node_fixture!(node_with_rlmm);
 
+    /// An offset restore with no command config and no pinned capture trust.
+    async fn restore_offsets(
+        capture: &str,
+        bootstrap_server: &str,
+        dry_run: bool,
+        archive: &ArchiveArgs,
+    ) -> OperationReport<usize> {
+        restore_offsets_configured(
+            capture,
+            bootstrap_server,
+            &SecurityArgs::default(),
+            &CaptureTrustArgs::default(),
+            dry_run,
+            archive,
+        )
+        .await
+    }
+
+    /// A capture with no command config and no signing key.
+    async fn capture(
+        log_dir: Option<&Path>,
+        bootstrap_server: Option<&str>,
+        archive: &ArchiveArgs,
+    ) -> OperationReport<String> {
+        capture_configured(
+            log_dir,
+            bootstrap_server,
+            &SecurityArgs::default(),
+            &CaptureSigningArgs::default(),
+            archive,
+        )
+        .await
+    }
+
     #[yare::parameterized(
         manifest = { MANIFEST, 8 * 1024 * 1024 },
         group_offsets = { GROUP_OFFSETS, 64 * 1024 * 1024 },
         metadata_checkpoint = { METADATA_CHECKPOINT, 512 * 1024 * 1024 },
         rlmm_snapshot = { RLMM_SNAPSHOT, 512 * 1024 * 1024 },
         diskless_wal_index = { DISKLESS_WAL_INDEX, 256 * 1024 * 1024 },
+        // A newer manifest can name an artifact this build does not know.
+        // `verify` reads it under the diskless index's limit.
+        unknown = { "a-newer-artifact.json", 256 * 1024 * 1024 },
     )]
     fn capture_size_limits_match_readers_at_the_boundary(name: &str, expected: u64) {
         let limit = artifact_byte_limit(name);
@@ -1145,6 +1166,129 @@ mod tests {
         check!(check_capture_size(name, limit, limit).is_ok());
         check!(check_capture_size(name, limit + 1, limit).is_err());
         check!(check_capture_size(name, u64::MAX, limit).is_err());
+    }
+
+    #[yare::parameterized(
+        manifest = { ArtifactKind::Manifest, "manifest.json" },
+        group_offsets = { ArtifactKind::GroupOffsets, "group-offsets.json" },
+        metadata_checkpoint = { ArtifactKind::MetadataCheckpoint, "cluster-metadata.checkpoint" },
+        rlmm_snapshot = { ArtifactKind::RlmmSnapshot, "rlmm-snapshot" },
+        diskless_wal_index = { ArtifactKind::DisklessWalIndex, "diskless-wal-index.json" },
+    )]
+    fn an_artifact_kind_is_found_by_the_file_name_it_is_written_under(
+        kind: ArtifactKind,
+        file_name: &str,
+    ) {
+        check!(kind.file_name() == file_name);
+        check!(ArtifactKind::from_file_name(file_name) == Some(kind));
+    }
+
+    #[test]
+    fn an_unknown_file_name_is_no_artifact_kind() {
+        check!(ArtifactKind::from_file_name("a-newer-artifact.json") == None);
+    }
+
+    /// The exact `manifest.json` a capture that took every artifact writes.
+    /// A change here is a change to the 1.x capture format.
+    const GOLDEN_CAPTURE_MANIFEST: &str = r#"{
+  "version": 0,
+  "capture_id": "0001700000000000",
+  "captured_at_ms": 1700000000000,
+  "log_dir": "/var/lib/krabka",
+  "bootstrap_server": "broker-1:9092",
+  "artifacts": [
+    {
+      "name": "rlmm-snapshot",
+      "source": "/var/lib/krabka/remote-log-metadata/snapshot",
+      "size_bytes": 19,
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "name": "cluster-metadata.checkpoint",
+      "source": "/var/lib/krabka/__cluster_metadata-0/00000000000000000042-0000000001.checkpoint",
+      "size_bytes": 32,
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+      "name": "group-offsets.json",
+      "source": "broker-1:9092",
+      "size_bytes": 120,
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    {
+      "name": "diskless-wal-index.json",
+      "source": "broker-1:9092",
+      "size_bytes": 4096,
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+    }
+  ]
+}"#;
+
+    fn golden_capture_artifacts() -> Vec<Artifact> {
+        [
+            (
+                RLMM_SNAPSHOT,
+                "/var/lib/krabka/remote-log-metadata/snapshot",
+                19,
+                '1',
+            ),
+            (
+                METADATA_CHECKPOINT,
+                "/var/lib/krabka/__cluster_metadata-0/00000000000000000042-0000000001.checkpoint",
+                32,
+                '2',
+            ),
+            (GROUP_OFFSETS, "broker-1:9092", 120, '3'),
+            (DISKLESS_WAL_INDEX, "broker-1:9092", 4096, '4'),
+        ]
+        .into_iter()
+        .map(|(name, source, size_bytes, digit)| Artifact {
+            name: name.to_owned(),
+            source: source.to_owned(),
+            size_bytes,
+            sha256: digit.to_string().repeat(64),
+        })
+        .collect()
+    }
+
+    #[tokio::test]
+    async fn a_capture_writes_the_golden_manifest_and_decodes_it_back() {
+        let ArchiveFixture {
+            root: _root,
+            args,
+            store,
+        } = archive_fixture();
+        let id = "0001700000000000";
+        let signing = CaptureSigningArgs::default();
+        let request = super::CaptureRequest::builder()
+            .log_dir(Path::new("/var/lib/krabka"))
+            .bootstrap_server("broker-1:9092")
+            .signing(&signing)
+            .archive(&args)
+            .captured_at_ms(1_700_000_000_000)
+            .build();
+        let expected = Manifest {
+            version: MANIFEST_VERSION,
+            capture_id: id.to_owned(),
+            captured_at_ms: 1_700_000_000_000,
+            log_dir: Some("/var/lib/krabka".to_owned()),
+            bootstrap_server: Some("broker-1:9092".to_owned()),
+            artifacts: golden_capture_artifacts(),
+        };
+
+        let written = super::write_manifest(&store, id, &request, golden_capture_artifacts())
+            .await
+            .expect("write the manifest");
+
+        check!(written == expected);
+        let bytes = store
+            .get(&capture_key(id, MANIFEST))
+            .await
+            .expect("read the manifest");
+        check!(String::from_utf8(bytes).expect("UTF-8 manifest") == GOLDEN_CAPTURE_MANIFEST);
+        let decoded = Manifest::from_slice(GOLDEN_CAPTURE_MANIFEST.as_bytes(), MANIFEST)
+            .expect("decode the golden manifest");
+        check!(decoded == expected);
     }
 
     #[yare::parameterized(
@@ -1256,13 +1400,22 @@ mod tests {
             args: archive,
             store,
         } = archive_fixture();
-        let signing = super::CaptureSigningArgs::default();
+        let signing = CaptureSigningArgs::default();
+        let request = |log_dir| {
+            super::CaptureRequest::builder()
+                .log_dir(log_dir)
+                .signing(&signing)
+                .archive(&archive)
+                .captured_at_ms(42)
+                .build()
+        };
+        let (mut left_events, mut right_events) = (Vec::new(), Vec::new());
         let (left, right) = tokio::join!(
-            super::capture_secured_at(Some(first.path()), None, None, &signing, &archive, 42),
-            super::capture_secured_at(Some(second.path()), None, None, &signing, &archive, 42),
+            super::run_capture(request(first.path()), &mut left_events),
+            super::run_capture(request(second.path()), &mut right_events),
         );
-        let left = left.result.unwrap();
-        let right = right.result.unwrap();
+        let left = left.unwrap();
+        let right = right.unwrap();
         check!(left != right);
         check!(list(&archive).await.result.unwrap().len() == 2);
         for (id, expected) in [

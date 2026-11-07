@@ -193,6 +193,7 @@ nix = { version = "0.31", default-features = false, features = ["zerocopy"] }
 
 [dev-dependencies]
 rstest = { workspace = true }
+krabka-bdd = { path = "../bdd" }
 rstest-bdd = { workspace = true }
 rstest-bdd-macros = { workspace = true }
 rust-embed = { workspace = true }

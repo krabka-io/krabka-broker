@@ -49,6 +49,9 @@ krabka-raft = { version = "1.1.5", path = "../raft" }
 # `meta.properties`, so it reads what Kafka's tools read.
 krabka-format = { path = "../format" }
 
+# The builder for one capture's request, so a test overrides only the fields
+# it pins.
+bon = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 futures-util = { workspace = true }

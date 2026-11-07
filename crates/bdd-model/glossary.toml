@@ -1,0 +1,51 @@
+# The tag and term glossary of Krabka's Gherkin features.
+#
+# Every tag a feature uses must be defined here; `krabka_bdd::scenarios!` and
+# the `krabka-bdd lint` command reject any other. The tag table in
+# docs/style_guides/gherkin_style_guide.md is generated from this file by
+# `krabka-bdd tags-table`, and `aspect check-gherkin` keeps the two equal.
+#
+# A term is a domain word that steps use. `krabka-bdd glossary` reports words
+# steps use that are not defined here, and terms no step uses any more.
+
+[tags.docker]
+meaning = "The scenario needs a container, such as a cp-kafka oracle. The crate's `crate_tests` call runs it under `--config=docker`."
+
+[tags.journey]
+meaning = "An end-to-end flow across many rules. See [Journeys](#journeys)."
+
+[tags.formulated]
+meaning = "Reviewed and agreed, automation not started. Generated as an ignored test."
+
+[tags.inprogress]
+meaning = "Automation or production code is incomplete. The test passes while the scenario fails, and fails once the scenario passes."
+
+[tags.manual]
+meaning = "Checked by a person, not automated. Generated as `#[ignore = \"manual\"]`. Rare and discouraged: automate the check instead where you can."
+
+[tags.allow_skipped]
+meaning = "A step may skip the scenario at run time. Without it, a skipped scenario fails."
+
+[terms.partition]
+definition = "An ordered, append-only log of records, one of a topic's shards."
+
+[terms.topic]
+definition = "A named stream of records, split into partitions."
+
+[terms.segment]
+definition = "One file of a partition's log, rolled on size or age."
+
+[terms.offset]
+definition = "The position of a record in its partition."
+
+[terms.leader-epoch]
+definition = "The number of the leadership term a partition's leader serves."
+
+[terms.high-watermark]
+definition = "The offset below which every record is replicated to the in-sync replicas."
+
+[terms.cleanup-policy]
+definition = "The `cleanup.policy` of a topic: delete, compact, both, or none."
+
+[terms.consumer-group]
+definition = "Consumers that share a group id and divide a topic's partitions between them."

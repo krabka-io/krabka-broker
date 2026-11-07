@@ -10,7 +10,6 @@ use {
     },
     crate::signing::{freeze_signing_bytes, freeze_signing_input},
     assert2::assert,
-    krabka_bdd::TokioMultiThreadContext,
     krabka_protocol::krabka::freeze::DescribedTopicFreeze,
     ring::signature::{ED25519, UnparsedPublicKey},
     rstest_bdd_macros::{given, then, when},
@@ -29,30 +28,28 @@ fn thaw_target(scope: &Scope) -> String {
 }
 
 /// `operator` freezes `scope`, and the outcome is recorded.
-fn record_freeze(
+async fn record_freeze(
     guard: &mut GuardScenario,
-    runtime: &TokioMultiThreadContext,
     operator: Operator,
     scope: &Scope,
     signing: Signing,
 ) {
-    let cluster = guard.cluster(runtime);
-    let outcome = runtime.block_on(cluster.freeze(operator, scope, signing));
+    let cluster = guard.cluster().await;
+    let outcome = cluster.freeze(operator, scope, signing).await;
     guard.outcome.set(outcome);
 }
 
 /// `operator` thaws `scope` with the scenario's proposal, and the outcome is
 /// recorded.
-fn record_thaw(
+async fn record_thaw(
     guard: &mut GuardScenario,
-    runtime: &TokioMultiThreadContext,
     operator: Operator,
     scope: &Scope,
     signing: Signing,
 ) {
     let proposal = *guard.proposal.get();
-    let cluster = guard.cluster(runtime);
-    let outcome = runtime.block_on(cluster.thaw(operator, scope, proposal, signing));
+    let cluster = guard.cluster().await;
+    let outcome = cluster.thaw(operator, scope, proposal, signing).await;
     guard.outcome.set(outcome);
 }
 
@@ -60,38 +57,25 @@ fn record_thaw(
 fn own_signature(operator: Operator) -> Signing { Signing::With(KeySource::OperatorKey(operator)) }
 
 /// The one registry entry on `scope`.
-fn registry_entry(
-    guard: &mut GuardScenario,
-    runtime: &TokioMultiThreadContext,
-    scope: &Scope,
-) -> DescribedTopicFreeze {
-    let cluster = guard.cluster(runtime);
-    runtime
-        .block_on(cluster.registry())
+async fn registry_entry(guard: &mut GuardScenario, scope: &Scope) -> DescribedTopicFreeze {
+    let cluster = guard.cluster().await;
+    cluster
+        .registry()
+        .await
         .into_iter()
         .find(|entry| entry.pattern_type == scope.pattern_type() && entry.scope == scope.name())
         .expect("the registry holds a freeze on the scope")
 }
 
 #[when("{operator} freezes {scope}")]
-fn freezes(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    scope: Scope,
-) {
-    record_freeze(guard, runtime, operator, &scope, Signing::Unsigned);
+async fn freezes(guard: &mut GuardScenario, operator: Operator, scope: Scope) {
+    record_freeze(guard, operator, &scope, Signing::Unsigned).await;
 }
 
 /// With no broker at the bootstrap address, the shipped entry point runs, so
 /// the connect step decides the outcome.
 #[when("{operator} tries to freeze {scope}")]
-fn tries_to_freeze(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    scope: Scope,
-) {
+async fn tries_to_freeze(guard: &mut GuardScenario, operator: Operator, scope: Scope) {
     if guard.unreachable {
         let args = [
             "freeze",
@@ -101,78 +85,52 @@ fn tries_to_freeze(
             "--reason",
             driver::REASON,
         ];
-        let outcome = runtime.block_on(driver::run_binary(UNREACHABLE_BOOTSTRAP, &args));
+        let outcome = driver::run_binary(UNREACHABLE_BOOTSTRAP, &args).await;
         guard.outcome.set(outcome);
     } else {
-        record_freeze(guard, runtime, operator, &scope, Signing::Unsigned);
+        record_freeze(guard, operator, &scope, Signing::Unsigned).await;
     }
 }
 
 /// A signed freeze, whether the scenario expects it to land or to be refused:
 /// `signs` and `tries to sign` record the outcome the same way.
 #[when("{operator} {attempt} a freeze of {scope} with {key}")]
-fn signs_freeze(
+async fn signs_freeze(
     guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
     operator: Operator,
     _attempt: Attempt,
     scope: Scope,
     key: KeySource,
 ) {
-    record_freeze(guard, runtime, operator, &scope, Signing::With(key));
+    record_freeze(guard, operator, &scope, Signing::With(key)).await;
 }
 
 #[when("{operator} thaws {scope} with that proposal")]
-fn thaws(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    scope: Scope,
-) {
-    record_thaw(guard, runtime, operator, &scope, own_signature(operator));
+async fn thaws(guard: &mut GuardScenario, operator: Operator, scope: Scope) {
+    record_thaw(guard, operator, &scope, own_signature(operator)).await;
 }
 
 #[when("{operator} tries to thaw {scope} with that proposal")]
-fn tries_to_thaw(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    scope: Scope,
-) {
-    record_thaw(guard, runtime, operator, &scope, own_signature(operator));
+async fn tries_to_thaw(guard: &mut GuardScenario, operator: Operator, scope: Scope) {
+    record_thaw(guard, operator, &scope, own_signature(operator)).await;
 }
 
 #[when("{operator} tries to thaw {scope} with the same proposal")]
-fn tries_to_thaw_again(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    scope: Scope,
-) {
-    record_thaw(guard, runtime, operator, &scope, own_signature(operator));
+async fn tries_to_thaw_again(guard: &mut GuardScenario, operator: Operator, scope: Scope) {
+    record_thaw(guard, operator, &scope, own_signature(operator)).await;
 }
 
 #[when("{operator} tries to thaw {scope} with that proposal without signing")]
-fn tries_to_thaw_unsigned(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    scope: Scope,
-) {
-    record_thaw(guard, runtime, operator, &scope, Signing::Unsigned);
+async fn tries_to_thaw_unsigned(guard: &mut GuardScenario, operator: Operator, scope: Scope) {
+    record_thaw(guard, operator, &scope, Signing::Unsigned).await;
 }
 
 /// The operator freezes the scope, opens a thaw proposal for it, the two
 /// other operators approve it, and the operator spends it on a signed thaw.
 #[given("{operator} has lifted a freeze on {scope} with an approved proposal")]
-fn has_lifted(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    scope: Scope,
-) {
-    let cluster = guard.cluster(runtime);
-    let proposal = runtime.block_on(async {
+async fn has_lifted(guard: &mut GuardScenario, operator: Operator, scope: Scope) {
+    let cluster = guard.cluster().await;
+    let proposal = async {
         assert!(cluster.freeze(operator, &scope, Signing::Unsigned).await == Outcome::Success);
         let (outcome, proposal) = cluster
             .propose(
@@ -195,32 +153,28 @@ fn has_lifted(
             .await;
         assert!(thawed == Outcome::Success);
         proposal
-    });
+    }
+    .await;
     guard.proposal.set(proposal);
 }
 
 #[given("{operator} has refrozen {scope}")]
-fn has_refrozen(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    scope: Scope,
-) {
-    freeze_succeeds(guard, runtime, operator, &scope);
+async fn has_refrozen(guard: &mut GuardScenario, operator: Operator, scope: Scope) {
+    freeze_succeeds(guard, operator, &scope).await;
 }
 
 /// The time an entry was set is not knowable, so it is zeroed before the
 /// whole registry is compared.
 #[then("the registry holds an unsigned freeze on {scope} set by {operator}")]
-fn registry_holds_unsigned_freeze(
+async fn registry_holds_unsigned_freeze(
     guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
     scope: Scope,
     operator: Operator,
 ) {
-    let cluster = guard.cluster(runtime);
-    let registry: Vec<_> = runtime
-        .block_on(cluster.registry())
+    let cluster = guard.cluster().await;
+    let registry: Vec<_> = cluster
+        .registry()
+        .await
         .into_iter()
         .map(|entry| DescribedTopicFreeze {
             set_at_ms: 0,
@@ -238,14 +192,11 @@ fn registry_holds_unsigned_freeze(
 }
 
 #[then("the registry still holds the freeze on {scope}")]
-fn registry_still_holds_freeze(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    scope: Scope,
-) {
-    let cluster = guard.cluster(runtime);
-    let scopes: Vec<_> = runtime
-        .block_on(cluster.registry())
+async fn registry_still_holds_freeze(guard: &mut GuardScenario, scope: Scope) {
+    let cluster = guard.cluster().await;
+    let scopes: Vec<_> = cluster
+        .registry()
+        .await
         .into_iter()
         .map(|entry| (entry.pattern_type, entry.scope))
         .collect();
@@ -256,16 +207,15 @@ fn registry_still_holds_freeze(
     "the freeze on {scope} names {owner}'s key and carries a signature that {verifier}'s public \
      key verifies"
 )]
-fn freeze_carries_verified_signature(
+async fn freeze_carries_verified_signature(
     guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
     scope: Scope,
     owner: Operator,
     verifier: Operator,
 ) {
-    let entry = registry_entry(guard, runtime, &scope);
-    let cluster = guard.cluster(runtime);
-    let cluster_id = runtime.block_on(cluster.cluster_id());
+    let entry = registry_entry(guard, &scope).await;
+    let cluster = guard.cluster().await;
+    let cluster_id = cluster.cluster_id().await;
     let public = fs::read(&cluster.key(verifier).public).expect("read the public key");
     let message = freeze_signing_bytes(
         &freeze_signing_input()
@@ -283,15 +233,12 @@ fn freeze_carries_verified_signature(
 /// registry stores, so the signature is the only signing material that left
 /// the operator's machine.
 #[then("no part of {operator}'s private key reached the broker")]
-fn private_key_stayed_local(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-) {
-    let cluster = guard.cluster(runtime);
+async fn private_key_stayed_local(guard: &mut GuardScenario, operator: Operator) {
+    let cluster = guard.cluster().await;
     let private = fs::read(&cluster.key(operator).pkcs8).expect("read the private key");
-    let stored: Vec<u8> = runtime
-        .block_on(cluster.registry())
+    let stored: Vec<u8> = cluster
+        .registry()
+        .await
         .into_iter()
         .flat_map(|entry| {
             [
