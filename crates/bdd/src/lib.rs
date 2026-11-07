@@ -34,7 +34,9 @@
 //!   `rstest-bdd-harness` as a dev-dependency, because rstest-bdd names the
 //!   harness traits through it.
 //! - `ignore_tags = "..."` replaces the scenarios the step check leaves out,
-//!   by default `@formulated or @inprogress`.
+//!   by default `@formulated or @inprogress`. rstest-bdd marks the same
+//!   scenarios `#[ignore]`, so the gating run skips them and
+//!   `cargo test -- --ignored` still runs them.
 //! - Every other argument is passed to rstest-bdd unchanged.
 //!
 //! # Step helpers

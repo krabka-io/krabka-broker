@@ -40,14 +40,16 @@ fn vote_naming_leader_two() -> PeerResponse {
     },
 )]
 fn vote_response_round_trips(resp: PeerResponse) {
-    assert2::assert!(PeerResponse::decode_vote(&resp.encode()) == Some(resp));
+    assert2::assert!(
+        PeerResponse::decode_vote(&resp.encode().expect("the body encodes")) == Some(resp)
+    );
 }
 
 #[test]
 fn encoded_vote_response_carries_the_leader_and_its_endpoint() {
     use krabka_protocol::Decode;
 
-    let mut cur = &vote_naming_leader_two().encode()[..];
+    let mut cur = &vote_naming_leader_two().encode().expect("the body encodes")[..];
     let raw = VoteResponse::decode(&mut cur, VOTE_VERSION).expect("decode vote response");
     let partition = &raw.topics[0].partitions[0];
     check!(
@@ -106,7 +108,7 @@ fn decodes_a_jvm_vote_response() {
         ],
         ..Default::default()
     };
-    let bytes = encode_body(&resp, VOTE_VERSION);
+    let bytes = encode_body(&resp, VOTE_VERSION).expect("the body encodes");
     assert2::assert!(
         PeerResponse::decode_vote(&bytes)
             == Some(PeerResponse::Vote {
@@ -127,7 +129,9 @@ fn decodes_a_jvm_vote_response() {
 #[test]
 fn ack_round_trips() {
     let resp = PeerResponse::Ack { epoch: 8 };
-    assert2::assert!(PeerResponse::decode_ack(&resp.encode()) == Some(resp));
+    assert2::assert!(
+        PeerResponse::decode_ack(&resp.encode().expect("the body encodes")) == Some(resp)
+    );
 }
 
 #[test]
@@ -135,7 +139,7 @@ fn encoded_ack_response_carries_success_error_codes() {
     use krabka_protocol::Decode;
 
     let resp = PeerResponse::Ack { epoch: 8 };
-    let mut cur = &resp.encode()[..];
+    let mut cur = &resp.encode().expect("the body encodes")[..];
     let raw = BeginQuorumEpochResponse::decode(&mut cur, QUORUM_EPOCH_VERSION).expect("decode ack");
     let partition = &raw.topics[0].partitions[0];
     check!(
@@ -158,7 +162,10 @@ fn fetch_snapshot_response_round_trips() {
         bytes: Bytes::from_static(b"snapshotX"),
         error_code: 0,
     };
-    assert2::assert!(PeerResponse::decode_fetch_snapshot(&resp.encode()) == Some(resp));
+    assert2::assert!(
+        PeerResponse::decode_fetch_snapshot(&resp.encode().expect("the body encodes"))
+            == Some(resp)
+    );
 }
 
 #[test]
@@ -170,7 +177,10 @@ fn fetch_snapshot_response_round_trips_error_code() {
         bytes: Bytes::new(),
         error_code: 42,
     };
-    assert2::assert!(PeerResponse::decode_fetch_snapshot(&resp.encode()) == Some(resp));
+    assert2::assert!(
+        PeerResponse::decode_fetch_snapshot(&resp.encode().expect("the body encodes"))
+            == Some(resp)
+    );
 }
 
 fn leader_endpoint(host: &str, port: u16) -> LeaderEndpoint {
@@ -270,7 +280,7 @@ fn kafka_empty_fetch_response(
 fn fetch_response_round_trips(case: &'static str, answer: FetchAnswer) {
     let response = PeerResponse::Fetch(answer);
     check!(
-        PeerResponse::decode_fetch(&response.encode()) == Some(response),
+        PeerResponse::decode_fetch(&response.encode().expect("the body encodes")) == Some(response),
         "{case}"
     );
 }
@@ -303,16 +313,17 @@ fn a_node_endpoint_for_another_node_is_not_the_leaders() {
         ..Default::default()
     };
     check!(
-        PeerResponse::decode_fetch(&encode_body(&response, FETCH_VERSION))
-            == Some(PeerResponse::Fetch(FetchAnswer {
-                error_code: NOT_LEADER_OR_FOLLOWER,
-                leader: leader(Some(2), 5, None),
-                diverging: None,
-                snapshot_id: None,
-                hwm: 0,
-                log_start_offset: -1,
-                records: Bytes::new(),
-            }))
+        PeerResponse::decode_fetch(
+            &encode_body(&response, FETCH_VERSION).expect("the body encodes")
+        ) == Some(PeerResponse::Fetch(FetchAnswer {
+            error_code: NOT_LEADER_OR_FOLLOWER,
+            leader: leader(Some(2), 5, None),
+            diverging: None,
+            snapshot_id: None,
+            hwm: 0,
+            log_start_offset: -1,
+            records: Bytes::new(),
+        }))
     );
 }
 
@@ -332,7 +343,8 @@ fn fetch_snapshot_answer_with_partition_preserves_top_level_error() {
         epoch: 0,
         endpoint: None,
     };
-    let bytes = encode_fetch_snapshot_answer(7, Some(partition), &leader, FETCH_SNAPSHOT_VERSION);
+    let bytes = encode_fetch_snapshot_answer(7, Some(partition), &leader, FETCH_SNAPSHOT_VERSION)
+        .expect("the body encodes");
     let mut cur = &bytes[..];
     let raw = FetchSnapshotResponse::decode(&mut cur, FETCH_SNAPSHOT_VERSION)
         .expect("decode FetchSnapshot");
@@ -371,15 +383,13 @@ fn followed_leader(fetch_refusal: &mut RefusedFetch, id: String) {
 
 #[when("the follower encodes its refused Fetch response")]
 fn encode_refused_fetch(fetch_refusal: &mut RefusedFetch) {
-    fetch_refusal.encoded = Some(
-        refused_fetch_answer(
-            fetch_refusal
-                .leader
-                .take()
-                .expect("leader routing facts were given"),
-        )
-        .encode(),
-    );
+    fetch_refusal.encoded = refused_fetch_answer(
+        fetch_refusal
+            .leader
+            .take()
+            .expect("leader routing facts were given"),
+    )
+    .encode();
 }
 
 #[then(
@@ -397,7 +407,10 @@ fn kafka_fetch_refusal(fetch_refusal: &RefusedFetch, id: i32, endpoint: bool) {
         Vec::new()
     };
     let expected = kafka_empty_fetch_response(id, 5, endpoints);
-    check!(fetch_refusal.encoded.as_ref() == Some(&encode_body(&expected, FETCH_VERSION)));
+    check!(
+        fetch_refusal.encoded.as_ref()
+            == Some(&encode_body(&expected, FETCH_VERSION).expect("the body encodes"))
+    );
 }
 
 scenarios!("tests/features/migrated/src/kraft/transport/wire/response/tests.feature", fixtures = [fetch_refusal: RefusedFetch]);

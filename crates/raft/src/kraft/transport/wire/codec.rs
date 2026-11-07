@@ -6,12 +6,19 @@
 //! `encode_body` helper are all needed by both [`request`](super::request) and
 //! [`response`](super::response), so they sit in one place instead of being
 //! duplicated.
+//!
+//! A generated encoder writes into its buffer as it goes, so the bytes of an
+//! encode that failed are a truncated message. The helpers here never return
+//! them.
 
 use {
     crate::kraft::types::{Epoch, NodeId},
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
     bytes::{Bytes, BytesMut},
-    krabka_protocol::{Encode, primitives::uuid::Uuid as MetaUuid, records::RecordsPayload},
+    krabka_protocol::{
+        Encode, ProtocolError, primitives::uuid::Uuid as MetaUuid, records::RecordsPayload,
+    },
+    std::any::type_name,
 };
 
 /// `KRaft` metadata log topic name.
@@ -28,13 +35,21 @@ pub const QUORUM_EPOCH_VERSION: i16 = 1;
 pub const FETCH_VERSION: i16 = 18;
 pub const FETCH_SNAPSHOT_VERSION: i16 = 1;
 
-pub fn records_payload_to_bytes(payload: &RecordsPayload) -> Bytes {
+/// The wire bytes of a decoded records payload, or `None` when a decoded
+/// batch does not encode again. The caller treats `None` as a malformed
+/// response.
+pub fn records_payload_to_bytes(payload: &RecordsPayload) -> Option<Bytes> {
     match payload {
-        RecordsPayload::Raw(bytes) => bytes.clone(),
+        RecordsPayload::Raw(bytes) => Some(bytes.clone()),
         other => {
             let mut out = BytesMut::new();
-            let _ = other.encode_to(&mut out);
-            out.freeze()
+            match other.encode_to(&mut out) {
+                Ok(()) => Some(out.freeze()),
+                Err(error) => {
+                    tracing::error!(%error, "a decoded records payload did not encode again");
+                    None
+                }
+            }
         }
     }
 }
@@ -56,10 +71,57 @@ pub fn cluster_id_to_wire(id: Option<uuid::Uuid>) -> Option<String> {
     id.map(|id| URL_SAFE_NO_PAD.encode(id.as_bytes()))
 }
 
-pub fn encode_body<T: Encode>(msg: &T, version: i16) -> Bytes {
-    let mut buf = BytesMut::new();
-    // Generated codecs only error on out-of-range version, which is fixed
-    // here, so encode is infallible in practice.
-    let _ = msg.encode(&mut buf, version);
-    buf.freeze()
+/// Encodes `msg` at `version`.
+///
+/// # Errors
+/// Returns the encoder's error. The partly written bytes are dropped.
+pub fn encode_message<T: Encode>(msg: &T, version: i16) -> Result<Bytes, ProtocolError> {
+    let mut buf = BytesMut::with_capacity(msg.encoded_len(version));
+    msg.encode(&mut buf, version)?;
+    Ok(buf.freeze())
+}
+
+/// Encodes a peer RPC body, or logs the encoder's error and returns `None`.
+///
+/// An answer of `None` drops the reply, which closes the connection, so a
+/// peer never receives a truncated body.
+pub fn encode_body<T: Encode>(msg: &T, version: i16) -> Option<Bytes> {
+    encode_message(msg, version)
+        .inspect_err(|error| {
+            tracing::error!(message = type_name::<T>(), version, %error, "a peer RPC body did not encode");
+        })
+        .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::{encode_body, encode_message},
+        assert2::{assert, check},
+        bytes::BufMut,
+        krabka_protocol::{Encode, ProtocolError},
+    };
+
+    /// Writes one byte, then fails, as a generated encoder does when a field
+    /// is out of range part way through a message.
+    struct FailsAfterOneByte;
+
+    impl Encode for FailsAfterOneByte {
+        fn encode<B: BufMut>(&self, buf: &mut B, _version: i16) -> Result<(), ProtocolError> {
+            buf.put_u8(1);
+            Err(ProtocolError::InvalidValue("refused"))
+        }
+
+        fn encoded_len(&self, _version: i16) -> usize { 2 }
+    }
+
+    #[test]
+    fn a_failed_encode_returns_the_error_not_the_truncated_bytes() {
+        assert!(let Err(ProtocolError::InvalidValue("refused")) = encode_message(&FailsAfterOneByte, 0));
+    }
+
+    #[test]
+    fn a_failed_peer_body_encode_returns_no_body() {
+        check!(encode_body(&FailsAfterOneByte, 0) == None);
+    }
 }

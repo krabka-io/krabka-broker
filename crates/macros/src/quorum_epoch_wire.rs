@@ -79,18 +79,25 @@ struct EncoderArgs {
     wire: Tokens,
 }
 
+/// Whether `ty` is `Option<Bytes>`: the encoder answers `None` for a body that
+/// does not encode, never a truncated one.
+fn is_option_bytes(ty: &impl ToTokenStream) -> bool {
+    ty.to_token_stream()
+        .to_string()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .eq("Option<Bytes>".chars())
+}
+
 fn response_body(metadata: &TokenStream, signature: &Signature) -> Result<TokenStream, ParseError> {
     if !is_plain_sync(signature)
         || signature.params.inner.inputs.len() != 4
-        || !signature
-            .output
-            .as_type()
-            .and_then(|ty| ty.as_path())
-            .is_some_and(|ty| ty.path.is_ident("Bytes"))
+        || !signature.output.as_type().is_some_and(is_option_bytes)
     {
         return Err(ParseError::new(
             signature.ident.span(),
-            "quorum epoch encoder needs a synchronous four-parameter function returning Bytes",
+            "quorum epoch encoder needs a synchronous four-parameter function returning \
+             Option<Bytes>",
         ));
     }
     let args: Meta = moxy::parse!({
@@ -216,7 +223,7 @@ mod tests {
 
     #[test]
     fn encoder_requires_visible_signature_and_typed_metadata() {
-        let signature = function_signature(&"pub fn encode(top: i16, partition: i16, leader: &QuorumLeader, version: i16) -> Bytes {}".parse().unwrap()).unwrap();
+        let signature = function_signature(&"pub fn encode(top: i16, partition: i16, leader: &QuorumLeader, version: i16) -> Option<Bytes> {}".parse().unwrap()).unwrap();
         let output = compact(
             &response_body(
                 &"response = Response, wire = wire".parse().unwrap(),
@@ -232,6 +239,28 @@ mod tests {
                 &signature
             )
             .is_err()
+        );
+    }
+
+    #[yare::parameterized(
+        bare_bytes = { "Bytes" },
+        other_option = { "Option<Vec<u8>>" },
+        result = { "Result<Bytes, Error>" },
+    )]
+    fn encoder_rejects_a_return_type_other_than_option_bytes(output: &str) {
+        let signature = function_signature(
+            &format!("fn encode(top: i16, partition: i16, leader: &QuorumLeader, version: i16) -> {output} {{}}")
+                .parse()
+                .unwrap(),
+        )
+        .unwrap();
+        assert2::assert!(
+            response_body(
+                &"response = Response, wire = wire".parse().unwrap(),
+                &signature
+            )
+            .is_err(),
+            "{output}"
         );
     }
 }

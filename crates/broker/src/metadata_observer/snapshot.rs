@@ -290,7 +290,7 @@ mod tests {
             } else if api_key == krabka_raft::API_KEY_METADATA_FETCH {
                 Some(metadata_fetch_redirect(snapshot_id))
             } else if api_key == api_key::FETCH_SNAPSHOT {
-                response(body).map(|response| framed(&response.encode()))
+                response(body).map(|response| framed(&response.encode().expect("the body encodes")))
             } else {
                 None
             }

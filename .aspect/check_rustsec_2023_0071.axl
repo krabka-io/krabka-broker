@@ -4,8 +4,8 @@
 RUSTSEC-2023-0071, the RSA "Marvin" timing side channel. The ignore rests on a
 review of one exact graph, which
 `docs/operations/security/rustsec-2023-0071.md` records: `rsa` is reached only
-through `krabka-sspi` and `picky`, `picky` only through `krabka-sspi`, and
-`krabka-sspi` only through `krabka-security`, all at the reviewed versions.
+through `sspi` and `picky`, `picky` only through `sspi`, and `sspi` only
+through `krabka-security`, all at the reviewed versions.
 
 This check pins that graph. A version bump, a second copy of any of the three
 packages, or a new normal-dependency parent fails it and asks for a fresh
@@ -22,16 +22,16 @@ ADVISORY = "RUSTSEC-2023-0071"
 # so its version is pinned too.
 REVIEWED_VERSIONS = {
     "rsa": "0.10.0-rc.18",
-    "krabka-sspi": "0.23.0",
-    "picky": "7.0.0-rc.26",
+    "sspi": "0.23.1",
+    "picky": "7.0.0-rc.27",
     "krabka-security": "0.8.0",
 }
 
 # The complete set of normal-dependency parents each of them may have.
 REVIEWED_PARENTS = {
-    "rsa": ["krabka-sspi", "picky"],
-    "picky": ["krabka-sspi"],
-    "krabka-sspi": ["krabka-security"],
+    "rsa": ["picky", "sspi"],
+    "picky": ["sspi"],
+    "sspi": ["krabka-security"],
 }
 
 def _is_normal(dependency):

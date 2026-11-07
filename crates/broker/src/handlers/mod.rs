@@ -43,7 +43,7 @@ mod delegation_token_test_support;
 mod group_heartbeat_test_support;
 mod node_endpoints;
 mod partition_materialization;
-mod private_api_keys;
+pub mod private_api_keys;
 mod raft_voter;
 mod record_strings;
 mod registration_listeners;
@@ -79,7 +79,7 @@ pub use self::{
         ALTER_BARRIER_GROUPS_API_KEY, APPROVE_BREAK_GLASS_API_KEY, DESCRIBE_BARRIER_GROUPS_API_KEY,
         DESCRIBE_BREAK_GLASS_API_KEY, DESCRIBE_TOPIC_FREEZES_API_KEY, KRABKA_PRIVATE_API_KEY_FLOOR,
         LIST_BARRIER_CUTS_API_KEY, PROPOSE_BREAK_GLASS_API_KEY, SET_TOPIC_FREEZE_API_KEY,
-        TRIGGER_BARRIER_API_KEY, WRITE_BARRIER_MARKERS_API_KEY,
+        TRIGGER_BARRIER_API_KEY, WRITE_BARRIER_MARKERS_API_KEY, krabka_private_api_name,
     },
     record_strings::decode_group_request,
     response_encoding::{
@@ -198,6 +198,8 @@ pub mod list_offsets;
 pub mod list_partition_reassignments;
 // KIP-664 transaction-summary admin RPC (api_key 66).
 pub mod list_transactions;
+// The settling of a failed local log read, shared by Fetch and ShareFetch.
+mod log_read_failure;
 pub mod metadata;
 pub mod offline_replicas;
 pub mod offset_commit;

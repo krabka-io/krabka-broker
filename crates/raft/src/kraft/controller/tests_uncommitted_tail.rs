@@ -94,6 +94,7 @@ fn answer(
         records: encode_batches(batches),
     })
     .encode()
+    .expect("the body encodes")
 }
 
 fn follow(engine: &mut Engine, leader_id: NodeId, leader_epoch: Epoch) {

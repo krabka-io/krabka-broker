@@ -10,7 +10,7 @@ use {
     super::ParsedRecord,
     crate::{
         error::LegacyRecordsError,
-        message::{Magic, Message, compression_from_attrs},
+        message::{Magic, Message, attrs, compression_from_attrs},
     },
     bytes::Buf,
     krabka_compression::{CompressionType, RecordDecompressionPolicy},
@@ -37,6 +37,8 @@ fn size_of_slice(slice: &[u8]) -> ByteSize {
 /// Returns `Truncated` if an entry header or an entry body stops early.
 /// Returns `NegativeLength` if an entry carries a negative `message_size`.
 /// Returns `NestedCompression` if a compressed wrapper holds another compressed wrapper.
+/// Returns `InconsistentMagic` if an inner message has a different magic than its wrapper.
+/// Returns `Malformed` if a nonzero v1 wrapper offset is below its last inner offset.
 /// Returns the error from `Message::decode_from` for a malformed or corrupt message frame.
 /// Returns a compression error if the wrapper value does not decompress within the default policy.
 pub fn decode_message_set<B: Buf>(
@@ -66,16 +68,18 @@ pub fn decode_message_set_with_policy<B: Buf>(
     let mut region = vec![0u8; set_size_bytes];
     buf.copy_to_slice(&mut region);
     let mut out = Vec::new();
-    decode_into(
-        &region, &mut out, /* allow_compression = */ true, policy,
-    )?;
+    decode_into(&region, &mut out, None, policy)?;
     Ok(out)
 }
 
+/// Decodes the entries in `bytes` into `out`.
+///
+/// `wrapper` is the magic of the compressed wrapper that `bytes` came out
+/// of, or `None` at the top level of a message set.
 fn decode_into(
     bytes: &[u8],
     out: &mut Vec<ParsedRecord>,
-    allow_compression: bool,
+    wrapper: Option<Magic>,
     policy: RecordDecompressionPolicy,
 ) -> Result<(), LegacyRecordsError> {
     let mut cur = bytes;
@@ -99,6 +103,16 @@ fn decode_into(
             });
         }
         let msg = Message::decode_from(&mut cur, size)?;
+        // Kafka validates produce data with `ensureMatchingMagic`: every
+        // inner message carries the magic of its wrapper.
+        if let Some(outer) = wrapper
+            && outer != msg.magic
+        {
+            return Err(LegacyRecordsError::InconsistentMagic {
+                outer: outer.as_i8(),
+                inner: msg.magic.as_i8(),
+            });
+        }
         let codec = compression_from_attrs(msg.attributes)?;
         if codec == CompressionType::None {
             out.push(ParsedRecord {
@@ -108,7 +122,7 @@ fn decode_into(
                 value: msg.value,
             });
         } else {
-            if !allow_compression {
+            if wrapper.is_some() {
                 return Err(LegacyRecordsError::NestedCompression);
             }
             let inner_compressed = msg.value.ok_or_else(|| {
@@ -121,7 +135,7 @@ fn decode_into(
 
             // Parse the inner set (no nested compression allowed).
             let start_len = out.len();
-            decode_into(&inner_bytes, out, false, policy)?;
+            decode_into(&inner_bytes, out, Some(msg.magic), policy)?;
 
             // KIP-32 anchors the last relative inner offset at the wrapper
             // offset. Retained records can have gaps after compaction.
@@ -130,17 +144,42 @@ fn decode_into(
                 && let Some(inner) = out.get_mut(start_len..)
                 && let Some(last) = inner.last()
             {
-                let base_abs = i128::from(offset) - i128::from(last.offset.0);
+                let base_abs = wrapper_base_offset(offset, last.offset.0)?;
+                // Kafka's `LegacyRecord.timestamp` reports a LogAppendTime
+                // wrapper's timestamp for every inner record.
+                let log_append_time = (msg.attributes & attrs::TIMESTAMP_TYPE_BIT != 0)
+                    .then_some(msg.timestamp)
+                    .flatten();
                 for rec in inner {
                     let absolute = base_abs + i128::from(rec.offset.0);
                     rec.offset = Offset(i64::try_from(absolute).map_err(|_| {
                         LegacyRecordsError::Malformed("absolute inner offset exceeds i64".into())
                     })?);
+                    if let Some(timestamp) = log_append_time {
+                        rec.timestamp = Some(timestamp);
+                    }
                 }
             }
         }
     }
     Ok(())
+}
+
+/// The amount a v1 wrapper adds to each relative inner offset.
+///
+/// Kafka's `DeepRecordsIterator` takes the inner offsets as they are when
+/// the wrapper offset is 0, which some librdkafka versions send on produce.
+/// It rejects any other wrapper offset below the last inner offset.
+fn wrapper_base_offset(wrapper: i64, last_inner: i64) -> Result<i128, LegacyRecordsError> {
+    if wrapper == 0 {
+        return Ok(0);
+    }
+    if wrapper < last_inner {
+        return Err(LegacyRecordsError::Malformed(format!(
+            "wrapper offset {wrapper} is below the last inner offset {last_inner}"
+        )));
+    }
+    Ok(i128::from(wrapper) - i128::from(last_inner))
 }
 
 #[cfg(test)]
@@ -172,7 +211,7 @@ mod tests {
     fn v1_wrapper(inner_offsets: &[i64], wrapper_offset: i64) -> BytesMut {
         let inner: Vec<_> = inner_offsets.iter().copied().map(record_at).collect();
         let mut flat = BytesMut::new();
-        encode_flat_message_set(inner, Magic::V1, &mut flat);
+        encode_flat_message_set(inner, Magic::V1, &mut flat).unwrap();
         let wrapper = Message {
             magic: Magic::V1,
             attributes: attrs_with_compression(0, CompressionType::Gzip),
@@ -183,7 +222,7 @@ mod tests {
         let mut wire = BytesMut::new();
         wire.put_i64(wrapper_offset);
         wire.put_i32(i32::try_from(wrapper.encoded_len()).unwrap());
-        wrapper.encode_into(&mut wire);
+        wrapper.encode_into(&mut wire).unwrap();
         wire
     }
 
@@ -275,7 +314,7 @@ mod tests {
         let outer_len = outer_msg.encoded_len();
         wire.put_i64(0);
         wire.put_i32(i32::try_from(outer_len).unwrap());
-        outer_msg.encode_into(&mut wire);
+        outer_msg.encode_into(&mut wire).unwrap();
 
         let mut cur: &[u8] = &wire[..];
         let err = decode_message_set(&mut cur, wire.len()).unwrap_err();
@@ -371,7 +410,7 @@ mod tests {
             key: None,
             value: Some(Bytes::from_static(b"flat")),
         };
-        encode_flat_message_set(vec![flat.clone()], Magic::V1, &mut buf);
+        encode_flat_message_set(vec![flat.clone()], Magic::V1, &mut buf).unwrap();
         let inner = vec![
             ParsedRecord {
                 offset: Offset(100),

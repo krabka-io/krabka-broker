@@ -1067,10 +1067,11 @@ mod tests {
             );
         }
 
-        let state = persister
-            .read_state_summary("g-reset", topic_id, 9)
-            .await
-            .expect("read unrequested state");
+        // Partition 9 is outside the topic, so a summary read refuses it.
+        // Check the stored state: the reset initialized nothing for it.
+        let state = broker_handle
+            .share_state_summary_for_test("g-reset", topic_id, 9)
+            .await;
         assert!(state.is_none());
         broker_handle.shutdown().await;
     }

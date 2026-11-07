@@ -31,7 +31,8 @@ pub(crate) mod test_support;
 pub(crate) use self::{
     fatal_fault::or_fatal_fault,
     image_watch::{
-        next_image_until_shutdown, next_published_image, wait_for_image_change, watch_image_loop,
+        next_image_until_shutdown, next_published_image, topic_reaches_image,
+        wait_for_image_change, watch_image_loop,
     },
 };
 pub use self::{observer_source::ObserverSource, quorum_forwarder::QuorumForwarder};

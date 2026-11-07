@@ -35,7 +35,7 @@ let records = vec![ParsedRecord {
 }];
 
 let mut buf = BytesMut::new();
-encode_flat_message_set(records, Magic::V1, &mut buf);
+encode_flat_message_set(records, Magic::V1, &mut buf).unwrap();
 let decoded = decode_message_set(&mut &buf[..], buf.len()).unwrap();
 assert_eq!(decoded[0].offset, 42);
 ```

@@ -809,7 +809,8 @@ async fn actor_loop(
                 break;
             }
             Wake::SessionCheck => {
-                if handle_session_tick(&mut actor, turn).await.is_err() {
+                if let Err(error) = handle_session_tick(&mut actor, turn).await {
+                    exit_on_write_failure(&actor.state.group_id, &error);
                     break;
                 }
             }
@@ -823,6 +824,7 @@ async fn actor_loop(
                     if matches!(error, BrokerError::StreamsTaskAssignment { .. }) {
                         tracing::warn!(%error, "Streams delayed assignment failed; retaining prior state");
                     } else {
+                        exit_on_write_failure(&actor.state.group_id, &error);
                         break;
                     }
                 }
@@ -1059,7 +1061,14 @@ async fn handle_message(
             );
             match description::stored_description(actor, turn).await {
                 Ok(description) => view.topology_description = description,
-                Err(_) => view.topology_description_error = true,
+                Err(error) => {
+                    tracing::warn!(
+                        group_id = %actor.state.group_id,
+                        ?error,
+                        "streams-group topology description unavailable",
+                    );
+                    view.topology_description_error = true;
+                }
             }
             turn.config
                 .selected_task_assignor_name()

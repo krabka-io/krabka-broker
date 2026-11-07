@@ -22,6 +22,15 @@ use {
     tokio::{sync::oneshot, time::Instant},
 };
 
+/// Sends `response` on `reply`. A response of `None`, a request body that did
+/// not decode or a reply that did not encode, drops `reply`, which closes the
+/// connection, as Kafka's `RequestContext.parseRequest` does.
+fn send_reply(reply: oneshot::Sender<bytes::Bytes>, response: Option<bytes::Bytes>) {
+    if let Some(response) = response {
+        let _ = reply.send(response);
+    }
+}
+
 /// The fields of one validated Fetch partition that answering it needs, kept
 /// while the request waits in the purgatory.
 #[derive(Debug, Clone, Copy)]
@@ -71,11 +80,7 @@ impl Engine {
             PeerApi::EndQuorumEpoch => self.answer_end_quorum_epoch(&req, version),
             PeerApi::FetchSnapshot => self.answer_fetch_snapshot(&req, version),
         };
-        // A body that does not decode drops `reply`, which closes the
-        // connection, as Kafka's `RequestContext.parseRequest` does.
-        if let Some(response) = response {
-            let _ = reply.send(response);
-        }
+        send_reply(reply, response);
     }
 
     /// Kafka's `KafkaRaftClient.handleFetchRequest`: the request checks, then
@@ -95,24 +100,33 @@ impl Engine {
             return;
         };
         if !self.has_valid_cluster_id(request.cluster_id.as_deref()) {
-            let _ = reply.send(wire::encode_fetch_top_level_error(
-                INCONSISTENT_CLUSTER_ID,
-                version,
-            ));
+            send_reply(
+                reply,
+                wire::encode_fetch_top_level_error(INCONSISTENT_CLUSTER_ID, version),
+            );
             return;
         }
         let (Some(topic), 1) = (request.topics.first(), request.topics.len()) else {
-            let _ = reply.send(wire::encode_fetch_top_level_error(INVALID_REQUEST, version));
+            send_reply(
+                reply,
+                wire::encode_fetch_top_level_error(INVALID_REQUEST, version),
+            );
             return;
         };
         let [partition] = topic.partitions.as_slice() else {
-            let _ = reply.send(wire::encode_fetch_top_level_error(INVALID_REQUEST, version));
+            send_reply(
+                reply,
+                wire::encode_fetch_top_level_error(INVALID_REQUEST, version),
+            );
             return;
         };
         if topic.topic_id != wire::METADATA_TOPIC_ID
             || partition.partition != wire::METADATA_PARTITION
         {
-            let _ = reply.send(wire::encode_fetch_top_level_error(INVALID_REQUEST, version));
+            send_reply(
+                reply,
+                wire::encode_fetch_top_level_error(INVALID_REQUEST, version),
+            );
             return;
         }
         if request.max_wait_ms < 0
@@ -120,7 +134,10 @@ impl Engine {
             || partition.last_fetched_epoch < 0
             || partition.last_fetched_epoch > partition.current_leader_epoch
         {
-            let _ = reply.send(self.empty_fetch_answer(INVALID_REQUEST).encode(version));
+            send_reply(
+                reply,
+                self.empty_fetch_answer(INVALID_REQUEST).encode(version),
+            );
             return;
         }
         let fetch = FetchPartitionRequest {
@@ -139,7 +156,7 @@ impl Engine {
             || answer.snapshot_id.is_some()
             || fetch.high_watermark < answer.hwm
         {
-            let _ = reply.send(answer.encode(version));
+            send_reply(reply, answer.encode(version));
             return;
         }
         let wait = Duration::from_millis(request.max_wait_ms.unsigned_abs().into());
@@ -187,7 +204,7 @@ impl Engine {
                 self.fetch_purgatory.push(parked);
                 continue;
             };
-            let _ = parked.reply.send(answer.encode(parked.version));
+            send_reply(parked.reply, answer.encode(parked.version));
         }
     }
 

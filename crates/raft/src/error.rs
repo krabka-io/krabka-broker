@@ -110,6 +110,16 @@ pub enum RaftError {
     #[error("change rejected: {0}")]
     ChangeRejected(String),
 
+    /// The controller leader rejected a change this node forwarded to it.
+    ///
+    /// The forwarded `SubmitChange` and `DelegationTokenMutation` responses
+    /// carry only an error code. The leader answers the rejection code for
+    /// any metadata validation failure and for a body it could not decode,
+    /// so the reason is unknown here. In particular it does not mean that a
+    /// topic already exists.
+    #[error("the controller leader rejected the forwarded change")]
+    ForwardedChangeRejected,
+
     /// A leader-local mutation was planned from an image that has since changed.
     /// The caller must read a fresh image and repeat its admission checks.
     #[error("the metadata image changed before the mutation was submitted")]

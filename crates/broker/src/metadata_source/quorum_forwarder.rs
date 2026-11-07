@@ -461,13 +461,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quorum_forwarder_error_code_two_maps_to_topic_exists() {
-        let err = rejected_submission(2, -1, "already-exists").await;
+    async fn quorum_forwarder_error_code_two_maps_to_a_forwarded_rejection() {
+        let err = rejected_submission(2, -1, "rejected").await;
 
-        assert2::assert!(matches!(
-            err,
-            RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))
-        ));
+        assert2::assert!(matches!(err, RaftError::ForwardedChangeRejected));
     }
 
     #[tokio::test]
@@ -492,7 +489,7 @@ mod tests {
     #[derive(Debug, PartialEq, Eq)]
     enum Forwarded {
         Applied,
-        TopicExists,
+        Rejected,
         UncommittedTail,
         ClusterAuthorizationFailed,
         UnsupportedPrivateVersion { api_key: i16, version: i16 },
@@ -504,9 +501,7 @@ mod tests {
         fn from(outcome: Result<SubmitChangeResult, RaftError>) -> Self {
             match outcome {
                 Ok(_) => Self::Applied,
-                Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {
-                    Self::TopicExists
-                }
+                Err(RaftError::ForwardedChangeRejected) => Self::Rejected,
                 Err(RaftError::UncommittedTail) => Self::UncommittedTail,
                 Err(RaftError::ClusterAuthorizationFailed) => Self::ClusterAuthorizationFailed,
                 Err(RaftError::UnsupportedPrivateVersion { api_key, version }) => {
@@ -575,7 +570,7 @@ mod tests {
         ] {
             let table = [
                 (0, -1, Forwarded::Applied, 1),
-                (2, -1, Forwarded::TopicExists, 1),
+                (2, -1, Forwarded::Rejected, 1),
                 (
                     krabka_raft::SUBMIT_CHANGE_UNCOMMITTED_TAIL,
                     -1,

@@ -28,8 +28,8 @@ mod response;
 pub use self::codec::{FETCH_SNAPSHOT_VERSION, FETCH_VERSION, QUORUM_EPOCH_VERSION, VOTE_VERSION};
 pub(crate) use self::{
     codec::{
-        METADATA_PARTITION, METADATA_TOPIC, METADATA_TOPIC_ID, epoch_from_wire, node_from_wire,
-        uuid_from_wire,
+        METADATA_PARTITION, METADATA_TOPIC, METADATA_TOPIC_ID, encode_message, epoch_from_wire,
+        node_from_wire, uuid_from_wire,
     },
     request::{decode_request, parse_cluster_id},
 };
@@ -90,7 +90,7 @@ mod tests {
             log_start_offset: 0,
             records: Bytes::new(),
         });
-        let mut c2 = &resp.encode()[..];
+        let mut c2 = &resp.encode().expect("the body encodes")[..];
         let dresp = FetchResponse::decode(&mut c2, FETCH_VERSION).unwrap();
         assert2::assert!(dresp.responses[0].topic_id == METADATA_TOPIC_ID);
     }
