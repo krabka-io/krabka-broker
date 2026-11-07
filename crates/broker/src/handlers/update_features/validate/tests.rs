@@ -606,3 +606,49 @@ fn krabka_version_reservation_level_finalizes_only_when_every_broker_supports_it
     ];
     assert_planned(cases);
 }
+
+/// `krabka.version` level 3 turns on the OCSF 1.3.0 activity ids in
+/// `__krabka_audit` and the normalized tiered-storage key prefix. The
+/// controller finalizes it only once every registered broker advertises it, so
+/// no 1.1.x broker, which writes the 1.0.0 ids and the as-configured keys, runs
+/// beside it. Lowering it again is an ordinary downgrade: every broker that
+/// supports level 3 reads both id sets and both key forms at every level.
+#[test]
+fn krabka_version_ocsf_and_prefix_level_finalizes_only_when_every_broker_supports_it() {
+    let kv = krabka_version::KRABKA_VERSION_FEATURE;
+    let level = krabka_version::OCSF_ACTIVITY_IDS_LEVEL;
+    let mv = FeatureLevel {
+        name: "metadata.version",
+        level: 30,
+    };
+    let with_broker = |levels: &[FeatureLevel<'_>], range| {
+        let mut features = krabka_metadata::supported_feature_ranges();
+        features.insert(kv.to_owned(), range);
+        remote_feature_image()
+            .image(image(levels))
+            .ranges(features)
+            .call()
+    };
+    let at_level = [mv, FeatureLevel { name: kv, level }];
+    let cases = [
+        (
+            "every broker advertises level 3",
+            with_broker(&[mv], (0, level)),
+            named_update(kv, level, UPGRADE),
+            Ok(plan(vec![feature_record(kv, level)], &[kv])),
+        ),
+        (
+            "a 1.1.x broker advertises only level 2",
+            with_broker(&[mv], (0, 2)),
+            named_update(kv, level, UPGRADE),
+            Err(invalid(kv, level, "Broker 2 only supports versions 0-2")),
+        ),
+        (
+            "a safe downgrade below level 3",
+            with_broker(&at_level, (0, level)),
+            named_update(kv, 2, SAFE),
+            Ok(plan(vec![feature_record(kv, 2)], &[kv])),
+        ),
+    ];
+    assert_planned(cases);
+}

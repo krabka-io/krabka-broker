@@ -150,7 +150,7 @@ finalized levels tell which formats are on disk.
 | :--- | :--- |
 | Every finalized level is in the source's supported range | Supported. The source reads every byte that the target wrote. |
 | A `metadata.version` above the source's maximum is finalized | Not supported. A KIP-1155 downgrade of `metadata.version` must come first. |
-| A `krabka.version` above the source's maximum is finalized, which is level 2 or more for every 1.0.x release | Not supported. No downgrade path exists for a krabka-only format. |
+| A `krabka.version` above the source's maximum is finalized, which is level 2 or more for every 1.0.x release and level 3 or more for every 1.1.x release | Not supported. No downgrade path exists for a krabka-only format. |
 | A feature that the source does not name is finalized above 0 | Not supported. The source supports level 0 only of a feature that it does not know, as Kafka's `QuorumFeatures.DISABLED` does. |
 
 `krabka_bench_driver::soak::lifecycle::rollback` applies the rule, and each
