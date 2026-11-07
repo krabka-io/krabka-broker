@@ -474,9 +474,8 @@ pub(super) async fn admit_partition(
     // this verifies the CRC and complete record structure while retaining the
     // original wire bytes. Compressed bodies are transiently decompressed for
     // validation but never re-encoded. The owned fallback fully materializes
-    // the records, exactly as before. A null /
-    // undecodable field returns INVALID_REQUEST / INVALID_RECORD, preserving
-    // the prior error-code ordering (before the leadership gate).
+    // the records. A null / undecodable field returns INVALID_REQUEST /
+    // INVALID_RECORD, ahead of the leadership gate.
     //
     // The same walk applies Kafka trunk's max.decompressed.message.bytes: a
     // compressed batch with a record whose decompressed body is larger than
