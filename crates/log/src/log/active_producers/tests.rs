@@ -3,8 +3,9 @@ use {
     crate::{
         TransactionalBatch,
         log::test_support::{
-            AppendPath as Path, TempLog, append_path as append, control_key, control_value,
-            test_log,
+            AppendPath as Path, TempLog, append_path as append, barrier_marker,
+            barrier_marker_from_producer, configured_test_log, control_key, control_value,
+            snapshot_offsets, test_log, tiny_segments,
         },
         test_support::open_log,
     },
@@ -605,4 +606,144 @@ fn remove_expired_producers_drops_old_verification_state() {
             "{name}"
         );
     }
+}
+
+/// For each producer id: the coordinator epoch that WriteTxnMarkers fences on,
+/// [`Log::transaction_marker_state`], and the one that `ActiveProducers` and
+/// the producer snapshot report, `-1` when the log keeps no entry.
+fn coordinator_epoch_views(log: &Log, producer_ids: &[i64]) -> Vec<(i64, i32, i32)> {
+    let active = log.active_producers();
+    producer_ids
+        .iter()
+        .map(|&producer_id| {
+            let fenced_on = log.transaction_marker_state(ProducerId(producer_id)).1;
+            let reported = active
+                .iter()
+                .find(|producer| producer.producer_id == ProducerId(producer_id))
+                .map_or(-1, |producer| producer.coordinator_epoch);
+            (producer_id, fenced_on, reported)
+        })
+        .collect()
+}
+
+/// The marker-fencing view and the `ActiveProducers` view of a producer's
+/// coordinator epoch agree after every append path, a replay and a snapshot
+/// load, whatever control batches the log holds.
+#[test]
+fn the_fencing_and_reported_coordinator_epochs_agree() {
+    let open = |producer_id: i64| {
+        data()
+            .producer(BatchProducer::from_wire((producer_id, 0)))
+            .transaction(BatchTransactionMode::Transactional)
+            .call()
+    };
+    let end = |producer_id: i64, outcome: MarkerOutcome, coordinator_epoch: i32| {
+        marker()
+            .producer(BatchProducer::from_wire((producer_id, 0)))
+            .outcome(outcome)
+            .coordinator_epoch(coordinator_epoch)
+            .call()
+    };
+    // (case, batches, the views of producers 7, 1000 and -1)
+    let cases = [
+        ("a data append", vec![open(7)], [
+            (7, -1, -1),
+            (1000, -1, -1),
+            (-1, -1, -1),
+        ]),
+        (
+            "a commit marker",
+            vec![open(7), end(7, MarkerOutcome::Commit, 5)],
+            [(7, 5, 5), (1000, -1, -1), (-1, -1, -1)],
+        ),
+        (
+            "an abort marker",
+            vec![open(7), end(7, MarkerOutcome::Abort, 3)],
+            [(7, 3, 3), (1000, -1, -1), (-1, -1, -1)],
+        ),
+        (
+            "a later marker at a lower coordinator epoch",
+            vec![
+                open(7),
+                end(7, MarkerOutcome::Commit, 5),
+                open(7),
+                end(7, MarkerOutcome::Abort, 2),
+            ],
+            [(7, 2, 2), (1000, -1, -1), (-1, -1, -1)],
+        ),
+        (
+            "a barrier marker after a commit",
+            vec![
+                open(7),
+                end(7, MarkerOutcome::Commit, 5),
+                barrier_marker().call(),
+                barrier_marker_from_producer().call(),
+            ],
+            [(7, 5, 5), (1000, -1, -1), (-1, -1, -1)],
+        ),
+    ];
+    for (name, batches, want) in cases {
+        check_append_paths(name, &batches, &want.to_vec(), |log| {
+            coordinator_epoch_views(log, &[7, 1000, -1])
+        });
+    }
+}
+
+/// Truncation and producer expiry leave the two coordinator-epoch views in
+/// agreement.
+#[test]
+fn truncation_and_expiry_keep_the_coordinator_epoch_views_in_agreement() {
+    let TempLog { dir: _dir, mut log } = test_log();
+    for (producer_id, coordinator_epoch) in [(7, 5), (8, 6), (7, 9)] {
+        log.append(
+            &mut data()
+                .producer(BatchProducer::from_wire((producer_id, 0)))
+                .transaction(BatchTransactionMode::Transactional)
+                .call(),
+        )
+        .unwrap();
+        log.append(
+            &mut marker()
+                .producer(BatchProducer::from_wire((producer_id, 0)))
+                .coordinator_epoch(coordinator_epoch)
+                .timestamp(3_000)
+                .call(),
+        )
+        .unwrap();
+    }
+    assert!(coordinator_epoch_views(&log, &[7, 8]) == vec![(7, 9, 9), (8, 6, 6)]);
+
+    // Drop the last transaction of producer 7: its earlier marker stands.
+    log.truncate_to(Offset(4)).unwrap();
+    assert!(coordinator_epoch_views(&log, &[7, 8]) == vec![(7, 5, 5), (8, 6, 6)]);
+
+    log.remove_expired_producers(i64::MAX, 1_000);
+    assert!(coordinator_epoch_views(&log, &[7, 8]) == vec![(7, -1, -1), (8, -1, -1)]);
+}
+
+/// A marker below Kafka's `-1` coordinator-epoch sentinel, which no broker
+/// write path produces: WriteTxnMarkers rejects it as malformed. The snapshot
+/// reader rejects an entry that holds one, so a reopen falls back to the
+/// snapshot before the marker and replays the marker. Both views agree live
+/// and after that reopen.
+#[test]
+fn a_coordinator_epoch_below_the_sentinel_survives_a_reopen_by_replay() {
+    let TempLog { dir, mut log } = configured_test_log(tiny_segments());
+    log.append(
+        &mut data()
+            .producer(BatchProducer::from_wire((7, 0)))
+            .transaction(BatchTransactionMode::Transactional)
+            .call(),
+    )
+    .unwrap();
+    log.append(&mut marker().coordinator_epoch(-5).call())
+        .unwrap();
+    log.append(&mut data().producer(BatchProducer::from_wire((8, 0))).call())
+        .unwrap();
+    assert!(coordinator_epoch_views(&log, &[7]) == vec![(7, -5, -5)]);
+
+    log.close();
+    assert!(snapshot_offsets(dir.path()) == vec![Offset(1), Offset(2), Offset(3)]);
+    let reopened = Log::open(dir.path(), tiny_segments()).unwrap();
+    assert!(coordinator_epoch_views(&reopened, &[7]) == vec![(7, -5, -5)]);
 }
