@@ -43,11 +43,12 @@ use {
     krabka_metadata::MetadataImage,
     krabka_raft::kraft::{
         controller::checkpoint::{
-            latest_checkpoint_id, load_checkpoint_by_id, retain_latest_checkpoint, write_checkpoint,
+            latest_checkpoint_id, read_checkpoint_by_id, retain_latest_checkpoint, write_checkpoint,
         },
         snapshot_fetch::SnapshotId,
     },
     std::{
+        fmt::Display,
         fs,
         path::{Path, PathBuf},
     },
@@ -109,32 +110,32 @@ impl ObserverStore {
     /// has no checkpoint and must replicate the log from its start.
     pub(super) fn resume(&mut self, cluster_id: uuid::Uuid) -> Option<Resumed> {
         let (end_offset, epoch) = self.persisted?;
-        let bytes = load_checkpoint_by_id(&self.dir, end_offset, epoch)?;
+        // A checkpoint that cannot be restored is not fatal on its own: the
+        // observer falls back to fetching from the start, and the controller
+        // answers that with a snapshot of its own. But it has to go, not just
+        // be skipped, whether its bytes would not read or would not decode. It
+        // keeps the highest id in the directory, so `retain_latest_checkpoint`
+        // would delete the replacement in its favour, `maybe_checkpoint` would
+        // measure its interval from it, and every restart would repeat the
+        // whole transfer.
+        let id = (end_offset, epoch);
+        let Ok(fetch_offset) = u64::try_from(end_offset) else {
+            return self.discard_unreadable(&"its end offset is negative", id);
+        };
+        let bytes = match read_checkpoint_by_id(&self.dir, end_offset, epoch) {
+            Ok(bytes) => bytes,
+            Err(error) => return self.discard_unreadable(&error, id),
+        };
         let records = match krabka_raft::deserialize_metadata_snapshot_image(&bytes) {
             Ok(records) => records,
-            Err(error) => {
-                // A checkpoint that will not decode is not fatal on its own:
-                // the observer falls back to fetching from the start, and the
-                // controller answers that with a snapshot of its own. But it
-                // has to go, not just be skipped. It keeps the highest id in
-                // the directory, so `retain_latest_checkpoint` would delete
-                // the replacement in its favour and every restart would repeat
-                // the whole transfer.
-                warn!(%error, end_offset, epoch, "discarding an unreadable observer checkpoint");
-                self.discard();
-                return None;
-            }
+            Err(error) => return self.discard_unreadable(&error, id),
         };
-        self.last_applied_record_timestamp_ms =
-            match krabka_raft::metadata_snapshot_last_contained_log_timestamp(&bytes) {
-                Ok(timestamp_ms) => timestamp_ms,
-                Err(error) => {
-                    warn!(%error, end_offset, epoch, "discarding an unreadable observer checkpoint");
-                    self.discard();
-                    return None;
-                }
-            };
-        let fetch_offset = u64::try_from(end_offset).ok()?;
+        let timestamp_ms = match krabka_raft::metadata_snapshot_last_contained_log_timestamp(&bytes)
+        {
+            Ok(timestamp_ms) => timestamp_ms,
+            Err(error) => return self.discard_unreadable(&error, id),
+        };
+        self.last_applied_record_timestamp_ms = timestamp_ms;
         info!(
             end_offset,
             epoch,
@@ -145,6 +146,15 @@ impl ObserverStore {
             image: MetadataImage::from_records(cluster_id, &records),
             fetch_offset,
         })
+    }
+
+    /// Log why the checkpoint at `id` cannot be restored, empty the store, and
+    /// report that there is nothing to resume from.
+    fn discard_unreadable(&mut self, error: &dyn Display, id: SnapshotId) -> Option<Resumed> {
+        let (end_offset, epoch) = id;
+        warn!(%error, end_offset, epoch, "discarding an unreadable observer checkpoint");
+        self.discard();
+        None
     }
 
     /// Persist the exact checkpoint bytes fetched from a controller under the
@@ -191,21 +201,31 @@ impl ObserverStore {
         }
     }
 
-    /// Empty the store. Best-effort: what cannot be removed is left behind, and
-    /// the next write supersedes it by offset anyway.
+    /// Empty the store, a directory under a checkpoint's name included.
+    ///
+    /// Best-effort: what cannot be removed is left behind. Retention ranks
+    /// entries by name alone, so a leftover still outranks, and deletes, every
+    /// lower-offset checkpoint written after it, until one with a higher
+    /// offset supersedes it.
     fn discard(&mut self) {
         self.persisted = None;
         let Ok(entries) = fs::read_dir(&self.dir) else {
             return;
         };
         for entry in entries.flatten() {
-            if entry
+            if !entry
                 .file_name()
                 .to_str()
                 .is_some_and(|name| name.ends_with(".checkpoint"))
             {
-                let _ = fs::remove_file(entry.path());
+                continue;
             }
+            let path = entry.path();
+            let _ = if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                fs::remove_dir_all(path)
+            } else {
+                fs::remove_file(path)
+            };
         }
     }
 
@@ -335,22 +355,53 @@ mod tests {
         assert!(fetch_offset == 8);
     }
 
-    /// A corrupt checkpoint must not wedge the node: resuming reports "nothing
-    /// to resume from", and the observer replicates from the log start.
+    /// Leaves a checkpoint at id `(12, 3)` whose bytes do not decode.
+    fn write_undecodable_checkpoint(data_dir: &Path) {
+        ObserverStore::open(data_dir, 1).save_fetched_snapshot((12, 3), b"not a checkpoint");
+    }
+
+    /// Leaves a directory where the checkpoint at id `(12, 3)` should be, so
+    /// the listing names it but reading it fails with an I/O error.
+    fn write_unreadable_checkpoint(data_dir: &Path) {
+        fs::create_dir_all(
+            data_dir
+                .join(OBSERVER_SUBDIR)
+                .join("00000000000000000012-0000000003.checkpoint"),
+        )
+        .expect("a directory in the checkpoint's place");
+    }
+
+    /// A checkpoint that cannot be restored must not wedge the node: resuming
+    /// reports "nothing to resume from", and the observer replicates from the
+    /// log start. That holds whether the bytes do not decode or the file does
+    /// not read at all.
     ///
     /// It must also be *gone*, not merely skipped. It holds the highest id in
     /// the directory, so leaving it there would have `retain_latest_checkpoint`
     /// delete the snapshot fetched to replace it — usually an older one, since
     /// the observer's own checkpoint runs ahead of the controller's latest —
     /// and every restart would repeat the whole transfer.
-    #[test]
-    fn an_unreadable_checkpoint_is_discarded_so_a_replacement_can_stick() {
+    #[yare::parameterized(
+        undecodable = { write_undecodable_checkpoint },
+        unreadable = { write_unreadable_checkpoint },
+    )]
+    fn a_checkpoint_that_cannot_be_restored_is_discarded_so_a_replacement_can_stick(
+        break_checkpoint: fn(&Path),
+    ) {
+        check_discarded_and_replaced(break_checkpoint);
+    }
+
+    /// The body of the table above, outside the macro: `yare`'s generated
+    /// module would make `assert2::assert` ambiguous with the prelude's.
+    fn check_discarded_and_replaced(break_checkpoint: fn(&Path)) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut store = ObserverStore::open(dir.path(), 1);
-        store.save_fetched_snapshot((12, 3), b"not a checkpoint");
+        break_checkpoint(dir.path());
 
         let mut reopened = ObserverStore::open(dir.path(), 1);
+        assert!(reopened.persisted == Some((12, 3)));
         assert!(reopened.resume(Uuid::nil()).is_none());
+        assert!(reopened.persisted.is_none());
+        assert!(reopened.last_applied_record_timestamp_ms() == 0);
 
         // An older, valid snapshot now survives being written.
         let replacement =
