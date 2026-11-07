@@ -32,12 +32,13 @@ use {
         handlers::{
             ApiVersion, DispatchResult, RequestContext,
             acl_gates::config_resource_refusal,
-            alter_configs::{
+            audit_resource,
+            config_alter::{
                 BrokerPreprocess, RecordBuilders, broker_preprocess_refusal,
                 guarded_resource_response, resource_preamble_refusal, resource_records,
                 resource_refusal,
             },
-            audit_resource, encode_response,
+            encode_response,
             forward_to_controller::to_active_controller_or_handle,
             response_encoding::ErrorRow as _,
         },
@@ -179,7 +180,7 @@ krabka_macros::decoded_dispatch! {
     {
         let mut req = krabka_macros::controller_request!(broker, ctx, req, version; self::handle_on_controller, self::request_refusal);
         let image = broker.controller.current_image();
-        let duplicates = super::alter_configs::duplicate_resource_flags(req.resources.iter());
+        let duplicates = super::config_alter::duplicate_resource_flags(req.resources.iter());
         let mut local = Vec::new();
         let mut local_indices = Vec::new();
         let mut indexed_responses = Vec::new();
@@ -238,7 +239,7 @@ krabka_macros::decoded_dispatch! {
                     .zip(handle(broker, req, version, ctx).await?.responses),
             );
         }
-        response.responses = super::alter_configs::ordered_resource_responses(indexed_responses);
+        response.responses = super::config_alter::ordered_resource_responses(indexed_responses);
         encode_response(&response, version)
     }
 }
@@ -249,7 +250,7 @@ fn request_refusal(
     message: Option<&str>,
 ) -> IncrementalAlterConfigsResponse {
     IncrementalAlterConfigsResponse {
-        responses: super::alter_configs::resource_error_rows(req.resources.iter(), code, message),
+        responses: super::config_alter::resource_error_rows(req.resources.iter(), code, message),
         ..Default::default()
     }
 }
@@ -270,7 +271,7 @@ async fn handle_on_controller(
     version: i16,
     ctx: &RequestContext<'_>,
 ) -> Result<IncrementalAlterConfigsResponse, BrokerError> {
-    let duplicates = super::alter_configs::duplicate_resource_flags(req.resources.iter());
+    let duplicates = super::config_alter::duplicate_resource_flags(req.resources.iter());
     let refusals: Vec<_> = req
         .resources
         .iter()
@@ -361,7 +362,7 @@ fn audit_resources_for(
     _image: &MetadataImage,
 ) -> Vec<krabka_audit::AuditResource> {
     iter::once(audit_resource(
-        super::alter_configs::config_resource_type(resource.resource_type),
+        super::config_alter::config_resource_type(resource.resource_type),
         resource.resource_name.clone(),
     ))
     .chain(
@@ -374,20 +375,20 @@ fn audit_resources_for(
 }
 
 /// Flags each resource named more than once in the request. See
-/// [`super::alter_configs::duplicate_resource_flags`].
+/// [`super::config_alter::duplicate_resource_flags`].
 #[cfg(test)]
 fn resource_duplicate_flags(resources: &[AlterConfigsResource]) -> Vec<bool> {
-    super::alter_configs::duplicate_resource_flags(resources.iter())
+    super::config_alter::duplicate_resource_flags(resources.iter())
 }
 
 /// Kafka's `ConfigAdminManager.preprocess` shape checks, with a null value
 /// legal on DELETE only. See
-/// [`super::alter_configs::validate_resource_shape`].
+/// [`super::config_alter::validate_resource_shape`].
 fn validate_resource_shape(
     resource: &AlterConfigsResource,
     is_duplicate: bool,
 ) -> Result<(), (i16, String)> {
-    super::alter_configs::validate_resource_shape(
+    super::config_alter::validate_resource_shape(
         is_duplicate,
         resource.configs.iter().map(|config| {
             (
@@ -417,7 +418,7 @@ async fn process_resource_once(
     is_duplicate: bool,
 ) -> Result<AlterConfigsResourceResponse, RaftError> {
     let mut out: AlterConfigsResourceResponse =
-        super::alter_configs::empty_resource_response(&resource);
+        super::config_alter::empty_resource_response(&resource);
     let shape = validate_resource_shape(&resource, is_duplicate);
     if let Some((code, message)) =
         resource_preamble_refusal(broker, &image, ctx, &resource, shape, true)
@@ -442,7 +443,7 @@ async fn process_resource_once(
         Err((code, message)) => return Ok(out.with_error(code, message)),
     };
 
-    if let Some((code, message)) = super::alter_configs::config_value_size_error(&to_submit) {
+    if let Some((code, message)) = super::config_alter::config_value_size_error(&to_submit) {
         return Ok(out.with_error(code, message));
     }
 
@@ -452,7 +453,7 @@ async fn process_resource_once(
                 .configs
                 .iter()
                 .any(|item| item.name == MIN_INSYNC_REPLICAS);
-        super::alter_configs::changes_min_isr(&image, record, include_topic)
+        super::config_alter::changes_min_isr(&image, record, include_topic)
     }) {
         let topic = (resource.resource_type == RESOURCE_TYPE_TOPIC)
             .then_some(resource.resource_name.as_str());

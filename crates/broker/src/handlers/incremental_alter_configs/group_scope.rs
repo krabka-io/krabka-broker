@@ -15,7 +15,7 @@ use {
             group::{GroupBounds, kafka_group_key},
             registry::ConfigType,
         },
-        handlers::alter_configs::group_config_record_from,
+        handlers::config_alter::group_config_record_from,
     },
     krabka_metadata::{MetadataImage, MetadataRecord},
     krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource,

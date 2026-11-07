@@ -25,6 +25,7 @@ use {
                 image_with_client_metrics_config, image_with_group_config, image_with_topic_config,
                 topic_resource,
             },
+            config_alter::config_value_size_error,
             test_support::{
                 assert_dispatch_response, config_resource_error_response,
                 duplicate_config_resource_response, ordered_rows,
@@ -479,7 +480,7 @@ fn an_oversized_value_is_refused_in_every_kind_of_config_record() {
     };
     for record in records(&long) {
         check!(
-            super::config_value_size_error(slice::from_ref(&record))
+            config_value_size_error(slice::from_ref(&record))
                 == Some((
                     codes::INVALID_CONFIG,
                     "The configuration value cannot be added because it exceeds the maximum \
@@ -491,13 +492,13 @@ fn an_oversized_value_is_refused_in_every_kind_of_config_record() {
     }
     for record in records(long.get(1..).unwrap()) {
         check!(
-            super::config_value_size_error(slice::from_ref(&record)).is_none(),
+            config_value_size_error(slice::from_ref(&record)).is_none(),
             "{record:?}"
         );
     }
     // A deletion writes no value.
     check!(
-        super::config_value_size_error(&[MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+        config_value_size_error(&[MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
             node_id: krabka_metadata::NodeId(1),
             config_name: "k".into(),
             config_value: None,

@@ -31,6 +31,7 @@ mod acl_test_support;
 
 mod acl_gates;
 mod admin_audit;
+mod config_alter;
 #[cfg(test)]
 mod controller_mutation_tests;
 mod coordinator_routing;

@@ -15,16 +15,22 @@
 
 use {
     super::{
-        RESOURCE_TYPE_TOPIC, RecordBuilders, broker_configs::broker_config_records,
-        client_metrics_configs::client_metrics_config_record, empty_resource_response,
-        group_configs::group_config_record, guarded_resource_response, resource_preamble_refusal,
-        resource_records, resource_refusal, topic_configs::topic_config_record,
-        validate_resource_shape,
+        RESOURCE_TYPE_TOPIC, broker_configs::broker_config_records,
+        client_metrics_configs::client_metrics_config_record, group_configs::group_config_record,
+        topic_configs::topic_config_record,
     },
     crate::{
         broker::Broker,
         config_keys::clear_elr_records,
-        handlers::{RequestContext, audit_admin_success, response_encoding::ErrorRow as _},
+        handlers::{
+            RequestContext, audit_admin_success,
+            config_alter::{
+                RecordBuilders, changes_min_isr, config_value_size_error, empty_resource_response,
+                guarded_resource_response, resource_preamble_refusal, resource_records,
+                resource_refusal, validate_resource_shape,
+            },
+            response_encoding::ErrorRow as _,
+        },
     },
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
@@ -97,12 +103,12 @@ async fn process_resource_once(
             return Ok(out.with_error(code, message));
         }
     };
-    if let Some((code, message)) = super::config_value_size_error(&records) {
+    if let Some((code, message)) = config_value_size_error(&records) {
         return Ok(out.with_error(code, message));
     }
     let min_isr_changed = records
         .iter()
-        .any(|record| super::changes_min_isr(&image, record, true));
+        .any(|record| changes_min_isr(&image, record, true));
     if min_isr_changed {
         let topic = (resource.resource_type == RESOURCE_TYPE_TOPIC)
             .then_some(resource.resource_name.as_str());

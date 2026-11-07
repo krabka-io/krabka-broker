@@ -23,7 +23,7 @@ use {
             self,
             registry::{self, ConfigScope, ConfigType},
         },
-        handlers::alter_configs::finish_topic_overrides,
+        handlers::config_alter::finish_topic_overrides,
         topic_policy::TopicPolicy,
     },
     krabka_log::topic_name,
