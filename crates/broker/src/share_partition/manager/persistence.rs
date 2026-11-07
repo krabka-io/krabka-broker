@@ -83,18 +83,7 @@ impl SharePartitionLeaderManager {
         if !st.dirty {
             return Ok(());
         }
-        let (start, dcc, batches) = st.to_persist_batches();
-        let result = self
-            .persister
-            .write_state(
-                group,
-                topic_id,
-                partition,
-                (st.state_epoch, st.leader_epoch),
-                (start, dcc),
-                batches,
-            )
-            .await;
+        let result = self.persister.write_state(key, st.to_share_write()).await;
         match result {
             Ok(()) => {
                 st.dirty = false;

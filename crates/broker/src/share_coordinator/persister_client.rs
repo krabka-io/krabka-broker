@@ -529,8 +529,8 @@ impl SharePersister {
         }))
     }
 
-    /// Persist a `WriteShareGroupState` delta for `(group, topic_id,
-    /// partition)`. The call is local when this broker leads the target
+    /// Persist the `WriteShareGroupState` partition `request` for `key`. The
+    /// call is local when this broker leads the target
     /// `__share_group_state` partition. If it does not, the client routes the
     /// call to the leader over RPC.
     ///
@@ -543,33 +543,19 @@ impl SharePersister {
     #[cfg_attr(test, mutants::skip)]
     pub(crate) async fn write_state(
         &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-        epochs: (i32, i32),
-        progress: (Offset, i32),
-        batches: Vec<StateBatch>,
+        key: ShareKeyRef<'_>,
+        request: ShareWrite,
     ) -> Result<(), BrokerError> {
-        let (state_epoch, leader_epoch) = epochs;
-        let (start_offset, delivery_complete_count) = progress;
+        let ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        } = key;
         let RoutedPartition {
             state_partition,
             local,
-        } = self
-            .route(ShareKeyRef {
-                group,
-                topic_id,
-                partition,
-            })
-            .await?;
+        } = self.route(key).await?;
         if local {
-            let request = ShareWrite {
-                state_epoch,
-                leader_epoch,
-                start_offset,
-                delivery_complete_count,
-                batches,
-            };
             return self
                 .share_coordinator
                 .write(
@@ -596,11 +582,12 @@ impl SharePersister {
             topic [topic_id];
             fields {
                 partition,
-                state_epoch,
-                leader_epoch,
-                start_offset: start_offset.0,
-                delivery_complete_count,
-                state_batches: batches
+                state_epoch: request.state_epoch,
+                leader_epoch: request.leader_epoch,
+                start_offset: request.start_offset.0,
+                delivery_complete_count: request.delivery_complete_count,
+                state_batches: request
+                    .batches
                     .into_iter()
                     .map(ProtoStateBatch::from)
                     .collect(),
