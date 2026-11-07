@@ -1,6 +1,6 @@
 use {
     super::{args_from, batch, record, record_with_key, topic_id_partition, verified_segment},
-    crate::{bound::Predicates, materialize::write_segment_after_skip},
+    crate::{bound::Predicates, materialize::write_segment},
     krabka_ids::{Offset, ProducerId},
     krabka_log::{Log, LogConfig, name},
     krabka_protocol::records::RecordBatch,
@@ -42,7 +42,7 @@ async fn filtered_and_empty_restore_batches_preserve_retry_coordinates_after_reo
     original.producer_epoch = 2;
     original.base_sequence = sequence;
     let segment = verified_segment(9, slice::from_ref(&original));
-    let outcome = write_segment_after_skip(&args, &partition, &segment, &predicates, false)
+    let outcome = write_segment(&args, &partition, &segment, &predicates, false)
         .await
         .unwrap();
     assert2::assert!(outcome.end_offset == Offset(11));

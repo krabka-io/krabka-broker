@@ -39,8 +39,8 @@ mod segment;
 mod test_support;
 
 pub use self::{
-    format::{FormatTargetOutcome, format_target_with_snapshot, seed_rlmm_snapshot_from},
-    segment::{SegmentOutcome, write_segment_after_skip},
+    format::{FormatTargetOutcome, format_target, seed_rlmm_snapshot},
+    segment::{SegmentOutcome, write_segment},
 };
 
 pub fn open_partition_log(

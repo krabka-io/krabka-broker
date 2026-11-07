@@ -58,7 +58,7 @@ pub struct SegmentOutcome {
 /// Returns [`RestoreError::Records`] when a batch will not re-encode, and
 /// [`RestoreError::Log`] or [`RestoreError::Io`] when the target rejects the
 /// write.
-pub async fn write_segment_after_skip(
+pub async fn write_segment(
     args: &RestoreArgs,
     partition: &TopicIdPartition,
     segment: &VerifiedSegment,
@@ -226,7 +226,7 @@ mod tests {
         ];
         let segment = verified_segment(0, &batches);
 
-        let outcome = write_segment_after_skip(&args, &partition, &segment, &predicates, false)
+        let outcome = write_segment(&args, &partition, &segment, &predicates, false)
             .await
             .expect("write_segment");
 
@@ -256,7 +256,7 @@ mod tests {
         let batch_b = batch(3, vec![record(0, "kept")]);
         let segment = verified_segment(0, &[batch_a, batch_b]);
 
-        let outcome = write_segment_after_skip(&args, &partition, &segment, &predicates, false)
+        let outcome = write_segment(&args, &partition, &segment, &predicates, false)
             .await
             .expect("write_segment");
 
@@ -288,7 +288,7 @@ mod tests {
         ]);
         let segment = verified_segment(0, slice::from_ref(&batch_a));
 
-        let outcome = write_segment_after_skip(&args, &partition, &segment, &predicates, false)
+        let outcome = write_segment(&args, &partition, &segment, &predicates, false)
             .await
             .expect("write_segment");
 
@@ -328,7 +328,7 @@ mod tests {
         let batch_b = batch(3, vec![record(0, "keep3")]);
         let segment = verified_segment(0, &[batch_a.clone(), batch_b.clone()]);
 
-        let outcome = write_segment_after_skip(&args, &partition, &segment, &predicates, false)
+        let outcome = write_segment(&args, &partition, &segment, &predicates, false)
             .await
             .expect("write_segment must not fail with an offset mismatch");
 
@@ -350,7 +350,7 @@ mod tests {
         let (_target, args, partition, predicates) =
             materialization_context(&["--exclude-key", "^drop$"]);
         let prefix = batch(0, vec![record(0, "head"), record_with_key(2, "drop")]);
-        write_segment_after_skip(
+        write_segment(
             &args,
             &partition,
             &verified_segment(0, slice::from_ref(&prefix)),
@@ -362,11 +362,11 @@ mod tests {
         let suffix = batch(20, vec![record(2, "tail")]);
         let segment = verified_segment(20, slice::from_ref(&suffix));
         check!(
-            write_segment_after_skip(&args, &partition, &segment, &predicates, false)
+            write_segment(&args, &partition, &segment, &predicates, false)
                 .await
                 .is_err()
         );
-        write_segment_after_skip(&args, &partition, &segment, &predicates, true)
+        write_segment(&args, &partition, &segment, &predicates, true)
             .await
             .unwrap();
         let restored = reopen_orders(&args);
@@ -392,14 +392,14 @@ mod tests {
 
         let batch_1 = batch(0, vec![record(0, "a"), record(1, "b")]);
         let segment_1 = verified_segment(0, slice::from_ref(&batch_1));
-        let outcome_1 = write_segment_after_skip(&args, &partition, &segment_1, &predicates, false)
+        let outcome_1 = write_segment(&args, &partition, &segment_1, &predicates, false)
             .await
             .expect("segment 1");
         check!(outcome_1.end_offset == Offset(1));
 
         let batch_2 = batch(2, vec![record(0, "c")]);
         let segment_2 = verified_segment(2, slice::from_ref(&batch_2));
-        let outcome_2 = write_segment_after_skip(&args, &partition, &segment_2, &predicates, false)
+        let outcome_2 = write_segment(&args, &partition, &segment_2, &predicates, false)
             .await
             .expect("segment 2");
         check!(outcome_2.end_offset == Offset(2));
@@ -420,7 +420,7 @@ mod tests {
         let batches = vec![batch(1000, vec![record(0, "x"), record(1, "y")])];
         let segment = verified_segment(1000, &batches);
 
-        let outcome = write_segment_after_skip(&args, &partition, &segment, &predicates, false)
+        let outcome = write_segment(&args, &partition, &segment, &predicates, false)
             .await
             .expect("write_segment");
         check!(outcome.base_offset == Offset(1000));
@@ -453,10 +453,9 @@ mod tests {
         let real_target = tempfile::tempdir().expect("tempdir");
         let real_args = args_from(&["--exclude-key", "^drop$"], real_target.path());
         let real_predicates = Predicates::from_args(&real_args).expect("predicates");
-        let real_outcome =
-            write_segment_after_skip(&real_args, &partition, &segment, &real_predicates, false)
-                .await
-                .expect("real write");
+        let real_outcome = write_segment(&real_args, &partition, &segment, &real_predicates, false)
+            .await
+            .expect("real write");
         let real_dir = name::partition_dir(&real_args.target.log_dir, "orders", 0);
         let log_bytes: u64 = fs::read_dir(real_dir)
             .expect("target partition")
@@ -470,10 +469,9 @@ mod tests {
         let mut dry_args = args_from(&["--exclude-key", "^drop$"], dry_target.path());
         dry_args.dry_run = true;
         let dry_predicates = Predicates::from_args(&dry_args).expect("predicates");
-        let dry_outcome =
-            write_segment_after_skip(&dry_args, &partition, &segment, &dry_predicates, false)
-                .await
-                .expect("dry write");
+        let dry_outcome = write_segment(&dry_args, &partition, &segment, &dry_predicates, false)
+            .await
+            .expect("dry write");
 
         check!(dry_outcome == real_outcome);
         check!(!dry_target.path().join("orders-0").exists());
