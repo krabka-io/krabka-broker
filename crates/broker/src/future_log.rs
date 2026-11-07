@@ -39,6 +39,7 @@ use {
 
 mod catch_up;
 mod cleanup;
+mod registry;
 mod replicator;
 mod start;
 #[cfg(test)]
@@ -47,6 +48,7 @@ mod truncation;
 
 pub use self::{
     cleanup::{abort_moves, shutdown_moves},
+    registry::FutureLogRegistry,
     start::{resume_move, start_move},
 };
 

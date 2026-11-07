@@ -13,13 +13,12 @@ use {
         broker::{Broker, dynamic_listeners::DataPlaneListeners},
         config::{BrokerConfig, ListenerSpec},
         error::BrokerError,
-        future_log::{FutureLogState, MovePolicy, resume_move},
+        future_log::{FutureLogRegistry, MovePolicy, resume_move},
         log_dir::{self, DiscoveredPartition},
         partition_registry::PartitionRegistry,
         platform::{Sockets, bind_listener},
         throttle::ThrottleState,
     },
-    dashmap::DashMap,
     krabka_ids::PartitionIndex,
     std::{fs, net::SocketAddr, sync::Arc},
     tokio::net::TcpListener,
@@ -40,7 +39,7 @@ pub(super) struct ListenerStartup {
     /// listener when none has that name. `None` on a node without the broker
     /// role, which binds no data-plane listener.
     pub(super) listen_addr: Option<SocketAddr>,
-    pub(super) future_logs: Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+    pub(super) future_logs: Arc<FutureLogRegistry>,
 }
 
 /// Binds the default data-plane listener before the broker registers itself,
@@ -143,7 +142,7 @@ pub(super) async fn bind_listeners_and_recover_moves(
     {
         config.advertised_listener = format!("{host}:{}", listen_addr.port());
     }
-    let future_logs = Arc::new(DashMap::new());
+    let future_logs = Arc::new(FutureLogRegistry::default());
     for log_dir in config.all_log_dirs() {
         for DiscoveredPartition {
             topic,

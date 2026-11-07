@@ -6,8 +6,7 @@
 //! its replicator task; a redirect also removes the staged future directory.
 
 use {
-    super::{FutureLogState, MoveError},
-    dashmap::DashMap,
+    super::{FutureLogRegistry, FutureLogState, MoveError},
     krabka_ids::PartitionIndex,
     std::{
         fs,
@@ -17,7 +16,7 @@ use {
 };
 
 pub(super) async fn cancel_move(
-    future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+    future_logs: &FutureLogRegistry,
     key: &(String, PartitionIndex),
     existing: Arc<FutureLogState>,
 ) -> Result<(), MoveError> {
@@ -31,7 +30,7 @@ pub(super) async fn cancel_move(
         task.abort();
         let _ = task.await;
     }
-    future_logs.remove_if(key, |_, state| Arc::ptr_eq(state, &existing));
+    future_logs.remove_if_same(key, &existing);
     let future_path = existing.future_path.clone();
     drop(existing);
     if future_path.exists() {
@@ -40,14 +39,8 @@ pub(super) async fn cancel_move(
     Ok(())
 }
 
-fn take_move_tasks(
-    future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>,
-) -> Vec<JoinHandle<()>> {
-    let states: Vec<_> = future_logs
-        .iter()
-        .map(|entry| Arc::clone(entry.value()))
-        .collect();
-    future_logs.clear();
+fn take_move_tasks(future_logs: &FutureLogRegistry) -> Vec<JoinHandle<()>> {
+    let states = future_logs.take_all();
     for state in &states {
         state.cancel.cancel();
     }
@@ -66,7 +59,7 @@ fn take_move_tasks(
 /// Cancel and await every in-progress log-directory move. Broker shutdown
 /// calls this after it has stopped accepting requests and before it stops the
 /// partition writers that the move tasks use.
-pub async fn shutdown_moves(future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>) {
+pub async fn shutdown_moves(future_logs: &FutureLogRegistry) {
     let tasks = take_move_tasks(future_logs);
     for task in &tasks {
         task.abort();
@@ -78,7 +71,7 @@ pub async fn shutdown_moves(future_logs: &DashMap<(String, PartitionIndex), Arc<
 
 /// Best-effort synchronous counterpart used when a
 /// [`crate::broker::BrokerHandle`] is dropped without an awaited shutdown.
-pub fn abort_moves(future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>) {
+pub fn abort_moves(future_logs: &FutureLogRegistry) {
     for task in take_move_tasks(future_logs) {
         task.abort();
     }
@@ -108,8 +101,7 @@ mod tests {
     struct PendingMoveFixture {
         dir: tempfile::TempDir,
         log: Arc<Mutex<Log>>,
-        // FutureLogState's existing task registry uses topic/partition keys.
-        logs: DashMap<(String, PartitionIndex), Arc<FutureLogState>>,
+        logs: FutureLogRegistry,
         started: Arc<AtomicU64>,
         dropped: Arc<AtomicU64>,
     }
@@ -118,7 +110,7 @@ mod tests {
         let log = Arc::new(Mutex::new(
             Log::open(dir.path(), LogConfig::default()).expect("open future log"),
         ));
-        let logs = DashMap::new();
+        let logs = FutureLogRegistry::default();
         let started = Arc::new(AtomicU64::new(0));
         let dropped = Arc::new(AtomicU64::new(0));
         PendingMoveFixture {
@@ -214,7 +206,7 @@ mod tests {
         assert!(
             future_logs
                 .get(&key)
-                .is_some_and(|entry| Arc::ptr_eq(entry.value(), &later))
+                .is_some_and(|entry| Arc::ptr_eq(&entry, &later))
         );
         assert!(!future_path.exists());
         assert!(later.future_path.exists());
