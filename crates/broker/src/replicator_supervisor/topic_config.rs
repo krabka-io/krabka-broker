@@ -6,6 +6,7 @@ use {
     crate::{
         api_catalog::UnstableApiVersions,
         config_keys::{apply_to_log_config, dynamic_log_base, log_max_decompressed_record},
+        log_dir_status::LogDirRegistry,
         partition_registry::PartitionRegistry,
     },
     krabka_ids::PartitionIndex,
@@ -48,6 +49,11 @@ pub fn topic_log_config(
 /// the cluster default, and only when `unstable` says the broker serves trunk's
 /// topic keys: under Kafka 4.3.1 a stored value of it is an unknown key that
 /// nothing reads, so the log runs with no limit.
+///
+/// A partition whose log cannot write the start checkpoint that enabling
+/// remote storage needs keeps its old config, and a storage failure takes its
+/// directory offline in `log_dir_status`; see
+/// [`Partition::apply_log_config_overrides`](crate::partition::Partition::apply_log_config_overrides).
 pub async fn push_topic_configs(
     desired: &HashSet<TopicPartition>,
     partitions: &PartitionRegistry,
@@ -55,6 +61,7 @@ pub async fn push_topic_configs(
     base: &LogConfig,
     node: krabka_metadata::NodeId,
     unstable: UnstableApiVersions,
+    log_dir_status: &LogDirRegistry,
 ) {
     let base = &dynamic_log_base(image, node, base);
     let empty: BTreeMap<String, String> = BTreeMap::new();
@@ -70,7 +77,7 @@ pub async fn push_topic_configs(
             ..base.clone()
         };
         if let Err(error) = part
-            .apply_log_config_overrides(overrides, &topic_base)
+            .apply_log_config_overrides(overrides, &topic_base, log_dir_status)
             .await
         {
             warn!(topic = %topic, partition, %error, "supervisor: log configuration update failed");
@@ -134,7 +141,16 @@ mod tests {
         } = setup;
         let (_dir, partitions) = materialized_partition_with_config(base);
         let desired = HashSet::from([("t".to_owned(), 0)]);
-        push_topic_configs(&desired, &partitions, image, base, NodeId(1), unstable).await;
+        push_topic_configs(
+            &desired,
+            &partitions,
+            image,
+            base,
+            NodeId(1),
+            unstable,
+            &LogDirRegistry::default(),
+        )
+        .await;
         let part = partitions.get("t", PartitionIndex(0)).expect("partition");
         await_until(what, || {
             ready(&part.log.lock().expect("log lock").config_snapshot())
