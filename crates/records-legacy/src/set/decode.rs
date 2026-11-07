@@ -5,6 +5,12 @@
 //! of the codec. Unwrapping is where nested compression is rejected, where the
 //! decompression policy is applied, and where the KIP-32 relative inner
 //! offsets of a v1 wrapper are rewritten back to absolute ones.
+//!
+//! A partial entry at the end of a set, whether its 12-byte offset and size
+//! or its message bytes stop early, ends the set. This matches Kafka's
+//! `ByteBufferLogInputStream` for the top-level set and
+//! `AbstractLegacyRecordBatch.DataLogInputStream` for the inner set of a
+//! compressed wrapper.
 
 use {
     super::ParsedRecord,
@@ -17,6 +23,10 @@ use {
     krabka_ids::Offset,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _},
 };
+
+/// The smallest legacy message: CRC, magic, attributes and two null length
+/// fields. Kafka calls it `LegacyRecord.RECORD_OVERHEAD_V0`.
+const RECORD_OVERHEAD_V0: usize = 14;
 
 /// The length of a wire slice as a byte count.
 ///
@@ -32,10 +42,16 @@ fn size_of_slice(slice: &[u8]) -> ByteSize {
 /// It unwraps a compressed wrapper message at the top level one time. It
 /// rejects nested compression, that is, a compressed wrapper inside a
 /// compressed wrapper.
+///
+/// A partial entry at the end of the set, or at the end of a compressed
+/// wrapper's inner set, is dropped and is not an error. Kafka's
+/// `ByteBufferLogInputStream` stops at an entry that the bytes do not hold
+/// in full.
+///
 /// # Errors
 /// Returns `Truncated` if `buf` holds fewer than `set_size_bytes` bytes.
-/// Returns `Truncated` if an entry header or an entry body stops early.
 /// Returns `NegativeLength` if an entry carries a negative `message_size`.
+/// Returns `Malformed` if an entry carries a `message_size` below the 14-byte magic 0 minimum.
 /// Returns `NestedCompression` if a compressed wrapper holds another compressed wrapper.
 /// Returns `InconsistentMagic` if an inner message has a different magic than its wrapper.
 /// Returns `Malformed` if a nonzero v1 wrapper offset is below its last inner offset.
@@ -84,10 +100,10 @@ fn decode_into(
 ) -> Result<(), LegacyRecordsError> {
     let mut cur = bytes;
     while !cur.is_empty() {
+        // Kafka's `ByteBufferLogInputStream.nextBatchSize` ends the set at
+        // a partial offset and size.
         if cur.len() < 12 {
-            return Err(LegacyRecordsError::Truncated {
-                needed: 12 - cur.len(),
-            });
+            break;
         }
         let offset = cur.get_i64();
         let size = cur.get_i32();
@@ -97,10 +113,17 @@ fn decode_into(
                 len: size,
             });
         };
+        // Kafka rejects a size below the smallest magic 0 message as corrupt
+        // before it looks for the body, so a short size never reads as a
+        // partial message.
+        if size < RECORD_OVERHEAD_V0 {
+            return Err(LegacyRecordsError::Malformed(format!(
+                "message size {size} is below the {RECORD_OVERHEAD_V0}-byte minimum"
+            )));
+        }
+        // A partial message ends the set, after the size checks have run.
         if cur.remaining() < size {
-            return Err(LegacyRecordsError::Truncated {
-                needed: size - cur.remaining(),
-            });
+            break;
         }
         let msg = Message::decode_from(&mut cur, size)?;
         // Kafka validates produce data with `ensureMatchingMagic`: every
@@ -212,12 +235,17 @@ mod tests {
         let inner: Vec<_> = inner_offsets.iter().copied().map(record_at).collect();
         let mut flat = BytesMut::new();
         encode_flat_message_set(inner, Magic::V1, &mut flat);
+        gzip_v1_wrapper(&flat, wrapper_offset)
+    }
+
+    /// A gzip v1 wrapper at `wrapper_offset` whose value is `inner_set`.
+    fn gzip_v1_wrapper(inner_set: &[u8], wrapper_offset: i64) -> BytesMut {
         let wrapper = Message {
             magic: Magic::V1,
             attributes: attrs_with_compression(0, CompressionType::Gzip),
             timestamp: Some(10),
             key: None,
-            value: Some(krabka_compression::compress(CompressionType::Gzip, &flat).unwrap()),
+            value: Some(krabka_compression::compress(CompressionType::Gzip, inner_set).unwrap()),
         };
         let mut wire = BytesMut::new();
         wire.put_i64(wrapper_offset);
@@ -338,21 +366,24 @@ mod tests {
     }
 
     #[test]
-    fn entry_header_truncated_reports_needed() {
-        // 8 bytes where a 12-byte (offset+size) entry header is required:
-        // needed = 12 - 8 = 4.
+    fn partial_entry_header_ends_the_set() {
+        // 8 bytes where a 12-byte (offset+size) entry header is required.
         let data = [0u8; 8];
         let mut cur: &[u8] = &data;
-        let err = decode_message_set(&mut cur, 8).unwrap_err();
-        assert2::assert!(matches!(err, LegacyRecordsError::Truncated { needed: 4 }));
+        assert2::assert!(let Ok(records) = decode_message_set(&mut cur, 8));
+        assert2::assert!(records == Vec::new());
     }
 
-    fn entry_error(size: i32, trailing: &[u8]) -> LegacyRecordsError {
+    fn entry_decode(size: i32, trailing: &[u8]) -> Result<Vec<ParsedRecord>, LegacyRecordsError> {
         let mut data = BytesMut::new();
         data.put_i64(0);
         data.put_i32(size);
         data.put_slice(trailing);
-        decode_message_set(&mut &data[..], data.len()).unwrap_err()
+        decode_message_set(&mut &data[..], data.len())
+    }
+
+    fn entry_error(size: i32, trailing: &[u8]) -> LegacyRecordsError {
+        entry_decode(size, trailing).unwrap_err()
     }
 
     #[test]
@@ -374,11 +405,27 @@ mod tests {
     }
 
     #[test]
-    fn entry_message_body_truncated_reports_needed() {
-        // Entry claims a 10-byte message but only 2 bytes follow:
-        // needed = 10 - 2 = 8.
-        let err = entry_error(10, &[0u8; 2]);
-        assert2::assert!(matches!(err, LegacyRecordsError::Truncated { needed: 8 }));
+    fn partial_message_body_ends_the_set() {
+        // Entry claims a 20-byte message but only 2 bytes follow.
+        assert2::assert!(let Ok(records) = entry_decode(20, &[0u8; 2]));
+        assert2::assert!(records == Vec::new());
+    }
+
+    #[test]
+    fn partial_entry_in_wrapper_inner_set_ends_the_inner_set() {
+        // Build the inner set by hand and cut its last entry inside the
+        // message bytes, as Kafka's `DataLogInputStream` would stop.
+        let inner: Vec<_> = [0, 1, 2].into_iter().map(record_at).collect();
+        let mut complete = BytesMut::new();
+        encode_flat_message_set(inner[..2].to_vec(), Magic::V1, &mut complete);
+        let mut flat = BytesMut::new();
+        encode_flat_message_set(inner, Magic::V1, &mut flat);
+        flat.truncate(complete.len() + 12 + 5);
+        let wire = gzip_v1_wrapper(&flat, 101);
+
+        // The last complete inner record anchors at the wrapper offset.
+        let expected = vec![record_at(100), record_at(101)];
+        assert2::assert!(decode_bytes(&wire) == expected);
     }
 
     #[test]
