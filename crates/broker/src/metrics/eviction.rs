@@ -564,18 +564,23 @@ mod tests {
         source.set_records(&live);
     }
 
-    #[tokio::test]
-    async fn deleting_a_topic_evicts_its_topic_and_partition_series() {
+    /// Seeds `TOPIC` with `seed` under a running evictor, checks the scrape
+    /// body carries every label set in `expected`, deletes the topic, and
+    /// checks the topic is gone from the body.
+    async fn delete_topic_and_expect_it_gone(
+        seed: impl FnOnce(&BrokerMetrics),
+        expected: &[String],
+    ) {
         let metrics = BrokerMetrics::new();
         let shutdown = CancellationToken::new();
         let live = topic_records(&[&[THIS_BROKER]]);
         let source = evicting_source(&metrics, &live, &shutdown);
 
-        create_partition_series(&metrics, &Arc::from(TOPIC), 0);
-        create_topic_series(&metrics, &Arc::from(TOPIC));
+        seed(&metrics);
         let before = scrape(&metrics);
-        assert!(before.contains(&partition_pair(TOPIC, 0)));
-        assert!(before.contains(&format!("topic=\"{TOPIC}\"")));
+        for label_set in expected {
+            assert!(before.contains(label_set.as_str()));
+        }
 
         delete_topic(&source, live);
 
@@ -584,29 +589,40 @@ mod tests {
         shutdown.cancel();
     }
 
+    #[tokio::test]
+    async fn deleting_a_topic_evicts_its_topic_and_partition_series() {
+        delete_topic_and_expect_it_gone(
+            |metrics| {
+                create_partition_series(metrics, &Arc::from(TOPIC), 0);
+                create_topic_series(metrics, &Arc::from(TOPIC));
+            },
+            &[partition_pair(TOPIC, 0), format!("topic=\"{TOPIC}\"")],
+        )
+        .await;
+    }
+
     /// A partition whose compaction and local retention only ever failed
     /// has no series but its failure counters, and no other path records
     /// it. Deleting its topic still takes every one of those counters, for
     /// every reason, out of the scrape body.
     #[tokio::test]
     async fn deleting_a_topic_evicts_the_failure_series_of_a_partition_that_only_failed() {
-        let metrics = BrokerMetrics::new();
-        let shutdown = CancellationToken::new();
-        let live = topic_records(&[&[THIS_BROKER]]);
-        let source = evicting_source(&metrics, &live, &shutdown);
-
-        for reason in CleanerFailureReason::ALL {
-            metrics.record_cleaner_failure(TOPIC, 0, reason);
-            metrics.record_retention_failure(TOPIC, 0, reason);
-        }
-        let before = scrape(&metrics);
-        assert!(before.contains(&format!("{},reason=\"other\"", partition_pair(TOPIC, 0))));
-
-        delete_topic(&source, live);
-
-        let after = scrape_until(&metrics, |body| !body.contains(TOPIC)).await;
-        check!(!after.contains(TOPIC));
-        shutdown.cancel();
+        delete_topic_and_expect_it_gone(
+            |metrics| {
+                for reason in CleanerFailureReason::ALL {
+                    metrics.record_cleaner_failure(TOPIC, 0, reason);
+                    metrics.record_retention_failure(TOPIC, 0, reason);
+                }
+            },
+            &CleanerFailureReason::ALL.map(|reason| {
+                format!(
+                    "{},reason=\"{}\"",
+                    partition_pair(TOPIC, 0),
+                    reason.as_str()
+                )
+            }),
+        )
+        .await;
     }
 
     /// A partition this broker still hosts keeps its series when a sibling
@@ -830,10 +846,12 @@ mod tests {
     ///
     /// Calling `seed` on a `&Probe` resolves to [`SeedOwned`] when the field
     /// is a [`TopicLabel`], [`PartitionLabel`] or [`CleanerFailureLabel`]
-    /// family, whatever its metric type, and falls back to [`SeedOther`] for every other field.
+    /// family, whatever its metric type, and falls back to [`SeedOther`] for
+    /// every other field.
     struct Probe<'a, T>(&'static str, &'a T);
 
-    /// Seeds a [`TopicLabel`] or [`PartitionLabel`] family.
+    /// Seeds a [`TopicLabel`], [`PartitionLabel`] or [`CleanerFailureLabel`]
+    /// family.
     trait SeedOwned<'a> {
         fn seed(&self) -> Option<Seeded<'a>>;
     }
@@ -917,10 +935,10 @@ mod tests {
     /// The destructure names every field of [`BrokerMetrics`] and has no
     /// `..`, so a new field fails to compile here until it is listed. Listing
     /// it is the whole job: the field's type decides whether it is seeded, so
-    /// a new [`TopicLabel`] or [`PartitionLabel`] family cannot be left out of
-    /// the check below by a wrong guess about where it belongs. A family keyed
-    /// by another label type that carries a topic, such as
-    /// [`SchemaRejectionLabel`], is not seen here.
+    /// a new [`TopicLabel`], [`PartitionLabel`] or [`CleanerFailureLabel`]
+    /// family cannot be left out of the check below by a wrong guess about
+    /// where it belongs. A family keyed by another label type that carries a
+    /// topic, such as [`SchemaRejectionLabel`], is not seen here.
     fn seed_owned_families(metrics: &BrokerMetrics) -> Vec<Seeded<'_>> {
         seed_fields!(
             metrics;
