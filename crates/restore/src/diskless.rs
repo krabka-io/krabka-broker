@@ -10,11 +10,12 @@ use {
             prepare::{PrepareBatchSetup, prepare_batch},
         },
         report::{DisklessPartitionReport, DisklessRestoreReport},
-        verify::{MAX_LOG_BYTES, fetch_capped},
+        verify::fetch_capped,
     },
     bytes::Bytes,
     krabka_ids::Offset,
     krabka_log::Log,
+    krabka_object_store::MAX_WAL_OBJECT_BYTES,
     krabka_protocol::records::{RecordBatchBorrowed, validate_one_v2_batch},
     krabka_remote_storage::{
         ObjectEntry, TopicIdPartition,
@@ -513,7 +514,7 @@ async fn fetch_object(
     let bytes = fetch_capped(
         store.ops(),
         &ObjectPath::from(key),
-        MAX_LOG_BYTES,
+        MAX_WAL_OBJECT_BYTES,
         authenticated,
     )
     .await?;

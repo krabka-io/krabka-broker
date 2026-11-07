@@ -13,6 +13,14 @@ use {
     std::sync::Arc,
 };
 
+/// The largest diskless WAL object any krabka tool reads whole.
+///
+/// `krabka backup` hashes each WAL object a capture names under this cap
+/// before it signs the capture, and `krabka restore` refuses to read one
+/// above it. The two must agree: a cap that drifted on one side alone would
+/// let backup sign a capture that restore cannot read.
+pub const MAX_WAL_OBJECT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
 /// The size and `SHA-256` of one object, hashed as it streams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CappedDigest {
