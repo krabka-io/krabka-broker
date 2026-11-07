@@ -49,18 +49,6 @@ pub enum LeaderRecovery {
     Recovering,
 }
 
-impl LeaderRecovery {
-    /// The recovery an election installs: an unclean election's leader
-    /// recovers, a clean one's does not.
-    pub fn of_election(unclean: bool) -> Self {
-        if unclean {
-            Self::Recovering
-        } else {
-            Self::Recovered
-        }
-    }
-}
-
 /// The new leadership a partition change writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartitionChange {
@@ -72,6 +60,24 @@ pub struct PartitionChange {
     pub epochs: NextEpochs,
     /// Whether `leader` must recover first.
     pub recovery: LeaderRecovery,
+}
+
+impl PartitionChange {
+    /// The change an election of `leader` with `isr` at `epochs` writes. An
+    /// unclean election's leader recovers first; a clean one's does not.
+    pub fn election(leader: NodeId, isr: Vec<NodeId>, epochs: NextEpochs, unclean: bool) -> Self {
+        let recovery = if unclean {
+            LeaderRecovery::Recovering
+        } else {
+            LeaderRecovery::Recovered
+        };
+        Self {
+            leader,
+            isr,
+            epochs,
+            recovery,
+        }
+    }
 }
 
 /// Push the `PartitionRecord` that moves `pr` to `change`'s leader, ISR and
