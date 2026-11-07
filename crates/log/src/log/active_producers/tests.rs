@@ -7,11 +7,12 @@ use {
             barrier_marker_from_producer, configured_test_log, control_key, control_value,
             snapshot_offsets, test_log, tiny_segments,
         },
+        name,
         test_support::open_log,
     },
     assert2::assert,
     krabka_protocol::records::{Attributes, Record, RecordBatch},
-    std::fmt,
+    std::{fmt, fs},
 };
 
 // A data batch of `producer` (`(id, epoch)`) with `records` records from
@@ -750,4 +751,35 @@ fn a_coordinator_epoch_below_the_sentinel_survives_a_reopen_by_replay() {
     assert!(snapshot_offsets(dir.path()) == vec![Offset(1), Offset(2), Offset(3)]);
     let reopened = Log::open(dir.path(), tiny_segments()).unwrap();
     assert!(coordinator_epoch_views(&reopened, &[7]) == vec![(7, -5, -5)]);
+}
+
+/// A marker whose append fails rolls back without leaving its coordinator
+/// epoch behind, even for a producer the log holds no entry for: the epoch
+/// lives only in the producer entry, which the failed append never wrote.
+#[test]
+fn a_failed_marker_append_leaves_no_coordinator_epoch() {
+    let TempLog { dir, mut log } = test_log();
+    // A transactional batch without a sequence opens the transaction but
+    // creates no producer entry.
+    log.append(
+        &mut data()
+            .producer(BatchProducer::from_wire((7, 0)))
+            .base_sequence(-1)
+            .transaction(BatchTransactionMode::Transactional)
+            .call(),
+    )
+    .unwrap();
+    let txn_index = name::txnindex_path(dir.path(), 0);
+    let _ = fs::remove_file(&txn_index);
+    fs::create_dir(&txn_index).unwrap();
+
+    let appended = log.append(
+        &mut marker()
+            .outcome(MarkerOutcome::Abort)
+            .coordinator_epoch(17)
+            .call(),
+    );
+
+    assert!(appended.is_err());
+    assert!(coordinator_epoch_views(&log, &[7]) == vec![(7, -1, -1)]);
 }
