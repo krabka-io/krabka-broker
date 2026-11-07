@@ -16,6 +16,8 @@ pub mod stats;
 pub mod verify;
 
 #[cfg(test)]
+mod bdd;
+#[cfg(test)]
 mod spool_model;
 #[cfg(test)]
 mod test_support;

@@ -86,8 +86,22 @@ pub fn build_object_store(
     }
 }
 
+/// Refuse an empty bucket name. The backend builders take one as a bucket that
+/// is named, so without this check the store would build and fail only on its
+/// first request.
+#[cfg(not(target_family = "wasm"))]
+fn require_bucket(backend: &str, bucket: &str) -> Result<(), ObjectStoreError> {
+    if bucket.is_empty() {
+        return Err(ObjectStoreError::InvalidConfig(format!(
+            "{backend} builder: the bucket name is empty"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(not(target_family = "wasm"))]
 pub fn build_s3_store(cfg: &S3Config) -> Result<AmazonS3, ObjectStoreError> {
+    require_bucket("S3", &cfg.bucket)?;
     let mut builder = krabka_macros::connection_policy!(
         AmazonS3Builder::new()
             .with_bucket_name(&cfg.bucket)
@@ -98,8 +112,14 @@ pub fn build_s3_store(cfg: &S3Config) -> Result<AmazonS3, ObjectStoreError> {
     if let Some(endpoint) = &cfg.endpoint {
         builder = builder.with_endpoint(endpoint);
     }
-    if let (Some(k), Some(s)) = (&cfg.access_key_id, &cfg.secret_access_key) {
-        builder = builder.with_access_key_id(k).with_secret_access_key(s);
+    // Each half goes to the builder on its own, so it refuses a key id without
+    // its secret, and a secret without its key id, rather than quietly falling
+    // back to another credential source.
+    if let Some(key_id) = &cfg.access_key_id {
+        builder = builder.with_access_key_id(key_id);
+    }
+    if let Some(secret) = &cfg.secret_access_key {
+        builder = builder.with_secret_access_key(secret);
     }
     if cfg.conditional_put {
         builder = builder.with_conditional_put(S3ConditionalPut::ETagMatch);
@@ -119,6 +139,7 @@ fn build_s3(cfg: &S3Config) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> {
 
 #[cfg(not(target_family = "wasm"))]
 pub fn build_gcs_store(cfg: &GcsConfig) -> Result<GoogleCloudStorage, ObjectStoreError> {
+    require_bucket("GCS", &cfg.bucket)?;
     let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(&cfg.bucket);
     if let Some(path) = &cfg.service_account_path {
         builder = builder.with_service_account_path(path);

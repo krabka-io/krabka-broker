@@ -14,4 +14,7 @@ crate_binary(
     lib = ":audit",
 )
 
-crate_tests(lib = "audit")
+crate_tests(
+    compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]),
+    lib = "audit",
+)

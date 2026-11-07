@@ -14,4 +14,7 @@ crate_binary(
     lib = ":barrier-cli",
 )
 
-crate_tests(lib = "barrier-cli")
+crate_tests(
+    compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]),
+    lib = "barrier-cli",
+)
