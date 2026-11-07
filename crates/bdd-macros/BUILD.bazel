@@ -1,0 +1,14 @@
+load("//bazel:defs.bzl", "crate_proc_macro", "crate_tests")
+
+package(default_visibility = ["//visibility:public"])
+
+# Consumed by `crate.from_cargo` (see //MODULE.bazel).
+exports_files(["Cargo.toml"])
+
+crate_proc_macro(name = "bdd-macros")
+
+crate_tests(
+    # rstest's `#[case]` expansion reads the manifest to find its own crate.
+    compile_data = ["Cargo.toml"],
+    lib = "bdd-macros",
+)

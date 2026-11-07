@@ -1,0 +1,27 @@
+[package]
+name = "krabka-bdd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Krabka's BDD layer over rstest-bdd: house-style feature lint, step-registry check, multi-thread Tokio harness and step helpers"
+repository = "https://github.com/krabka-io/krabka-broker"
+homepage = "https://github.com/krabka-io/krabka-broker"
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+krabka-bdd-macros = { path = "../bdd-macros" }
+rstest-bdd = { workspace = true }
+rstest-bdd-harness = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+rstest = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+rust-embed = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time"] }
