@@ -132,7 +132,12 @@ impl TopologyDescriptionBackend for FileTopologyDescriptionBackend {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {
+        super::*,
+        assert2::assert,
+        std::sync::Arc,
+        tokio::{sync::Barrier, task::JoinSet},
+    };
 
     #[tokio::test]
     async fn filesystem_store_survives_reopen_and_fences_epochs() {
@@ -198,13 +203,13 @@ mod tests {
     #[tokio::test]
     async fn concurrent_backend_instances_publish_complete_envelopes() {
         let directory = tempfile::tempdir().expect("directory");
-        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(16));
-        let mut writers = tokio::task::JoinSet::new();
+        let barrier = Arc::new(Barrier::new(16));
+        let mut writers = JoinSet::new();
         for _ in 0..16 {
             let backend = FileTopologyDescriptionBackend::new(directory.path())
                 .await
                 .expect("backend");
-            let start = std::sync::Arc::clone(&barrier);
+            let start = Arc::clone(&barrier);
             writers.spawn(async move {
                 start.wait().await;
                 backend
