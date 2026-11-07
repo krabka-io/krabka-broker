@@ -146,6 +146,34 @@ fn get_or_spawn<H: RegisteredActor, S: BuildHasher + Clone>(
     spawned
 }
 
+/// Replaces `closed`, the exited actor that `map` held for `group_id`, with a
+/// fresh one from `spawn`, hydrated with what `seed` returns, only while `map`
+/// still holds `closed`. A group removed since answers `None`, and an actor
+/// that replaced `closed` since is returned as it is.
+fn respawn_registered<H: RegisteredActor, S: BuildHasher + Clone>(
+    map: &DashMap<String, Arc<H>, S>,
+    group_id: &str,
+    closed: &Arc<H>,
+    spawn: impl FnOnce() -> H,
+    seed: impl FnOnce() -> Option<H::Seed>,
+) -> Option<Arc<H>> {
+    let respawned = match map.entry(group_id.into()) {
+        Entry::Vacant(_) => return None,
+        Entry::Occupied(entry) if !Arc::ptr_eq(entry.get(), closed) => {
+            return Some(Arc::clone(entry.get()));
+        }
+        Entry::Occupied(mut entry) => {
+            let respawned = Arc::new(spawn());
+            entry.insert(Arc::clone(&respawned));
+            respawned
+        }
+    };
+    if let Some(seed) = seed() {
+        let _ = respawned.try_seed(seed);
+    }
+    Some(respawned)
+}
+
 /// The `GROUP_ID_NOT_FOUND` message of a `ConsumerGroupHeartbeat` that names a
 /// group that does not exist: Kafka's `getOrMaybeCreateConsumerGroup` says
 /// `Consumer group <id> not found.`, and `consumerGroupLeave` reaches the
@@ -316,25 +344,19 @@ impl GroupCoordinator {
         group_id: &str,
         closed: &Arc<StreamsGroupActorHandle>,
     ) -> Option<Arc<StreamsGroupActorHandle>> {
-        let respawned = match self.streams_groups.entry(group_id.into()) {
-            Entry::Vacant(_) => return None,
-            Entry::Occupied(entry) if !Arc::ptr_eq(entry.get(), closed) => {
-                return Some(Arc::clone(entry.get()));
-            }
-            Entry::Occupied(mut entry) => {
-                let respawned = Arc::new(StreamsGroupActorHandle::spawn(
+        respawn_registered(
+            &self.streams_groups,
+            group_id,
+            closed,
+            || {
+                StreamsGroupActorHandle::spawn(
                     group_id.into(),
                     Arc::clone(&self.streams_config),
                     Arc::clone(self),
-                ));
-                entry.insert(Arc::clone(&respawned));
-                respawned
-            }
-        };
-        if let Some(seed) = self.cached_streams_seed(group_id) {
-            let _ = respawned.tx.try_send(StreamsGroupActorMessage::Seed(seed));
-        }
-        Some(respawned)
+                )
+            },
+            || self.cached_streams_seed(group_id),
+        )
     }
 
     /// Snapshot the ids of every live streams group, per KIP-1071.
@@ -680,12 +702,20 @@ mod tests {
         coord.shutdown_all().await;
     }
 
-    /// A registry entry that records every seed it is handed, standing in for
-    /// an actor handle so a test can choose when it reads as closed.
+    /// A message that a [`FakeActor`] received.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Received {
+        Seed(u32),
+        Request,
+    }
+
+    /// A registry entry that records every message it is handed, in order,
+    /// standing in for an actor handle so a test can choose when it reads as
+    /// closed.
     #[derive(Debug, Default)]
     struct FakeActor {
         closed: AtomicBool,
-        seeds: Mutex<Vec<u32>>,
+        received: Mutex<Vec<Received>>,
     }
 
     impl FakeActor {
@@ -696,7 +726,25 @@ mod tests {
             }
         }
 
-        fn seeds(&self) -> Vec<u32> { self.seeds.lock().expect("seeds lock").clone() }
+        fn received(&self) -> Vec<Received> { self.received.lock().expect("received lock").clone() }
+
+        fn seeds(&self) -> Vec<u32> {
+            self.received()
+                .into_iter()
+                .filter_map(|received| match received {
+                    Received::Seed(seed) => Some(seed),
+                    Received::Request => None,
+                })
+                .collect()
+        }
+
+        /// Hands the actor a request, as a heartbeat or a delete does.
+        fn request(&self) {
+            self.received
+                .lock()
+                .expect("received lock")
+                .push(Received::Request);
+        }
     }
 
     impl RegisteredActor for FakeActor {
@@ -705,7 +753,10 @@ mod tests {
         fn is_closed(&self) -> bool { self.closed.load(Ordering::SeqCst) }
 
         fn try_seed(&self, seed: u32) -> Result<(), TrySendError<()>> {
-            self.seeds.lock().expect("seeds lock").push(seed);
+            self.received
+                .lock()
+                .expect("received lock")
+                .push(Received::Seed(seed));
             Ok(())
         }
     }
