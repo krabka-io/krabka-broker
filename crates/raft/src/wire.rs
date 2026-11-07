@@ -62,10 +62,53 @@ const NO_SNAPSHOT: i64 = -1;
 /// not-leader or metadata-validation.
 pub const API_KEY_SUBMIT_CHANGE: i16 = PrivateRpc::SubmitChange.api_key();
 
-/// `KrabkaSubmitChangeResponse::error_code`: the leader refused a
-/// compare-and-set until its uncommitted tail commits. The forwarding node
-/// turns it back into [`crate::RaftError::UncommittedTail`].
-pub const SUBMIT_CHANGE_UNCOMMITTED_TAIL: i16 = 4;
+/// The `error_code` of a [`KrabkaSubmitChangeResponse`], which answers a
+/// forwarded `SubmitChange` and a forwarded delegation-token mutation alike.
+///
+/// The discriminants are the wire values; a 1.x receiver reads every one of
+/// them, so none may change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i16)]
+pub enum SubmitChangeCode {
+    /// The change was applied.
+    Applied = 0,
+    /// The responder is not the leader; consult `leader_hint`.
+    NotLeader = 1,
+    /// Metadata validation rejected the records. The leader also answers it
+    /// for a body it could not decode.
+    Rejected = 2,
+    /// Any other engine failure.
+    Failed = 3,
+    /// The leader refused a compare-and-set until its uncommitted tail
+    /// commits. The forwarding node turns it back into
+    /// [`crate::RaftError::UncommittedTail`].
+    UncommittedTail = 4,
+    /// The connection principal lacks `ClusterAction` on the cluster.
+    ClusterAuthorizationFailed = PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
+    /// The receiver does not implement the request's version.
+    UnsupportedVersion = PRIVATE_UNSUPPORTED_VERSION,
+}
+
+impl SubmitChangeCode {
+    /// The wire value of this code.
+    #[must_use]
+    pub const fn to_i16(self) -> i16 { self as i16 }
+
+    /// The code a wire value names. A value no variant names reads as
+    /// [`Self::NotLeader`], so the forwarding node retries elsewhere.
+    #[must_use]
+    pub const fn from_i16(code: i16) -> Self {
+        match code {
+            0 => Self::Applied,
+            2 => Self::Rejected,
+            3 => Self::Failed,
+            4 => Self::UncommittedTail,
+            PRIVATE_CLUSTER_AUTHORIZATION_FAILED => Self::ClusterAuthorizationFailed,
+            PRIVATE_UNSUPPORTED_VERSION => Self::UnsupportedVersion,
+            _ => Self::NotLeader,
+        }
+    }
+}
 
 /// The `error_code` of a krabka-private response when the connection
 /// principal lacks `ClusterAction` on the cluster. It is Kafka's
@@ -229,9 +272,7 @@ impl KrabkaSubmitChangeRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KrabkaSubmitChangeResponse {
-    /// 0 means success. Any other value is an opaque transport-level error
-    /// code: 1 is not leader, 2 is metadata validation, 3 is other, and 4
-    /// ([`SUBMIT_CHANGE_UNCOMMITTED_TAIL`]) is an uncommitted leader tail.
+    /// The wire value of a [`SubmitChangeCode`]. 0 means success.
     pub error_code: i16,
     /// The leader id the responder believes is current, when the responder
     /// cannot apply the change itself. -1 means "unknown".
@@ -411,6 +452,33 @@ impl KrabkaMetadataFetchResponse {
 mod tests {
     use {super::*, assert2::check, std::fmt};
 
+    /// Each `SubmitChangeCode` is the wire value a 1.x peer sends and reads,
+    /// and reads back as itself.
+    #[yare::parameterized(
+        applied = { SubmitChangeCode::Applied, 0 },
+        not_leader = { SubmitChangeCode::NotLeader, 1 },
+        rejected = { SubmitChangeCode::Rejected, 2 },
+        failed = { SubmitChangeCode::Failed, 3 },
+        uncommitted_tail = { SubmitChangeCode::UncommittedTail, 4 },
+        cluster_authorization_failed = { SubmitChangeCode::ClusterAuthorizationFailed, 31 },
+        unsupported_version = { SubmitChangeCode::UnsupportedVersion, 35 },
+    )]
+    fn a_submit_change_code_round_trips_its_wire_value(code: SubmitChangeCode, wire: i16) {
+        check!((code.to_i16(), SubmitChangeCode::from_i16(wire)) == (wire, code));
+    }
+
+    /// A wire value no code names reads as `NotLeader`, as the forwarding
+    /// node read it before the codes had names.
+    #[yare::parameterized(
+        negative = { -1 },
+        between = { 5 },
+        kafka_not_controller = { 41 },
+        max = { i16::MAX },
+    )]
+    fn an_unknown_submit_change_code_reads_as_not_leader(wire: i16) {
+        check!(SubmitChangeCode::from_i16(wire) == SubmitChangeCode::NotLeader);
+    }
+
     /// The v0 `SubmitChange` request body that [`submit_request`] encodes to.
     const SUBMIT_REQUEST_V0: &[u8] = &[0, 0, 0, 3, 1, 2, 3];
 
@@ -444,7 +512,7 @@ mod tests {
 
     fn submit_response() -> KrabkaSubmitChangeResponse {
         KrabkaSubmitChangeResponse {
-            error_code: SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+            error_code: SubmitChangeCode::UncommittedTail.to_i16(),
             leader_hint: 3,
             result: Bytes::from_static(b"ok"),
         }

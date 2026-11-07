@@ -12,8 +12,7 @@ use {
         types::{NodeId, controller_endpoint_addr as endpoint_addr_from_endpoints},
         wire::{
             API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_SUBMIT_CHANGE, KrabkaSubmitChangeRequest,
-            KrabkaSubmitChangeResponse, PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
-            PRIVATE_UNSUPPORTED_VERSION, SUBMIT_CHANGE_UNCOMMITTED_TAIL, private_request_version,
+            KrabkaSubmitChangeResponse, SubmitChangeCode, private_request_version,
         },
     },
     krabka_metadata::{MetadataImage, MetadataRecord},
@@ -332,22 +331,23 @@ fn submit_change_frame(payload: Vec<u8>) -> Result<Vec<u8>, RaftError> {
 
 /// Decode a `KrabkaSubmitChangeResponse` from the leader's `resp_body` and map
 /// its transport `error_code` into the caller's `Result`:
-/// - `0` → applied (`Ok`).
-/// - `2` → the leader rejected the change
+/// - [`SubmitChangeCode::Applied`] → applied (`Ok`).
+/// - [`SubmitChangeCode::Rejected`] → the leader rejected the change
 ///   ([`RaftError::ForwardedChangeRejected`]). The leader sends this code for
 ///   any metadata validation failure and for a body it could not decode, and
 ///   the wire carries no reason, so it does not say that a topic exists.
-/// - [`crate::wire::SUBMIT_CHANGE_UNCOMMITTED_TAIL`] → the leader refused a
+/// - [`SubmitChangeCode::UncommittedTail`] → the leader refused a
 ///   compare-and-set until its tail commits ([`RaftError::UncommittedTail`]).
-/// - [`crate::wire::PRIVATE_CLUSTER_AUTHORIZATION_FAILED`] → the leader denied
+/// - [`SubmitChangeCode::ClusterAuthorizationFailed`] → the leader denied
 ///   `ClusterAction` to this node's principal
 ///   ([`RaftError::ClusterAuthorizationFailed`]).
-/// - [`crate::wire::PRIVATE_UNSUPPORTED_VERSION`] → the leader does not
+/// - [`SubmitChangeCode::UnsupportedVersion`] → the leader does not
 ///   implement `version`, the version of `api_key` this node sent
 ///   ([`RaftError::UnsupportedPrivateVersion`]). `krabka.version` negotiation
 ///   keeps a sender at a version every registered node serves, so only a peer
 ///   outside that agreement answers it.
-/// - anything else → collapse to `NotLeader` (`CreateTopics` maps that to the
+/// - [`SubmitChangeCode::NotLeader`], [`SubmitChangeCode::Failed`] and any
+///   value no code names → collapse to `NotLeader` (`CreateTopics` maps that to the
 ///   retryable `NOT_CONTROLLER`), preferring the response's `leader_hint` when
 ///   non-negative and falling back to the dialed `leader`.
 ///
@@ -363,18 +363,20 @@ pub fn translate_submit_change_response(
 ) -> Result<SubmitChangeResult, RaftError> {
     let mut cur: &[u8] = resp_body;
     let resp = KrabkaSubmitChangeResponse::decode_v0(&mut cur)?;
-    match resp.error_code {
-        0 => <serde_wincode::SerdeCompat<SubmitChangeResult> as wincode::Deserialize>::deserialize(
-            &resp.result,
-        )
-        .map_err(RaftError::from),
-        2 => Err(RaftError::ForwardedChangeRejected),
-        SUBMIT_CHANGE_UNCOMMITTED_TAIL => Err(RaftError::UncommittedTail),
-        PRIVATE_CLUSTER_AUTHORIZATION_FAILED => Err(RaftError::ClusterAuthorizationFailed),
-        PRIVATE_UNSUPPORTED_VERSION => {
+    match SubmitChangeCode::from_i16(resp.error_code) {
+        SubmitChangeCode::Applied => {
+            <serde_wincode::SerdeCompat<SubmitChangeResult> as wincode::Deserialize>::deserialize(
+                &resp.result,
+            )
+            .map_err(RaftError::from)
+        }
+        SubmitChangeCode::Rejected => Err(RaftError::ForwardedChangeRejected),
+        SubmitChangeCode::UncommittedTail => Err(RaftError::UncommittedTail),
+        SubmitChangeCode::ClusterAuthorizationFailed => Err(RaftError::ClusterAuthorizationFailed),
+        SubmitChangeCode::UnsupportedVersion => {
             Err(RaftError::UnsupportedPrivateVersion { api_key, version })
         }
-        _ => Err(RaftError::NotLeader {
+        SubmitChangeCode::NotLeader | SubmitChangeCode::Failed => Err(RaftError::NotLeader {
             current_leader: (resp.leader_hint >= 0)
                 .then(|| NodeId(u64::try_from(resp.leader_hint).unwrap_or(leader.0))),
         }),
@@ -397,7 +399,7 @@ mod tests {
             wire::{
                 API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
                 KrabkaSubmitChangeRequest, PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
-                PRIVATE_UNSUPPORTED_VERSION, SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+                PRIVATE_UNSUPPORTED_VERSION,
             },
         },
         assert2::check,
@@ -651,7 +653,7 @@ mod tests {
             SubmitResponseExpectation::ForwardedChangeRejected,
         },
         uncommitted_tail = {
-            SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+            4,
             -1,
             API_KEY_SUBMIT_CHANGE,
             0,
