@@ -8,7 +8,7 @@
 
 use {
     super::{
-        actor::{self, GroupActorHandle, GroupActorMessage, GroupKindTag},
+        actor::{GroupActorHandle, GroupActorMessage, GroupKindTag},
         group::CoordinatorGroup,
         group_coordinator::{GroupCoordinator, GroupType},
         seeds::{GroupSeed, ShareGroupSeed, StreamsGroupSeed},
@@ -16,7 +16,7 @@ use {
         streams::actor::{StreamsGroupActorHandle, StreamsGroupActorMessage},
     },
     dashmap::{DashMap, Entry},
-    std::{hash::BuildHasher, sync::Arc},
+    std::{convert::identity, hash::BuildHasher, sync::Arc},
     tokio::sync::mpsc::error::TrySendError,
 };
 
@@ -44,11 +44,12 @@ fn undelivered<T>(error: &TrySendError<T>) -> TrySendError<()> {
     }
 }
 
-/// What hydrates a respawned group actor: the cached state of a consumer
-/// group, or the respawn seed that the stopped actor left, which the fresh
-/// actor takes itself.
+/// What hydrates a group actor: the cached or replayed state of a consumer
+/// group, a classic group replayed at bootstrap, or the respawn seed that the
+/// stopped actor left, which the fresh actor takes itself.
 enum GroupActorSeed {
     Consumer(Box<GroupSeed>),
+    Classic(Box<CoordinatorGroup>),
     Respawn,
 }
 
@@ -61,6 +62,7 @@ impl RegisteredActor for GroupActorHandle {
         self.tx
             .try_send(match seed {
                 GroupActorSeed::Consumer(seed) => GroupActorMessage::Seed(*seed),
+                GroupActorSeed::Classic(group) => GroupActorMessage::ClassicSeed(group),
                 GroupActorSeed::Respawn => GroupActorMessage::Respawn,
             })
             .map_err(|error| undelivered(&error))
@@ -91,13 +93,19 @@ impl RegisteredActor for StreamsGroupActorHandle {
     }
 }
 
-/// The live actor that `map` holds for `group_id`, or a fresh one from
-/// `spawn` when the entry is absent or its actor has exited.
+/// What `map` holds for `group_id` when `kept` answers for it, or else a
+/// fresh actor from `spawn` registered in its place and answered through
+/// `spawned`.
 ///
-/// The entry guard is held from the live-or-closed decision until the fresh
+/// `kept` sees the registered actor, or `None` for an absent entry, and
+/// returns the answer that leaves the entry as it is, or `None` to replace
+/// it.
+///
+/// The entry guard is held from the keep-or-replace decision until the fresh
 /// actor is registered, so racing callers agree on one actor and only that
 /// caller spawns one. The fresh actor is hydrated with what `seed` returns
-/// before it is registered, so the seed is the first message it reads.
+/// before it is registered, so the seed is the first message it reads and a
+/// concurrent lookup that finds it queues behind the seed.
 ///
 /// The guard is a write lock on the shard of `map` that holds `group_id`,
 /// and the lock is not reentrant. So `seed`, which reads the seed caches, runs
@@ -105,45 +113,96 @@ impl RegisteredActor for StreamsGroupActorHandle {
 /// released. The seed is used only when the entry under the guard still holds
 /// the actor (or the absence) seen before `seed` ran. Otherwise another
 /// caller replaced it meanwhile, its actor may have made newer writes, and the
-/// lookup and `seed` run again. Under the guard run only an atomic
-/// `is_closed` read, `spawn`, a non-blocking `try_seed` and the insert. Every
-/// `spawn` this module passes clones `Arc`s, builds an mpsc channel and hands
-/// an `async fn` future, unpolled, to `tokio::spawn`. None of that touches a
-/// registry map, takes a lock a registry caller holds, blocks or awaits.
+/// lookup and `seed` run again. Under the guard run only `kept`, `spawn`, a
+/// non-blocking `try_seed` and the insert. Every `kept` this module passes
+/// reads `is_closed` atomically or compares pointers, and every `spawn` clones
+/// `Arc`s, builds an mpsc channel and hands an `async fn` future, unpolled, to
+/// `tokio::spawn`. None of that touches a registry map, takes a lock a
+/// registry caller holds, blocks or awaits.
+fn spawn_unless_kept<H: RegisteredActor, S: BuildHasher + Clone, R>(
+    map: &DashMap<String, Arc<H>, S>,
+    group_id: &str,
+    kept: impl Fn(Option<&Arc<H>>) -> Option<R>,
+    spawn: impl FnOnce() -> H,
+    seed: impl Fn() -> Option<H::Seed>,
+    spawned: impl FnOnce(Arc<H>) -> R,
+) -> R {
+    let (entry, cached) = loop {
+        let observed = map.get(group_id).map(|h| Arc::clone(h.value()));
+        if let Some(answer) = kept(observed.as_ref()) {
+            return answer;
+        }
+        let cached = seed();
+        let entry = map.entry(group_id.into());
+        let current = match &entry {
+            Entry::Occupied(entry) => Some(entry.get()),
+            Entry::Vacant(_) => None,
+        };
+        if let Some(answer) = kept(current) {
+            return answer;
+        }
+        let unchanged = match (current, &observed) {
+            (Some(current), Some(observed)) => Arc::ptr_eq(current, observed),
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+        };
+        if unchanged {
+            break (entry, cached);
+        }
+    };
+    let fresh = Arc::new(spawn());
+    let undelivered = cached.and_then(|cached| fresh.try_seed(cached).err());
+    entry.insert(Arc::clone(&fresh));
+    if let Some(error) = undelivered {
+        tracing::warn!(group_id, %error, "dropped the seed of a respawned group actor");
+    }
+    spawned(fresh)
+}
+
+/// The live actor that `map` holds for `group_id`, or a fresh one from
+/// `spawn`, hydrated with what `seed` returns, when the entry is absent or
+/// its actor has exited. See [`spawn_unless_kept`].
 fn get_or_spawn<H: RegisteredActor, S: BuildHasher + Clone>(
     map: &DashMap<String, Arc<H>, S>,
     group_id: &str,
     spawn: impl FnOnce() -> H,
     seed: impl Fn() -> Option<H::Seed>,
 ) -> Arc<H> {
-    let (entry, cached) = loop {
+    spawn_unless_kept(
+        map,
+        group_id,
         // Dead-actor detection: a closed mpsc sender means the actor exited
         // (typically after a log-write failure), and the entry is replaced.
-        let observed = match map.get(group_id) {
-            Some(h) if !h.value().is_closed() => return Arc::clone(h.value()),
-            found => found.map(|h| Arc::clone(h.value())),
-        };
-        let cached = seed();
-        let entry = map.entry(group_id.into());
-        let unchanged = match (&entry, &observed) {
-            (Entry::Occupied(entry), _) if !entry.get().is_closed() => {
-                return Arc::clone(entry.get());
-            }
-            (Entry::Occupied(entry), Some(observed)) => Arc::ptr_eq(entry.get(), observed),
-            (Entry::Vacant(_), None) => true,
-            (Entry::Occupied(_), None) | (Entry::Vacant(_), Some(_)) => false,
-        };
-        if unchanged {
-            break (entry, cached);
-        }
-    };
-    let spawned = Arc::new(spawn());
-    let undelivered = cached.and_then(|cached| spawned.try_seed(cached).err());
-    entry.insert(Arc::clone(&spawned));
-    if let Some(error) = undelivered {
-        tracing::warn!(group_id, %error, "dropped the seed of a respawned group actor");
-    }
-    spawned
+        |found| found.filter(|h| !h.is_closed()).cloned(),
+        spawn,
+        seed,
+        identity,
+    )
+}
+
+/// Replaces `closed`, the exited actor that `map` held for `group_id`, with a
+/// fresh one from `spawn`, hydrated with what `seed` returns, only while `map`
+/// still holds `closed`. A group removed since answers `None`, and an actor
+/// that replaced `closed` since is returned as it is. See
+/// [`spawn_unless_kept`].
+fn respawn_registered<H: RegisteredActor, S: BuildHasher + Clone>(
+    map: &DashMap<String, Arc<H>, S>,
+    group_id: &str,
+    closed: &Arc<H>,
+    spawn: impl FnOnce() -> H,
+    seed: impl Fn() -> Option<H::Seed>,
+) -> Option<Arc<H>> {
+    spawn_unless_kept(
+        map,
+        group_id,
+        |found| match found {
+            Some(found) if Arc::ptr_eq(found, closed) => None,
+            other => Some(other.cloned()),
+        },
+        spawn,
+        seed,
+        Some,
+    )
 }
 
 /// The `GROUP_ID_NOT_FOUND` message of a `ConsumerGroupHeartbeat` that names a
@@ -269,14 +328,16 @@ impl GroupCoordinator {
         get_or_spawn(
             &self.streams_groups,
             group_id,
-            || {
-                StreamsGroupActorHandle::spawn(
-                    group_id.into(),
-                    Arc::clone(&self.streams_config),
-                    Arc::clone(self),
-                )
-            },
+            || self.spawn_streams(group_id),
             || self.cached_streams_seed(group_id),
+        )
+    }
+
+    fn spawn_streams(self: &Arc<Self>, group_id: &str) -> StreamsGroupActorHandle {
+        StreamsGroupActorHandle::spawn(
+            group_id.into(),
+            Arc::clone(&self.streams_config),
+            Arc::clone(self),
         )
     }
 
@@ -316,25 +377,13 @@ impl GroupCoordinator {
         group_id: &str,
         closed: &Arc<StreamsGroupActorHandle>,
     ) -> Option<Arc<StreamsGroupActorHandle>> {
-        let respawned = match self.streams_groups.entry(group_id.into()) {
-            Entry::Vacant(_) => return None,
-            Entry::Occupied(entry) if !Arc::ptr_eq(entry.get(), closed) => {
-                return Some(Arc::clone(entry.get()));
-            }
-            Entry::Occupied(mut entry) => {
-                let respawned = Arc::new(StreamsGroupActorHandle::spawn(
-                    group_id.into(),
-                    Arc::clone(&self.streams_config),
-                    Arc::clone(self),
-                ));
-                entry.insert(Arc::clone(&respawned));
-                respawned
-            }
-        };
-        if let Some(seed) = self.cached_streams_seed(group_id) {
-            let _ = respawned.tx.try_send(StreamsGroupActorMessage::Seed(seed));
-        }
-        Some(respawned)
+        respawn_registered(
+            &self.streams_groups,
+            group_id,
+            closed,
+            || self.spawn_streams(group_id),
+            || self.cached_streams_seed(group_id),
+        )
     }
 
     /// Snapshot the ids of every live streams group, per KIP-1071.
@@ -397,32 +446,52 @@ impl GroupCoordinator {
     /// Spawn a classic actor seeded with a fully-replayed `Group` at
     /// bootstrap.
     pub fn seed_classic(self: &Arc<Self>, group_id: &str, group: Box<CoordinatorGroup>) {
-        let handle = self.get_or_create_classic(group_id);
-        let _ = handle.tx.try_send(GroupActorMessage::ClassicSeed(group));
+        seed_replayed(
+            group_id,
+            &self.get_or_create_classic(group_id),
+            GroupActorSeed::Classic(group),
+        );
     }
 
     pub fn finalize_bootstrap(self: &Arc<Self>) {
-        let group_ids: Vec<String> = self.seeds.iter().map(|e| e.key().clone()).collect();
-        for gid in group_ids {
-            if let Some((_, seed)) = self.seeds.remove(&gid) {
-                let handle = self.get_or_create_consumer(&gid);
-                let _ = handle.tx.try_send(actor::GroupActorMessage::Seed(seed));
-            }
+        drain_seeds(
+            &self.seeds,
+            |group_id| self.get_or_create_consumer(group_id),
+            |seed| GroupActorSeed::Consumer(Box::new(seed)),
+        );
+        drain_seeds(
+            &self.share_seeds,
+            |group_id| self.get_or_create_share(group_id),
+            identity,
+        );
+        drain_seeds(
+            &self.streams_seeds,
+            |group_id| self.get_or_create_streams(group_id),
+            identity,
+        );
+    }
+}
+
+/// Removes each seed that `seeds` holds and hands it, as `into_seed` wraps
+/// it, to the actor that `get_or_create` returns for its group.
+fn drain_seeds<T, H: RegisteredActor>(
+    seeds: &DashMap<String, T>,
+    get_or_create: impl Fn(&str) -> Arc<H>,
+    into_seed: impl Fn(T) -> H::Seed,
+) {
+    let group_ids: Vec<String> = seeds.iter().map(|e| e.key().clone()).collect();
+    for group_id in group_ids {
+        if let Some((_, seed)) = seeds.remove(&group_id) {
+            seed_replayed(&group_id, &get_or_create(&group_id), into_seed(seed));
         }
-        let share_ids: Vec<String> = self.share_seeds.iter().map(|e| e.key().clone()).collect();
-        for gid in share_ids {
-            if let Some((_, seed)) = self.share_seeds.remove(&gid) {
-                let handle = self.get_or_create_share(&gid);
-                let _ = handle.tx.try_send(ShareGroupActorMessage::Seed(seed));
-            }
-        }
-        let streams_ids: Vec<String> = self.streams_seeds.iter().map(|e| e.key().clone()).collect();
-        for gid in streams_ids {
-            if let Some((_, seed)) = self.streams_seeds.remove(&gid) {
-                let handle = self.get_or_create_streams(&gid);
-                let _ = handle.tx.try_send(StreamsGroupActorMessage::Seed(seed));
-            }
-        }
+    }
+}
+
+/// Hands `seed`, the replayed state of `group_id`, to its actor `handle`, and
+/// logs a seed that a full or closed mailbox dropped.
+fn seed_replayed<H: RegisteredActor>(group_id: &str, handle: &Arc<H>, seed: H::Seed) {
+    if let Err(error) = handle.try_seed(seed) {
+        tracing::warn!(group_id, %error, "dropped the replayed seed of a group actor");
     }
 }
 
@@ -538,6 +607,59 @@ mod tests {
         coord.shutdown_all().await;
     }
 
+    /// Sends the request that `message` builds down `tx` and waits for its
+    /// answer.
+    async fn ask<M, T>(tx: &mpsc::Sender<M>, message: impl FnOnce(oneshot::Sender<T>) -> M) -> T {
+        let (reply, answer) = oneshot::channel();
+        tx.send(message(reply)).await.expect("send the request");
+        answer.await.expect("an answer")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_finalized_bootstrap_hydrates_one_group_of_each_kind() {
+        let coord = make_coord();
+        coord.seeds.insert("consumer".into(), GroupSeed {
+            group_epoch: 7,
+            ..GroupSeed::default()
+        });
+        coord.share_seeds.insert("share".into(), ShareGroupSeed {
+            group_epoch: 17,
+            ..ShareGroupSeed::default()
+        });
+        coord
+            .streams_seeds
+            .insert("streams".into(), StreamsGroupSeed {
+                group_epoch: 27,
+                ..StreamsGroupSeed::default()
+            });
+
+        coord.finalize_bootstrap();
+
+        let consumer = coord.find("consumer").expect("the consumer actor");
+        let share = coord.find_share("share").expect("the share actor");
+        let streams = coord.find_streams("streams").expect("the streams actor");
+        let epochs = (
+            ask(&consumer.tx, |reply| GroupActorMessage::Describe { reply })
+                .await
+                .group_epoch,
+            ask(&share.tx, |reply| ShareGroupActorMessage::Describe {
+                reply,
+            })
+            .await
+            .group_epoch,
+            ask(&streams.tx, |reply| StreamsGroupActorMessage::Describe {
+                reply,
+            })
+            .await
+            .group_epoch,
+        );
+        check!(coord.seeds.is_empty());
+        check!(coord.share_seeds.is_empty());
+        check!(coord.streams_seeds.is_empty());
+        assert!(epochs == (7, 17, 27));
+        coord.shutdown_all().await;
+    }
+
     /// Sends `Shutdown` down `tx` and waits until the actor has exited and
     /// closed its mailbox, as an actor does after a failed log write.
     async fn stop_actor<M>(tx: &mpsc::Sender<M>, shutdown: impl FnOnce(oneshot::Sender<()>) -> M) {
@@ -627,12 +749,20 @@ mod tests {
         coord.shutdown_all().await;
     }
 
-    /// A registry entry that records every seed it is handed, standing in for
-    /// an actor handle so a test can choose when it reads as closed.
+    /// A message that a [`FakeActor`] received.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Received {
+        Seed(u32),
+        Request,
+    }
+
+    /// A registry entry that records every message it is handed, in order,
+    /// standing in for an actor handle so a test can choose when it reads as
+    /// closed.
     #[derive(Debug, Default)]
     struct FakeActor {
         closed: AtomicBool,
-        seeds: Mutex<Vec<u32>>,
+        received: Mutex<Vec<Received>>,
     }
 
     impl FakeActor {
@@ -643,7 +773,25 @@ mod tests {
             }
         }
 
-        fn seeds(&self) -> Vec<u32> { self.seeds.lock().expect("seeds lock").clone() }
+        fn received(&self) -> Vec<Received> { self.received.lock().expect("received lock").clone() }
+
+        fn seeds(&self) -> Vec<u32> {
+            self.received()
+                .into_iter()
+                .filter_map(|received| match received {
+                    Received::Seed(seed) => Some(seed),
+                    Received::Request => None,
+                })
+                .collect()
+        }
+
+        /// Hands the actor a request, as a heartbeat or a delete does.
+        fn request(&self) {
+            self.received
+                .lock()
+                .expect("received lock")
+                .push(Received::Request);
+        }
     }
 
     impl RegisteredActor for FakeActor {
@@ -652,7 +800,10 @@ mod tests {
         fn is_closed(&self) -> bool { self.closed.load(Ordering::SeqCst) }
 
         fn try_seed(&self, seed: u32) -> Result<(), TrySendError<()>> {
-            self.seeds.lock().expect("seeds lock").push(seed);
+            self.received
+                .lock()
+                .expect("received lock")
+                .push(Received::Seed(seed));
             Ok(())
         }
     }
@@ -717,6 +868,28 @@ mod tests {
                 .is_some_and(|r| Arc::ptr_eq(r.value(), &answer))
         );
         assert!(answer.seeds() == vec![2]);
+    }
+
+    /// A lookup that runs while a closed actor is respawned, as a heartbeat or
+    /// a delete on another task may, can be handed the fresh actor only once
+    /// that actor holds its seed, so the seed is the first message it reads.
+    #[test]
+    fn a_respawned_actor_reads_its_seed_before_a_concurrent_lookups_request() {
+        let map = DashMap::new();
+        let closed = Arc::new(FakeActor::closed());
+        map.insert("g".to_owned(), Arc::clone(&closed));
+        let seed = || {
+            if let Some(found) = map.get("g") {
+                found.value().request();
+            }
+            Some(7)
+        };
+
+        let fresh = respawn_registered(&map, "g", &closed, FakeActor::default, seed)
+            .expect("a respawned actor");
+
+        check!(map.get("g").is_some_and(|r| Arc::ptr_eq(r.value(), &fresh)));
+        assert!(fresh.received() == vec![Received::Seed(7)]);
     }
 
     /// A hasher that sends every key to the same `DashMap` shard, so a test
