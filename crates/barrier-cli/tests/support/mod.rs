@@ -339,8 +339,12 @@ impl Operator {
 
     /// Describe one group.
     pub async fn describe(&self, group: &str) -> Transcript {
-        self.run(&["describe".to_owned(), "--group".to_owned(), group.to_owned()])
-            .await
+        self.run(&[
+            "describe".to_owned(),
+            "--group".to_owned(),
+            group.to_owned(),
+        ])
+        .await
     }
 
     /// Describe every group.

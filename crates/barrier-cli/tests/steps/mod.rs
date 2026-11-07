@@ -28,7 +28,12 @@ pub struct BarrierScenario {
 
 impl BarrierScenario {
     /// Create `topic` with `partitions` partitions, once.
-    pub fn create_topic(&mut self, runtime: &TokioMultiThreadContext, topic: &str, partitions: i32) {
+    pub fn create_topic(
+        &mut self,
+        runtime: &TokioMultiThreadContext,
+        topic: &str,
+        partitions: i32,
+    ) {
         let cluster = self.cluster.get(runtime);
         runtime.block_on(cluster.create_topic(topic, partitions));
         self.topics.insert(topic.to_owned());
@@ -79,7 +84,7 @@ pub fn barrier() -> BarrierScenario {
     }
 }
 
-#[given("the {topic} topic has {partitions:i32} partitions")]
+#[given("the {topic} topic has {partitions} partitions")]
 fn topic_has_partitions(
     barrier: &mut BarrierScenario,
     #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
@@ -125,7 +130,7 @@ fn cut_once(
     barrier.cut_group(runtime, &topic, None, 1);
 }
 
-#[given("a barrier group over the {topic} topic has been cut {times:usize} times")]
+#[given("a barrier group over the {topic} topic has been cut {times} times")]
 fn cut_times(
     barrier: &mut BarrierScenario,
     #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
@@ -161,11 +166,7 @@ fn list(
     #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
 ) {
     let cluster = barrier.cluster.get(runtime);
-    let transcript = runtime.block_on(
-        cluster
-            .operator()
-            .list(CutQuery::builder().build()),
-    );
+    let transcript = runtime.block_on(cluster.operator().list(CutQuery::builder().build()));
     barrier.transcript.set(transcript);
 }
 
@@ -175,8 +176,5 @@ fn refused_as_unknown(barrier: &BarrierScenario) {
     let transcript = barrier.transcript.get();
     assert2::check!(transcript.exit == 1, "{transcript:?}");
     assert2::check!(transcript.stdout.is_empty(), "{transcript:?}");
-    assert2::check!(
-        transcript.stderr.starts_with("error 91"),
-        "{transcript:?}"
-    );
+    assert2::check!(transcript.stderr.starts_with("error 91"), "{transcript:?}");
 }
