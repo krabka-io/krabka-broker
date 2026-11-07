@@ -282,7 +282,7 @@ mod tests {
         rate.record(3_000.0, 5_000);
 
         let measured = rate.measure(5_000);
-        check!((measured - want).abs() < 1e-9, "{measured}");
+        check!((measured - want).abs() < 1.0e-9, "{measured}");
     }
 
     /// `SampledStat` keeps `samples + 1` slots. One byte a second for 13
@@ -299,7 +299,7 @@ mod tests {
         check!(rate.samples.len() == 12);
         check!(rate.current == 0);
         let measured = rate.measure(12_000);
-        check!((measured - 1.1).abs() < 1e-9, "{measured}");
+        check!((measured - 1.1).abs() < 1.0e-9, "{measured}");
     }
 
     /// A quota checked just before each one-second record at the bound reads
