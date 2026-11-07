@@ -48,7 +48,9 @@ pub fn code_name(code: i16) -> String {
         codes::BREAK_GLASS_APPROVAL_REQUIRED => {
             Some("no approved break-glass proposal covers this")
         }
-        codes::BREAK_GLASS_DUPLICATE_APPROVER => Some("this principal already approved"),
+        codes::BREAK_GLASS_DUPLICATE_APPROVER => {
+            Some("this principal proposed the action or already approved it")
+        }
         codes::BREAK_GLASS_NOT_AN_APPROVER => Some("this principal is not a configured approver"),
         codes::OPERATOR_SIGNATURE_INVALID => Some("the operator signature did not verify"),
         codes::OPERATOR_SIGNATURE_REQUIRED => Some("this action needs an operator signature"),

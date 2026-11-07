@@ -14,17 +14,17 @@ def _dep(name, version, kind = None):
 _VERSIONS = {
     "krabka-broker": "1.0.0",
     "krabka-security": "0.8.0",
-    "krabka-sspi": "0.23.0",
-    "picky": "7.0.0-rc.26",
+    "picky": "7.0.0-rc.27",
     "rsa": "0.10.0-rc.18",
+    "sspi": "0.23.1",
 }
 
 _EDGES = {
     "krabka-broker": [("krabka-security", None)],
-    "krabka-security": [("krabka-sspi", None)],
-    "krabka-sspi": [("picky", None), ("rsa", None)],
+    "krabka-security": [("sspi", None)],
     "picky": [("rsa", None)],
     "rsa": [],
+    "sspi": [("picky", None), ("rsa", None)],
 }
 
 def _metadata(versions = _VERSIONS, edges = _EDGES, extra = []):
@@ -55,7 +55,7 @@ def _test_the_reviewed_graph_has_no_problems(_ctx):
 def _test_normal_parents_reads_normal_edges_only(_ctx):
     edges = _with(_EDGES, "krabka-broker", [("krabka-security", None), ("rsa", "dev")])
     parents = normal_parents(_metadata(edges = edges))
-    check_eq("rsa", parents[_id("rsa", "0.10.0-rc.18")], ["krabka-sspi", "picky"])
+    check_eq("rsa", parents[_id("rsa", "0.10.0-rc.18")], ["picky", "sspi"])
     check_eq("broker", parents[_id("krabka-broker", "1.0.0")], [])
 
 def _test_a_dev_or_build_parent_is_not_a_new_path(_ctx):
@@ -69,8 +69,8 @@ def _test_a_dev_or_build_parent_is_not_a_new_path(_ctx):
 def _test_an_explicit_normal_kind_is_a_normal_edge(_ctx):
     edges = _with(_EDGES, "krabka-broker", [("krabka-security", None), ("rsa", "normal")])
     check_eq("problems", problems(_metadata(edges = edges)), [
-        "rsa parent set changed from reviewed [krabka-sspi, picky] to " +
-        "[krabka-broker, krabka-sspi, picky]; review RUSTSEC-2023-0071 reachability",
+        "rsa parent set changed from reviewed [picky, sspi] to " +
+        "[krabka-broker, picky, sspi]; review RUSTSEC-2023-0071 reachability",
     ])
 
 def _test_a_version_change_is_reported(_ctx):
@@ -87,23 +87,23 @@ def _test_a_security_crate_version_change_is_reported(_ctx):
     ])
 
 def _test_a_new_rsa_parent_is_reported(_ctx):
-    edges = _with(_EDGES, "krabka-security", [("krabka-sspi", None), ("rsa", None)])
+    edges = _with(_EDGES, "krabka-security", [("sspi", None), ("rsa", None)])
     check_eq("problems", problems(_metadata(edges = edges)), [
-        "rsa parent set changed from reviewed [krabka-sspi, picky] to " +
-        "[krabka-security, krabka-sspi, picky]; review RUSTSEC-2023-0071 reachability",
+        "rsa parent set changed from reviewed [picky, sspi] to " +
+        "[krabka-security, picky, sspi]; review RUSTSEC-2023-0071 reachability",
     ])
 
 def _test_a_new_sspi_parent_is_reported(_ctx):
-    edges = _with(_EDGES, "krabka-broker", [("krabka-security", None), ("krabka-sspi", None)])
+    edges = _with(_EDGES, "krabka-broker", [("krabka-security", None), ("sspi", None)])
     check_eq("problems", problems(_metadata(edges = edges)), [
-        "krabka-sspi parent set changed from reviewed [krabka-security] to " +
+        "sspi parent set changed from reviewed [krabka-security] to " +
         "[krabka-broker, krabka-security]; review RUSTSEC-2023-0071 reachability",
     ])
 
 def _test_a_lost_parent_is_reported(_ctx):
-    edges = _with(_EDGES, "krabka-sspi", [("picky", None)])
+    edges = _with(_EDGES, "sspi", [("picky", None)])
     check_eq("problems", problems(_metadata(edges = edges)), [
-        "rsa parent set changed from reviewed [krabka-sspi, picky] to " +
+        "rsa parent set changed from reviewed [picky, sspi] to " +
         "[picky]; review RUSTSEC-2023-0071 reachability",
     ])
 
@@ -115,7 +115,7 @@ def _test_a_second_copy_is_reported(_ctx):
 
 def _test_a_removed_package_asks_to_remove_the_exception(_ctx):
     versions = _without(_VERSIONS, "rsa")
-    edges = _with(_with(_EDGES, "krabka-sspi", [("picky", None)]), "picky", [])
+    edges = _with(_with(_EDGES, "sspi", [("picky", None)]), "picky", [])
     check_eq("problems", problems(_metadata(versions = versions, edges = edges)), [
         "review and remove the RUSTSEC-2023-0071 exception; absent packages: rsa",
     ])
