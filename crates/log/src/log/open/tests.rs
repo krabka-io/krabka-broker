@@ -16,7 +16,7 @@ use {
         },
         log_start_offset_checkpoint::{read, write},
         name::producer_snapshot_path,
-        producer_snapshot::LoadedSnapshot,
+        producer_snapshot::{LoadedSnapshot, ProducerSnapshotEntry},
         test_support::open_log,
     },
     assert2::{assert, check},

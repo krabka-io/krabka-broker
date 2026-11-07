@@ -6,9 +6,20 @@
 //! and the stamp indexes depend on stays on [`Log`](super::Log).
 
 use {
-    super::verification::VerificationState,
-    crate::producer_snapshot::{ProducerBatchMetadata, ProducerSnapshotEntry},
-    krabka_ids::ProducerId,
+    super::{
+        control::{
+            TransactionMarkerFlags, batch_control_marker_coordinator_epoch,
+            transaction_marker_flags,
+        },
+        open::{DataProducerAppend, ProducerTail},
+        verification::VerificationState,
+    },
+    crate::{
+        error::LogError,
+        producer_snapshot::{ProducerBatchMetadata, ProducerSnapshotEntry},
+    },
+    krabka_ids::{Offset, ProducerId},
+    krabka_protocol::records::RecordBatch,
     std::collections::{HashMap, VecDeque},
 };
 
@@ -59,5 +70,81 @@ impl ProducerStateManager {
         }
         self.verifications
             .retain(|_, state| now_ms.saturating_sub(state.created_ms) < expiration_ms);
+    }
+
+    /// Record a control batch of `producer_id`, which is not negative, in
+    /// its entry. An end marker also closes the producer's transaction and
+    /// takes its coordinator epoch.
+    ///
+    /// # Errors
+    /// Returns the marker decoding error. The entry already holds the
+    /// marker's producer epoch and timestamp by then.
+    pub(super) fn apply_marker(
+        &mut self,
+        producer_id: ProducerId,
+        batch: &RecordBatch,
+    ) -> Result<(), LogError> {
+        let entry = self
+            .entries
+            .entry(producer_id)
+            .or_insert_with(|| ProducerSnapshotEntry::empty(producer_id, batch.producer_epoch));
+        if entry.producer_epoch != batch.producer_epoch {
+            // Kafka clears the retained data-batch metadata when an end
+            // marker advances the producer epoch (transaction version 2).
+            self.earlier_batches.remove(&producer_id);
+            entry.last_sequence = -1;
+            entry.last_offset = Offset(-1);
+            entry.offset_delta = 0;
+        }
+        entry.producer_epoch = batch.producer_epoch;
+        entry.timestamp = batch.max_timestamp;
+        let TransactionMarkerFlags {
+            is_abort,
+            is_commit,
+        } = transaction_marker_flags(batch)?;
+        if is_abort || is_commit {
+            entry.current_txn_first_offset = None;
+        }
+        if (is_abort || is_commit)
+            && let Some(epoch) = batch_control_marker_coordinator_epoch(batch)?
+        {
+            entry.coordinator_epoch = epoch;
+        }
+        Ok(())
+    }
+
+    /// Record one data batch in its producer's entry: `tail` is where the
+    /// batch ends, as `Log::data_producer_tail` computed it.
+    pub(super) fn apply_data_batch(&mut self, append: DataProducerAppend, tail: ProducerTail) {
+        let DataProducerAppend {
+            producer_id,
+            producer_epoch,
+            last_offset_delta,
+            base_offset,
+            timestamp,
+            is_transactional,
+            ..
+        } = append;
+        let ProducerTail {
+            last_sequence,
+            last_offset,
+        } = tail;
+        let entry = self
+            .entries
+            .entry(producer_id)
+            .or_insert_with(|| ProducerSnapshotEntry::empty(producer_id, producer_epoch));
+        let mut earlier = self.earlier_batches.remove(&producer_id);
+        entry.add_data_batch(&mut earlier, producer_epoch, ProducerBatchMetadata {
+            last_sequence,
+            last_offset,
+            offset_delta: last_offset_delta,
+            timestamp,
+        });
+        if let Some(earlier) = earlier {
+            self.earlier_batches.insert(producer_id, earlier);
+        }
+        if is_transactional && entry.current_txn_first_offset.is_none() {
+            entry.current_txn_first_offset = Some(base_offset);
+        }
     }
 }

@@ -11,8 +11,7 @@ use {
     super::{
         Log,
         control::{
-            ControlBatchKind, TransactionMarkerFlags, batch_control_marker_coordinator_epoch,
-            control_batch_kind, transaction_marker_flags,
+            ControlBatchKind, TransactionMarkerFlags, control_batch_kind, transaction_marker_flags,
         },
         pending_transactions::PendingTransactions,
         producer_state::ProducerStateManager,
@@ -23,7 +22,7 @@ use {
         io::FileIo,
         leader_epoch_checkpoint::LeaderEpochCheckpoint,
         log_start_offset_checkpoint, name,
-        producer_snapshot::{self, LoadedSnapshot, ProducerBatchMetadata, ProducerSnapshotEntry},
+        producer_snapshot::{self, LoadedSnapshot},
         recovery::{deleted_orphan_recover, swap_orphan_recover},
         segment::Segment,
         stamp_index::OffsetRange,
@@ -553,34 +552,7 @@ impl Log {
             return Ok(());
         }
         if batch.attributes.is_control_batch() {
-            let entry = self
-                .producers
-                .entries
-                .entry(producer_id)
-                .or_insert_with(|| ProducerSnapshotEntry::empty(producer_id, batch.producer_epoch));
-            if entry.producer_epoch != batch.producer_epoch {
-                // Kafka clears the retained data-batch metadata when an end
-                // marker advances the producer epoch (transaction version 2).
-                self.producers.earlier_batches.remove(&producer_id);
-                entry.last_sequence = -1;
-                entry.last_offset = Offset(-1);
-                entry.offset_delta = 0;
-            }
-            entry.producer_epoch = batch.producer_epoch;
-            entry.timestamp = batch.max_timestamp;
-            let TransactionMarkerFlags {
-                is_abort,
-                is_commit,
-            } = transaction_marker_flags(batch)?;
-            if is_abort || is_commit {
-                entry.current_txn_first_offset = None;
-            }
-            if (is_abort || is_commit)
-                && let Some(epoch) = batch_control_marker_coordinator_epoch(batch)?
-            {
-                entry.coordinator_epoch = epoch;
-            }
-            return Ok(());
+            return self.producers.apply_marker(producer_id, batch);
         }
         self.update_data_producer_entry(DataProducerAppend {
             producer_id,
@@ -597,40 +569,16 @@ impl Log {
         &mut self,
         append: DataProducerAppend,
     ) -> Result<(), LogError> {
-        let DataProducerAppend {
-            producer_id,
-            producer_epoch,
-            base_sequence,
-            last_offset_delta,
-            base_offset,
-            timestamp,
-            is_transactional,
-        } = append;
-        let Some(ProducerTail {
-            last_sequence,
-            last_offset,
-        }) = Self::data_producer_tail(producer_id, base_sequence, last_offset_delta, base_offset)?
+        let Some(tail) = Self::data_producer_tail(
+            append.producer_id,
+            append.base_sequence,
+            append.last_offset_delta,
+            append.base_offset,
+        )?
         else {
             return Ok(());
         };
-        let entry = self
-            .producers
-            .entries
-            .entry(producer_id)
-            .or_insert_with(|| ProducerSnapshotEntry::empty(producer_id, producer_epoch));
-        let mut earlier = self.producers.earlier_batches.remove(&producer_id);
-        entry.add_data_batch(&mut earlier, producer_epoch, ProducerBatchMetadata {
-            last_sequence,
-            last_offset,
-            offset_delta: last_offset_delta,
-            timestamp,
-        });
-        if let Some(earlier) = earlier {
-            self.producers.earlier_batches.insert(producer_id, earlier);
-        }
-        if is_transactional && entry.current_txn_first_offset.is_none() {
-            entry.current_txn_first_offset = Some(base_offset);
-        }
+        self.producers.apply_data_batch(append, tail);
         Ok(())
     }
 
