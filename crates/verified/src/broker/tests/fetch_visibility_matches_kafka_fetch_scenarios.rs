@@ -1,5 +1,5 @@
 use {
-    super::{FetchVisibility, FetchWatermarks, fetch_visibility},
+    super::{FetchReader, FetchVisibility, FetchWatermarks, Isolation, fetch_visibility},
     rstest::fixture,
     rstest_bdd_macros::{given, scenarios, then, when},
 };
@@ -41,19 +41,18 @@ fn fetch_watermarks(
 
 #[when("a {reader} using {isolation} fetches offset {fetch_offset}")]
 fn fetch_offset(fetch: &mut FetchScenario, reader: String, isolation: String, fetch_offset: i64) {
-    let is_follower = match reader.as_str() {
-        "consumer" => false,
-        "follower" => true,
-        _ => panic!("unknown fetch reader: {reader}"),
-    };
-    let read_committed = match isolation.as_str() {
-        "read-committed" => true,
-        "read-uncommitted" => false,
+    let isolation = match isolation.as_str() {
+        "read-committed" => Isolation::ReadCommitted,
+        "read-uncommitted" => Isolation::ReadUncommitted,
         _ => panic!("unknown fetch isolation: {isolation}"),
     };
+    let reader = match reader.as_str() {
+        "consumer" => FetchReader::Consumer(isolation),
+        "follower" => FetchReader::Follower,
+        _ => panic!("unknown fetch reader: {reader}"),
+    };
     fetch.visibility = Some(fetch_visibility(
-        is_follower,
-        read_committed,
+        reader,
         fetch.watermarks.expect("fetch watermarks were given"),
         fetch_offset,
     ));

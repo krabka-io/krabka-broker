@@ -38,7 +38,7 @@ pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
             let mut responses = Vec::with_capacity(req.resources.len());
             let validate_only = req.validate_only;
             let mut audited: Vec<krabka_audit::AuditResource> = Vec::new();
-            let duplicate_flags = crate::handlers::alter_configs::duplicate_resource_flags(
+            let duplicate_flags = crate::handlers::config_alter::duplicate_resource_flags(
                 req.resources.iter(),
             );
             for (resource, is_duplicate) in req.resources.into_iter().zip(duplicate_flags) {

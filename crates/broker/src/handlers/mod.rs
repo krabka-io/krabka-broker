@@ -31,6 +31,7 @@ mod acl_test_support;
 
 mod acl_gates;
 mod admin_audit;
+mod config_alter;
 #[cfg(test)]
 mod controller_mutation_tests;
 mod coordinator_routing;
@@ -51,13 +52,6 @@ mod request_names;
 mod response_encoding;
 #[cfg(test)]
 mod stopped_actor_tests;
-
-pub fn map_partition_rows<T>(
-    indexes: impl Iterator<Item = i32>,
-    row: impl FnMut(i32) -> T,
-) -> Vec<T> {
-    indexes.map(row).collect()
-}
 mod submit_failure;
 
 pub use self::{
@@ -169,9 +163,8 @@ pub mod describe_producers;
 pub mod describe_quorum;
 // KIP-664 transaction introspection (api_key 65).
 pub mod describe_transactions;
-// KIP-966 paginated topic listing (api_key 75).
-// KIP-966: the eligible-leader-replica columns DescribeTopicPartitions
-// reports, read out of the metadata image.
+// KIP-966 paginated topic listing (api_key 75), with the eligible-leader-replica
+// columns read out of the metadata image.
 pub mod describe_topic_partitions;
 pub mod describe_user_scram_credentials;
 pub mod elect_leaders;
@@ -210,8 +203,8 @@ pub mod produce;
 // KIP-714 client-metrics push, paired with get_telemetry_subscriptions.
 pub mod push_telemetry;
 pub mod remove_raft_voter;
-// Kafka's `AbstractRequest.getErrorResponse` for every api key.
 pub mod renew_delegation_token;
+// Kafka's `AbstractRequest.getErrorResponse` for every api key.
 pub mod request_error;
 // KIP-932 ShareGroupDescribe (api_key 77), with a per-group Describe ACL gate.
 pub mod share_group_describe;

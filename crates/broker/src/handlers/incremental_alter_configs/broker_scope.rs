@@ -8,7 +8,7 @@
 //! live in [`crate::config_keys::broker_dynamic`].
 
 use {
-    super::{OP_APPEND, OP_DELETE, OP_SET, is_known_operation, topic_scope::merge_list_op},
+    super::{ConfigOperation, ListOperation, MergeOperation, topic_scope::merge_list_op},
     crate::{
         api_catalog::UnstableApiVersions,
         codes,
@@ -48,18 +48,17 @@ fn apply_operations(
     for cfg in &resource.configs {
         let name = cfg.name.as_str();
         let value = cfg.value.as_deref().unwrap_or_default();
-        match cfg.config_operation {
-            OP_SET => {
+        match ConfigOperation::from(cfg.config_operation).merge() {
+            MergeOperation::Set => {
                 props.insert(name.to_owned(), value.to_owned());
             }
-            OP_DELETE => {
+            MergeOperation::Delete => {
                 props.remove(name);
             }
-            operation => {
-                let verb = if operation == OP_APPEND {
-                    "append"
-                } else {
-                    "subtract"
+            MergeOperation::List(operation) => {
+                let verb = match operation {
+                    ListOperation::Append => "append",
+                    ListOperation::Subtract => "subtract",
                 };
                 match broker_key_kind(name, unstable) {
                     BrokerKeyKind::Unknown => {
@@ -96,7 +95,7 @@ fn unknown_operation_error(resource: &AlterConfigsResource) -> Result<(), (i16, 
     resource
         .configs
         .iter()
-        .find(|cfg| !is_known_operation(cfg.config_operation))
+        .find(|cfg| !ConfigOperation::from(cfg.config_operation).is_known())
         .map_or(Ok(()), |cfg| {
             Err((
                 codes::INVALID_REQUEST,
@@ -192,7 +191,11 @@ pub(super) fn preprocess_broker_resource(
     // Check only newly introduced directories. Existing stored values may be
     // stale here; their merge and wildcard exclusivity are controller checks.
     for config in &resource.configs {
-        if config.name == CORDONED_LOG_DIRS && matches!(config.config_operation, OP_SET | OP_APPEND)
+        if config.name == CORDONED_LOG_DIRS
+            && matches!(
+                ConfigOperation::from(config.config_operation),
+                ConfigOperation::Set | ConfigOperation::Append
+            )
         {
             let props = BTreeMap::from([(
                 CORDONED_LOG_DIRS.to_owned(),
@@ -215,11 +218,8 @@ mod tests {
         crate::{
             features::{ELR_VERSION, METADATA_VERSION},
             handlers::{
-                incremental_alter_configs::{
-                    OP_SUBTRACT,
-                    test_support::{
-                        make_del_cfg, make_image_with_broker, make_resource, make_set_cfg,
-                    },
+                incremental_alter_configs::test_support::{
+                    make_del_cfg, make_image_with_broker, make_resource, make_set_cfg,
                 },
                 test_support::broker_config_context,
             },
@@ -455,17 +455,27 @@ mod tests {
     /// (`List.remove(Object)`). The broker's `ConfigAdminManager`
     /// (`split` and Scala's `diff`) agrees on both.
     #[rstest::rstest]
-    #[case::append_with_a_trailing_comma(OP_APPEND, "delete", "compact,", "delete,compact")]
-    #[case::append_of_only_commas(OP_APPEND, "delete", ",", "delete")]
+    #[case::append_with_a_trailing_comma(
+        ConfigOperation::Append,
+        "delete",
+        "compact,",
+        "delete,compact"
+    )]
+    #[case::append_of_only_commas(ConfigOperation::Append, "delete", ",", "delete")]
     #[case::subtract_removes_one_occurrence(
-        OP_SUBTRACT,
+        ConfigOperation::Subtract,
         "delete,compact,delete",
         "delete",
         "compact,delete"
     )]
-    #[case::subtract_with_a_trailing_comma(OP_SUBTRACT, "delete,compact", "delete,", "compact")]
+    #[case::subtract_with_a_trailing_comma(
+        ConfigOperation::Subtract,
+        "delete,compact",
+        "delete,",
+        "compact"
+    )]
     fn a_broker_list_key_merges_as_kafkas_controller_does(
-        #[case] operation: i8,
+        #[case] operation: ConfigOperation,
         #[case] stored: &str,
         #[case] value: &str,
         #[case] expected: &str,
@@ -482,7 +492,7 @@ mod tests {
         );
         let resource = make_resource("", vec![AlterableConfig {
             name: key.into(),
-            config_operation: operation,
+            config_operation: operation.into(),
             value: Some(value.into()),
             ..Default::default()
         }]);

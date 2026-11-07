@@ -6,10 +6,7 @@
 pub use krabka_raft::BootstrapMode;
 use {
     krabka_units::{ByteSize, Time, days, gibibytes, hours, mebibytes, millis, minutes, secs},
-    std::{
-        num::NonZeroU64,
-        sync::{Arc, atomic::AtomicI64},
-    },
+    std::num::NonZeroU64,
 };
 
 mod break_glass;
@@ -21,6 +18,7 @@ mod kafka_static_keys;
 mod leader_rebalance;
 mod listener;
 mod log_storage;
+mod oauthbearer_jwks;
 mod offset_retention;
 pub mod page_cache_budget;
 mod record_decompression;
@@ -308,9 +306,3 @@ pub const DEFAULT_BREAK_GLASS_SIGNED_ACTIONS: &[&str] =
 /// Default cadence of the topic-backed RLMM snapshot flush. 60s,
 /// matching Kafka's `remote.log.metadata.snapshot.interval` default.
 pub const DEFAULT_RLMM_SNAPSHOT_INTERVAL: Time = minutes(1);
-
-/// A shared, zero-valued epoch-millisecond counter.
-///
-/// The OAUTHBEARER JWKS refresher stamps two of these, and the validator reads
-/// them through the same `Arc`.
-fn shared_epoch_ms() -> Arc<AtomicI64> { Arc::new(AtomicI64::new(0)) }

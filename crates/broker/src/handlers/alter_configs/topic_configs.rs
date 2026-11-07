@@ -16,8 +16,10 @@
 //! erase it.
 
 use {
-    super::finish_topic_overrides,
-    crate::{api_catalog::UnstableApiVersions, codes, config_keys, topic_policy::TopicPolicy},
+    crate::{
+        api_catalog::UnstableApiVersions, codes, config_keys,
+        handlers::config_alter::finish_topic_overrides, topic_policy::TopicPolicy,
+    },
     krabka_log::topic_name,
     krabka_metadata::{MetadataRecord, TopicConfigRecord},
     krabka_protocol::owned::alter_configs_request::AlterConfigsResource,

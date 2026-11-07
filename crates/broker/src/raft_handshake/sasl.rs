@@ -23,7 +23,10 @@ use {
                 handle_authenticate_gssapi, handle_authenticate_oauthbearer_with_jwks_cache,
                 handle_authenticate_plain, handle_authenticate_scram, handle_handshake,
             },
-            dispatch::sasl::{audit_principal, emit_authentication as emit_audit_authentication},
+            dispatch::sasl::{
+                audit_principal, emit_authentication as emit_audit_authentication,
+                unidentified_principal,
+            },
         },
         time_util::now_ms,
     },
@@ -121,13 +124,8 @@ fn emit_authentication(
     };
     // A refused exchange resolved no principal, so its row names no user and
     // carries the mechanism's own auth method instead.
-    let principal = principal.map_or_else(
-        || krabka_audit::AuditPrincipal {
-            name: String::new(),
-            auth_method: format!("{:?}", krabka_security::AuthMethod::from_sasl(mechanism)),
-        },
-        audit_principal,
-    );
+    let principal =
+        principal.map_or_else(|| unidentified_principal(Some(mechanism)), audit_principal);
     emit_audit_authentication(
         audit_log,
         peer,
@@ -268,8 +266,7 @@ pub(super) async fn run_inbound_sasl(
                             &req,
                             &mut auth,
                             &cfg.oauthbearer_validator,
-                            &cfg.oauthbearer_jwks_cache_generation,
-                            &cfg.oauthbearer_jwks_last_successful_fetch_ms,
+                            &cfg.oauthbearer_jwks_snapshot,
                             now_ms,
                             CONTROLLER_MAX_REAUTH,
                         )

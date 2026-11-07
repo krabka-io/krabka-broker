@@ -4,7 +4,7 @@
 //! record with the merged map.
 
 use {
-    super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT},
+    super::{ConfigOperation, ListOperation, topic_scope::not_a_list},
     crate::{client_metrics::config::validate, codes},
     krabka_metadata::{ClientMetricsConfigRecord, MetadataImage, MetadataRecord},
     krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource,
@@ -29,28 +29,25 @@ pub(super) fn client_metrics_records(
         .unwrap_or_default();
     let mut merged = current.clone();
     for cfg in &resource.configs {
-        match cfg.config_operation {
-            OP_SET => {
+        match ConfigOperation::from(cfg.config_operation) {
+            ConfigOperation::Set => {
                 merged.insert(cfg.name.clone(), cfg.value.clone().unwrap_or_default());
             }
-            OP_DELETE => {
+            ConfigOperation::Delete => {
                 merged.remove(&cfg.name);
             }
-            op => {
-                return Err((codes::INVALID_CONFIG, match op {
-                    OP_APPEND => format!(
-                        "Can't APPEND to key {} because its type is not LIST.",
-                        cfg.name
-                    ),
-                    OP_SUBTRACT => format!(
-                        "Can't SUBTRACT to key {} because its type is not LIST.",
-                        cfg.name
-                    ),
-                    op => format!(
+            ConfigOperation::Append => return Err(not_a_list(ListOperation::Append, &cfg.name)),
+            ConfigOperation::Subtract => {
+                return Err(not_a_list(ListOperation::Subtract, &cfg.name));
+            }
+            ConfigOperation::Unknown(op) => {
+                return Err((
+                    codes::INVALID_CONFIG,
+                    format!(
                         "config_operation={op} not supported for client-metrics key `{}`",
                         cfg.name
                     ),
-                }));
+                ));
             }
         }
     }
@@ -70,7 +67,7 @@ pub(super) fn client_metrics_records(
 #[cfg(test)]
 mod tests {
     use {
-        super::*, crate::handlers::describe_configs::RESOURCE_TYPE_CLIENT_METRICS, assert2::check,
+        super::*, crate::handlers::config_alter::ConfigResourceType, assert2::check,
         krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
         std::collections::BTreeMap,
     };
@@ -108,7 +105,7 @@ mod tests {
 
     fn run(name: &str, ops: &[Op<'_>]) -> Result<Vec<MetadataRecord>, (i16, String)> {
         let resource = AlterConfigsResource {
-            resource_type: RESOURCE_TYPE_CLIENT_METRICS,
+            resource_type: ConfigResourceType::ClientMetrics.to_wire(),
             resource_name: name.into(),
             configs: ops
                 .iter()
@@ -198,7 +195,7 @@ mod tests {
                 name: "interval with spaces is trimmed before parsing",
                 op: Op {
                     key: "interval.ms",
-                    operation: OP_SET,
+                    operation: ConfigOperation::Set.into(),
                     value: Some(" 1000 "),
                 },
                 expected: record(maplit::btreemap! {
@@ -210,7 +207,7 @@ mod tests {
                 name: "delete of a key with no value changes nothing",
                 op: Op {
                     key: "bogus",
-                    operation: OP_DELETE,
+                    operation: ConfigOperation::Delete.into(),
                     value: None,
                 },
                 expected: vec![],
@@ -219,7 +216,7 @@ mod tests {
                 name: "delete of a set key drops it",
                 op: Op {
                     key: "interval.ms",
-                    operation: OP_DELETE,
+                    operation: ConfigOperation::Delete.into(),
                     value: None,
                 },
                 expected: record(maplit::btreemap! {"metrics".to_owned() => "a.".to_owned()}),
@@ -228,7 +225,7 @@ mod tests {
                 name: "java lookahead pattern",
                 op: Op {
                     key: "match",
-                    operation: OP_SET,
+                    operation: ConfigOperation::Set.into(),
                     value: Some("client_id=(?!test).*"),
                 },
                 expected: record(maplit::btreemap! {
@@ -241,7 +238,7 @@ mod tests {
                 name: "java named group and backreference",
                 op: Op {
                     key: "match",
-                    operation: OP_SET,
+                    operation: ConfigOperation::Set.into(),
                     value: Some("client_id=(?<n>a)\\k<n>"),
                 },
                 expected: record(maplit::btreemap! {
@@ -260,7 +257,7 @@ mod tests {
     fn empty_subscription_name_is_an_invalid_request() {
         let result = run("", &[Op {
             key: "interval.ms",
-            operation: OP_SET,
+            operation: ConfigOperation::Set.into(),
             value: Some("60000"),
         }]);
         check!(

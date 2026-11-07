@@ -5,7 +5,10 @@
 #[krabka_macros::sendfile_cfg]
 use krabka_protocol::records::FileRegion;
 use {
-    super::{FetchWatermarks, VisibilityWindow, compute_visibility_window, plan::refused_read},
+    super::{
+        FetchWatermarks, VisibilityWindow, compute_visibility_window, fetch_reader,
+        plan::refused_read,
+    },
     crate::{
         blocking::{run_blocking, run_page_cache_io},
         codes,
@@ -682,8 +685,7 @@ fn plan_read(
         partition.delivery.now_ms(),
     );
     let window = compute_visibility_window(
-        follower_fetch,
-        read_committed,
+        fetch_reader(follower_fetch, read_committed),
         FetchWatermarks {
             log_start: local_log_start,
             hw: high_watermark,

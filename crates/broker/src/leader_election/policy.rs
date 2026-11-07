@@ -29,27 +29,79 @@ pub struct FailoverPlan {
     pub unavailable: Vec<(String, i32)>,
 }
 
-/// Push the `PartitionRecord` that moves `pr` to `leader` and `isr` at the
-/// given epochs, every other field carried over from `pr`. When `recovering`,
-/// a `PartitionRecoveryRecord` marking the new leader `RECOVERING` follows it,
-/// which is what an unclean election writes.
+/// The partition epoch and leader epoch a partition change writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NextEpochs {
+    /// The `PartitionRecord.partition_epoch` the change writes.
+    pub partition: i32,
+    /// The `PartitionRecord.leader_epoch` the change writes.
+    pub leader: LeaderEpoch,
+}
+
+/// Whether the leader a [`PartitionChange`] installs must recover its log
+/// before it serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaderRecovery {
+    /// The leader serves as soon as it is elected.
+    Recovered,
+    /// The leader is marked `RECOVERING`, which is what an unclean election
+    /// writes.
+    Recovering,
+}
+
+/// The new leadership a partition change writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartitionChange {
+    /// The leader the change installs.
+    pub leader: NodeId,
+    /// The ISR the change installs.
+    pub isr: Vec<NodeId>,
+    /// The epochs the change writes.
+    pub epochs: NextEpochs,
+    /// Whether `leader` must recover first.
+    pub recovery: LeaderRecovery,
+}
+
+impl PartitionChange {
+    /// The change an election of `leader` with `isr` at `epochs` writes. An
+    /// unclean election's leader recovers first; a clean one's does not.
+    pub fn election(leader: NodeId, isr: Vec<NodeId>, epochs: NextEpochs, unclean: bool) -> Self {
+        let recovery = if unclean {
+            LeaderRecovery::Recovering
+        } else {
+            LeaderRecovery::Recovered
+        };
+        Self {
+            leader,
+            isr,
+            epochs,
+            recovery,
+        }
+    }
+}
+
+/// Push the `PartitionRecord` that moves `pr` to `change`'s leader, ISR and
+/// epochs, every other field carried over from `pr`. When the change's leader
+/// is [`LeaderRecovery::Recovering`], a `PartitionRecoveryRecord` marking it
+/// `RECOVERING` follows.
 pub fn push_partition_change(
     changes: &mut Vec<MetadataRecord>,
     pr: &PartitionRecord,
-    leader: NodeId,
-    isr: Vec<NodeId>,
-    partition_epoch: i32,
-    leader_epoch: LeaderEpoch,
-    recovering: bool,
+    PartitionChange {
+        leader,
+        isr,
+        epochs,
+        recovery,
+    }: PartitionChange,
 ) {
     changes.push(MetadataRecord::V1Partition(PartitionRecord {
         leader,
         isr,
-        leader_epoch,
-        partition_epoch,
+        leader_epoch: epochs.leader,
+        partition_epoch: epochs.partition,
         ..pr.clone()
     }));
-    if recovering {
+    if recovery == LeaderRecovery::Recovering {
         changes.push(MetadataRecord::V1PartitionRecovery(
             PartitionRecoveryRecord {
                 topic: pr.topic.clone(),
@@ -450,13 +502,11 @@ fn decide(pr: &PartitionRecord, gone: &Departure, ctx: &Ladder<'_>) -> FailoverD
 /// not elect anyway, so the two orders agree. Kafka's `uncleanShutdownReplicas`
 /// keeps `returning` out of the target ELR, so it is not what keeps that set
 /// from being empty, as a fenced broker is.
-type NodeSet = HashSet<NodeId>;
-
 pub fn unclean_restart_one(
     pr: &PartitionRecord,
     returning: NodeId,
-    alive: &NodeSet,
-    witnesses: &NodeSet,
+    alive: &HashSet<NodeId>,
+    witnesses: &HashSet<NodeId>,
     elr: &PartitionElr,
     strategy: RecoveryStrategy,
     unclean_enabled: bool,
