@@ -5,8 +5,8 @@
 
 use {
     krabka_metadata::MetadataImage,
-    std::{future, sync::Arc},
-    tokio::sync::watch,
+    std::{future, sync::Arc, time::Duration},
+    tokio::{sync::watch, time},
     tokio_util::sync::CancellationToken,
 };
 
@@ -74,9 +74,54 @@ pub async fn wait_for_image_change(
     }
 }
 
+/// Whether `topic` is in the image on `images`, now or within `timeout`.
+///
+/// A node that forwards its writes sees a topic another node created only
+/// once its own image catches up with the leader. A closed publisher counts
+/// as the topic never arriving.
+pub async fn topic_reaches_image(
+    mut images: watch::Receiver<Arc<MetadataImage>>,
+    topic: &str,
+    timeout: Duration,
+) -> bool {
+    time::timeout(
+        timeout,
+        images.wait_for(|image| image.topic(topic).is_some()),
+    )
+    .await
+    .is_ok_and(|seen| seen.is_ok())
+}
+
 #[cfg(test)]
 mod tests {
-    use {super::*, tokio::sync::mpsc};
+    use {super::*, crate::test_support::topic_image, tokio::sync::mpsc};
+
+    const WAIT: Duration = Duration::from_secs(5);
+
+    /// The topic counts as arrived when it is in the image already, or when
+    /// an image that holds it is published before the timeout; not when the
+    /// timeout passes first or the publisher closes.
+    #[tokio::test(start_paused = true)]
+    async fn topic_reaches_image_waits_for_the_topic_until_the_timeout() {
+        let empty = || Arc::new(MetadataImage::new(uuid::Uuid::nil()));
+        let with_topic = || Arc::new(topic_image().topic("orders").call());
+
+        let (_tx, rx) = watch::channel(with_topic());
+        assert2::assert!(topic_reaches_image(rx, "orders", Duration::ZERO).await);
+
+        let (tx, rx) = watch::channel(empty());
+        let waiting = tokio::spawn(async move { topic_reaches_image(rx, "orders", WAIT).await });
+        time::sleep(WAIT / 2).await;
+        tx.send(with_topic()).expect("the wait is still subscribed");
+        assert2::assert!(waiting.await.expect("the wait does not panic"));
+
+        let (_tx, rx) = watch::channel(with_topic());
+        assert2::assert!(!topic_reaches_image(rx, "other", WAIT).await);
+
+        let (tx, rx) = watch::channel(empty());
+        drop(tx);
+        assert2::assert!(!topic_reaches_image(rx, "orders", WAIT).await);
+    }
 
     /// The loop both callers share: it must apply the image already in the
     /// channel before waiting, apply each update observed in this test, and stop

@@ -69,6 +69,7 @@ use {
     std::{
         collections::{BTreeMap, HashSet},
         sync::Arc,
+        time::Duration,
     },
 };
 
@@ -143,7 +144,8 @@ pub async fn handle(
     // KIP-108: a validate-only request runs every check and commits nothing,
     // so the policy below sees it exactly as it sees a committing one.
     let validate_only = req.validate_only;
-    let creation = TopicCreation::new(broker, &image, validate_only);
+    let timeout = Duration::from_millis(u64::try_from(req.timeout_ms).unwrap_or(0));
+    let creation = TopicCreation::new(broker, &image, validate_only, timeout);
 
     for topic_req in effective {
         let created = match creation.create(topic_req, &mut quota).await {

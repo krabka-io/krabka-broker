@@ -60,6 +60,11 @@ impl TxnCoordinator {
     /// broker's loaded term of the partition, and [`BrokerError::Protocol`] if
     /// the transactional id is longer than 32767 bytes, which the log key
     /// cannot carry.
+    ///
+    /// Only tests seed entries through this form. Every production writer
+    /// takes the state-partition write lock itself, before the entry lock, so
+    /// the check that admits a transition and its append share one guard.
+    #[cfg(test)]
     #[tracing::instrument(
         name = "txn_coordinator_put",
         level = "debug",
@@ -156,9 +161,10 @@ impl TxnCoordinator {
     /// reverse index.
     ///
     /// The record is a null-valued record under the same byte-exact
-    /// `TransactionLogKey(v0)` that [`Self::put`] writes, which is how Kafka
-    /// expires a transactional id: compaction reclaims the tid's history, and
-    /// [`Self::recover`] already reads a null value as a delete.
+    /// `TransactionLogKey(v0)` that [`Self::put_under_state_partition_lock`]
+    /// writes, which is how Kafka expires a transactional id: compaction
+    /// reclaims the tid's history, and [`Self::recover`] already reads a null
+    /// value as a delete.
     ///
     /// `entry` is the live entry, and the caller **holds its lock**. That is
     /// what makes the append and the in-memory drop one step: every path that

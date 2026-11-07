@@ -253,10 +253,18 @@ async fn only_an_existing_topic_excuses_a_refused_audit_batch() {
         refusal: fn() -> RaftError,
         expected: Result<(), String>,
     }
-    let cases: [Case; 2] = [
+    let cases: [Case; 3] = [
         Case {
             refusal: || RaftError::Metadata(MetadataError::TopicExists(String::new())),
             expected: Ok(()),
+        },
+        // A forwarded batch the leader refused for an unknown reason, which
+        // may be a validation failure or a body it could not decode.
+        Case {
+            refusal: || RaftError::ForwardedChangeRejected,
+            expected: Err(
+                "startup failed: the controller leader rejected the forwarded change".into(),
+            ),
         },
         Case {
             refusal: || RaftError::ChangeRejected("refused".into()),
@@ -276,6 +284,33 @@ async fn only_an_existing_topic_excuses_a_refused_audit_batch() {
 
         check!(result.map_err(|error| error.to_string()) == expected);
     }
+}
+
+// Two broker-only nodes race to create the audit topic. The leader refuses the
+// loser's forwarded batch with the code that names no reason, and the loser
+// starts once the winner's topic reaches its image.
+#[tokio::test(start_paused = true)]
+async fn a_forwarded_refusal_is_excused_once_a_racing_audit_topic_arrives() {
+    let fake = Arc::new(
+        FakeMetadataSource::builder()
+            .records(&registrations(&[1]))
+            .leader(Some(CONTROLLER))
+            .on_submit(|_| Err(RaftError::ForwardedChangeRejected))
+            .build(),
+    );
+    let source: Arc<dyn MetadataSource> = Arc::<FakeMetadataSource>::clone(&fake);
+    let config = node(NodeId(1), BROKER_ONLY);
+    let bootstrap = tokio::spawn(async move { bootstrap_audit_topic(&config, &source).await });
+    await_until("the loser submits its batch", || {
+        !fake.submitted().is_empty()
+    })
+    .await;
+
+    let winner = audit_batch(uuid::Uuid::from_u128(7), &[1]);
+    fake.set_records(&[registrations(&[1]), winner].concat());
+
+    let result = bootstrap.await.expect("the bootstrap task does not panic");
+    check!(result.map_err(|error| error.to_string()) == Ok(()));
 }
 
 // A broker-only node sees its own forwarded batch only on its next metadata

@@ -163,6 +163,26 @@ fn a_committed_swap_promotes_its_transaction_index() {
     check!(directory_files(dir.path()) == expected);
 }
 
+/// A completed swap takes the replaced segments' `.stampindex` files with
+/// them, the survivor's own base included: the swap set carries none, so a
+/// stamp sidecar left at the survivor's base would read as the survivor's.
+/// The untouched segment keeps its own.
+#[test]
+fn a_committed_swap_retires_the_replaced_stamp_indexes() {
+    let mut files = originals_with_swaps();
+    for base in [0, 10, 20] {
+        files.insert(
+            file(base, "stampindex"),
+            format!("stamps {base}").into_bytes(),
+        );
+    }
+    let dir = populated_directory(&files);
+
+    let mut expected = compacted();
+    expected.insert(file(20, "stampindex"), b"stamps 20".to_vec());
+    check!(recovered_files(dir.path()) == expected);
+}
+
 /// A crash after the log reached its final name: only sidecars remain to
 /// promote, and an index with neither form is created empty.
 #[test]
