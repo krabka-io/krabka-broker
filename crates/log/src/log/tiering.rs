@@ -175,8 +175,8 @@ impl Log {
     }
 
     /// Raise a remote-storage-enabled log's global start to `remote_start`,
-    /// the lowest offset the remote tier holds at or above the start this log
-    /// reports, and return the start it reports then: Kafka's
+    /// the lowest offset the remote tier holds at or above `listed_from`, and
+    /// return the start it reports then: Kafka's
     /// `UnifiedLog.updateLogStartOffsetFromRemoteTier`, which
     /// `RLMCopyTask.maybeUpdateLogStartOffsetOnBecomingLeader` calls on a
     /// leader.
@@ -190,21 +190,29 @@ impl Log {
     /// the same case, since its start reads as 0 (see
     /// [`Log::reported_log_start`]).
     ///
-    /// The start only rises from [`Log::reported_log_start`], and never past
-    /// [`Log::local_log_start_offset`], because every offset from there on is
-    /// on this disk. An established start rises through
-    /// [`Log::set_log_start_offset`]. A start nobody established may come to
-    /// rest below the segments it was inferred from, because those offsets
-    /// are the archive's to serve, and the leader-epoch cache is then left
-    /// alone, as [`Log::follow_leader_log_start`] leaves it on a lower start.
-    /// A log without remote storage has no remote tier to follow and is left
-    /// alone, as Kafka ignores the call.
+    /// `listed_from` is the [`Log::reported_log_start`] the caller measured
+    /// the archive from. Nothing changes unless the log still reports it: a
+    /// start that moved meanwhile, down by truncation, a reset or a leader's
+    /// lower start, or up by a `DeleteRecords`, was never measured, and a
+    /// raise over it could hide offsets the archive serves or undo a
+    /// deletion.
+    ///
+    /// The start only rises, and never past [`Log::local_log_start_offset`],
+    /// because every offset from there on is on this disk. An established
+    /// start rises through [`Log::set_log_start_offset`]. A start nobody
+    /// established may come to rest below the segments it was inferred from,
+    /// because those offsets are the archive's to serve. The leader-epoch
+    /// cache is then left alone, as [`Log::follow_leader_log_start`] leaves it
+    /// on a lower start, until the next [`Log::open`] cuts it at the
+    /// checkpoint. A log without remote storage has no remote tier to follow
+    /// and is left alone, as Kafka ignores the call.
     ///
     /// # Errors
     /// Returns [`LogError::Io`] if the log-start or leader-epoch checkpoint
     /// cannot be written.
     pub fn update_log_start_from_remote_tier(
         &mut self,
+        listed_from: Offset,
         remote_start: Offset,
     ) -> Result<Offset, LogError> {
         let tiered = self
@@ -212,9 +220,10 @@ impl Log {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .remote_storage_enable;
+        let reported = self.reported_log_start();
         let target = remote_start.min(self.local_log_start_offset());
-        if !tiered || target <= self.reported_log_start() {
-            return Ok(self.reported_log_start());
+        if !tiered || reported != listed_from || target <= reported {
+            return Ok(reported);
         }
         if self.start_offset_established {
             self.set_log_start_offset(target)?;

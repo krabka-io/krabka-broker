@@ -696,7 +696,7 @@ fn update_log_start_from_remote_tier_raises_to_what_some_tier_holds(
     };
 
     let reported = log
-        .update_log_start_from_remote_tier(remote_start(floors))
+        .update_log_start_from_remote_tier(log.reported_log_start(), remote_start(floors))
         .unwrap();
 
     check!((reported, GlobalStart::of(&log)) == (log.reported_log_start(), expected(floors)));
@@ -716,7 +716,34 @@ fn update_log_start_from_remote_tier_leaves_a_log_without_remote_storage_alone()
         "the fixture leaves a start below the local segments"
     );
 
-    let reported = log.update_log_start_from_remote_tier(local).unwrap();
+    let reported = log
+        .update_log_start_from_remote_tier(before.start, local)
+        .unwrap();
+
+    check!((reported, GlobalStart::of(&log)) == (before.start, before));
+}
+
+/// The caller measured the archive from the start the log reported then. A
+/// start that moved since, either way, was never measured, so the raise is
+/// dropped rather than carried over offsets the listing never examined, or
+/// over a `DeleteRecords` that raced it.
+#[yare::parameterized(
+    a_start_lowered_since_the_listing = { 1 },
+    a_start_raised_since_the_listing = { -1 },
+)]
+fn update_log_start_from_remote_tier_drops_a_raise_measured_from_another_start(moved_by: i64) {
+    let dir = tempdir().unwrap();
+    let config = LogConfig {
+        remote_storage_enable: true,
+        ..LogConfig::default()
+    };
+    let mut log = evicted_log(dir.path(), &config, true);
+    let before = GlobalStart::of(&log);
+    let local = log.local_log_start_offset();
+
+    let reported = log
+        .update_log_start_from_remote_tier(before.start + moved_by, local)
+        .unwrap();
 
     check!((reported, GlobalStart::of(&log)) == (before.start, before));
 }

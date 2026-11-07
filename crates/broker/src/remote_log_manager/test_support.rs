@@ -503,11 +503,21 @@ pub fn seed_finished_segments(rlmm: &Arc<dyn RemoteLogMetadataManager>, count: u
 /// into `rlmm`, without going near an RSM.
 pub fn finished_segment(rlmm: &Arc<dyn RemoteLogMetadataManager>, id: u128, base: i64) {
     stuck_started_segment(rlmm, id, base);
+    move_segment(rlmm, id, RemoteLogSegmentState::CopySegmentFinished);
+}
+
+/// Mark segment `id` `DeleteSegmentStarted`, the way a delete that has begun
+/// leaves it.
+pub fn mark_delete_started(rlmm: &Arc<dyn RemoteLogMetadataManager>, id: u128) {
+    move_segment(rlmm, id, RemoteLogSegmentState::DeleteSegmentStarted);
+}
+
+fn move_segment(rlmm: &Arc<dyn RemoteLogMetadataManager>, id: u128, state: RemoteLogSegmentState) {
     rlmm.update_remote_log_segment_metadata(RemoteLogSegmentMetadataUpdate {
         remote_log_segment_id: RemoteLogSegmentId::new(tp(), Uuid::from_u128(id)),
         event_timestamp_ms: 100,
         custom_metadata: None,
-        state: RemoteLogSegmentState::CopySegmentFinished,
+        state,
         broker_id: 1,
     })
     .unwrap();
