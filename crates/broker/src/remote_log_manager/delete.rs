@@ -35,6 +35,11 @@ use {
 /// `DELETE_SEGMENT_FINISHED` once an RSM delete throws. Nothing retries the
 /// partition on its own; the warning is the operator's signal.
 ///
+/// After a `DeleteTopics` the counts land on a topic that no longer exists,
+/// so the metric-series evictor drops them on its next pass. A scrape sees
+/// them only if it runs before that pass. Kafka does not count cascade deletes
+/// at all.
+///
 /// # A write-once archive keeps every byte
 ///
 /// Under [`ArchiveMode::WriteOnce`] the cascade still walks
@@ -535,7 +540,8 @@ mod tests {
         let rlmm_impl = Arc::new(InmemoryRemoteLogMetadataManager::new());
         let resources = fixtures::OwnedTierResources {
             rlmm: Arc::clone(&rlmm_impl) as Arc<dyn RemoteLogMetadataManager>,
-            ..fixtures::owned_tier_resources()
+            metrics: BrokerMetrics::new(),
+            index_cache: disabled_index_cache(),
         };
         let copied = copy_exports(&resources.tier(&rsm), fixtures::two_exports()).await;
         check!(copied == 2);

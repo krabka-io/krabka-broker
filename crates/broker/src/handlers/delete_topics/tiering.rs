@@ -56,7 +56,9 @@ pub(super) fn tiered_partitions(
 
 /// Fires off the detached tasks that walk each tiered partition's remote
 /// segments through `DeletePartitionMarked` → `DeletePartitionStarted` →
-/// per-segment lifecycle → `DeletePartitionFinished`.
+/// per-segment lifecycle, and on to `DeletePartitionFinished` once every
+/// segment delete succeeds. A failed one leaves the partition at
+/// `DeletePartitionStarted`.
 ///
 /// The response returns immediately; failures inside the cascade log at WARN
 /// and count against `metrics`.
