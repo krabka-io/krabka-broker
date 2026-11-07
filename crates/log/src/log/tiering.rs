@@ -17,6 +17,7 @@ use {
     std::{
         fs, iter,
         path::{Path, PathBuf},
+        sync::PoisonError,
         time::SystemTime,
     },
     tracing::{field, instrument},
@@ -171,6 +172,58 @@ impl Log {
     #[must_use]
     pub fn local_log_start_offset(&self) -> Offset {
         self.first_local_offset().max(self.log_start_offset())
+    }
+
+    /// Raise a remote-storage-enabled log's global start to `remote_start`,
+    /// the lowest offset the remote tier holds at or above the start this log
+    /// reports, and return the start it reports then: Kafka's
+    /// `UnifiedLog.updateLogStartOffsetFromRemoteTier`, which
+    /// `RLMCopyTask.maybeUpdateLogStartOffsetOnBecomingLeader` calls on a
+    /// leader.
+    ///
+    /// It closes what a tiered [`Log::open`] cannot see. That open takes the
+    /// checkpointed start with no floor at the first segment, so a checkpoint
+    /// older than segments local retention deleted before the log turned
+    /// tiered -- a crash before the deferred checkpoint write -- reopens at a
+    /// start whose offsets are in no tier, and the fetch path sends a read for
+    /// them to an archive that never held them. A log with no checkpoint is
+    /// the same case, since its start reads as 0 (see
+    /// [`Log::reported_log_start`]).
+    ///
+    /// The start only rises from [`Log::reported_log_start`], and never past
+    /// [`Log::local_log_start_offset`], because every offset from there on is
+    /// on this disk. An established start rises through
+    /// [`Log::set_log_start_offset`]. A start nobody established may come to
+    /// rest below the segments it was inferred from, because those offsets
+    /// are the archive's to serve, and the leader-epoch cache is then left
+    /// alone, as [`Log::follow_leader_log_start`] leaves it on a lower start.
+    /// A log without remote storage has no remote tier to follow and is left
+    /// alone, as Kafka ignores the call.
+    ///
+    /// # Errors
+    /// Returns [`LogError::Io`] if the log-start or leader-epoch checkpoint
+    /// cannot be written.
+    pub fn update_log_start_from_remote_tier(
+        &mut self,
+        remote_start: Offset,
+    ) -> Result<Offset, LogError> {
+        let tiered = self
+            .config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remote_storage_enable;
+        let target = remote_start.min(self.local_log_start_offset());
+        if !tiered || target <= self.reported_log_start() {
+            return Ok(self.reported_log_start());
+        }
+        if self.start_offset_established {
+            self.set_log_start_offset(target)?;
+        } else {
+            self.write_start_checkpoint(target)?;
+            self.start_offset = target;
+            self.start_offset_established = true;
+        }
+        Ok(self.reported_log_start())
     }
 
     /// Delete every sealed segment whose `last_offset < target` from disk
