@@ -7,6 +7,7 @@
 
 use {
     super::{FutureLogState, MoveError},
+    crate::task_join::joined_cleanly,
     dashmap::DashMap,
     krabka_ids::PartitionIndex,
     std::{
@@ -63,17 +64,22 @@ fn take_move_tasks(
         .collect()
 }
 
-/// Cancel and await every in-progress log-directory move. Broker shutdown
-/// calls this after it has stopped accepting requests and before it stops the
-/// partition writers that the move tasks use.
-pub async fn shutdown_moves(future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>) {
+/// Cancel and await every in-progress log-directory move, and answer whether
+/// none of the move tasks had panicked. Broker shutdown calls this after it has
+/// stopped accepting requests and before it stops the partition writers that
+/// the move tasks use.
+pub async fn shutdown_moves(
+    future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>,
+) -> bool {
     let tasks = take_move_tasks(future_logs);
     for task in &tasks {
         task.abort();
     }
+    let mut clean = true;
     for task in tasks {
-        let _ = task.await;
+        clean &= joined_cleanly("log-directory move", task).await;
     }
+    clean
 }
 
 /// Best-effort synchronous counterpart used when a
@@ -129,6 +135,22 @@ mod tests {
         }
     }
 
+    /// A move into `dir` whose replicator is `task`.
+    fn move_state(
+        dir: &tempfile::TempDir,
+        future_log: Arc<Mutex<Log>>,
+        cancel: CancellationToken,
+        task: JoinHandle<()>,
+    ) -> Arc<FutureLogState> {
+        Arc::new(FutureLogState {
+            target_log_dir: dir.path().to_path_buf(),
+            future_path: dir.path().to_path_buf(),
+            future_log,
+            cancel,
+            task: Mutex::new(Some(task)),
+        })
+    }
+
     struct DropCounter(Arc<AtomicU64>);
 
     impl Drop for DropCounter {
@@ -161,26 +183,43 @@ mod tests {
             let task = pending_move(&started, &dropped);
             future_logs.insert(
                 ("t".to_owned(), partition),
-                Arc::new(FutureLogState {
-                    target_log_dir: dir.path().to_path_buf(),
-                    future_path: dir.path().to_path_buf(),
-                    future_log: Arc::clone(&future_log),
-                    cancel: cancel.clone(),
-                    task: Mutex::new(Some(task)),
-                }),
+                move_state(&dir, Arc::clone(&future_log), cancel.clone(), task),
             );
             cancels.push(cancel);
         }
 
         wait_tasks_started(|| started.load(Ordering::SeqCst) == 2, "move tasks start").await;
 
-        time::timeout(Duration::from_secs(1), shutdown_moves(&future_logs))
+        let clean = time::timeout(Duration::from_secs(1), shutdown_moves(&future_logs))
             .await
             .expect("move task shutdown completes");
 
+        assert!(clean);
         assert!(future_logs.is_empty());
         assert!(cancels.iter().all(CancellationToken::is_cancelled));
         assert!(dropped.load(Ordering::SeqCst) == 2);
+    }
+
+    /// A move task that panicked mid-copy is reported, so broker shutdown
+    /// withholds the clean-shutdown proof.
+    #[tokio::test]
+    async fn shutdown_moves_reports_a_move_task_that_panicked() {
+        let PendingMoveFixture {
+            dir,
+            log: future_log,
+            logs: future_logs,
+            ..
+        } = pending_move_fixture();
+        let panicked: JoinHandle<()> = task::spawn(async { panic!("the move panics") });
+        while !panicked.is_finished() {
+            task::yield_now().await;
+        }
+        future_logs.insert(
+            ("t".to_owned(), PartitionIndex(0)),
+            move_state(&dir, future_log, CancellationToken::new(), panicked),
+        );
+
+        assert!(!shutdown_moves(&future_logs).await);
     }
 
     #[tokio::test]
@@ -196,13 +235,7 @@ mod tests {
         let task = pending_move(&started, &dropped);
         future_logs.insert(
             ("t".to_owned(), PartitionIndex(0)),
-            Arc::new(FutureLogState {
-                target_log_dir: dir.path().to_path_buf(),
-                future_path: dir.path().to_path_buf(),
-                future_log,
-                cancel: cancel.clone(),
-                task: Mutex::new(Some(task)),
-            }),
+            move_state(&dir, future_log, cancel.clone(), task),
         );
 
         time::timeout(Duration::from_secs(1), async {

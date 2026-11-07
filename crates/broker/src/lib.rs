@@ -264,6 +264,7 @@ pub mod telemetry;
 pub(crate) mod test_support;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod testing;
+mod task_join;
 pub mod throttle;
 pub(crate) mod time_util;
 pub(crate) mod tls_reload;

@@ -5,6 +5,8 @@
 
 #[cfg(test)]
 use crate::broker::Broker;
+#[cfg(any(test, feature = "test-helpers"))]
+use std::future::Future;
 use {
     crate::{
         broker::BrokerHandle,
@@ -14,15 +16,12 @@ use {
         incarnation::own_broker_epoch,
         partition::Partition,
         partition_registry::PartitionRegistry,
+        task_join::joined_cleanly,
         time_util::now_ms,
     },
     krabka_ids::PartitionIndex,
-    std::{collections::BTreeSet, future::Future, net::SocketAddr, sync::Arc, time::Duration},
-    tokio::{
-        sync::watch,
-        task::{JoinError, JoinHandle},
-        time,
-    },
+    std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration},
+    tokio::{sync::watch, task::JoinHandle, time},
 };
 
 #[cfg(any(test, feature = "test-helpers"))]
@@ -69,20 +68,6 @@ fn take_partition_writer_tasks(partitions: &PartitionRegistry) -> Vec<JoinHandle
         .into_iter()
         .filter_map(|partition| partition.take_writer_handle())
         .collect()
-}
-
-/// Await a task that shutdown stopped, and answer whether it ended without a
-/// panic. A task that returned or was aborted ended cleanly. A panic is logged
-/// here, because the task may have stopped halfway through changing state that
-/// the clean-shutdown proof vouches for.
-async fn joined_cleanly<T>(task: &str, join: impl Future<Output = Result<T, JoinError>>) -> bool {
-    match join.await {
-        Err(error) if error.is_panic() => {
-            tracing::error!(task, %error, "a task panicked before shutdown; the next start recovers");
-            false
-        }
-        _ => true,
-    }
 }
 
 /// Abort and await every partition writer, and answer whether none of them
@@ -638,7 +623,7 @@ impl BrokerHandle {
         if let Some(task) = task {
             clean &= joined_cleanly("audit writer", task).await;
         }
-        shutdown_moves(&self.broker.future_logs).await;
+        clean &= shutdown_moves(&self.broker.future_logs).await;
         clean &= shutdown_partition_writers(&self.broker.partitions).await;
         clean &= close_logs(&self.broker.partitions);
         self.broker.client_metrics.shutdown().await;

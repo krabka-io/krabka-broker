@@ -284,8 +284,8 @@ impl Partition {
         }
     }
 
-    /// The partition's [`Log`], locked. Every query on the log goes through
-    /// here, so a poisoned mutex gets one answer everywhere.
+    /// The partition's [`Log`], locked. Every `Partition` query on the log
+    /// goes through here, so each answers a poisoned mutex the same way.
     ///
     /// # Errors
     ///
