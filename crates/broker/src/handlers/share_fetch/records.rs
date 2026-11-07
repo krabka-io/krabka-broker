@@ -1224,4 +1224,38 @@ mod tests {
         );
         assert!(what == "share-fetch read returned a record batch whose last offset overflows");
     }
+
+    /// Bytes that are not whole batches are a corrupt read naming the fault:
+    /// a header cut short, or a `batch_length` shorter than a header or
+    /// running past the read.
+    #[test]
+    fn a_read_that_is_not_whole_batches_names_the_fault() {
+        let with_length = |length: u8| {
+            let mut raw = OVERFLOWING_BATCH_HEADER;
+            raw[11] = length;
+            Bytes::copy_from_slice(&raw)
+        };
+        let cases = [
+            (
+                Bytes::from_static(&OVERFLOWING_BATCH_HEADER[..20]),
+                "a truncated record batch header",
+            ),
+            (with_length(0x30), "a record batch length outside the read"),
+            (with_length(0x32), "a record batch length outside the read"),
+        ];
+        let actual: Vec<_> = cases
+            .iter()
+            .map(|(bytes, _)| match batch_spans(bytes) {
+                Err(BrokerError::Log(krabka_log::LogError::Records(
+                    RecordsError::RecordParse(what),
+                ))) => Some(what),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<_> = cases
+            .iter()
+            .map(|(_, what)| Some(format!("share-fetch read returned {what}")))
+            .collect();
+        assert!(actual == expected);
+    }
 }

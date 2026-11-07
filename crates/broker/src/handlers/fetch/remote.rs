@@ -1519,6 +1519,60 @@ mod tests {
         check!(super::deliverable_run(&cut, |_| true).is_err());
     }
 
+    /// Bytes that are not whole batches fail the run with the fault each
+    /// names, and a batch that is not due yet ends the run before its last
+    /// offset is checked.
+    #[test]
+    fn deliverable_run_names_each_corrupt_archive() {
+        use bytes::Bytes;
+
+        /// A bare v2 header (no records) with these fields, the rest zero.
+        fn header(base_offset: i64, last_offset_delta: i32, batch_length: i32) -> Bytes {
+            let mut raw = vec![0_u8; records::HEADER_LEN];
+            raw[..8].copy_from_slice(&base_offset.to_be_bytes());
+            raw[8..12].copy_from_slice(&batch_length.to_be_bytes());
+            raw[23..27].copy_from_slice(&last_offset_delta.to_be_bytes());
+            Bytes::from(raw)
+        }
+        let fault = |archived: Bytes| match super::deliverable_run(&archived, |_| true) {
+            Err(krabka_remote_storage::RemoteStorageError::Io(err)) => Some(err.to_string()),
+            _ => None,
+        };
+        // The header alone: 61 bytes, 12 of them in front of `batch_length`.
+        let whole = 49;
+        let cases = [
+            (
+                header(0, 0, whole).slice(..20),
+                "a truncated record batch header",
+            ),
+            (
+                header(0, 0, whole - 1),
+                "a record batch length outside the read",
+            ),
+            (
+                header(0, 0, whole + 1),
+                "a record batch length outside the read",
+            ),
+            (header(0, 0, -1), "a record batch length outside the read"),
+            (
+                header(i64::MAX - 1, 5, whole),
+                "a record batch whose last offset overflows",
+            ),
+        ];
+        let actual: Vec<_> = cases
+            .iter()
+            .map(|(bytes, _)| fault(bytes.clone()))
+            .collect();
+        let expected: Vec<_> = cases
+            .iter()
+            .map(|(_, what)| Some(format!("corrupt remote log bytes: {what}")))
+            .collect();
+        assert!(actual == expected);
+
+        let not_due = super::deliverable_run(&header(i64::MAX - 1, 5, whole), |_| false);
+        assert!(let Ok(None) = not_due);
+    }
+
     /// A `PendingRead` with no partition attached, for the cases that never
     /// reach the log.
     fn out_of_range_at_unattached(fetch_offset: i64) -> super::PendingRead {
