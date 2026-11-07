@@ -183,8 +183,10 @@ Follow the style guides in [`docs/style_guides/`](docs/style_guides/README.md):
 [code](docs/style_guides/code_style_guide.md),
 [rustdoc](docs/style_guides/rustdoc_style_guide.md),
 [README](docs/style_guides/readme_style_guide.md),
-[design docs](docs/style_guides/design_doc_style_guide.md), and
-[coverage reports](docs/style_guides/coverage_report_style_guide.md). Examples
+[design docs](docs/style_guides/design_doc_style_guide.md),
+[coverage reports](docs/style_guides/coverage_report_style_guide.md), and
+[Gherkin](docs/style_guides/gherkin_style_guide.md). Gherkin scenarios follow the
+BDD loop in that guide: formulate the scenario, see it fail, then make it pass. Examples
 are the pinned stable toolchain, `cargo +nightly fmt`, forbidden `unsafe`, and
 `clippy::pedantic`.
 

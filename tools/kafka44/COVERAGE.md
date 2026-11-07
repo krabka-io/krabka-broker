@@ -91,6 +91,10 @@ After merging main d6b952c80, the first two historical counterexamples are addre
 
 ## Current distributed-test release blocker
 
+This heading is retained for existing links. The historical blocker below is
+superseded by the [November 4 nightly receipt](../../qualification/kafka44-nightly-jepsen-20261104.json)
+and the reconciliation evidence in the current summary above.
+
 Parent audit of actual nightly [41302675028](https://github.com/krabka-io/krabka-broker/actions/runs/41302675028) reports **36 tests: 25 passed, 10 fixed, 1 regression, 0 skipped**. The regression is `assign-mixed` under partition/kill/pause faults, invalid due to workload `unseen`. Private downloaded report: `/home/matt/.openclaw/workspace/coordinator/.private/kafka44-jepsen-audit`. This lane independently parsed `results.json` and confirmed the `assign-mixed` row: status `invalid`, detail `invalid checkers: workload`, bad/error types `[unseen]`, store timestamp `2026-11-01T12:07:17.891410344Z`. The individual operation history has not yet been analyzed here. Investigate the history and establish whether the witness is lost records, checker/workload accounting, or another defect. Expected-failure annotations do not waive it and a clean bounded model does not resolve it.
 
 ## Actual released-oracle CI receipt
@@ -530,3 +534,30 @@ InitProducerId6 remain unstable. Existing finalized levels are not rewritten.
 Historical failures, candidate identities and unmeasured schedules remain intact.
 See [parent closeout](CLOSEOUT.md) for the exact completion scope and retained
 limitations; neither acceptance nor graduation claims universal parity.
+
+
+## DLQ terminal ordering and clean restart (2026-11-07)
+
+The [paired receipt](../../qualification/kafka44-dlq/ordering-20261107/receipt.json)
+and [reproduction instructions](../../qualification/kafka44-dlq/ordering-20261107/README.md)
+cover eight real `ShareBoundary` cases per peer against the pinned released
+Kafka 4.4 image, with released defaults and no unstable switches. Copied and
+headers-only records pass generous, one-byte-below, exact and one-byte-above
+batch limits. The successful copies assert payloads and six provenance headers;
+the two below-limit cases per peer yield no destination record within the
+fixture's four-second observation window and archive the source offset.
+
+Released `DumpLogSegments` decodes all eight groups per peer as ARCHIVING(3),
+then ARCHIVED(4), with final startOffset=0 and deliveryCompleteCount=1. The
+retained decoded logs are unchanged after a clean whole-process restart. Admin
+probes report startOffset=0 and lag=0 for all eight groups before and after
+restart. The boundary and Admin outputs match between peers. This closes the
+earlier terminal-prefix representation difference for these executions, not
+for every failure schedule; historical receipts remain unchanged.
+
+The candidate receipt identifies a locked integration-worktree build by binary,
+source and inventory hashes. It is not a pristine commit build. This run uses
+one node per peer with RF1/minISR1 and a clean restart after completed writes.
+It does not cover a crash during ARCHIVING, power loss, RF3, concurrent owners
+or destination ACL failure. Earlier lost-confirmation duplicate witnesses still
+apply. No exactly-once or JVM extension ABI equivalence follows.

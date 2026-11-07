@@ -93,8 +93,19 @@ async fn registered_native_manager_receives_real_reject_and_closes_once(fail_wri
     cluster.reject_acquired(Offset(0), Offset(2)).await;
     cluster
         .broker
-        .wait_until_share_spso(GROUP, cluster.tid, 0, 3)
+        .wait_until_share_delivery_complete(GROUP, cluster.tid, 0, 3)
         .await;
+    // Phase 2 persists the terminal rows before pruning only the live cache.
+    // This checks the actual owner/persister path for both successful and
+    // terminally rejected writes, not merely the acquisition projection.
+    assert2::assert!(
+        cluster
+            .broker
+            .share_state_summary_for_test(GROUP, cluster.tid, 0)
+            .await
+            .map(|(_, _, start, completed)| (start, completed))
+            == Some((0, 3))
+    );
     let requests = observations.requests.lock().unwrap().clone();
     assert2::assert!(
         requests

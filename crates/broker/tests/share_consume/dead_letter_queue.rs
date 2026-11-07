@@ -834,22 +834,24 @@ async fn read_dlq_records(dead_letter_case: &mut DeadLetterScenario, records: i6
     );
 }
 
-#[then("the source share start offset reaches {offset}")]
+#[then("the source share completed prefix reaches {offset}")]
 async fn dlq_source_archived(dead_letter_case: &DeadLetterScenario, offset: i64) {
-    dead_letter_case
-        .cluster()
-        .broker
-        .wait_until_share_spso(GROUP, dead_letter_case.cluster().tid, 0, offset)
-        .await;
-    check!(
-        dead_letter_case
-            .cluster()
-            .broker
-            .share_state_summary_for_test(GROUP, dead_letter_case.cluster().tid, 0)
-            .await
-            .map(|(_, _, start, _)| start)
-            == Some(offset)
-    );
+    let cluster = dead_letter_case.cluster();
+    time::timeout(Duration::from_secs(30), async {
+        loop {
+            if cluster
+                .broker
+                .share_state_summary_for_test(GROUP, cluster.tid, 0)
+                .await
+                .is_some_and(|(_, _, start, completed)| start + i64::from(completed) == offset)
+            {
+                break;
+            }
+            time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the complete source prefix is durable");
 }
 
 #[then(

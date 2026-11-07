@@ -2,7 +2,7 @@
 resolver = "2"
 members = ["crates/*"]
 # The cargo-mutants pin that Bazel builds //tools/mutants from is not a member.
-exclude = ["tools/mutants"]
+exclude = ["tools/mutants", "vendor/async-dnssd"]
 
 [workspace.package]
 version = "1.1.5"
@@ -234,8 +234,14 @@ opentelemetry_sdk = { version = "0.33", default-features = false, features = ["t
 pbkdf2 = { version = "=0.13.0", default-features = false, features = ["kdf", "hmac"] }
 prometheus-client = "0.25"
 proptest = "1"
+# The `.feature` parser `krabka-bdd-macros` lints with, at the version the
+# rstest-bdd macros parse with.
+gherkin = { version = "0.16", default-features = false, features = ["parser"] }
 rstest = "0.28"
 rstest-bdd = "0.6"
+# The `HarnessAdapter` and `AttributePolicy` traits that `krabka-bdd`'s
+# multi-thread Tokio harness implements.
+rstest-bdd-harness = "0.6"
 rstest-bdd-macros = "0.6"
 # rstest-bdd localizations must be embedded in debug test binaries as well;
 # filesystem-backed assets retain a sandbox path and cannot run hermetically.
@@ -325,6 +331,10 @@ krabka-units = "0.8.0"
 # against crates.io above and in the member manifests; the patch below is
 # the single place a sibling revision is bumped.
 [patch.crates-io]
+# Maintenance-only advisory remediation; retain exact reviewed upstream revisions.
+testcontainers = { git = "https://github.com/testcontainers/testcontainers-rs", rev = "dba4383d9bdbaed68d499f6e3ba933a289ba0a4a" }
+loom = { git = "https://github.com/tokio-rs/loom", rev = "acaa24a94cdd7c182e87d1ca05ffcab830cceb60" }
+async-dnssd = { path = "vendor/async-dnssd" }
 # `fs::sync_file_range` is in rustix only through the open upstream PR
 # bytecodealliance/rustix#1718, from this fork at its head. The broker's
 # `log_write_back` uses it, and the broker is not published. A published crate

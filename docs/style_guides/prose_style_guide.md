@@ -1,19 +1,20 @@
 # Prose Style Guide
 
-This guide defines how to write prose in Krabka. It applies to every guide in this directory, and it governs the wording rules that the others leave open.
+This guide defines how to write prose in Krabka. It applies to every guide in this directory, and it covers the wording questions that the others leave open.
 
-Krabka writes prose in **ASD-STE100 Simplified Technical English (STE)**. STE is a controlled-language specification for technical documentation. It gives each word one meaning, keeps sentences short, and puts the actor in front of the verb. The result is easy to read for a reviewer, for a new contributor, and for a reader whose first language is not English.
+Krabka prose is plain, direct technical English. It borrows a few ideas from ASD-STE100 Simplified Technical English: one word for one meaning, the actor in front of the verb, and short sentences where a long one would be hard to follow. These are aims for clarity, not a controlled vocabulary. A reviewer should ask "is this clear and accurate?", not "does this pass a word list?".
 
 ## Scope
 
-STE applies to all prose that Krabka writes:
+These guidelines apply to all prose that Krabka writes:
 
 - Rustdoc comments (`///` and `//!`) and ordinary `//` comments
 - Crate `README.md` files, design docs, and coverage reports
 - Commit messages, pull request titles, and pull request bodies
 - Every document under `docs/`
+- Gherkin `.feature` files, which follow the [Gherkin style guide](gherkin_style_guide.md) for their structure
 
-STE does **not** apply to:
+They do **not** apply to:
 
 - Rust code, attributes, and the contents of doctest fences
 - Identifiers of any kind: type names, function names, crate names, feature flags, CLI flags, environment variables, config keys, and file paths
@@ -21,41 +22,17 @@ STE does **not** apply to:
 - Quoted output, captured logs, and table data
 - Text copied from an external specification
 
-Technical names are exempt from the word rules. Write `ApiVersions`, `RowDescription`, and `producer_byte_rate` as they are.
+Write technical names as they are: `ApiVersions`, `RowDescription`, `producer_byte_rate`.
 
 ## Words
 
-- Use one word for one meaning. Use the same word every time for the same thing. Do not change words for variety.
-- Use each word as one part of speech only.
-- Prefer the short, common word.
-- Do not use slang, idioms, or metaphors. Write the plain fact. "Blast radius", "front door", and "footgun" are not STE.
-
-Frequent substitutions:
-
-| Do not write | Write |
-| :--- | :--- |
-| utilize, leverage | use |
-| via | through, with |
-| commence, initiate | start |
-| terminate | stop, end |
-| prior to | before |
-| subsequent to | after |
-| in order to | to |
-| ensure | make sure |
-| perform | do |
-| provide | give, supply |
-| obtain | get |
-| require | need |
-| approximately | about |
-| sufficient | enough |
-| however | but |
-| therefore | so |
-| due to | because of |
-| in the event that | if |
+- **Use one term for one concept, everywhere.** If the code says `log start offset`, the docs, the comments and the scenarios say `log start offset` too, not "earliest offset" in one place and "LSO" in another. This is the one word rule that matters, because a second name for the same thing makes a reader wonder whether it is a second thing.
+- Prefer the plain word when it says the same thing: "use" over "leverage", "start" over "commence", "before" over "prior to". This is a preference, not a ban. Use the precise word when the plain one loses meaning.
+- Avoid slang and metaphors that a reader whose first language is not English could misread, such as "blast radius", "front door", and "footgun". Domain terms that the Kafka community uses are fine.
 
 ## `must` and `should`
 
-This rule matters more than any other in this guide, because it changes what an API promises.
+This rule matters more than any other in this guide, because it changes what an API promises. It is not relaxed.
 
 **Write `must` only when the code enforces the rule.** A rule is enforced when breaking it produces an observable failure from the code you are documenting: an `Err` return, a `panic!`, an `assert!`, an `expect`, or a protocol-level rejection.
 
@@ -63,7 +40,7 @@ This rule matters more than any other in this guide, because it changes what an 
 
 Do not write `shall`. Keep `must not` and `do not` for prohibitions.
 
-An STE rewrite must never convert a `should` into a `must`. That is a change of contract, not a change of wording.
+A wording edit must never convert a `should` into a `must`. That is a change of contract, not a change of wording.
 
 ```rust
 /// Panics if `size` is under one millisecond.        // must-class: an assert enforces it
@@ -78,38 +55,30 @@ pub fn of_size(size: Time) -> Self {
 
 ## Sentences and paragraphs
 
-- Keep procedural sentences to 20 words or fewer. Keep descriptive sentences to 25 words or fewer.
-- Write one instruction per sentence. Keep one topic per sentence.
-- Start with the main point, not with a qualifier.
-- Do not remove articles (`a`, `an`, `the`) or other words that complete the sentence.
-- Keep paragraphs to six sentences or fewer. Put the topic sentence first.
+- Lead with the main point. Put qualifiers and history after it.
+- Keep sentences short enough to read in one pass. As a rough guide, a sentence over about 30 words usually reads better as two. There is no hard limit.
+- Keep one topic per paragraph, with the topic sentence first.
+- Do not drop articles (`a`, `an`, `the`) to save space. Telegraphic prose is harder to read, not easier.
 
-## Verbs
+## Voice
 
-- Use the active voice and name the actor. Write "the broker rejects the request", not "the request is rejected".
-- Use simple tenses only: present, past, and future. Use the past participle as an adjective.
-- Do not use the `-ing` form as a noun or as a trailing analysis clause. Write a new sentence instead.
+- Prefer the active voice and name the actor: "the broker rejects the request", not "the request is rejected". Use the passive when the actor is unknown or does not matter.
 - Use the imperative for instructions.
-
-## Noun clusters
-
-Use a maximum of three nouns in a row. Break a longer cluster with a preposition or a hyphen. A technical name counts as one unit.
 
 ## Punctuation
 
-- Do not use an em dash to join two clauses. Use a period or a comma. A dash that separates a list term from its definition is acceptable, and the rustdoc guide uses that form.
-- Do not put essential information in parentheses. Give it its own clause.
+- Do not put essential information in parentheses. A reader skims past them.
 - Do not use `->`, `=>`, `+`, `/`, or `iff` as words in prose. Write them out.
 
 ## Safety and rules
 
-Keep every warning, prohibition, and absolute exactly as forceful as it is. Words such as `never`, `must`, `all`, `only`, and `do not` define rules. Do not soften one, do not narrow its scope, and do not drop a negation when you split a sentence.
+Keep every warning, prohibition, and absolute exactly as forceful as it is. Words such as `never`, `must`, `all`, `only`, and `do not` define rules. Do not soften one, do not narrow its scope, and do not drop a negation when you rewrite a sentence.
 
 ## Rustdoc specifics
 
 The [rustdoc guide](rustdoc_style_guide.md) defines structure. These rules govern its prose:
 
-- The first line is the rustdoc summary. Keep it to one short sentence on the first line. Do not split it into two sentences.
+- The first line is the rustdoc summary. Keep it to one short sentence.
 - Never rename a heading in a Markdown file. Other files link to it by anchor.
 - **`# Errors` and `# Panics` must state the real conditions for the item they sit on.** Do not paste a generic sentence across a crate. A prose audit of this workspace found eight such boilerplate strings, and many were false: a `# Panics` body that named a mutex on a file with no mutex, a `# Errors` body that named Kubernetes in a crate with no Kubernetes dependency, and encode functions documented as failing on truncated input. A section that does not describe the item is worse than no section, because a reader trusts it.
 - If you cannot state the real condition, delete the section. Do not leave a placeholder.

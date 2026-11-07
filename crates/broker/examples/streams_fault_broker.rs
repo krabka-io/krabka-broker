@@ -9,6 +9,9 @@
 //! (comma-separated ID@CONTROLLER), and share FLAGS across the nodes.
 //! Missing flags mean healthy IO. The harness preserves DATA and FLAGS on exit.
 //! See tools/kafka44/README.md for the released-codec fault fixture.
+#[path = "fixtures/streams_assignors.rs"]
+mod streams_assignors;
+
 use {
     krabka_broker::{
         Broker, BrokerConfig, NodeId,
@@ -128,6 +131,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         storage: FileTopologyDescriptionBackend::new(flags.join("store")).await?,
         flags,
     }));
+    if env::var_os("STREAMS_FIXTURE_ASSIGNORS").is_some() {
+        streams_assignors::register(&mut config.streams_group)?;
+    }
     let broker = Broker::start(config).await?;
     println!("READY {}", broker.listen_addr());
     signal::ctrl_c().await?;

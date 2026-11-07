@@ -250,3 +250,16 @@ were executed for the formal kernels; no actor-model source-mutation run is
 claimed.
 
 Final corrected-model workspace gate: `cargo clippy --workspace --all-targets -- -D warnings` **passed** (4m05s, including the preceding test-build lock wait). No Clippy suppressions were added.
+
+## Actual broker-wire differential (2026-11-05)
+
+The [single-broker custom-assignor lane](../tools/kafka44/STREAMS_ASSIGNOR_WIRE.md)
+now executes both the real released JVM callback and an equivalent native Rust
+callback behind actual brokers. Seven matching scenario records per broker
+cover default/override placement, full cooperative revoke/acquire, callback
+failure with no failed member retained, and repaired retry/reassignment. The
+[receipt](streams-assignor-wire-20261105/receipt.json) pins source/binary/image
+identities and hashes raw responses. This supersedes the component-only wire
+limitation above for that bounded scope. RF3 movement, combined authorization
+failures, invalid-output wire cases and unavailable persisted-plugin fallback
+remain open; arbitrary JVM loading/lifecycle compatibility is not claimed.

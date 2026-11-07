@@ -1,0 +1,14 @@
+broker_id = 1
+log_dir = "/home/matt/.openclaw/workspace/coordinator/.private/dlq-ordering-20261107/candidate-data"
+[[listeners]]
+name = "PLAINTEXT"
+bind_addr = "127.0.0.1:64902"
+advertised = "127.0.0.1:64902"
+protocol = "Plaintext"
+[runtime]
+offsets_topic_replication_factor = 1
+transaction_state_replication_factor = 1
+transaction_state_min_isr = 1
+share_state_replication_factor = 1
+share_state_min_isr = 1
+share_state_num_partitions = 1

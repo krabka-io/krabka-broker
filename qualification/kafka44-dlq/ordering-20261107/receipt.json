@@ -1,0 +1,97 @@
+{
+  "date": "2026-11-07",
+  "status": "paired-terminal-ordering-boundaries-and-clean-restart-pass",
+  "scope": "Eight real share-consumer payload/header/size scenarios per peer, actual persisted state decoding before/after clean restart; no fault-window or RF3 claim.",
+  "candidate": {
+    "base_head": "d0f61446c315e3c3c9592dfc30d836201caf8823",
+    "binary_sha256": "9986200827a28b2bd5de10be19ecfd9f7235f429ca1a7dbab04decd3ce340700",
+    "format_binary_sha256": "a24f55da52f6fbb510ca59144898b4e2284cdc216a529d8cc972d0677b9beaa3",
+    "source_sha256": {
+      "Cargo.lock": "996d22f957196ef40983febef9ef58c489f991f3a4c1f38a11816cd99eaaceef",
+      "crates/broker/src/share_partition/state/dlq.rs": "4fa600a4675056d26e648407d5d61caf3c6ba6dc21233a4358ff1183e4acb252",
+      "crates/broker/src/share_partition/manager/dead_letter.rs": "64261c6be36d54ee78a165ee37b85b024e8c3b40843890e82804b02cabf85b3d",
+      "qualification/kafka44-dlq/ShareBoundary.java": "a64beea04b63fd4c62e4c43f084070c6b1108de83d8206e55a8759e7bb56d486"
+    },
+    "working_tree_note": "Inventory captured after build; concurrent non-DLQ catalog/vendor formatting edits present. Binary is from this integration worktree, not a pristine git tree.",
+    "post_build_inventory_sha256": "e678af5c0b0653789d3427e51fb491ad9763bf27a7812a0884704a454bfc7a90",
+    "flags": "Released defaults, no unstable switches",
+    "client": "127.0.0.1:64902",
+    "controller": "127.0.0.1:64903"
+  },
+  "oracle": {
+    "image": "apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f",
+    "client": "127.0.0.1:64900",
+    "controller": "127.0.0.1:64901",
+    "format": "4.4-IV2, default share2"
+  },
+  "released_client_jar_sha256": "9e4514622675f9b24c83373d0d5b35dd7a4dba34bad69762fe90a9e54cfb71de",
+  "results": {
+    "boundary_rows_per_peer": 8,
+    "zero_lag_rows_per_peer_before_restart": 8,
+    "zero_lag_rows_per_peer_after_restart": 8,
+    "copied_encoded_bytes": 356,
+    "headers_only_encoded_bytes": 254,
+    "terminal_refusals_per_peer": 2,
+    "decoded": {
+      "oracle-before": {
+        "groups": 8,
+        "each_state_sequence": [
+          3,
+          4
+        ],
+        "each_final_startOffset": 0,
+        "each_final_deliveryCompleteCount": 1
+      },
+      "oracle-after": {
+        "groups": 8,
+        "each_state_sequence": [
+          3,
+          4
+        ],
+        "each_final_startOffset": 0,
+        "each_final_deliveryCompleteCount": 1
+      },
+      "candidate-before": {
+        "groups": 8,
+        "each_state_sequence": [
+          3,
+          4
+        ],
+        "each_final_startOffset": 0,
+        "each_final_deliveryCompleteCount": 1
+      },
+      "candidate-after": {
+        "groups": 8,
+        "each_state_sequence": [
+          3,
+          4
+        ],
+        "each_final_startOffset": 0,
+        "each_final_deliveryCompleteCount": 1
+      }
+    }
+  },
+  "private_artifacts": "/home/matt/.openclaw/workspace/coordinator/.private/dlq-ordering-20261107",
+  "setup_failures": "Initial oracle startup lacked writable LOG_DIR; retained stopped container, replaced before probe. Initial candidate format omitted required controller listener; corrected before successful probe.",
+  "limits": [
+    "Single node per peer, RF1/minISR1; no RF3/ACL qualification",
+    "Clean restart after completion, not crash during ARCHIVING or power-loss/fsync proof",
+    "No exactly-once guarantee; lost-confirmation duplicate receipts remain applicable",
+    "No JVM/native extension ABI equivalence or production deployment"
+  ],
+  "artifacts_sha256": {
+    "oracle-state-after.txt": "51abbadebdb03a25040445d4d5585df3bae1e657864591529b584c0071ff94a7",
+    "README.md": "bca51faff4e79bc36fa0a7b963696ec3475d2a4c60e4e738753ca4148c94f2bc",
+    "oracle-after.txt": "51056c055d73ff91fd6ac45ff6688bc5251155bbd68a002b9feb28655abdd0d7",
+    "candidate-boundaries.txt": "43ba94dcce5225b3c1d7c52a6a95cc80dfb56eef96b9758768699ad8fffed776",
+    "oracle-before.txt": "51056c055d73ff91fd6ac45ff6688bc5251155bbd68a002b9feb28655abdd0d7",
+    "candidate-before.txt": "51056c055d73ff91fd6ac45ff6688bc5251155bbd68a002b9feb28655abdd0d7",
+    "oracle-state-before.txt": "51abbadebdb03a25040445d4d5585df3bae1e657864591529b584c0071ff94a7",
+    "candidate-state-after.txt": "e576122c3821b469e39c275db9443ef82c3eb23ae932fefb7cd3bc9addd0e154",
+    "candidate.toml": "f4df3bc63877a5e03e0f13e51b6a11ecf7250fea8f36d69c572be7f3850a2221",
+    "oracle.properties": "8f79a6b816ca06c90192328fbe5c98ba4d1359fe1f77406ddd664b54fd582e86",
+    "oracle-boundaries.txt": "43ba94dcce5225b3c1d7c52a6a95cc80dfb56eef96b9758768699ad8fffed776",
+    "candidate-after.txt": "51056c055d73ff91fd6ac45ff6688bc5251155bbd68a002b9feb28655abdd0d7",
+    "candidate-state-before.txt": "e576122c3821b469e39c275db9443ef82c3eb23ae932fefb7cd3bc9addd0e154"
+  }
+}

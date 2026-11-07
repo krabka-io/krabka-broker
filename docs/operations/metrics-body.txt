@@ -1,3 +1,23 @@
+# HELP krabka_broker_streams_topology_storage_operations Completed native Streams topology storage callbacks by operation and result..
+# TYPE krabka_broker_streams_topology_storage_operations counter
+krabka_broker_streams_topology_storage_operations_total{operation="set",result="success"} 0
+# HELP krabka_broker_streams_topology_storage_duration_seconds Native Streams topology storage callback latency in seconds..
+# TYPE krabka_broker_streams_topology_storage_duration_seconds histogram
+krabka_broker_streams_topology_storage_duration_seconds_sum{operation="set",result="success"} 0.0
+krabka_broker_streams_topology_storage_duration_seconds_count{operation="set",result="success"} 0
+krabka_broker_streams_topology_storage_duration_seconds_bucket{le="0.0001",operation="set",result="success"} 0
+krabka_broker_streams_topology_storage_duration_seconds_bucket{le="0.0005",operation="set",result="success"} 0
+krabka_broker_streams_topology_storage_duration_seconds_bucket{le="0.001",operation="set",result="success"} 0
+krabka_broker_streams_topology_storage_duration_seconds_bucket{le="0.005",operation="set",result="success"} 0
+krabka_broker_streams_topology_storage_duration_seconds_bucket{le="0.01",operation="set",result="success"} 0
+krabka_broker_streams_topology_storage_duration_seconds_bucket{le="0.025",operation="set",result="success"} 0
+krabka_broker_streams_topology_storage_duration_seconds_bucket{le="0.05",operation="set",result="success"} 0
+krabka_broker_streams_topology_storage_duration_seconds_bucket{le="0.1",operation="set",result="success"} 0
+krabka_broker_streams_topology_storage_duration_seconds_bucket{le="0.25",operation="set",result="success"} 0
+krabka_broker_streams_topology_storage_duration_seconds_bucket{le="0.5",operation="set",result="success"} 0
+krabka_broker_streams_topology_storage_duration_seconds_bucket{le="1.0",operation="set",result="success"} 0
+krabka_broker_streams_topology_storage_duration_seconds_bucket{le="10.0",operation="set",result="success"} 0
+krabka_broker_streams_topology_storage_duration_seconds_bucket{le="+Inf",operation="set",result="success"} 0
 # HELP krabka_broker_topic_bytes_in Bytes received from producers, per topic (cumulative). Operators compute throughput via rate(...)..
 # TYPE krabka_broker_topic_bytes_in counter
 krabka_broker_topic_bytes_in_total{topic="orders"} 0

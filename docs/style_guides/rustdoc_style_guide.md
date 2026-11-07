@@ -2,7 +2,7 @@
 
 This guide defines conventions for rustdoc comments across Krabka crates. It follows the patterns that `krabka-protocol`, `krabka-raft`, `krabka-broker`, and `krabka-metadata` already use. It complements the general [code style guide](code_style_guide.md).
 
-This guide defines **structure**. The [prose style guide](prose_style_guide.md) defines **wording**, and it applies to every doc comment: Simplified Technical English, one short summary sentence on the first line, and `must` only where the code enforces the rule.
+This guide defines **structure**. The [prose style guide](prose_style_guide.md) defines **wording**, and it applies to every doc comment: plain technical English, one short summary sentence on the first line, and `must` only where the code enforces the rule.
 
 ## Crate-Level Documentation
 

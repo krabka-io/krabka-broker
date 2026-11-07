@@ -413,6 +413,7 @@ async fn the_description_epochs_are_written_with_the_plugin_only() {
 struct NativeStore {
     intent_log: Option<Arc<InMemoryOffsetsLog>>,
     delete_barrier: Option<(Notify, Notify)>,
+    set_barrier: Option<(Notify, Notify)>,
     value: Mutex<Option<StoredDescription>>,
     set_failure: Mutex<Option<StorageFailure>>,
     fail_get: AtomicBool,
@@ -432,6 +433,10 @@ impl TopologyDescriptionBackend for NativeStore {
                     last_group_metadata(log).await.description.stored
                         == DescriptionEpochs::UNCERTAIN
                 );
+            }
+            if let Some((entered, release)) = &self.set_barrier {
+                entered.notify_one();
+                release.notified().await;
             }
             let failure = *self.set_failure.lock().expect("lock");
             if let Some(failure) = failure {
@@ -499,10 +504,7 @@ fn native_logging_setup(
 
 fn native_setup() -> (Arc<NativeStore>, Arc<GroupCoordinator>) {
     let backend = Arc::new(NativeStore::default());
-    let coordinator = native_coordinator(
-        Arc::clone(&backend),
-        Arc::new(InMemoryOffsetsLog::default()),
-    );
+    let coordinator = fresh_native_coordinator(&backend);
     (backend, coordinator)
 }
 
@@ -618,15 +620,9 @@ async fn native_cleanup_failure_is_retried_and_never_claims_reliable_storage() {
 #[tokio::test]
 async fn shared_native_backend_survives_coordinator_movement_and_epoch_change() {
     let backend = Arc::new(NativeStore::default());
-    let first = native_coordinator(
-        Arc::clone(&backend),
-        Arc::new(InMemoryOffsetsLog::default()),
-    );
+    let first = fresh_native_coordinator(&backend);
     let (expected, seed) = store_shutdown_and_snapshot(&first).await;
-    let second = native_coordinator(
-        Arc::clone(&backend),
-        Arc::new(InMemoryOffsetsLog::default()),
-    );
+    let second = fresh_native_coordinator(&backend);
     let moved = second.get_or_create_streams("app");
     moved
         .tx
@@ -1099,4 +1095,213 @@ async fn abandoned_actor_cannot_retire_a_newer_closed_mailbox() {
     ));
     assert!(coordinator.streams_description_runtime.contains_key("app"));
     assert!(coordinator.group_type("app") == Some(GroupType::Streams));
+}
+
+/// A graceful owner handoff drains an already admitted native write before
+/// replaying its durable seed. This does not simulate overlapping owners or
+/// claim that a native backend fences stale owners on behalf of the embedder.
+#[tokio::test]
+async fn active_member_handoff_drains_admitted_backend_write() {
+    let backend = Arc::new(NativeStore {
+        set_barrier: Some((Notify::new(), Notify::new())),
+        ..Default::default()
+    });
+    let first = fresh_native_coordinator(&backend);
+    let old = first.get_or_create_streams("app");
+    let joined = heartbeat(&old, join("a"), 1).await;
+    let writer_handle = Arc::clone(&old);
+    let writer =
+        tokio::spawn(async move { push(&writer_handle, description_push("a", 0, 1)).await });
+    let (entered, release) = backend.set_barrier.as_ref().expect("barrier");
+    entered.notified().await;
+    // Queue shutdown behind the write while it is blocked in actual plugin IO.
+    let (reply, stopped) = oneshot::channel();
+    old.tx
+        .send(StreamsGroupActorMessage::Shutdown(reply))
+        .await
+        .expect("queue shutdown");
+    assert!(!writer.is_finished());
+    release.notify_one();
+    assert!(writer.await.expect("writer task").0 == codes::NONE);
+    stopped.await.expect("old owner drained");
+    assert!(old.tx.is_closed());
+    let seed = first.cached_streams_seed("app").expect("durable seed");
+    assert!(seed.members.contains_key("a"));
+    assert!(seed.description_epochs.stored == 0);
+    let (second, moved) = replay_native(&backend, seed).await;
+    let resumed = heartbeat(&moved, steady("a", joined.member_epoch), 1).await;
+    assert!(!resumed.topology_description_required);
+    assert!(describe(&moved).await.topology_description.is_some());
+    second.shutdown_all().await;
+}
+
+/// Ownership selection and actor membership both gate the *production sweep*
+/// after handoff; a failed native deletion is retried on the next eligible pass.
+#[tokio::test]
+async fn moved_active_group_cleanup_requires_ownership_then_membership_and_retries() {
+    use crate::coordinator::retention::sweep;
+    let (backend, first) = native_setup();
+    let (_, seed) = store_shutdown_and_snapshot(&first).await;
+    assert!(seed.members.contains_key("a"));
+    let (moved, handle) = replay_native(&backend, seed).await;
+    // Even with no offsets, active members prevent topology reclamation.
+    assert!(sweep(&moved, |_| true, 101, 100, 0).await.is_empty());
+    assert!(backend.value.lock().expect("lock").is_some());
+    leave_native_member(&handle).await;
+    // An old/non-owning broker must not enter the backend cleanup path.
+    assert!(sweep(&moved, |_| false, 102, 100, 0).await.is_empty());
+    assert!(backend.value.lock().expect("lock").is_some());
+    backend.fail_delete.store(true, Ordering::SeqCst);
+    let failed = sweep(&moved, |_| true, 103, 100, 0).await;
+    assert!(failed.is_empty() || failed.iter().all(|row| !row.outcome.group_deleted));
+    assert!(backend.value.lock().expect("lock").is_some());
+    backend.fail_delete.store(false, Ordering::SeqCst);
+    let retried = sweep(&moved, |_| true, 104, 100, 0).await;
+    assert!(retried.len() == 1 && retried[0].outcome.group_deleted);
+    assert!(backend.value.lock().expect("lock").is_none());
+    assert!(handle.tx.is_closed());
+}
+
+/// Drive all six telemetry outcomes through real actor callbacks and encode
+/// the production registry, rather than asserting isolated counter helpers.
+#[tokio::test]
+async fn native_storage_metrics_cover_callbacks_and_exclude_rejected_pushes() {
+    use crate::metrics::{BrokerMetrics, test_support::encode_metrics};
+    let (backend, coordinator) = native_setup();
+    let metrics = BrokerMetrics::new();
+    coordinator.set_metrics(metrics.clone());
+    let handle = coordinator.get_or_create_streams("app");
+    heartbeat(&handle, join("a"), 1).await;
+    // Rejected protocol requests never invoke the native backend.
+    assert!(push(&handle, description_push("stranger", 0, 1)).await.0 == codes::UNKNOWN_MEMBER_ID);
+    *backend.set_failure.lock().expect("lock") = Some(StorageFailure::Transient);
+    assert!(
+        push(&handle, description_push("a", 0, 1)).await.0
+            == codes::STREAMS_TOPOLOGY_DESCRIPTION_UPDATE_FAILED
+    );
+    *backend.set_failure.lock().expect("lock") = None;
+    assert!(push(&handle, description_push("a", 0, 1)).await.0 == codes::NONE);
+    assert!(describe(&handle).await.topology_description.is_some());
+    backend.fail_get.store(true, Ordering::SeqCst);
+    assert!(describe(&handle).await.topology_description_error);
+    leave_native_member(&handle).await;
+    for fail in [true, false] {
+        backend.fail_delete.store(fail, Ordering::SeqCst);
+        let deleted = ask(&handle.tx, StreamsGroupActorMessage::DeleteDescription)
+            .await
+            .expect("answer")
+            .expect("log");
+        assert!(deleted != fail);
+    }
+    let body = encode_metrics(&metrics);
+    for operation in ["set", "get", "delete"] {
+        for result in ["success", "failure"] {
+            let labels = format!("{{operation=\"{operation}\",result=\"{result}\"}}");
+            assert!(
+                body.contains(&format!(
+                    "krabka_broker_streams_topology_storage_operations_total{labels} 1\n"
+                )),
+                "{body}"
+            );
+            assert!(
+                body.contains(&format!(
+                    "krabka_broker_streams_topology_storage_duration_seconds_count{labels} 1\n"
+                )),
+                "{body}"
+            );
+        }
+    }
+    coordinator.shutdown_all().await;
+}
+
+/// Execute the actual periodic retention runner after native owner handoff.
+/// Virtual Tokio time controls ticks; native plugin barriers acknowledge each
+/// attempted deletion. This is not a distributed timing/fairness proof.
+#[tokio::test]
+async fn moved_group_periodic_runner_retries_on_next_configured_tick() {
+    use {
+        crate::{
+            coordinator::{bootstrap::OFFSETS_TOPIC, retention},
+            metadata_source::test_support::start_controller,
+        },
+        krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord},
+        krabka_raft::{ControllerHandle, NodeId},
+        krabka_units::{Time, convert::TimeExt as _},
+        std::time::Duration,
+        tokio::time::{advance, pause, resume},
+        tokio_util::sync::CancellationToken,
+    };
+    let controller = start_controller().await;
+    let source = Arc::new(controller.controller);
+    source
+        .submit_change(vec![
+            MetadataRecord::V1Topic(TopicRecord {
+                name: OFFSETS_TOPIC.into(),
+                topic_id: uuid::Uuid::new_v4(),
+                partitions: 1,
+                replication_factor: 1,
+            }),
+            MetadataRecord::V1Partition(PartitionRecord {
+                topic: OFFSETS_TOPIC.into(),
+                partition: 0,
+                leader: NodeId(1),
+                ..Default::default()
+            }),
+        ])
+        .await
+        .expect("offsets ownership metadata");
+    let backend = Arc::new(NativeStore {
+        delete_barrier: Some((Notify::new(), Notify::new())),
+        ..Default::default()
+    });
+    let first = fresh_native_coordinator(&backend);
+    let (_, seed) = store_shutdown_and_snapshot(&first).await;
+    let (moved, handle) = replay_native(&backend, seed).await;
+    leave_native_member(&handle).await;
+    backend.fail_delete.store(true, Ordering::SeqCst);
+    pause();
+    let shutdown = CancellationToken::new();
+    let runner = tokio::spawn(retention::run(
+        NodeId(1),
+        Arc::<ControllerHandle>::clone(&source),
+        Arc::clone(&moved),
+        Time::from_millis(10_000),
+        Time::from_millis(100),
+        shutdown.clone(),
+    ));
+    let (entered, release) = backend.delete_barrier.as_ref().expect("barrier");
+    entered.notified().await;
+    release.notify_one();
+    // A mailbox round trip ensures the failed sweep's actor turn has ended.
+    assert!(describe(&handle).await.topology_description.is_none());
+    assert!(backend.value.lock().expect("lock").is_some());
+    backend.fail_delete.store(false, Ordering::SeqCst);
+    advance(Duration::from_secs(10)).await;
+    entered.notified().await;
+    release.notify_one();
+    // Shutdown acknowledgement is queued behind the successful cleanup.
+    handle.tx.closed().await;
+    assert!(backend.value.lock().expect("lock").is_none());
+    shutdown.cancel();
+    runner.await.expect("runner stopped");
+    resume();
+    source.cancel().await;
+}
+
+fn fresh_native_coordinator(backend: &Arc<NativeStore>) -> Arc<GroupCoordinator> {
+    native_coordinator(Arc::clone(backend), Arc::new(InMemoryOffsetsLog::default()))
+}
+
+async fn replay_native(
+    backend: &Arc<NativeStore>,
+    seed: StreamsGroupSeed,
+) -> (Arc<GroupCoordinator>, Arc<StreamsGroupActorHandle>) {
+    let coordinator = fresh_native_coordinator(backend);
+    let handle = coordinator.get_or_create_streams("app");
+    handle
+        .tx
+        .send(StreamsGroupActorMessage::Seed(seed))
+        .await
+        .expect("replay");
+    (coordinator, handle)
 }
