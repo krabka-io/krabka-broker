@@ -46,6 +46,7 @@ use {
         },
         file_config::{FileAuthorizationConfig, FileSchemaRegistryConfig},
         network::auth::{GssapiConfig, SslPrincipalMapper},
+        oauth_jwks::JwksSnapshotState,
         operator_keys::OperatorKeys,
         replica_selector::ReplicaSelectorKind,
         schema_validation::SchemaValidator,
@@ -71,10 +72,7 @@ use {
         net::SocketAddr,
         num::NonZeroU64,
         path::PathBuf,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicI64, AtomicU64},
-        },
+        sync::{Arc, Mutex, atomic::AtomicI64},
     },
     tokio::sync::mpsc::Receiver,
     uuid::Uuid,
@@ -914,19 +912,13 @@ krabka_macros::broker_config! {
         #[default(Arc::new(Mutex::new(None)))]
         pub oauthbearer_jwks_signal_rx: Arc<Mutex<Option<Receiver<()>>>>,
 
-        /// Shared timestamp of the last successful JWKS fetch.
+        /// JWKS publication state the authenticate paths read.
         ///
-        /// `apply_to` creates it as `AtomicI64::new(0)`. The validator's
-        /// `JwksHandle` and the refresher both clone this `Arc`, so the
-        /// validator's expiry check sees the refresher's writes.
-        #[default(shared_epoch_ms())]
-        pub oauthbearer_jwks_last_successful_fetch_ms: Arc<AtomicI64>,
-
-        /// Seqlock generation that makes the JWKS keys and successful-fetch
-        /// timestamp one validation snapshot. Even values are stable; odd
-        /// values mean the refresher is publishing a new pair.
-        #[default(Arc::new(AtomicU64::new(0)))]
-        pub oauthbearer_jwks_cache_generation: Arc<AtomicU64>,
+        /// `apply_to` creates it for the signed validator. The validator's
+        /// `JwksHandle` and the refresher share its atomics, so the
+        /// validator's expiry check and the cache guard see the refresher's
+        /// writes.
+        pub oauthbearer_jwks_snapshot: JwksSnapshotState,
 
         /// Shared on-demand-refresh timestamp for rate-limiting.
         ///

@@ -10,9 +10,19 @@
 //! [`JwksHandle`]: krabka_security::JwksHandle
 //! [`SignedJwsValidator`]: krabka_security::SignedJwsValidator
 
+//!
+//! The fetch and the refresher need an HTTP client stack, which wasm32-wasip1
+//! does not have. The shared publication state in `runtime` builds everywhere,
+//! because `[oauthbearer]` loading creates it on every platform.
+
+#[cfg(not(target_family = "wasm"))]
 mod fetch;
+#[cfg(not(target_family = "wasm"))]
 mod refresher;
-#[cfg(test)]
+mod runtime;
+#[cfg(all(test, not(target_family = "wasm")))]
 mod test_support;
 
+pub use self::runtime::JwksSnapshotState;
+#[cfg(not(target_family = "wasm"))]
 pub use self::{fetch::fetch_jwks, refresher::JwksRefresher};

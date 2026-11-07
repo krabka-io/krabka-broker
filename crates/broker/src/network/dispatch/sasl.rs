@@ -522,8 +522,7 @@ async fn run_authenticate(
             req,
             auth,
             &broker.config.oauthbearer_validator,
-            &broker.config.oauthbearer_jwks_cache_generation,
-            &broker.config.oauthbearer_jwks_last_successful_fetch_ms,
+            &broker.config.oauthbearer_jwks_snapshot,
             now_ms,
             max_reauth,
         )

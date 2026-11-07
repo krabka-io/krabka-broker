@@ -120,8 +120,10 @@ fn jwks_refresher(
         signal_rx,
         min_on_demand_pause: config.oauthbearer_jwks_min_on_demand_pause,
         http_timeout: config.oauth_jwks_http_timeout,
-        last_successful_fetch_ms: Arc::clone(&config.oauthbearer_jwks_last_successful_fetch_ms),
-        cache_generation: Arc::clone(&config.oauthbearer_jwks_cache_generation),
+        last_successful_fetch_ms: Arc::clone(
+            &config.oauthbearer_jwks_snapshot.last_successful_fetch_ms,
+        ),
+        cache_generation: Arc::clone(&config.oauthbearer_jwks_snapshot.generation),
         last_on_demand_refresh_ms: Arc::clone(&config.oauthbearer_jwks_last_on_demand_refresh_ms),
         ignore_key_use: config.features.oauthbearer_jwks_ignore_key_use,
         timer: system_timer(),
@@ -296,7 +298,6 @@ mod tests {
     use {
         super::jwks_refresher,
         crate::{BrokerError, config::BrokerConfig, file_config::FileConfig},
-        assert2::let_assert,
         std::sync::atomic::Ordering,
         tokio_util::sync::CancellationToken,
     };
@@ -322,11 +323,11 @@ mod tests {
             .expect("a signed validator gets a refresher");
         assert!(Arc::ptr_eq(
             &refresher.cache_generation,
-            &config.oauthbearer_jwks_cache_generation
+            &config.oauthbearer_jwks_snapshot.generation
         ));
         assert!(Arc::ptr_eq(
             &refresher.last_successful_fetch_ms,
-            &config.oauthbearer_jwks_last_successful_fetch_ms
+            &config.oauthbearer_jwks_snapshot.last_successful_fetch_ms
         ));
         refresher
             .last_successful_fetch_ms
@@ -343,8 +344,8 @@ mod tests {
         let config = oauthbearer_config("jwks_endpoint_uri = \"https://idp.example/jwks\"\n");
         let shutdown = CancellationToken::new();
         assert!(let Ok(Some(_)) = jwks_refresher(&config, &shutdown));
-        let_assert!(
-            Err(BrokerError::Startup(message)) = jwks_refresher(&config.clone(), &shutdown)
+        assert!(
+            let Err(BrokerError::Startup(message)) = jwks_refresher(&config.clone(), &shutdown)
         );
         assert!(message == "signed validator must park its JWKS signal receiver");
     }

@@ -20,13 +20,13 @@ use {
             FileOAuthBearerConfig,
         },
     },
-    crate::config::{BrokerConfig, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE},
+    crate::{
+        config::{BrokerConfig, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE},
+        oauth_jwks::JwksSnapshotState,
+    },
     jsonpath_rust::{parser, parser::model::JpQuery},
     krabka_units::{Time, convert::TimeExt as _},
-    std::sync::{
-        Arc, PoisonError,
-        atomic::{AtomicI64, AtomicU64},
-    },
+    std::sync::{Arc, PoisonError, atomic::AtomicI64},
     tokio::sync::mpsc,
 };
 
@@ -226,13 +226,12 @@ pub(super) fn apply_oauthbearer(
             // the same Arc-shared state. Channel capacity 1 +
             // `try_send` on the producer ⇒ signals coalesce.
             let (signal_tx, signal_rx) = mpsc::channel::<()>(1);
-            let last_successful = Arc::new(AtomicI64::new(0));
-            let cache_generation = Arc::new(AtomicU64::new(0));
+            let snapshot = JwksSnapshotState::default();
             let last_on_demand = Arc::new(AtomicI64::new(0));
 
             let handle = krabka_security::JwksHandle::new_with_refresher_handles(
                 krabka_security::Jwks::empty(),
-                Arc::clone(&last_successful),
+                Arc::clone(&snapshot.last_successful_fetch_ms),
                 signal_tx,
             );
 
@@ -272,8 +271,7 @@ pub(super) fn apply_oauthbearer(
             *cfg.oauthbearer_jwks_signal_rx
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner) = Some(signal_rx);
-            cfg.oauthbearer_jwks_last_successful_fetch_ms = last_successful;
-            cfg.oauthbearer_jwks_cache_generation = cache_generation;
+            cfg.oauthbearer_jwks_snapshot = snapshot;
             cfg.oauthbearer_jwks_last_on_demand_refresh_ms = last_on_demand;
             cfg.oauthbearer_jwks_min_on_demand_pause = oauth
                 .jwks_min_refresh_pause_seconds
