@@ -28,7 +28,7 @@ use std::{
 use {
     rustix::{
         fs::{Advice, FallocateFlags, fadvise, fallocate, open, statx},
-        io::{Errno, ReadWriteFlags, preadv2},
+        io::{self as rustix_io, Errno, ReadWriteFlags, preadv2},
     },
     std::num::NonZeroU64,
 };
@@ -518,15 +518,29 @@ fn advise_dont_need(file: &File, offset: u64, len: u64) { let _ = (file, offset,
 #[cfg(target_os = "linux")]
 fn is_cached(file: &File, offset: u64) -> Option<bool> {
     let mut byte = [0u8; 1];
-    match preadv2(
+    cache_probe_answer(preadv2(
         file,
         &mut [std::io::IoSliceMut::new(&mut byte)],
         offset,
         ReadWriteFlags::NOWAIT,
-    ) {
+    ))
+}
+
+/// What one `preadv2(RWF_NOWAIT)` probe says about the page cache.
+///
+/// Only a byte read means cached. `EOPNOTSUPP` and `ENOSYS` mean the kernel or
+/// filesystem has no such probe, which the caller latches. Every other error,
+/// `EAGAIN` and also an unexpected one such as `EIO` or `EINVAL`, answers not
+/// cached. An unexpected error says nothing about residency, and "not cached"
+/// keeps the read from waiting on the disk under the log lock, which is the
+/// stall the probe exists to prevent. It is not latched, since it may pass.
+#[cfg(target_os = "linux")]
+fn cache_probe_answer(probe: rustix_io::Result<usize>) -> Option<bool> {
+    match probe {
+        Ok(0) => Some(false),
+        Ok(_) => Some(true),
         Err(Errno::OPNOTSUPP | Errno::NOSYS) => None,
-        Err(Errno::AGAIN) | Ok(0) => Some(false),
-        _ => Some(true),
+        Err(_) => Some(false),
     }
 }
 
@@ -651,6 +665,27 @@ mod tests {
             vec,
         },
     };
+
+    /// Only a byte read counts as cached. An unexpected errno answers not
+    /// cached rather than cached, so the caller does not read under the log
+    /// lock from a disk it could not probe.
+    #[cfg(target_os = "linux")]
+    #[yare::parameterized(
+        read_a_byte = { Ok(1), Some(true) },
+        read_nothing = { Ok(0), Some(false) },
+        would_block = { Err(Errno::AGAIN), Some(false) },
+        not_supported = { Err(Errno::OPNOTSUPP), None },
+        no_such_call = { Err(Errno::NOSYS), None },
+        io_error = { Err(Errno::IO), Some(false) },
+        invalid_argument = { Err(Errno::INVAL), Some(false) },
+        bad_descriptor = { Err(Errno::BADF), Some(false) },
+    )]
+    fn cache_probe_answer_counts_only_a_read_byte_as_cached(
+        probe: rustix_io::Result<usize>,
+        expected: Option<bool>,
+    ) {
+        check!(cache_probe_answer(probe) == expected);
+    }
 
     /// A writer that replays a script of results, recording what each call was
     /// offered. A regular file cannot be persuaded to write short or to make

@@ -41,6 +41,9 @@ pub(super) struct ReplicatorTask {
     pub(super) cancel: CancellationToken,
     pub(super) _partitions: Arc<PartitionRegistry>,
     pub(super) future_logs: Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+    /// This move's own registry entry. The task removes only that entry when
+    /// it ends, never one a later move put under the same key.
+    pub(super) registration: Arc<FutureLogState>,
     pub(super) topic: String,
     pub(super) partition: PartitionIndex,
     pub(super) policy: MovePolicy,
@@ -63,6 +66,7 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
         cancel,
         _partitions,
         future_logs,
+        registration,
         topic,
         partition,
         policy,
@@ -198,8 +202,10 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
             () = part.append_notify.notified() => {}
         }
     }
-    // Whatever the outcome, the future-log entry is no longer useful.
-    future_logs.remove(&(topic, partition));
+    // Whatever the outcome, this move's entry is no longer useful.
+    future_logs.remove_if(&(topic, partition), |_, state| {
+        Arc::ptr_eq(state, &registration)
+    });
 }
 
 #[cfg(test)]
@@ -210,8 +216,8 @@ mod tests {
             future_log::{
                 canonicalize_or_self, resume_move,
                 test_support::{
-                    OpenedFutureLog, TestStampSource, append_epoch_batch, append_records,
-                    append_value_batch, fixture_partition, open_future_log,
+                    OpenedFutureLog, RegisteredSourceFixture, TestStampSource, append_epoch_batch,
+                    append_records, append_value_batch, fixture_partition, open_future_log,
                     registered_source_fixture, test_policy,
                 },
             },
@@ -222,7 +228,10 @@ mod tests {
         krabka_units::mebibytes,
         std::{fs, path::Path, sync::atomic::AtomicU64, time::Duration},
         tempfile::tempdir,
-        tokio::{task, time},
+        tokio::{
+            task::{self, JoinHandle},
+            time,
+        },
     };
 
     async fn resume_and_wait(
@@ -265,6 +274,14 @@ mod tests {
         future_path: PathBuf,
         target: &Path,
     ) {
+        let cancel = CancellationToken::new();
+        let registration = Arc::new(FutureLogState {
+            target_log_dir: target.to_path_buf(),
+            future_path: future_path.clone(),
+            future_log: Arc::clone(&future_log),
+            cancel: cancel.clone(),
+            task: Mutex::new(None),
+        });
         time::timeout(
             Duration::from_secs(10),
             replicator_loop(ReplicatorTask {
@@ -273,9 +290,10 @@ mod tests {
                 target_partition_path: log_dir::partition_dir(target, "t", 0),
                 future_path,
                 target_log_dir: target.to_path_buf(),
-                cancel: CancellationToken::new(),
+                cancel,
                 _partitions: Arc::new(PartitionRegistry::new()),
                 future_logs: Arc::new(DashMap::new()),
+                registration,
                 topic: "t".into(),
                 partition: PartitionIndex(0),
                 policy: test_policy(),
@@ -314,6 +332,62 @@ mod tests {
         assert!(source.partition.stamp_for_offset(Offset(0)) == Some(101));
         append_records(&source.partition, PartitionRecordsSetup::default());
         assert!(source.partition.stamp_for_offset(Offset(3)) == Some(102));
+    }
+
+    /// Whether the move task for `t-0` has ended: its entry is gone, or the
+    /// entry left behind names a task that already finished.
+    fn move_ended(future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>) -> bool {
+        future_logs
+            .get(&("t".to_owned(), PartitionIndex(0)))
+            .is_none_or(|entry| {
+                entry
+                    .task
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .is_some_and(JoinHandle::is_finished)
+            })
+    }
+
+    /// A move whose task ends at its first step, here because the partition
+    /// writer is dead, must not leave its entry behind: a stale entry makes a
+    /// later `AlterReplicaLogDirs` to the same directory a no-op. The task can
+    /// end before the move registers it, so the test repeats the race.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_move_task_that_ends_at_once_leaves_no_registry_entry() {
+        for _ in 0..1000 {
+            let primary = tempdir().unwrap();
+            let target = tempdir().unwrap();
+            let RegisteredSourceFixture {
+                partition,
+                future_logs,
+                partitions,
+            } = registered_source_fixture().primary(primary.path()).call();
+            let writer = partition.take_writer_handle().unwrap();
+            writer.abort();
+            let _ = writer.await;
+            fs::create_dir_all(log_dir::future_partition_dir(target.path(), "t", 0)).unwrap();
+
+            resume_move(
+                &partitions,
+                &future_logs,
+                target.path(),
+                &LogConfig::default(),
+                "t",
+                PartitionIndex(0),
+                test_policy(),
+            )
+            .expect("resume should spawn a future-log move");
+            time::timeout(Duration::from_secs(5), async {
+                while !move_ended(&future_logs) {
+                    task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the move task should end");
+
+            assert!(future_logs.is_empty());
+        }
     }
 
     #[tokio::test]

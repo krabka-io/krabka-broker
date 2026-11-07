@@ -12,7 +12,7 @@ use {
     super::ParsedRecord,
     crate::{
         error::LegacyRecordsError,
-        message::{Magic, Message, attrs_with_compression},
+        message::{Magic, Message, attrs_with_compression, wire_len},
     },
     bytes::{BufMut, BytesMut},
     krabka_compression::CompressionType,
@@ -31,25 +31,44 @@ fn message_for_record(record: ParsedRecord, magic: Magic) -> Message {
     }
 }
 
+/// Write one `MessageSet` entry: the offset, the message size, then the
+/// message.
+///
+/// # Errors
+/// Returns `Malformed`, and writes nothing, when the message is longer than
+/// its `int32` size field can say.
+fn put_framed<B: BufMut>(
+    buf: &mut B,
+    offset: i64,
+    message: &Message,
+) -> Result<(), LegacyRecordsError> {
+    let size = wire_len(message.encoded_len())?;
+    buf.put_i64(offset);
+    buf.put_i32(size);
+    // A message whose size fits has a key and a value that fit, so this
+    // cannot fail after the offset and size are written.
+    message.encode_into(buf)
+}
+
 /// Encode a flat `MessageSet` of magic `magic` into `buf`.
 ///
 /// This function writes one outer message per record. Use it to emit an
 /// uncompressed batch.
+///
+/// # Errors
+/// Returns `Malformed` when a record's message is longer than its `int32`
+/// size field can say. `buf` then holds the entries before that record, and
+/// the caller discards it.
 pub fn encode_flat_message_set<B: BufMut, I: IntoIterator<Item = ParsedRecord>>(
     records: I,
     magic: Magic,
     buf: &mut B,
-) {
+) -> Result<(), LegacyRecordsError> {
     for r in records {
-        let offset = r.offset;
-        let msg = message_for_record(r, magic);
-        let msg_len = msg.encoded_len();
-        buf.put_i64(offset.0);
-        // Safe: legacy messages are well-bounded; capping at i32::MAX is
-        // sufficient for any realistic batch.
-        buf.put_i32(i32::try_from(msg_len).unwrap_or(i32::MAX));
-        msg.encode_into(buf);
+        let offset = r.offset.0;
+        put_framed(buf, offset, &message_for_record(r, magic))?;
     }
+    Ok(())
 }
 
 /// Encode a `MessageSet` wrapped in a single compressed outer message.
@@ -58,7 +77,10 @@ pub fn encode_flat_message_set<B: BufMut, I: IntoIterator<Item = ParsedRecord>>(
 /// follows the KIP-32 conventions: v1 inner offsets are relative to the
 /// first record, preserving gaps left by compaction.
 /// # Errors
+/// Returns `Malformed` if `codec` is `CompressionType::None`, whose set
+/// [`encode_flat_message_set`] writes.
 /// Returns `Malformed` if `codec` is `CompressionType::Zstd`, which v0/v1 cannot represent.
+/// Returns `Malformed` if a message is longer than its `int32` size field can say.
 /// Returns `Malformed` if a v1 relative offset exceeds `i64`.
 /// Returns a compression error if the codec cannot compress the inner set.
 pub fn encode_compressed_message_set<B: BufMut>(
@@ -67,10 +89,11 @@ pub fn encode_compressed_message_set<B: BufMut>(
     codec: CompressionType,
     buf: &mut B,
 ) -> Result<(), LegacyRecordsError> {
-    assert2::assert!(
-        codec != CompressionType::None,
-        "use encode_flat_message_set for uncompressed"
-    );
+    if codec == CompressionType::None {
+        return Err(LegacyRecordsError::Malformed(
+            "an uncompressed set has no wrapper; use encode_flat_message_set".into(),
+        ));
+    }
     if matches!(codec, CompressionType::Zstd) {
         return Err(LegacyRecordsError::Malformed(
             "zstd compression not representable in v0/v1".into(),
@@ -93,11 +116,11 @@ pub fn encode_compressed_message_set<B: BufMut>(
                 LegacyRecordsError::Malformed("relative inner offset exceeds i64".into())
             })?,
         };
-        let msg = message_for_record(r.clone(), magic);
-        let msg_len = msg.encoded_len();
-        inner.put_i64(inner_offset);
-        inner.put_i32(i32::try_from(msg_len).unwrap_or(i32::MAX));
-        msg.encode_into(&mut inner);
+        put_framed(
+            &mut inner,
+            inner_offset,
+            &message_for_record(r.clone(), magic),
+        )?;
     }
 
     // Compress.
@@ -122,14 +145,10 @@ pub fn encode_compressed_message_set<B: BufMut>(
         key: None,
         value: Some(compressed),
     };
-    let wrapper_len = wrapper.encoded_len();
 
     // The wrapper carries the absolute offset of its last record in both
     // magics, as Kafka's `MemoryRecordsBuilder` writes it.
-    buf.put_i64(last.offset.0);
-    buf.put_i32(i32::try_from(wrapper_len).unwrap_or(i32::MAX));
-    wrapper.encode_into(buf);
-    Ok(())
+    put_framed(buf, last.offset.0, &wrapper)
 }
 
 #[cfg(test)]
@@ -171,6 +190,43 @@ mod tests {
     }
 
     #[test]
+    fn compressed_refuses_an_uncompressed_codec() {
+        let mut wire = BytesMut::new();
+        assert2::assert!(matches!(
+            encode_compressed_message_set(
+                &sample_records_v1(),
+                Magic::V1,
+                CompressionType::None,
+                &mut wire
+            ),
+            Err(LegacyRecordsError::Malformed(_))
+        ));
+        assert2::assert!(wire.is_empty());
+    }
+
+    /// A message longer than its `int32` size field is refused rather than
+    /// framed with a saturated size that disagrees with its bytes. The value
+    /// is zeroed memory the encoder never touches, so the test stays cheap.
+    #[yare::parameterized(
+        value_fits_but_message_does_not = { usize::try_from(i32::MAX).unwrap() },
+        value_does_not_fit = { usize::try_from(i32::MAX).unwrap() + 1 },
+    )]
+    fn flat_refuses_a_message_its_size_field_cannot_say(value_len: usize) {
+        let record = ParsedRecord {
+            offset: Offset(0),
+            timestamp: None,
+            key: None,
+            value: Some(Bytes::from(vec![0u8; value_len])),
+        };
+        let mut wire = BytesMut::new();
+        assert2::assert!(matches!(
+            encode_flat_message_set([record], Magic::V0, &mut wire),
+            Err(LegacyRecordsError::Malformed(_))
+        ));
+        assert2::assert!(wire.is_empty());
+    }
+
+    #[test]
     fn compressed_v1_rejects_unrepresentable_relative_span() {
         let mut records = sample_records_v1();
         records[0].offset = Offset(i64::MIN);
@@ -200,7 +256,7 @@ mod tests {
         if let Some(codec) = codec {
             encode_compressed_message_set(&records, magic, codec, &mut buffer).unwrap();
         } else {
-            encode_flat_message_set(records.clone(), magic, &mut buffer);
+            encode_flat_message_set(records.clone(), magic, &mut buffer).unwrap();
         }
 
         let decoded = decode_message_set(&mut &buffer[..], buffer.len()).unwrap();
@@ -216,7 +272,7 @@ mod tests {
             value: Some(Bytes::from_static(b"v")),
         }];
         let mut buf = BytesMut::new();
-        encode_flat_message_set(recs, Magic::V1, &mut buf);
+        encode_flat_message_set(recs, Magic::V1, &mut buf).unwrap();
         let decoded = decode_bytes(&buf);
         assert2::assert!(
             decoded

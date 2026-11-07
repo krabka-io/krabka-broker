@@ -8,8 +8,22 @@
 
 use {
     super::{Magic, Message},
+    crate::error::LegacyRecordsError,
     bytes::{BufMut, Bytes},
 };
+
+/// `len` as the `int32` length field the wire gives it.
+///
+/// # Errors
+/// Returns `Malformed` when `len` exceeds `i32::MAX`, since a saturated field
+/// would disagree with the bytes after it.
+pub fn wire_len(len: usize) -> Result<i32, LegacyRecordsError> {
+    i32::try_from(len).map_err(|_| {
+        LegacyRecordsError::Malformed(format!(
+            "a length of {len} bytes does not fit the i32 length field"
+        ))
+    })
+}
 
 impl Message {
     /// Number of bytes that the message occupies inside the per-entry frame.
@@ -31,7 +45,13 @@ impl Message {
     /// Encode the message into `buf`, including the CRC field.
     ///
     /// This method extends `buf`. It writes nothing before the CRC.
-    pub fn encode_into<B: BufMut>(&self, buf: &mut B) {
+    ///
+    /// # Errors
+    /// Returns `Malformed`, and writes nothing, when the key or the value is
+    /// longer than its `int32` length field can say.
+    pub fn encode_into<B: BufMut>(&self, buf: &mut B) -> Result<(), LegacyRecordsError> {
+        let key_len = nullable_len_field(self.key.as_ref())?;
+        let value_len = nullable_len_field(self.value.as_ref())?;
         // Build the CRC-covered payload first, then prefix it with the CRC.
         // `encoded_len` counts the 4-byte CRC this body excludes; reserving it
         // anyway costs four bytes and keeps arithmetic out of a capacity hint,
@@ -43,25 +63,27 @@ impl Message {
             let ts = self.timestamp.unwrap_or(-1);
             body.extend_from_slice(&ts.to_be_bytes());
         }
-        put_nullable_bytes(&mut body, self.key.as_ref());
-        put_nullable_bytes(&mut body, self.value.as_ref());
+        put_nullable_bytes(&mut body, key_len, self.key.as_ref());
+        put_nullable_bytes(&mut body, value_len, self.value.as_ref());
 
         let crc = crc32fast::hash(&body);
         buf.put_u32(crc);
         buf.put_slice(&body);
+        Ok(())
     }
 }
 
 fn nullable_bytes_len(b: Option<&Bytes>) -> usize { 4 + b.map_or(0, Bytes::len) }
 
-fn put_nullable_bytes(buf: &mut Vec<u8>, b: Option<&Bytes>) {
-    match b {
-        None => buf.extend_from_slice(&(-1i32).to_be_bytes()),
-        Some(data) => {
-            let len = i32::try_from(data.len()).unwrap_or(i32::MAX);
-            buf.extend_from_slice(&len.to_be_bytes());
-            buf.extend_from_slice(data);
-        }
+/// The length field of a nullable byte string: `-1` for null.
+fn nullable_len_field(b: Option<&Bytes>) -> Result<i32, LegacyRecordsError> {
+    b.map_or(Ok(-1), |data| wire_len(data.len()))
+}
+
+fn put_nullable_bytes(buf: &mut Vec<u8>, len: i32, b: Option<&Bytes>) {
+    buf.extend_from_slice(&len.to_be_bytes());
+    if let Some(data) = b {
+        buf.extend_from_slice(data);
     }
 }
 
@@ -83,6 +105,34 @@ mod tests {
         let RoundTrip { buffer, decoded } = round_trip(&message);
         assert2::assert!(buffer.len() == message.encoded_len());
         assert2::assert!(decoded == message);
+    }
+
+    #[yare::parameterized(
+        zero = { 0, Some(0) },
+        largest = { usize::try_from(i32::MAX).unwrap(), Some(i32::MAX) },
+        one_past = { usize::try_from(i32::MAX).unwrap() + 1, None },
+    )]
+    fn wire_len_refuses_a_length_past_i32(len: usize, expected: Option<i32>) {
+        assert2::assert!(wire_len(len).ok() == expected);
+    }
+
+    /// A key longer than its `int32` length field is refused, and nothing is
+    /// written, rather than written with a saturated length.
+    #[test]
+    fn encode_into_refuses_a_key_its_length_field_cannot_say() {
+        let message = Message {
+            key: Some(Bytes::from(vec![
+                0u8;
+                usize::try_from(i32::MAX).unwrap() + 1
+            ])),
+            ..fixture_v0()
+        };
+        let mut buffer = bytes::BytesMut::new();
+        assert2::assert!(matches!(
+            message.encode_into(&mut buffer),
+            Err(LegacyRecordsError::Malformed(_))
+        ));
+        assert2::assert!(buffer.is_empty());
     }
 
     #[test]

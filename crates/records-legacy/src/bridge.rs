@@ -117,7 +117,7 @@ pub fn v2_to_legacy(batch: &RecordBatch, target: Magic) -> Result<Bytes, LegacyR
     if compressed {
         encode_compressed_message_set(&records, target, codec, &mut out)?;
     } else {
-        encode_flat_message_set(records, target, &mut out);
+        encode_flat_message_set(records, target, &mut out)?;
     }
     Ok(out.freeze())
 }
@@ -279,7 +279,7 @@ mod tests {
                 value: None,
             });
         let mut wire = BytesMut::new();
-        encode_flat_message_set(records, Magic::V1, &mut wire);
+        encode_flat_message_set(records, Magic::V1, &mut wire).unwrap();
         wire
     }
 

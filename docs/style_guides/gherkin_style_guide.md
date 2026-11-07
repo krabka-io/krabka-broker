@@ -135,12 +135,13 @@ The fork the root `Cargo.toml` pins fixes most of upstream's silent failures. It
 - A `*` step after a `When` or `Then` continues that keyword.
 - A failing step's panic names the feature file and line, the rule, the scenario, the outline row and the step as written.
 - `ignore_tags = "<tag expression>"` marks matching scenarios `#[ignore]` instead of dropping them, so `--ignored` still runs them. Tags may contain `:` and `.`.
+- `expect_failure_tags = "<tag expression>"` runs matching scenarios as expected failures. The test passes while a step fails, and fails with "scenario tagged ... now passes: remove the tag" once every step passes, so a scenario cannot stay `@inprogress` after the work is done. A tag set that matches both `ignore_tags` and `expect_failure_tags` is a compile error.
+- Placeholder values bind to a step function's parameters by name, so the parameter order does not matter. Position is the fallback only where names cannot match, such as a `StepArgs` struct.
 
 What is still open:
 
 - Cargo does not see a new `.feature` file in a directory that `scenarios!` reads until the Rust file that calls the macro changes. After you add a feature file, touch that file, or the new scenarios do not exist. Edits to an existing file are tracked. Bazel is not affected, because the `compile_data` glob is a build input.
 - When several step definitions match a step, rstest-bdd runs the most specific one and breaks ties arbitrarily. `krabka_bdd::scenarios!` turns that into a failing test.
-- Placeholder values bind to a step function's parameters by position, not by name. Keep the parameters in the order the placeholders appear in the pattern: reordering them still compiles and silently swaps the values.
 
 ## krabka-bdd
 
@@ -152,7 +153,7 @@ What is still open:
 krabka_bdd::scenarios!("tests/features/log_policy", fixtures = [log_policy: LogPolicyScenario]);
 ```
 
-It takes the arguments of `rstest_bdd_macros::scenarios!`. Before it expands, it lints every `.feature` file under the directory against this guide. Each finding is a compile error of the form `path:line:col: rule-id: message. Fix: hint`. A clean directory expands to rstest-bdd's `scenarios!` and to one more test, `<dir>_steps::every_step_matches_one_definition`. That test resolves every step of every scenario the call runs, with outline rows substituted, against the step definitions in the test binary. It fails on a step that matches no definition and on a step that matches more than one, and lists the `file:line` of each match. It leaves out the scenarios that `ignore_tags` names, by default `@formulated or @inprogress`.
+It takes the arguments of `rstest_bdd_macros::scenarios!`. Before it expands, it lints every `.feature` file under the directory against this guide. Each finding is a compile error of the form `path:line:col: rule-id: message. Fix: hint`. A clean directory expands to rstest-bdd's `scenarios!` and to one more test, `<dir>_steps::every_step_matches_one_definition`. That test resolves every step of every scenario the call runs, with outline rows substituted, against the step definitions in the test binary. It fails on a step that matches no definition and on a step that matches more than one, and lists the `file:line` of each match. It leaves out the scenarios that `ignore_tags` names, by default `@formulated or @inprogress`, and rstest-bdd marks the same scenarios `#[ignore]`, so the gating run skips them and `cargo test -- --ignored` runs them.
 
 | Rule id | Flags | Fix |
 | :--- | :--- | :--- |

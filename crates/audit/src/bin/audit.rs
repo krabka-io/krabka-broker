@@ -21,13 +21,26 @@ enum Command {
         /// Path to the audit partition directory, for example `<log_dir>/__krabka_audit-0`
         #[arg(long)]
         partition_dir: PathBuf,
-        /// The `key_id` that the trusted public key corresponds to.
-        #[arg(long)]
-        key_id: String,
-        /// Path to the trusted Ed25519 public key (raw 32 bytes).
-        #[arg(long)]
-        public_key: PathBuf,
+        /// A `key_id` to trust. Repeat it once per key, for example the
+        /// keys before and after a rotation; each pairs with the
+        /// `--public-key` at the same position.
+        #[arg(long, required = true)]
+        key_id: Vec<String>,
+        /// Path to a trusted Ed25519 public key (raw 32 bytes). Repeat it
+        /// once per `--key-id`, in the same order.
+        #[arg(long, required = true)]
+        public_key: Vec<PathBuf>,
     },
+}
+
+/// Read every public key file and pair it with the key id at its position.
+fn trusted_keys(key_ids: Vec<String>, public_keys: &[PathBuf]) -> Result<TrustedKeys, String> {
+    let keys = public_keys
+        .iter()
+        .map(|path| fs::read(path).map_err(|e| format!("read public key {}: {e}", path.display())))
+        .collect::<Result<Vec<_>, _>>()?;
+    TrustedKeys::paired(key_ids, keys)
+        .map_err(|e| format!("{e} (pass one --public-key for every --key-id, in the same order)"))
 }
 
 #[tracing::instrument(
@@ -46,15 +59,14 @@ fn main() -> ExitCode {
             let span = tracing::Span::current();
             span.record("command", "verify");
             span.record("partition_dir", field::display(partition_dir.display()));
-            span.record("key_id", field::display(&key_id));
-            let pubkey = match fs::read(&public_key) {
-                Ok(b) => b,
+            span.record("key_id", field::display(key_id.join(",")));
+            let trusted = match trusted_keys(key_id, &public_key) {
+                Ok(trusted) => trusted,
                 Err(e) => {
-                    eprintln!("error: read public key {}: {e}", public_key.display());
+                    eprintln!("error: {e}");
                     return ExitCode::FAILURE;
                 }
             };
-            let trusted = TrustedKeys::single(key_id, pubkey);
             match verify_partition_dir(&partition_dir, &trusted) {
                 Ok(report) if !report.ok => {
                     match &report.first_break {

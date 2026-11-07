@@ -53,7 +53,7 @@ fn build_v0_messageset(pairs: &[KeyValue<'_>]) -> Bytes {
         })
         .collect();
     let mut buf = BytesMut::new();
-    encode_flat_message_set(records, Magic::V0, &mut buf);
+    encode_flat_message_set(records, Magic::V0, &mut buf).unwrap();
     buf.freeze()
 }
 

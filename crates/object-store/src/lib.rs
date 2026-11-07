@@ -56,7 +56,7 @@ pub use {
     error::ObjectStoreError,
     ops::{ObjectOps, ObjectStoreClient, PutMode, PutOutcome, PutRequest},
     prefix::{normalize_prefix, prefixed_key},
-    read::read_capped,
+    read::{CappedDigest, MAX_WAL_OBJECT_BYTES, digest_capped, read_capped},
 };
 
 #[cfg(test)]

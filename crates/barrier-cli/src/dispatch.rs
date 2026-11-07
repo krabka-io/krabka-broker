@@ -34,6 +34,21 @@ krabka_macros::parsed_cli_entrypoint!({
     /// argument list is a bug in that list rather than a runtime condition.
 });
 
+/// The `timeout_ms` that asks the broker for its own default. The broker reads
+/// any non-positive value that way.
+const BROKER_DEFAULT_TIMEOUT_MS: i32 = 0;
+
+/// The `timeout_ms` a `trigger --timeout` sends.
+///
+/// No timeout asks for the broker's default. A timeout above `i32::MAX`
+/// milliseconds saturates there, so the broker clamps it to its ceiling, as the
+/// `--timeout` help says.
+fn trigger_timeout_ms(timeout: Option<Time>) -> i32 {
+    timeout.map_or(BROKER_DEFAULT_TIMEOUT_MS, |timeout| {
+        i32::try_from(timeout.millis_i64()).unwrap_or(i32::MAX)
+    })
+}
+
 /// Run one parsed command, writing to stdout and stderr.
 pub async fn run(cli: Cli) -> i32 {
     let (mut out, mut err) = (io::stdout(), io::stderr());
@@ -97,11 +112,7 @@ async fn dispatch(client: &Client, command: Command, console: &mut Console<'_>) 
         Command::Trigger { group, timeout } => {
             let request = api::TriggerBarrierRequest {
                 group,
-                // A non-positive timeout asks the broker for its own default.
-                timeout_ms: timeout
-                    .map(Time::millis_i64)
-                    .and_then(|ms| i32::try_from(ms).ok())
-                    .unwrap_or(0),
+                timeout_ms: trigger_timeout_ms(timeout),
                 ..api::TriggerBarrierRequest::default()
             };
             send_then(client, console, request, report_trigger).await
@@ -165,5 +176,28 @@ async fn send_then<R: krabka_client_core::ProtocolRequest>(
             ));
             EXIT_UNREACHABLE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        assert2::check,
+        krabka_units::prelude::{days, secs},
+    };
+
+    /// `trigger --timeout` reaches the wire in whole milliseconds. A timeout
+    /// past `i32::MAX` saturates, so the broker clamps it to its ceiling
+    /// rather than reading it as "use the default".
+    #[yare::parameterized(
+        omitted = { None, BROKER_DEFAULT_TIMEOUT_MS },
+        five_seconds = { Some(secs(5)), 5_000 },
+        largest_that_fits = { Some(Time::from_millis(i64::from(i32::MAX))), i32::MAX },
+        one_past_the_field = { Some(Time::from_millis(i64::from(i32::MAX) + 1)), i32::MAX },
+        thirty_days = { Some(days(30)), i32::MAX },
+    )]
+    fn trigger_timeout_ms_saturates_past_the_wire_field(timeout: Option<Time>, expected: i32) {
+        check!(trigger_timeout_ms(timeout) == expected);
     }
 }

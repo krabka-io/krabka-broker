@@ -234,7 +234,7 @@ mod tests {
     fn v1_wrapper(inner_offsets: &[i64], wrapper_offset: i64) -> BytesMut {
         let inner: Vec<_> = inner_offsets.iter().copied().map(record_at).collect();
         let mut flat = BytesMut::new();
-        encode_flat_message_set(inner, Magic::V1, &mut flat);
+        encode_flat_message_set(inner, Magic::V1, &mut flat).unwrap();
         gzip_v1_wrapper(&flat, wrapper_offset)
     }
 
@@ -250,7 +250,7 @@ mod tests {
         let mut wire = BytesMut::new();
         wire.put_i64(wrapper_offset);
         wire.put_i32(i32::try_from(wrapper.encoded_len()).unwrap());
-        wrapper.encode_into(&mut wire);
+        wrapper.encode_into(&mut wire).unwrap();
         wire
     }
 
@@ -342,7 +342,7 @@ mod tests {
         let outer_len = outer_msg.encoded_len();
         wire.put_i64(0);
         wire.put_i32(i32::try_from(outer_len).unwrap());
-        outer_msg.encode_into(&mut wire);
+        outer_msg.encode_into(&mut wire).unwrap();
 
         let mut cur: &[u8] = &wire[..];
         let err = decode_message_set(&mut cur, wire.len()).unwrap_err();
@@ -417,9 +417,9 @@ mod tests {
         // message bytes, as Kafka's `DataLogInputStream` would stop.
         let inner: Vec<_> = [0, 1, 2].into_iter().map(record_at).collect();
         let mut complete = BytesMut::new();
-        encode_flat_message_set(inner[..2].to_vec(), Magic::V1, &mut complete);
+        encode_flat_message_set(inner[..2].to_vec(), Magic::V1, &mut complete).unwrap();
         let mut flat = BytesMut::new();
-        encode_flat_message_set(inner, Magic::V1, &mut flat);
+        encode_flat_message_set(inner, Magic::V1, &mut flat).unwrap();
         flat.truncate(complete.len() + 12 + 5);
         let wire = gzip_v1_wrapper(&flat, 101);
 
@@ -457,7 +457,7 @@ mod tests {
             key: None,
             value: Some(Bytes::from_static(b"flat")),
         };
-        encode_flat_message_set(vec![flat.clone()], Magic::V1, &mut buf);
+        encode_flat_message_set(vec![flat.clone()], Magic::V1, &mut buf).unwrap();
         let inner = vec![
             ParsedRecord {
                 offset: Offset(100),

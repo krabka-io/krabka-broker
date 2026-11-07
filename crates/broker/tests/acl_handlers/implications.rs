@@ -43,7 +43,7 @@ async fn alice_topic_grant(visibility: &mut TopicVisibility, operation: String) 
 #[rstest_bdd_macros::when("alice requests Metadata for foo by name")]
 async fn alice_named_metadata(visibility: &mut TopicVisibility) {
     visibility.metadata =
-        Some(named_metadata_as_alice(visibility.address.expect("broker address"), "foo").await);
+        Some(named_metadata_as_alice(visibility.address.expect("broker address"), "foo", 0).await);
 }
 #[rstest_bdd_macros::then("Metadata contains exactly foo without a topic authorization error")]
 fn alice_topic_described(visibility: &TopicVisibility) {

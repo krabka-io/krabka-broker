@@ -11,12 +11,12 @@ use {
     crate::support::{
         produce::encode_batch_request,
         topics::{creatable_topic, create_topic_request},
-        wire::{HeaderEncoding, request_frame},
+        wire::{HeaderEncoding, decode_response_frame, request_frame},
     },
     assert2::assert,
-    bytes::{Buf, BytesMut},
+    bytes::BytesMut,
     krabka_protocol::{
-        Decode, Encode,
+        Encode,
         kafka_3_6_2::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         owned::produce_response::ProduceResponse,
         records::{RecordBatch, RecordsPayload},
@@ -120,11 +120,9 @@ pub async fn produce_batch_to(addr: SocketAddr, topic: &str, partition: i32, bat
         .await
         .expect("read produce resp");
 
-    let mut cur: &[u8] = &resp;
-    let _corr = cur.get_i32();
-    let _tagged = cur.get_u8(); // flexible response header tagged fields
-    let produce_resp =
-        ProduceResponse::decode(&mut cur, PRODUCE_VERSION).expect("decode ProduceResponse v9");
+    let produce_resp: ProduceResponse =
+        decode_response_frame(&resp, 99, PRODUCE_VERSION, true, "decode ProduceResponse")
+            .expect("decode ProduceResponse v9");
     let part_resp = &produce_resp.responses[0].partition_responses[0];
     assert!(
         part_resp.error_code == 0,

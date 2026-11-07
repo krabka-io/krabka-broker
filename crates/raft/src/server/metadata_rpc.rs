@@ -84,8 +84,8 @@ fn applied_change(result: &SubmitChangeResult) -> Result<KrabkaSubmitChangeRespo
     })
 }
 
-/// The forwarded `submit_change` response for a local submit that failed with
-/// `error`.
+/// The forwarded `submit_change` or delegation-token mutation response for a
+/// local write that failed with `error`.
 fn submit_change_failure(error: &RaftError) -> KrabkaSubmitChangeResponse {
     let (error_code, leader_hint) = match error {
         RaftError::Metadata(_) => (SUBMIT_CHANGE_REJECTED, LEADER_HINT_UNKNOWN),
@@ -115,6 +115,21 @@ pub(super) async fn dispatch_delegation_token_mutation(
     body: &[u8],
     engine: &KraftController,
 ) -> Result<Bytes, RaftError> {
+    apply_delegation_token_mutations(body, |mutations| {
+        engine.submit_delegation_token_mutations(mutations)
+    })
+    .await
+}
+
+/// [`dispatch_delegation_token_mutation`] with the leader's write as `submit`.
+async fn apply_delegation_token_mutations<Submit, Written>(
+    body: &[u8],
+    submit: Submit,
+) -> Result<Bytes, RaftError>
+where
+    Submit: FnOnce(Vec<DelegationTokenMutation>) -> Written,
+    Written: Future<Output = Result<SubmitChangeResult, RaftError>>,
+{
     let req = decode_submit_change_request(body)?;
     let mutations: Vec<DelegationTokenMutation> = match <serde_wincode::SerdeCompat<
         Vec<DelegationTokenMutation>,
@@ -134,23 +149,11 @@ pub(super) async fn dispatch_delegation_token_mutation(
             return Ok(Bytes::from(out));
         }
     };
-    let response = match engine.submit_delegation_token_mutations(mutations).await {
+    // The same error codes as a forwarded `SubmitChange`, so the forwarding
+    // node tells an uncommitted tail and a rejection from a lost leadership.
+    let response = match submit(mutations).await {
         Ok(result) => applied_change(&result)?,
-        Err(RaftError::NotLeader { current_leader }) => KrabkaSubmitChangeResponse {
-            error_code: SUBMIT_CHANGE_NOT_LEADER,
-            leader_hint: current_leader
-                .and_then(|leader| i64::try_from(leader.0).ok())
-                .unwrap_or(LEADER_HINT_UNKNOWN),
-            result: Bytes::new(),
-        },
-        Err(error) => {
-            tracing::warn!(?error, "delegation-token mutation failed");
-            KrabkaSubmitChangeResponse {
-                error_code: SUBMIT_CHANGE_FAILED,
-                leader_hint: LEADER_HINT_UNKNOWN,
-                result: Bytes::new(),
-            }
-        }
+        Err(error) => submit_change_failure(&error),
     };
     let mut out = Vec::with_capacity(16);
     response.encode_v0(&mut out)?;
@@ -245,7 +248,7 @@ mod tests {
         assert2::check,
         krabka_ids::ApiKey,
         krabka_metadata::MetadataRecord,
-        std::{iter, slice},
+        std::{future, iter, slice},
         uuid::Uuid,
     };
 
@@ -537,6 +540,52 @@ mod tests {
         let mut cur = &resp_bytes[..];
         let resp = KrabkaSubmitChangeResponse::decode_v0(&mut cur).expect("decode response");
         assert2::assert!(resp.error_code == SUBMIT_CHANGE_APPLIED);
+    }
+
+    /// A forwarded token mutation that the leader fails answers the code the
+    /// forwarded `SubmitChange` answers, so the forwarding node reports the
+    /// leader's error rather than a lost leadership.
+    #[tokio::test]
+    async fn a_failed_token_mutation_encodes_the_code_the_forwarding_node_translates() {
+        let cases = [
+            (
+                "uncommitted tail",
+                RaftError::UncommittedTail,
+                SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+                LEADER_HINT_UNKNOWN,
+            ),
+            (
+                "metadata rejection",
+                RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord("token")),
+                SUBMIT_CHANGE_REJECTED,
+                LEADER_HINT_UNKNOWN,
+            ),
+            (
+                "not the leader",
+                RaftError::NotLeader {
+                    current_leader: Some(NodeId(3)),
+                },
+                SUBMIT_CHANGE_NOT_LEADER,
+                3,
+            ),
+        ];
+        // An empty record list and an empty mutation list encode alike.
+        let body = submit_change_body(&[]);
+        for (case, error, error_code, leader_hint) in cases {
+            let response = apply_delegation_token_mutations(&body, |_| future::ready(Err(error)))
+                .await
+                .expect("token mutation dispatch");
+
+            check!(
+                decode_submit_change_response(&response)
+                    == KrabkaSubmitChangeResponse {
+                        error_code,
+                        leader_hint,
+                        result: Bytes::new(),
+                    },
+                "{case}"
+            );
+        }
     }
 
     #[yare::parameterized(

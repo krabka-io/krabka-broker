@@ -215,7 +215,8 @@ mod tests {
             finalized_features_epoch: -1,
             admin_router: None,
             unstable,
-        });
+        })
+        .expect("the ApiVersions body encodes");
         let response = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode response");
         assert2::assert!(
             response.api_keys == expected_entries(api_versions_max),
