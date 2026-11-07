@@ -108,7 +108,6 @@ pub async fn start_move(
     let future_log = open_future_log(partitions, &future_path, log_config)?;
 
     spawn_move(MoveTask {
-        partitions: Arc::clone(partitions),
         future_logs: Arc::clone(future_logs),
         target_log_dir,
         future_path,
@@ -141,7 +140,6 @@ pub fn resume_move(
     let future_path = log_dir::future_partition_dir(target_log_dir, topic, partition.get());
     let future_log = open_future_log(partitions, &future_path, log_config)?;
     spawn_move(MoveTask {
-        partitions: Arc::clone(partitions),
         future_logs: Arc::clone(future_logs),
         target_log_dir: target_log_dir.to_path_buf(),
         future_path,
@@ -170,7 +168,6 @@ fn open_future_log(
 /// `FutureLogState`, inserts it into the registry, and spawns the
 /// per-move replicator task.
 struct MoveTask {
-    partitions: Arc<PartitionRegistry>,
     future_logs: Arc<FutureLogRegistry>,
     target_log_dir: PathBuf,
     future_path: PathBuf,
@@ -206,7 +203,6 @@ fn spawn_move(task: MoveTask) {
         target_partition_path,
         target_log_dir: task.target_log_dir,
         cancel,
-        _partitions: task.partitions,
         future_logs: task.future_logs,
         registration: Arc::clone(&state),
         topic: task.topic,

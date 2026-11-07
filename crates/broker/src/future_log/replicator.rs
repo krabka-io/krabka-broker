@@ -13,10 +13,7 @@ use {
         catch_up::catch_up,
         truncation::{cut_future_log, truncate_to_current_epochs},
     },
-    crate::{
-        partition::{Partition, SwapOutcome, WriterMessage},
-        partition_registry::PartitionRegistry,
-    },
+    crate::partition::{Partition, SwapOutcome, WriterMessage},
     krabka_ids::PartitionIndex,
     krabka_log::{Log, Offset},
     krabka_units::convert::TimeExt as _,
@@ -38,7 +35,6 @@ pub(super) struct ReplicatorTask {
     pub(super) target_partition_path: PathBuf,
     pub(super) target_log_dir: PathBuf,
     pub(super) cancel: CancellationToken,
-    pub(super) _partitions: Arc<PartitionRegistry>,
     pub(super) future_logs: Arc<FutureLogRegistry>,
     /// This move's own registry entry. The task removes only that entry when
     /// it ends, never one a later move put under the same key.
@@ -63,7 +59,6 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
         target_partition_path,
         target_log_dir,
         cancel,
-        _partitions,
         future_logs,
         registration,
         topic,
@@ -219,6 +214,7 @@ mod tests {
                 },
             },
             log_dir,
+            partition_registry::PartitionRegistry,
         },
         assert2::assert,
         krabka_log::LogConfig,
@@ -288,7 +284,6 @@ mod tests {
                 future_path,
                 target_log_dir: target.to_path_buf(),
                 cancel,
-                _partitions: Arc::new(PartitionRegistry::new()),
                 future_logs: Arc::new(FutureLogRegistry::default()),
                 registration,
                 topic: "t".into(),
