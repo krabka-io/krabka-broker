@@ -428,8 +428,11 @@ impl GroupCoordinator {
     /// Spawn a classic actor seeded with a fully-replayed `Group` at
     /// bootstrap.
     pub fn seed_classic(self: &Arc<Self>, group_id: &str, group: Box<CoordinatorGroup>) {
-        let handle = self.get_or_create_classic(group_id);
-        let _ = handle.try_seed(GroupActorSeed::Classic(group));
+        seed_replayed(
+            group_id,
+            &self.get_or_create_classic(group_id),
+            GroupActorSeed::Classic(group),
+        );
     }
 
     pub fn finalize_bootstrap(self: &Arc<Self>) {
@@ -461,9 +464,16 @@ fn drain_seeds<T, H: RegisteredActor>(
     let group_ids: Vec<String> = seeds.iter().map(|e| e.key().clone()).collect();
     for group_id in group_ids {
         if let Some((_, seed)) = seeds.remove(&group_id) {
-            let handle = get_or_create(&group_id);
-            let _ = handle.try_seed(into_seed(seed));
+            seed_replayed(&group_id, &get_or_create(&group_id), into_seed(seed));
         }
+    }
+}
+
+/// Hands `seed`, the replayed state of `group_id`, to its actor `handle`, and
+/// logs a seed that a full or closed mailbox dropped.
+fn seed_replayed<H: RegisteredActor>(group_id: &str, handle: &Arc<H>, seed: H::Seed) {
+    if let Err(error) = handle.try_seed(seed) {
+        tracing::warn!(group_id, %error, "dropped the replayed seed of a group actor");
     }
 }
 
