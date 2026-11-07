@@ -317,7 +317,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_absolute_read_rejects_an_oversized_object_before_fetching_it() {
+    async fn an_absolute_digest_rejects_an_oversized_object_before_fetching_it() {
         let root = tempfile::tempdir().expect("archive root");
         fs::write(root.path().join("wal.ckwl"), b"oversized").expect("write object");
         let archive = Archive::open(&local_args(root.path())).expect("open the archive");
@@ -331,7 +331,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_absolute_read_rejects_growth_between_head_and_get() {
+    async fn an_absolute_digest_rejects_growth_between_head_and_get() {
         let archive = archive_that_grows_during_get("wal.ckwl", None).await;
         let error = archive
             .digest_absolute_capped("wal.ckwl", 5)
