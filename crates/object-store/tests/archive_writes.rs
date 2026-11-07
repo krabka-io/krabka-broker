@@ -3,16 +3,19 @@
 
 #![cfg(test)]
 
+mod hermetic;
+
 use {
     bytes::Bytes,
+    hermetic::{Backend, Hermetic},
     krabka_bdd::Given,
     krabka_object_store::{
         ObjectOps as _, ObjectStoreClient, ObjectStoreError, PutMode, PutOutcome, PutRequest,
     },
-    object_store::{ObjectStore, ObjectStoreExt as _, local::LocalFileSystem, memory::InMemory},
+    object_store::{ObjectStore, ObjectStoreExt as _},
     std::{convert::Infallible, fmt::Write as _, fs, str::FromStr, sync::Arc},
     tempfile::TempDir,
-    tokio::runtime::{Builder, Runtime},
+    tokio::runtime::Runtime,
 };
 
 const ARCHIVED: &str = "Given a tiered segment has been archived";
@@ -30,13 +33,6 @@ const OTHER_BYTES: &[u8] = b"other bytes";
 /// The part size of a multipart upload. The rules do not depend on it, only
 /// on whether a file is uploaded in parts at all.
 const PART_SIZE: usize = 64 * 1024;
-
-/// The store backend a scenario archives to.
-#[derive(Clone, Copy, Debug, krabka_bdd::StepParam)]
-enum Backend {
-    InMemory,
-    LocalFilesystem,
-}
 
 /// What protects an archived object against being replaced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
@@ -77,17 +73,15 @@ struct Archive {
 
 impl Archive {
     fn new(backend: Backend) -> Self {
-        let (store, root): (Arc<dyn ObjectStore>, _) = match backend {
-            Backend::InMemory => (Arc::new(InMemory::new()), None),
-            Backend::LocalFilesystem => {
-                let root = tempfile::tempdir().unwrap();
-                let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-                (Arc::new(store), Some(root))
-            }
-        };
+        let Hermetic {
+            runtime,
+            store,
+            client,
+            root,
+        } = Hermetic::open(backend);
         Self {
-            runtime: Builder::new_current_thread().enable_all().build().unwrap(),
-            client: ObjectStoreClient::new(Arc::clone(&store)),
+            runtime,
+            client,
             store,
             staging: tempfile::tempdir().unwrap(),
             multipart_threshold: 1024,

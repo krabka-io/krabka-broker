@@ -4,19 +4,20 @@
 
 #![cfg(test)]
 
+mod hermetic;
+
 use {
     bytes::Bytes,
+    hermetic::{Backend, Hermetic},
     krabka_bdd::Given,
     krabka_object_store::{
         ObjectOps as _, ObjectStoreClient, ObjectStoreError, PutMode, PutOutcome, PutRequest,
         normalize_prefix, prefixed_key,
     },
-    object_store::{
-        ObjectStore, ObjectStoreExt as _, local::LocalFileSystem, memory::InMemory, path::Path,
-    },
+    object_store::{ObjectStore, ObjectStoreExt as _, path::Path},
     std::{convert::Infallible, str::FromStr, sync::Arc},
     tempfile::TempDir,
-    tokio::runtime::{Builder, Runtime},
+    tokio::runtime::Runtime,
 };
 
 const ARCHIVED: &str = "Given a cluster has archived a WAL object under the prefix <first>";
@@ -32,13 +33,6 @@ const FIRST_BYTES: &[u8] = b"first cluster segment";
 
 /// The bytes the second cluster archives.
 const SECOND_BYTES: &[u8] = b"second cluster segment";
-
-/// The store backend a scenario's bucket lives in.
-#[derive(Clone, Copy, Debug, krabka_bdd::StepParam)]
-enum Backend {
-    InMemory,
-    LocalFilesystem,
-}
 
 /// A comma-separated list of prefixes or keys, as a step writes it.
 #[derive(Clone, Debug)]
@@ -66,17 +60,15 @@ struct Bucket {
 
 impl Bucket {
     fn new(backend: Backend) -> Self {
-        let (store, root): (Arc<dyn ObjectStore>, _) = match backend {
-            Backend::InMemory => (Arc::new(InMemory::new()), None),
-            Backend::LocalFilesystem => {
-                let root = tempfile::tempdir().unwrap();
-                let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-                (Arc::new(store), Some(root))
-            }
-        };
+        let Hermetic {
+            runtime,
+            store,
+            client,
+            root,
+        } = Hermetic::open(backend);
         Self {
-            runtime: Builder::new_current_thread().enable_all().build().unwrap(),
-            client: ObjectStoreClient::new(Arc::clone(&store)),
+            runtime,
+            client,
             store,
             _root: root,
         }
