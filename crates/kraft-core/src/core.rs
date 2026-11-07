@@ -95,7 +95,12 @@ pub struct QuorumTimeouts {
 }
 
 /// An extent as the whole milliseconds the deadline timeline is kept in.
-fn whole_millis(extent: Time) -> u64 { u64::try_from(extent.millis_i64()).unwrap_or(0) }
+///
+/// A [`SimInstant`] is a coordinate on that integer millisecond timeline, and
+/// [`election_jitter_ms`] is defined over it, so every extent added to a
+/// deadline crosses into integers here. A negative extent reads as zero.
+#[must_use]
+pub fn whole_millis(extent: Time) -> u64 { u64::try_from(extent.millis_i64()).unwrap_or(0) }
 
 #[derive(Clone, Copy)]
 struct VoteRequest {
