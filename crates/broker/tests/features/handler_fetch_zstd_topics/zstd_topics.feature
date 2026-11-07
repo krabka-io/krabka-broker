@@ -19,6 +19,13 @@ Feature: Consumers older than Fetch v10 cannot read zstd topics
       When a consumer fetches the topic with Fetch v9
       Then the consumer receives the record
 
+  Rule: A follower broker replicates a zstd topic at any Fetch version
+
+    Scenario: A Fetch v9 follower replicates a zstd topic
+      Given a replicated topic with compression.type zstd holds one record
+      When the follower broker fetches the topic with Fetch v9
+      Then the follower receives the record
+
   Rule: Fetch v10 is the first version that reads a zstd topic
 
     Scenario: A Fetch v10 consumer reads a zstd topic

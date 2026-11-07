@@ -1,24 +1,26 @@
 //! Scenarios for `tests/features/handler_fetch_zstd_topics`: a consumer that
 //! sends Fetch older than v10 is refused every partition of a topic whose
-//! `compression.type` is zstd.
+//! `compression.type` is zstd. A follower broker is not.
 
 use {
     super::test_support::{
         TopicRepresentation, expected_refused_partition, expected_single_topic, fetch_wire,
-        request_partition, sessionless_request,
+        request_partition, sessionless_request, start_with_idle_follower,
     },
     crate::{
         codes::{NONE, UNSUPPORTED_COMPRESSION_TYPE},
         config_keys::COMPRESSION_TYPE,
         handlers::test_support::{
             StartedBroker, configured_topic_request, created_topic_response, produce_records,
+            record_batch, seed_partition_replicas, wait_for_bound_partition,
         },
-        test_support::{KafkaErrorCode, start_broker_no_audit},
+        test_support::{KafkaErrorCode, append_partition_batch, start_broker_no_audit},
     },
     assert2::assert,
     bytes::Bytes,
     krabka_bdd::{Given, TokioMultiThreadContext},
     krabka_ids::{ApiVersion, Offset, PartitionIndex},
+    krabka_metadata::{MetadataRecord, NodeId, TopicConfigRecord},
     krabka_protocol::{
         owned::{
             fetch_request::{FetchRequest, FetchTopic},
@@ -28,12 +30,19 @@ use {
         records::RecordsPayload,
     },
     rstest_bdd_macros::{given, then, when},
+    std::{collections::BTreeMap, sync::atomic},
 };
 
 /// The topic every scenario creates.
 const TOPIC: &str = "orders";
 
-/// The value of the one record `produce_records` appends.
+/// The broker under test, which leads every partition.
+const THIS_NODE: NodeId = NodeId(1);
+
+/// The follower replica of a replicated topic.
+const FOLLOWER: NodeId = NodeId(2);
+
+/// The value of the one record a scenario appends.
 const RECORD_VALUE: &[u8] = b"v";
 
 /// The `compression.type` a scenario's topic is created with.
@@ -102,6 +111,60 @@ fn topic_holds_one_record(
     zstd_topic.broker.set(started);
 }
 
+#[given("a replicated topic with compression.type zstd holds one record")]
+fn replicated_topic_holds_one_record(
+    zstd_topic: &mut ZstdTopicScenario,
+    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
+) {
+    let started = runtime.block_on(async {
+        let started = start_with_idle_follower().await;
+        seed_partition_replicas()
+            .broker(&started.broker)
+            .topic(TOPIC)
+            .leader(THIS_NODE)
+            .replicas(&[THIS_NODE, FOLLOWER])
+            .call()
+            .await;
+        started
+            .broker
+            .submit_metadata_record_for_test(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: TOPIC.to_owned(),
+                overrides: BTreeMap::from([(
+                    COMPRESSION_TYPE.to_owned(),
+                    TopicCodec::Zstd.config_value().to_owned(),
+                )]),
+            }))
+            .await
+            .expect("submit topic config record");
+        started
+            .broker
+            .wait_for_image(|image| {
+                image
+                    .topic_config(TOPIC)
+                    .is_some_and(|config| config.contains_key(COMPRESSION_TYPE))
+            })
+            .await;
+        let partition = wait_for_bound_partition(
+            &started.broker.broker_arc_for_test(),
+            TOPIC,
+            async |partition| {
+                partition.current_leader.load(atomic::Ordering::Acquire) == THIS_NODE.0
+                    && partition
+                        .replica_state
+                        .lock()
+                        .await
+                        .isr
+                        .contains(&krabka_raft::NodeId(FOLLOWER.0))
+            },
+            "the broker leads the partition with the follower in sync",
+        )
+        .await;
+        append_partition_batch(&partition, &mut record_batch(1));
+        started
+    });
+    zstd_topic.broker.set(started);
+}
+
 #[when("a consumer fetches the topic with Fetch v{version}")]
 fn consumer_fetches(
     zstd_topic: &mut ZstdTopicScenario,
@@ -115,6 +178,33 @@ fn consumer_fetches(
             ..Default::default()
         }],
         ..sessionless_request().version(version).call()
+    };
+    let response = runtime.block_on(
+        fetch_wire()
+            .broker(&zstd_topic.broker.get().broker)
+            .request(&request)
+            .version(ApiVersion(version))
+            .call(),
+    );
+    zstd_topic.response.set(response);
+}
+
+#[when("the follower broker fetches the topic with Fetch v{version}")]
+fn follower_fetches(
+    zstd_topic: &mut ZstdTopicScenario,
+    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
+    version: i16,
+) {
+    let request = FetchRequest {
+        topics: vec![FetchTopic {
+            topic: TOPIC.to_owned(),
+            partitions: vec![request_partition(Offset(0))],
+            ..Default::default()
+        }],
+        ..sessionless_request()
+            .version(version)
+            .replica(i32::try_from(FOLLOWER.0).expect("small node id"))
+            .call()
     };
     let response = runtime.block_on(
         fetch_wire()
@@ -155,6 +245,9 @@ impl ReadRow {
                 other => panic!("the records are not v2 batches: {other:?}"),
             },
             Some(RecordsPayload::V2(batches)) => batches,
+            // A refused row carries empty records, so its error code is what
+            // the comparison reports.
+            Some(RecordsPayload::Legacy(bytes)) if bytes.is_empty() => Vec::new(),
             other => panic!("the records are not v2 batches: {other:?}"),
         };
         Self {
@@ -181,6 +274,26 @@ fn consumer_receives_record(zstd_topic: &ZstdTopicScenario) {
         rows == vec![ReadRow {
             error_code: NONE,
             high_watermark: 1,
+            values: vec![Some(Bytes::from_static(RECORD_VALUE))],
+        }]
+    );
+}
+
+/// A follower reads up to the log end; the row reports the high watermark
+/// from before the fetch, which is still 0.
+#[then("the follower receives the record")]
+fn follower_receives_record(zstd_topic: &ZstdTopicScenario) {
+    let rows: Vec<ReadRow> = zstd_topic
+        .response
+        .get()
+        .responses
+        .iter()
+        .flat_map(|topic| topic.partitions.iter().map(ReadRow::of))
+        .collect();
+    assert!(
+        rows == vec![ReadRow {
+            error_code: NONE,
+            high_watermark: 0,
             values: vec![Some(Bytes::from_static(RECORD_VALUE))],
         }]
     );
