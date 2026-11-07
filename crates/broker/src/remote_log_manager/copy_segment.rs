@@ -167,6 +167,18 @@ enum Chain {
     At(ChainStamp),
 }
 
+impl Chain {
+    /// Count a copy that did not seal its manifest. Only a chained copy is
+    /// trying to seal one, so only a chained copy can fail to. An unchained
+    /// copy failing on a mutable tier is an ordinary copy failure and says
+    /// nothing about the archive's attestation.
+    fn record_seal_failure(self, tier: &RemoteTier<'_>) {
+        if matches!(self, Self::At(_)) {
+            tier.metrics.worm_manifest_seal_failures_total.inc();
+        }
+    }
+}
+
 async fn copy_one_inner(
     tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
@@ -186,14 +198,6 @@ async fn copy_one_inner(
             error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                    "remote-log-manager: refusing a WORM copy after chain sequence exhaustion");
             return CopyOutcome::Failed;
-        }
-    };
-    // Only a chained copy is trying to seal a manifest, so only a chained copy
-    // can fail to. An unchained copy failing on a mutable tier is an ordinary
-    // copy failure and says nothing about the archive's attestation.
-    let seal_failed = || {
-        if matches!(chain, Chain::At(_)) {
-            tier.metrics.worm_manifest_seal_failures_total.inc();
         }
     };
     let Some((metadata, epochs)) = build_started_metadata(tp, broker_id, leader_epoch, ex, chain)
@@ -264,20 +268,20 @@ async fn copy_one_inner(
                   timeout_ms = tier.copy_timeout.millis_i64(),
                   "remote-log-manager: segment copy exceeded its deadline; abandoning it and \
                    moving on to the next partition");
-            seal_failed();
+            chain.record_seal_failure(tier);
             return CopyOutcome::Failed;
         }
         Ok(Ok(Err(e))) => {
             warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                   error = %e, "remote-log-manager: segment copy failed");
-            seal_failed();
+            chain.record_seal_failure(tier);
             rollback(tier, &metadata, broker_id).await;
             return CopyOutcome::Failed;
         }
         Ok(Err(e)) => {
             warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                   error = %e, "remote-log-manager: segment copy task panicked");
-            seal_failed();
+            chain.record_seal_failure(tier);
             rollback(tier, &metadata, broker_id).await;
             return CopyOutcome::Failed;
         }
@@ -312,7 +316,7 @@ async fn copy_one_inner(
                        "remote-log-manager: write-once copy returned no chain receipt; \
                         leaving the segment in CopySegmentStarted rather than serving \
                         unattested data");
-                seal_failed();
+                chain.record_seal_failure(tier);
                 return CopyOutcome::Failed;
             };
             if receipt.head.is_none()
@@ -324,7 +328,7 @@ async fn copy_one_inner(
                        "remote-log-manager: write-once copy returned a mismatched chain receipt; \
                         leaving the segment in CopySegmentStarted rather than serving \
                         unattested data");
-                seal_failed();
+                chain.record_seal_failure(tier);
                 return CopyOutcome::Failed;
             }
             // The receipt is the archive's word that a manifest over these
