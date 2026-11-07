@@ -523,7 +523,7 @@ pub struct FetchWatermarks {
 ///
 /// A follower has no isolation level: its `read_committed` is ignored, and it
 /// reads to the log end like any other follower.
-pub(crate) const fn fetch_reader(is_follower: bool, read_committed: bool) -> FetchReader {
+pub const fn fetch_reader(is_follower: bool, read_committed: bool) -> FetchReader {
     if is_follower {
         FetchReader::Follower
     } else if read_committed {
