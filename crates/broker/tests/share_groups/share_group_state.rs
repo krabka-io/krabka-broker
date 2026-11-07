@@ -5,6 +5,11 @@
 //! These tests assert on the persister rather than on what
 //! `ShareGroupDescribe` reports about members, so they are kept apart from the
 //! membership scenarios.
+//!
+//! Every read of a share state summary waits for the active term of its
+//! `__share_group_state` partition. A reload of that partition drops its keys
+//! and replays them, and a read in that window would find no state for a key
+//! the partition holds.
 
 use {
     crate::share_group_harness::{
@@ -45,7 +50,7 @@ async fn initialize_share_partitions(
             let mut all_done = true;
             for partition in 0..partitions {
                 if broker
-                    .share_state_summary_for_test(group, tid, partition)
+                    .active_share_state_summary_for_test(group, tid, partition)
                     .await
                     .is_none()
                 {
@@ -107,7 +112,7 @@ async fn heartbeat_until(
             let mut all = true;
             for p in partitions.clone() {
                 all &= broker
-                    .share_state_summary_for_test(group, topic, p)
+                    .active_share_state_summary_for_test(group, topic, p)
                     .await
                     .is_some()
                     == present;
@@ -196,7 +201,7 @@ async fn uninitialized_share_state(share_lifecycle: &ShareLifecycle, topic: Stri
     for partition in 0..partitions {
         let (_, _, offset, _) = share_lifecycle
             .broker()
-            .share_state_summary_for_test(&share_lifecycle.group, identity, partition)
+            .active_share_state_summary_for_test(&share_lifecycle.group, identity, partition)
             .await
             .expect("partition initialized");
         offsets.push(offset);
@@ -211,7 +216,7 @@ async fn lifecycle_state_present(share_lifecycle: &ShareLifecycle, topic: String
         assert!(
             share_lifecycle
                 .broker()
-                .share_state_summary_for_test(&share_lifecycle.group, identity, partition)
+                .active_share_state_summary_for_test(&share_lifecycle.group, identity, partition)
                 .await
                 .is_some()
                 == present,
