@@ -26,10 +26,10 @@ mod subscription;
 #[cfg(test)]
 mod test_support;
 
+use self::subscription::SelectorError;
 #[cfg(test)]
 pub use self::subscription::compute_subscription;
 pub use self::subscription::{Subscriptions, subscription_id};
-use self::subscription::SelectorError;
 
 /// Connection-derived attributes: the ones subscription matching reads, and
 /// the id of the connection that carried the request, which
