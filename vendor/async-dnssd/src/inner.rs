@@ -28,6 +28,11 @@ use crate::{
 	},
 };
 
+fn record_data(data: &[u8]) -> (u16, *const u8) {
+	assert!(data.len() < (1 << 16));
+	(data.len() as u16, data.as_ptr())
+}
+
 // More typesafe than raw "ffi", but still not quite done
 
 struct ManagedService(ffi::DNSServiceRef);
@@ -320,28 +325,24 @@ impl SharedService {
 		rdata: &[u8],
 		ttl: u32,
 	) -> Result<DNSRecord, Error> {
-		let rd_len = rdata.len();
-		assert!(rd_len < (1 << 16));
-		let rd_len = rd_len as u16;
-		let rdata = rdata.as_ptr();
+		let (rd_len, rdata) = record_data(rdata);
 
+		self.make_record(rr_type, |handle, record_ref| {
+			Error::from(unsafe {
+				ffi::DNSServiceAddRecord(handle, record_ref, flags, rr_type.0, rd_len, rdata, ttl)
+			})
+		})
+	}
+
+	fn make_record(
+		self,
+		rr_type: Type,
+		create: impl FnOnce(ffi::DNSServiceRef, *mut ffi::DNSRecordRef) -> Result<(), Error>,
+	) -> Result<DNSRecord, Error> {
 		let inner = self.inner.lock().unwrap();
-
-		let mut record_ref: ffi::DNSRecordRef = null_mut();
-		Error::from(unsafe {
-			ffi::DNSServiceAddRecord(
-				inner.handle.as_raw(),
-				&mut record_ref,
-				flags,
-				rr_type.0,
-				rd_len,
-				rdata,
-				ttl,
-			)
-		})?;
-
+		let mut record_ref = null_mut();
+		create(inner.handle.as_raw(), &mut record_ref)?;
 		drop(inner);
-
 		Ok(DNSRecord {
 			service: self,
 			raw: DNSRecordRef(record_ref),
@@ -368,37 +369,25 @@ impl SharedService {
 		callback: ffi::DNSServiceRegisterRecordReply,
 		context: *mut c_void,
 	) -> Result<DNSRecord, Error> {
-		let rd_len = rdata.len();
-		assert!(rd_len < (1 << 16));
-		let rd_len = rd_len as u16;
-		let rdata = rdata.as_ptr();
+		let (rd_len, rdata) = record_data(rdata);
 
-		let inner = self.inner.lock().unwrap();
-
-		let mut record_ref: ffi::DNSRecordRef = null_mut();
-		Error::from(unsafe {
-			ffi::DNSServiceRegisterRecord(
-				inner.handle.as_raw(),
-				&mut record_ref,
-				flags,
-				interface_index,
-				fullname.as_ptr(),
-				rr_type.0,
-				rr_class.0,
-				rd_len,
-				rdata,
-				ttl,
-				callback,
-				context,
-			)
-		})?;
-
-		drop(inner);
-
-		Ok(DNSRecord {
-			service: self,
-			raw: DNSRecordRef(record_ref),
-			rr_type,
+		self.make_record(rr_type, |handle, record_ref| {
+			Error::from(unsafe {
+				ffi::DNSServiceRegisterRecord(
+					handle,
+					record_ref,
+					flags,
+					interface_index,
+					fullname.as_ptr(),
+					rr_type.0,
+					rr_class.0,
+					rd_len,
+					rdata,
+					ttl,
+					callback,
+					context,
+				)
+			})
 		})
 	}
 }
@@ -439,10 +428,7 @@ impl DNSRecord {
 		rdata: &[u8],
 		ttl: u32,
 	) -> Result<(), Error> {
-		let rd_len = rdata.len();
-		assert!(rd_len < (1 << 16));
-		let rd_len = rd_len as u16;
-		let rdata = rdata.as_ptr();
+		let (rd_len, rdata) = record_data(rdata);
 
 		let inner = self.service.inner.lock().unwrap();
 

@@ -35,16 +35,19 @@ use crate::{
 	},
 };
 
+fn decoded_address(record: &QueryRecordResult, ip: IpAddr, port: u16) -> ResolveHostResult {
+	ResolveHostResult {
+		flags: ResolvedHostFlags::from_bits_truncate(record.flags.bits()),
+		address: ScopedSocketAddr::new(ip, port, record.interface.scope_id()),
+	}
+}
+
 fn decode_a(a: QueryRecordResult, port: u16) -> Option<ResolveHostResult> {
 	if a.rr_class == Class::IN && a.rr_type == Type::A && a.rdata.len() == 4 {
 		let mut octets = [0u8; 4];
 		octets.clone_from_slice(&a.rdata);
 		let ip = IpAddr::V4(Ipv4Addr::from(octets));
-		let addr = ScopedSocketAddr::new(ip, port, a.interface.scope_id());
-		Some(ResolveHostResult {
-			flags: ResolvedHostFlags::from_bits_truncate(a.flags.bits()),
-			address: addr,
-		})
+		Some(decoded_address(&a, ip, port))
 	} else {
 		println!("Invalid A response: {:?}", a);
 		None
@@ -56,11 +59,7 @@ fn decode_aaaa(a: QueryRecordResult, port: u16) -> Option<ResolveHostResult> {
 		let mut octets = [0u8; 16];
 		octets.clone_from_slice(&a.rdata);
 		let ip = IpAddr::V6(Ipv6Addr::from(octets));
-		let addr = ScopedSocketAddr::new(ip, port, a.interface.scope_id());
-		Some(ResolveHostResult {
-			flags: ResolvedHostFlags::from_bits_truncate(a.flags.bits()),
-			address: addr,
-		})
+		Some(decoded_address(&a, ip, port))
 	} else {
 		println!("Invalid AAAA response: {:?}", a);
 		None

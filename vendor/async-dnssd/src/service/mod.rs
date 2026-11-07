@@ -1,3 +1,40 @@
+mod callback_support {
+	pub(super) use crate::{
+		cstr,
+		ffi,
+		inner,
+		interface::Interface,
+	};
+	pub(super) use std::{
+		io,
+		os::raw::{
+			c_char,
+			c_void,
+		},
+	};
+}
+type ServiceCallback<T> = crate::stream::ServiceStream<crate::inner::OwnedService, T>;
+
+// All callback streams share the same structurally pinned forwarding implementation.
+macro_rules! callback_stream {
+    ($(#[$attr:meta])* $name:ident, $item:ty) => {
+        $(#[$attr])*
+        #[must_use = "streams do nothing unless polled"]
+        #[pin_project::pin_project]
+        pub struct $name {
+            #[pin]
+            stream: crate::fused_err_stream::FusedErrorStream<CallbackStream>,
+        }
+        impl futures_core::Stream for $name {
+            type Item = std::io::Result<$item>;
+            fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>)
+                -> std::task::Poll<Option<Self::Item>> {
+                self.project().stream.poll_next(cx)
+            }
+        }
+    };
+}
+
 pub use self::{
 	browse::*,
 	connection::*,

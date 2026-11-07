@@ -13,14 +13,40 @@ use std::{
 
 use crate::{
 	error::Error,
-	ffi,
 	inner::EventedService,
 };
 
 #[allow(clippy::borrowed_box)]
-fn box_raw<T>(ptr: &mut Box<T>) -> *mut c_void {
+pub(crate) fn box_raw<T>(ptr: &mut Box<T>) -> *mut c_void {
 	ptr.as_mut() as *mut T as *mut c_void
 }
+
+pub(crate) fn callback_result<T>(
+	error_code: crate::ffi::DNSServiceErrorType,
+	f: impl FnOnce() -> io::Result<T>,
+) -> io::Result<T> {
+	Error::from(error_code)
+		.map_err(io::Error::from)
+		.and_then(|()| f())
+}
+
+macro_rules! callback_handler {
+	($deliver:expr) => {
+		pub(crate) unsafe fn run_callback<F>(
+			context: *mut std::os::raw::c_void,
+			error_code: crate::ffi::DNSServiceErrorType,
+			f: F,
+		) where
+			F: FnOnce() -> std::io::Result<T>,
+			T: std::fmt::Debug,
+		{
+			let sender = &mut *(context as *mut CallbackContext<T>);
+			// One-shot delivery takes the sender before decoding, as upstream did.
+			($deliver)(sender, error_code, f);
+		}
+	};
+}
+pub(crate) use callback_handler;
 
 type CallbackContext<T> = Option<oneshot::Sender<io::Result<T>>>;
 
@@ -34,29 +60,14 @@ struct Inner<S: EventedService, T> {
 pub(crate) struct ServiceFuture<S: EventedService, T>(Option<Inner<S, T>>);
 
 impl<S: EventedService, T> ServiceFuture<S, T> {
-	pub(crate) unsafe fn run_callback<F>(
-		context: *mut c_void,
-		error_code: ffi::DNSServiceErrorType,
-		f: F,
-	) where
-		F: FnOnce() -> io::Result<T>,
-		T: ::std::fmt::Debug,
-	{
-		let sender = context as *mut CallbackContext<T>;
-		let sender: &mut CallbackContext<T> = &mut *sender;
+	callback_handler!(|sender: &mut CallbackContext<T>, error_code, f| {
 		let sender = sender.take().expect("callback must be run only once");
+		sender
+			.send(callback_result(error_code, f))
+			.expect("receiver must still be alive");
+	});
 
-		let data = Error::from(error_code)
-			.map_err(io::Error::from)
-			.and_then(|()| f());
-
-		sender.send(data).expect("receiver must still be alive");
-	}
-
-	pub(crate) fn new<F>(f: F) -> io::Result<Self>
-	where
-		F: FnOnce(*mut c_void) -> Result<S, Error>,
-	{
+	pub(crate) fn new(f: impl FnOnce(*mut c_void) -> Result<S, Error>) -> io::Result<Self> {
 		let (sender, receiver) = oneshot::channel::<io::Result<T>>();
 		let mut sender = Box::new(Some(sender));
 

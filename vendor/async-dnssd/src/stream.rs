@@ -12,14 +12,8 @@ use std::{
 
 use crate::{
 	error::Error,
-	ffi,
 	inner::EventedService,
 };
-
-#[allow(clippy::borrowed_box)]
-fn box_raw<T>(ptr: &mut Box<T>) -> *mut c_void {
-	ptr.as_mut() as *mut T as *mut c_void
-}
 
 type CallbackContext<T> = mpsc::UnboundedSender<io::Result<T>>;
 
@@ -31,25 +25,11 @@ pub(crate) struct ServiceStream<S: EventedService, T> {
 }
 
 impl<S: EventedService, T> ServiceStream<S, T> {
-	pub(crate) unsafe fn run_callback<F>(
-		context: *mut c_void,
-		error_code: ffi::DNSServiceErrorType,
-		f: F,
-	) where
-		F: FnOnce() -> io::Result<T>,
-		T: ::std::fmt::Debug,
-	{
-		let sender = context as *mut CallbackContext<T>;
-		let sender: &mut CallbackContext<T> = &mut *sender;
-
-		let data = Error::from(error_code)
-			.map_err(io::Error::from)
-			.and_then(|()| f());
-
+	crate::future::callback_handler!(|sender: &mut CallbackContext<T>, error_code, f| {
 		sender
-			.unbounded_send(data)
+			.unbounded_send(crate::future::callback_result(error_code, f))
 			.expect("receiver must still be alive");
-	}
+	});
 
 	pub(crate) fn new<F>(f: F) -> io::Result<Self>
 	where
@@ -58,7 +38,7 @@ impl<S: EventedService, T> ServiceStream<S, T> {
 		let (sender, receiver) = mpsc::unbounded::<io::Result<T>>();
 		let mut sender = Box::new(sender);
 
-		let service = f(box_raw(&mut sender))?;
+		let service = f(crate::future::box_raw(&mut sender))?;
 
 		Ok(Self {
 			service,

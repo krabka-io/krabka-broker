@@ -1,14 +1,21 @@
 use std::{
 	io,
-	os::raw::{c_char, c_void},
-	pin::Pin,
-	task::{Context, Poll},
+	os::raw::{
+		c_char,
+		c_void,
+	},
 };
 
 use crate::{
-	cstr, ffi, inner,
+	cstr,
+	ffi,
+	inner,
 	interface::Interface,
-	service::{resolve_host_extended, ResolveHost, ResolveHostData},
+	service::{
+		resolve_host_extended,
+		ResolveHost,
+		ResolveHostData,
+	},
 };
 
 type CallbackStream = crate::stream::ServiceStream<inner::OwnedService, ResolveResult>;
@@ -25,29 +32,9 @@ bitflags::bitflags! {
 	}
 }
 
+callback_stream!(
 /// Pending resolve request
-#[must_use = "streams do nothing unless polled"]
-#[pin_project::pin_project]
-pub struct Resolve {
-	#[pin]
-	stream: crate::fused_err_stream::FusedErrorStream<CallbackStream>,
-}
-
-impl Resolve {
-	fn stream(
-		self: Pin<&mut Self>,
-	) -> Pin<&mut crate::fused_err_stream::FusedErrorStream<CallbackStream>> {
-		self.project().stream
-	}
-}
-
-impl futures_core::Stream for Resolve {
-	type Item = io::Result<ResolveResult>;
-
-	fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-		self.stream().poll_next(cx)
-	}
-}
+Resolve, ResolveResult);
 
 /// Resolve result
 ///

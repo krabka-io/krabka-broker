@@ -1,13 +1,13 @@
-use std::{
-	io,
-	os::raw::{c_char, c_void},
-	pin::Pin,
-	task::{Context, Poll},
+use super::callback_support::{
+	c_char,
+	c_void,
+	cstr,
+	ffi,
+	inner,
+	Interface,
 };
 
-use crate::{cstr, ffi, inner, interface::Interface};
-
-type CallbackStream = crate::stream::ServiceStream<inner::OwnedService, EnumerateResult>;
+type CallbackStream = super::ServiceCallback<EnumerateResult>;
 
 /// Whether to enumerate domains which are browsed or domains for which
 /// registrations can be made.
@@ -51,29 +51,9 @@ bitflags::bitflags! {
 	}
 }
 
+callback_stream!(
 /// Pending domain enumeration
-#[must_use = "streams do nothing unless polled"]
-#[pin_project::pin_project]
-pub struct EnumerateDomains {
-	#[pin]
-	stream: crate::fused_err_stream::FusedErrorStream<CallbackStream>,
-}
-
-impl EnumerateDomains {
-	fn stream(
-		self: Pin<&mut Self>,
-	) -> Pin<&mut crate::fused_err_stream::FusedErrorStream<CallbackStream>> {
-		self.project().stream
-	}
-}
-
-impl futures_core::Stream for EnumerateDomains {
-	type Item = io::Result<EnumerateResult>;
-
-	fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-		self.stream().poll_next(cx)
-	}
-}
+EnumerateDomains, EnumerateResult);
 
 /// Domain enumeration result
 ///

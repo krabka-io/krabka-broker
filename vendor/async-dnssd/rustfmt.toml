@@ -1,3 +1,6 @@
+# Match the vendored crate when rustfmt is invoked without Cargo.
+edition = "2021"
+
 # Maximum width of each line
 max_width = 100
 

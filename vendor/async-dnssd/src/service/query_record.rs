@@ -1,14 +1,19 @@
 use std::{
 	io,
-	os::raw::{c_char, c_void},
-	pin::Pin,
-	task::{Context, Poll},
+	os::raw::{
+		c_char,
+		c_void,
+	},
 };
 
 use crate::{
 	cstr,
-	dns_consts::{Class, Type},
-	ffi, inner,
+	dns_consts::{
+		Class,
+		Type,
+	},
+	ffi,
+	inner,
 	interface::Interface,
 };
 
@@ -43,29 +48,9 @@ bitflags::bitflags! {
 	}
 }
 
+callback_stream!(
 /// Pending query
-#[must_use = "streams do nothing unless polled"]
-#[pin_project::pin_project]
-pub struct QueryRecord {
-	#[pin]
-	stream: crate::fused_err_stream::FusedErrorStream<CallbackStream>,
-}
-
-impl QueryRecord {
-	fn stream(
-		self: Pin<&mut Self>,
-	) -> Pin<&mut crate::fused_err_stream::FusedErrorStream<CallbackStream>> {
-		self.project().stream
-	}
-}
-
-impl futures_core::Stream for QueryRecord {
-	type Item = io::Result<QueryRecordResult>;
-
-	fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-		self.stream().poll_next(cx)
-	}
-}
+QueryRecord, QueryRecordResult);
 
 /// Query result
 ///

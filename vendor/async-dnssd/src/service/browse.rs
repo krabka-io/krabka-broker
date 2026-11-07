@@ -1,13 +1,14 @@
-use std::{
+use super::callback_support::{
+	c_char,
+	c_void,
+	cstr,
+	ffi,
+	inner,
 	io,
-	os::raw::{c_char, c_void},
-	pin::Pin,
-	task::{Context, Poll},
+	Interface,
 };
 
-use crate::{cstr, ffi, inner, interface::Interface};
-
-type CallbackStream = crate::stream::ServiceStream<inner::OwnedService, BrowseResult>;
+type CallbackStream = super::ServiceCallback<BrowseResult>;
 
 bitflags::bitflags! {
 	/// Flags for [`BrowseResult`](struct.BrowseResult.html)
@@ -27,31 +28,11 @@ bitflags::bitflags! {
 	}
 }
 
+callback_stream!(
 /// Pending browse request
 ///
 /// Results are delivered through `Stream`.
-#[must_use = "streams do nothing unless polled"]
-#[pin_project::pin_project]
-pub struct Browse {
-	#[pin]
-	stream: crate::fused_err_stream::FusedErrorStream<CallbackStream>,
-}
-
-impl Browse {
-	fn stream(
-		self: Pin<&mut Self>,
-	) -> Pin<&mut crate::fused_err_stream::FusedErrorStream<CallbackStream>> {
-		self.project().stream
-	}
-}
-
-impl futures_core::Stream for Browse {
-	type Item = io::Result<BrowseResult>;
-
-	fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-		self.stream().poll_next(cx)
-	}
-}
+Browse, BrowseResult);
 
 /// Browse result
 ///

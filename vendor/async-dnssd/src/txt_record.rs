@@ -199,6 +199,17 @@ pub enum TxtRecordError {
 	EntryTooLong,
 }
 
+fn next_entry<'a>(data: &mut &'a [u8], pos: &mut usize) -> Option<&'a [u8]> {
+	if data.is_empty() {
+		return None;
+	}
+	let len = data[0] as usize;
+	let entry = &data[1..][..len];
+	*data = &data[len + 1..];
+	*pos += len + 1;
+	Some(entry)
+}
+
 struct PositionKeyIter<'a> {
 	pos: usize,
 	data: &'a [u8],
@@ -209,14 +220,8 @@ impl<'a> Iterator for PositionKeyIter<'a> {
 	type Item = (Range<usize>, &'a [u8]);
 
 	fn next(&mut self) -> Option<Self::Item> {
-		if self.data.is_empty() {
-			return None;
-		}
-		let len = self.data[0] as usize;
 		let entry_pos = self.pos;
-		let entry = &self.data[1..][..len];
-		self.data = &self.data[len + 1..];
-		self.pos += len + 1;
+		let entry = next_entry(&mut self.data, &mut self.pos)?;
 
 		Some(match entry.iter().position(|&b| b == b'=') {
 			Some(pos) => (entry_pos..self.pos, &entry[..pos]),
@@ -238,13 +243,7 @@ impl<'a> Iterator for TxtRecordIter<'a> {
 	type Item = (&'a [u8], Option<&'a [u8]>);
 
 	fn next(&mut self) -> Option<Self::Item> {
-		if self.data.is_empty() {
-			return None;
-		}
-		let len = self.data[0] as usize;
-		let entry = &self.data[1..][..len];
-		self.data = &self.data[len + 1..];
-		self.pos += len + 1;
+		let entry = next_entry(&mut self.data, &mut self.pos)?;
 
 		Some(match entry.iter().position(|&b| b == b'=') {
 			Some(pos) => (&entry[..pos], Some(&entry[pos + 1..])),
