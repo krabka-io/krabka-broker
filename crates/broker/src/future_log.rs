@@ -47,7 +47,6 @@ mod test_support;
 mod truncation;
 
 pub use self::{
-    cleanup::{abort_moves, shutdown_moves},
     registry::FutureLogRegistry,
     start::{resume_move, start_move},
 };

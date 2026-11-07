@@ -42,43 +42,45 @@ impl FutureLogRegistry {
         }
         Ok(())
     }
-}
 
-fn take_move_tasks(future_logs: &FutureLogRegistry) -> Vec<JoinHandle<()>> {
-    let states = future_logs.take_all();
-    for state in &states {
-        state.cancel.cancel();
+    /// Remove every move, cancel its token, and return the replicator tasks
+    /// that still have to be stopped.
+    fn drain_for_shutdown(&self) -> Vec<JoinHandle<()>> {
+        let states = self.take_all();
+        for state in &states {
+            state.cancel.cancel();
+        }
+        states
+            .into_iter()
+            .filter_map(|state| {
+                state
+                    .task
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take()
+            })
+            .collect()
     }
-    states
-        .into_iter()
-        .filter_map(|state| {
-            state
-                .task
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take()
-        })
-        .collect()
-}
 
-/// Cancel and await every in-progress log-directory move. Broker shutdown
-/// calls this after it has stopped accepting requests and before it stops the
-/// partition writers that the move tasks use.
-pub async fn shutdown_moves(future_logs: &FutureLogRegistry) {
-    let tasks = take_move_tasks(future_logs);
-    for task in &tasks {
-        task.abort();
+    /// Cancel and await every in-progress log-directory move. Broker shutdown
+    /// calls this after it has stopped accepting requests and before it stops
+    /// the partition writers that the move tasks use.
+    pub async fn shutdown(&self) {
+        let tasks = self.drain_for_shutdown();
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            let _ = task.await;
+        }
     }
-    for task in tasks {
-        let _ = task.await;
-    }
-}
 
-/// Best-effort synchronous counterpart used when a
-/// [`crate::broker::BrokerHandle`] is dropped without an awaited shutdown.
-pub fn abort_moves(future_logs: &FutureLogRegistry) {
-    for task in take_move_tasks(future_logs) {
-        task.abort();
+    /// Best-effort synchronous counterpart of [`Self::shutdown`], used when a
+    /// [`crate::broker::BrokerHandle`] is dropped without an awaited shutdown.
+    pub fn abort(&self) {
+        for task in self.drain_for_shutdown() {
+            task.abort();
+        }
     }
 }
 
@@ -220,7 +222,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shutdown_moves_cancels_and_awaits_every_task() {
+    async fn shutdown_cancels_and_awaits_every_task() {
         let PendingMoveFixture {
             dir,
             log: future_log,
@@ -248,7 +250,7 @@ mod tests {
 
         wait_tasks_started(|| started.load(Ordering::SeqCst) == 2, "move tasks start").await;
 
-        time::timeout(Duration::from_secs(1), shutdown_moves(&future_logs))
+        time::timeout(Duration::from_secs(1), future_logs.shutdown())
             .await
             .expect("move task shutdown completes");
 
@@ -258,7 +260,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn abort_moves_cancels_and_aborts_every_task() {
+    async fn abort_cancels_and_aborts_every_task() {
         let PendingMoveFixture {
             dir,
             log: future_log,
@@ -287,7 +289,7 @@ mod tests {
         .await
         .expect("move task starts");
 
-        abort_moves(&future_logs);
+        future_logs.abort();
 
         assert!(future_logs.is_empty());
         assert!(cancel.is_cancelled());
