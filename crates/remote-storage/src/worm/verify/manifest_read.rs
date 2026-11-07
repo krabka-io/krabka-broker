@@ -123,24 +123,8 @@ mod tests {
         },
         assert2::{assert, check},
         bytes::Bytes,
-        krabka_object_store::fault::{
-            FaultInjectingStore, FaultKind, FaultPolicy, OpFault, StoreOp,
-        },
-        object_store::memory::InMemory,
+        krabka_object_store::fault::FaultKind,
     };
-
-    /// An archive whose listing still names every object while every read
-    /// fails with `kind`: the store the verifier meets when objects vanish
-    /// between the listing and the read, or when it may list but not read.
-    async fn archive_whose_reads_fail(kind: FaultKind) -> Archive {
-        let backing: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let archive = Archive::build_on(Arc::clone(&backing), &[1]).await;
-        let failing: Arc<dyn ObjectStore> = Arc::new(FaultInjectingStore::new(
-            backing,
-            FaultPolicy::none().with(StoreOp::Get, OpFault::always(kind)),
-        ));
-        archive.with_store(failing)
-    }
 
     #[yare::parameterized(
         pre_1_0 = {
@@ -203,7 +187,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_manifest_object_is_a_break_and_not_an_error() {
-        let archive = archive_whose_reads_fail(FaultKind::NotFound).await;
+        let archive = Archive::with_failing_reads(FaultKind::NotFound).await;
         let segment = &archive.segments[0];
 
         let report = archive.verify().await;
@@ -222,7 +206,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_manifest_read_the_store_refuses_is_an_error_and_not_a_break() {
-        let archive = archive_whose_reads_fail(FaultKind::ServerError).await;
+        let archive = Archive::with_failing_reads(FaultKind::ServerError).await;
 
         let result = verify_archive(
             &archive.store,
