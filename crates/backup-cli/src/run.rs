@@ -943,12 +943,7 @@ async fn restore_offsets_secured_inner(
     let recorded = manifest.artifact(GROUP_OFFSETS).ok_or_else(|| {
         BackupError::NoSuchCapture(format!("capture {id} holds no {GROUP_OFFSETS}"))
     })?;
-    let bytes = store
-        .get_capped(&capture_key(&id, GROUP_OFFSETS), MAX_GROUP_OFFSETS_BYTES)
-        .await?;
-    if let Some(problem) = artifact_problem(recorded, &bytes) {
-        return Err(BackupError::Integrity(format!("capture {id}: {problem}")));
-    }
+    let bytes = read_verified_artifact(&store, &id, ArtifactKind::GroupOffsets, recorded).await?;
     verify_offsets_boundary(&store, &id, &manifest, &bytes, trust).await?;
     let offsets = GroupOffsetsFile::from_slice(&bytes, &capture_key(&id, GROUP_OFFSETS))?;
 
@@ -1005,15 +1000,7 @@ async fn verify_offsets_boundary(
         }
         return Ok(());
     };
-    let bytes = store
-        .get_capped(
-            &capture_key(id, DISKLESS_WAL_INDEX),
-            MAX_DISKLESS_INDEX_BYTES,
-        )
-        .await?;
-    if let Some(problem) = artifact_problem(recorded, &bytes) {
-        return Err(BackupError::Integrity(format!("capture {id}: {problem}")));
-    }
+    let bytes = read_verified_artifact(store, id, ArtifactKind::DisklessWalIndex, recorded).await?;
     let capture = DisklessWalCapture::from_slice(&bytes).map_err(BackupError::Integrity)?;
     if capture.authentication.is_none() && !configured {
         return Ok(());
@@ -1038,6 +1025,23 @@ async fn verify_offsets_boundary(
         ));
     }
     Ok(())
+}
+
+/// Read one artifact of a capture and refuse bytes that are not the bytes the
+/// manifest recorded for it.
+async fn read_verified_artifact(
+    store: &Archive,
+    id: &str,
+    kind: ArtifactKind,
+    recorded: &Artifact,
+) -> Result<Vec<u8>, BackupError> {
+    let bytes = store
+        .get_capped(&capture_key(id, kind.file_name()), kind.byte_limit())
+        .await?;
+    if let Some(problem) = artifact_problem(recorded, &bytes) {
+        return Err(BackupError::Integrity(format!("capture {id}: {problem}")));
+    }
+    Ok(bytes)
 }
 
 /// Read every group's committed offsets from a live cluster.
