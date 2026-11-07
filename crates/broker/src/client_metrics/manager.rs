@@ -925,11 +925,11 @@ mod tests {
                 .attrs(&slow_client())
                 .step(step)
                 .call();
-            let state = m.state.lock().unwrap_or_else(PoisonError::into_inner);
-            assert!(
-                (outcome, state.instances.len(), state.connections.len()) == (expected, 0, 0),
-                "{name}"
-            );
+            let kept = {
+                let state = m.state.lock().unwrap_or_else(PoisonError::into_inner);
+                (state.instances.len(), state.connections.len())
+            };
+            assert!((outcome, kept) == (expected, (0, 0)), "{name}");
         }
     }
 
@@ -951,8 +951,10 @@ mod tests {
             let at = start + Duration::from_secs(later);
             assert!(run().m(&m).img(&after).attrs(&client).now(at).call() == rejected);
         }
-        let state = m.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let kept = state
+        let kept = m
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .instances
             .get(&client.client_instance_id)
             .map(|inst| (inst.subscription_id, inst.subscription_version));
