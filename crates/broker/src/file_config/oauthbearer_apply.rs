@@ -132,6 +132,21 @@ fn configure_introspection_validator(
     ))
 }
 
+/// Compile the `JsonPath` expression `expr` that the `[oauthbearer]` option
+/// `option` sets.
+///
+/// # Errors
+///
+/// Returns [`FileConfigError::InvalidConfig`] naming the option and the
+/// expression when `expr` does not parse.
+fn compile_json_path(option: &str, expr: &str) -> Result<JpQuery, FileConfigError> {
+    parser::parse_json_path(expr).map_err(|error| {
+        FileConfigError::InvalidConfig(format!(
+            "[oauthbearer]: invalid {option} JsonPath expression {expr:?}: {error}"
+        ))
+    })
+}
+
 /// Whether any resolved listener offers SASL/OAUTHBEARER. A listener's own
 /// `sasl_mechanisms` wins over the broker-wide list, matching
 /// [`crate::config::BrokerConfig::validate`].
@@ -170,25 +185,13 @@ pub(super) fn apply_oauthbearer(
     let custom_claim_check_compiled = oauth
         .custom_claim_check
         .as_deref()
-        .map(|expr| {
-            parser::parse_json_path(expr).map_err(|error| {
-                FileConfigError::InvalidConfig(format!(
-                    "[oauthbearer]: invalid custom_claim_check JsonPath expression {expr:?}: {error}"
-                ))
-            })
-        })
+        .map(|expr| compile_json_path("custom_claim_check", expr))
         .transpose()?;
 
     let groups_claim_compiled = oauth
         .groups_claim
         .as_deref()
-        .map(|expr| {
-            parser::parse_json_path(expr).map_err(|error| {
-                FileConfigError::InvalidConfig(format!(
-                    "[oauthbearer]: invalid groups_claim JsonPath expression {expr:?}: {error}"
-                ))
-            })
-        })
+        .map(|expr| compile_json_path("groups_claim", expr))
         .transpose()?;
 
     let unsecured_required_scope = oauth
@@ -891,6 +894,16 @@ introspection_client_id = "kafka-broker"
             .expect_err("invalid JsonPath must be a configuration error");
         assert2::assert!(error.to_string().contains(field));
         assert2::assert!(error.to_string().contains("JsonPath expression"));
+        let FileConfigError::InvalidConfig(message) = &error else {
+            panic!("expected InvalidConfig; got {error:?}")
+        };
+        let parse_error = parser::parse_json_path("$[").unwrap_err();
+        assert2::assert!(
+            *message
+                == format!(
+                    "[oauthbearer]: invalid {field} JsonPath expression \"$[\": {parse_error}"
+                )
+        );
     }
 
     #[test]
