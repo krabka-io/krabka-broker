@@ -270,7 +270,9 @@ fn documentation(input: TokenStream) -> Result<TokenStream, ParseError> {
     }
 }
 
-pub fn parsed_cli_entrypoint(input: TokenStream) -> Result<TokenStream, ParseError> {
+/// A documented `run_from_args` whose body turns `argv` into a `Cli` with
+/// `parse`.
+fn cli_entrypoint(input: TokenStream, parse: &TokenStream) -> Result<TokenStream, ParseError> {
     let docs = documentation(input)?;
     Ok(moxy::template! {
         {{ docs }}
@@ -279,24 +281,19 @@ pub fn parsed_cli_entrypoint(input: TokenStream) -> Result<TokenStream, ParseErr
             I: IntoIterator<Item = T>,
             T: Into<::std::ffi::OsString> + Clone,
         {
-            run(Cli::parse_from(argv)).await
+            run({{ parse }}).await
         }
     })
 }
 
+pub fn parsed_cli_entrypoint(input: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_entrypoint(input, &moxy::template! { Cli::parse_from(argv) })
+}
+
 pub fn bootstrap_cli_entrypoint(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let docs = documentation(input)?;
-    Ok(moxy::template! {
-        {{ docs }}
-        pub async fn run_from_args<I, T>(argv: I) -> i32
-        where
-            I: IntoIterator<Item = T>,
-            T: Into<::std::ffi::OsString> + Clone,
-        {
-            let cli = Cli::try_parse_with_env(argv, |name| ::std::env::var(name).ok())
-                .unwrap_or_else(|error| error.exit());
-            run(cli).await
-        }
+    cli_entrypoint(input, &moxy::template! {
+        Cli::try_parse_with_env(argv, |name| ::std::env::var(name).ok())
+            .unwrap_or_else(|error| error.exit())
     })
 }
 
